@@ -807,6 +807,10 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     return this.plane(id).fit(id);
   }
 
+  invalidatePtyGrid(id: string): void {
+    this.plane(id).invalidatePtyGrid(id);
+  }
+
   flushResize(id: string): void {
     this.plane(id).flushResize(id);
   }

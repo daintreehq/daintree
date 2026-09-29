@@ -1328,6 +1328,10 @@ export const createAddPanelActions = (
             // sendPtyResize would defer 500ms for a settled-strategy agent —
             // exactly the window in which the CLI paints its banner at the
             // stale spawn width. The backend dedupes when nothing drifted.
+            // Whatever a fit recorded as sent during the spawn never reached a
+            // PTY; forget it so a pane that detached before this point still
+            // re-asserts on its next fit.
+            terminalInstanceService.invalidatePtyGrid(id);
             const settledDims = getAttachedGridDims(id);
             if (settledDims && (settledDims.cols !== spawnCols || settledDims.rows !== spawnRows)) {
               terminalClient.resize(id, settledDims.cols, settledDims.rows);

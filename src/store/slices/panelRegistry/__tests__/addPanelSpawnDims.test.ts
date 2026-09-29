@@ -58,6 +58,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     prewarmTerminal: vi.fn(),
     setInputLocked: vi.fn(),
     sendPtyResize: vi.fn(),
+    invalidatePtyGrid: vi.fn(),
     waitForAttachSettled: vi.fn().mockResolvedValue(undefined),
     get: vi.fn(() => null),
   },
@@ -150,6 +151,9 @@ describe("spawn-time PTY geometry (#10863)", () => {
     };
     expect(tc.resize).not.toHaveBeenCalledWith("dims-1", 54, 40);
     expect(terminalInstanceService.sendPtyResize).not.toHaveBeenCalledWith("dims-1", 54, 40);
+    // Any PTY grid recorded before the spawn landed is untrusted: a later
+    // same-grid fit must re-assert rather than skip.
+    expect(terminalInstanceService.invalidatePtyGrid).toHaveBeenCalledWith("dims-1");
   });
 
   it("re-asserts the fitted grid when the attach landed while the spawn IPC was in flight", async () => {

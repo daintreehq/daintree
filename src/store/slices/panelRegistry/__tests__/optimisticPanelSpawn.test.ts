@@ -53,6 +53,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     prewarmTerminal: vi.fn(),
     setInputLocked: vi.fn(),
     sendPtyResize: vi.fn(),
+    invalidatePtyGrid: vi.fn(),
     waitForAttachSettled: vi.fn().mockResolvedValue(undefined),
     // No attached renderer xterm in these tests — spawn falls back to the
     // default/estimated dims path.

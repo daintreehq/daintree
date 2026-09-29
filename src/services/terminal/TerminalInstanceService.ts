@@ -2337,7 +2337,6 @@ class TerminalInstanceService {
       wasDetached,
       isOpened: managed.isOpened,
       bufferRows: managed.terminal.buffer?.active?.length ?? 0,
-      containerRect: container.getBoundingClientRect(),
     });
 
     if (wasReparented) {
@@ -2593,6 +2592,10 @@ class TerminalInstanceService {
 
   fit(id: string): { cols: number; rows: number } | null {
     return this.resizeController.fit(id);
+  }
+
+  invalidatePtyGrid(id: string): void {
+    this.resizeController.invalidatePtyGrid(id);
   }
 
   flushResize(id: string): void {
@@ -2875,6 +2878,7 @@ class TerminalInstanceService {
     // Defer to the reconciliation watchdog via the reveal-pending obligation;
     // a no-drift fit falls through (its resize is a no-op and the PTY
     // re-assert is dedupe-safe). Alt-buffer panes never reach here.
+    this.resizeController.invalidatePtyGrid(id);
     if (this.deferGridChangeForStream(managed, this.proposalDivergesFromGrid(managed))) {
       // Deferred to the watchdog — skip the fit.
     } else {
@@ -3322,6 +3326,7 @@ class TerminalInstanceService {
       try {
         writeLocal(managed, "\x1b[!p");
 
+        this.resizeController.invalidatePtyGrid(id);
         this.resetRenderer(id);
 
         const timestamp = new Date().toLocaleTimeString();

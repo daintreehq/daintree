@@ -50,6 +50,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     prewarmTerminal: vi.fn(),
     setInputLocked: vi.fn(),
     sendPtyResize: vi.fn(),
+    invalidatePtyGrid: vi.fn(),
     waitForAttachSettled: vi.fn().mockResolvedValue(undefined),
     get: vi.fn(() => null),
   },

@@ -804,6 +804,8 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
         write,
       } as unknown as ManagedTerminal["terminal"],
     });
+    managed.ptyCols = 80;
+    managed.ptyRows = 24;
     service.instances.set("t1", managed);
     const resetRenderer = vi.spyOn(service, "resetRenderer").mockImplementation(() => true);
 
@@ -812,6 +814,9 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     // Automatic recovery must stay UNforced — a single-arg call is the assertion
     // that #10863's deferral still shields this sweep (#11638).
     expect(resetRenderer).toHaveBeenCalledWith("t1");
+    // A restarted host respawns each PTY at its original spawn grid, so the
+    // renderer's record of what it last sent no longer describes the PTY.
+    expect(managed.ptyCols).toBeUndefined();
     expect(managed.fitAddon.fit).not.toHaveBeenCalled();
     expect(write).toHaveBeenCalledTimes(2);
   });

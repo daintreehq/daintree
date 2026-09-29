@@ -476,11 +476,30 @@ export class TerminalResizeController {
       }
       const buffer = managed.terminal.buffer.active;
       const wasAtBottom = buffer.viewportY >= buffer.baseY;
+      // xterm and the PTY both already on this grid, with nothing queued that
+      // could move either: committing would flush held ingest and round-trip a
+      // same-size resize to the pty-host for nothing. A serialized restore
+      // parks its own target geometry, so it always takes the full path.
+      const unchanged =
+        managed.terminal.cols === cols &&
+        managed.terminal.rows === rows &&
+        managed.ptyCols === cols &&
+        managed.ptyRows === rows &&
+        !managed.isSerializedRestoreInProgress &&
+        !this.hasPendingResize(id);
+      const boxChanged = managed.lastWidth !== rect.width || managed.lastHeight !== rect.height;
       managed.lastWidth = rect.width;
       managed.lastHeight = rect.height;
       managed.latestCols = cols;
       managed.latestRows = rows;
       managed.latestWasAtBottom = wasAtBottom;
+      if (unchanged) {
+        // Same cell count is not the same pixels: a font change, or a caller
+        // that cleared the box cache to force a refit, still needs the
+        // viewport re-pinned.
+        if (boxChanged) this.pinToBottomAfterResize(managed);
+        return { cols, rows };
+      }
       this.clearResizeJob(managed);
       this.clearSettledTimer(id);
       this.applyResize(id, cols, rows);
@@ -797,7 +816,7 @@ export class TerminalResizeController {
       // reflows a hidden, possibly frozen renderer — the delivery this path
       // exists to bypass. Queued work was already cancelled above.
       if (grid.cacheWasStale) {
-        terminalClient.resize(id, grid.cols, grid.rows);
+        this.postPtyResize(managed, id, grid.cols, grid.rows);
       }
       return null;
     }
@@ -805,7 +824,7 @@ export class TerminalResizeController {
     // xterm first, then the PTY: the app must never receive SIGWINCH for a
     // grid the parser has not adopted yet.
     this.resizeTerminal(managed, grid.cols, grid.rows);
-    terminalClient.resize(id, grid.cols, grid.rows);
+    this.postPtyResize(managed, id, grid.cols, grid.rows);
     this.pinToBottomAfterResize(managed);
     return { cols: grid.cols, rows: grid.rows };
   }
@@ -1050,7 +1069,7 @@ export class TerminalResizeController {
     // still wraps at the pre-background geometry.
     this.cancelPendingResize(id);
     this.resizeTerminal(managed, targetCols, targetRows);
-    terminalClient.resize(id, targetCols, targetRows);
+    this.postPtyResize(managed, id, targetCols, targetRows);
     this.pinToBottomAfterResize(managed);
     return true;
   }
@@ -1177,7 +1196,7 @@ export class TerminalResizeController {
       heldBytesFlushed = this.flushHeldBytesBeforeResize(id);
       this.resizeTerminal(managed, cols, rows);
     }
-    terminalClient.resize(id, cols, rows);
+    this.postPtyResize(managed, id, cols, rows);
     // An over-budget backlog resumes only AFTER the resize, exactly as
     // commitResize orders it. Resuming first would drain it inline into xterm
     // and then let resize()'s synchronous flushSync keep consuming whatever
@@ -1232,7 +1251,7 @@ export class TerminalResizeController {
 
     const flushedHeldBytes = this.flushHeldBytesBeforeResize(id);
     this.resizeTerminal(managed, cols, rows);
-    terminalClient.resize(id, cols, rows);
+    this.postPtyResize(managed, id, cols, rows);
 
     if (!flushedHeldBytes) {
       this.deps.dataBuffer.resumeFlush(id);
@@ -1268,6 +1287,26 @@ export class TerminalResizeController {
    * of the box that armed it, so a later resize that supersedes them must know
    * they exist.
    */
+  /**
+   * Forget the grid last sent to the PTY, so the next `fit()` re-asserts it even
+   * when xterm already matches. For paths where the PTY may be on a grid this
+   * renderer never sent: a pty-host restart respawns each PTY at its original
+   * spawn size, a pane restart spawns a fresh one, and a resize sent before a
+   * PTY existed was dropped.
+   */
+  invalidatePtyGrid(id: string): void {
+    const managed = this.deps.getInstance(id);
+    if (!managed) return;
+    managed.ptyCols = undefined;
+    managed.ptyRows = undefined;
+  }
+
+  private postPtyResize(managed: ManagedTerminal, id: string, cols: number, rows: number): void {
+    managed.ptyCols = cols;
+    managed.ptyRows = rows;
+    terminalClient.resize(id, cols, rows);
+  }
+
   hasPendingResize(id: string): boolean {
     const managed = this.deps.getInstance(id);
     return (
@@ -1310,7 +1349,7 @@ export class TerminalResizeController {
       this.scheduleSettledResize(id, cols, rows);
     } else {
       this.clearSettledTimer(id);
-      terminalClient.resize(id, cols, rows);
+      this.postPtyResize(managed, id, cols, rows);
     }
   }
 
@@ -1364,7 +1403,7 @@ export class TerminalResizeController {
     }
 
     this.cancelPendingResize(id);
-    terminalClient.resize(id, cols, rows);
+    this.postPtyResize(managed, id, cols, rows);
   }
 
   clearSettledTimer(id: string): void {
