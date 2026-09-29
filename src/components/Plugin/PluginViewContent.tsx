@@ -1,4 +1,5 @@
 import {
+  Profiler,
   Suspense,
   createContext,
   createElement,
@@ -11,6 +12,7 @@ import {
   useState,
   type ComponentType,
   type LazyExoticComponent,
+  type ProfilerOnRenderCallback,
 } from "react";
 import type {
   PanelReloadResult,
@@ -54,6 +56,13 @@ import { useBuiltinPanelView } from "@/registry/builtinRendererRegistry";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { actionService } from "@/services/ActionService";
+import {
+  measurePluginViewPhase,
+  pluginViewMetrics,
+  type PluginViewPhase,
+} from "@/services/plugin/pluginViewMetrics";
+import { markRendererPerformance } from "@/utils/performance";
+import { PERF_MARKS } from "@shared/perf/marks";
 
 /**
  * The resolved subset of `PanelKindConfig` a plugin view actually needs. Both
@@ -210,6 +219,39 @@ function isImportStageFailure(err: unknown): boolean {
  */
 const PluginViewCloseContext = createContext<{ onRequestClose?: () => void }>({});
 
+/**
+ * One attempt's load timings, filled in by its `lazy()` factory and completed
+ * by the paint reporter once the view has actually painted. Keyed off the lazy
+ * wrapper in a WeakMap so the timings live exactly as long as the attempt.
+ */
+interface ViewLoadTiming {
+  openedAt: number;
+  retry: boolean;
+  activateMs: number;
+  importMs: number;
+  stylesMs: number;
+  recorded: boolean;
+}
+
+/**
+ * `markRendererPerformance` also lands a User Timing mark under capture, and
+ * these fire on every open, so the previous mark of the same name is cleared
+ * first to keep the browser's buffer at one per phase. The capture buffer
+ * itself is bounded by `markRendererPerformance`.
+ */
+function markPluginView(mark: string, meta: Record<string, unknown>): void {
+  try {
+    performance.clearMarks?.(mark);
+  } catch {
+    // Clearing is housekeeping; the mark below still matters more.
+  }
+  markRendererPerformance(mark, meta);
+}
+
+function roundMs(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
 function isPluginViewModule(mod: unknown): mod is { default: ComponentType<PanelViewProps> } {
   if (mod === null || typeof mod !== "object") return false;
   const candidate = (mod as { default?: unknown }).default;
@@ -330,6 +372,50 @@ export function makePluginViewContent(
   // recovery generation, which is exactly the granularity main mints it at.
   let recoveryComponentPath: string | undefined;
 
+  const loadTimings = new WeakMap<object, ViewLoadTiming>();
+
+  const startTiming = (retry: boolean): ViewLoadTiming => {
+    const timing: ViewLoadTiming = {
+      openedAt: performance.now(),
+      retry,
+      activateMs: 0,
+      importMs: 0,
+      stylesMs: 0,
+      recorded: false,
+    };
+    markPluginView(PERF_MARKS.PLUGIN_VIEW_LOAD_START, { pluginId, kindId, retry });
+    return timing;
+  };
+
+  const endPhase = (phase: PluginViewPhase, start: number): number => {
+    const end = performance.now();
+    measurePluginViewPhase(pluginId, phase, start, end, { kindId });
+    return end - start;
+  };
+
+  const trackLazy = (
+    view: LazyExoticComponent<ComponentType<PanelViewProps>>,
+    timing: ViewLoadTiming
+  ): LazyExoticComponent<ComponentType<PanelViewProps>> => {
+    loadTimings.set(view, timing);
+    return view;
+  };
+
+  // Factory scope, so the Profiler sees one stable callback and the view's
+  // commits cost a single registry push each. Production react-dom never calls
+  // it (only development and profiling builds do); the rest of the load timing
+  // does not depend on it.
+  const onViewCommit: ProfilerOnRenderCallback = (
+    _id,
+    _phase,
+    actualDuration,
+    _baseDuration,
+    startTime,
+    commitTime
+  ) => {
+    pluginViewMetrics.recordCommit(pluginId, actualDuration, startTime, commitTime);
+  };
+
   /**
    * A built-in plugin's panel view is compiled into the host bundle and
    * registered in-process under this kind id (#11244), so there is no module to
@@ -340,13 +426,17 @@ export function makePluginViewContent(
    * is no poisoned specifier to replace.
    */
   const createBuiltinLazyView = (
-    component: ComponentType<PanelViewProps>
+    component: ComponentType<PanelViewProps>,
+    timing: ViewLoadTiming
   ): LazyExoticComponent<ComponentType<PanelViewProps>> =>
     lazy<ComponentType<PanelViewProps>>(async () => {
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
         (async () => {
+          const activateStart = performance.now();
           await window.electron?.plugin?.activateForView?.(kindId);
+          timing.activateMs = endPhase("activate", activateStart);
+          markPluginView(PERF_MARKS.PLUGIN_VIEW_ACTIVATED, { pluginId, kindId });
         })().finally(() => {
           if (timeoutId !== undefined) clearTimeout(timeoutId);
         }),
@@ -367,11 +457,14 @@ export function makePluginViewContent(
       // Compiler folds a capitalised alias of a lowercase binding back into the
       // binding, and `<component />` then renders an intrinsic element.
       const BuiltinPanelView = (props: PanelViewProps) => createElement(component, props);
+      endPhase("view-load", timing.openedAt);
+      markPluginView(PERF_MARKS.PLUGIN_VIEW_IMPORTED, { pluginId, kindId });
       return { default: BuiltinPanelView };
     });
 
   const createLazyView = (
-    requestRecoveryPath = false
+    requestRecoveryPath: boolean,
+    timing: ViewLoadTiming
   ): LazyExoticComponent<ComponentType<PanelViewProps>> =>
     lazy<ComponentType<PanelViewProps>>(async () => {
       // Race the `plugin://` import against a timeout. A wedged protocol load
@@ -411,17 +504,27 @@ export function makePluginViewContent(
           // ~10ms compile, and the view's own source read all overlap the
           // activation round trip rather than queueing behind it (#12220).
           const initialPath = recoveryComponentPath ?? componentPath;
-          const stylesReady = preparePluginStyles(initialPath);
+          const trackStyles = (path: string): Promise<number> => {
+            const stylesStart = performance.now();
+            return preparePluginStyles(path).then(() => endPhase("styles", stylesStart));
+          };
+          const stylesReady = trackStyles(initialPath);
+          const activateStart = performance.now();
           const recovered = requestRecoveryPath
             ? await window.electron?.plugin?.activateForView?.(kindId, true)
             : await window.electron?.plugin?.activateForView?.(kindId);
+          timing.activateMs = endPhase("activate", activateStart);
+          markPluginView(PERF_MARKS.PLUGIN_VIEW_ACTIVATED, { pluginId, kindId });
           if (typeof recovered === "string" && recovered.length > 0) {
             recoveryComponentPath = recovered;
           }
           const viewPath = recoveryComponentPath ?? componentPath;
           pluginDocumentRuntime.registerView(pluginId, viewPath);
+          pluginViewMetrics.registerViewOrigin(pluginId, viewPath);
           try {
+            const importStart = performance.now();
             const module: unknown = await import(/* @vite-ignore */ viewPath);
+            timing.importMs = endPhase("import", importStart);
             // Awaited AFTER the import, so the two run concurrently, but before
             // the factory resolves — which is what makes the view's first paint
             // styled instead of flashing unstyled. `preparePluginStyles` never
@@ -429,7 +532,13 @@ export function makePluginViewContent(
             // render, so a styling failure must not reach the error boundary.
             // A recovery generation minted during activation re-prepares under
             // its own URL; it is the same file, so this is all but free.
-            await (viewPath === initialPath ? stylesReady : preparePluginStyles(viewPath));
+            // Assigned from the preparation actually awaited, so a recovery's
+            // speculative first preparation cannot overwrite the real one.
+            timing.stylesMs = await (viewPath === initialPath
+              ? stylesReady
+              : trackStyles(viewPath));
+            endPhase("view-load", timing.openedAt);
+            markPluginView(PERF_MARKS.PLUGIN_VIEW_IMPORTED, { pluginId, kindId });
             return module;
           } catch (err) {
             throw markImportStageFailure(err);
@@ -470,13 +579,65 @@ export function makePluginViewContent(
       return { default: mod.default };
     });
 
+  /**
+   * `retry` marks an attempt that replaces one whose load or render failed, as
+   * opposed to a cold open, a user reload of a healthy view, or a backend rebind.
+   */
   const createAttempt = (
     requestRecoveryPath: boolean,
-    builtinComponent: ComponentType<PanelViewProps> | null
-  ): LazyExoticComponent<ComponentType<PanelViewProps>> =>
-    builtinComponent
-      ? createBuiltinLazyView(builtinComponent)
-      : createLazyView(requestRecoveryPath);
+    builtinComponent: ComponentType<PanelViewProps> | null,
+    retry: boolean
+  ): LazyExoticComponent<ComponentType<PanelViewProps>> => {
+    const timing = startTiming(retry);
+    return trackLazy(
+      builtinComponent
+        ? createBuiltinLazyView(builtinComponent, timing)
+        : createLazyView(requestRecoveryPath, timing),
+      timing
+    );
+  };
+
+  /**
+   * Completes an attempt's load sample once its first commit has painted.
+   * Rendered beside the view inside the same Suspense boundary, so its effect
+   * runs only once the view has resolved and committed; the double rAF then
+   * waits out the frame that commit lands in. A view that throws while
+   * rendering unwinds this with it, so a failed load records no sample.
+   */
+  function PluginViewPaintReporter({ view }: { view: object }) {
+    useEffect(() => {
+      const timing = loadTimings.get(view);
+      if (!timing || timing.recorded || typeof requestAnimationFrame !== "function") return;
+      let second = 0;
+      const first = requestAnimationFrame(() => {
+        second = requestAnimationFrame(() => {
+          if (timing.recorded) return;
+          timing.recorded = true;
+          const firstPaintMs = endPhase("first-paint", timing.openedAt);
+          markPluginView(PERF_MARKS.PLUGIN_VIEW_FIRST_PAINT, {
+            pluginId,
+            kindId,
+            retry: timing.retry,
+            firstPaintMs: roundMs(firstPaintMs),
+          });
+          pluginViewMetrics.recordViewLoad(pluginId, {
+            kindId,
+            activateMs: roundMs(timing.activateMs),
+            importMs: roundMs(timing.importMs),
+            stylesMs: roundMs(timing.stylesMs),
+            firstPaintMs: roundMs(firstPaintMs),
+            retry: timing.retry,
+            at: Date.now(),
+          });
+        });
+      });
+      return () => {
+        cancelAnimationFrame(first);
+        cancelAnimationFrame(second);
+      };
+    }, [view]);
+    return null;
+  }
 
   /**
    * Reports "a view is live for this panel" as a commit-time effect. Rendered as
@@ -554,7 +715,7 @@ export function makePluginViewContent(
     // `setLazyView(() => createLazyView())` on reset) keeps exhaustive-deps
     // happy and lets the React Compiler optimize this component.
     const [LazyView, setLazyView] = useState<LazyExoticComponent<ComponentType<PanelViewProps>>>(
-      () => createAttempt(false, builtinComponent)
+      () => createAttempt(false, builtinComponent, false)
     );
     // Which path the held attempt was built for. Between a resolution change and
     // the effect that replaces the attempt there is one render where the two
@@ -599,6 +760,10 @@ export function makePluginViewContent(
     // cases this can't cover; see PluginViewFallback.
     const initPluginRuntime = usePluginRuntimeStore((s) => s.init);
     useEffect(() => initPluginRuntime(), [initPluginRuntime]);
+
+    // Long frames are only attributed while a plugin view is mounted, so the
+    // monitor costs nothing once the last one closes.
+    useEffect(() => pluginViewMetrics.retainView(pluginId), []);
 
     // The dispose controller lives in state because its signal is consumed
     // during render (passed to the plugin view as `disposeSignal`), and refs
@@ -768,6 +933,7 @@ export function makePluginViewContent(
         // attempt stale.
         attemptRef.current += 1;
         retireUnsavedOwner();
+        const replacesFailure = boundaryShowingError.current;
         // The attempt being built is new, so whatever the last one threw is no
         // longer on screen once it commits, and whatever focus the last one held
         // went with its DOM.
@@ -797,7 +963,7 @@ export function makePluginViewContent(
         // that, because the poisoned entry belongs to the specifier, not the
         // wrapper. Activation failures and render throws still just remount.
         const builtin = builtinComponentRef.current;
-        setLazyView(() => createAttempt(requestRecoveryPath, builtin));
+        setLazyView(() => createAttempt(requestRecoveryPath, builtin, replacesFailure));
         setAttemptBuiltin(() => builtin);
         setRetryCount(attemptRef.current);
         // The retry is under way, so the panel is no longer failed — it is
@@ -1255,20 +1421,23 @@ export function makePluginViewContent(
                 ref={styleRootRef}
                 {...PLUGIN_STYLE_ROOT_PROPS}
               >
-                <LazyView
-                  panelId={panelId}
-                  pluginId={pluginId}
-                  disposeSignal={controller.signal}
-                  panelRemovedSignal={panelRemovedSignal}
-                  initialArgs={mountArgs}
-                  stateVersion={mountStateVersion}
-                  persistState={persistState}
-                  requestReload={requestReload}
-                  setHasUnsavedChanges={setHasUnsavedChanges}
-                  worktreeId={worktreeId}
-                  styleRootAttributes={PLUGIN_STYLE_ROOT_PROPS}
-                  {...(settingsContext ? { settingsContext } : {})}
-                />
+                <Profiler id={kindId} onRender={onViewCommit}>
+                  <LazyView
+                    panelId={panelId}
+                    pluginId={pluginId}
+                    disposeSignal={controller.signal}
+                    panelRemovedSignal={panelRemovedSignal}
+                    initialArgs={mountArgs}
+                    stateVersion={mountStateVersion}
+                    persistState={persistState}
+                    requestReload={requestReload}
+                    setHasUnsavedChanges={setHasUnsavedChanges}
+                    worktreeId={worktreeId}
+                    styleRootAttributes={PLUGIN_STYLE_ROOT_PROPS}
+                    {...(settingsContext ? { settingsContext } : {})}
+                  />
+                </Profiler>
+                <PluginViewPaintReporter view={LazyView} />
                 <PluginViewMountReporter
                   panelId={panelId}
                   attempt={retryCount}
