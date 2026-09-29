@@ -9,6 +9,10 @@ import { ContentGridEmptyState } from "./ContentGridEmptyState";
 import { pixelSnapTransform, type ContentGridContext } from "./useContentGridContext";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useShallow } from "zustand/react/shallow";
+
+const EMPTY_PREFIXES = new Map<string, string>();
 
 export function ContentGridFleetScope({
   ctx,
@@ -24,6 +28,23 @@ export function ContentGridFleetScope({
   "use memo";
 
   const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
+  // Only the title prefixes, compared by value — the worktree Map itself
+  // changes identity on every git-status tick of any worktree.
+  const worktreePrefixes = useWorktreeStore(
+    useShallow((s) => {
+      if (!ctx.fleetNeedsWorktreePrefix) return EMPTY_PREFIXES;
+      const prefixes = new Map<string, string>();
+      for (const [id, worktree] of s.worktrees) {
+        prefixes.set(
+          id,
+          worktree.isMainWorktree
+            ? worktree.name?.trim() || worktree.branch?.trim() || "Unknown Worktree"
+            : worktree.branch?.trim() || worktree.name?.trim() || "Unknown Worktree"
+        );
+      }
+      return prefixes;
+    })
+  );
 
   // framer-motion's `layout="position"` snapshots every wrapper via
   // getBoundingClientRect on any commit whose layoutDependency changed — or is
@@ -77,7 +98,7 @@ export function ContentGridFleetScope({
               <ContentGridEmptyState
                 hasLaunchTarget={ctx.hasActiveWorktree}
                 hasProjectContext={ctx.projectName !== null}
-                hasWorktrees={ctx.worktreeMap.size > 0}
+                hasWorktrees={ctx.hasWorktrees}
                 isWorktreeInitialized={ctx.isWorktreeInitialized}
                 activeWorktreeName={ctx.activeWorktreeName}
                 activeWorktreeId={ctx.activeWorktreeId}
@@ -99,12 +120,7 @@ export function ContentGridFleetScope({
                   let titleOverride: string | undefined;
                   if (ctx.fleetNeedsWorktreePrefix) {
                     const worktreeId = terminal.worktreeId ?? null;
-                    const worktree = worktreeId ? ctx.worktreeMap.get(worktreeId) : null;
-                    const prefix = worktree
-                      ? worktree.isMainWorktree
-                        ? worktree.name?.trim() || worktree.branch?.trim() || "Unknown Worktree"
-                        : worktree.branch?.trim() || worktree.name?.trim() || "Unknown Worktree"
-                      : null;
+                    const prefix = worktreeId ? worktreePrefixes.get(worktreeId) : undefined;
                     if (prefix) {
                       titleOverride = `${prefix} — ${getTerminalDisplayTitle(terminal, "full", {
                         showTask: showAgentTaskTitles,
