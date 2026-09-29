@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useState } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { PanelPalette } from "../PanelPalette";
@@ -229,5 +230,67 @@ describe("PanelPalette combobox popup relationship", () => {
     const controls = combobox().getAttribute("aria-controls");
     expect(combobox().getAttribute("aria-expanded")).toBe("true");
     expect(document.getElementById(controls!)?.getAttribute("role")).toBe("listbox");
+  });
+});
+
+describe("PanelPalette Home/End", () => {
+  const liveResults = resumeResults.filter((r) => !r.isStale);
+
+  function Stateful() {
+    const [selectedIndex, setSelectedIndex] = useState(1);
+    return (
+      <PanelPalette
+        {...baseProps}
+        query=""
+        results={liveResults}
+        selectedIndex={selectedIndex}
+        onHoverIndex={setSelectedIndex}
+      />
+    );
+  }
+
+  it("jumps to the first and last row, and leaves Shift+End to the field", () => {
+    render(<Stateful />);
+    const field = document.querySelector<HTMLElement>('[role="combobox"]')!;
+    const active = () => field.getAttribute("aria-activedescendant");
+    const first = `panel-option-${liveResults[0]!.id}`;
+    const last = `panel-option-${liveResults[liveResults.length - 1]!.id}`;
+
+    expect(fireEvent.keyDown(field, { key: "End" })).toBe(false);
+    expect(active()).toBe(last);
+    expect(fireEvent.keyDown(field, { key: "Home" })).toBe(false);
+    expect(active()).toBe(first);
+
+    expect(fireEvent.keyDown(field, { key: "End", shiftKey: true })).toBe(true);
+    expect(active()).toBe(first);
+  });
+
+  it("skips removed rows at either end", () => {
+    const withStaleEnds: PanelKindOption[] = [
+      { ...resumeResults[2]!, id: "resume:lead" },
+      resumeResults[0]!,
+      resumeResults[1]!,
+      resumeResults[2]!,
+    ];
+    function StaleEnds() {
+      const [selectedIndex, setSelectedIndex] = useState(1);
+      return (
+        <PanelPalette
+          {...baseProps}
+          query="x"
+          results={withStaleEnds}
+          selectedIndex={selectedIndex}
+          onHoverIndex={setSelectedIndex}
+        />
+      );
+    }
+    render(<StaleEnds />);
+    const field = document.querySelector<HTMLElement>('[role="combobox"]')!;
+    const active = () => field.getAttribute("aria-activedescendant");
+
+    fireEvent.keyDown(field, { key: "End" });
+    expect(active()).toBe(`panel-option-${resumeResults[1]!.id}`);
+    fireEvent.keyDown(field, { key: "Home" });
+    expect(active()).toBe(`panel-option-${resumeResults[0]!.id}`);
   });
 });

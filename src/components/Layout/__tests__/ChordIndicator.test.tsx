@@ -144,6 +144,44 @@ describe("ChordIndicator (Cmd+K command HUD)", () => {
     expect(input()!.getAttribute("aria-activedescendant")).toBe(selected[0]!.id);
   });
 
+  it("wraps the arrows at the ends, jumps with Home/End, and leaves Shift+End to the field", async () => {
+    render(<ChordIndicator />);
+    pressCmdK();
+    await flushFrames();
+    const rows = options();
+    expect(rows.length).toBeGreaterThan(1);
+    const first = rows[0]!.id;
+    const last = rows[rows.length - 1]!.id;
+    const active = () => input()!.getAttribute("aria-activedescendant");
+    expect(active()).toBe(first);
+
+    fireEvent.keyDown(input()!, { key: "ArrowUp" });
+    expect(active()).toBe(last);
+    fireEvent.keyDown(input()!, { key: "ArrowDown" });
+    expect(active()).toBe(first);
+
+    fireEvent.keyDown(input()!, { key: "End" });
+    expect(active()).toBe(last);
+    fireEvent.keyDown(input()!, { key: "Home" });
+    expect(active()).toBe(first);
+
+    expect(fireEvent.keyDown(input()!, { key: "End", shiftKey: true })).toBe(true);
+    expect(active()).toBe(first);
+  });
+
+  it("leaves End to the IME mid-composition", async () => {
+    render(<ChordIndicator />);
+    pressCmdK();
+    await flushFrames();
+    const first = options()[0]!.id;
+    const active = () => input()!.getAttribute("aria-activedescendant");
+    expect(active()).toBe(first);
+
+    expect(fireEvent.keyDown(input()!, { key: "End", isComposing: true })).toBe(true);
+    expect(fireEvent.keyDown(input()!, { key: "End", keyCode: 229 })).toBe(true);
+    expect(active()).toBe(first);
+  });
+
   it("ends the chord when focus moves out of the input, leaving focus at the destination", async () => {
     const next = document.createElement("button");
     document.body.appendChild(next);

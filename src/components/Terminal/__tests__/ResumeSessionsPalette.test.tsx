@@ -204,6 +204,44 @@ describe("ResumeSessionsPalette", () => {
     }
   });
 
+  it("jumps to the first and last row on Home/End, and leaves Shift+End to the field", () => {
+    const live = [makeItem("a"), makeItem("b"), makeItem("c")];
+    paletteState.results = live;
+    paletteState.visibleResults = live;
+    paletteState.removedResults = [];
+    paletteState.totalResults = live.length;
+    paletteState.selectedIndex = 1;
+    render(<ResumeSessionsPalette />);
+    const field = screen.getByRole("combobox");
+
+    expect(fireEvent.keyDown(field, { key: "End" })).toBe(false);
+    expect(paletteState.setSelectedIndex).toHaveBeenLastCalledWith(2);
+    expect(fireEvent.keyDown(field, { key: "Home" })).toBe(false);
+    expect(paletteState.setSelectedIndex).toHaveBeenLastCalledWith(0);
+
+    paletteState.setSelectedIndex.mockClear();
+    expect(fireEvent.keyDown(field, { key: "End", shiftKey: true })).toBe(true);
+    expect(paletteState.setSelectedIndex).not.toHaveBeenCalled();
+  });
+
+  it("never jumps onto a removed-worktree row with Home/End", () => {
+    const lead = makeItem("lead", { isStale: true });
+    const live = [makeItem("a"), makeItem("b")];
+    const tail = makeItem("tail", { isStale: true });
+    paletteState.results = [lead, ...live, tail];
+    paletteState.visibleResults = live;
+    paletteState.removedResults = [lead, tail];
+    paletteState.totalResults = 4;
+    paletteState.selectedIndex = 1;
+    render(<ResumeSessionsPalette />);
+    const field = screen.getByRole("combobox");
+
+    fireEvent.keyDown(field, { key: "End" });
+    expect(paletteState.setSelectedIndex).toHaveBeenLastCalledWith(2);
+    fireEvent.keyDown(field, { key: "Home" });
+    expect(paletteState.setSelectedIndex).toHaveBeenLastCalledWith(1);
+  });
+
   it("says 'Worktree removed' once for the section, never once per row", () => {
     render(<ResumeSessionsPalette />);
     const dialog = document.querySelector('[role="dialog"]')!;

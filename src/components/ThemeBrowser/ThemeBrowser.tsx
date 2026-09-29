@@ -29,6 +29,7 @@ import { AccessibilityAnnouncer } from "@/components/Accessibility/Accessibility
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useOverlayClaim, useImageError } from "@/hooks";
+import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 
 const PANEL_WIDTH = 380;
 const LISTBOX_ID = "theme-browser-listbox";
@@ -429,18 +430,13 @@ export function ThemeBrowser() {
   const handleListKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       if (filteredThemes.length === 0) return;
-      if (e.key === "ArrowDown") {
+      // A persistent list: the arrows stop at its ends. The search field forwards
+      // only the arrows, so there Home and End stay with the caret.
+      const next = keyBelongsToField(e)
+        ? null
+        : stepListboxCursor(e.key, keyboardIndex, filteredThemes.length, { wrap: false });
+      if (next !== null) {
         e.preventDefault();
-        const next = Math.min(keyboardIndex + 1, filteredThemes.length - 1);
-        setKeyboardIndex(next);
-        const scheme = filteredThemes[next];
-        if (scheme && scheme.id !== activeSchemeId) {
-          handlePreview(scheme.id, true);
-          revealRow(scheme.id);
-        }
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        const next = Math.max(keyboardIndex - 1, 0);
         setKeyboardIndex(next);
         const scheme = filteredThemes[next];
         if (scheme && scheme.id !== activeSchemeId) {

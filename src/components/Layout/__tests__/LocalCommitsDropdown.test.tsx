@@ -478,6 +478,41 @@ describe("LocalCommitsDropdown grid semantics", () => {
     expect(target?.textContent).toContain("Load more");
   });
 
+  it("wraps the arrows through the search field and jumps with Home and End", async () => {
+    const firstPage = Array.from({ length: 3 }, (_, i) => makeCommit(i));
+    listCommitsMock.mockResolvedValueOnce(makeResponse(firstPage, { hasMore: true, total: 9 }));
+
+    const { getByRole, findByText } = render(
+      <LocalCommitsDropdown cwd="/repo" open initialCount={9} />
+    );
+    await findByText("Load more");
+
+    const input = getByRole("combobox");
+    const lit = () => {
+      const id = input.getAttribute("aria-activedescendant");
+      return id ? document.getElementById(id) : null;
+    };
+    const rows = () => Array.from(document.querySelectorAll("#local-commit-list [role='row']"));
+
+    // Up from the field goes round to the last row, Load more.
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(lit()?.textContent).toContain("Load more");
+    // Down past it comes back to the field.
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(lit()).toBeNull();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(lit()).toBe(rows()[0]);
+
+    fireEvent.keyDown(input, { key: "End" });
+    expect(lit()?.textContent).toContain("Load more");
+    fireEvent.keyDown(input, { key: "Home" });
+    expect(lit()).toBe(rows()[0]);
+
+    // Shift+End selects the query text and leaves the cursor alone.
+    expect(fireEvent.keyDown(input, { key: "End", shiftKey: true })).toBe(true);
+    expect(lit()).toBe(rows()[0]);
+  });
+
   it("marks whatever aria-activedescendant points at as the cursor row", async () => {
     const firstPage = Array.from({ length: 3 }, (_, i) => makeCommit(i));
     listCommitsMock.mockResolvedValueOnce(makeResponse(firstPage, { hasMore: true, total: 9 }));

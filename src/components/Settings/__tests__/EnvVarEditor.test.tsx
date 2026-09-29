@@ -520,6 +520,39 @@ describe("EnvVarEditor", () => {
       expect(onChange).toHaveBeenLastCalledWith({ ANTHROPIC_API_KEY: "v" });
     });
 
+    it("wraps the arrows at the ends of an open list, jumps with Home/End, and leaves Shift+End to the field", () => {
+      const { getAllByTestId } = render(
+        <EnvVarEditor env={{ FOO: "v" }} onChange={onChange} suggestions={sampleSuggestions} />
+      );
+      const keyInput = getAllByTestId("env-editor-key")[0]!;
+      const highlighted = () =>
+        getAllByTestId("env-editor-key-suggestion")
+          .filter((el) => el.getAttribute("aria-selected") === "true")
+          .map((el) => el.textContent ?? "");
+      const activeOption = () => {
+        const id = keyInput.getAttribute("aria-activedescendant");
+        return id ? (document.getElementById(id)?.textContent ?? "") : "";
+      };
+
+      // A shut list opens at its first row.
+      fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+      expect(activeOption()).toContain("ANTHROPIC_API_KEY");
+
+      fireEvent.keyDown(keyInput, { key: "ArrowUp" });
+      expect(activeOption()).toContain("DEBUG");
+      fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+      expect(activeOption()).toContain("ANTHROPIC_API_KEY");
+
+      fireEvent.keyDown(keyInput, { key: "End" });
+      expect(activeOption()).toContain("DEBUG");
+      fireEvent.keyDown(keyInput, { key: "Home" });
+      expect(activeOption()).toContain("ANTHROPIC_API_KEY");
+
+      expect(fireEvent.keyDown(keyInput, { key: "End", shiftKey: true })).toBe(true);
+      expect(activeOption()).toContain("ANTHROPIC_API_KEY");
+      expect(highlighted()).toHaveLength(1);
+    });
+
     it("Escape closes an open popover without blurring the input", () => {
       const { getAllByTestId } = render(
         <EnvVarEditor env={{ FOO: "v" }} onChange={onChange} suggestions={sampleSuggestions} />

@@ -101,6 +101,28 @@ describe("SettingsSubjectPicker", () => {
     expect(onChange).toHaveBeenCalledWith("gamma");
   });
 
+  it("wraps the arrows at the ends, jumps with Home/End, and leaves Shift+End to the field", async () => {
+    renderPicker("gamma");
+    const input = await openWithKeyboard();
+    const active = () => input.getAttribute("aria-activedescendant");
+    expect(active()).toBe("test-picker-item-gamma");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(active()).toBe("test-picker-item-overview");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(active()).toBe("test-picker-item-gamma");
+
+    fireEvent.keyDown(input, { key: "Home" });
+    expect(active()).toBe("test-picker-item-overview");
+    fireEvent.keyDown(input, { key: "End" });
+    expect(active()).toBe("test-picker-item-gamma");
+
+    fireEvent.keyDown(input, { key: "Home" });
+    expect(fireEvent.keyDown(input, { key: "End", shiftKey: true })).toBe(true);
+    expect(active()).toBe("test-picker-item-overview");
+    expect(cursorRows()).toHaveLength(1);
+  });
+
   it("never lets a failed search pick the overview", async () => {
     const onChange = renderPicker("alpha");
     const input = await openWithKeyboard();
@@ -112,6 +134,17 @@ describe("SettingsSubjectPicker", () => {
     fireEvent.keyDown(input, { key: "ArrowDown" });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("leaves Home/End to the caret when nothing matches", async () => {
+    renderPicker("alpha");
+    const input = await openWithKeyboard();
+    act(() => {
+      fireEvent.change(input, { target: { value: "zzz" } });
+    });
+    expect(fireEvent.keyDown(input, { key: "Home" })).toBe(true);
+    expect(fireEvent.keyDown(input, { key: "End" })).toBe(true);
+    expect(cursorRows()).toHaveLength(0);
   });
 
   it("puts the cursor on the first match, not the overview, while filtering", async () => {

@@ -110,6 +110,7 @@ import {
 } from "@shared/config/scratchCleanup";
 import { PathSegments } from "@/components/ui/PathSegments";
 import { pluralize } from "@/lib/pluralize";
+import { keyBelongsToField } from "@/hooks/useListboxCursor";
 
 export interface ProjectSwitcherPaletteProps {
   isOpen: boolean;
@@ -2398,6 +2399,15 @@ function ProjectPaletteInner({
           e.stopPropagation();
           onSelectNext();
           break;
+        // First and last, as in every other palette. Shift+Home selects the
+        // query instead, and an empty list leaves the keys to the caret.
+        case "Home":
+        case "End":
+          if (keyBelongsToField(e) || results.length === 0 || !onHoverRow) break;
+          e.preventDefault();
+          e.stopPropagation();
+          onHoverRow(results[e.key === "Home" ? 0 : results.length - 1]!.id);
+          break;
         case "Enter":
           e.preventDefault();
           e.stopPropagation();
@@ -2447,6 +2457,7 @@ function ProjectPaletteInner({
     [
       results,
       selectedIndex,
+      onHoverRow,
       mode,
       query,
       onQueryChange,

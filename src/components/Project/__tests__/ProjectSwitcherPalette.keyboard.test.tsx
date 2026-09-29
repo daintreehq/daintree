@@ -2,6 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
+import { useState } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 
 const originalScrollIntoView = Element.prototype.scrollIntoView;
@@ -450,6 +451,30 @@ describe("ProjectSwitcherPalette active descendant", () => {
       expect(selected).toHaveLength(1);
       unmount();
     }
+  });
+
+  it("Home/End jump to the first and last row, and Shift+End stays with the field", () => {
+    function Stateful() {
+      const [selectedIndex, setSelectedIndex] = useState(1);
+      return (
+        <ProjectSwitcherPalette
+          {...mixedProps}
+          selectedIndex={selectedIndex}
+          onHoverRow={(id: string) => setSelectedIndex(mixedResults.findIndex((r) => r.id === id))}
+        />
+      );
+    }
+    render(<Stateful />);
+    const input = screen.getByTestId("palette-input");
+    const active = () => input.getAttribute("aria-activedescendant");
+
+    expect(fireEvent.keyDown(input, { key: "End" })).toBe(false);
+    expect(active()).toBe("project-option-background");
+    expect(fireEvent.keyDown(input, { key: "Home" })).toBe(false);
+    expect(active()).toBe("project-option-active");
+
+    expect(fireEvent.keyDown(input, { key: "End", shiftKey: true })).toBe(true);
+    expect(active()).toBe("project-option-active");
   });
 
   it("Enter selects the project the active descendant points at", () => {

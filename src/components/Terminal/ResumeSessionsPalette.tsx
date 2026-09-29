@@ -12,6 +12,7 @@ import { useResumeSessionsPalette } from "@/hooks/useResumeSessionsPalette";
 import { useResumeAgentSession } from "@/hooks/useResumeAgentSession";
 import type { ResumeSessionItem } from "@/services/resumeSessionItems";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
+import { keyBelongsToField } from "@/hooks/useListboxCursor";
 
 interface ResumeSessionRowProps {
   item: ResumeSessionItem;
@@ -225,6 +226,19 @@ export function ResumeSessionsPalette() {
           e.preventDefault();
           selectNext();
           break;
+        // First and last, as in every other palette. Shift+Home selects the
+        // query instead, and an empty list leaves the keys to the caret.
+        case "Home":
+        case "End": {
+          if (keyBelongsToField(e)) break;
+          // Removed-worktree rows are never selectable; the ends are the live rows.
+          const live = results.flatMap((item, index) => (item.isStale ? [] : [index]));
+          const target = (e.key === "Home" ? live[0] : live[live.length - 1]) ?? -1;
+          if (target < 0) break;
+          e.preventDefault();
+          setSelectedIndex(target);
+          break;
+        }
         case "Enter":
           e.preventDefault();
           handleConfirm();
@@ -249,7 +263,7 @@ export function ResumeSessionsPalette() {
           break;
       }
     },
-    [selectPrevious, selectNext, handleConfirm, close, query, setQuery]
+    [selectPrevious, selectNext, handleConfirm, close, query, setQuery, results, setSelectedIndex]
   );
 
   const setItemRef = useCallback(
