@@ -104,6 +104,13 @@ describe("popover header contract", () => {
       return /<PopoverContent\b/.test(src) && !/<PopoverContent\b[^>]*aria-labelledby=/s.test(src);
     });
     expect(offenders).toEqual([]);
+    // Recent calls is hosted by the activity strip, which owns its PopoverContent.
+    expect(read("src/components/HelpPanel/McpActivityStrip.tsx")).toMatch(
+      /<PopoverContent\b[\s\S]*?aria-labelledby=\{titleId\}[\s\S]*?<RecentCallsPopover/
+    );
+    expect(read("src/components/HelpPanel/RecentCallsPopover.tsx")).toMatch(
+      /id=\{titleId\} className=\{POPOVER_TITLE_CLASS\}/
+    );
   });
 
   it("no popover in the family spells its own rule token or a stray header inset", () => {
@@ -111,7 +118,7 @@ describe("popover header contract", () => {
       const src = read(rel);
       // The divider is `border-divider`; the arbitrary-value spelling and the
       // heavier border ramp both drifted in as header and footer rules.
-      expect(src, rel).not.toMatch(/border-\[var\(--border-divider\)\]/);
+      expect(src, rel).not.toMatch(/(?:border|divide)-\[var\(--border-divider\)\]/);
       expect(src, rel).not.toMatch(/border-[bt] border-border-default\b/);
       expect(src, rel).not.toMatch(/\b(?:border|divide)-border-subtle\b|border-daintree-border/);
       // Title strips are `py-2`; a split `pt-2.5 pb-*` was the drift.

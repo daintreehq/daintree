@@ -3560,6 +3560,11 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     border-color: var(--border-divider);
   }
 
+  /* The same token between the children of a divide-y list. */
+  .divide-divider > :not(:last-child) {
+    border-color: var(--border-divider);
+  }
+
   .border-overlay {
     border-color: var(--border-overlay);
   }

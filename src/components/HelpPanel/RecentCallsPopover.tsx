@@ -98,6 +98,8 @@ interface RecentCallsPopoverProps {
   busy: boolean;
   onRetry: () => void;
   onOpenAuditLog: () => void;
+  /** The id the host's `PopoverContent` points `aria-labelledby` at. */
+  titleId?: string;
 }
 
 export function RecentCallsPopover({
@@ -107,6 +109,7 @@ export function RecentCallsPopover({
   busy,
   onRetry,
   onOpenAuditLog,
+  titleId,
 }: RecentCallsPopoverProps) {
   const groups = useMemo(() => groupCallsByTurn(records), [records]);
   // Ages stay honest while the popover sits open; the ticker only runs while
@@ -158,7 +161,9 @@ export function RecentCallsPopover({
       className="flex max-h-[min(440px,var(--radix-popover-content-available-height,440px))] flex-col text-2xs text-text-primary"
     >
       <div className={cn(POPOVER_HEADER_CLASS, "shrink-0")}>
-        <span className={POPOVER_TITLE_CLASS}>Recent tool calls</span>
+        <span id={titleId} className={POPOVER_TITLE_CLASS}>
+          Recent tool calls
+        </span>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-1">
@@ -201,7 +206,7 @@ export function RecentCallsPopover({
                 {retry}
               </div>
             )}
-            <ul className="divide-y divide-[var(--border-divider)]">
+            <ul className="divide-y divide-divider">
               {groups.map((group, index) => {
                 const headingId = `${baseId}-group-${index}`;
                 return (

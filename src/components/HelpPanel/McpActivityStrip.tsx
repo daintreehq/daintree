@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Spinner } from "@/components/ui/Spinner";
 import { CircleSlash, TriangleAlert, XCircle, CheckCircle2 } from "lucide-react";
 import { Activity } from "@/components/icons";
@@ -54,6 +54,7 @@ interface McpActivityStripProps {
  */
 export function McpActivityStrip({ sessionId, activity, compact = false }: McpActivityStripProps) {
   const [open, setOpen] = useState(false);
+  const titleId = useId();
   const [records, setRecords] = useState<McpAuditRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -209,10 +210,11 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
         side="top"
         align="start"
         onOpenAutoFocus={(event) => event.preventDefault()}
-        aria-label="Recent tool calls"
+        aria-labelledby={titleId}
         className="w-80 max-w-[var(--radix-popover-content-available-width)]"
       >
         <RecentCallsPopover
+          titleId={titleId}
           records={records}
           loading={loading}
           error={error}
