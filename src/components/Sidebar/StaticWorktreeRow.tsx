@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { memo, useCallback, useMemo } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { WorktreeCard, type WorktreeCardProps } from "@/components/Worktree";
 import { WorktreeCardErrorFallback } from "@/components/Worktree/WorktreeCardErrorFallback";
@@ -111,5 +111,9 @@ function StaticWorktreeRow({
   );
 }
 
-export { StaticWorktreeRow };
+// Rendered from Virtuoso's item renderer, which re-invokes on every sidebar
+// render; memo lets rows whose props are unchanged skip the whole card subtree.
+const MemoizedStaticWorktreeRow = memo(StaticWorktreeRow);
+
+export { MemoizedStaticWorktreeRow as StaticWorktreeRow };
 export type { StaticWorktreeRowProps };

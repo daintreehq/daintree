@@ -1,7 +1,11 @@
 import { use, useSyncExternalStore } from "react";
 import { useStore } from "zustand";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
-import type { WorktreeViewState, WorktreeViewActions } from "@/store/createWorktreeStore";
+import type {
+  WorktreeViewState,
+  WorktreeViewActions,
+  WorktreeViewStoreApi,
+} from "@/store/createWorktreeStore";
 
 export function useWorktreeStore<T>(
   selector: (state: WorktreeViewState & WorktreeViewActions) => T
@@ -11,6 +15,19 @@ export function useWorktreeStore<T>(
     throw new Error("useWorktreeStore must be used within WorktreeStoreProvider");
   }
   return useStore(store, selector);
+}
+
+/**
+ * The view's store itself, for callbacks that read worktree state at call time
+ * instead of subscribing to it — a whole-Map subscription re-renders the host
+ * on every worktree status change.
+ */
+export function useWorktreeStoreApi(): WorktreeViewStoreApi {
+  const store = use(WorktreeStoreContext);
+  if (!store) {
+    throw new Error("useWorktreeStoreApi must be used within WorktreeStoreProvider");
+  }
+  return store;
 }
 
 /** A subscription to nothing, for the renders where there is no store to watch. */

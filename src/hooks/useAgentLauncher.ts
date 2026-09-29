@@ -6,7 +6,8 @@ import { useScratchStore } from "@/store/scratchStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import { useWorktrees } from "./useWorktrees";
+import { getNormalizedWorktreeMap } from "./useWorktrees";
+import { useWorktreeStoreApi } from "./useWorktreeStore";
 import { isElectronAvailable } from "./useElectron";
 
 import { systemClient } from "@/clients";
@@ -291,7 +292,10 @@ export interface UseAgentLauncherReturn {
 
 export function useAgentLauncher(): UseAgentLauncherReturn {
   const addPanel = usePanelStore((state) => state.addPanel);
-  const { worktreeMap, isInitialized } = useWorktrees();
+  // Read at launch time rather than subscribed, so `launchAgent` keeps its
+  // identity across worktree status changes instead of re-minting App's
+  // launch callbacks (and the AppLayout props built from them) on every one.
+  const worktreeStore = useWorktreeStoreApi();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const deletedWorktrees = useWorktreeSelectionStore((state) => state.deletedWorktrees);
   const currentProject = useProjectStore((state) => state.currentProject);
@@ -379,10 +383,11 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         // Inside the try: a throw between the add above and the `finally` would
         // strand the entry and leave this agentId unlaunchable for the session.
         markRendererPerformance("agentlaunch.begin", { agentId });
+        const { worktrees: worktreeSnapshots, isInitialized } = worktreeStore.getState();
         const { worktreeId: effectiveWorktreeId, worktree: targetWorktree } = resolveLaunchTarget(
           launchOptions?.worktreeId,
           activeWorktreeId,
-          worktreeMap,
+          getNormalizedWorktreeMap(worktreeSnapshots),
           isInitialized,
           deletedWorktrees
         );
@@ -833,8 +838,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
     [
       activeWorktreeId,
       deletedWorktrees,
-      worktreeMap,
-      isInitialized,
+      worktreeStore,
       addPanel,
       currentProject,
       currentScratch,

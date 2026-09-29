@@ -146,6 +146,20 @@ export {
 // This allows clicks to work for popovers without triggering drag
 const DRAG_ACTIVATION_DISTANCE = 8;
 
+// Module-level so `useSensor`'s [sensor, options] memo holds across renders.
+// This provider is not compiled (see the compiler baseline), and fresh option
+// objects rebuilt dnd-kit's activators on every render — a new internal
+// context that re-rendered every draggable and sortable in the app.
+const MOUSE_SENSOR_OPTIONS = {
+  activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE },
+};
+const TOUCH_SENSOR_OPTIONS = {
+  activationConstraint: { delay: 150, tolerance: 5 },
+};
+const KEYBOARD_SENSOR_OPTIONS = {
+  coordinateGetter: sameContainerKeyboardCoordinates,
+};
+
 // Right-click button index for MouseEvent.button (matches dnd-kit upstream).
 const MOUSE_RIGHT_CLICK = 2;
 
@@ -571,6 +585,14 @@ export function DndProvider({ children }: DndProviderProps) {
     [announcementRefs]
   );
 
+  const accessibility = useMemo(
+    () => ({
+      announcements: dragAnnouncements,
+      screenReaderInstructions: dragScreenReaderInstructions,
+    }),
+    [dragAnnouncements]
+  );
+
   // Ref to track overContainer for stable collision detection (avoids infinite loops)
   const overContainerRef = useRef<"grid" | "dock" | null>(null);
   useEffect(() => {
@@ -610,15 +632,9 @@ export function DndProvider({ children }: DndProviderProps) {
   // opt-out doesn't apply here because keyboard activation is explicit
   // (Space/Enter on a focused activator node, not bubbling pointer input).
   const sensors = useSensors(
-    useSensor(NoDndMouseSensor, {
-      activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE },
-    }),
-    useSensor(NoDndTouchSensor, {
-      activationConstraint: { delay: 150, tolerance: 5 },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sameContainerKeyboardCoordinates,
-    })
+    useSensor(NoDndMouseSensor, MOUSE_SENSOR_OPTIONS),
+    useSensor(NoDndTouchSensor, TOUCH_SENSOR_OPTIONS),
+    useSensor(KeyboardSensor, KEYBOARD_SENSOR_OPTIONS)
   );
 
   // dnd-kit's defaults (threshold 0.2/0.2, acceleration 10) make the sortable
@@ -1441,10 +1457,7 @@ export function DndProvider({ children }: DndProviderProps) {
       collisionDetection={collisionDetection}
       measuring={MEASURING_CONFIG}
       autoScroll={autoScroll}
-      accessibility={{
-        announcements: dragAnnouncements,
-        screenReaderInstructions: dragScreenReaderInstructions,
-      }}
+      accessibility={accessibility}
     >
       <DndPlaceholderContext.Provider value={placeholderContextValue}>
         {children}
