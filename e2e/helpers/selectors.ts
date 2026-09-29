@@ -571,7 +571,6 @@ export const SEL = {
     overriddenBadge: 'text="Overridden by team recipe"',
     moreButton: (name: string) => `[aria-label="More actions for recipe ${name}"]`,
     copyJsonItem: '[role="menuitem"]:has-text("Copy as JSON")',
-    exportedButton: (name: string) => `[aria-label="Recipe ${name} exported to clipboard"]`,
   },
   recipeConflict: {
     dialog: '[role="dialog"]:has-text("changed on disk")',

@@ -34,7 +34,7 @@ const toolbarButtonIds: Record<string, string> = {
 // row is found by the kind's own name rather than a toolbar button id.
 const toolbarPanelTrayItemNames: Record<string, string> = {
   "Open browser": "Browser",
-  "Open dev preview": "Dev Preview",
+  "Open dev preview": "Dev preview",
   "Browse files": "File Browser",
 };
 

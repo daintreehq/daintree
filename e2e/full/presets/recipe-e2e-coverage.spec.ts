@@ -130,15 +130,19 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       await manager.locator(SEL.recipeManager.moreButton("Export Me")).click({ force: true });
       await window.locator(SEL.recipeManager.copyJsonItem).click();
 
-      // UI feedback flips only when the clipboard write resolves, so its
-      // appearance confirms the copy succeeded before we read it back.
-      await expect(manager.locator(SEL.recipeManager.exportedButton("Export Me"))).toBeVisible({
-        timeout: T_MEDIUM,
-      });
-
-      const clipboardText = await app.evaluate(({ clipboard }) => clipboard.readText());
-      const parsed = JSON.parse(clipboardText) as { name?: string };
-      expect(parsed.name).toBe("Export Me");
+      await expect
+        .poll(
+          async () => {
+            const text = await app.evaluate(({ clipboard }) => clipboard.readText());
+            try {
+              return (JSON.parse(text) as { name?: string }).name;
+            } catch {
+              return undefined;
+            }
+          },
+          { timeout: T_MEDIUM }
+        )
+        .toBe("Export Me");
 
       await closeAppDialog(window);
     });

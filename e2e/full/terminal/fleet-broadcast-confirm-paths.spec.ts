@@ -336,14 +336,7 @@ test.describe.serial("Fleet broadcast: confirm and lifecycle paths", () => {
         .locator(SEL.notifications.toastRegion)
         .getByRole("button", { name: "Undo" });
       await expect(undo).toBeVisible({ timeout: T_MEDIUM });
-
-      await window.locator(SEL.fleet.selectionMenuTrigger).click();
-      await expect(window.locator(SEL.fleet.savedRow).filter({ hasText: fleetName })).toHaveCount(
-        0,
-        { timeout: T_MEDIUM }
-      );
-      await window.keyboard.press("Escape");
-
+      // The toast expires before a menu round trip; the final delete below checks removal.
       await undo.click();
       await openSavedFleetRow(window, fleetName);
       await window.keyboard.press("Escape");
