@@ -107,7 +107,10 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
     "get-serialized-state": (msg) => {
       void (async () => {
         try {
-          const serializedState = await ptyManager.getSerializedStateAsync(msg.id);
+          const serializedState = await ptyManager.getSerializedStateAsync(
+            msg.id,
+            msg.tailRows !== undefined ? { tailRows: msg.tailRows } : undefined
+          );
           sendEvent({
             type: "serialized-state",
             requestId: msg.requestId,

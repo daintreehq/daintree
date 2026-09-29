@@ -1909,7 +1909,7 @@ export interface GeneratedIpcInvokeMap {
     result: Record<string, import("../terminalStatus.js").TerminalOutputActivityLookup>;
   };
   "terminal:get-serialized-state": {
-    args: [terminalId: string];
+    args: [terminalId: string, options?: import("../terminal.js").SerializeReadOptions | undefined];
     result: import("../terminal.js").SerializedTerminalSnapshot | null;
   };
   "terminal:get-serialized-states": {

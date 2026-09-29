@@ -1,6 +1,9 @@
 import type { PatternDetectionConfig } from "../AgentPatternDetector.js";
 import type { AnalysisChunkFlags } from "../analysisWorkerProtocol.js";
-import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
+import type {
+  SerializeReadOptions,
+  SerializedTerminalSnapshot,
+} from "../../../../shared/types/terminal.js";
 
 /**
  * Backend-level counterpart of the worker-wire `AnalysisFinalSnapshot`: the
@@ -77,7 +80,7 @@ export interface AnalysisBackend {
    * capture width, so every replay site sizes its target to these numbers
    * before writing (#11552).
    */
-  serialize(): Promise<SerializedTerminalSnapshot | null>;
+  serialize(options?: SerializeReadOptions): Promise<SerializedTerminalSnapshot | null>;
   serializeForPersistence(): Promise<SerializedTerminalSnapshot | null>;
   /** Drain pending parses, then capture both preserved + persistence forms. */
   captureFinalSnapshot(): Promise<AnalysisFinalCapture>;

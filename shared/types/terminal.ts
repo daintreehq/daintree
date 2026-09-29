@@ -79,6 +79,17 @@ export interface SerializedTerminalSnapshot extends TerminalGeometry {
   data: string;
   /** Live snapshots only; persisted and preserved snapshots never carry it. */
   continuation?: SnapshotContinuation;
+  /**
+   * Set when the read was capped by `tailRows` and older rows were left out, so
+   * a caller that needs more than the tail knows to read again in full.
+   */
+  partial?: true;
+}
+
+/** Options for a live snapshot read that only needs the newest rows. */
+export interface SerializeReadOptions {
+  /** Scrollback rows to include beyond the visible screen; omit for the whole buffer. */
+  tailRows?: number;
 }
 
 /**

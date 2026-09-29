@@ -1,7 +1,7 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { panelKindHasPty } from "../../../shared/config/panelKindRegistry.js";
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js";
-import { tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
+import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import {
   boundTerminalStatusOutput,
   type CapturedTail,
@@ -371,7 +371,16 @@ export async function buildViewlessTerminalStatus(
   if (includeOutput) {
     const readable = lookupIds.filter((id) => records.has(id));
     const snapshots = await Promise.all(
-      readable.map((id) => deps.ptyClient.getSerializedStateAsync(id))
+      // Raw output keeps the whole-buffer read: the serializer's erase escapes
+      // depend on the range it starts from, so a capped read is not byte-identical.
+      readable.map((id) =>
+        stripAnsi
+          ? readTailSnapshot(
+              (options) => deps.ptyClient.getSerializedStateAsync(id, options),
+              lines
+            )
+          : deps.ptyClient.getSerializedStateAsync(id)
+      )
     );
     readable.forEach((id, index) => {
       const snapshot = snapshots[index];

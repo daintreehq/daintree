@@ -6,7 +6,7 @@ import {
   TerminalSendCommandResultSchema,
   TerminalLastMessageResultSchema,
 } from "./schemas";
-import { tailCapturedOutput } from "@shared/utils/artifactParser";
+import { readTailSnapshot, tailCapturedOutput } from "@shared/utils/artifactParser";
 import {
   boundTerminalStatusOutput,
   fitTerminalOutputResult,
@@ -273,7 +273,14 @@ export function registerTerminalQueryActions(
       const effectiveMaxLines = Math.min(Math.max(maxLines, 1), 1000);
 
       // Get serialized terminal state via existing IPC method
-      const serializedState = await window.electron.terminal.getSerializedState(terminalId);
+      // Raw output keeps the whole-buffer read: the serializer's erase escapes
+      // depend on the range it starts from, so a capped read is not byte-identical.
+      const serializedState = stripAnsi
+        ? await readTailSnapshot(
+            (options) => window.electron.terminal.getSerializedState(terminalId, options),
+            effectiveMaxLines
+          )
+        : await window.electron.terminal.getSerializedState(terminalId);
 
       if (serializedState === null) {
         return {

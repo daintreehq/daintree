@@ -291,7 +291,7 @@ export class AnalysisWorkerRuntime {
         }
         const promise =
           msg.op === "serialize"
-            ? session.serialize()
+            ? session.serialize(msg.tailRows !== undefined ? { tailRows: msg.tailRows } : undefined)
             : msg.op === "serialize-persistence"
               ? session.serializeForPersistence()
               : session.captureFinalSnapshot();
