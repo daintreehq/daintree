@@ -223,6 +223,11 @@ import { unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { injectSkeletonCss } from "../skeletonCss.js";
 import { projectStore } from "../../services/ProjectStore.js";
+import { formatCancelledSwitchMessage } from "../projectSwitchCancelledError.js";
+import {
+  publishSystemMemoryPressure,
+  resetSystemMemoryPressureDeliveryForTesting,
+} from "../systemMemoryPressureDelivery.js";
 import { notifyError } from "../../ipc/errorHandlers.js";
 
 function createMockWindow() {
@@ -476,7 +481,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
 
       expect(err.message).toContain("View never painted");
       expect((err as { userMessage?: string }).userMessage).toBe(
-        "The project didn't finish displaying, so the switch was cancelled and you're still in Alpha."
+        formatCancelledSwitchMessage("Alpha", null)
       );
       expect(manager.getActiveProjectId()).toBe("proj-a");
       expect(vi.mocked(notifyError)).not.toHaveBeenCalled();
@@ -1944,13 +1949,41 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
       const error = await rejected;
       expect(error.message).toContain("View never painted");
       expect((error as { userMessage?: string }).userMessage).toBe(
-        "The project didn't finish displaying, so the switch was cancelled and you're still in Bravo."
+        formatCancelledSwitchMessage("Bravo", null)
       );
       expect(manager.getActiveProjectId()).toBe("proj-b");
       expect(attachedWebContents()).toEqual([bWc]);
       expect(vi.mocked(notifyError)).not.toHaveBeenCalled();
     } finally {
       vi.mocked(projectStore.getProjectById).mockImplementation(() => null);
+    }
+  });
+
+  it("notes an open system memory episode in a cancelled warm switch's copy", async () => {
+    const bWc = await switchToColdB();
+    holdFrames(initialWc);
+    const episode = {
+      status: "degraded",
+      swapUsedPercent: 89,
+      swapKind: "swap",
+      fseventsdRssMb: null,
+      kernelPressureLevel: "warn",
+    } as const;
+    publishSystemMemoryPressure(episode, []);
+    try {
+      const rejected = expectRejection(
+        manager.switchTo("proj-a", "/path/a", undefined, { requesterWebContentsId: bWc.id })
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      manager.signalWarmViewPainted(initialWc.id);
+      await vi.advanceTimersByTimeAsync(PAINT_HARD_MS);
+
+      const error = await rejected;
+      expect((error as { userMessage?: string }).userMessage).toBe(
+        formatCancelledSwitchMessage(null, episode)
+      );
+    } finally {
+      resetSystemMemoryPressureDeliveryForTesting();
     }
   });
 
@@ -2078,6 +2111,28 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
     frames.drawAll();
     await switchedBack;
     expect(manager.getActiveProjectId()).toBe("proj-a");
+  });
+
+  it("leaves a warm switch whose cached renderer crashed to the requester it rolled back to", async () => {
+    const bWc = await switchToColdB();
+    const frames = holdFrames(initialWc);
+
+    const rejected = expectRejection(
+      manager.switchTo("proj-a", "/path/a", undefined, { requesterWebContentsId: bWc.id })
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    frames.drawAll();
+    manager.signalWarmViewPainted(initialWc.id);
+    const failOnRendererGone = initialWc.on.mock.calls
+      .filter(([event]) => event === "render-process-gone")
+      .at(-1)?.[1] as Handler;
+    failOnRendererGone({}, { reason: "crashed", exitCode: 1 });
+
+    const error = await rejected;
+    expect(error.message).toContain("renderer gone");
+    expect((error as { userMessage?: string }).userMessage).toBeTruthy();
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    expect(vi.mocked(notifyError)).not.toHaveBeenCalled();
   });
 
   it("fails a warm switch at once when the cached view's renderer crashes mid-gate", async () => {

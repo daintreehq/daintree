@@ -57,8 +57,9 @@ export function createCancelledSwitchError(opts: {
  * A cancelled switch is reported by the renderer that asked for it, which the
  * rollback has put back on screen — the main-side notification would be a
  * second, generic toast for the same failure. Every other failure, and any
- * switch whose requester is not the restored view (menu and Dock opens, a
- * request that reached a cached view), keeps the main-side report.
+ * switch whose requester is not the view the rollback actually restored (menu
+ * and Dock opens, a request that reached a cached view, a rollback that could
+ * not reattach anything), keeps the main-side report.
  */
 export function reportSwitchFailure(
   error: unknown,
@@ -69,9 +70,17 @@ export function reportSwitchFailure(
     error instanceof Error &&
     cancelledSwitchErrors.has(error) &&
     requesterWebContentsId !== undefined &&
-    restoredView !== null &&
-    !restoredView.webContents.isDestroyed() &&
-    restoredView.webContents.id === requesterWebContentsId;
+    liveWebContentsId(restoredView) === requesterWebContentsId;
   if (reportedByRequester) return;
   notifyError(error, { source: "project-switch" });
+}
+
+// A destroyed view's `webContents` getter can itself throw or return undefined.
+function liveWebContentsId(view: WebContentsView | null): number | null {
+  try {
+    const wc = view?.webContents;
+    return wc && !wc.isDestroyed() ? wc.id : null;
+  } catch {
+    return null;
+  }
 }

@@ -76,7 +76,8 @@ function deliverFocusIntent(view: WebContentsView, intent: ProjectFocusOnActivat
  * of the cold-start rollback. The cached renderer stays cached, so the next
  * switch to it retries a warm reactivation rather than recreating a project
  * that may have running agents. Each step is independent: a throw from one
- * must not leave the window pointed at the view it failed to park.
+ * must not leave the window pointed at the view it failed to park. Returns the
+ * view it put back on screen, or null when none was restored.
  */
 function abandonUnpaintedWarmSwitch(
   host: ProjectViewManager,
@@ -85,13 +86,14 @@ function abandonUnpaintedWarmSwitch(
   previousEntry: ViewEntry | null,
   unboundOutgoingView: WebContentsView | null,
   cachedRendererGone: boolean
-): void {
-  if (host.disposed || host.win.isDestroyed()) return;
+): WebContentsView | null {
+  if (host.disposed || host.win.isDestroyed()) return null;
   // switchChain serializes switches, so the only other writer is a teardown of
   // the cached view mid-gate (destroyView nulls the pointer). Either way the
   // outgoing view is still what the user sees, and it gets the window back.
-  if (host.activeProjectId !== cached.projectId && host.activeProjectId !== null) return;
+  if (host.activeProjectId !== cached.projectId && host.activeProjectId !== null) return null;
   host.activeProjectId = previousProjectId;
+  let restoredView: WebContentsView | null = null;
   try {
     // Stale-entry guarded: a torn-down cached view is only detached.
     deactivateEntry(host, cached);
@@ -110,8 +112,10 @@ function abandonUnpaintedWarmSwitch(
       if (cachedRendererGone) {
         host.onViewReady?.(previousEntry.view.webContents);
       }
+      restoredView = previousEntry.view;
     } else if (unboundOutgoingView && !unboundOutgoingView.webContents.isDestroyed()) {
       registerAppView(host.win, unboundOutgoingView);
+      restoredView = unboundOutgoingView;
     }
   } catch (error) {
     console.error("[ProjectViewManager] restoring the outgoing view threw:", error);
@@ -121,6 +125,7 @@ function abandonUnpaintedWarmSwitch(
   } catch (error) {
     console.error("[ProjectViewManager] pruneOrphanedChildren threw:", error);
   }
+  return restoredView;
 }
 
 export async function performSwitch(
@@ -290,7 +295,7 @@ export async function performSwitch(
           rendererGone: cachedRendererGone,
           rollbackProjectId: previousProjectId,
         });
-        abandonUnpaintedWarmSwitch(
+        const restoredView = abandonUnpaintedWarmSwitch(
           host,
           cached,
           previousProjectId,
@@ -309,7 +314,7 @@ export async function performSwitch(
           previousProjectId,
         });
         if (!host.disposed && !host.win.isDestroyed()) {
-          reportSwitchFailure(unpaintedError, request?.requesterWebContentsId, outgoingView);
+          reportSwitchFailure(unpaintedError, request?.requesterWebContentsId, restoredView);
         }
         throw unpaintedError;
       }
@@ -771,6 +776,7 @@ export async function performSwitch(
     }
 
     host.activeProjectId = previousProjectId;
+    let restoredView: WebContentsView | null = null;
     if (previousEntry && !previousEntry.view.webContents.isDestroyed()) {
       // Full reactivation, not a hand-rolled subset. This previously did only
       // `registerAppView` + `setVisible(true)`, which is registry bookkeeping
@@ -802,11 +808,13 @@ export async function performSwitch(
       // rolled-back active view, matching the load/reload path that normally
       // fires it for the active view.
       host.onViewReady?.(previousEntry.view.webContents);
+      restoredView = previousEntry.view;
     } else if (unboundOutgoingView && !unboundOutgoingView.webContents.isDestroyed()) {
       // Same rollback requirement for first-run/unbound windows: the visible
       // welcome view is not a project entry, but IPC helpers still need
       // getAppWebContents() to resolve to it after a failed first switch.
       registerAppView(host.win, unboundOutgoingView);
+      restoredView = unboundOutgoingView;
     }
 
     // Sweep any orphan that leaked before this failed switch (#10806). The
@@ -818,7 +826,7 @@ export async function performSwitch(
       console.error("[ProjectViewManager] pruneOrphanedChildren threw:", pruneError);
     }
 
-    reportSwitchFailure(loadError, request?.requesterWebContentsId, outgoingView);
+    reportSwitchFailure(loadError, request?.requesterWebContentsId, restoredView);
 
     throw loadError;
   } finally {

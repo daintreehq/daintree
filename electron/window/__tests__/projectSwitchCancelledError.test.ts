@@ -127,6 +127,17 @@ describe("reportSwitchFailure", () => {
     expect(notifyError).toHaveBeenCalledWith(error, { source: "project-switch" });
   });
 
+  it("reports when the restored view's webContents can no longer be read", () => {
+    const error = cancelledError();
+    const torn = {
+      get webContents(): never {
+        throw new Error("Object has been destroyed");
+      },
+    };
+    reportSwitchFailure(error, 7, torn as never);
+    expect(notifyError).toHaveBeenCalledWith(error, { source: "project-switch" });
+  });
+
   it("reports any other switch failure even to the restored requester", () => {
     const error = new AppError({ code: "INTERNAL", message: "load failed" });
     reportSwitchFailure(error, 7, view(7));

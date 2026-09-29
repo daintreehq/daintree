@@ -625,6 +625,21 @@ describe("ProjectViewManager — switch failure rollback", () => {
     ).toHaveLength(0);
   });
 
+  it("still reports a load failure to main when the requester is the restored view (#13035)", async () => {
+    const failWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(failWc);
+
+    const errPromise = expectRejection(
+      manager.switchTo("proj-b", "/path/b", undefined, { requesterWebContentsId: initialWc.id })
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    failWc._fireOnce("preload-error", {}, "/test/preload.cjs", new Error("Cannot find module"));
+
+    const err = await errPromise;
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(notifyError).toHaveBeenCalledWith(err, { source: "project-switch" });
+  });
+
   it("rolls back when did-fail-load fires", async () => {
     const failWc = createMockWebContents({ autoFinishLoad: false });
     wcQueue.push(failWc);
