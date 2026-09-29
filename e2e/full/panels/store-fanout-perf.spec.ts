@@ -24,6 +24,9 @@ import { T_LONG } from "../../helpers/timeouts";
 //   tick-change: dirty/clean a file, then force the poll (real status delta)
 //   flip:        drive one agent working<->waiting via a fake claude CLI
 //   stream:      one agent streams output for a fixed window (ambient fanout)
+//   flip-fleet:  two idle agents fleet-armed (ribbon shown) while the other
+//                agents flip working<->waiting together (3+ agents only)
+//   title-fleet: same armed pair while the other agents retitle via OSC 0
 //
 // Opt-in only — a measurement harness for local A/B runs, never a CI gate
 // (perf budgets deliberately stay out of PR CI pre-1.0).
@@ -55,6 +58,7 @@ const OUT_PATH = process.env.PERF_STORE_FANOUT_OUT ?? "";
 const READY_TOKEN = "FAKE_CLAUDE_READY";
 const WORK_TOKEN = "__DAINTREE_FAKE_WORK__";
 const IDLE_TOKEN = "__DAINTREE_FAKE_IDLE__";
+const TITLE_TOKEN = "__DAINTREE_FAKE_TITLE__";
 
 interface EventSample {
   /** commits observed in the event window */
@@ -200,8 +204,14 @@ function buildFixture(scale: number, dir: string): Fixture {
       "};",
       "const keepAlive = setInterval(() => {}, 1000);",
       "const shutdown = () => { stopWork(); clearInterval(keepAlive); process.exit(0); };",
+      `const TITLE = ${JSON.stringify(TITLE_TOKEN)};`,
       "process.stdin.on('data', (chunk) => {",
       "  const input = String(chunk);",
+      "  const ti = input.lastIndexOf(TITLE);",
+      "  if (ti >= 0) {",
+      "    const text = input.slice(ti + TITLE.length).split(/[\\r\\n]/)[0];",
+      "    process.stdout.write('\\u001b]0;' + text + '\\u0007');",
+      "  }",
       "  const wi = input.lastIndexOf(WORK);",
       "  const ii = input.lastIndexOf(IDLE);",
       "  if (wi >= 0 && wi > ii) startWork();",
@@ -1168,6 +1178,77 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
         const streamCommits = (await probeStop()) as any[];
         await ptyWrite(`${IDLE_TOKEN}\r`);
         const stream = [collectWindow(streamCommits, streamT0, streamT1)];
+
+        // ── Workload: flip-fleet — two idle agents in side worktrees are
+        // fleet-armed (ribbon + count chip mounted) while every other agent is
+        // driven working->waiting together, so the flips land on panes outside
+        // the fleet. One sample per cycle, spanning WORK write to settled
+        // waiting. Only the visible (main) agent's transitions are verified;
+        // the others are driven by the same writes. Needs 3+ agents; skipped
+        // below that.
+        const flipFleet: EventSample[] = [];
+        const titleFleet: EventSample[] = [];
+        const sideIdx = worktrees
+          .slice(0, scale)
+          .map((wt, i) => (wt.id === mainWt.id ? -1 : i))
+          .filter((i) => i >= 0)
+          .slice(0, 2);
+        if (launched.length >= 3 && sideIdx.length === 2) {
+          const armedWorktreeIds = sideIdx.map((i) => worktrees[i].id);
+          const flipIds = launched.filter((_, i) => !sideIdx.includes(i));
+          await page.evaluate(
+            (worktreeIds) =>
+              (window as any).__daintreeDispatchAction(
+                "fleet.armMatchingFilter",
+                { worktreeIds },
+                { source: "test" }
+              ),
+            armedWorktreeIds
+          );
+          await expect(page.getByTestId("fleet-arming-ribbon")).toBeVisible({ timeout: T_LONG });
+          const writeAll = (data: string) =>
+            page.evaluate(
+              ([ids, payload]) => {
+                for (const id of ids as string[])
+                  (window as any).electron.terminal.write(id, payload);
+              },
+              [flipIds, data] as const
+            );
+          // The stream workload's IDLE rides the ~8s debounce; start from a
+          // settled waiting state so the first WORK wait can't pass on the old one.
+          await waitForState("waiting", 40_000);
+          await page.waitForTimeout(1_000);
+          await probeStart();
+          const fleetWindows: Array<{ t0: number; t1: number }> = [];
+          for (let cycle = 0; cycle < FLIP_CYCLES; cycle++) {
+            const t0 = await page.evaluate(() => performance.now());
+            await writeAll(`${WORK_TOKEN}\r`);
+            const tWorking = await waitForState("working", 20_000);
+            await page.waitForTimeout(1_000);
+            await writeAll(`${IDLE_TOKEN}\r`);
+            const tWaiting = await waitForState("waiting", 40_000);
+            await page.waitForTimeout(1_500);
+            const t1 = await page.evaluate(() => performance.now());
+            if (tWorking > 0 && tWaiting > 0) fleetWindows.push({ t0, t1 });
+          }
+          const fleetCommits = (await probeStop()) as any[];
+          for (const w of fleetWindows) flipFleet.push(collectWindow(fleetCommits, w.t0, w.t1));
+
+          // title-fleet: same armed pair; the other agents retitle themselves
+          // (OSC 0, as real agent CLIs do per task) — panel-map writes that
+          // change no agent state and touch no armed pane.
+          await page.waitForTimeout(1_000);
+          await probeStart();
+          const titleT0 = await page.evaluate(() => performance.now());
+          for (let k = 0; k < TICKS; k++) {
+            await writeAll(`${TITLE_TOKEN}Fanout task ${k}\r`);
+            await page.waitForTimeout(400);
+          }
+          await page.waitForTimeout(600);
+          const titleT1 = await page.evaluate(() => performance.now());
+          const titleCommits = (await probeStop()) as any[];
+          titleFleet.push(collectWindow(titleCommits, titleT0, titleT1));
+        }
         await assertNoReload("after workloads");
 
         const scaleResult: ScaleResult = {
@@ -1180,6 +1261,8 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
             { name: "tick-change", events: tickChange },
             { name: "flip", events: flips },
             { name: "stream", events: stream },
+            ...(flipFleet.length > 0 ? [{ name: "flip-fleet", events: flipFleet }] : []),
+            ...(titleFleet.length > 0 ? [{ name: "title-fleet", events: titleFleet }] : []),
           ],
         };
         results.push(scaleResult);

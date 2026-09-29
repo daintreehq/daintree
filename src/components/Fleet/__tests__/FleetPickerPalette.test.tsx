@@ -124,6 +124,34 @@ describe("FleetPickerPalette", () => {
     resetEscapeStack();
   });
 
+  it("ignores panel-map writes while closed and shows the latest panels on reopen", async () => {
+    seedTerminals([makeTerminal("t1")]);
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeWorktreeSnap("wt-1", "main")], { epoch: "test", seq: 1 });
+    let commits = 0;
+    const tree = (isOpen: boolean) => (
+      <WorktreeStoreContext.Provider value={store}>
+        <React.Profiler id="palette" onRender={() => commits++}>
+          <FleetPickerPalette isOpen={isOpen} onClose={() => {}} />
+        </React.Profiler>
+      </WorktreeStoreContext.Provider>
+    );
+    const { rerender } = render(tree(false));
+    await act(async () => {});
+    const before = commits;
+
+    act(() => {
+      seedTerminals([makeTerminal("t1", { title: "renamed" }), makeTerminal("t2")]);
+    });
+    expect(commits).toBe(before);
+
+    rerender(tree(true));
+    await act(async () => {});
+    expect(
+      (screen.getByTestId("fleet-picker-cold-start-confirm") as HTMLButtonElement).textContent
+    ).toContain("Arm 2 selected");
+  });
+
   it("renders the palette title and content when open", async () => {
     seedTerminals([makeTerminal("t1")]);
     renderPalette([makeWorktreeSnap("wt-1", "main")]);
