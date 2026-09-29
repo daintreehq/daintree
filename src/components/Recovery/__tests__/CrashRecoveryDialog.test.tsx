@@ -40,13 +40,16 @@ vi.mock("@/components/ui/AppDialog", () => {
   );
   AppDialog.Description = ({ children }: SectionProps) => <p>{children}</p>;
   AppDialog.Footer = ({
+    children,
     secondaryAction,
     primaryAction,
   }: {
+    children?: ReactNode;
     secondaryAction?: { label: string; onClick: () => void; disabled?: boolean };
     primaryAction?: { label: string; onClick: () => void; loading?: boolean; disabled?: boolean };
   }) => (
-    <div>
+    <div data-testid="app-dialog-footer">
+      {children}
       {secondaryAction && (
         <button
           type="button"
@@ -501,8 +504,8 @@ describe("CrashRecoveryDialog", () => {
       });
       expect(screen.getByTestId("panel-checkbox-t1").getAttribute("aria-checked")).toBe("false");
       expect(screen.getByTestId("panel-checkbox-t2").getAttribute("aria-checked")).toBe("false");
-      const restoreBtn = screen.getByTestId("restore-selected-button") as HTMLButtonElement;
-      expect(restoreBtn.disabled).toBe(true);
+      const restoreBtn = screen.getByTestId("restore-selected-button");
+      expect(restoreBtn.getAttribute("aria-disabled")).toBe("true");
       // Toggle-all should still let the user opt back in
       fireEvent.click(screen.getByTestId("toggle-all-button"));
       expect(screen.getByTestId("panel-checkbox-t1").getAttribute("aria-checked")).toBe("true");
@@ -553,8 +556,8 @@ describe("CrashRecoveryDialog", () => {
       fireEvent.click(screen.getByText("Cancel"));
       expect(onResolve).not.toHaveBeenCalled();
       // Fresh button should be re-enabled
-      const btn = screen.getByTestId("fresh-button") as HTMLButtonElement;
-      expect(btn.disabled).toBe(false);
+      const btn = screen.getByTestId("fresh-button");
+      expect(btn.getAttribute("aria-disabled")).toBeNull();
     });
 
     it("shows panel preview in destructive confirm dialog", () => {
@@ -599,11 +602,27 @@ describe("CrashRecoveryDialog", () => {
       expect(checkbox1.getAttribute("aria-checked")).toBe("true");
     });
 
-    it("restore selected button is disabled when no panels selected", () => {
-      setup();
+    it("restore selected button is unavailable, and inert, when no panels are selected", () => {
+      const { onResolve } = setup();
       fireEvent.click(screen.getByTestId("toggle-all-button"));
       const btn = screen.getByTestId("restore-selected-button") as HTMLButtonElement;
-      expect(btn.disabled).toBe(true);
+      expect(btn.getAttribute("aria-disabled")).toBe("true");
+      // Still focusable: the footer vetoes the click rather than leaving the tab order.
+      expect(btn.disabled).toBe(false);
+      fireEvent.click(btn);
+      expect(onResolve).not.toHaveBeenCalled();
+    });
+
+    it("answers from the footer: the safe choice leading, the one filled primary trailing", () => {
+      setup();
+      const footer = screen.getByTestId("app-dialog-footer");
+      const fresh = within(footer).getByTestId("fresh-button");
+      const restore = within(footer).getByTestId("restore-selected-button");
+      expect(
+        fresh.compareDocumentPosition(restore) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+      expect(fresh.getAttribute("variant")).toBe("ghost");
+      expect(restore.getAttribute("variant")).toBe("contrast");
     });
 
     it("shows selection count", () => {
@@ -769,6 +788,16 @@ describe("CrashRecoveryDialog", () => {
       .calls[0]![0] as string;
     const body = decodeURIComponent(url.match(/[?&]body=([^&]*)/)![1]!);
     expect(body).toBe("Edited crash notes from the user");
+  });
+
+  it("orders the report actions like a footer: Cancel leading, Submit trailing", () => {
+    setup();
+    fireEvent.click(screen.getByTestId("details-toggle"));
+    fireEvent.click(screen.getByTestId("report-button"));
+    const cancel = screen.getByTestId("cancel-report-button");
+    const submit = screen.getByTestId("submit-report-button");
+    expect(cancel.compareDocumentPosition(submit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(cancel.getAttribute("variant")).toBe("ghost");
   });
 
   it("hides the preview when Cancel is clicked", () => {

@@ -16,6 +16,8 @@ import { cn } from "@/lib/utils";
 import { Plug } from "@/components/icons";
 import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
+import { ARIA_DISABLED_CLASSES } from "../ui/ariaDisabled";
+import { ChoiceCard } from "../ui/card";
 import { Checkbox } from "../ui/checkbox";
 import { Textarea } from "../ui/textarea";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
@@ -248,6 +250,9 @@ export function CrashRecoveryDialog({
     [onUpdateConfig]
   );
 
+  const freshUnavailable = resolving || showFreshConfirm;
+  const restoreUnavailable = resolving || selectedCount === 0;
+
   const suspectCount = useMemo(() => panels.filter((p) => p.isSuspect).length, [panels]);
   const backupDate = crash.backupTimestamp
     ? new Date(crash.backupTimestamp).toLocaleString()
@@ -328,82 +333,48 @@ export function CrashRecoveryDialog({
                 </div>
               )}
 
-              <div className="flex gap-2">
-                <Button
-                  variant="contrast"
-                  onClick={handleRestoreSelected}
-                  loading={resolvingKind === "restore"}
-                  disabled={resolving || selectedCount === 0}
-                  className="flex-1"
-                  data-testid="restore-selected-button"
-                >
-                  {/* One flex item: the button's gap would otherwise space the
-                      parentheses away from the count. */}
-                  <span>
-                    Restore selected (<span className="tabular-nums">{selectedCount}</span>)
-                  </span>
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => setShowFreshConfirm(true)}
-                  disabled={resolving || showFreshConfirm}
-                  data-testid="fresh-button"
-                >
-                  Continue without restoring
-                </Button>
-              </div>
-
               {backupDate && (
                 <p className="text-xs text-text-secondary">Session backup from {backupDate}</p>
               )}
             </>
           ) : (
+            // Each card acts at once — Restore restores, Continue opens its
+            // confirm — so they carry no radio puck: nothing here is selected
+            // and then submitted.
             <div className="flex flex-col gap-2">
-              <button
-                type="button"
+              <ChoiceCard
                 onClick={handleRestoreAll}
                 disabled={resolving}
-                className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-border-default hover:border-border-strong hover:bg-overlay-subtle text-left transition-colors disabled:opacity-50 disabled:pointer-events-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+                aria-labelledby="crash-restore-title"
+                aria-describedby="crash-restore-desc"
+                className="flex-col"
                 data-testid="restore-button"
               >
-                <div className="mt-0.5 h-5 w-5 rounded-full bg-overlay-medium flex items-center justify-center shrink-0">
-                  <div className="h-2 w-2 rounded-full bg-daintree-text/40" />
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-text-primary">
-                    Restore previous session
-                  </div>
-                  {backupDate ? (
-                    <div className="text-xs text-text-secondary mt-0.5">
-                      Restore session from {backupDate}
-                    </div>
-                  ) : (
-                    <div className="text-xs text-text-secondary mt-0.5">
-                      No backup available — layout may be empty
-                    </div>
-                  )}
-                </div>
-              </button>
+                <span id="crash-restore-title" className="text-sm font-medium text-text-primary">
+                  Restore previous session
+                </span>
+                <span id="crash-restore-desc" className="mt-0.5 text-xs text-text-secondary">
+                  {backupDate
+                    ? `Restore session from ${backupDate}`
+                    : "No backup available — layout may be empty"}
+                </span>
+              </ChoiceCard>
 
-              <button
-                type="button"
+              <ChoiceCard
                 onClick={() => setShowFreshConfirm(true)}
                 disabled={resolving || showFreshConfirm}
-                className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-border-default hover:border-border-strong hover:bg-overlay-subtle text-left transition-colors disabled:opacity-50 disabled:pointer-events-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+                aria-labelledby="crash-fresh-title"
+                aria-describedby="crash-fresh-desc"
+                className="flex-col"
                 data-testid="fresh-button"
               >
-                <div className="mt-0.5 h-5 w-5 rounded-full bg-daintree-text/10 flex items-center justify-center shrink-0">
-                  <div className="h-2 w-2 rounded-full bg-daintree-text/40" />
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-text-primary">
-                    Continue without restoring
-                  </div>
-                  <div className="text-xs text-text-secondary mt-0.5">
-                    Reset to a clean layout — open panels will be cleared
-                  </div>
-                </div>
-              </button>
+                <span id="crash-fresh-title" className="text-sm font-medium text-text-primary">
+                  Continue without restoring
+                </span>
+                <span id="crash-fresh-desc" className="mt-0.5 text-xs text-text-secondary">
+                  Reset to a clean layout — open panels will be cleared
+                </span>
+              </ChoiceCard>
             </div>
           )}
 
@@ -581,7 +552,15 @@ export function CrashRecoveryDialog({
                         {reportError}
                       </InlineError>
                     )}
-                    <div className="flex gap-2">
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setShowReportPreview(false)}
+                        data-testid="cancel-report-button"
+                      >
+                        Cancel
+                      </Button>
                       <Button
                         variant="contrast"
                         size="sm"
@@ -591,14 +570,6 @@ export function CrashRecoveryDialog({
                       >
                         <ExternalLink aria-hidden="true" />
                         Submit on GitHub
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setShowReportPreview(false)}
-                        data-testid="cancel-report-button"
-                      >
-                        Cancel
                       </Button>
                     </div>
                   </div>
@@ -635,6 +606,45 @@ export function CrashRecoveryDialog({
             </div>
           )}
         </AppDialog.Body>
+
+        {/* The panel list is a form, so its answer belongs in the footer: safe
+            answer leading, the dialog's one filled button trailing. The
+            no-panels branch answers through its cards instead. */}
+        {hasPanels && (
+          <AppDialog.Footer>
+            {/* aria-disabled, not native disabled: a natively disabled button
+                leaves the tab order, so each action vetoes itself instead. */}
+            <div className="flex shrink-0 items-center gap-3">
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  if (!freshUnavailable) setShowFreshConfirm(true);
+                }}
+                aria-disabled={freshUnavailable || undefined}
+                className={cn(freshUnavailable && ARIA_DISABLED_CLASSES)}
+                data-testid="fresh-button"
+              >
+                Continue without restoring
+              </Button>
+              <Button
+                variant="contrast"
+                onClick={() => {
+                  if (!restoreUnavailable) handleRestoreSelected();
+                }}
+                loading={resolvingKind === "restore"}
+                aria-disabled={restoreUnavailable || undefined}
+                className={cn(restoreUnavailable && ARIA_DISABLED_CLASSES)}
+                data-testid="restore-selected-button"
+              >
+                {/* One flex item: the button's gap would otherwise space the
+                    parentheses away from the count. */}
+                <span>
+                  Restore selected (<span className="tabular-nums">{selectedCount}</span>)
+                </span>
+              </Button>
+            </div>
+          </AppDialog.Footer>
+        )}
       </AppDialog>
 
       <ConfirmDialog

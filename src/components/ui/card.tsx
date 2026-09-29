@@ -26,9 +26,14 @@ const cardVariants = cva("rounded-[var(--radius-lg)] border", {
       lg: "p-6",
     },
     /**
-     * Hover paint only. The frame stays a plain `<div>` and never takes focus,
-     * so a focus ring here could never match — the real control inside the card
-     * owns focus, and the accent that goes with it.
+     * Hover paint only: a neutral wash plus the border stepping up a tier — the
+     * border step is what carries it on light themes, where the wash alone
+     * composites under the JND. The frame stays a plain `<div>` and never takes
+     * focus, so a focus ring here could never match — the real control inside
+     * the card owns focus, and the accent that goes with it.
+     *
+     * Every utility is spelled out whole: Tailwind only generates classes it
+     * finds verbatim in source, so a class assembled at runtime paints nothing.
      */
     interactive: {
       true: "transition-[background-color,border-color] duration-150 ease-out hover:bg-overlay-subtle hover:border-border-strong",
@@ -63,4 +68,115 @@ function Card({ className, variant, padding, interactive, ref, ...props }: CardP
   );
 }
 
-export { Card, cardVariants };
+/**
+ * A whole card that is itself the control: a quick action, a recovery choice,
+ * an agent to pick, a theme radio. `Card interactive` is the frame for a card
+ * that *holds* controls; this is the card that *is* one, so it also owns focus
+ * and press.
+ *
+ * - Rest is outlined, never filled: a resting wash is the hover state, so a
+ *   filled card reads as already hovered, and static panels (`Card`) are the
+ *   ones that carry a fill.
+ * - Press is the Button snap (`active:scale-[0.98]`, 1ms in). `press-scale` is
+ *   what removes it under reduced motion — `motion-reduce:` cannot, because the
+ *   utility sets the individual `scale` property.
+ * - Hover is `not-disabled:` rather than `enabled:` so the recipe also drives
+ *   a `<label>` wrapping a radio, which is never `:enabled`. Press needs no
+ *   guard: a disabled button never enters `:active`.
+ * - `selected` is a radio card's checked state. Its edge is `text-secondary`,
+ *   the Pressed Toggle edge, because the hover border would otherwise be the
+ *   same tier as the selection and the two would read alike.
+ */
+const choiceCardVariants = cva(
+  [
+    "press-scale relative flex text-left cursor-pointer select-none rounded-[var(--radius-lg)] border",
+    // `scale` stays out of the transition list, so the press snaps both ways
+    // rather than easing back over 150ms.
+    "transition-[background-color,border-color,color,box-shadow] duration-150 ease-out",
+    "active:scale-[0.98] active:duration-[1ms]",
+    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary",
+    "disabled:cursor-not-allowed disabled:opacity-50",
+  ],
+  {
+    variants: {
+      /**
+       * `elevated` lifts one recommended card off the set — a raised surface and
+       * the stronger edge, never accent. On light the `/95` alpha makes the lift
+       * translucency-inert, so `.light` takes the opaque surface; its hover
+       * lays the same wash over that surface as an inset shadow after the
+       * ambient one — shadows interpolate by position, so the ambient pair lines
+       * up and the wash eases in — and the fill it already has is not what
+       * hover has to replace.
+       *
+       * `row` is a card in a navigation list of equivalent destinations (the
+       * portal launchpad): borderless at rest, since seven outlines in a column
+       * repeat what the logos already say, and the full card frame on hover.
+       */
+      tone: {
+        default: "",
+        elevated: "",
+        row: "",
+      },
+      selected: {
+        true: "border-text-secondary bg-overlay-selected",
+        false: "",
+      },
+      padding: {
+        sm: "px-3 py-2",
+        md: "p-3",
+      },
+    },
+    compoundVariants: [
+      {
+        tone: "default",
+        selected: false,
+        className:
+          "border-border-default not-disabled:hover:bg-overlay-subtle not-disabled:hover:border-border-strong",
+      },
+      {
+        tone: "row",
+        selected: false,
+        className:
+          "border-transparent not-disabled:hover:bg-overlay-subtle not-disabled:hover:border-border-strong",
+      },
+      {
+        tone: "elevated",
+        selected: false,
+        className:
+          "border-border-strong bg-surface-panel-elevated/95 [.light_&]:bg-surface-panel-elevated shadow-[var(--theme-shadow-ambient)] not-disabled:hover:shadow-[var(--theme-shadow-ambient),inset_0_0_0_100vmax_var(--color-overlay-subtle)]",
+      },
+    ],
+    defaultVariants: {
+      tone: "default",
+      selected: false,
+      padding: "md",
+    },
+  }
+);
+
+export interface ChoiceCardProps
+  extends
+    React.ButtonHTMLAttributes<HTMLButtonElement>,
+    Omit<VariantProps<typeof choiceCardVariants>, "selected"> {
+  ref?: React.Ref<HTMLButtonElement>;
+}
+
+/**
+ * Selection is a radio's job, so `selected` is not a prop here: a radio card is
+ * a `<label>` over a native radio that spells `choiceCardVariants({ selected })`
+ * itself, which keeps arrow-key selection native.
+ */
+function ChoiceCard({ className, tone, padding, ref, type = "button", ...props }: ChoiceCardProps) {
+  return (
+    <button
+      ref={ref}
+      type={type}
+      className={cn(choiceCardVariants({ tone, padding }), className)}
+      {...props}
+      data-slot="choice-card"
+      data-tone={tone ?? "default"}
+    />
+  );
+}
+
+export { Card, cardVariants, ChoiceCard, choiceCardVariants };

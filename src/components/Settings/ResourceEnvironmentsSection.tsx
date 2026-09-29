@@ -359,11 +359,11 @@ export function ResourceEnvironmentsSection({
                     }
                     className={cn(SETTINGS_CONTROL_WIDTH.wide, "font-mono")}
                   />
-                  <Button type="button" variant="contrast" size="sm" onClick={handleAddEnv}>
-                    Add
-                  </Button>
                   <Button type="button" variant="outline" size="sm" onClick={cancelAddForm}>
                     Cancel
+                  </Button>
+                  <Button type="button" variant="contrast" size="sm" onClick={handleAddEnv}>
+                    Add
                   </Button>
                 </div>
                 {addEnvironmentError && (

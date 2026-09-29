@@ -1,7 +1,9 @@
+import { useId } from "react";
 import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
 import type { LoadedPluginInfo } from "@shared/types/plugin";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ChoiceCard } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { categoryIconFor, PluginIconTile } from "./pluginIcons";
 import { pluginLabel } from "./PluginDetailPane";
@@ -19,15 +21,13 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
   // failed plugin still looked healthy, and they are the first thing the wide
   // pane shows on open.
   const signal = pluginSignalFor(plugin);
+  const idBase = useId();
   return (
-    <button
-      type="button"
+    <ChoiceCard
       onClick={onSelect}
-      className={cn(
-        "flex items-start gap-3 p-4 text-left rounded-[var(--radius-lg)] border border-border-default bg-overlay-subtle transition-colors",
-        "hover:bg-overlay-soft hover:border-border-interactive",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-      )}
+      aria-labelledby={`${idBase}-name`}
+      aria-describedby={`${idBase}-detail`}
+      className="items-start gap-3 p-4"
     >
       <PluginIconTile
         manifest={plugin.manifest}
@@ -39,6 +39,7 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
             shared it, and a prerelease-and-build semver cut "Enterprise
             Compliance…" down to "Ent…" beside its own full version string. */}
         <span
+          id={`${idBase}-name`}
           className={cn(
             "block text-sm font-medium truncate",
             disabled ? "text-text-secondary" : "text-text-primary"
@@ -46,20 +47,22 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
         >
           {pluginLabel(plugin)}
         </span>
-        <span className="mt-0.5 flex items-center gap-1.5 min-w-0 text-2xs text-text-secondary">
-          <span className="truncate">v{plugin.manifest.version}</span>
-          {disabled && <Badge size="xs">Disabled</Badge>}
-        </span>
-        {signal ? (
-          <span className={cn("mt-1 flex items-center gap-1 text-xs font-medium", signal.tone)}>
-            <signal.icon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            <span className="truncate">{signal.label}</span>
+        <span id={`${idBase}-detail`} className="contents">
+          <span className="mt-0.5 flex items-center gap-1.5 min-w-0 text-2xs text-text-secondary">
+            <span className="truncate">v{plugin.manifest.version}</span>
+            {disabled && <Badge size="xs">Disabled</Badge>}
           </span>
-        ) : (
-          blurb && <span className="mt-1 text-xs line-clamp-2 text-text-secondary">{blurb}</span>
-        )}
+          {signal ? (
+            <span className={cn("mt-1 flex items-center gap-1 text-xs font-medium", signal.tone)}>
+              <signal.icon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span className="truncate">{signal.label}</span>
+            </span>
+          ) : (
+            blurb && <span className="mt-1 text-xs line-clamp-2 text-text-secondary">{blurb}</span>
+          )}
+        </span>
       </span>
-    </button>
+    </ChoiceCard>
   );
 }
 

@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { choiceCardVariants } from "@/components/ui/card";
 import { getRecipeTerminalSummary } from "../utils/recipeUtils";
 import { getRecipeScope } from "@/utils/recipeScope";
 import { isPluginRecipe } from "@shared/types/project";
@@ -92,13 +93,8 @@ export function RecipeRunnerItem({
                   // is inside the recipe group (group-focus-within) — at rest the
                   // default-focused first card must NOT glow accent, or the hero
                   // recipe reads as a focused input on every empty grid.
-                  //
-                  // `transition-colors` stays narrow: transform is deliberately out
-                  // of the property list, so the press scale snaps instead of easing
-                  // over 150ms. A disabled card never enters :active, so the scale
-                  // needs no disabled: reset. `launcher-press` is what lets reduced
-                  // motion suppress the scale — see the rule in `index.css`.
-                  "launcher-press group flex flex-col items-start gap-1.5 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
+                  choiceCardVariants(),
+                  "group flex-col items-start gap-1.5 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
                 )}
               >
                 <div className="flex items-center gap-2 w-full">
@@ -207,7 +203,8 @@ export function RecipeRunnerItem({
             // name instead of squeezing it: the name is what a user chooses by,
             // and "Migrate remaining Je…" beside an intact "Project-wide" gave
             // the classification priority over the thing being classified.
-            "launcher-press group w-full flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
+            choiceCardVariants({ padding: "sm" }),
+            "group w-full flex-wrap items-center gap-x-2 gap-y-0.5 focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
           )}
         >
           <Play

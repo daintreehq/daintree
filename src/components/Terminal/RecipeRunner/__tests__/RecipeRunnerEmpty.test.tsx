@@ -36,8 +36,16 @@ describe("RecipeRunnerEmpty", () => {
       <RecipeRunnerEmpty onCreate={vi.fn()} suggestions={suggestions} onRunSuggestion={vi.fn()} />
     );
 
-    expect(screen.getByRole("button", { name: /dev.*npm run dev/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /test.*npm run test/i })).toBeTruthy();
+    // The suggestion's name is its accessible name; the command it runs is the
+    // description, so the two are announced apart rather than run together.
+    for (const [name, command] of [
+      ["dev", "npm run dev"],
+      ["test", "npm run test"],
+    ]) {
+      const card = screen.getByRole("button", { name });
+      const described = document.getElementById(card.getAttribute("aria-describedby") ?? "");
+      expect(described?.textContent).toBe(command);
+    }
     expect(
       screen.queryByText(/Launch agents, dev servers, and terminals together with one click/i)
     ).toBeNull();
@@ -56,7 +64,7 @@ describe("RecipeRunnerEmpty", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /dev.*npm run dev/i }));
+    fireEvent.click(screen.getByRole("button", { name: "dev" }));
     expect(onRunSuggestion).toHaveBeenCalledWith(suggestion);
   });
 
@@ -81,7 +89,7 @@ describe("RecipeRunnerEmpty", () => {
       />
     );
 
-    const button = screen.getByRole("button", { name: /dev.*npm run dev/i });
+    const button = screen.getByRole("button", { name: "dev" });
     expect(button.hasAttribute("disabled")).toBe(true);
     fireEvent.click(button);
     expect(onRunSuggestion).not.toHaveBeenCalled();
