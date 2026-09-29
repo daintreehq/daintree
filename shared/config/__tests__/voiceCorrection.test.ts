@@ -117,6 +117,30 @@ describe("buildCorrectionSystemPrompt", () => {
     expect(prompt).toContain('"replace"');
   });
 
+  it("pins a fixed language and forbids translation", () => {
+    const prompt = buildCorrectionSystemPrompt({ language: "en" });
+    expect(prompt).toContain("The speaker dictates in English.");
+    expect(prompt).toContain("Never translate it into another language");
+  });
+
+  it("preserves each spoken language for auto-detect", () => {
+    const prompt = buildCorrectionSystemPrompt({ language: "auto" });
+    expect(prompt).toContain("more than one language");
+    expect(prompt).not.toContain("The speaker dictates in");
+  });
+
+  it("adds no language section when language is unset", () => {
+    expect(buildCorrectionSystemPrompt({})).not.toContain("LANGUAGE:");
+  });
+
+  it("places the language rule before custom instructions and the guardrail", () => {
+    const prompt = buildCorrectionSystemPrompt({ language: "en", customInstructions: "Be terse." });
+    expect(prompt.indexOf("LANGUAGE:")).toBeLessThan(prompt.indexOf("CUSTOM CONTEXT"));
+    expect(prompt.indexOf("CUSTOM CONTEXT")).toBeLessThan(
+      prompt.lastIndexOf("Return a JSON object")
+    );
+  });
+
   it("guardrail is always the last section of the prompt", () => {
     const prompt = buildCorrectionSystemPrompt({
       customInstructions: "Always use British spelling.",

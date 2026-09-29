@@ -85,6 +85,7 @@ export interface VoiceCorrectionSettings {
   apiKey: string;
   customDictionary: string[];
   customInstructions?: string;
+  language?: string;
   projectName?: string;
   projectPath?: string;
   organizationId?: string;
@@ -409,13 +410,15 @@ export class VoiceCorrectionService {
     request: VoiceCorrectionRequest,
     settings: VoiceCorrectionSettings
   ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
-    const { model, customDictionary, customInstructions, projectName, projectPath } = settings;
+    const { model, customDictionary, customInstructions, projectName, projectPath, language } =
+      settings;
 
     const context: CorrectionPromptContext = {
       projectName,
       projectPath,
       customDictionary,
       customInstructions,
+      language,
     };
     const systemPrompt = buildCorrectionSystemPrompt(context);
     const userMessage = this.buildUserMessage(request);
