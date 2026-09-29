@@ -6,7 +6,7 @@ import {
   type ProcessDetector,
 } from "../ProcessDetector.js";
 import { stripAnsi } from "./AgentPatternDetector.js";
-import { detectPrompt } from "./PromptDetector.js";
+import { detectPrompt, type PromptDetectorConfig } from "./PromptDetector.js";
 import { INITIAL_FOREGROUND_SENTINEL } from "./ForegroundProcessGroupProbe.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../../utils/lifecycle.js";
 
@@ -68,6 +68,19 @@ const SHELL_PROMPT_PATTERNS_NO_AGENT_GLYPHS = SHELL_PROMPT_PATTERNS.map((pattern
     : pattern
 );
 
+// detectPrompt only reads its config, so the poll can share one per mode
+// instead of rebuilding the pattern arrays every tick.
+const POLL_PROMPT_CONFIG: Readonly<PromptDetectorConfig> = Object.freeze({
+  promptPatterns: [...SHELL_PROMPT_PATTERNS],
+  promptHintPatterns: [],
+  promptScanLineCount: SHELL_IDENTITY_FALLBACK_SCAN_LINES,
+  promptConfidence: 0.85,
+});
+const POLL_PROMPT_CONFIG_AGENT_COMMITTED: Readonly<PromptDetectorConfig> = Object.freeze({
+  ...POLL_PROMPT_CONFIG,
+  promptPatterns: [...SHELL_PROMPT_PATTERNS_NO_AGENT_GLYPHS],
+});
+
 const UNAMBIGUOUS_SHELL_PROMPT_PATTERNS = [
   SHELL_ONLY_SINGLE_CHAR_PROMPT_PATTERN,
   POSIX_USER_HOST_PROMPT_PATTERN,
@@ -77,6 +90,14 @@ const UNAMBIGUOUS_SHELL_PROMPT_PATTERNS = [
 
 const ACTIVE_AGENT_PROMPT_PATTERN =
   /(?:welcome to claude code|claude code v\d|tips for getting started|\?\s+for\s+shortcuts|welcome\s+back!)/i;
+
+function findLastNonBlankLine(lines: readonly string[]): string | undefined {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (typeof line === "string" && line.trim().length > 0) return line;
+  }
+  return undefined;
+}
 
 function isUnambiguousShellPromptLine(line: string | undefined, agentCommitted = false): boolean {
   if (line === undefined) return false;
@@ -249,6 +270,11 @@ export class IdentityWatcher {
   private escState: 0 | 1 | 2 | 3 = 0;
   private seededCommand: string | undefined;
   private stopped = false;
+  // Tail lines of the last forensics-buffer snapshot the poll stripped. The
+  // buffer is only reassigned when output arrives, so a quiet agent hands the
+  // poll the same string every tick and the ANSI strip can be skipped.
+  private recentOutputTailSource: string | undefined;
+  private recentOutputTail: readonly string[] = [];
 
   constructor(private readonly delegate: IdentityWatcherDelegate) {}
 
@@ -406,9 +432,7 @@ export class IdentityWatcher {
 
   hasAgentUiPromptFalsePositive(hasPtyDescendants = false): boolean {
     const lines = this.delegate.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES);
-    const lastVisibleLine = [...lines]
-      .reverse()
-      .find((line) => typeof line === "string" && line.trim().length > 0);
+    const lastVisibleLine = findLastNonBlankLine(lines);
     const cursorLine = this.delegate.getCursorLine();
     const currentVisibleLine =
       cursorLine && cursorLine.trim().length > 0 ? cursorLine : lastVisibleLine;
@@ -446,7 +470,7 @@ export class IdentityWatcher {
     ) {
       return false;
     }
-    if (ACTIVE_AGENT_PROMPT_PATTERN.test(visibleTail)) {
+    if (activeAgentPromptVisible) {
       return true;
     }
     return (
@@ -608,13 +632,9 @@ export class IdentityWatcher {
 
   private hasUnambiguousShellPromptVisible(agentCommitted = false): boolean {
     const lines = this.delegate.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES);
-    const lastVisibleLine = [...lines]
-      .reverse()
-      .find((line) => typeof line === "string" && line.trim().length > 0);
+    const lastVisibleLine = findLastNonBlankLine(lines);
     const cursorLine = this.delegate.getCursorLine();
-    const recentOutputLine = this.getRecentOutputTailLines()
-      .reverse()
-      .find((line) => line.trim().length > 0);
+    const recentOutputLine = this.getRecentOutputTailLines().at(-1);
     return (
       isUnambiguousShellPromptLine(cursorLine ?? undefined, agentCommitted) ||
       isUnambiguousShellPromptLine(lastVisibleLine, agentCommitted) ||
@@ -622,10 +642,14 @@ export class IdentityWatcher {
     );
   }
 
-  private getRecentOutputTailLines(): string[] {
+  private getRecentOutputTailLines(): readonly string[] {
     const recentOutput = this.delegate.getRecentOutput?.();
     if (!recentOutput) return [];
-    return this.getOutputTailLines(recentOutput);
+    if (recentOutput !== this.recentOutputTailSource) {
+      this.recentOutputTailSource = recentOutput;
+      this.recentOutputTail = this.getOutputTailLines(recentOutput);
+    }
+    return this.recentOutputTail;
   }
 
   private hasUnambiguousShellPromptInText(text: string, agentCommitted = false): boolean {
@@ -796,14 +820,7 @@ export class IdentityWatcher {
       unambiguousShellPromptVisible ||
       detectPrompt(
         promptScanLines,
-        {
-          promptPatterns: agentCommitted
-            ? [...SHELL_PROMPT_PATTERNS_NO_AGENT_GLYPHS]
-            : [...SHELL_PROMPT_PATTERNS],
-          promptHintPatterns: [],
-          promptScanLineCount: SHELL_IDENTITY_FALLBACK_SCAN_LINES,
-          promptConfidence: 0.85,
-        },
+        agentCommitted ? POLL_PROMPT_CONFIG_AGENT_COMMITTED : POLL_PROMPT_CONFIG,
         this.delegate.getCursorLine(),
         { allowHistoryScan: true }
       ).isPrompt;
