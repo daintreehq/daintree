@@ -67,10 +67,12 @@ export interface KbdChordProps {
   /**
    * Key glyph colour. `secondary` (the default) suits a hint beside a label;
    * `primary` is for places where the keys are the content being read, such as
-   * a shortcut editor's binding column. The class sits on each key, so a colour
-   * on the wrapper cannot reach it.
+   * a shortcut editor's binding column. `inverse` is for a hint inside a filled
+   * `contrast` button, where the neutral chip would vanish: the chip takes the
+   * button's own ink as a wash and its border drops. The class sits on each
+   * key, so a colour on the wrapper cannot reach it.
    */
-  foreground?: "secondary" | "primary";
+  foreground?: "secondary" | "primary" | "inverse";
 }
 
 /**
@@ -98,7 +100,13 @@ export function KbdChord({
   const keyClass =
     foreground === "primary"
       ? baseKeyClass.replace("text-text-secondary", "text-text-primary")
-      : baseKeyClass;
+      : foreground === "inverse"
+        ? baseKeyClass
+            .replace("text-text-secondary", "text-text-inverse")
+            .replace("bg-overlay-subtle", "bg-text-inverse/15")
+            .replace("border-border-subtle", "border-transparent")
+        : baseKeyClass;
+  const separatorInk = foreground === "inverse" ? "text-text-inverse" : "text-text-secondary";
 
   return (
     <span
@@ -118,7 +126,7 @@ export function KbdChord({
               "⌘K, ⌘S" rather than floating a small mark between two gaps. */}
           {stepIndex > 0 && (
             <span
-              className={cn("text-text-secondary select-none", bare ? "mr-1" : "text-3xs")}
+              className={cn(separatorInk, "select-none", bare ? "mr-1" : "text-3xs")}
               aria-hidden
             >
               ,
@@ -136,7 +144,7 @@ export function KbdChord({
             {tokens.map((token, tokenIndex) => (
               <Fragment key={tokenIndex}>
                 {tokenIndex > 0 && !mac && (
-                  <span className="text-text-secondary text-3xs select-none" aria-hidden>
+                  <span className={cn(separatorInk, "text-3xs select-none")} aria-hidden>
                     +
                   </span>
                 )}

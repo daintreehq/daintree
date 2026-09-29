@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import { InlineError } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
+import { KbdChord } from "@/components/ui/Kbd";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { cn } from "@/lib/utils";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -925,11 +926,9 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               aria-keyshortcuts="Enter"
             >
               Clone
-              <span
-                className="ml-1 rounded-xs bg-text-inverse/15 px-1 py-0.5 font-mono text-3xs leading-none text-text-inverse"
-                aria-hidden="true"
-              >
-                {"\u21A9"}
+              {/* Hidden from the name: `aria-keyshortcuts` already says it. */}
+              <span className="ml-1 inline-flex" aria-hidden="true">
+                <KbdChord shortcut="Enter" density="compact" foreground="inverse" />
               </span>
             </Button>
           </div>

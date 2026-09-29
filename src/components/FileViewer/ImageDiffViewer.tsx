@@ -10,6 +10,7 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
 import { formatBytes } from "@/lib/formatBytes";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { TRANSPARENCY_CHECKERBOARD_STYLE } from "./transparencyCheckerboard";
 
 export interface ImageDiffViewerProps {
@@ -185,11 +186,12 @@ function scaledSize(dims: ImageDims, scale: number): CSSProperties {
 }
 
 function SideChip({ label }: { label: string }) {
-  // Opaque on purpose: it floats over arbitrary image content in the overlay modes.
+  // Opaque on purpose: it floats over arbitrary image content in the overlay
+  // modes, where the badge's translucent fills would take on the image's colour.
   return (
-    <span className="rounded-sm border border-border-default bg-surface-panel-elevated px-1.5 py-0.5 text-3xs font-medium text-text-secondary">
+    <Badge size="xs" className="border border-border-default bg-surface-panel-elevated">
       {label}
-    </span>
+    </Badge>
   );
 }
 

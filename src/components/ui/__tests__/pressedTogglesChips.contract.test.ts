@@ -19,6 +19,7 @@ const RAW_ARIA_PRESSED: Record<string, string> = {
   // Checkable rows in the sources popover: a check glyph carries the state,
   // the way a menu's checkbox items do.
   "src/components/Logs/LogFilters.tsx": "checkable popover rows",
+  "src/components/EventInspector/EventFilters.tsx": "checkable popover rows",
   // Show/hide value: the eye glyph is the state, the established reveal idiom.
   "src/components/Settings/AgentScopeEditor/ReadOnlyDetail.tsx": "reveal toggle",
   "src/components/Settings/EnvVarRow.tsx": "reveal toggle",
