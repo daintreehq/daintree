@@ -127,6 +127,16 @@ function boxViolations(rel: string, source: string, family: Family): string[] {
     const missing = [box.radius, box.inset].filter((t) => !call.classes.includes(t));
     if (!call.classes.some((t) => heights.includes(t))) missing.push(heights.join(" | "));
     if (missing.length) out.push(`${rel}:${call.line} missing ${missing.join(", ")}`);
+    // `cn()` lets the later utility win, so an allowed value is no guarantee
+    // on its own: every radius and padding token the row carries, on any
+    // branch, has to be one the family allows.
+    const conflicting = call.classes.filter(
+      (t) =>
+        (/^rounded(-|$)/.test(t) && t !== box.radius) ||
+        (/^px-/.test(t) && t !== box.inset) ||
+        (/^py-/.test(t) && !heights.includes(t))
+    );
+    if (conflicting.length) out.push(`${rel}:${call.line} overridden by ${conflicting.join(", ")}`);
   }
   return out;
 }
@@ -160,6 +170,17 @@ const PALETTE_FILES = [
   "src/components/Terminal/SendToAgentPalette.tsx",
   "src/components/Worktree/IssuePickerDialog.tsx",
   "src/components/Plugin/PluginQuickPickDialog.tsx",
+];
+
+/**
+ * Palettes whose every row carries a second line (a path, a description). Rows
+ * that grow a second line only sometimes (an action's description, a theme's
+ * "Active") keep the list's single-line rhythm rather than changing height row
+ * by row.
+ */
+const ALWAYS_TWO_LINE_FILES = [
+  "src/components/Worktree/WorktreePalette.tsx",
+  "src/components/TerminalPalette/NewTerminalPalette.tsx",
 ];
 
 const files = ROOTS.flatMap(sourceFiles).map((file) => ({
@@ -207,6 +228,11 @@ describe("palette and picker row shape — the checks catch what they claim to",
     ["an oversized height", "popover", row('"px-2 py-20 rounded-[var(--radius-sm)]"')],
     ["the palette box in a popover", "popover", row('"px-3 py-2 rounded-[var(--radius-md)]"')],
     ["the popover box in a palette", "palette", row('"px-2 py-1.5 rounded-[var(--radius-sm)]"')],
+    [
+      "an allowed box overridden by a later utility",
+      "palette",
+      row('"px-3 py-2 rounded-[var(--radius-md)]", "px-1 py-20 rounded-lg"'),
+    ],
     [
       "a focusable popover row at the palette radius",
       "popover",
@@ -259,6 +285,12 @@ describe("palette and picker row shape", () => {
       expect(boxViolations(rel, source, "palette")).toEqual([]);
     }
   );
+
+  it.each(ALWAYS_TWO_LINE_FILES)("gives %s's two-line rows the two-line height", (rel) => {
+    const rows = rowCalls(read(rel), rel).filter((c) => c.kind === "row");
+    expect(rows.length).toBeGreaterThan(0);
+    for (const call of rows) expect(call.classes, `${rel}:${call.line}`).toContain("py-2");
+  });
 
   it.each(POPOVER_FILES)(
     "draws popover rows in %s at radius-sm, px-2 py-1.5, like a menu row",
