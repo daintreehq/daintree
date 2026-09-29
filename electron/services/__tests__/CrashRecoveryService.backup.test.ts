@@ -504,6 +504,76 @@ describe("CrashRecoveryService", () => {
       expect(ts).toBe(previousStat.mtimeMs);
     });
 
+    it("a scheduled backup of unchanged state does not rotate the previous generation away", () => {
+      vi.useFakeTimers();
+      try {
+        const backupDir = path.join(userData, "backups");
+        const currentPath = path.join(backupDir, "session-state.json");
+        const previousPath = path.join(backupDir, "session-state.previous.json");
+        let width = 1;
+        storeMock.get.mockImplementation((key: string) => {
+          if (key === "appState") return { sidebarWidth: width, terminals: [] };
+          return { autoRestoreOnCrash: false };
+        });
+        windowStatesStoreMock.get.mockReturnValue({});
+
+        const svc = makeService();
+        svc.initialize();
+        svc.takeBackup();
+        width = 2;
+        svc.scheduleBackup();
+        vi.advanceTimersByTime(1500);
+        expect(JSON.parse(fs.readFileSync(currentPath, "utf8")).appState.sidebarWidth).toBe(2);
+        expect(JSON.parse(fs.readFileSync(previousPath, "utf8")).appState.sidebarWidth).toBe(1);
+
+        const writes = utilsMock.resilientAtomicWriteFileSync.mock.calls.length;
+        svc.scheduleBackup();
+        vi.advanceTimersByTime(1500);
+        expect(utilsMock.resilientAtomicWriteFileSync.mock.calls.length).toBe(writes);
+        expect(JSON.parse(fs.readFileSync(previousPath, "utf8")).appState.sidebarWidth).toBe(1);
+
+        width = 3;
+        svc.scheduleBackup();
+        vi.advanceTimersByTime(1500);
+        expect(JSON.parse(fs.readFileSync(currentPath, "utf8")).appState.sidebarWidth).toBe(3);
+        expect(JSON.parse(fs.readFileSync(previousPath, "utf8")).appState.sidebarWidth).toBe(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("rewrites unchanged state when the current backup has gone missing", () => {
+      const currentPath = path.join(userData, "backups", "session-state.json");
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "appState") return { sidebarWidth: 1, terminals: [] };
+        return { autoRestoreOnCrash: false };
+      });
+      windowStatesStoreMock.get.mockReturnValue({});
+
+      const svc = makeService();
+      svc.initialize();
+      svc.takeBackup();
+      fs.unlinkSync(currentPath);
+      svc.takeBackup();
+      expect(JSON.parse(fs.readFileSync(currentPath, "utf8")).appState.sidebarWidth).toBe(1);
+    });
+
+    it("rewrites unchanged state when the current backup was corrupted on disk", () => {
+      const currentPath = path.join(userData, "backups", "session-state.json");
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "appState") return { sidebarWidth: 1, terminals: [] };
+        return { autoRestoreOnCrash: false };
+      });
+      windowStatesStoreMock.get.mockReturnValue({});
+
+      const svc = makeService();
+      svc.initialize();
+      svc.takeBackup();
+      fs.writeFileSync(currentPath, "{trunc");
+      svc.takeBackup();
+      expect(JSON.parse(fs.readFileSync(currentPath, "utf8")).appState.sidebarWidth).toBe(1);
+    });
+
     it("rolling pair stays a pair across multiple takeBackup calls (no chain accumulation)", () => {
       const backupDir = path.join(userData, "backups");
       fs.mkdirSync(backupDir, { recursive: true });
