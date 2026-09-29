@@ -5,11 +5,100 @@
 // how TypeScript learns its shape. Opt in with
 // `"types": ["@daintreehq/plugin-sdk/plugin-ui"]` in tsconfig, or
 // `/// <reference types="@daintreehq/plugin-sdk/plugin-ui" />` in one file.
+//
+// Stability: the kit is versioned by `PLUGIN_UI_VERSION` (semver). A minor
+// version only adds: new components, new optional props, new icon names, new
+// theme token keys. Within a major version no export, prop, accepted value or
+// token key is removed or narrowed. Every component validates its props at
+// runtime, so a value outside these types is ignored rather than thrown on.
+//
+// Components render Daintree's own controls and are themed with the app.
+// They load with the kit on first use, so a component can paint a frame late
+// the first time a view renders it. Parts that open in a host overlay (tooltip
+// bodies, menus, select lists, dialogs) take no `className`: they render
+// outside the view's style root, where the view's classes do not apply.
 declare module "@daintreehq/plugin-ui" {
   import type { ComponentType } from "react";
-  import type { PluginMarkdownProps } from "@daintreehq/plugin-sdk/react";
+  import type {
+    PluginBadgeProps,
+    PluginButtonProps,
+    PluginCalloutProps,
+    PluginCheckboxProps,
+    PluginConfirmDialogProps,
+    PluginCopyButtonProps,
+    PluginDaintreeTheme,
+    PluginDialogAction,
+    PluginDialogProps,
+    PluginDismissButtonProps,
+    PluginDropdownMenuEntry,
+    PluginDropdownMenuProps,
+    PluginEmptyStateProps,
+    PluginIconButtonProps,
+    PluginIconName,
+    PluginIconProps,
+    PluginInputProps,
+    PluginKbdChordProps,
+    PluginKbdProps,
+    PluginMarkdownProps,
+    PluginScrollShadowProps,
+    PluginSearchFieldProps,
+    PluginSegmentedControlProps,
+    PluginSegmentedOption,
+    PluginSelectOption,
+    PluginSelectOptionGroup,
+    PluginSelectProps,
+    PluginSkeletonBoneProps,
+    PluginSkeletonProps,
+    PluginSkeletonTextProps,
+    PluginSpinnerProps,
+    PluginSpinningIconProps,
+    PluginTextareaProps,
+    PluginThemeTokenKey,
+    PluginThemeTokens,
+    PluginTooltipProps,
+    PluginTruncatedTooltipProps,
+  } from "@daintreehq/plugin-sdk/react";
 
   export type MarkdownProps = PluginMarkdownProps;
+  export type ButtonProps = PluginButtonProps;
+  export type IconButtonProps = PluginIconButtonProps;
+  export type TooltipProps = PluginTooltipProps;
+  export type TruncatedTooltipProps = PluginTruncatedTooltipProps;
+  export type SpinnerProps = PluginSpinnerProps;
+  export type SpinningIconProps = PluginSpinningIconProps;
+  export type BadgeProps = PluginBadgeProps;
+  export type CheckboxProps = PluginCheckboxProps;
+  export type InputProps = PluginInputProps;
+  export type TextareaProps = PluginTextareaProps;
+  export type SelectProps = PluginSelectProps;
+  export type SelectOption = PluginSelectOption;
+  export type SelectOptionGroup = PluginSelectOptionGroup;
+  export type SegmentedControlProps = PluginSegmentedControlProps;
+  export type SegmentedOption = PluginSegmentedOption;
+  export type KbdProps = PluginKbdProps;
+  export type KbdChordProps = PluginKbdChordProps;
+  export type CopyButtonProps = PluginCopyButtonProps;
+  export type DismissButtonProps = PluginDismissButtonProps;
+  export type CalloutProps = PluginCalloutProps;
+  export type EmptyStateProps = PluginEmptyStateProps;
+  export type SkeletonProps = PluginSkeletonProps;
+  export type SkeletonBoneProps = PluginSkeletonBoneProps;
+  export type SkeletonTextProps = PluginSkeletonTextProps;
+  export type ScrollShadowProps = PluginScrollShadowProps;
+  export type SearchFieldProps = PluginSearchFieldProps;
+  export type DropdownMenuProps = PluginDropdownMenuProps;
+  export type DropdownMenuEntry = PluginDropdownMenuEntry;
+  export type DialogProps = PluginDialogProps;
+  export type DialogAction = PluginDialogAction;
+  export type ConfirmDialogProps = PluginConfirmDialogProps;
+  export type IconProps = PluginIconProps;
+  export type IconName = PluginIconName;
+  export type DaintreeTheme = PluginDaintreeTheme;
+  export type ThemeTokenKey = PluginThemeTokenKey;
+  export type ThemeTokens = PluginThemeTokens;
+
+  /** The kit's contract version, `"1.0.0"` for this release line. */
+  export const PLUGIN_UI_VERSION: string;
 
   /**
    * Daintree's own Markdown renderer: GFM, highlighted code fences, the app's
@@ -17,4 +106,86 @@ declare module "@daintreehq/plugin-ui" {
    * first render, so it can paint one frame late.
    */
   export const Markdown: ComponentType<MarkdownProps>;
+
+  /** The app's button. `icon` is a leading glyph; `loading` keeps focus and width. */
+  export const Button: ComponentType<ButtonProps>;
+  /** An icon-only button whose accessible name doubles as its tooltip. */
+  export const IconButton: ComponentType<IconButtonProps>;
+  /** A hover card on one child element. The child shows while the kit loads. */
+  export const Tooltip: ComponentType<TooltipProps>;
+  /** A tooltip that only opens while the child's text is truncated. */
+  export const TruncatedTooltip: ComponentType<TruncatedTooltipProps>;
+  /** A decorative loading spinner. */
+  export const Spinner: ComponentType<SpinnerProps>;
+  /** An icon that spins while `active` and finishes its turn before stopping. */
+  export const SpinningIcon: ComponentType<SpinningIconProps>;
+  /** A status pill. */
+  export const Badge: ComponentType<BadgeProps>;
+  export const Checkbox: ComponentType<CheckboxProps>;
+  export const Input: ComponentType<InputProps>;
+  export const Textarea: ComponentType<TextareaProps>;
+  /** A single choice from a list, given as `options` (optionally grouped). */
+  export const Select: ComponentType<SelectProps>;
+  /** A segmented single-choice control with radio-group keyboard behaviour. */
+  export const SegmentedControl: ComponentType<SegmentedControlProps>;
+  /** One literal key cap. */
+  export const Kbd: ComponentType<KbdProps>;
+  /** A shortcut like `"Cmd+Shift+P"`, drawn with the platform's glyphs. */
+  export const KbdChord: ComponentType<KbdChordProps>;
+  /** Copies text, confirming with a check and a spoken announcement. */
+  export const CopyButton: ComponentType<CopyButtonProps>;
+  /** The X that dismisses a card, banner or hint. */
+  export const DismissButton: ComponentType<DismissButtonProps>;
+  /** An inline message box whose glyph and tint follow `severity`. */
+  export const Callout: ComponentType<CalloutProps>;
+  /** What a pane or list shows when it has nothing to show. */
+  export const EmptyState: ComponentType<EmptyStateProps>;
+  /** The accessible loading region; put `SkeletonBone`/`SkeletonText` inside. */
+  export const Skeleton: ComponentType<SkeletonProps>;
+  export const SkeletonBone: ComponentType<SkeletonBoneProps>;
+  export const SkeletonText: ComponentType<SkeletonTextProps>;
+  /** A vertical scroller with edge fades that show there is more. */
+  export const ScrollShadow: ComponentType<ScrollShadowProps>;
+  /** The app's search box. */
+  export const SearchField: ComponentType<SearchFieldProps>;
+  /** A menu opened from `trigger`, built from an `items` array. */
+  export const DropdownMenu: ComponentType<DropdownMenuProps>;
+  /** A modal dialog with a title bar, scrolling body and footer actions. */
+  export const Dialog: ComponentType<DialogProps>;
+  /** The confirm-or-cancel dialog, including the destructive typed-name gate. */
+  export const ConfirmDialog: ComponentType<ConfirmDialogProps>;
+  /**
+   * One of Daintree's icons by name. An unknown name renders nothing (and
+   * warns in development) rather than throwing.
+   */
+  export const Icon: ComponentType<IconProps>;
+
+  /**
+   * The active theme: `colorMode`, `themeId`, and resolved sRGB `tokens` for
+   * canvas and WebGL code. Re-renders the component when the theme changes.
+   * For styling DOM, prefer the theme's CSS classes and variables; they
+   * follow the theme without a re-render.
+   *
+   * Token keys (the `--theme-*` CSS variable names without the prefix):
+   * surfaces `surface-{grid,sidebar,canvas,panel,panel-elevated,input,inset,hover,active}`;
+   * text `text-{primary,secondary,muted,placeholder,inverse,link}`;
+   * borders `border-{default,subtle,strong,divider,interactive}`;
+   * accent `accent-{primary,foreground,hover,soft,muted}`, `focus-ring`;
+   * status `status-{success,warning,danger,info}`;
+   * agent activity `activity-{active,idle,working,waiting}`;
+   * terminal `terminal-{background,foreground,muted,cursor,selection}` and the
+   * 16 ANSI colours `terminal-{black,red,green,yellow,blue,magenta,cyan,white}`
+   * with their `terminal-bright-*` pairs; syntax
+   * `syntax-{comment,punctuation,number,string,operator,keyword,function,link,quote}`;
+   * a chart ramp `category-{blue,purple,cyan,green,amber,orange,teal,indigo,rose,pink,violet,slate}`.
+   */
+  export function useDaintreeTheme(): DaintreeTheme;
+  /**
+   * The active theme, for code outside React. Cheap to call often: tokens are
+   * resolved once per theme change and the same frozen object is returned
+   * until the next one.
+   */
+  export function getDaintreeTheme(): DaintreeTheme;
+  /** Calls `listener` after every theme change. Returns a function that stops it. */
+  export function onDidChangeDaintreeTheme(listener: (theme: DaintreeTheme) => void): () => void;
 }

@@ -18,7 +18,23 @@ const sdkDir = path.resolve(here, "../..");
  */
 const CONSUMER = `
 import { createElement } from "react";
-import { Markdown, type MarkdownProps } from "@daintreehq/plugin-ui";
+import {
+  Markdown,
+  Button,
+  Icon,
+  Select,
+  DropdownMenu,
+  CopyButton,
+  EmptyState,
+  PLUGIN_UI_VERSION,
+  useDaintreeTheme,
+  getDaintreeTheme,
+  onDidChangeDaintreeTheme,
+  type MarkdownProps,
+  type IconName,
+  type DropdownMenuEntry,
+  type DaintreeTheme,
+} from "@daintreehq/plugin-ui";
 
 const props: MarkdownProps = { source: "# Notes", basePath: "/repo/notes/", fontSize: "lg" };
 export const view = createElement(Markdown, props);
@@ -28,6 +44,48 @@ export const badSize = createElement(Markdown, { source: "x", fontSize: "huge" }
 
 // @ts-expect-error source is required
 export const noSource = createElement(Markdown, {});
+
+export const version: string = PLUGIN_UI_VERSION;
+
+const branch: IconName = "git-branch";
+export const icon = createElement(Icon, { name: branch, size: 14 });
+// @ts-expect-error icon names are a closed set
+export const badIcon = createElement(Icon, { name: "not-an-icon" });
+
+export const button = createElement(Button, { variant: "ghost", icon: "play", "data-testid": "go" });
+// @ts-expect-error icon strings are names, not text
+export const badButtonIcon = createElement(Button, { icon: "not-an-icon" });
+// @ts-expect-error variants are a closed set
+export const badButton = createElement(Button, { variant: "rainbow" });
+
+export const select = createElement(Select, {
+  options: [{ value: "a", label: "A" }, { label: "Group", options: [{ value: "b", label: "B" }] }],
+  onValueChange: (value: string) => void value,
+});
+
+const items: DropdownMenuEntry[] = [
+  { label: "Rename", onSelect: () => {}, icon: "pencil" },
+  { type: "separator" },
+  { type: "checkbox", label: "Wrap", checked: true, onCheckedChange: (next: boolean) => void next },
+];
+export const menu = createElement(DropdownMenu, { trigger: button, items });
+
+// @ts-expect-error an icon-only CopyButton needs an aria-label
+export const unnamedCopy = createElement(CopyButton, { text: "x" });
+export const labelledCopy = createElement(CopyButton, { text: "x", label: "Copy path" });
+
+// @ts-expect-error title is required
+export const untitled = createElement(EmptyState, {});
+
+export function useAccent(): string {
+  const theme: DaintreeTheme = useDaintreeTheme();
+  const mode: "dark" | "light" = theme.colorMode;
+  void mode;
+  return theme.tokens["accent-primary"];
+}
+// @ts-expect-error token keys are a closed set
+export const badToken = getDaintreeTheme().tokens["accent-nope"];
+export const stop: () => void = onDidChangeDaintreeTheme((theme) => void theme.themeId);
 `;
 
 let consumerDir: string;
