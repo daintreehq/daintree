@@ -623,12 +623,42 @@ export class PluginDevWorkerHostProxy {
    * line in main, which applies the same cap again on arrival.
    */
   private assertPushWithinLimit(channel: string, payload: unknown): void {
-    assertPayloadWithinLimit(
-      this.pluginId,
-      `push payload on "${channel}"`,
-      payload,
-      PLUGIN_PUSH_MAX_PAYLOAD_BYTES
-    );
+    try {
+      assertPayloadWithinLimit(
+        this.pluginId,
+        `push payload on "${channel}"`,
+        payload,
+        PLUGIN_PUSH_MAX_PAYLOAD_BYTES
+      );
+    } catch (err) {
+      this.reportPushRejected();
+      throw err;
+    }
+  }
+
+  /**
+   * Send an accepted push. A payload structured clone refuses fails in
+   * `postMessage` itself, so that refusal is reported like an oversize one.
+   */
+  private sendPush(method: "broadcastToRenderer" | "postToPanel", params: unknown): void {
+    try {
+      this.notify(method, params);
+    } catch (err) {
+      if ((err as { name?: unknown } | null)?.name === "DataCloneError") this.reportPushRejected();
+      throw err;
+    }
+  }
+
+  /**
+   * Tell main a push was refused before it crossed the port, so its metrics
+   * see the rejection. Payload-free, and never allowed to mask the refusal.
+   */
+  private reportPushRejected(): void {
+    try {
+      this.notify("pushRejected", {});
+    } catch {
+      // The port is closing; the plugin still gets the original error.
+    }
   }
 
   private notify(method: PluginHostNotifyMethod, params: unknown, registrationKey?: string): void {
@@ -791,7 +821,7 @@ export class PluginDevWorkerHostProxy {
           );
         }
         this.assertPushWithinLimit(channel, payload);
-        this.notify("broadcastToRenderer", { channel, payload });
+        this.sendPush("broadcastToRenderer", { channel, payload });
         return Promise.resolve();
       },
       // Post-activation-safe sibling of broadcastToRenderer: no
@@ -821,10 +851,10 @@ export class PluginDevWorkerHostProxy {
         // routing. Structured clone over the parent-port preserves `undefined`.
         try {
           this.assertPushWithinLimit(channel, payload);
+          this.sendPush("postToPanel", { channel, payload, panelId });
         } catch (err) {
           return Promise.reject(err);
         }
-        this.notify("postToPanel", { channel, payload, panelId });
         return Promise.resolve();
       },
       getActiveWorktree: () =>

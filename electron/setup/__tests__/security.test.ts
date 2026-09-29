@@ -95,6 +95,7 @@ import { assertIpcSecurityReady, _resetIpcGuardForTesting } from "../../ipc/ipcG
 import { AppError } from "../../utils/errorTypes.js";
 import { PLUGIN_INVOKE_MAX_ARGS_BYTES } from "../../../shared/config/pluginBudgets.js";
 import { deserializeError } from "../../../shared/utils/ipcErrorSerialization.js";
+import { observeIpcEnvelopeRejections } from "../../ipc/envelopeRejections.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockWebContents = {} as any;
@@ -1084,6 +1085,42 @@ describe("enforceIpcSenderValidation envelope guards", () => {
       }
     }
   );
+
+  it("tells the channel's observer about an envelope it refused, and only that", async () => {
+    const observer = vi.fn();
+    const stopObserving = observeIpcEnvelopeRejections("plugin:invoke", observer);
+    try {
+      const oversize = "x".repeat(PAYLOAD_BUDGETS.pluginInvoke + 1024);
+      const refused = await invokeWrappedHandle("handle", "plugin:invoke", vi.fn(), [
+        "acme.demo",
+        "save",
+        oversize,
+      ]);
+      expect(refused.ok).toBe(false);
+      expect(observer).toHaveBeenCalledTimes(1);
+      const [event, args, error] = observer.mock.calls[0]!;
+      expect(event).toMatchObject({ senderFrame: { url: "http://localhost:3000" } });
+      expect((args as unknown[]).slice(0, 2)).toEqual(["acme.demo", "save"]);
+      expect((error as Error).name).toBe("PluginPayloadTooLargeError");
+    } finally {
+      stopObserving();
+    }
+  });
+
+  it("leaves a failure inside the handler to the handler, not the envelope observer", async () => {
+    const observer = vi.fn();
+    const stopObserving = observeIpcEnvelopeRejections("plugin:invoke", observer);
+    try {
+      const failing = vi.fn(() => {
+        throw new Error("handler failed");
+      });
+      await invokeWrappedHandle("handleOnce", "plugin:invoke", failing, ["acme.demo", "save"]);
+      expect(failing).toHaveBeenCalledTimes(1);
+      expect(observer).not.toHaveBeenCalled();
+    } finally {
+      stopObserving();
+    }
+  });
 
   it("never echoes an oversized plugin id or channel back in the rejection", async () => {
     const handler = vi.fn();

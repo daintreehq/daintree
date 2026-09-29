@@ -417,6 +417,86 @@ describe("createSyncedCollection delivery", () => {
   });
 });
 
+describe("createSyncedCollection push limit", () => {
+  const big = (id: string, size: number): Row & { pad: string } => ({
+    id,
+    v: 1,
+    pad: "x".repeat(size),
+  });
+
+  it("splits a change set over the limit across consecutive revisions", async () => {
+    const h = fakeHost();
+    const c = await createSyncedCollection<Row>(h.host, "rows", { key, maxDeltaBytes: 4096 });
+    h.snapshot("rows");
+    for (let i = 0; i < 20; i++) c.upsert(big(`r${i}`, 1000));
+    c.remove("r0");
+    await c.flush();
+    const deltas = h.posts.map((p) => p.payload as SyncedCollectionDelta<Row>);
+    expect(deltas.length).toBeGreaterThan(1);
+    expect(deltas.map((d) => d.revision)).toEqual(deltas.map((_, i) => i + 1));
+    for (const d of deltas) expect(JSON.stringify(d).length).toBeLessThanOrEqual(4096);
+    expect(deltas.flatMap((d) => d.upserts.map(([k]) => k))).toEqual(
+      Array.from({ length: 19 }, (_, i) => `r${i + 1}`)
+    );
+    expect(c.revision).toBe(deltas.length);
+  });
+
+  it("converges when the final batch holds an item too large to push, with nothing after it", async () => {
+    const h = fakeHost();
+    const worker = await createSyncedCollection<Row>(h.host, "rows", { key, maxDeltaBytes: 4096 });
+    const b = fakeBridge();
+    b.invoke.mockImplementation(async () => h.snapshot("rows"));
+    const { result } = renderHook(() => useSyncedCollection<Row>("acme", "rows"));
+    await settle();
+
+    worker.upsert({ id: "a", v: 1 });
+    worker.upsert(big("huge", 10_000));
+    await worker.flush();
+    const [only] = h.posts.map((p) => p.payload as SyncedCollectionDelta<Row>);
+    expect(h.posts).toHaveLength(1);
+    expect(only).toMatchObject({ resync: true, removes: [], upserts: [] });
+    for (const { channel, payload } of h.posts.splice(0)) b.push(channel, payload);
+    await settle();
+    await settle();
+
+    expect(b.invoke).toHaveBeenCalledTimes(2);
+    expect(result.current.items.map((r) => r.id)).toEqual(["a", "huge"]);
+    expect(result.current.revision).toBe(worker.revision);
+  });
+
+  it("sends a resync instead of retrying a delta the host refused as too large", async () => {
+    const h = fakeHost();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const worker = await createSyncedCollection<Row>(h.host, "rows", { key });
+      const b = fakeBridge();
+      b.invoke.mockImplementation(async () => h.snapshot("rows"));
+      const { result } = renderHook(() => useSyncedCollection<Row>("acme", "rows"));
+      await settle();
+
+      h.host.postToPanel.mockRejectedValueOnce(
+        new Error('PLUGIN_PAYLOAD_TOO_LARGE: plugin "acme" push exceeds the 1048576-byte limit')
+      );
+      worker.upsert({ id: "a", v: 1 });
+      await worker.flush();
+      await vi.advanceTimersByTimeAsync(0);
+      const sent = h.posts.map((p) => p.payload as SyncedCollectionDelta<Row>);
+      expect(sent).toEqual([
+        { epoch: expect.any(String), revision: 2, resync: true, removes: [], upserts: [] },
+      ]);
+      for (const { channel, payload } of h.posts.splice(0)) b.push(channel, payload);
+      await settle();
+      await settle();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.host.postToPanel).toHaveBeenCalledTimes(3);
+      expect(result.current.items).toEqual([{ id: "a", v: 1 }]);
+      expect(result.current.revision).toBe(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
 describe("createSyncedCollection host contract", () => {
   it("accepts the real host API and the SDK's mock host", async () => {
     const { createMockHost } = await import("../testing.js");

@@ -17,6 +17,8 @@ import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
 import { PluginInvokeTimeoutError, runWithInvokeDeadline } from "../pluginInvokeDeadline.js";
 import type { PluginIpcContext } from "../../../../shared/types/plugin.js";
 import { databaseBackupApprovers } from "../pluginInternalApprovers.js";
+import { parseWorkerToHostMessage } from "../../../schemas/pluginDevWorker.js";
+import { PLUGIN_PUSH_MAX_PAYLOAD_BYTES } from "../../../../shared/config/pluginBudgets.js";
 
 class FakeWorkerHost extends EventEmitter {
   sent: any[] = [];
@@ -190,6 +192,7 @@ function makeBridge(
   const clear = overrides?.clear ?? vi.fn();
   const onActivationResult = overrides?.onActivationResult ?? vi.fn();
   const onTerminalFailure = vi.fn();
+  const onPushRejected = vi.fn();
   const bridge = new PluginDevWorkerMainBridge({
     pluginId: overrides?.pluginId ?? "acme.demo",
     host: host as any,
@@ -198,8 +201,9 @@ function makeBridge(
     clearPriorRegistrations: clear,
     onActivationResult,
     onTerminalFailure,
+    onPushRejected,
   });
-  return { host, workerHost, bridge, clear, onActivationResult, onTerminalFailure };
+  return { host, workerHost, bridge, clear, onActivationResult, onTerminalFailure, onPushRejected };
 }
 
 const flush = () => new Promise((r) => setImmediate(r));
@@ -2486,5 +2490,59 @@ describe("PluginDevWorkerMainBridge coalesced subscriptions and readFiles", () =
     );
     const res = workerHost.sent.find((m: any) => m.type === "host-result" && m.requestId === "rf1");
     expect(res).toMatchObject({ ok: true, result });
+  });
+});
+
+describe("PluginDevWorkerMainBridge push rejections", () => {
+  function makeConnected() {
+    const pair = makeBridge();
+    const wire: any[] = [];
+    const proxy = new PluginDevWorkerHostProxy(
+      "acme.demo",
+      (msg) => {
+        // What the real port does: structured clone, then main's schema gate.
+        const cloned = structuredClone(msg);
+        wire.push(cloned);
+        const parsed = parseWorkerToHostMessage(cloned);
+        if (!parsed.ok) throw new Error(`schema rejected: ${parsed.issues}`);
+        pair.workerHost.emit("worker-message", parsed.message);
+      },
+      {
+        instanceId: "acme.demo",
+        manifestId: "acme.demo",
+        origin: "global",
+        projectId: null,
+        projectRoot: null,
+      }
+    );
+    return { ...pair, proxy, wire };
+  }
+
+  it("reports a push the worker refused before the port, without its payload", async () => {
+    const { host, proxy, onPushRejected, wire } = makeConnected();
+    const huge = { blob: "x".repeat(PLUGIN_PUSH_MAX_PAYLOAD_BYTES) };
+    expect(() => proxy.host.broadcastToRenderer("tick", huge)).toThrow(/PLUGIN_PAYLOAD_TOO_LARGE/);
+    await expect(proxy.host.postToPanel("tick", huge, "panel-a")).rejects.toThrow(
+      /PLUGIN_PAYLOAD_TOO_LARGE/
+    );
+    await flush();
+    expect(onPushRejected).toHaveBeenCalledTimes(2);
+    expect(host.broadcastToRenderer).not.toHaveBeenCalled();
+    expect(wire.every((m) => JSON.stringify(m).length < 1_000)).toBe(true);
+  });
+
+  it("reports a push structured clone refuses at the port", async () => {
+    const { proxy, onPushRejected } = makeConnected();
+    await expect(proxy.host.postToPanel("tick", { run: () => 1 }, "panel-a")).rejects.toThrow();
+    await flush();
+    expect(onPushRejected).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report an accepted push", async () => {
+    const { host, proxy, onPushRejected } = makeConnected();
+    await proxy.host.broadcastToRenderer("tick", { a: 1 });
+    await flush();
+    expect(host.broadcastToRenderer).toHaveBeenCalledWith("tick", { a: 1 });
+    expect(onPushRejected).not.toHaveBeenCalled();
   });
 });

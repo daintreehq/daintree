@@ -735,6 +735,7 @@ interface PluginSwitchProps extends PluginDomProps<HTMLButtonElement> {
     onCheckedChange?: (checked: boolean) => void;
     disabled?: boolean;
     name?: string;
+    /** @deprecated Ignored: switches draw at one size everywhere in Daintree. */
     size?: "sm" | "md";
     className?: string;
 }
@@ -856,6 +857,11 @@ interface PluginListRowProps extends Omit<PluginDomProps<HTMLElement>, "title"> 
     /** The selected record in a list-detail list (outside a listbox). */
     selected?: boolean;
     onSelect?: () => void;
+    /**
+     * Dimmed and not clickable. In a `useListNavigation` listbox, report the same
+     * rows through its `isDisabled` so the cursor skips them and Enter and Space
+     * cannot select them; `getRowProps` then marks them disabled for you.
+     */
     disabled?: boolean;
     className?: string;
 }
@@ -870,6 +876,12 @@ interface UseListNavigationOptions {
     initialIndex?: number;
     /** A row's text, for typeahead: typing jumps to the next row that starts with it. */
     getLabel?: (index: number) => string;
+    /**
+     * Rows that cannot be chosen. The cursor and typeahead skip them, and
+     * Enter, Space and clicks on them do nothing. `getRowProps` marks them
+     * `aria-disabled`.
+     */
+    isDisabled?: (index: number) => boolean;
 }
 /** Props `useListNavigation` hands the list element. */
 interface PluginListNavigationContainerProps {
@@ -883,6 +895,8 @@ interface PluginListNavigationRowProps {
     id: string;
     role: "option";
     "aria-selected": boolean;
+    /** Set on rows `isDisabled` reports. */
+    "aria-disabled"?: true;
     onClick: () => void;
     onPointerMove: () => void;
 }
@@ -1335,8 +1349,10 @@ interface CachedHostChannelOptions {
     enabled?: boolean;
     /**
      * A push channel (`host.postToPanel(channel, …)` broadcast) that means "this
-     * result is stale". Each push schedules a refetch; a burst of them within
-     * `debounceMs` of each other costs one. The payload is ignored.
+     * result is stale". Each push marks the cached result stale and schedules a
+     * refetch; a burst of them within `debounceMs` of each other costs one. The
+     * mark outlives the view: if every view unmounts before the refetch runs, the
+     * next mount refetches regardless of `staleMs`. The payload is ignored.
      */
     invalidateOn?: string;
     /**

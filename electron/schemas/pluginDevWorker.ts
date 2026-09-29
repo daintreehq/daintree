@@ -101,6 +101,7 @@ const HOST_NOTIFY_METHODS = {
   "process.kill": true,
   "process.write": true,
   "process.resize": true,
+  pushRejected: true,
 } as const satisfies Record<PluginHostNotifyMethod, true>;
 
 const SUBSCRIPTION_KINDS = {

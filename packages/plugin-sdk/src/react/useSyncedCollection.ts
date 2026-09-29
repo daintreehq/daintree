@@ -142,6 +142,12 @@ export function useSyncedCollection<T>(
         return;
       }
       if (delta.revision <= m.revision) return;
+      if (delta.resync) {
+        // The worker could not push these changes; the snapshot carries them.
+        pull();
+        held.push(delta);
+        return;
+      }
       if (delta.reset) m.map.clear();
       for (const key of delta.removes) m.map.delete(key);
       for (const [key, item] of delta.upserts) m.map.set(key, item);

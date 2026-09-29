@@ -1,5 +1,9 @@
-import type { PluginRendererMetricsReport } from "@shared/types/pluginMetrics";
-import { pluginViewMetrics, type PluginViewMetrics } from "./pluginViewMetrics";
+import type { PluginRendererMetricsEnvelope } from "@shared/types/ipc/pluginMetrics";
+import {
+  pluginViewMetrics,
+  type PluginViewMetrics,
+  type TaggedPluginReport,
+} from "./pluginViewMetrics";
 
 /**
  * Drains this renderer's plugin view observations to main in batches.
@@ -14,7 +18,10 @@ import { pluginViewMetrics, type PluginViewMetrics } from "./pluginViewMetrics";
 /** Delay between the first delta after a drain and the drain itself. */
 export const REPORT_DRAIN_DELAY_MS = 2_000;
 
-type DrainRegistry = Pick<PluginViewMetrics, "subscribe" | "onDrainRequested" | "drainReports">;
+type DrainRegistry = Pick<
+  PluginViewMetrics,
+  "subscribe" | "onDrainRequested" | "drainTaggedReports"
+>;
 
 interface ListenerTarget {
   addEventListener(type: string, listener: () => void): void;
@@ -23,7 +30,7 @@ interface ListenerTarget {
 
 export interface PluginMetricsReporterOptions {
   registry?: DrainRegistry;
-  send?: (reports: PluginRendererMetricsReport[]) => void;
+  send?: (reports: PluginRendererMetricsEnvelope[]) => void;
   /** Defaults to `document`; `null` opts out of visibility draining. */
   target?: (ListenerTarget & { readonly visibilityState: string }) | null;
   /** Defaults to `window`; `null` opts out of `pagehide` draining. */
@@ -33,7 +40,7 @@ export interface PluginMetricsReporterOptions {
   queueMicrotask?: (fn: () => void) => void;
 }
 
-function defaultSend(reports: PluginRendererMetricsReport[]): void {
+function defaultSend(reports: PluginRendererMetricsEnvelope[]): void {
   window.electron?.plugin?.reportViewMetrics?.(reports);
 }
 
@@ -56,15 +63,20 @@ export function startPluginMetricsReporter(options: PluginMetricsReporterOptions
       timer = null;
     }
     if (stopped) return;
-    let reports: PluginRendererMetricsReport[];
+    let tagged: TaggedPluginReport[];
     try {
-      reports = registry.drainReports();
+      tagged = registry.drainTaggedReports();
     } catch {
       return;
     }
-    if (reports.length === 0) return;
+    // A report with no load could never match a live one in main; not sent.
+    const envelopes: PluginRendererMetricsEnvelope[] = [];
+    for (const { generation, report } of tagged) {
+      if (generation !== null) envelopes.push({ generation, report });
+    }
+    if (envelopes.length === 0) return;
     try {
-      send(reports);
+      send(envelopes);
     } catch {
       // Main may be mid-teardown; the observations are best-effort.
     }

@@ -45,6 +45,12 @@ export interface PluginMetricsHost {
   /** Only plugins the host has loaded are recorded; anything else is dropped. */
   isKnownPlugin(pluginId: string): boolean;
   isolationOf(pluginId: string): PluginPerfSnapshot["isolation"];
+  /**
+   * Whether `generation` names the load currently live under `pluginId`: the
+   * `plugin://` authority its views were served from. A renderer report tagged
+   * with any other generation belongs to a load that has since been replaced.
+   */
+  isCurrentGeneration(pluginId: string, generation: string): boolean;
   /** Live worker processes, by plugin id. */
   workerPids(): Iterable<readonly [pluginId: string, pid: number]>;
 }
@@ -315,8 +321,14 @@ export class PluginMetricsService {
     this.markChanged(pluginId);
   }
 
-  /** A renderer's report, already validated and clamped at the IPC boundary. */
-  recordRendererReport(report: PluginRendererMetricsReport): boolean {
+  /**
+   * A renderer's report, already validated and clamped at the IPC boundary.
+   * Dropped unless `generation` is the plugin's live load: the renderer
+   * buffers for seconds, so a fast unload and reload would otherwise land the
+   * old load's views in the new load's freshly evicted numbers.
+   */
+  recordRendererReport(report: PluginRendererMetricsReport, generation: string): boolean {
+    if (this.disposed || !this.host?.isCurrentGeneration(report.pluginId, generation)) return false;
     const entry = this.entryFor(report.pluginId);
     if (!entry) return false;
     for (const load of report.viewLoads) {

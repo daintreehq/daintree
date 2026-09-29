@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { PluginRendererMetricsReport } from "../../shared/types/pluginMetrics.js";
+import type { PluginRendererMetricsEnvelope } from "../../shared/types/ipc/pluginMetrics.js";
 
 /**
  * Boundary schema for `plugin:report-view-metrics`. The renderer is not trusted
@@ -60,27 +61,36 @@ export const PluginRendererMetricsReportSchema = z.object({
   longFrames: z.array(LongFrameSchema).max(MAX_REPORTED_LONG_FRAMES),
 }) satisfies z.ZodType<PluginRendererMetricsReport, unknown>;
 
+/** A `plugin://` authority is `pi-` plus 32 hex digits; this only bounds what is compared. */
+const GenerationSchema = z.string().min(1).max(128);
+
 /**
- * Parse one renderer message into the reports worth recording. A malformed
- * report is dropped on its own; the rest of the message still counts.
+ * Parse one renderer message into the tagged reports worth recording. A
+ * malformed entry is dropped on its own; the rest of the message still counts.
  */
-export function parseRendererMetricsReports(payload: unknown): PluginRendererMetricsReport[] {
+export function parseRendererMetricsEnvelopes(payload: unknown): PluginRendererMetricsEnvelope[] {
   if (!Array.isArray(payload)) return [];
   const limit = Math.min(payload.length, MAX_REPORTS_PER_MESSAGE);
   let elements = 0;
   for (let i = 0; i < limit; i++) {
     const item: unknown = payload[i];
     if (!item || typeof item !== "object") continue;
+    const report: unknown = Reflect.get(item, "report");
+    if (!report || typeof report !== "object") continue;
     for (const key of ["viewLoads", "commitDurationsMs", "longFrames"]) {
-      const list: unknown = Reflect.get(item, key);
+      const list: unknown = Reflect.get(report, key);
       if (Array.isArray(list)) elements += list.length;
     }
     if (elements > MAX_ELEMENTS_PER_MESSAGE) return [];
   }
-  const out: PluginRendererMetricsReport[] = [];
+  const out: PluginRendererMetricsEnvelope[] = [];
   for (let i = 0; i < limit; i++) {
-    const parsed = PluginRendererMetricsReportSchema.safeParse(payload[i]);
-    if (parsed.success) out.push(parsed.data);
+    const item: unknown = payload[i];
+    if (!item || typeof item !== "object") continue;
+    const generation = GenerationSchema.safeParse(Reflect.get(item, "generation"));
+    if (!generation.success) continue;
+    const report = PluginRendererMetricsReportSchema.safeParse(Reflect.get(item, "report"));
+    if (report.success) out.push({ generation: generation.data, report: report.data });
   }
   return out;
 }

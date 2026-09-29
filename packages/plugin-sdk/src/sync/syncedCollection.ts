@@ -15,12 +15,22 @@ export interface SyncedCollectionSnapshot<T> {
  * consecutive, so a view that sees `revision` skip a number knows it missed a
  * delta. Apply in order: `reset` (clear everything), then `removes`, then
  * `upserts` — a key already present keeps its position, a new one is appended.
+ *
+ * A change set too large for one push is split across consecutive revisions,
+ * each applied like any other delta. One that cannot be split small enough (a
+ * single item over the limit) is replaced by a `resync` delta.
  */
 export interface SyncedCollectionDelta<T> {
   epoch: string;
   revision: number;
   /** True when the collection was replaced wholesale; `upserts` then holds every item. */
   reset?: boolean;
+  /**
+   * True when the changes at this revision could not be pushed (too large):
+   * `removes` and `upserts` are empty, and a view holding an older revision
+   * pulls a fresh snapshot instead of applying it.
+   */
+  resync?: boolean;
   removes: string[];
   upserts: Array<[string, T]>;
 }
@@ -36,6 +46,43 @@ export interface SyncedCollectionOptions<T> {
    * everything done in the same task.
    */
   flushMs?: number;
+  /**
+   * Largest delta sent in one push, estimated as JSON length. Default 512 KiB,
+   * half the host's 1 MiB push cap (`PLUGIN_PUSH_MAX_PAYLOAD_BYTES` in the
+   * host's `shared/config/pluginBudgets.ts`), leaving room for multi-byte text
+   * the estimate undercounts. Larger change sets are split across consecutive
+   * revisions; an item that alone exceeds it makes views resync instead.
+   */
+  maxDeltaBytes?: number;
+}
+
+// Half the host's `PLUGIN_PUSH_MAX_PAYLOAD_BYTES` (1 MiB, in the host's
+// `shared/config/pluginBudgets.ts`), which the SDK cannot import.
+const SYNCED_COLLECTION_MAX_DELTA_BYTES = 512 * 1024;
+
+// The host's rejection for a push over its cap starts with this code.
+const PAYLOAD_TOO_LARGE_PREFIX = "PLUGIN_PAYLOAD_TOO_LARGE:";
+
+// Room for the envelope: epoch, revision, flags and the array brackets.
+const DELTA_OVERHEAD_BYTES = 256;
+
+function jsonLength(value: unknown): number {
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    // Not JSON-representable (a BigInt, a cycle): the host measures it; a
+    // rejection still ends in a resync.
+    return 0;
+  }
+}
+
+function isPayloadTooLarge(error: unknown): boolean {
+  // Duck-typed: a rejection relayed from another process may not be an Error.
+  const message =
+    typeof error === "object" && error !== null && "message" in error
+      ? String((error as { message: unknown }).message)
+      : String(error);
+  return message.startsWith(PAYLOAD_TOO_LARGE_PREFIX);
 }
 
 /** A keyed collection a worker owns and plugin views mirror with `useSyncedCollection`. */
@@ -117,6 +164,7 @@ export async function createSyncedCollection<T>(
 ): Promise<SyncedCollection<T>> {
   const { key } = options;
   const flushMs = Math.max(0, options.flushMs ?? 16);
+  const maxDeltaBytes = Math.max(1, options.maxDeltaBytes ?? SYNCED_COLLECTION_MAX_DELTA_BYTES);
   const snapshotChannel = syncedCollectionSnapshotChannel(channel);
   const epoch = newEpoch();
 
@@ -134,40 +182,102 @@ export async function createSyncedCollection<T>(
   let warned = false;
 
   const dirty = (): boolean => pendingReset || pendingRemoves.size > 0 || pendingUpserts.size > 0;
+  const clearPending = (): void => {
+    pendingReset = false;
+    pendingRemoves.clear();
+    pendingUpserts.clear();
+  };
+
+  const resyncDelta = (at: number): SyncedCollectionDelta<T> => ({
+    epoch,
+    revision: at,
+    resync: true,
+    removes: [],
+    upserts: [],
+  });
+
+  /**
+   * The pending changes as deltas under the push limit, applied in order to
+   * the same effect as one. `null` when an item alone is over it.
+   */
+  const chunkPending = (): Array<Omit<SyncedCollectionDelta<T>, "epoch" | "revision">> | null => {
+    type Chunk = Omit<SyncedCollectionDelta<T>, "epoch" | "revision">;
+    const chunks: Chunk[] = [];
+    let current: Chunk = { removes: [], upserts: [] };
+    if (pendingReset) current.reset = true;
+    let bytes = DELTA_OVERHEAD_BYTES;
+    const room = (cost: number): void => {
+      if (bytes + cost <= maxDeltaBytes) return;
+      if (current.removes.length === 0 && current.upserts.length === 0 && !current.reset) return;
+      chunks.push(current);
+      current = { removes: [], upserts: [] };
+      bytes = DELTA_OVERHEAD_BYTES;
+    };
+    if (!pendingReset) {
+      for (const k of pendingRemoves) {
+        const cost = jsonLength(k) + 1;
+        if (DELTA_OVERHEAD_BYTES + cost > maxDeltaBytes) return null;
+        room(cost);
+        current.removes.push(k);
+        bytes += cost;
+      }
+    }
+    for (const entry of pendingUpserts) {
+      const cost = jsonLength(entry) + 1;
+      if (DELTA_OVERHEAD_BYTES + cost > maxDeltaBytes) return null;
+      room(cost);
+      current.upserts.push(entry);
+      bytes += cost;
+    }
+    chunks.push(current);
+    return chunks;
+  };
 
   const flushNow = (): Promise<void> => {
     if (timer !== null) clearTimeout(timer);
     timer = null;
     if (!dirty()) return lastPost;
-    revision++;
-    const delta: SyncedCollectionDelta<T> = {
-      epoch,
-      revision,
-      removes: pendingReset ? [] : [...pendingRemoves],
-      upserts: [...pendingUpserts],
-    };
-    if (pendingReset) delta.reset = true;
-    pendingReset = false;
-    pendingRemoves.clear();
-    pendingUpserts.clear();
     // Before the first pull no view can be holding a snapshot to apply this
     // to: a view subscribes, then pulls, and drops every delta at or below the
     // revision it pulled. The revision still advances.
-    if (!pulled || disposed) return lastPost;
-    lastPost = send(delta, 0);
+    if (!pulled || disposed) {
+      revision++;
+      clearPending();
+      return lastPost;
+    }
+    const chunks = chunkPending();
+    clearPending();
+    if (chunks === null) {
+      revision++;
+      lastPost = send(resyncDelta(revision), 0);
+      return lastPost;
+    }
+    const sends = chunks.map((chunk) => {
+      revision++;
+      return send({ epoch, revision, ...chunk }, 0);
+    });
+    lastPost = Promise.all(sends).then(() => {});
     return lastPost;
   };
 
   // A lost delta with nothing after it would leave views stale with no gap to
   // notice, so the newest one is retried. Once a later delta exists, that one
-  // carries the gap and the view resyncs on it.
+  // carries the gap and the view resyncs on it. A delta the host refused as too
+  // large would be refused again, so it is replaced by a resync delta instead.
   const send = (delta: SyncedCollectionDelta<T>, attempt: number): Promise<void> =>
     host.postToPanel(channel, delta).catch((error: unknown) => {
       if (!warned) {
         warned = true;
         console.warn(`[synced-collection] pushing "${channel}" failed.`, error);
       }
-      if (attempt >= 3 || disposed) return;
+      if (disposed) return;
+      if (isPayloadTooLarge(error)) {
+        if (delta.resync || revision !== delta.revision) return;
+        revision++;
+        lastPost = send(resyncDelta(revision), 0);
+        return;
+      }
+      if (attempt >= 3) return;
       setTimeout(
         () => {
           if (!disposed && revision === delta.revision) void send(delta, attempt + 1);
@@ -178,9 +288,7 @@ export async function createSyncedCollection<T>(
 
   const touch = (): void => {
     if (disposed) {
-      pendingReset = false;
-      pendingRemoves.clear();
-      pendingUpserts.clear();
+      clearPending();
       return;
     }
     if (timer === null) timer = setTimeout(() => void flushNow(), flushMs);
@@ -267,9 +375,7 @@ export async function createSyncedCollection<T>(
       disposed = true;
       if (timer !== null) clearTimeout(timer);
       timer = null;
-      pendingReset = false;
-      pendingRemoves.clear();
-      pendingUpserts.clear();
+      clearPending();
     },
   };
 }

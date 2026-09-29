@@ -510,6 +510,11 @@ export interface PluginHostFactoryDeps {
     input: Parameters<ReturnType<typeof getPluginActionAuditService>["append"]>[0]
   ) => void;
   safeArgsHash: (args: unknown[]) => string;
+  /**
+   * Meter a push refused for size or cloneability. Optional because metering
+   * is best-effort; a missing sink must never change what the plugin sees.
+   */
+  recordPushRejected?: (pluginId: string) => void;
 }
 
 /**
@@ -685,17 +690,27 @@ export function createHost(
    */
   const pushPluginMessage = (channel: string, panelId: string | null, payload: unknown): void => {
     const what = `push payload on "${channel}"`;
-    const bytes = assertPayloadWithinLimit(pluginId, what, payload, PLUGIN_PUSH_MAX_PAYLOAD_BYTES);
+    let bytes: number;
+    let snapshot: unknown;
+    try {
+      bytes = assertPayloadWithinLimit(pluginId, what, payload, PLUGIN_PUSH_MAX_PAYLOAD_BYTES);
+      // Delivery is deferred to the next flush, so a builtin that mutates and
+      // re-posts one object must not have both pushes carry its final state.
+      // Cloning here also refuses an uncloneable payload on the call that made
+      // it, instead of failing a whole renderer batch later.
+      snapshot = snapshotPayload(pluginId, what, payload);
+    } catch (err) {
+      // Metered here because a refused push never reaches the batcher's flush
+      // observer, which is where accepted pushes are counted.
+      if (isBound()) deps.recordPushRejected?.(pluginId);
+      throw err;
+    }
     routePluginPush({
       pluginId,
       projectId: boundProjectId,
       channel: `plugin:${pluginId}:${channel}`,
       panelId,
-      // Delivery is deferred to the next flush, so a builtin that mutates and
-      // re-posts one object must not have both pushes carry its final state.
-      // Cloning here also refuses an uncloneable payload on the call that made
-      // it, instead of failing a whole renderer batch later.
-      payload: snapshotPayload(pluginId, what, payload),
+      payload: snapshot,
       bytes,
       locatePanel: (target, owner) => deps.panelLifecycleBroker.pushTargetsFor(target, owner),
     });
@@ -1321,12 +1336,12 @@ export function createHost(
         resolveSubscriptionDebounceMs(options?.debounceMs),
         () => {
           chain = chain.then(async () => {
-            if (!deps.plugins.has(pluginId) || disposed) return;
+            if (!isBound() || disposed) return;
             try {
               const snapshots = await fetchWorktreeSnapshots();
-              // Re-check after the async fetch so a racing unloadPlugin()
-              // doesn't fire the callback into a disposed plugin closure.
-              if (!deps.plugins.has(pluginId) || disposed) return;
+              // Re-check after the async fetch so a racing unload, or a
+              // same-id reload, doesn't fire into the retired closure.
+              if (!isBound() || disposed) return;
               const active = snapshots.find((s) => s.isCurrent === true);
               callback(active ? toPluginWorktreeSnapshot(active) : null);
             } catch (err) {
@@ -1345,15 +1360,16 @@ export function createHost(
         // "active" means active within its own project, so a foreign event is
         // not a change it can observe at all — nor may it extend a burst.
         if (!isEventForBoundProject(event)) return;
-        if (!deps.plugins.has(pluginId)) return;
+        if (!isBound()) return;
         coalescer.push();
       });
-      const dispose = (): void => {
-        if (disposed) return;
+      // The whole disposer is tracked, not just the event unsubscribe: an
+      // unload or activation rollback must also cancel a queued flush.
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
         disposed = true;
         coalescer.dispose();
         unsubscribe();
-      };
+      });
       return Promise.resolve(dispose);
     },
     onDidChangeWorktrees: (callback, options) => {
@@ -1370,10 +1386,10 @@ export function createHost(
       // and the change tracker's base is always the list handed over last.
       let chain: Promise<void> = Promise.resolve();
       const runEmit = async (): Promise<void> => {
-        if (!deps.plugins.has(pluginId) || disposed) return;
+        if (!isBound() || disposed) return;
         try {
           const snapshots = await fetchWorktreeSnapshots();
-          if (!deps.plugins.has(pluginId) || disposed) return;
+          if (!isBound() || disposed) return;
           const list = snapshots.map(toPluginWorktreeSnapshot);
           callback(list, tracker.next(list));
         } catch (err) {
@@ -1402,13 +1418,12 @@ export function createHost(
       // correct after deletions. One coalescer spans both event kinds.
       const disposeUpdate = deps.subscribeWorktreeEvent(pluginId, "worktree-update", emit);
       const disposeRemove = deps.subscribeWorktreeEvent(pluginId, "worktree-removed", emit);
-      const dispose = (): void => {
-        if (disposed) return;
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
         disposed = true;
         coalescer.dispose();
         disposeUpdate();
         disposeRemove();
-      };
+      });
       return Promise.resolve(dispose);
     },
     onDidChangeAgentState: (callback, options) => {
@@ -1448,14 +1463,14 @@ export function createHost(
           for (const snapshot of batch) {
             // A listener quarantined mid-batch disposes the subscription; the
             // rest of the batch must not reach it.
-            if (!active || !deps.plugins.has(pluginId)) return;
+            if (!active || !isBound()) return;
             deliver(snapshot);
           }
         }
       );
       const handler = (payload: AgentStateChangePayload): void => {
         if (!isAgentEventForBoundProject(payload)) return;
-        if (!deps.plugins.has(pluginId)) return;
+        if (!isBound()) return;
         const snapshot = toPluginAgentSnapshot(payload);
         lastAgentSnapshot = snapshot;
         // Keyed by the raw routing ids the projection drops; an event with

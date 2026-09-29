@@ -10,6 +10,7 @@ import {
 } from "../../shared/utils/ipcErrorSerialization.js";
 import { FAULT_MODE_ENABLED, applyInvokeFault, initFaultRegistry } from "../ipc/faultRegistry.js";
 import { markIpcSecurityReady } from "../ipc/ipcGuard.js";
+import { notifyIpcEnvelopeRejected } from "../ipc/envelopeRejections.js";
 import { channelToCategory, type IpcChannelCategory } from "../ipc/utils.js";
 import { AppError } from "../utils/errorTypes.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
@@ -310,6 +311,20 @@ export function sanitizeErrorForRenderer(msg: string): string {
 
 // Wrap ipcMain.handle globally to enforce sender validation on ALL IPC handlers
 // This must run before any handlers are registered
+/** {@link validateIpcInvokeEnvelope}, telling the channel's rejection observer when it refuses. */
+function validateEnvelopeObserved(
+  channel: string,
+  event: IpcMainInvokeEvent,
+  args: unknown[]
+): void {
+  try {
+    validateIpcInvokeEnvelope(channel, args);
+  } catch (error) {
+    notifyIpcEnvelopeRejected(channel, event, args, error);
+    throw error;
+  }
+}
+
 export function enforceIpcSenderValidation(): void {
   if (FAULT_MODE_ENABLED) initFaultRegistry();
 
@@ -330,7 +345,7 @@ export function enforceIpcSenderValidation(): void {
         );
       }
       try {
-        validateIpcInvokeEnvelope(channel, args);
+        validateEnvelopeObserved(channel, event, args);
         if (FAULT_MODE_ENABLED) {
           const stub = await applyInvokeFault(channel);
           if (stub) return wrapSuccess(stub.value);
@@ -376,7 +391,7 @@ export function enforceIpcSenderValidation(): void {
           );
         }
         try {
-          validateIpcInvokeEnvelope(channel, args);
+          validateEnvelopeObserved(channel, event, args);
           if (FAULT_MODE_ENABLED) {
             const stub = await applyInvokeFault(channel);
             if (stub) return wrapSuccess(stub.value);

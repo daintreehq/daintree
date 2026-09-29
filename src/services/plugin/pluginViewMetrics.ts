@@ -3,6 +3,7 @@ import type {
   PluginRendererMetricsReport,
   PluginViewLoadSample,
 } from "@shared/types/pluginMetrics";
+import { stripPluginViewGeneration } from "@shared/utils/pluginViewUrl";
 
 /**
  * Renderer-side cost observations for plugin views, per project view context.
@@ -51,8 +52,38 @@ const MAX_TRACKED_AUTHORITIES = 64;
  * and a fixed one keeps `recordCommit` allocation-free.
  */
 const COMMIT_WINDOW_RING = 64;
+/** Replaced generations remembered per plugin, so a straggler from one is dropped. */
+const MAX_RETIRED_GENERATIONS = 8;
+
+/**
+ * The plugin load a view belongs to, read off its module URL (see
+ * {@link generationOfViewUrl}).
+ */
+export interface PluginViewGeneration {
+  /** The `plugin://` authority: main mints one per load and never reissues it. */
+  token: string;
+  /**
+   * The URL's `__dtv-N` view generation, which main allocates from one
+   * monotonic counter, so a later load always has a larger one. `null` when
+   * the URL carries none.
+   */
+  order: number | null;
+}
+
+/** A drained report and the load it was observed against (`null`: none reported one). */
+export interface TaggedPluginReport {
+  generation: string | null;
+  report: PluginRendererMetricsReport;
+}
 
 interface PluginEntry {
+  /**
+   * The plugin load these observations belong to: the `plugin://` authority
+   * its views were served from. `null` until a view reports one.
+   */
+  generation: string | null;
+  /** The {@link PluginViewGeneration.order} that load was first seen with. */
+  generationOrder: number | null;
   pendingLoads: PluginViewLoadSample[];
   pendingCommits: number[];
   /** Commits seen this drain window, including any the reservoir dropped. */
@@ -106,7 +137,9 @@ export function createPluginViewMetrics() {
   const openViews = new Map<string, number>();
   let openViewCount = 0;
   /** Bumped by `reset()`, so a release closure from before it cannot touch the new counts. */
-  let generation = 0;
+  let resetEpoch = 0;
+  /** Generations each plugin has moved past, newest last. */
+  const retiredGenerations = new Map<string, string[]>();
 
   /**
    * Drop the least recently active closed, drained plugins until the cap holds.
@@ -127,6 +160,8 @@ export function createPluginViewMetrics() {
     let entry = plugins.get(pluginId);
     if (!entry) {
       entry = {
+        generation: null,
+        generationOrder: null,
         pendingLoads: [],
         pendingCommits: [],
         pendingCommitsSeen: 0,
@@ -145,6 +180,86 @@ export function createPluginViewMetrics() {
       plugins.set(pluginId, entry);
       evictIdlePlugins(pluginId);
     }
+    return entry;
+  }
+
+  function isRetired(pluginId: string, generation: string): boolean {
+    return retiredGenerations.get(pluginId)?.includes(generation) === true;
+  }
+
+  /**
+   * Retire everything observed under the plugin's previous load: it was
+   * replaced, and main would reject those numbers anyway. The local snapshot
+   * restarts too, the way main's evicted metrics do.
+   */
+  function rememberRetired(pluginId: string, generation: string): void {
+    let retired = retiredGenerations.get(pluginId);
+    if (!retired) {
+      retired = [];
+      retiredGenerations.set(pluginId, retired);
+      if (retiredGenerations.size > MAX_TRACKED_PLUGINS) {
+        const oldest = retiredGenerations.keys().next().value;
+        if (oldest !== undefined && oldest !== pluginId) retiredGenerations.delete(oldest);
+      }
+    }
+    if (!retired.includes(generation)) pushBounded(retired, generation, MAX_RETIRED_GENERATIONS);
+    // The old load's scripts can outlive it (a timer in a module that was
+    // never evicted), but their frames are no longer this plugin's to count.
+    if (authorities.get(generation) === pluginId) authorities.delete(generation);
+  }
+
+  function retire(pluginId: string, entry: PluginEntry): void {
+    if (entry.generation !== null) rememberRetired(pluginId, entry.generation);
+    entry.pendingLoads = [];
+    entry.pendingCommits = [];
+    entry.pendingCommitsSeen = 0;
+    entry.pendingCommitMax = 0;
+    entry.pendingLongFrames = [];
+    entry.pendingLongFramesDropped = 0;
+    entry.pendingLongFramesDroppedBlockingMs = 0;
+    entry.recentLoads = [];
+    entry.localCommitCount = 0;
+    entry.localCommitLast = 0;
+    entry.longFrameCount = 0;
+    entry.longFrameBlockingMs = 0;
+    entry.longFrameLastAt = null;
+    dirty.delete(pluginId);
+    for (let i = 0; i < COMMIT_WINDOW_RING; i++) {
+      if (windowPlugins[i] === pluginId) windowPlugins[i] = undefined;
+    }
+  }
+
+  /**
+   * The entry to record into for an observation made under `generation`, or
+   * `null` when that load has already been replaced. Omitted, the observation
+   * joins whatever load the plugin is currently on.
+   *
+   * A load's views can still be activating when its successor's first view
+   * mounts, so first sight is not proof of being newer: the view generation
+   * orders loads, and an older one that turns up late is retired on arrival
+   * rather than allowed to retire its successor.
+   */
+  function entryForGeneration(
+    pluginId: string,
+    generation?: PluginViewGeneration
+  ): PluginEntry | null {
+    if (generation === undefined) return entryFor(pluginId);
+    const { token, order } = generation;
+    if (isRetired(pluginId, token)) return null;
+    const entry = entryFor(pluginId);
+    if (entry.generation === token) return entry;
+    if (
+      entry.generation !== null &&
+      order !== null &&
+      entry.generationOrder !== null &&
+      order < entry.generationOrder
+    ) {
+      rememberRetired(pluginId, token);
+      return null;
+    }
+    if (entry.generation !== null) retire(pluginId, entry);
+    entry.generation = token;
+    entry.generationOrder = order;
     return entry;
   }
 
@@ -176,8 +291,13 @@ export function createPluginViewMetrics() {
     notify(drainRequestListeners);
   }
 
-  function recordViewLoad(pluginId: string, sample: PluginViewLoadSample): void {
-    const entry = entryFor(pluginId);
+  function recordViewLoad(
+    pluginId: string,
+    sample: PluginViewLoadSample,
+    generation?: PluginViewGeneration
+  ): void {
+    const entry = entryForGeneration(pluginId, generation);
+    if (!entry) return;
     pushBounded(entry.pendingLoads, sample, MAX_PENDING_VIEW_LOADS);
     pushBounded(entry.recentLoads, sample, MAX_RECENT_VIEW_LOADS);
     markDirty(pluginId, entry);
@@ -190,10 +310,18 @@ export function createPluginViewMetrics() {
    * allocation-free in the steady state. Past the pending cap the drain window
    * becomes a uniform reservoir sample (so p50/p95 stay representative); the
    * window's worst commit is tracked beside it and put back at drain; the
-   * report's `commitCount` stays exact either way.
+   * report's `commitCount` stays exact either way. `generation` is the view's
+   * load (see {@link generationOfViewUrl}); a commit from a replaced load is
+   * dropped.
    */
-  function recordCommit(pluginId: string, actualDurationMs: number, commitTime: number): void {
-    const entry = entryFor(pluginId);
+  function recordCommit(
+    pluginId: string,
+    actualDurationMs: number,
+    commitTime: number,
+    generation?: PluginViewGeneration
+  ): void {
+    const entry = entryForGeneration(pluginId, generation);
+    if (!entry) return;
     const seen = ++entry.pendingCommitsSeen;
     const pending = entry.pendingCommits;
     if (pending.length < MAX_PENDING_COMMITS) {
@@ -237,10 +365,16 @@ export function createPluginViewMetrics() {
     if (pending.length === LONG_FRAME_HIGH_WATER) requestDrain();
   }
 
-  /** Remember which plugin a `plugin://` module URL's authority belongs to. */
+  /**
+   * Remember which plugin a `plugin://` module URL's authority belongs to. A
+   * view loading from a new authority is the plugin's new load, so this is
+   * also where a replaced load's pending observations are retired.
+   */
   function registerViewOrigin(pluginId: string, moduleUrl: string): void {
-    const authority = authorityOf(moduleUrl);
-    if (!authority) return;
+    const generation = generationOfViewUrl(moduleUrl);
+    if (!generation) return;
+    if (!entryForGeneration(pluginId, generation)) return;
+    const authority = generation.token;
     // Re-inserted so a reload's fresh authority is the newest and the oldest
     // (a plugin load whose views are long gone) is what the cap drops.
     authorities.delete(authority);
@@ -255,13 +389,13 @@ export function createPluginViewMetrics() {
   function retainView(pluginId: string): () => void {
     openViews.set(pluginId, (openViews.get(pluginId) ?? 0) + 1);
     openViewCount++;
-    const retainedIn = generation;
+    const retainedIn = resetEpoch;
     let released = false;
     return () => {
       if (released) return;
       released = true;
       // A view retained before `reset()` was already forgotten by it.
-      if (retainedIn !== generation) return;
+      if (retainedIn !== resetEpoch) return;
       openViewCount--;
       const remaining = (openViews.get(pluginId) ?? 1) - 1;
       if (remaining > 0) {
@@ -300,9 +434,17 @@ export function createPluginViewMetrics() {
   }
 
   function drainReports(): PluginRendererMetricsReport[] {
+    return drainTaggedReports().map((tagged) => tagged.report);
+  }
+
+  /**
+   * {@link drainReports} with each report's load attached, read before the
+   * drain's own eviction can drop the entry that knew it.
+   */
+  function drainTaggedReports(): TaggedPluginReport[] {
     drainRequested = false;
     if (dirty.size === 0) return [];
-    const reports: PluginRendererMetricsReport[] = [];
+    const reports: TaggedPluginReport[] = [];
     for (const pluginId of dirty) {
       const entry = plugins.get(pluginId);
       if (!entry) continue;
@@ -318,14 +460,17 @@ export function createPluginViewMetrics() {
         commits[Math.floor(Math.random() * commits.length)] = entry.pendingCommitMax;
       }
       reports.push({
-        pluginId,
-        viewLoads: entry.pendingLoads,
-        commitDurationsMs: entry.pendingCommits,
-        commitCount: entry.pendingCommitsSeen,
-        longFrames: entry.pendingLongFrames,
-        longFramesDropped: {
-          count: entry.pendingLongFramesDropped,
-          blockingMs: entry.pendingLongFramesDroppedBlockingMs,
+        generation: entry.generation,
+        report: {
+          pluginId,
+          viewLoads: entry.pendingLoads,
+          commitDurationsMs: entry.pendingCommits,
+          commitCount: entry.pendingCommitsSeen,
+          longFrames: entry.pendingLongFrames,
+          longFramesDropped: {
+            count: entry.pendingLongFramesDropped,
+            blockingMs: entry.pendingLongFramesDroppedBlockingMs,
+          },
         },
       });
       entry.pendingLoads = [];
@@ -395,7 +540,8 @@ export function createPluginViewMetrics() {
     authorities.clear();
     openViews.clear();
     openViewCount = 0;
-    generation++;
+    resetEpoch++;
+    retiredGenerations.clear();
     drainRequested = false;
     windowPlugins.fill(undefined);
     windowCursor = 0;
@@ -412,6 +558,7 @@ export function createPluginViewMetrics() {
     pluginsCommittingDuring,
     isTracking,
     drainReports,
+    drainTaggedReports,
     subscribe,
     onDrainRequested,
     getLocalSnapshot,
@@ -432,6 +579,19 @@ function authorityOf(url: string): string | undefined {
   }
   const authority = rest.slice(0, end).toLowerCase();
   return authority.length > 0 ? authority : undefined;
+}
+
+/**
+ * The plugin load a view module URL belongs to. The token is the URL's
+ * `plugin://` authority, shared by a load's regular and recovery view
+ * generations since both are the same load; the order is its `__dtv-N`.
+ */
+export function generationOfViewUrl(url: string): PluginViewGeneration | undefined {
+  const token = authorityOf(url);
+  if (!token) return undefined;
+  const pathStart = PLUGIN_SCHEME.length + token.length + 1;
+  const path = url.charAt(pathStart - 1) === "/" ? url.slice(pathStart) : "";
+  return { token, order: stripPluginViewGeneration(path)?.generation ?? null };
 }
 
 export type PluginViewMetrics = ReturnType<typeof createPluginViewMetrics>;

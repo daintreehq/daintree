@@ -1105,6 +1105,8 @@ export class PluginService {
     this.metrics = new PluginMetricsService({
       host: {
         isKnownPlugin: (pluginId) => this.plugins.has(pluginId),
+        isCurrentGeneration: (pluginId, generation) =>
+          this.pluginAuthorities.get(pluginId) === generation,
         isolationOf: (pluginId) =>
           this.plugins.get(pluginId)?.isBuiltin === true ? "in-process" : "worker",
         workerPids: () => this.liveWorkerPids(),
@@ -2947,6 +2949,11 @@ export class PluginService {
       host,
       workerHost,
       getCapabilities: () => this.plugins.get(pluginId)?.manifest.capabilities ?? [],
+      // Only while this load is live: a straggler from a replaced instance
+      // must not count against its same-id successor.
+      onPushRejected: () => {
+        if (this.plugins.get(pluginId) === plugin) this.metrics.recordPushOversized(pluginId);
+      },
       clearPriorRegistrations: () => {
         // Drop the prior generation's activate-time registrations before the
         // reloaded worker re-registers, so a handler the new code stopped
@@ -3708,6 +3715,7 @@ export class PluginService {
         this.validateAndBuildActionDescriptor(pluginId, contribution),
       safeAppendAudit,
       safeArgsHash,
+      recordPushRejected: (pluginId) => this.metrics.recordPushOversized(pluginId),
     };
   }
 

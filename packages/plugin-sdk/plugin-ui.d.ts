@@ -287,6 +287,7 @@ declare module "@daintreehq/plugin-ui" {
   /**
    * The keyboard model of a list: one tab stop, Up/Down/Home/End move the
    * cursor, Enter or Space selects, typing jumps when `getLabel` is given.
+   * Rows `isDisabled` reports are skipped and never selected.
    */
   export function useListNavigation(options: UseListNavigationOptions): UseListNavigationResult;
 

@@ -183,6 +183,8 @@ export interface PluginDevWorkerMainBridgeDeps {
    * screen — or the plugin is stuck dead with no path back.
    */
   onTerminalFailure?: () => void;
+  /** The worker refused a push before sending it (size cap or clone failure). */
+  onPushRejected?: () => void;
 }
 
 interface PendingInvoke {
@@ -222,6 +224,7 @@ export class PluginDevWorkerMainBridge {
     result: { ok: true } | { ok: false; error: string; stack?: string }
   ) => void;
   private readonly onTerminalFailure?: () => void;
+  private readonly onPushRejected?: () => void;
 
   private disposed = false;
   /**
@@ -307,6 +310,7 @@ export class PluginDevWorkerMainBridge {
     this.clearPriorRegistrations = deps.clearPriorRegistrations;
     this.onActivationResult = deps.onActivationResult;
     this.onTerminalFailure = deps.onTerminalFailure;
+    this.onPushRejected = deps.onPushRejected;
 
     this.activationPromise = new Promise<void>((resolve, reject) => {
       this.activationResolve = resolve;
@@ -1362,6 +1366,11 @@ export class PluginDevWorkerMainBridge {
           return;
         }
         handle.resize(p.cols, p.rows);
+        return;
+      }
+      case "pushRejected": {
+        if (this.disposed) return;
+        this.onPushRejected?.();
         return;
       }
       default:

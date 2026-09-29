@@ -6,8 +6,10 @@ import { formatBytes as hostBytes } from "@/lib/formatBytes";
 import { formatCompactCount as hostCount } from "@/lib/formatCount";
 import { formatElapsedDuration as hostDuration } from "@/utils/formatElapsedDuration";
 
-// The kit's formatters are copies (see src/pluginUi/format.ts); these pin each
-// one to the host function it copies across the ranges the host handles.
+// The kit's formatters delegate to the host's after normalising a plugin's
+// input (see src/pluginUi/format.ts). These pin that the adapters change no
+// label the host prints, and that the input they widen (ISO strings, Dates,
+// junk from untyped JS) lands on the same labels or a safe fallback.
 const NOW = new Date("2026-09-30T12:00:00Z").getTime();
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
@@ -45,10 +47,14 @@ describe("@daintreehq/plugin-ui formatters", () => {
     }
   });
 
-  it("matches the host's formatRelativeTime", () => {
+  it("matches the host's formatRelativeTime, for ISO strings and Dates too", () => {
     for (const age of AGES) {
-      expect(kit.formatRelativeTime(NOW - age, NOW)).toBe(hostRelativeTime(NOW - age, NOW));
+      const expected = hostRelativeTime(NOW - age, NOW);
+      expect(kit.formatRelativeTime(NOW - age, NOW)).toBe(expected);
+      expect(kit.formatRelativeTime(new Date(NOW - age).toISOString(), NOW)).toBe(expected);
+      expect(kit.formatRelativeTime(new Date(NOW - age), NOW)).toBe(expected);
     }
+    expect(kit.formatRelativeTime("not a date", NOW)).toBe("Unknown");
   });
 
   it("matches the host's formatBytes", () => {
@@ -86,6 +92,7 @@ describe("@daintreehq/plugin-ui formatters", () => {
       expect(typeof kit.formatCount(value)).toBe("string");
       expect(typeof kit.formatDuration(value)).toBe("string");
       expect(kit.formatTimeAgo(value, NOW)).toBe("Unknown");
+      expect(kit.formatRelativeTime(value, NOW)).toBe("Unknown");
     }
   });
 });

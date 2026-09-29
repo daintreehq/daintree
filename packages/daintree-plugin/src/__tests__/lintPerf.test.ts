@@ -47,21 +47,21 @@ export default function Panel() {
 });
 
 describe("undebounced-worktree-subscription", () => {
-  it("flags onDidChangeWorktrees without options", async () => {
+  it("leaves onDidChangeWorktrees alone, since the host coalesces it by default", async () => {
     const findings = await lintFor("undebounced-worktree-subscription", {
       "src/index.ts": `export async function activate(host) {
   host.onDidChangeWorktrees((worktrees) => render(worktrees));
+  host.onDidChangeWorktrees(render, { signal });
 }
 `,
     });
-    expect(findings).toHaveLength(1);
-    expect(findings[0]!.line).toBe(2);
+    expect(findings).toEqual([]);
   });
 
-  it("flags an options object without debounceMs, and a host fs.watch without one", async () => {
+  it("flags a host fs.watch without debounceMs", async () => {
     const findings = await lintFor("undebounced-worktree-subscription", {
       "src/index.ts": `export async function activate(host) {
-  host.onDidChangeWorktrees(render, { signal });
+  host.fs.watch([dir], onChange);
   host.fs.watch([dir], onChange, { recursive: true });
 }
 `,

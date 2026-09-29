@@ -30,10 +30,8 @@ import type {
 } from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
-import type {
-  PluginPerfSnapshot,
-  PluginRendererMetricsReport,
-} from "../shared/types/pluginMetrics.js";
+import type { PluginPerfSnapshot } from "../shared/types/pluginMetrics.js";
+import type { PluginRendererMetricsEnvelope } from "../shared/types/ipc/pluginMetrics.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { PLUGIN_PUSH_BATCH_CHANNEL } from "./services/plugin/pluginPushProtocol.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -3354,7 +3352,7 @@ function buildElectronApi(): ElectronAPI {
       ...buildPluginMetricsPreloadBindings(_unwrappingInvoke),
 
       // Fire-and-forget: renderer-side view cost observations, drained in batches.
-      reportViewMetrics: (reports: PluginRendererMetricsReport[]) => {
+      reportViewMetrics: (reports: PluginRendererMetricsEnvelope[]) => {
         ipcRenderer.send(CHANNELS.PLUGIN_REPORT_VIEW_METRICS, reports);
       },
 

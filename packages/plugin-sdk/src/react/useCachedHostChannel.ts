@@ -25,8 +25,10 @@ export interface CachedHostChannelOptions {
   enabled?: boolean;
   /**
    * A push channel (`host.postToPanel(channel, …)` broadcast) that means "this
-   * result is stale". Each push schedules a refetch; a burst of them within
-   * `debounceMs` of each other costs one. The payload is ignored.
+   * result is stale". Each push marks the cached result stale and schedules a
+   * refetch; a burst of them within `debounceMs` of each other costs one. The
+   * mark outlives the view: if every view unmounts before the refetch runs, the
+   * next mount refetches regardless of `staleMs`. The payload is ignored.
    */
   invalidateOn?: string;
   /**
@@ -84,6 +86,11 @@ const EMPTY: CacheState = Object.freeze({
 const states = new Map<string, CacheState>();
 const listeners = new Map<string, Set<() => void>>();
 const inFlight = new Map<string, InFlight>();
+// Keys an invalidation has marked stale, with the sequence number it drew.
+// Kept apart from views and timers: a view that unmounts before its debounced
+// refetch fires cancels the refetch, not the mark, so the next mount refetches
+// whatever its `staleMs`. Only a request started after the mark clears it.
+const staleMarks = new Map<string, number>();
 let nextSeq = 0;
 
 interface InvalidationSubscriber {
@@ -118,6 +125,7 @@ function runInvalidation(key: string, entry: Invalidation): void {
 }
 
 function invalidate(key: string, debounceMs: number): void {
+  staleMarks.set(key, ++nextSeq);
   const entry = invalidations.get(key);
   if (!entry) return;
   if (entry.timer !== null) clearTimeout(entry.timer);
@@ -172,7 +180,10 @@ function evict(): void {
   // longer tracks — so the bound applies to entries nobody is using.
   for (const key of states.keys()) {
     if (states.size <= HOST_CHANNEL_CACHE_LIMIT) return;
-    if (!listeners.has(key) && !inFlight.has(key)) states.delete(key);
+    if (!listeners.has(key) && !inFlight.has(key)) {
+      states.delete(key);
+      staleMarks.delete(key);
+    }
   }
 }
 
@@ -207,7 +218,9 @@ function request(
   supersede: boolean
 ): Promise<unknown> {
   const current = inFlight.get(key);
-  if (current && !supersede) return current.promise;
+  // A request sent before the latest invalidation cannot answer it.
+  const mark = staleMarks.get(key);
+  if (current && !supersede && (mark === undefined || mark < current.seq)) return current.promise;
   const seq = ++nextSeq;
   const prev = states.get(key) ?? EMPTY;
   if (!prev.validating) write(key, { ...prev, validating: true });
@@ -219,6 +232,8 @@ function request(
       (data) => {
         if (inFlight.get(key)?.seq !== seq) return undefined;
         inFlight.delete(key);
+        const marked = staleMarks.get(key);
+        if (marked !== undefined && marked < seq) staleMarks.delete(key);
         write(key, { data, error: null, validating: false, updatedAt: Date.now() });
         return data;
       },
@@ -337,7 +352,12 @@ export function useCachedHostChannel<TArgs = unknown, TResult = unknown>(
   useEffect(() => {
     if (!enabled || signal?.aborted) return;
     const cached = touch(key);
-    if (cached && cached.updatedAt > 0 && Date.now() - cached.updatedAt < staleMs) return;
+    const fresh =
+      cached !== undefined &&
+      cached.updatedAt > 0 &&
+      Date.now() - cached.updatedAt < staleMs &&
+      !staleMarks.has(key);
+    if (fresh) return;
     void request(key, pluginId, channel, argsRef.current, false);
   }, [key, enabled, staleMs, signal, pluginId, channel]);
 
@@ -383,5 +403,6 @@ export function resetHostChannelCacheForTests(): void {
   states.clear();
   listeners.clear();
   inFlight.clear();
+  staleMarks.clear();
   for (const key of [...invalidations.keys()]) cancelInvalidation(key);
 }
