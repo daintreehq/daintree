@@ -218,6 +218,10 @@ describe("forge PR read results validate against the advertised schema", () => {
     expect(validator("forge.getPR")({ pr: PR })).toBe(true);
   });
 
+  it("accepts a found PR carrying a reported merge conflict", () => {
+    expect(validator("forge.getPR")({ pr: { ...PR, mergeState: "conflicts" } })).toBe(true);
+  });
+
   it("rejects a singular payload carrying the provider's rawData", () => {
     // The regression that matters: `dispatch` strips unknown keys against
     // `resultSchema`, and this is what proves a strict client would reject the

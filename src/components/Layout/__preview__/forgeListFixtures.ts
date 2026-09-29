@@ -107,6 +107,12 @@ const RICH_ISSUES: Issue[] = [
     labels: [L("infrastructure", "0e8a16"), L("future-work", "5aa9e6")],
     commentCount: 1,
     author: JUSTIN,
+    linkedPR: {
+      number: 11930,
+      state: "open",
+      url: `${REPO}/pull/11930`,
+      mergeState: "conflicts",
+    },
   }),
   issue(11244, "Fold the forge slot view seam into the panel contract", 3 * day, {
     labels: [L("architecture", "c5def5"), L("plugins", "7cd44a")],
@@ -155,7 +161,7 @@ const RICH_PRS: PR[] = [
     author: JUSTIN,
   }),
   pr(11930, "chore(deps): hold vite at 8.0.14", 1 * day, {
-    ciStatus: "success",
+    mergeState: "conflicts",
     commentCount: 1,
     headRef: "chore/hold-vite",
   }),

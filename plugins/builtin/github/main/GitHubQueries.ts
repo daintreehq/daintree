@@ -27,10 +27,10 @@ export const REPO_STATS_AND_PAGE_QUERY = `
           timelineItems(itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT], last: 20) {
             nodes {
               ... on CrossReferencedEvent {
-                source { ... on PullRequest { number state merged url updatedAt } }
+                source { ... on PullRequest { number state merged url updatedAt mergeStateStatus } }
               }
               ... on ConnectedEvent {
-                subject { ... on PullRequest { number state merged url updatedAt } }
+                subject { ... on PullRequest { number state merged url updatedAt mergeStateStatus } }
               }
             }
           }
@@ -190,6 +190,7 @@ export const LIST_ISSUES_QUERY = `
                     number
                     state
                     merged
+                    mergeStateStatus
                     url
                     updatedAt
                   }
@@ -201,6 +202,7 @@ export const LIST_ISSUES_QUERY = `
                     number
                     state
                     merged
+                    mergeStateStatus
                     url
                     updatedAt
                   }
@@ -353,6 +355,7 @@ export const SEARCH_QUERY = `
                     number
                     state
                     merged
+                    mergeStateStatus
                     url
                     updatedAt
                   }
@@ -364,6 +367,7 @@ export const SEARCH_QUERY = `
                     number
                     state
                     merged
+                    mergeStateStatus
                     url
                     updatedAt
                   }
@@ -384,6 +388,7 @@ export const SEARCH_QUERY = `
           closedAt
           mergedAt
           merged
+          mergeStateStatus
           reviewDecision
           baseRefName
           headRefName
@@ -472,6 +477,7 @@ export const GET_ISSUE_QUERY = `
                   number
                   state
                   merged
+                  mergeStateStatus
                   url
                   updatedAt
                 }
@@ -483,6 +489,7 @@ export const GET_ISSUE_QUERY = `
                   number
                   state
                   merged
+                  mergeStateStatus
                   url
                   updatedAt
                 }
@@ -581,6 +588,7 @@ export const GET_PR_QUERY = `
         state
         isDraft
         merged
+        mergeStateStatus
         reviewDecision
         createdAt
         updatedAt
@@ -822,6 +830,7 @@ export function buildBatchBranchPRQuery(owner: string, repo: string, branches: s
             state
             isDraft
             merged
+            mergeStateStatus
             baseRefName
             headRefName
             createdAt
@@ -910,6 +919,7 @@ export function buildBatchIssuesQuery(owner: string, repo: string, numbers: numb
                   number
                   state
                   merged
+                  mergeStateStatus
                   url
                   updatedAt
                 }
@@ -921,6 +931,7 @@ export function buildBatchIssuesQuery(owner: string, repo: string, numbers: numb
                   number
                   state
                   merged
+                  mergeStateStatus
                   url
                   updatedAt
                 }
@@ -967,6 +978,7 @@ export function buildBatchPRsQuery(owner: string, repo: string, numbers: number[
         state
         isDraft
         merged
+        mergeStateStatus
         createdAt
         updatedAt
         closedAt

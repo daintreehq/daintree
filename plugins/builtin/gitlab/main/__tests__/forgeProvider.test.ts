@@ -769,6 +769,7 @@ describe("findPRsByBranches", () => {
                   iid: "12",
                   title: "Newest",
                   state: "opened",
+                  detailedMergeStatus: "CONFLICT",
                   sourceBranch: "feature/a",
                   targetBranch: "main",
                   webUrl: "https://gitlab.com/group/project/-/merge_requests/12",
@@ -796,13 +797,30 @@ describe("findPRsByBranches", () => {
 
     const url = requestUrl(fetchMock().mock.calls[0]);
     expect(url).toBe("https://gitlab.com/api/graphql");
+    const init = fetchMock().mock.calls[0]?.[1] as RequestInit | undefined;
+    const body = JSON.parse(String(init?.body)) as { query: string };
+    expect(body.query).toContain("detailedMergeStatus");
     expect(result?.get("feature/a")?.number).toBe(12);
+    expect(result?.get("feature/a")?.mergeState).toBe("conflicts");
     expect(result?.has("feature/b")).toBe(true);
     expect(result?.get("feature/b")).toBeNull();
   });
 
   it("omits branches when the query fails so the host falls back", async () => {
     fetchMock().mockResolvedValue(jsonResponse({ message: "unauthorized" }, { status: 401 }));
+    const result = await gitlabForgeProvider.findPRsByBranches?.(REPO, ["feature/a"]);
+    expect(result?.size).toBe(0);
+  });
+
+  // A self-managed instance older than `detailedMergeStatus` rejects the whole
+  // query with an HTTP-200 schema error; the omitted branches then resolve
+  // through the host's per-branch REST fallback.
+  it("omits branches when the server rejects a field it doesn't know", async () => {
+    fetchMock().mockResolvedValue(
+      jsonResponse({
+        errors: [{ message: "Field 'detailedMergeStatus' doesn't exist on type 'MergeRequest'" }],
+      })
+    );
     const result = await gitlabForgeProvider.findPRsByBranches?.(REPO, ["feature/a"]);
     expect(result?.size).toBe(0);
   });

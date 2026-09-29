@@ -166,6 +166,7 @@ const ForgeLinkedPRResultSchema = z.object({
   state: z.string(),
   url: z.string(),
   ciStatus: z.string().optional(),
+  mergeState: z.string().optional(),
 });
 
 // Normalized PR shape returned by getPR/createPR/editPR. Every cross-provider
@@ -205,6 +206,12 @@ const ForgePRResultSchema = z.object({
     .string()
     .optional()
     .describe("Roll-up head-commit CI state: success, failure, pending, neutral or unknown"),
+  mergeState: z
+    .string()
+    .optional()
+    .describe(
+      "conflicts when the forge reported the head conflicts with the base branch; absent when nothing was reported"
+    ),
   commentCount: z.number().optional(),
   createdAt: z.number().optional(),
   updatedAt: z.number().optional(),

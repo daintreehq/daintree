@@ -321,3 +321,40 @@ describe("graphqlMergeRequestToForgePR", () => {
     );
   });
 });
+
+describe("merge-conflict observation", () => {
+  it("REST: detailed_merge_status conflict reports conflicts", () => {
+    const pr = mergeRequestToForgePR(baseMR({ detailed_merge_status: "conflict" }), HOST);
+    expect(pr.mergeState).toBe("conflicts");
+  });
+
+  it.each([["checking"], ["unchecked"], ["mergeable"], ["draft_status"], ["ci_must_pass"]])(
+    "REST: %s reports nothing — a blocker or a pending check is not a conflict",
+    (status) => {
+      const pr = mergeRequestToForgePR(
+        baseMR({ detailed_merge_status: status, has_conflicts: true }),
+        HOST
+      );
+      expect("mergeState" in pr).toBe(false);
+    }
+  );
+
+  it("REST: falls back to has_conflicts only when no detailed status came back", () => {
+    expect(mergeRequestToForgePR(baseMR({ has_conflicts: true }), HOST).mergeState).toBe(
+      "conflicts"
+    );
+    expect("mergeState" in mergeRequestToForgePR(baseMR({ has_conflicts: false }), HOST)).toBe(
+      false
+    );
+  });
+
+  it("GraphQL: detailedMergeStatus CONFLICT reports conflicts", () => {
+    const pr = graphqlMergeRequestToForgePR({ iid: "7", detailedMergeStatus: "CONFLICT" }, HOST);
+    expect(pr?.mergeState).toBe("conflicts");
+  });
+
+  it("GraphQL: a status still being computed reports nothing", () => {
+    const pr = graphqlMergeRequestToForgePR({ iid: "7", detailedMergeStatus: "CHECKING" }, HOST);
+    expect(pr && "mergeState" in pr).toBe(false);
+  });
+});
