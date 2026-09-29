@@ -158,6 +158,7 @@ export type {
   PluginIpcHandler,
   PluginChannelSchema,
   PluginTypedIpcHandler,
+  PluginHandlerOptions,
 } from "./plugin.js";
 
 // ── Worktree observability ──────────────────────────────────────────

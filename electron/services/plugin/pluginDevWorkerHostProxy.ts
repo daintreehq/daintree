@@ -202,9 +202,18 @@ export class PluginDevWorkerHostProxy {
     this.mcpRosters.clear();
     for (const controller of this.mcpInvokeAborts.values()) controller.abort();
     this.mcpInvokeAborts.clear();
+    // Forgotten, not cancelled: an invoke settling after dispose still reports
+    // (a command disposed mid-import answers with that error), but nothing
+    // here keeps it alive.
+    this.runningInvokes.clear();
     this.commandModules.clear();
     for (const database of this.databases) void database.close();
     this.databases.clear();
+  }
+
+  /** Test seam: plain invokes whose result is still awaited. */
+  runningInvokeCount(): number {
+    return this.runningInvokes.size;
   }
 
   /** Route a message received from main. Returns true if it was consumed. */
@@ -231,8 +240,13 @@ export class PluginDevWorkerHostProxy {
         const controller = this.mcpInvokeAborts.get(msg.requestId);
         this.mcpInvokeAborts.delete(msg.requestId);
         controller?.abort();
+        // Same for a plain invoke: the entry goes now, and the cancelled mark on
+        // the object its settle closure holds makes a late result a no-op.
         const running = this.runningInvokes.get(msg.requestId);
-        if (running) running.cancelled = true;
+        if (running) {
+          running.cancelled = true;
+          this.runningInvokes.delete(msg.requestId);
+        }
         return true;
       }
       case "subscription-event": {
@@ -339,22 +353,24 @@ export class PluginDevWorkerHostProxy {
     const settle = (
       outcome: { ok: true; result: unknown } | { ok: false; error: string }
     ): void => {
-      this.runningInvokes.delete(msg.requestId);
+      if (this.runningInvokes.get(msg.requestId) === running) {
+        this.runningInvokes.delete(msg.requestId);
+      }
       if (running.cancelled) return;
       // Refused here, before the clone across the port, rather than only by
       // main's re-check after it has already paid for it.
-      if (
-        outcome.ok &&
-        capTarget !== null &&
-        estimatePayloadBytes(outcome.result, PLUGIN_INVOKE_MAX_RESULT_BYTES) >
-          PLUGIN_INVOKE_MAX_RESULT_BYTES
-      ) {
+      const resultBytes =
+        outcome.ok && capTarget !== null
+          ? estimatePayloadBytes(outcome.result, PLUGIN_INVOKE_MAX_RESULT_BYTES)
+          : 0;
+      if (outcome.ok && resultBytes > PLUGIN_INVOKE_MAX_RESULT_BYTES) {
         outcome = {
           ok: false,
           error: new PluginPayloadTooLargeError(
             this.pluginId,
             `result of "${capTarget}"`,
-            PLUGIN_INVOKE_MAX_RESULT_BYTES
+            PLUGIN_INVOKE_MAX_RESULT_BYTES,
+            resultBytes
           ).message,
         };
       }

@@ -1405,6 +1405,62 @@ describe("createHost — invoke deadline and payload caps", () => {
     expect(channels).toEqual(["plugin:acme.push-order:tick", CHANNELS.EVENTS_PUSH]);
   });
 
+  it("snapshots a push when it is made, so later mutation cannot change it", async () => {
+    const { host } = await hostFor("push-snapshot");
+    broadcastToRendererMock.mockClear();
+    const state = { n: 1 };
+    await host.postToPanel("tick", state, "panel-a");
+    state.n = 2;
+    await host.postToPanel("tick", state, "panel-a");
+    state.n = 3;
+    flushPushes();
+    expect(broadcastToRendererMock.mock.calls.map((call) => call[1])).toEqual([
+      { panelId: "panel-a", payload: { n: 1 } },
+      { panelId: "panel-a", payload: { n: 2 } },
+    ]);
+  });
+
+  it("rejects an uncloneable push to its caller and still delivers everyone else's", async () => {
+    const { host } = await hostFor("push-uncloneable");
+    const { host: other } = await hostFor("push-bystander");
+    broadcastToRendererMock.mockClear();
+    await other.postToPanel("tick", { ok: true }, "panel-b");
+    await expect(host.postToPanel("tick", { fn: () => 1 }, "panel-a")).rejects.toThrow(
+      /^PLUGIN_PAYLOAD_UNCLONEABLE: plugin "acme\.push-uncloneable" push payload on "tick"/
+    );
+    expect(() => host.broadcastToRenderer("tick", { fn: () => 1 })).toThrow(
+      /^PLUGIN_PAYLOAD_UNCLONEABLE: /
+    );
+    flushPushes();
+    expect(broadcastToRendererMock.mock.calls).toEqual([
+      ["plugin:acme.push-bystander:tick", { panelId: "panel-b", payload: { ok: true } }],
+    ]);
+  });
+
+  it("delivers queued pushes before a panel reload reaches the renderer", async () => {
+    const { service, host } = await hostFor("push-reload-order");
+    const dispatcher = (
+      service as unknown as {
+        panelReloadDispatcher: { reload: (...args: unknown[]) => Promise<unknown> };
+      }
+    ).panelReloadDispatcher;
+    const order: string[] = [];
+    broadcastToRendererMock.mockClear();
+    broadcastToRendererMock.mockImplementation((channel: string) => order.push(channel));
+    const reload = vi.spyOn(dispatcher, "reload").mockImplementation(async () => {
+      order.push("reload");
+      return "reloaded";
+    });
+    try {
+      await host.postToPanel("tick", { n: 1 }, "panel-a");
+      await host.reloadPanel("panel-a");
+    } finally {
+      reload.mockRestore();
+      broadcastToRendererMock.mockImplementation(() => {});
+    }
+    expect(order).toEqual(["plugin:acme.push-reload-order:tick", "reload"]);
+  });
+
   it("throws on an oversize broadcastToRenderer payload", async () => {
     const { host } = await hostFor("bcast-cap");
     expect(() =>

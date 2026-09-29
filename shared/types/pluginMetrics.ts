@@ -40,8 +40,16 @@ export interface PluginViewLoadSample {
 export interface PluginRendererMetricsReport {
   pluginId: string;
   viewLoads: PluginViewLoadSample[];
-  /** React `Profiler` actualDuration of each view commit since the last report. */
+  /**
+   * React `Profiler` actualDuration of view commits since the last report. A
+   * bounded sample when the view committed more often than the registry keeps;
+   * `commitCount` is then the true number observed.
+   */
   commitDurationsMs: number[];
+  /** Commits observed since the last report, including any not in the sample. */
+  commitCount: number;
+  /** Long frames observed but not listed, because the per-report cap was reached. */
+  longFramesDropped: { count: number; blockingMs: number };
   /**
    * Long animation frames that overlapped this plugin's view commits or ran a
    * script served from the plugin's origin. An overlap is an observation that
@@ -62,6 +70,11 @@ export interface PluginPerfSnapshot {
   isolation: "worker" | "in-process";
   activation: { lastMs: number; count: number; at: number } | null;
   viewLoads: PluginViewLoadSample[];
+  /**
+   * Null when no commit durations were observed. Production React builds do not
+   * run `Profiler` callbacks, so this is populated only in development and
+   * profiling builds; the UI says so rather than showing zero.
+   */
   viewCommits: PluginDurationStats | null;
   invokes: PluginDurationStats & { errors: number; timeouts: number; oversized: number };
   pushes: {

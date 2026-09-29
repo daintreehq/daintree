@@ -15,49 +15,85 @@ export interface PluginPushTarget {
 /**
  * Called once per plugin per flush with what was actually handed to IPC:
  * `messages` counts deliveries (one push reaching two renderers counts two)
- * and `bytes` sums their estimated payload sizes. Pushes dropped because their
- * renderer was destroyed before the flush are not counted.
+ * and `bytes` sums their estimated payload sizes. Pushes that reached no
+ * renderer (destroyed, out of scope, or aimed at a closed panel) are not
+ * counted.
  */
 export type PluginPushFlushObserver = (pluginId: string, messages: number, bytes: number) => void;
 
-interface QueuedPush {
+/**
+ * Where a targeted push's panel lives, as the lifecycle broker knows it:
+ * the renderers (webContents ids) holding it, or `"closed"` once the panel was
+ * reported removed and nothing holds it any more. An empty list means "not
+ * reported yet", which a push racing the lifecycle batch can see.
+ */
+export type PluginPushPanelLocation = readonly number[] | "closed";
+
+export interface PluginPushRoute {
   pluginId: string;
-  entry: PluginPushBatchEntry;
+  /** The binding's project, or `null` for an app-global plugin. */
+  projectId: string | null;
+  /** The full `plugin:{pluginId}:{channel}` transport channel. */
+  channel: string;
+  /** `null` for a broadcast; otherwise the single panel the push targets. */
+  panelId: string | null;
+  /**
+   * Delivered as is, later, on the next flush — so it must be a value nothing
+   * mutates after this call. Plugin-supplied payloads are snapshotted by the
+   * host before they get here.
+   */
+  payload: unknown;
+  /** Estimated payload size, for metering and batch splitting. */
   bytes: number;
+  /** Consulted at flush time, so a panel that moved renderer is followed. */
+  locatePanel?: (panelId: string, pluginId: string) => PluginPushPanelLocation;
 }
 
-interface Destination {
-  target: PluginPushTarget;
-  queue: QueuedPush[];
+/** The renderers a scope covers: the project's views, or every renderer for `null`. */
+export type PluginPushScopeResolver = (projectId: string | null) => readonly PluginPushTarget[];
+
+interface QueuedPush {
+  route: PluginPushRoute;
+  entry: PluginPushBatchEntry;
 }
 
 export interface PluginPushBatcherOptions {
   schedule?: (flush: () => void) => void;
   maxBatchSize?: number;
   maxBatchBytes?: number;
+  resolveScope?: PluginPushScopeResolver;
 }
 
 /**
  * Coalesces plugin pushes into one IPC message per renderer per macrotask.
  *
+ * Pushes are queued with their routing inputs, not their recipients: which
+ * renderers receive a push is decided at flush time, against the renderers and
+ * panel locations that exist then, so a panel that moved or a renderer that
+ * was replaced between the push and the flush is followed rather than missed.
+ *
  * Ordering is FIFO per renderer, across every plugin and channel on the
  * transport, so the relative order a renderer observes is exactly the order
- * the pushes were made. Nothing is merged or dropped except for a renderer
- * that no longer exists; a flush over the entry or byte cap goes out as
- * several consecutive messages.
+ * the pushes were made. Nothing is merged; a flush over the entry or byte cap
+ * goes out as several consecutive messages. A push is dropped only when it has
+ * nowhere to go (no live renderer in scope, or its panel is closed) or, alone
+ * among its batch, when IPC refuses to serialize it.
  */
 export class PluginPushBatcher {
-  private readonly destinations = new Map<number, Destination>();
+  private queue: QueuedPush[] = [];
   private scheduled = false;
   private observer: PluginPushFlushObserver | null = null;
   private readonly schedule: (flush: () => void) => void;
   private readonly maxBatchSize: number;
   private readonly maxBatchBytes: number;
+  private readonly resolveScope: PluginPushScopeResolver;
 
   constructor(options: PluginPushBatcherOptions = {}) {
     this.schedule = options.schedule ?? ((flush) => void setImmediate(flush));
     this.maxBatchSize = Math.max(1, options.maxBatchSize ?? PLUGIN_PUSH_MAX_BATCH_SIZE);
     this.maxBatchBytes = options.maxBatchBytes ?? PLUGIN_PUSH_MAX_PAYLOAD_BYTES;
+    this.resolveScope =
+      options.resolveScope ?? ((projectId) => getProjectRendererTargets(projectId));
   }
 
   /** Install (or with `null`, remove) the per-flush metering hook. */
@@ -65,23 +101,11 @@ export class PluginPushBatcher {
     this.observer = observer;
   }
 
-  enqueue(
-    target: PluginPushTarget,
-    pluginId: string,
-    channel: string,
-    envelope: unknown,
-    bytes: number
-  ): void {
-    let destination = this.destinations.get(target.id);
-    // A recycled id means the old renderer is gone; its queue goes with it.
-    if (destination && destination.target !== target && destination.target.isDestroyed()) {
-      destination = undefined;
-    }
-    if (!destination) {
-      destination = { target, queue: [] };
-      this.destinations.set(target.id, destination);
-    }
-    destination.queue.push({ pluginId, entry: [channel, envelope], bytes });
+  enqueue(route: PluginPushRoute): void {
+    this.queue.push({
+      route,
+      entry: [route.channel, { panelId: route.panelId, payload: route.payload }],
+    });
     if (!this.scheduled) {
       this.scheduled = true;
       this.schedule(() => this.flush());
@@ -91,33 +115,34 @@ export class PluginPushBatcher {
   /** Deliver everything queued now. Safe to call at any time. */
   flush(): void {
     this.scheduled = false;
-    if (this.destinations.size === 0) return;
-    const destinations = [...this.destinations.values()];
-    this.destinations.clear();
-    const totals = new Map<string, { messages: number; bytes: number }>();
-    for (const { target, queue } of destinations) {
-      if (isGone(target)) continue;
-      for (const chunk of this.chunk(queue)) {
-        try {
-          target.send(
-            PLUGIN_PUSH_BATCH_CHANNEL,
-            chunk.map((push) => push.entry)
-          );
-        } catch {
-          // A renderer torn down mid-flush; the rest of its queue has nowhere to go.
-          break;
-        }
-        for (const push of chunk) {
-          const total = totals.get(push.pluginId);
-          if (total) {
-            total.messages += 1;
-            total.bytes += push.bytes;
-          } else {
-            totals.set(push.pluginId, { messages: 1, bytes: push.bytes });
-          }
-        }
+    if (this.queue.length === 0) return;
+    const queue = this.queue;
+    this.queue = [];
+
+    const scopes = new Map<string | null, readonly PluginPushTarget[]>();
+    const destinations = new Map<PluginPushTarget, QueuedPush[]>();
+    for (const push of queue) {
+      for (const target of this.targetsFor(push.route, scopes)) {
+        const pushes = destinations.get(target);
+        if (pushes) pushes.push(push);
+        else destinations.set(target, [push]);
       }
     }
+
+    const totals = new Map<string, { messages: number; bytes: number }>();
+    const count = (push: QueuedPush): void => {
+      const total = totals.get(push.route.pluginId);
+      if (total) {
+        total.messages += 1;
+        total.bytes += push.route.bytes;
+      } else {
+        totals.set(push.route.pluginId, { messages: 1, bytes: push.route.bytes });
+      }
+    };
+    for (const [target, pushes] of destinations) {
+      this.deliver(target, pushes, count);
+    }
+
     const observer = this.observer;
     if (!observer) return;
     for (const [pluginId, { messages, bytes }] of totals) {
@@ -126,6 +151,86 @@ export class PluginPushBatcher {
       } catch {
         // Metering must never affect delivery.
       }
+    }
+  }
+
+  /**
+   * The live renderers one push goes to. Scope is the binding's project views
+   * (every renderer for an unbound plugin). A targeted push narrows that to the
+   * renderer(s) holding the panel, so the others never deserialize it; the
+   * preload still filters by panel id as a second line of defence. A panel not
+   * reported yet falls back to the scope — never wider — and a closed one
+   * receives nothing.
+   */
+  private targetsFor(
+    route: PluginPushRoute,
+    scopes: Map<string | null, readonly PluginPushTarget[]>
+  ): readonly PluginPushTarget[] {
+    let scope = scopes.get(route.projectId);
+    if (!scope) {
+      let resolved: readonly PluginPushTarget[] = [];
+      try {
+        resolved = this.resolveScope(route.projectId).filter((target) => !isGone(target));
+      } catch {
+        // No renderers can be named right now; the push has nowhere to go.
+      }
+      scope = resolved;
+      scopes.set(route.projectId, scope);
+    }
+    if (route.panelId === null || !route.locatePanel || scope.length === 0) return scope;
+    let location: PluginPushPanelLocation;
+    try {
+      location = route.locatePanel(route.panelId, route.pluginId);
+    } catch {
+      return scope;
+    }
+    if (location === "closed") return [];
+    if (location.length === 0 || scope.length === 1) return scope;
+    const narrowed = scope.filter((target) => location.includes(target.id));
+    return narrowed.length > 0 ? narrowed : scope;
+  }
+
+  /**
+   * Send one renderer its pushes in order. A renderer torn down mid-flush ends
+   * its own delivery and nothing else. Any other send failure is the payload's
+   * (IPC could not serialize something structured clone accepted), so the
+   * batch is retried entry by entry and only the entries that still fail are
+   * dropped.
+   */
+  private deliver(
+    target: PluginPushTarget,
+    pushes: readonly QueuedPush[],
+    count: (push: QueuedPush) => void
+  ): void {
+    for (const chunk of this.chunk(pushes)) {
+      if (this.trySend(target, chunk)) {
+        chunk.forEach(count);
+        continue;
+      }
+      if (isGone(target)) return;
+      for (const push of chunk) {
+        if (this.trySend(target, [push])) {
+          count(push);
+        } else if (isGone(target)) {
+          return;
+        } else {
+          console.warn(
+            `[PluginPush] dropped a push on "${push.route.channel}" from "${push.route.pluginId}": IPC could not serialize it`
+          );
+        }
+      }
+    }
+  }
+
+  private trySend(target: PluginPushTarget, pushes: readonly QueuedPush[]): boolean {
+    try {
+      target.send(
+        PLUGIN_PUSH_BATCH_CHANNEL,
+        pushes.map((push) => push.entry)
+      );
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -140,21 +245,21 @@ export class PluginPushBatcher {
     for (const push of queue) {
       if (
         current.length > 0 &&
-        (current.length >= this.maxBatchSize || bytes + push.bytes > this.maxBatchBytes)
+        (current.length >= this.maxBatchSize || bytes + push.route.bytes > this.maxBatchBytes)
       ) {
         yield current;
         current = [];
         bytes = 0;
       }
       current.push(push);
-      bytes += push.bytes;
+      bytes += push.route.bytes;
     }
     if (current.length > 0) yield current;
   }
 
-  /** Test seam: renderers with pushes waiting for the next flush. */
-  pendingDestinationCount(): number {
-    return this.destinations.size;
+  /** Test seam: pushes waiting for the next flush. */
+  pendingCount(): number {
+    return this.queue.length;
   }
 }
 
@@ -179,46 +284,33 @@ export function resetPluginPushBatcherForTests(): void {
   sharedBatcher = null;
 }
 
-export interface PluginPushRoute {
-  pluginId: string;
-  /** The binding's project, or `null` for an app-global plugin. */
-  projectId: string | null;
-  /** The full `plugin:{pluginId}:{channel}` transport channel. */
-  channel: string;
-  /** `null` for a broadcast; otherwise the single panel the push targets. */
-  panelId: string | null;
-  payload: unknown;
-  /** Estimated payload size, for metering only. */
-  bytes: number;
-  /**
-   * Renderers (webContents ids) known to hold `panelId` for this plugin. An
-   * empty answer — the panel has not been reported yet, which a push racing
-   * the lifecycle batch can see — falls back to the full scope below.
-   */
-  locatePanel?: (panelId: string, pluginId: string) => readonly number[];
+/** Deliver everything already pushed, before a send that must follow it. */
+export function flushPluginPushes(): void {
+  sharedBatcher?.flush();
+}
+
+/** Queue one plugin push; its recipients are resolved when the queue flushes. */
+export function routePluginPush(route: PluginPushRoute): void {
+  getPluginPushBatcher().enqueue(route);
 }
 
 /**
- * Queue one plugin push for every renderer that should receive it.
- *
- * Scope is the binding's project views (every renderer for an unbound plugin).
- * A targeted push narrows that to the renderer(s) holding the panel, so the
- * other renderers never deserialize it; the preload still filters by panel id
- * as a second line of defence.
+ * Wrap a renderer-delivery collaborator so every method call first delivers
+ * the plugin pushes already queued. Anything the host sends a renderer
+ * directly — dispatches, prompts, reloads, badges, toasts — must never
+ * overtake a panel update the plugin made before it.
  */
-export function routePluginPush(route: PluginPushRoute): void {
-  let targets: readonly PluginPushTarget[] = getProjectRendererTargets(route.projectId);
-  if (route.panelId !== null && route.locatePanel && targets.length > 1) {
-    const holders = route.locatePanel(route.panelId, route.pluginId);
-    if (holders.length > 0) {
-      const narrowed = targets.filter((target) => holders.includes(target.id));
-      if (narrowed.length > 0) targets = narrowed;
-    }
-  }
-  if (targets.length === 0) return;
-  const envelope = { panelId: route.panelId, payload: route.payload };
-  const batcher = getPluginPushBatcher();
-  for (const target of targets) {
-    batcher.enqueue(target, route.pluginId, route.channel, envelope, route.bytes);
-  }
+export function withPushFlushBarrier<T extends object>(collaborator: T): T {
+  // Partial test deps leave collaborators a host never touches unset.
+  if (collaborator === null || typeof collaborator !== "object") return collaborator;
+  return new Proxy(collaborator, {
+    get(target, property) {
+      const value: unknown = Reflect.get(target, property, target);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]): unknown => {
+        flushPluginPushes();
+        return Reflect.apply(value, target, args);
+      };
+    },
+  });
 }

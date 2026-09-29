@@ -410,10 +410,10 @@ export function makePluginViewContent(
     _phase,
     actualDuration,
     _baseDuration,
-    startTime,
+    _startTime,
     commitTime
   ) => {
-    pluginViewMetrics.recordCommit(pluginId, actualDuration, startTime, commitTime);
+    pluginViewMetrics.recordCommit(pluginId, actualDuration, commitTime);
   };
 
   /**

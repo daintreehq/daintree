@@ -18,6 +18,9 @@ export default function Panel() {
     });
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({ file: "src/panel.tsx", line: 4, severity: "warn" });
+    // Subscribe before pulling, or a push that lands between the two is lost.
+    expect(findings[0]!.hint).toMatch(/subscribe first and then pull/);
+    expect(findings[0]!.hint).toMatch(/revision/);
   });
 
   it("leaves worker polling alone, which the docs recommend", async () => {
@@ -181,6 +184,17 @@ export default function Panel({ pluginId }) {
 `,
     });
     expect(findings.map((f) => f.line)).toEqual([4, 5]);
+    expect(findings[0]!.message).toMatch(/copies the collection/);
+    expect(findings[1]!.message).not.toMatch(/renders once per event/);
+    for (const hook of [
+      "useThrottledCallback",
+      "usePluginEventSelector",
+      "useVirtualList",
+      "useProgressiveList",
+    ]) {
+      expect(findings[0]!.hint).toContain(hook);
+    }
+    expect(findings[0]!.hint).toMatch(/buffer flushed once per frame for appends/);
   });
 
   it("accepts coalesced handlers and ordinary low-frequency state", async () => {

@@ -9,7 +9,7 @@ const intervalPollingInView: LintRule = {
   severity: "warn",
   appliesTo: "view",
   message: "setInterval in view code polls from the renderer",
-  hint: "poll in the worker and push with host.postToPanel; the view pulls once on mount and subscribes",
+  hint: "poll in the worker and push with host.postToPanel; in the view, subscribe first and then pull the current state — pushes arrive batched per macrotask with no ordering against invoke results, so tag both with a revision number and keep the newest",
   check(file) {
     return [...file.masked.matchAll(/\bsetInterval\s*\(/g)].map((m) => ({ offset: m.index }));
   },
@@ -163,8 +163,8 @@ const renderOnEveryEvent: LintRule = {
   severity: "warn",
   appliesTo: "view",
   message:
-    "state is set on every event of a high-frequency subscription, so the view renders per event",
-  hint: "coalesce: buffer events and flush once per requestAnimationFrame (or ask the worker to batch/debounce)",
+    "state is updated on every event of a high-frequency subscription, so each event schedules an update",
+  hint: "coalesce: useThrottledCallback for replaceable values (progress, latest state), usePluginEventSelector for a slice of a snapshot, a buffer flushed once per frame for appends (throttling drops them), and useVirtualList or useProgressiveList for long lists — or ask the worker to batch",
   check(file) {
     const hits: RuleHit[] = [];
     for (const m of file.masked.matchAll(VIEW_SUBSCRIBE)) {
@@ -183,8 +183,8 @@ const renderOnEveryEvent: LintRule = {
         hits.push({
           offset: m.index,
           message: append
-            ? "every event appends to state, so the view re-renders once per event"
-            : `state is set on every "${channel}" event, so the view re-renders once per event`,
+            ? "every event copies the collection in state to append one item, so the work grows with its length"
+            : `state is updated on every "${channel}" event, so a burst schedules one update per event`,
         });
       }
     }

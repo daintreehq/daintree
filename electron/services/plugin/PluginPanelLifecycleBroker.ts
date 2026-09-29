@@ -17,6 +17,14 @@ export interface PanelLifecycleSourceHandle {
 /** Bounds on a renderer-supplied non-plugin inventory, which main holds in memory. */
 const MAX_INVENTORY_PANELS = 10_000;
 const MAX_PANEL_ID_LENGTH = 512;
+/** How many closed panel ids are remembered for push routing, oldest forgotten first. */
+const MAX_CLOSED_PANELS = 1024;
+/**
+ * How long after a `removed` report a panel still counts as "not reported"
+ * rather than closed. A panel moving between renderers is removed from one
+ * before the other reports it; pushes in that gap keep the scoped fallback.
+ */
+const CLOSED_PANEL_GRACE_MS = 2_000;
 
 /** Resolves a panel kind id to its owning plugin, or `undefined` if unknown. */
 export type PanelKindOwnerResolver = (panelKindId: string) => string | undefined;
@@ -86,8 +94,21 @@ export class PluginPanelLifecycleBroker {
    * so a renderer misreporting it can at worst cause a refusal.
    */
   private readonly nonPluginBySource = new Map<number, Set<string>>();
+  /**
+   * panelId → owning plugin, for panels a renderer reported `removed` that no
+   * renderer holds any more. Lets a push to a closed panel be dropped instead
+   * of broadcast as though the panel were merely not reported yet, once a
+   * short grace for a panel moving between renderers has passed. Bounded;
+   * forgetting an entry only restores that broadcast fallback. Any later
+   * non-terminal report of the id (a reused id, a panel that reappeared
+   * elsewhere) clears it.
+   */
+  private readonly closedPanels = new Map<string, { pluginId: string; at: number }>();
 
-  constructor(private readonly resolveOwner: PanelKindOwnerResolver) {}
+  constructor(
+    private readonly resolveOwner: PanelKindOwnerResolver,
+    private readonly now: () => number = Date.now
+  ) {}
 
   /**
    * Accept a renderer batch. Malformed entries and unknown panel kinds are
@@ -107,8 +128,10 @@ export class PluginPanelLifecycleBroker {
       }
       if (event.phase === "removed") {
         panels.delete(event.panelId);
-      } else if (event.phase !== "restored") {
-        panels.set(event.panelId, event);
+        if (!this.isHeldAnywhere(event.panelId)) this.rememberClosed(event);
+      } else {
+        this.closedPanels.delete(event.panelId);
+        if (event.phase !== "restored") panels.set(event.panelId, event);
       }
 
       this.emit(event);
@@ -216,9 +239,11 @@ export class PluginPanelLifecycleBroker {
    * a targeted push. Unlike {@link locate} this is not an authorization answer:
    * a hidden or backgrounded view may still have subscribers, so every holder
    * is returned. Any doubt about ownership returns nothing, which the caller
-   * treats as "fall back to its full broadcast scope".
+   * treats as "fall back to its full broadcast scope". `"closed"` means the
+   * plugin's panel was reported removed, no renderer holds it, and the move
+   * grace has passed: the push has no recipient.
    */
-  pushTargetsFor(panelId: string, pluginId: string): number[] {
+  pushTargetsFor(panelId: string, pluginId: string): number[] | "closed" {
     const sources: number[] = [];
     for (const [sourceId, panels] of this.bySource) {
       const event = panels.get(panelId);
@@ -226,7 +251,29 @@ export class PluginPanelLifecycleBroker {
       if (this.resolveOwner(event.panelKindId) !== pluginId) return [];
       sources.push(sourceId);
     }
+    if (sources.length === 0) {
+      const closed = this.closedPanels.get(panelId);
+      if (closed?.pluginId === pluginId && this.now() - closed.at >= CLOSED_PANEL_GRACE_MS) {
+        return "closed";
+      }
+    }
     return sources;
+  }
+
+  private isHeldAnywhere(panelId: string): boolean {
+    for (const panels of this.bySource.values()) {
+      if (panels.has(panelId)) return true;
+    }
+    return false;
+  }
+
+  private rememberClosed(event: PluginPanelLifecycleEvent): void {
+    this.closedPanels.delete(event.panelId);
+    this.closedPanels.set(event.panelId, { pluginId: event.pluginId, at: this.now() });
+    if (this.closedPanels.size > MAX_CLOSED_PANELS) {
+      const oldest = this.closedPanels.keys().next();
+      if (!oldest.done) this.closedPanels.delete(oldest.value);
+    }
   }
 
   /** Drop every listener a plugin registered (unload / worker teardown). */
@@ -237,6 +284,7 @@ export class PluginPanelLifecycleBroker {
   dispose(): void {
     this.bySource.clear();
     this.nonPluginBySource.clear();
+    this.closedPanels.clear();
     this.listeners.clear();
   }
 

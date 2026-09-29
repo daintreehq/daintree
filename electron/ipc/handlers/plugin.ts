@@ -2155,6 +2155,10 @@ export function registerPluginHandlers(): () => void {
         throw new Error("plugin:invoke rejected: plugin belongs to a different project");
       }
 
+      // Whether the args passed the size cap, so the failure audit below knows
+      // it may hash them: hashing sorts and serialises the whole payload, which
+      // is exactly the unbounded work the cap exists to refuse.
+      let argsWithinLimit = false;
       try {
         // Before any dispatch work, so an oversize payload is never forwarded
         // to a plugin worker (a second full structured clone).
@@ -2164,6 +2168,7 @@ export function registerPluginHandlers(): () => void {
           args,
           PLUGIN_INVOKE_MAX_ARGS_BYTES
         );
+        argsWithinLimit = true;
         const service = await getPluginService();
         // No trustworthy window means no worktree — short-circuit rather than
         // query, so the invariant holds here regardless of what the service
@@ -2203,12 +2208,18 @@ export function registerPluginHandlers(): () => void {
           // same, but distinct args produce distinct hashes. (A summary-based
           // hash via `summarizeMcpArgs` collapses arrays to a constant, which
           // would defeat forensic grouping.)
+          //
+          // Oversize args are recorded unhashed (`""`, the schema's "never
+          // validated" value); the error message carries the limit and the
+          // size measured.
           let argsHash = "";
-          try {
-            argsHash = stableArgsSha256(args);
-          } catch {
-            // Hashing is best-effort — a serialization throw here must not
-            // mask the original handler error.
+          if (argsWithinLimit) {
+            try {
+              argsHash = stableArgsSha256(args);
+            } catch {
+              // Hashing is best-effort — a serialization throw here must not
+              // mask the original handler error.
+            }
           }
           // An ownership rejection (#10462) is a denied invocation, not a
           // handler failure — record it as "restricted" so it groups with the

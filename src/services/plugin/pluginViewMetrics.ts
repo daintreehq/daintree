@@ -11,6 +11,12 @@ import type {
  * commit says the plugin was active during the stall, not that it caused it.
  * A later phase drains the pending deltas to main; until then the local
  * snapshot serves tests and any in-renderer fallback UI.
+ *
+ * Drain protocol: `subscribe` fires once when the first delta lands after a
+ * drain (schedule a lazy drain); `onDrainRequested` fires once per drain
+ * window when any plugin's pending buffer reaches its high-water mark (drain
+ * now, before the buffer starts sampling or dropping). Both are reset by
+ * `drainReports`.
  */
 
 type LongFrame = PluginRendererMetricsReport["longFrames"][number];
@@ -24,13 +30,25 @@ export const MAX_PENDING_LONG_FRAMES = 128;
 export const MAX_RECENT_VIEW_LOADS = 20;
 /** Commit durations the local snapshot's rolling stats cover. */
 const LOCAL_COMMIT_WINDOW = 256;
-/** Plugins and `plugin://` authorities remembered; the oldest idle ones go first. */
-const MAX_TRACKED_PLUGINS = 64;
+/**
+ * Fraction of a pending cap at which `onDrainRequested` fires, leaving room for
+ * the drainer to run before sampling (commits) or dropping (long frames, loads)
+ * begins.
+ */
+const HIGH_WATER_RATIO = 0.75;
+const COMMIT_HIGH_WATER = Math.floor(MAX_PENDING_COMMITS * HIGH_WATER_RATIO);
+const VIEW_LOAD_HIGH_WATER = Math.floor(MAX_PENDING_VIEW_LOADS * HIGH_WATER_RATIO);
+const LONG_FRAME_HIGH_WATER = Math.floor(MAX_PENDING_LONG_FRAMES * HIGH_WATER_RATIO);
+/**
+ * Plugins and `plugin://` authorities remembered. Past the cap, the least
+ * recently active plugins with no open view and nothing pending go first.
+ */
+export const MAX_TRACKED_PLUGINS = 64;
 const MAX_TRACKED_AUTHORITIES = 64;
 /**
- * Recent commit windows kept for long-frame overlap. Long animation frames are
- * delivered within a frame or two of the work, so a short ring is enough, and
- * a fixed one keeps `recordCommit` allocation-free.
+ * Recent commit times kept for long-frame attribution. Long animation frames
+ * are delivered within a frame or two of the work, so a short ring is enough,
+ * and a fixed one keeps `recordCommit` allocation-free.
  */
 const COMMIT_WINDOW_RING = 64;
 
@@ -41,6 +59,8 @@ interface PluginEntry {
   pendingCommitsSeen: number;
   pendingCommitMax: number;
   pendingLongFrames: LongFrame[];
+  pendingLongFramesDropped: number;
+  pendingLongFramesDroppedBlockingMs: number;
   recentLoads: PluginViewLoadSample[];
   localCommits: Float64Array;
   localCommitCount: number;
@@ -72,11 +92,12 @@ export function createPluginViewMetrics() {
   const plugins = new Map<string, PluginEntry>();
   const dirty = new Set<string>();
   const listeners = new Set<() => void>();
+  const drainRequestListeners = new Set<() => void>();
+  let drainRequested = false;
   /** `plugin://` authority → plugin id, learned from the URLs views load from. */
   const authorities = new Map<string, string>();
 
-  const windowStarts = new Float64Array(COMMIT_WINDOW_RING);
-  const windowEnds = new Float64Array(COMMIT_WINDOW_RING);
+  const commitTimes = new Float64Array(COMMIT_WINDOW_RING);
   const windowPlugins: (string | undefined)[] = new Array(COMMIT_WINDOW_RING);
   let windowCursor = 0;
   let windowCount = 0;
@@ -84,11 +105,20 @@ export function createPluginViewMetrics() {
   /** Mounted plugin views, per plugin. Long frames are only attributed while any are open. */
   const openViews = new Map<string, number>();
   let openViewCount = 0;
+  /** Bumped by `reset()`, so a release closure from before it cannot touch the new counts. */
+  let generation = 0;
 
-  function evictIdlePlugins(): void {
+  /**
+   * Drop the least recently active closed, drained plugins until the cap holds.
+   * Open and pending entries are never dropped, so the map can briefly exceed
+   * the cap; the next drain or view release brings it back. `keep` protects an
+   * entry that has just been created and not yet written to.
+   */
+  function evictIdlePlugins(keep?: string): void {
+    if (plugins.size <= MAX_TRACKED_PLUGINS) return;
     for (const pluginId of plugins.keys()) {
       if (plugins.size <= MAX_TRACKED_PLUGINS) return;
-      if (openViews.has(pluginId) || dirty.has(pluginId)) continue;
+      if (pluginId === keep || openViews.has(pluginId) || dirty.has(pluginId)) continue;
       plugins.delete(pluginId);
     }
   }
@@ -102,6 +132,8 @@ export function createPluginViewMetrics() {
         pendingCommitsSeen: 0,
         pendingCommitMax: 0,
         pendingLongFrames: [],
+        pendingLongFramesDropped: 0,
+        pendingLongFramesDroppedBlockingMs: 0,
         recentLoads: [],
         localCommits: new Float64Array(LOCAL_COMMIT_WINDOW),
         localCommitCount: 0,
@@ -111,19 +143,13 @@ export function createPluginViewMetrics() {
         longFrameLastAt: null,
       };
       plugins.set(pluginId, entry);
-      if (plugins.size > MAX_TRACKED_PLUGINS) evictIdlePlugins();
+      evictIdlePlugins(pluginId);
     }
     return entry;
   }
 
-  // Listeners hear "there is something to drain" once per drain window, not
-  // once per commit, so a chatty view cannot turn the notification into load.
-  function markDirty(pluginId: string): void {
-    if (dirty.has(pluginId)) return;
-    const wasClean = dirty.size === 0;
-    dirty.add(pluginId);
-    if (!wasClean) return;
-    for (const listener of listeners) {
+  function notify(targets: Set<() => void>): void {
+    for (const listener of targets) {
       try {
         listener();
       } catch {
@@ -132,25 +158,41 @@ export function createPluginViewMetrics() {
     }
   }
 
+  // Listeners hear "there is something to drain" once per drain window, not
+  // once per commit, so a chatty view cannot turn the notification into load.
+  function markDirty(pluginId: string, entry: PluginEntry): void {
+    if (dirty.has(pluginId)) return;
+    const wasClean = dirty.size === 0;
+    dirty.add(pluginId);
+    // Move to the back of the eviction order: once per drain window, not per record.
+    plugins.delete(pluginId);
+    plugins.set(pluginId, entry);
+    if (wasClean) notify(listeners);
+  }
+
+  function requestDrain(): void {
+    if (drainRequested) return;
+    drainRequested = true;
+    notify(drainRequestListeners);
+  }
+
   function recordViewLoad(pluginId: string, sample: PluginViewLoadSample): void {
     const entry = entryFor(pluginId);
     pushBounded(entry.pendingLoads, sample, MAX_PENDING_VIEW_LOADS);
     pushBounded(entry.recentLoads, sample, MAX_RECENT_VIEW_LOADS);
-    markDirty(pluginId);
+    markDirty(pluginId, entry);
+    // Last, so a listener that drains synchronously sees a finished record.
+    if (entry.pendingLoads.length >= VIEW_LOAD_HIGH_WATER) requestDrain();
   }
 
   /**
    * Called from a React `Profiler` `onRender`, so it has to stay O(1) and
    * allocation-free in the steady state. Past the pending cap the drain window
    * becomes a uniform reservoir sample (so p50/p95 stay representative); the
-   * window's worst commit is tracked beside it and put back at drain.
+   * window's worst commit is tracked beside it and put back at drain; the
+   * report's `commitCount` stays exact either way.
    */
-  function recordCommit(
-    pluginId: string,
-    actualDurationMs: number,
-    startTime: number,
-    commitTime: number
-  ): void {
+  function recordCommit(pluginId: string, actualDurationMs: number, commitTime: number): void {
     const entry = entryFor(pluginId);
     const seen = ++entry.pendingCommitsSeen;
     const pending = entry.pendingCommits;
@@ -166,25 +208,33 @@ export function createPluginViewMetrics() {
     entry.localCommitCount++;
     entry.localCommitLast = actualDurationMs;
 
-    // The render's own duration back from the commit, not `startTime` onwards:
-    // a concurrent render can yield between the two, and a frame in that gap
-    // saw none of this plugin's work.
-    windowStarts[windowCursor] = Math.max(startTime, commitTime - actualDurationMs);
-    windowEnds[windowCursor] = commitTime;
+    // Only the commit instant is reliable: `actualDuration` is render time
+    // summed across a render that may have yielded, not a contiguous interval,
+    // so a window reconstructed from it can span frames that saw none of it.
+    commitTimes[windowCursor] = commitTime;
     windowPlugins[windowCursor] = pluginId;
     windowCursor = (windowCursor + 1) % COMMIT_WINDOW_RING;
     if (windowCount < COMMIT_WINDOW_RING) windowCount++;
 
-    markDirty(pluginId);
+    markDirty(pluginId, entry);
+    if (seen === COMMIT_HIGH_WATER) requestDrain();
   }
 
+  /** Past the pending cap a frame is counted in `longFramesDropped` rather than listed. */
   function recordLongFrame(pluginId: string, frame: LongFrame): void {
     const entry = entryFor(pluginId);
-    pushBounded(entry.pendingLongFrames, frame, MAX_PENDING_LONG_FRAMES);
+    const pending = entry.pendingLongFrames;
+    if (pending.length < MAX_PENDING_LONG_FRAMES) {
+      pending.push(frame);
+    } else {
+      entry.pendingLongFramesDropped++;
+      entry.pendingLongFramesDroppedBlockingMs += frame.blockingMs;
+    }
     entry.longFrameCount++;
     entry.longFrameBlockingMs += frame.blockingMs;
     entry.longFrameLastAt = frame.at;
-    markDirty(pluginId);
+    markDirty(pluginId, entry);
+    if (pending.length === LONG_FRAME_HIGH_WATER) requestDrain();
   }
 
   /** Remember which plugin a `plugin://` module URL's authority belongs to. */
@@ -205,14 +255,21 @@ export function createPluginViewMetrics() {
   function retainView(pluginId: string): () => void {
     openViews.set(pluginId, (openViews.get(pluginId) ?? 0) + 1);
     openViewCount++;
+    const retainedIn = generation;
     let released = false;
     return () => {
       if (released) return;
       released = true;
+      // A view retained before `reset()` was already forgotten by it.
+      if (retainedIn !== generation) return;
       openViewCount--;
       const remaining = (openViews.get(pluginId) ?? 1) - 1;
-      if (remaining > 0) openViews.set(pluginId, remaining);
-      else openViews.delete(pluginId);
+      if (remaining > 0) {
+        openViews.set(pluginId, remaining);
+      } else {
+        openViews.delete(pluginId);
+        evictIdlePlugins();
+      }
     };
   }
 
@@ -222,14 +279,15 @@ export function createPluginViewMetrics() {
     return authority ? authorities.get(authority) : undefined;
   }
 
-  /** Plugins with a recorded commit window intersecting `[start, end]` (performance.now() clock). */
+  /** Plugins with a recorded commit whose `commitTime` falls in `[start, end]` (performance.now() clock). */
   function pluginsCommittingDuring(start: number, end: number): string[] {
     if (windowCount === 0) return [];
     const found: string[] = [];
     for (let i = 0; i < windowCount; i++) {
       const pluginId = windowPlugins[i];
       if (pluginId === undefined) continue;
-      if (windowStarts[i]! <= end && windowEnds[i]! >= start && !found.includes(pluginId)) {
+      const at = commitTimes[i]!;
+      if (at >= start && at <= end && !found.includes(pluginId)) {
         found.push(pluginId);
       }
     }
@@ -242,6 +300,7 @@ export function createPluginViewMetrics() {
   }
 
   function drainReports(): PluginRendererMetricsReport[] {
+    drainRequested = false;
     if (dirty.size === 0) return [];
     const reports: PluginRendererMetricsReport[] = [];
     for (const pluginId of dirty) {
@@ -262,22 +321,44 @@ export function createPluginViewMetrics() {
         pluginId,
         viewLoads: entry.pendingLoads,
         commitDurationsMs: entry.pendingCommits,
+        commitCount: entry.pendingCommitsSeen,
         longFrames: entry.pendingLongFrames,
+        longFramesDropped: {
+          count: entry.pendingLongFramesDropped,
+          blockingMs: entry.pendingLongFramesDroppedBlockingMs,
+        },
       });
       entry.pendingLoads = [];
       entry.pendingCommits = [];
       entry.pendingCommitsSeen = 0;
       entry.pendingCommitMax = 0;
       entry.pendingLongFrames = [];
+      entry.pendingLongFramesDropped = 0;
+      entry.pendingLongFramesDroppedBlockingMs = 0;
     }
     dirty.clear();
+    evictIdlePlugins();
     return reports;
   }
 
+  /** Fires once when the first delta lands after a drain: schedule a lazy drain. */
   function subscribe(listener: () => void): () => void {
     listeners.add(listener);
     return () => {
       listeners.delete(listener);
+    };
+  }
+
+  /**
+   * Fires once per drain window when a plugin's pending commits, view loads or
+   * long frames reach 75% of their cap: drain promptly, so the report stays
+   * unsampled. The drainer should also have a `subscribe` timer; this is the
+   * early trigger, not the only one.
+   */
+  function onDrainRequested(listener: () => void): () => void {
+    drainRequestListeners.add(listener);
+    return () => {
+      drainRequestListeners.delete(listener);
     };
   }
 
@@ -314,6 +395,8 @@ export function createPluginViewMetrics() {
     authorities.clear();
     openViews.clear();
     openViewCount = 0;
+    generation++;
+    drainRequested = false;
     windowPlugins.fill(undefined);
     windowCursor = 0;
     windowCount = 0;
@@ -330,6 +413,7 @@ export function createPluginViewMetrics() {
     isTracking,
     drainReports,
     subscribe,
+    onDrainRequested,
     getLocalSnapshot,
     reset,
   };

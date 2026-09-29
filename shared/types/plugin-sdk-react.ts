@@ -362,7 +362,15 @@ export interface PluginSpinningIconProps {
   className?: string;
 }
 
-export type PluginBadgeTone = "neutral" | "outline" | "error" | "warning" | "success" | "info";
+/**
+ * The kit's status vocabulary is shared by `Badge` and `Callout`: `error`,
+ * `danger`, `warning`, `success`, `info`, `neutral`. `error` and `danger` draw
+ * the same colour (the `status-error` class aliases the `status-danger` theme
+ * token); a `Badge` renders them identically, while a `Callout` gives
+ * `danger` (a destructive caution) its own glyph. `outline` is a Badge-only, uncoloured shape.
+ */
+export type PluginBadgeTone =
+  "neutral" | "outline" | "error" | "danger" | "warning" | "success" | "info";
 
 /** Props of `Badge`. Presentation only: wrap it in a `Button` to make it clickable. */
 export interface PluginBadgeProps extends PluginDomProps<HTMLSpanElement> {
@@ -553,6 +561,7 @@ export interface PluginDismissButtonProps {
   className?: string;
 }
 
+/** The shared status vocabulary; see `PluginBadgeTone` for how `error` and `danger` relate. */
 export type PluginCalloutSeverity = "error" | "warning" | "danger" | "success" | "info" | "neutral";
 
 /** Props of `Callout`, an inline message box. The glyph follows the severity. */
@@ -724,7 +733,11 @@ export interface PluginConfirmDialogProps {
 
 /**
  * Keys of {@link PluginThemeTokens}: Daintree's semantic theme tokens, the
- * same names as the `--theme-*` CSS variables without the prefix.
+ * same names as the `--theme-*` CSS variables without the prefix. The surface,
+ * text, border, accent, `focus-ring` and status keys are core and stable within
+ * the major version; the activity, terminal (ANSI included), syntax and
+ * category keys are extended, provided best effort, and may be renamed in a
+ * minor version with the change noted.
  */
 export type PluginThemeTokenKey =
   | "surface-grid"

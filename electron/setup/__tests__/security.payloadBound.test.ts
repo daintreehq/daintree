@@ -11,6 +11,7 @@ import {
 } from "../security.js";
 import { channelToCategory } from "../../ipc/utils.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { PLUGIN_INVOKE_MAX_ARGS_BYTES } from "../../../shared/config/pluginBudgets.js";
 
 // Exact measurement exactly as the gate performed it before the fast path:
 // null means the old gate failed open (stringify threw, or the payload held a
@@ -465,5 +466,39 @@ describe("validateIpcInvokeEnvelope parity with the exact-only gate", () => {
     for (const args of payloadsAround(PAYLOAD_BUDGETS.gitOps)) {
       expect(actualOutcome("terminal:spawn", args)).toBe(referenceOutcome("terminal:spawn", args));
     }
+  });
+});
+
+describe("validateIpcInvokeEnvelope on plugin:invoke", () => {
+  const budget = PAYLOAD_BUDGETS.pluginInvoke;
+
+  function outcome(args: unknown[]): string {
+    try {
+      validateIpcInvokeEnvelope("plugin:invoke", args);
+      return "ok";
+    } catch (err) {
+      return (err as Error).message.split(":")[0]!;
+    }
+  }
+
+  it("uses the plugin args cap plus bounded headroom, not the default budget", () => {
+    expect(channelToCategory["plugin:invoke"]).toBe("pluginInvoke");
+    expect(budget).toBeGreaterThan(PLUGIN_INVOKE_MAX_ARGS_BYTES);
+    expect(budget - PLUGIN_INVOKE_MAX_ARGS_BYTES).toBeLessThanOrEqual(64 * 1024);
+    expect(outcome(["p", "c", "x".repeat(PLUGIN_INVOKE_MAX_ARGS_BYTES)])).toBe("ok");
+    expect(outcome(["p", "c", "x".repeat(budget)])).toBe("PLUGIN_PAYLOAD_TOO_LARGE");
+  });
+
+  it("counts binary and Map payloads instead of failing open on them", () => {
+    expect(outcome(["p", "c", new Uint8Array(budget)])).toBe("PLUGIN_PAYLOAD_TOO_LARGE");
+    expect(outcome(["p", "c", new Map([["k", "x".repeat(budget)]])])).toBe(
+      "PLUGIN_PAYLOAD_TOO_LARGE"
+    );
+  });
+
+  it("still enforces the arg-count cap first", () => {
+    expect(() => validateIpcInvokeEnvelope("plugin:invoke", Array.from({ length: 9 }))).toThrow(
+      AppError
+    );
   });
 });

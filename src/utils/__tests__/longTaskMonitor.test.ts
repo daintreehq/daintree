@@ -439,11 +439,11 @@ describe("attributeLongFrameToPlugins", () => {
     ]);
   });
 
-  it("falls back to commit-window overlap for host-scheduled render work", () => {
+  it("falls back to commit-time overlap for host-scheduled render work", () => {
     const metrics = createPluginViewMetrics();
     metrics.retainView("acme");
-    metrics.recordCommit("acme", 30, 1010, 1040);
-    metrics.recordCommit("beta", 5, 3000, 3005);
+    metrics.recordCommit("acme", 30, 1040);
+    metrics.recordCommit("beta", 5, 3005);
     metrics.drainReports();
     attributeLongFrameToPlugins(
       makeLoafEntry({
@@ -464,7 +464,7 @@ describe("attributeLongFrameToPlugins", () => {
     const metrics = createPluginViewMetrics();
     metrics.retainView("acme");
     metrics.registerViewOrigin("acme", "plugin://acme/view.js");
-    metrics.recordCommit("acme", 30, 1010, 1040);
+    metrics.recordCommit("acme", 30, 1040);
     metrics.drainReports();
     attributeLongFrameToPlugins(
       makeLoafEntry({
@@ -481,7 +481,7 @@ describe("attributeLongFrameToPlugins", () => {
   it("runs from the observer without changing the warning behaviour", () => {
     vi.mocked(logWarn).mockClear();
     pluginViewMetrics.retainView("acme");
-    pluginViewMetrics.recordCommit("acme", 30, 10, 40);
+    pluginViewMetrics.recordCommit("acme", 30, 40);
     pluginViewMetrics.drainReports();
     startLongTaskMonitor(100);
     emitLoafEntry({ duration: 80, startTime: 0 });

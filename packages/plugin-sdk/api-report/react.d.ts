@@ -179,7 +179,14 @@ interface PluginSpinningIconProps {
     size?: number;
     className?: string;
 }
-type PluginBadgeTone = "neutral" | "outline" | "error" | "warning" | "success" | "info";
+/**
+ * The kit's status vocabulary is shared by `Badge` and `Callout`: `error`,
+ * `danger`, `warning`, `success`, `info`, `neutral`. `error` and `danger` draw
+ * the same colour (the `status-error` class aliases the `status-danger` theme
+ * token); a `Badge` renders them identically, while a `Callout` gives
+ * `danger` (a destructive caution) its own glyph. `outline` is a Badge-only, uncoloured shape.
+ */
+type PluginBadgeTone = "neutral" | "outline" | "error" | "danger" | "warning" | "success" | "info";
 /** Props of `Badge`. Presentation only: wrap it in a `Button` to make it clickable. */
 interface PluginBadgeProps extends PluginDomProps<HTMLSpanElement> {
     children?: ReactNode;
@@ -353,6 +360,7 @@ interface PluginDismissButtonProps {
     disabled?: boolean;
     className?: string;
 }
+/** The shared status vocabulary; see `PluginBadgeTone` for how `error` and `danger` relate. */
 type PluginCalloutSeverity = "error" | "warning" | "danger" | "success" | "info" | "neutral";
 /** Props of `Callout`, an inline message box. The glyph follows the severity. */
 interface PluginCalloutProps {
@@ -512,7 +520,11 @@ interface PluginConfirmDialogProps {
 }
 /**
  * Keys of {@link PluginThemeTokens}: Daintree's semantic theme tokens, the
- * same names as the `--theme-*` CSS variables without the prefix.
+ * same names as the `--theme-*` CSS variables without the prefix. The surface,
+ * text, border, accent, `focus-ring` and status keys are core and stable within
+ * the major version; the activity, terminal (ANSI included), syntax and
+ * category keys are extended, provided best effort, and may be renamed in a
+ * minor version with the change noted.
  */
 type PluginThemeTokenKey = "surface-grid" | "surface-sidebar" | "surface-canvas" | "surface-panel" | "surface-panel-elevated" | "surface-input" | "surface-inset" | "surface-hover" | "surface-active" | "text-primary" | "text-secondary" | "text-muted" | "text-placeholder" | "text-inverse" | "text-link" | "border-default" | "border-subtle" | "border-strong" | "border-divider" | "border-interactive" | "accent-primary" | "accent-foreground" | "accent-hover" | "accent-soft" | "accent-muted" | "focus-ring" | "status-success" | "status-warning" | "status-danger" | "status-info" | "activity-active" | "activity-idle" | "activity-working" | "activity-waiting" | "terminal-background" | "terminal-foreground" | "terminal-muted" | "terminal-cursor" | "terminal-selection" | "terminal-black" | "terminal-red" | "terminal-green" | "terminal-yellow" | "terminal-blue" | "terminal-magenta" | "terminal-cyan" | "terminal-white" | "terminal-bright-black" | "terminal-bright-red" | "terminal-bright-green" | "terminal-bright-yellow" | "terminal-bright-blue" | "terminal-bright-magenta" | "terminal-bright-cyan" | "terminal-bright-white" | "syntax-comment" | "syntax-punctuation" | "syntax-number" | "syntax-string" | "syntax-operator" | "syntax-keyword" | "syntax-function" | "syntax-link" | "syntax-quote" | "category-blue" | "category-purple" | "category-cyan" | "category-green" | "category-amber" | "category-orange" | "category-teal" | "category-indigo" | "category-rose" | "category-pink" | "category-violet" | "category-slate";
 /**
@@ -990,10 +1002,14 @@ type ThrottledCallback<A extends unknown[]> = ((...args: A) => void) & {
 };
 /**
  * Coalesce a callback that fires faster than the view can usefully paint —
- * progress ticks, streamed log lines, pointer moves — so it runs at most once
+ * progress ticks, the latest status, pointer moves — so it runs at most once
  * per frame (or per `ms`) with the latest arguments. Wrap the state setter
  * rather than the render: pushes still arrive at full rate, React just commits
  * once per frame.
+ *
+ * Calls inside a window are dropped in favour of the last one, so this is for
+ * values where only the newest matters. For logs or streamed lines, push every
+ * chunk into a buffer (a ref) and flush the buffer to state once per frame.
  *
  * ```tsx
  * const [progress, setProgress] = useState(0);

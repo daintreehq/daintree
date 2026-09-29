@@ -17,7 +17,7 @@ npm install --save-dev @daintreehq/plugin-sdk
 | `@daintreehq/plugin-sdk/files` | The pure file-tree model — lazy children, expansion, flattening to rows, git-status roll-up, filename classification — fed from `host.fs.readdir(dir, { detail: true })` |
 | `@daintreehq/plugin-sdk/data` | Helpers for data kept as files: `parseFrontmatter`, `stringifyFrontmatter` and `updateFrontmatter` (changes only the named keys, every other byte preserved), `parseJsonl` / `stringifyJsonlLine`, `contentRevision`, and `editFile` — the conflict-checked read → transform → `host.fs.writeFile({ expectedRevision })` loop with retry |
 | `@daintreehq/plugin-sdk/testing` | `createMockHost`, a recording `PluginHostApi` for exercising `activate()` and handlers without Electron |
-| `@daintreehq/plugin-sdk/plugin-ui` | Types only: declares the host-served `@daintreehq/plugin-ui` module (`Markdown`). Add it to `compilerOptions.types`; the runtime always comes from the running app |
+| `@daintreehq/plugin-sdk/plugin-ui` | Types only: declares the host-served `@daintreehq/plugin-ui` v1 kit — Daintree's own controls themed with the app: `Markdown`, `Button`, `IconButton`, `Tooltip`, form controls (`Input`, `Textarea`, `Checkbox`, `Select`, `SegmentedControl`, `SearchField`), status (`Badge`, `Callout`, `Spinner`, `Skeleton`, `EmptyState`), `DropdownMenu`, `Dialog`, `ConfirmDialog`, `Icon`, `Kbd`, and the theme readers (`useDaintreeTheme`, `getDaintreeTheme`). Add it to `compilerOptions.types`; the runtime always comes from the running app |
 
 A plugin worker that is not bundled — a hand-written `dist/index.mjs` with no `node_modules` — can still import `@daintreehq/plugin-sdk`, `/files` and `/data`: Daintree resolves them to a copy of this package that ships with the app whenever the plugin has no copy of its own. An installed or bundled copy always takes precedence. `/react` and `/testing` are not served that way.
 
@@ -34,7 +34,7 @@ The patterns behind Daintree's own fast panels, packaged so the fast way is the 
 | `useVirtualList({ count, estimateSize, overscan, getScrollElement })` | Thousands of rows: only the rows in view are mounted. Heights are fixed or known per index; they are not measured from the DOM. |
 | `usePluginEventSelector(pluginId, channel, selector, { initial, isEqual, panelId })` | A channel pushes a large snapshot and this component shows one part of it. It re-renders only when `selector(payload)` changes. `useHostStore(subscribe, getSnapshot, selector, isEqual)` is the same idea for any store, and `shallowEqual` pairs with selectors that build objects. |
 | `useCachedHostChannel(pluginId, channel, args, { staleMs, cacheKey, signal, enabled })` | A read the view repeats on every open. The cached result paints first and is revalidated in the background; concurrent mounts share one request, and the cache is bounded (least recently used entries beyond 50 are dropped). |
-| `useThrottledCallback(callback, { ms })` | Pushes arrive faster than a frame (progress, streamed lines). Wrap the state setter so React commits at most once per frame, or once per `ms`. |
+| `useThrottledCallback(callback, { ms })` | A replaceable value is pushed faster than a frame (progress, the latest status). Wrap the state setter so React commits at most once per frame, or once per `ms`. It keeps only the latest arguments per window, so never use it for logs or streamed lines: push every chunk into a buffer (a ref) and flush the buffer to state once per frame instead. |
 
 ## Usage
 
