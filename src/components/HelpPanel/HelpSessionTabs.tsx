@@ -1,10 +1,18 @@
 import { useCallback, useId, useMemo, useRef } from "react";
 import { LayoutGroup } from "framer-motion";
-import { Plus } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { SpinnerCircle, HollowCircle, InteractingCircle } from "@/components/icons";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+  stopContextMenuPropagation,
+} from "@/components/ui/context-menu";
 import {
   DocumentTabClose,
   DocumentTabIndicator,
@@ -131,6 +139,11 @@ interface SessionTabChipProps {
   onSelect: (slot: number) => void;
   onClose: (slot: number) => void;
   onFocusTab: (slot: number) => void;
+  /** Close from the lane's own menu, with focus handed on once the lane is gone. */
+  onMenuClose: (slot: number) => void;
+  isSoleLane: boolean;
+  canOpenSession: boolean;
+  onOpenSession?: () => void;
 }
 
 /**
@@ -147,7 +160,12 @@ function SessionTabChip({
   onSelect,
   onClose,
   onFocusTab,
+  onMenuClose,
+  isSoleLane,
+  canOpenSession,
+  onOpenSession,
 }: SessionTabChipProps) {
+  const closingFromMenuRef = useRef(false);
   const stateId = `${tabId}-state`;
   const title = tab.fullTitle ?? tab.label;
   const { ref: labelRef, isTruncated: isLabelTruncated } = useTruncationDetection();
@@ -222,13 +240,48 @@ function SessionTabChip({
   // swapping it in when a title arrives would remount the tab and drop keyboard focus.
   const hasTitleTip =
     tab.fullTitle !== undefined && (tab.fullTitle !== tab.label || isLabelTruncated);
+  // Each lane owns its menu, like every other tab in the app: a right-click on a
+  // background lane closes that lane, never the one in front.
   return (
-    <Tooltip autoDismiss={false} open={hasTitleTip ? undefined : false}>
-      <TooltipTrigger asChild>{chip}</TooltipTrigger>
-      {tab.fullTitle !== undefined && (
-        <TooltipContent side="bottom">{tab.fullTitle}</TooltipContent>
-      )}
-    </Tooltip>
+    <ContextMenu>
+      <Tooltip autoDismiss={false} open={hasTitleTip ? undefined : false}>
+        <ContextMenuTrigger asChild onContextMenu={stopContextMenuPropagation}>
+          <TooltipTrigger asChild>{chip}</TooltipTrigger>
+        </ContextMenuTrigger>
+        {tab.fullTitle !== undefined && (
+          <TooltipContent side="bottom">{tab.fullTitle}</TooltipContent>
+        )}
+      </Tooltip>
+      <ContextMenuContent
+        onCloseAutoFocus={(e) => {
+          // Back onto a lane that is closing would read as a cancelled close and
+          // stand the handoff down; the strip moves focus once the lane is gone.
+          // The sole lane survives its close (it resets in place), so it takes
+          // focus back as usual.
+          if (closingFromMenuRef.current && !isSoleLane) e.preventDefault();
+          closingFromMenuRef.current = false;
+        }}
+      >
+        {onOpenSession && (
+          <>
+            <ContextMenuItem disabled={!canOpenSession} onSelect={onOpenSession}>
+              <Plus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              New session
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
+        <ContextMenuItem
+          onSelect={() => {
+            closingFromMenuRef.current = true;
+            onMenuClose(tab.slot);
+          }}
+        >
+          <X data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          Close session
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -327,6 +380,14 @@ export function HelpSessionTabs({
     [disarmKeyboardClose, onClose]
   );
 
+  const handleMenuClose = useCallback(
+    (slot: number) => {
+      armKeyboardClose(slot);
+      onClose(slot);
+    },
+    [armKeyboardClose, onClose]
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       // The focused lane, whichever element the key reached the list through.
@@ -404,6 +465,10 @@ export function HelpSessionTabs({
               onSelect={onSelect}
               onClose={handlePointerClose}
               onFocusTab={handleTabFocus}
+              onMenuClose={handleMenuClose}
+              isSoleLane={tabs.length === 1}
+              canOpenSession={canOpenSession}
+              onOpenSession={onOpenSession}
             />
           ))}
         </LayoutGroup>

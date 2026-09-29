@@ -7,7 +7,11 @@ import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
-import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
+import {
+  collectEligibleIds,
+  useFleetArmingStore,
+  isFleetArmEligible,
+} from "@/store/fleetArmingStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import {
   AGENT_SNOOZE_DURATION_OPTIONS,
@@ -108,6 +112,7 @@ import {
   ContextMenuSubContent,
   ContextMenuSubTrigger,
   ContextMenuTrigger,
+  stopContextMenuPropagation,
 } from "@/components/ui/context-menu";
 import { MenuActionSourceContext, type MenuActionSourceValue } from "@/components/ui/menu-source";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
@@ -160,16 +165,64 @@ interface TerminalContextMenuProps {
   terminalId: string;
   children: React.ReactNode;
   forceLocation?: PanelLocation;
+  /**
+   * The trigger stands for the panel rather than being its surface: a tab in a
+   * strip, a sidebar session row, a rescue chip. A proxy owns the right-click
+   * under it, so the event stops here instead of reaching an enclosing menu —
+   * the active panel's own in a tab strip, the worktree card's in the sidebar.
+   * It also leaves `data-context-trigger` to the panel, so opening a panel's
+   * menu from the keyboard never lands on a row standing in for it.
+   */
+  proxy?: boolean;
 }
 
 /**
- * Right-click context menu for panel headers (terminal, agent, browser, dev-preview).
- * Used by both DockedTerminalItem and PanelHeader.
+ * Keeps what the menu's portalled layers do — a menu item, the move picker, a
+ * confirm dialog — from reaching the row or tab the proxy sits in. React
+ * bubbles portal events through the component tree, so without this choosing
+ * an item on a sidebar session row also clicked its worktree card, and
+ * selected that worktree. Events from the proxy's own element pass through.
  */
-export function TerminalContextMenu({
+function containPortalEvent(event: React.SyntheticEvent) {
+  const origin = event.target;
+  if (!(origin instanceof Node) || !event.currentTarget.contains(origin)) event.stopPropagation();
+}
+
+/**
+ * Radix opens a context menu from a touch or pen long-press as well, timed
+ * from pointerdown. A proxy nested in another trigger (a session row in a
+ * worktree card) would otherwise start both timers and open both menus.
+ */
+function containPortalOrLongPress(event: React.PointerEvent) {
+  if (event.pointerType !== "mouse") event.stopPropagation();
+  else containPortalEvent(event);
+}
+
+/**
+ * The right-click menu for one panel, scoped to that panel wherever the
+ * pointer found it: its own surface, a dock item, a tab, a sidebar row.
+ */
+export function TerminalContextMenu(props: TerminalContextMenuProps) {
+  if (!props.proxy) return <TerminalContextMenuBody {...props} />;
+  return (
+    <div
+      className="contents"
+      onClick={containPortalEvent}
+      onDoubleClick={containPortalEvent}
+      onMouseDown={containPortalEvent}
+      onPointerDown={containPortalOrLongPress}
+      onKeyDown={containPortalEvent}
+    >
+      <TerminalContextMenuBody {...props} />
+    </div>
+  );
+}
+
+function TerminalContextMenuBody({
   terminalId,
   children,
   forceLocation,
+  proxy = false,
 }: TerminalContextMenuProps) {
   const terminal = usePanelStore((state) => state.panelsById[terminalId]);
   const maximizeTarget = usePanelStore((s) => s.maximizeTarget);
@@ -298,35 +351,55 @@ export function TerminalContextMenu({
     [refreshOrchestratorCandidates, terminal]
   );
 
-  const captureMovePickerAnchor = useCallback((event: React.MouseEvent<HTMLElement>) => {
-    // The trigger wrapper is `display: contents` and has no box of its own.
-    const pane = event.currentTarget.firstElementChild;
-    if (!(pane instanceof HTMLElement)) {
-      capturedMovePickerAnchorRef.current = null;
-      movePickerReturnFocusRef.current = null;
-      return;
-    }
-    // Where the menu opened, kept relative to the pane: the picker takes the
-    // menu's place. Hung off the pane's own rect, it would have to sit outside
-    // a box that usually fills the window's height, with no room either side.
-    const bounds = pane.getBoundingClientRect();
-    const offsetX = Math.min(Math.max(event.clientX - bounds.left, 0), bounds.width);
-    const offsetY = Math.min(Math.max(event.clientY - bounds.top, 0), bounds.height);
-    movePickerReturnFocusRef.current = pane;
-    capturedMovePickerAnchorRef.current = {
-      // Lets Floating UI follow the pane itself when it moves or resizes.
-      contextElement: pane,
-      getBoundingClientRect: () => {
-        const rect = pane.getBoundingClientRect();
-        return DOMRect.fromRect({
-          x: rect.left + Math.min(offsetX, rect.width),
-          y: rect.top + Math.min(offsetY, rect.height),
-          width: 0,
-          height: 0,
-        });
-      },
-    };
-  }, []);
+  const captureMovePickerAnchor = useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      // The trigger wrapper is `display: contents` and has no box of its own.
+      const pane = event.currentTarget.firstElementChild;
+      if (!(pane instanceof HTMLElement)) {
+        capturedMovePickerAnchorRef.current = null;
+        movePickerReturnFocusRef.current = null;
+        return;
+      }
+      // Where the menu opened, kept relative to the pane: the picker takes the
+      // menu's place. Hung off the pane's own rect, it would have to sit outside
+      // a box that usually fills the window's height, with no room either side.
+      const bounds = pane.getBoundingClientRect();
+      const offsetX = Math.min(Math.max(event.clientX - bounds.left, 0), bounds.width);
+      const offsetY = Math.min(Math.max(event.clientY - bounds.top, 0), bounds.height);
+      // A panel surface takes focus back itself. A proxy's first child is a
+      // row or tab wrapper, so return to the control that was right-clicked.
+      const FOCUSABLE = 'button, [tabindex]:not([tabindex="-1"]), [role="tab"]';
+      const hit =
+        proxy && event.target instanceof Element
+          ? event.target.closest<HTMLElement>(FOCUSABLE)
+          : null;
+      const focusable =
+        hit && pane.contains(hit) ? hit : proxy ? pane.querySelector<HTMLElement>(FOCUSABLE) : null;
+      movePickerReturnFocusRef.current = focusable ?? pane;
+      capturedMovePickerAnchorRef.current = {
+        // Lets Floating UI follow the pane itself when it moves or resizes.
+        contextElement: pane,
+        getBoundingClientRect: () => {
+          const rect = pane.getBoundingClientRect();
+          return DOMRect.fromRect({
+            x: rect.left + Math.min(offsetX, rect.width),
+            y: rect.top + Math.min(offsetY, rect.height),
+            width: 0,
+            height: 0,
+          });
+        },
+      };
+    },
+    [proxy]
+  );
+
+  const handleTriggerContextMenu = useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      if (proxy) stopContextMenuPropagation(event);
+      captureMovePickerAnchor(event);
+    },
+    [proxy, captureMovePickerAnchor]
+  );
 
   // Radix also opens the menu from a touch or pen long-press, which never
   // raises the contextmenu event the capture above hangs off.
@@ -417,7 +490,7 @@ export function TerminalContextMenu({
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent<HTMLElement>) => {
-      captureMovePickerAnchor(e);
+      handleTriggerContextMenu(e);
       const { panelsById } = usePanelStore.getState();
       const resolved: Array<{ panelId: string; label: string }> = [];
       const seenIds = new Set<string>([terminalId]);
@@ -464,7 +537,7 @@ export function TerminalContextMenu({
       setHoveredFilePath(terminalInstanceService.getHoveredFilePath(terminalId));
       setHoveredFileKind(terminalInstanceService.getHoveredFileKind(terminalId));
     },
-    [captureMovePickerAnchor, terminalId, recentVoiceTargets]
+    [handleTriggerContextMenu, terminalId, recentVoiceTargets]
   );
 
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
@@ -580,9 +653,17 @@ export function TerminalContextMenu({
           useFleetArmingStore.getState().toggleId(terminalId);
           break;
         case "fleet-arm-worktree":
-          void actionService.dispatch("terminal.bulkCommand", undefined, {
-            source: sourceRef.current,
-          });
+          // This panel's worktree, which a sidebar row can offer while another
+          // worktree is active; `terminal.bulkCommand` arms the active one.
+          if (terminal?.worktreeId) {
+            useFleetArmingStore
+              .getState()
+              .armIds(collectEligibleIds("current", terminal.worktreeId));
+          } else {
+            void actionService.dispatch("terminal.bulkCommand", undefined, {
+              source: sourceRef.current,
+            });
+          }
           break;
         case "fleet-clear":
           void actionService.dispatch("terminal.disarmAll", undefined, {
@@ -898,6 +979,10 @@ export function TerminalContextMenu({
     return <div className="contents">{children}</div>;
   }
 
+  const triggerMarker = proxy
+    ? { "data-context-proxy": terminalId }
+    : { "data-context-trigger": terminalId };
+
   const isBrowser = isBrowserPanel(terminal);
   const isDevPreview = isDevPreviewPanel(terminal);
   const isReview = isReviewPanel(terminal);
@@ -1075,8 +1160,8 @@ export function TerminalContextMenu({
         <ContextMenuTrigger asChild>
           <div
             className="contents"
-            data-context-trigger={terminalId}
-            onContextMenu={captureMovePickerAnchor}
+            {...triggerMarker}
+            onContextMenu={handleTriggerContextMenu}
             onPointerDown={captureMovePickerAnchorOnPress}
           >
             {children}
@@ -1140,8 +1225,8 @@ export function TerminalContextMenu({
         <ContextMenuTrigger asChild>
           <div
             className="contents"
-            data-context-trigger={terminalId}
-            onContextMenu={captureMovePickerAnchor}
+            {...triggerMarker}
+            onContextMenu={handleTriggerContextMenu}
             onPointerDown={captureMovePickerAnchorOnPress}
           >
             {children}
@@ -1204,8 +1289,8 @@ export function TerminalContextMenu({
         <ContextMenuTrigger asChild>
           <div
             className="contents"
-            data-context-trigger={terminalId}
-            onContextMenu={captureMovePickerAnchor}
+            {...triggerMarker}
+            onContextMenu={handleTriggerContextMenu}
             onPointerDown={captureMovePickerAnchorOnPress}
           >
             {children}
@@ -1258,8 +1343,8 @@ export function TerminalContextMenu({
         <ContextMenuTrigger asChild>
           <div
             className="contents"
-            data-context-trigger={terminalId}
-            onContextMenu={captureMovePickerAnchor}
+            {...triggerMarker}
+            onContextMenu={handleTriggerContextMenu}
             onPointerDown={captureMovePickerAnchorOnPress}
           >
             {children}
@@ -1326,7 +1411,7 @@ export function TerminalContextMenu({
         <ContextMenuTrigger asChild>
           <div
             className="contents"
-            data-context-trigger={terminalId}
+            {...triggerMarker}
             onContextMenu={handleContextMenu}
             onPointerDown={captureMovePickerAnchorOnPress}
           >

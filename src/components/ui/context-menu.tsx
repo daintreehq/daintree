@@ -618,7 +618,23 @@ const ContextMenuRadioItem = React.forwardRef<
 });
 ContextMenuRadioItem.displayName = "ContextMenuRadioItem";
 
+/**
+ * Keeps a nested trigger's right-click from reaching an enclosing trigger.
+ *
+ * A right-click menu belongs to the object under the pointer. Radix's trigger
+ * calls `preventDefault()` but never `stopPropagation()`, so a tab inside a
+ * panel's trigger, or a row inside a card's, lets the event carry on to the
+ * enclosing one. Pass this as the inner trigger's `onContextMenu`. It must not
+ * call `preventDefault()`: Radix runs it ahead of its own handler and skips that
+ * handler when the default is already prevented, so the inner menu would never
+ * open.
+ */
+function stopContextMenuPropagation(event: React.MouseEvent): void {
+  event.stopPropagation();
+}
+
 export {
+  stopContextMenuPropagation,
   ContextMenu,
   ContextMenuTrigger,
   ContextMenuContent,

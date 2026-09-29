@@ -7,6 +7,7 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
+  stopContextMenuPropagation,
 } from "@/components/ui/context-menu";
 
 interface TwoPaneSplitDividerProps {
@@ -213,7 +214,7 @@ export function TwoPaneSplitDivider({
 
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild onContextMenu={(e) => e.stopPropagation()}>
+      <ContextMenuTrigger asChild onContextMenu={stopContextMenuPropagation}>
         <div
           ref={dividerRef}
           role="separator"
