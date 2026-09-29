@@ -1,5 +1,7 @@
-import { useEffect, useEffectEvent, useMemo, useRef } from "react";
-import { useWorktrees } from "@/hooks";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import type { WorktreeSnapshot } from "@shared/types";
+import { useWorktreeStore, useWorktreeStoreApi } from "@/hooks/useWorktreeStore";
+import { getNormalizedWorktreeList } from "@/hooks/useWorktrees";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store";
 import { useScratchStore } from "@/store/scratchStore";
@@ -9,11 +11,25 @@ import {
   RENDERER_ACTIVATION_ORIGIN,
   clearHostAppliedActivation,
   consumeHostAppliedActivation,
+  hasHostAppliedActivation,
   markActivationRequested,
 } from "@/store/worktreeActivationOrigin";
 
+// Main first, else the head of the list as `useWorktrees` orders it. The sort
+// only runs for a Map without a main worktree.
+function pickFallbackWorktreeId(worktrees: Map<string, WorktreeSnapshot>): string | null {
+  for (const worktree of worktrees.values()) {
+    if (worktree.isMainWorktree) return worktree.id;
+  }
+  return getNormalizedWorktreeList(worktrees)[0]?.id ?? null;
+}
+
+/**
+ * Runs in the app root, so it subscribes only to the primitive facts it acts on
+ * — whether the active worktree is live, its path, the fallback pick — never
+ * the whole worktree Map, which changes on every worktree's status tick.
+ */
 export function useActiveWorktreeSync() {
-  const { worktrees, isInitialized } = useWorktrees();
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const restoreWorktreeId = useWorktreeSelectionStore((s) => s.restoreWorktreeId);
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
@@ -22,6 +38,41 @@ export function useActiveWorktreeSync() {
   const currentProject = useProjectStore((s) => s.currentProject);
   const currentScratch = useScratchStore((s) => s.currentScratch);
   const { homeDir } = useHomeDir();
+  const isInitialized = useWorktreeStore((s) => s.isInitialized);
+  const activeWorktreeIsLive = useWorktreeStore(
+    (s) => activeWorktreeId !== null && s.worktrees.has(activeWorktreeId)
+  );
+  const activeWorktreePath = useWorktreeStore((s) =>
+    activeWorktreeId !== null ? s.worktrees.get(activeWorktreeId)?.path : undefined
+  );
+  const hasWorktrees = useWorktreeStore((s) => s.worktrees.size > 0);
+  // Only needed once the selection is no longer valid (neither live nor a
+  // deleted-worktree row); resolving it otherwise would re-render on
+  // activity-order changes in a Map with no main worktree.
+  const fallbackWorktreeId = useWorktreeStore((s) =>
+    activeWorktreeId !== null &&
+    (s.worktrees.has(activeWorktreeId) || deletedWorktrees.has(activeWorktreeId))
+      ? null
+      : pickFallbackWorktreeId(s.worktrees)
+  );
+  const worktreeStore = useWorktreeStoreApi();
+  // The activation sync used to re-run on every worktree Map change, and two
+  // things lean on that: a failed `set-active` is retried on the next change,
+  // and an unconsumed host-applied mark expires on it. Keep both without
+  // subscribing to the Map — a change re-runs the sync only while one of them
+  // is pending.
+  const retryActivationRef = useRef(false);
+  const [activationRecheck, setActivationRecheck] = useState(0);
+  useEffect(
+    () =>
+      worktreeStore.subscribe((state, prev) => {
+        if (state.worktrees === prev.worktrees) return;
+        if (!retryActivationRef.current && !hasHostAppliedActivation()) return;
+        retryActivationRef.current = false;
+        setActivationRecheck((n) => n + 1);
+      }),
+    [worktreeStore]
+  );
 
   const lastSyncedActiveRef = useRef<{ projectId: string | null; worktreeId: string | null }>({
     projectId: null,
@@ -34,11 +85,6 @@ export function useActiveWorktreeSync() {
     markActivationRequested(worktreeId, restoreWorktreeId === worktreeId);
   });
 
-  const activeWorktree = useMemo(
-    () => worktrees.find((w) => w.id === activeWorktreeId) ?? null,
-    [worktrees, activeWorktreeId]
-  );
-
   useEffect(() => {
     if (!isInitialized) return;
 
@@ -49,8 +95,7 @@ export function useActiveWorktreeSync() {
     // branch: a deleted row outlives the last live worktree while it still owns
     // a terminal, so an empty list does not invalidate it.
     const activeSelectionIsValid =
-      activeWorktreeId !== null &&
-      (worktrees.some((w) => w.id === activeWorktreeId) || deletedWorktrees.has(activeWorktreeId));
+      activeWorktreeId !== null && (activeWorktreeIsLive || deletedWorktrees.has(activeWorktreeId));
     if (activeSelectionIsValid) return;
 
     // Past `isInitialized`, an empty list is the workspace's real answer, not a
@@ -62,18 +107,19 @@ export function useActiveWorktreeSync() {
     // the git-backed project that left this id behind — the same reasoning that
     // makes `stateHydration` skip the write rather than clear. Guarded on a
     // non-null id because `setActiveWorktree` re-runs terminal policy on every
-    // call, and this effect re-runs on each snapshot.
-    if (worktrees.length === 0) {
+    // call.
+    if (!hasWorktrees || fallbackWorktreeId === null) {
       if (activeWorktreeId !== null) {
         setActiveWorktree(null, { persist: false });
       }
       return;
     }
 
-    const mainWorktree = worktrees.find((w) => w.isMainWorktree) ?? worktrees[0]!;
-    selectWorktree(mainWorktree.id);
+    selectWorktree(fallbackWorktreeId);
   }, [
-    worktrees,
+    activeWorktreeIsLive,
+    hasWorktrees,
+    fallbackWorktreeId,
     activeWorktreeId,
     isInitialized,
     selectWorktree,
@@ -99,8 +145,7 @@ export function useActiveWorktreeSync() {
       return;
     }
 
-    const worktreeExists = worktrees.some((w) => w.id === selectedWorktreeId);
-    if (!worktreeExists) {
+    if (!activeWorktreeIsLive) {
       return;
     }
 
@@ -112,6 +157,7 @@ export function useActiveWorktreeSync() {
     }
 
     lastSyncedActiveRef.current = { projectId, worktreeId: selectedWorktreeId };
+    retryActivationRef.current = false;
     // The selection is already applied locally; the origin tag lets the
     // `worktree-activated` echo be skipped instead of re-selecting an id this
     // view may have moved past by the time it lands (#12370). Whether it was
@@ -129,22 +175,25 @@ export function useActiveWorktreeSync() {
           lastSyncedActiveRef.current.worktreeId === selectedWorktreeId
         ) {
           lastSyncedActiveRef.current = { projectId, worktreeId: null };
+          retryActivationRef.current = true;
         }
       });
-  }, [activeWorktreeId, currentProject?.id, worktrees]);
+  }, [activeWorktreeId, currentProject?.id, activeWorktreeIsLive, activationRecheck]);
 
   // Before the snapshot is authoritative the worktree is withheld from the
   // chain — a stale selection would spawn terminals in the wrong tree.
   const defaultTerminalCwd = useMemo(
     () =>
       resolveWorkspaceCwd({
-        worktreePath: isInitialized ? activeWorktree?.path : null,
+        worktreePath: isInitialized ? activeWorktreePath : null,
         projectPath: currentProject?.path,
         scratchPath: currentScratch?.path,
         homeDir,
       }),
-    [activeWorktree, currentProject, currentScratch, homeDir, isInitialized]
+    [activeWorktreePath, currentProject, currentScratch, homeDir, isInitialized]
   );
 
-  return { activeWorktree, defaultTerminalCwd };
+  // Only a live worktree is an active one to report — a deleted-worktree row or
+  // a stale id is not.
+  return { activeWorktreeId: activeWorktreeIsLive ? activeWorktreeId : null, defaultTerminalCwd };
 }

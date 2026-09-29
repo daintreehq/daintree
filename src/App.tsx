@@ -17,6 +17,8 @@ import {
 } from "./hooks";
 import type { ProjectCreationIdentity } from "@shared/types";
 import { useActionRegistry } from "./hooks/useActionRegistry";
+import { useWorktreeStoreApi } from "./hooks/useWorktreeStore";
+import { getNormalizedWorktreeList } from "./hooks/useWorktrees";
 import { usePluginActions } from "./hooks/usePluginActions";
 import { usePluginPanelKinds } from "./hooks/usePluginPanelKinds";
 import { usePluginPanelLifecycle } from "./hooks/usePluginPanelLifecycle";
@@ -146,6 +148,12 @@ function AppInner() {
   const { findNearest, findByIndex, findDockByIndex, getCurrentLocation } = useGridNavigation();
 
   const {
+    isWorktreeOverviewOpen,
+    toggleWorktreeOverview,
+    openWorktreeOverview,
+    closeWorktreeOverview,
+  } = useWorktreeOverview();
+  const {
     worktrees,
     isLoading,
     newTerminalPalette,
@@ -170,7 +178,8 @@ function AppInner() {
     shouldMountResumeSessionsPalette,
     shouldMountLogLevelPalette,
     shouldMountActionPalette,
-  } = usePaletteWiring();
+  } = usePaletteWiring({ isWorktreeOverviewOpen });
+  const worktreeStore = useWorktreeStoreApi();
   const currentProject = useProjectStore((state) => state.currentProject);
   const gitInitDialogOpen = useProjectStore((state) => state.gitInitDialogOpen);
   const gitInitDirectoryPath = useProjectStore((state) => state.gitInitDirectoryPath);
@@ -216,7 +225,7 @@ function AppInner() {
     }))
   );
 
-  const { activeWorktree, defaultTerminalCwd } = useActiveWorktreeSync();
+  const { activeWorktreeId: liveActiveWorktreeId, defaultTerminalCwd } = useActiveWorktreeSync();
   useAgentActivityBroadcast();
   const resumeSession = useResumeAgentSession();
 
@@ -251,12 +260,6 @@ function AppInner() {
     prevPluginManagerOpenRef.current = isPluginManagerOpen;
     if (!wasOpen && isPluginManagerOpen) setIsSettingsOpen(false);
   }, [isPluginManagerOpen, setIsSettingsOpen]);
-  const {
-    isWorktreeOverviewOpen,
-    toggleWorktreeOverview,
-    openWorktreeOverview,
-    closeWorktreeOverview,
-  } = useWorktreeOverview();
 
   const shouldMountCrossDiffDialog = useKeepMounted(crossDiffDialog.isOpen);
   const shouldMountShortcutsDialog = useKeepMounted(isShortcutsOpen);
@@ -373,8 +376,9 @@ function AppInner() {
       await usePanelStore.getState().addPanel(options);
     },
     getDefaultCwd: () => defaultTerminalCwd,
-    getActiveWorktreeId: () => activeWorktree?.id,
-    getWorktrees: () => worktrees,
+    getActiveWorktreeId: () => liveActiveWorktreeId ?? undefined,
+    // Read at call time: `worktrees` above is only live while a list is open.
+    getWorktrees: () => getNormalizedWorktreeList(worktreeStore.getState().worktrees),
     getFocusedId: () => focusedId,
     getIsSettingsOpen: () => isSettingsOpen,
     getGridNavigation: () => ({ findNearest, findByIndex, findDockByIndex, getCurrentLocation }),

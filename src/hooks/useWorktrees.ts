@@ -84,6 +84,13 @@ export function getNormalizedWorktreeMap(
   return getNormalized(worktreeMap).normalizedMap;
 }
 
+/** The normalized, sorted list of a store worktree Map — `useWorktrees().worktrees`. */
+export function getNormalizedWorktreeList(
+  worktreeMap: Map<string, WorktreeSnapshot>
+): WorktreeState[] {
+  return getNormalized(worktreeMap).worktrees;
+}
+
 // Stable sentinel for gated consumers — getNormalized caches per Map identity,
 // so a disabled subscription yields the same empty outputs every render.
 const EMPTY_WORKTREES = new Map<string, WorktreeSnapshot>();
