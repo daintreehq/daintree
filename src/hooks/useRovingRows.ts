@@ -46,6 +46,7 @@ export interface UseRovingRowsResult {
    */
   containerProps: {
     ref: (element: HTMLElement | null) => void;
+    onBlur: (event: Pick<React.FocusEvent, "relatedTarget" | "currentTarget">) => void;
     tabIndex: number | undefined;
     onFocus: (event: Pick<React.FocusEvent, "target" | "currentTarget">) => void;
   };
@@ -83,6 +84,10 @@ export function useRovingRows({
   // Set while focus sits on the container because the focused row scrolled out
   // of the window — so the container does not bounce it straight back.
   const parkedRef = useRef(false);
+  // The row that last took focus inside this list, cleared when focus moves
+  // somewhere else — so a row scrolling out while the user is elsewhere never
+  // pulls focus into the list.
+  const focusedKeyRef = useRef<string | null>(null);
 
   // Resolved at read time, so a filter that removes the stop's row can never
   // leave the list with no tab stop at all for a render.
@@ -114,7 +119,13 @@ export function useRovingRows({
       if (!(target instanceof Element)) return;
       // The container itself counts: it holds focus while the focused row is
       // windowed out, and the arrows have to keep working from there.
-      if (!target.closest("[data-roving-row]") && target !== event.currentTarget) return;
+      if (
+        !target.closest("[data-roving-row]") &&
+        target !== event.currentTarget &&
+        target !== containerRef.current
+      ) {
+        return;
+      }
       const from = tabStopKey === null ? -1 : keys.indexOf(tabStopKey);
       let to: number;
       switch (event.key) {
@@ -139,7 +150,7 @@ export function useRovingRows({
       setCursorKey(key);
       focusRow(key, to);
     },
-    [keys, tabStopKey, focusRow]
+    [keys, tabStopKey, focusRow, containerRef]
   );
 
   const onContainerFocus = useCallback(
@@ -158,8 +169,21 @@ export function useRovingRows({
   );
 
   const onRowFocus = useCallback((key: string) => {
+    focusedKeyRef.current = key;
     setCursorKey(key);
   }, []);
+
+  const onContainerBlur = useCallback(
+    (event: Pick<React.FocusEvent, "relatedTarget" | "currentTarget">) => {
+      const next = event.relatedTarget;
+      // A null related target is a window blur or the focused row being
+      // removed, and both have to leave the record alone.
+      if (next instanceof Node && !event.currentTarget.contains(next)) {
+        focusedKeyRef.current = null;
+      }
+    },
+    []
+  );
 
   const rowRef = useCallback(
     (key: string) => (element: HTMLElement | null) => {
@@ -173,6 +197,7 @@ export function useRovingRows({
         const detached = elementsRef.current.get(key);
         queueMicrotask(() => {
           const container = containerRef.current;
+          if (focusedKeyRef.current !== key) return;
           if (!detached || detached.isConnected || !container?.isConnected) return;
           if (document.activeElement !== document.body && document.activeElement !== null) {
             return;
@@ -186,6 +211,17 @@ export function useRovingRows({
       if (pendingFocusRef.current === key) {
         pendingFocusRef.current = null;
         element.focus();
+        return;
+      }
+      // Scrolled back into the window while focus was parked on the list: give
+      // it back, so the next Tab leaves the list instead of re-entering it.
+      const container = containerRef.current;
+      if (
+        focusedKeyRef.current === key &&
+        container !== null &&
+        document.activeElement === container
+      ) {
+        element.focus({ preventScroll: true });
       }
     },
     [containerRef]
@@ -207,6 +243,7 @@ export function useRovingRows({
     reportTabStopMounted,
     containerProps: {
       ref: externalContainerRef ? noopRef : setContainer,
+      onBlur: onContainerBlur,
       // -1 rather than nothing on a windowed list, so focus can be parked here.
       tabIndex: windowed ? (tabStopKey !== null && !stopMounted ? 0 : -1) : undefined,
       onFocus: onContainerFocus,

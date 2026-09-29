@@ -67,11 +67,13 @@ describe("useRovingRows", () => {
     expect(reveal).not.toHaveBeenCalled();
   });
 
-  it("parks focus on the list when the focused row is windowed out, and keeps the arrows working", async () => {
-    function List({ mounted }: { mounted: string[] }) {
-      const roving = useRovingRows({ keys: KEYS, windowed: true });
-      return (
-        <div data-testid="list" onKeyDown={roving.onKeyDown} {...roving.containerProps}>
+  // The folder listing's shape: the key handler on an outer group, the
+  // container (where focus parks) one level in.
+  function List({ mounted }: { mounted: string[] }) {
+    const roving = useRovingRows({ keys: KEYS, windowed: true });
+    return (
+      <div role="group" onKeyDown={roving.onKeyDown}>
+        <div data-testid="list" {...roving.containerProps}>
           {mounted.map((key) => (
             <button
               key={key}
@@ -85,8 +87,11 @@ describe("useRovingRows", () => {
             </button>
           ))}
         </div>
-      );
-    }
+      </div>
+    );
+  }
+
+  it("parks focus on the list when the focused row is windowed out, and keeps the arrows working", async () => {
     const { getByText, getByTestId, rerender } = render(<List mounted={["a", "b", "c"]} />);
     act(() => getByText("b").focus());
 
@@ -102,8 +107,41 @@ describe("useRovingRows", () => {
     const list = getByTestId("list");
     expect(document.activeElement).toBe(list);
 
-    // Arrows continue from the row that had focus.
+    // Arrows continue from the row that had focus, through the outer handler.
     fireEvent.keyDown(list, { key: "ArrowDown" });
     expect(document.activeElement).toBe(getByText("c"));
+  });
+
+  it("hands focus back to the row when it scrolls back into the window", async () => {
+    const { getByText, getByTestId, rerender } = render(<List mounted={["a", "b", "c"]} />);
+    act(() => getByText("b").focus());
+    rerender(<List mounted={["c", "d"]} />);
+    await act(async () => {});
+    expect(document.activeElement).toBe(getByTestId("list"));
+
+    rerender(<List mounted={["a", "b", "c"]} />);
+    await act(async () => {});
+    expect(document.activeElement).toBe(getByText("b"));
+  });
+
+  it("never pulls focus into the list when a row scrolls out while focus is elsewhere", async () => {
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    const { getByText, rerender } = render(<List mounted={["a", "b", "c"]} />);
+    act(() => getByText("b").focus());
+    // Focus leaves for a control outside the list, then drops to the page.
+    act(() => outside.focus());
+    act(() => outside.blur());
+    rerender(<List mounted={["c", "d"]} />);
+    await act(async () => {});
+    expect(document.activeElement).toBe(document.body);
+    outside.remove();
+  });
+
+  it("does not park for a row that never had focus", async () => {
+    const { rerender } = render(<List mounted={["a", "b", "c"]} />);
+    rerender(<List mounted={["c", "d"]} />);
+    await act(async () => {});
+    expect(document.activeElement).toBe(document.body);
   });
 });
