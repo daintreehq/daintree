@@ -1,4 +1,5 @@
 import { PANE_STATUS_FOOTER_CLASS } from "@/components/ui/paneToolbarStyles";
+import { cn } from "@/lib/utils";
 import type { HiddenRowCounts } from "./fileBrowserTree";
 
 export interface FileBrowserHiddenStripProps {
@@ -44,7 +45,9 @@ export function FileBrowserHiddenStrip({ counts, onShowDotfiles }: FileBrowserHi
       // view is doing, and `contentinfo` is reserved for a page-level footer.
       role="status"
       data-testid="file-browser-hidden-strip"
-      className={PANE_STATUS_FOOTER_CLASS}
+      // `py-0`: the Show button carries the 24px target itself, so the strip
+      // adds no padding around it and stays at the shared strip height.
+      className={cn(PANE_STATUS_FOOTER_CLASS, "py-0")}
     >
       <span className="min-w-0 flex-1 truncate">
         <span className="tabular-nums">{counts.dotfiles}</span>
@@ -62,7 +65,7 @@ export function FileBrowserHiddenStrip({ counts, onShowDotfiles }: FileBrowserHi
         // accessible name carries the full phrase.
         aria-label="Show dotfiles"
         onClick={onShowDotfiles}
-        className="shrink-0 rounded-lg px-1 text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
+        className="inline-flex min-h-6 shrink-0 items-center rounded-lg px-1 text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
       >
         Show
       </button>
