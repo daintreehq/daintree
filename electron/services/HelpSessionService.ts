@@ -695,7 +695,7 @@ export class HelpSessionService {
    * tallies want this one.
    */
   private readonly panelVisibleByProjectId = new Map<string, boolean>();
-  private onMcpSessionRevokedFn: ((token: string) => void) | null = null;
+  private onMcpSessionRevokedFn: ((token: string, sessionId: string) => void) | null = null;
   private disposed = false;
   private projectMetadataReader: ProjectMetadataReader | null = null;
   private knownProjectRootsReader: KnownProjectRootsReader | null = null;
@@ -719,11 +719,13 @@ export class HelpSessionService {
 
   /**
    * Wire the eager MCP-session teardown invoked on revoke (#9151). Given the
-   * revoked help session's raw bearer token, the callback drops the live MCP
-   * session(s) it owns so tier/grants/pin don't linger until the idle reaper.
-   * Idempotent — re-set on every `ensureMcpServerReady`.
+   * revoked help session's raw bearer token and its session id, the callback
+   * drops the live MCP session(s) it owns so tier/grants/pin don't linger until
+   * the idle reaper, and revokes the ownership principal its records are held
+   * under (#12993). Invoked in the same synchronous step that removes the token
+   * from `sessionsByToken`. Idempotent — re-set on every `ensureMcpServerReady`.
    */
-  setOnMcpSessionRevoked(cb: ((token: string) => void) | null): void {
+  setOnMcpSessionRevoked(cb: ((token: string, sessionId: string) => void) | null): void {
     this.onMcpSessionRevokedFn = cb;
   }
 
@@ -1500,6 +1502,17 @@ export class HelpSessionService {
         record.revoked = true;
         this.sessionsByToken.delete(token);
         this.sessionsById.delete(sessionId);
+        // The probe connects with this bearer, so a session may already be
+        // bound to its ownership principal (#12993). Revoke it with the token.
+        try {
+          this.onMcpSessionRevokedFn?.(token, sessionId);
+        } catch (teardownErr) {
+          console.warn(
+            "[HelpSessionService] MCP session teardown after failed probe failed:",
+            sessionId,
+            teardownErr
+          );
+        }
         if (input.agentId === "claude" || input.agentId === "copilot") {
           await this.stripStaleDaintreeMcpEntry(sessionPath);
           // The lane file was written moments ago with the bearer the probe just
@@ -1775,7 +1788,7 @@ export class HelpSessionService {
     // MCP session is live regardless of whether we captured a hibernation
     // resume ID); a no-op when the agent never reached the MCP server.
     try {
-      this.onMcpSessionRevokedFn?.(record.token);
+      this.onMcpSessionRevokedFn?.(record.token, record.sessionId);
     } catch (err) {
       console.warn(
         "[HelpSessionService] MCP session teardown during revoke failed:",
@@ -2048,7 +2061,7 @@ export class HelpSessionService {
       // 30-minute idle reaper, exactly the stale state this issue closes on
       // the `revokeSession` path.
       try {
-        this.onMcpSessionRevokedFn?.(prior.token);
+        this.onMcpSessionRevokedFn?.(prior.token, prior.sessionId);
       } catch (err) {
         console.warn(
           "[HelpSessionService] MCP session teardown during displacement failed:",
@@ -2476,7 +2489,9 @@ export class HelpSessionService {
       this.getTerminalIdForSession(sessionId)
     );
     // Eager MCP-session teardown on revoke (#9151). Idempotent re-set.
-    this.setOnMcpSessionRevoked((token) => mcpServerService.disconnectHelpBearer(token));
+    this.setOnMcpSessionRevoked((token, sessionId) =>
+      mcpServerService.disconnectHelpBearer(token, sessionId)
+    );
     if (!mcpServerService.isEnabled()) {
       // setEnabled() will only call start() internally if it has its own
       // `registry` already set — which it doesn't on cold boot if the

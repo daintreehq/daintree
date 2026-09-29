@@ -32,6 +32,7 @@ import type {
 } from "./shared.js";
 import { parseWorkspaceSelector, type WorkspaceSelectorRejection } from "./workspaceSelector.js";
 import { projectAuditResult } from "./auditResultProjection.js";
+import { helpOwnershipPrincipal } from "./resourceOwnership.js";
 import { WorkspaceBindingError } from "./rendererBridge.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
@@ -510,8 +511,9 @@ export class HttpLifecycle {
   }
 
   /**
-   * The principal a pane bearer's resource ownership is held under (#12487),
-   * or null for every other bearer.
+   * The principal a pane bearer's (#12487) or help-session bearer's (#12993)
+   * resource ownership is held under, or null for every other bearer — an api
+   * key is shared by every external client, so it keeps session-scoped records.
    *
    * Resolved before any session state is written, like the pane's workspace
    * binding, and bound with no await in between, so no revocation can land
@@ -523,7 +525,10 @@ export class HttpLifecycle {
   private resolveOwnershipPrincipal(authHeader: string): string | null {
     const token = extractBearerToken(authHeader);
     if (!token) return null;
-    return this.paneOwnershipPrincipalResolver?.(token) ?? null;
+    const panePrincipal = this.paneOwnershipPrincipalResolver?.(token) ?? null;
+    if (panePrincipal !== null) return panePrincipal;
+    const helpSessionId = this.helpSessionIdResolver?.(token) ?? null;
+    return helpSessionId === null ? null : helpOwnershipPrincipal(helpSessionId);
   }
 
   /**

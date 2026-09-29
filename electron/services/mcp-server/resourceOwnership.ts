@@ -36,10 +36,11 @@ import type { ActionDispatchResult } from "../../../shared/types/actions.js";
  *    by an api key holds its records itself, and they are cleared by every
  *    teardown path in lockstep with the routing maps — see
  *    `SessionStore.clearSessionBinding` and `drain`. A session authenticated
- *    by a per-pane bearer is bound at handshake to that bearer's principal
- *    (#12487), and its records are held by the principal instead: a reconnect,
- *    an idle reap or a server restart replaces the session but not the bearer,
- *    so the pane keeps authority over what it launched. The principal's
+ *    by a per-pane bearer (#12487) or a help-session bearer (#12993) is bound
+ *    at handshake to that bearer's principal, and its records are held by the
+ *    principal instead: a reconnect, an idle reap or a server restart replaces
+ *    the session but not the bearer, so the pane or help session keeps
+ *    authority over what it launched. The principal's
  *    records go when the bearer is revoked ({@link revokePrincipal}), never
  *    before. Clearing authority is not cleanup: the terminals and worktrees
  *    themselves stay exactly where they are, because a disconnect is not a
@@ -89,6 +90,16 @@ export function principalOwnerKey(principalId: string): string {
   return `${PRINCIPAL_OWNER_PREFIX}${principalId}`;
 }
 
+/**
+ * The principal a help-session bearer's resource ownership is held under
+ * (#12993). Derived from the help-session id minted fresh at every provision,
+ * so it is stable across the session's reconnects and never shared with a
+ * successor. Namespaced so it can never spell a pane bearer's principal.
+ */
+export function helpOwnershipPrincipal(helpSessionId: string): string {
+  return `help\u0000${helpSessionId}`;
+}
+
 function isPrincipalOwner(owner: string): boolean {
   return owner.startsWith(PRINCIPAL_OWNER_PREFIX);
 }
@@ -105,7 +116,7 @@ export class ResourceOwnershipLedger {
   private readonly byOwner = new Map<string, Map<string, OwnedResourceRecord>>();
   /** resourceKey → owner. The index that makes newest-creator-wins eviction O(1). */
   private readonly ownerByResource = new Map<string, string>();
-  /** sessionId → principal owner key, for sessions a per-pane bearer authenticated. */
+  /** sessionId → principal owner key, for sessions a pane or help bearer authenticated. */
   private readonly principalBySession = new Map<string, string>();
   /**
    * Principal owner keys whose bearer has not been revoked. A principal id is
