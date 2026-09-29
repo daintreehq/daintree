@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
+import { StrictMode } from "react";
 import { createPortal } from "react-dom";
 import { act, createEvent, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import {
@@ -7,6 +8,11 @@ import {
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
 } from "../dockStatusPill";
+import {
+  getDockPopoverOpen,
+  registerDockPopoverLayer,
+  _resetForTests as _resetDockPopoverForTests,
+} from "@/lib/dockPopoverLayer";
 
 function closeEvent() {
   const event = new Event("focusOutside", { cancelable: true });
@@ -205,5 +211,44 @@ describe("useDockPopoverFocusHandoff — keyboard entry", () => {
     root.focus();
     fireEvent.keyDown(root, { key: "End" });
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "last" }));
+  });
+});
+
+describe("DockPopoverList dialog-layer registration", () => {
+  afterEach(() => {
+    _resetDockPopoverForTests();
+  });
+
+  it("holds the layer exactly while mounted", () => {
+    const { unmount } = render(<DockPopoverList>row</DockPopoverList>);
+    expect(getDockPopoverOpen()).toBe(true);
+
+    unmount();
+
+    expect(getDockPopoverOpen()).toBe(false);
+  });
+
+  it("stays balanced through StrictMode's double effect", () => {
+    const { unmount } = render(
+      <StrictMode>
+        <DockPopoverList>row</DockPopoverList>
+      </StrictMode>
+    );
+    expect(getDockPopoverOpen()).toBe(true);
+
+    unmount();
+
+    expect(getDockPopoverOpen()).toBe(false);
+  });
+
+  it("releases only its own registration", () => {
+    // The docked panel's popover can be up at the same time.
+    const releaseDock = registerDockPopoverLayer();
+    const { unmount } = render(<DockPopoverList>row</DockPopoverList>);
+
+    unmount();
+
+    expect(getDockPopoverOpen()).toBe(true);
+    releaseDock();
   });
 });

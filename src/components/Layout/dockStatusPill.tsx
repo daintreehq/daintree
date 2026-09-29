@@ -1,8 +1,9 @@
-import { forwardRef, useCallback, useEffect, useRef, type ReactNode } from "react";
+import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { POPOVER_HEADER_CLASS, POPOVER_ROW_HOVER_CLASS } from "@/components/ui/popoverHeader";
 import { cn } from "@/lib/utils";
+import { registerDockPopoverLayer } from "@/lib/dockPopoverLayer";
 
 /**
  * The status pills sit inside one tray, and the tray is the surface: each pill
@@ -241,9 +242,16 @@ interface DockPopoverListProps {
  * all four popovers: the cap never runs past the room the popover actually has
  * above the dock, and the compact scroll shadow says there is more above or
  * below when macOS hides the scrollbar.
+ *
+ * Also the popover's registration with the dialog layer (#13081): the list is
+ * mounted exactly while the popover paints — through its exit animation, and
+ * never after Trash empties under an open popover — so a dialog opened from a
+ * row, or arriving from anywhere else, clears it. A layout effect so an
+ * already-open dialog is re-tiered before the popover's first paint.
  */
 export const DockPopoverList = forwardRef<HTMLDivElement, DockPopoverListProps>(
   function DockPopoverList({ children, onFocusCapture }, forwardedRef) {
+    useLayoutEffect(() => registerDockPopoverLayer(), []);
     const listRef = useRef<HTMLDivElement | null>(null);
     const setRef = useCallback(
       (node: HTMLDivElement | null) => {

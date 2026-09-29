@@ -174,8 +174,8 @@ export function AppLayout({
   useCcrPresetsSubscription();
   useProjectPresetsSubscription();
   useDiagnosticsAutoOpen();
-  // Published once for the whole view: every AppDialog layers itself against
-  // this rather than each caller working it out (#11505).
+  // The docked panel's share of the signal every AppDialog layers itself
+  // against (#11505); status-pill popovers publish their own from their list.
   useDockPopoverLayerSync();
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   // Issue #7627: track active drag-resize per panel so AppLayout can suppress
