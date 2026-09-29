@@ -240,3 +240,82 @@ describe("bundled-react", () => {
     expect(findings).toEqual([]);
   });
 });
+
+describe("whole-state-push", () => {
+  it("flags re-sending a collection that only grows, alone or beside the new item", async () => {
+    const findings = await lintFor("whole-state-push", {
+      "src/index.ts": `export async function activate(host) {
+  const calls = [];
+  host.onToolCall(async (call) => {
+    calls.push(call);
+    await host.postToPanel("tool-call", { call, calls });
+  });
+  const log = [];
+  host.onLine((line) => {
+    log = [...log, line];
+    void host.postToPanel("log", log);
+  });
+}
+`,
+    });
+    expect(findings.map((f) => f.line)).toEqual([5, 10]);
+    expect(findings[0]!.hint).toMatch(/createSyncedCollection/);
+    expect(findings[0]!.message).toMatch(/`calls`/);
+  });
+
+  it("flags posting the object that owns a growing member", async () => {
+    const findings = await lintFor("whole-state-push", {
+      "src/state.ts": `const state = { events: [], count: 0 };
+export function record(host, event) {
+  state.events.push(event);
+  state.count++;
+  return host.postToPanel("state", state);
+}
+`,
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ line: 5 });
+  });
+
+  it("accepts deltas, bounded buffers and unrelated members", async () => {
+    const findings = await lintFor("whole-state-push", {
+      "src/index.ts": `export async function activate(host) {
+  const calls = [];
+  host.onToolCall(async (call) => {
+    calls.push(call);
+    await host.postToPanel("tool-call", { call, total: calls.length });
+  });
+  const recent = [];
+  host.onLine((line) => {
+    recent.push(line);
+    if (recent.length > 50) recent.shift();
+    void host.postToPanel("recent", recent);
+  });
+  const state = { events: [], status: "idle" };
+  host.onEvent((event) => {
+    state.events.push(event);
+    void host.postToPanel("status", state.status);
+  });
+}
+`,
+    });
+    expect(findings).toEqual([]);
+  });
+});
+
+describe("perf hints point at the SDK hooks", () => {
+  it("names useStreamBuffer and useSyncedCollection for per-event appends", async () => {
+    const findings = await lintFor("render-on-every-event", {
+      "src/panel.tsx": `import { usePluginEvent } from "@daintreehq/plugin-sdk/react";
+export default function Panel({ pluginId }) {
+  const [lines, setLines] = useState([]);
+  usePluginEvent(pluginId, "output", (line) => setLines((prev) => [...prev, line]));
+  return <pre>{lines.join("")}</pre>;
+}
+`,
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.hint).toMatch(/useStreamBuffer/);
+    expect(findings[0]!.hint).toMatch(/useSyncedCollection/);
+  });
+});

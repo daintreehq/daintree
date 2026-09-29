@@ -9,7 +9,7 @@ const intervalPollingInView: LintRule = {
   severity: "warn",
   appliesTo: "view",
   message: "setInterval in view code polls from the renderer",
-  hint: "poll in the worker and push with host.postToPanel; in the view, subscribe first and then pull the current state — pushes arrive batched per macrotask with no ordering against invoke results, so tag both with a revision number and keep the newest",
+  hint: "poll in the worker and push with host.postToPanel; in the view, subscribe first and then pull the current state — pushes arrive batched per macrotask with no ordering against invoke results, so tag both with a revision number and keep the newest (createSyncedCollection + useSyncedCollection from the SDK do exactly this for a keyed list); for an animation loop use useAnimationFrame, which pauses while the view is hidden or cached",
   check(file) {
     return [...file.masked.matchAll(/\bsetInterval\s*\(/g)].map((m) => ({ offset: m.index }));
   },
@@ -120,7 +120,7 @@ const largeInlinePayload: LintRule = {
   severity: "warn",
   appliesTo: "any",
   message: "the whole collection is posted once per item, so the cost grows with its square",
-  hint: "post the collection once after the loop, or post only the item that changed",
+  hint: "post the collection once after the loop, or post only the item that changed — createSyncedCollection batches a loop of changes into one delta for useSyncedCollection",
   check(file) {
     const hits: RuleHit[] = [];
     const seen = new Set<number>();
@@ -148,6 +148,78 @@ const largeInlinePayload: LintRule = {
   },
 };
 
+/** `x.push(`, `x.unshift(`, `x = [...x, …]`, `x = x.concat(` — `x` grows. `x` may be a member path. */
+function appendedCollections(masked: string): Set<string> {
+  const grown = new Set<string>();
+  const path = "[A-Za-z_$][\\w$]*(?:\\s*\\.\\s*[A-Za-z_$][\\w$]*)*";
+  const normal = (text: string) => text.replace(/\s+/g, "");
+  for (const m of masked.matchAll(new RegExp(`(${path})\\s*\\.\\s*(?:push|unshift)\\s*\\(`, "g"))) {
+    grown.add(normal(m[1]!));
+  }
+  for (const m of masked.matchAll(
+    new RegExp(
+      `(${path})\\s*=\\s*(?:\\[\\s*\\.\\.\\.\\s*(${path})|(${path})\\s*\\.\\s*concat\\s*\\()`,
+      "g"
+    )
+  )) {
+    const target = normal(m[1]!);
+    if (normal(m[2] ?? m[3] ?? "") === target) grown.add(target);
+  }
+  return grown;
+}
+
+/** `x.shift()`, `x.splice(`, `x.length = `, `x = x.slice(` — someone keeps `x` bounded. */
+function isBounded(masked: string, name: string): boolean {
+  const p = name.split(".").map(escape).join("\\s*\\.\\s*");
+  return new RegExp(
+    `(?<![\\w$.])${p}\\s*(?:\\.\\s*(?:shift|splice)\\s*\\(|\\.\\s*length\\s*=(?!=)|=\\s*${p}\\s*\\.\\s*slice\\s*\\()`
+  ).test(masked);
+}
+
+/** Names a payload sends whole: `x`, `{ x }`, `{ k: x }`, `[...x]`, `x.slice()`. */
+function payloadReferences(payloadText: string, name: string): boolean {
+  const p = name.split(".").map(escape).join("\\s*\\.\\s*");
+  return new RegExp(
+    `(?<![\\w$.])${p}(?![\\w$]|\\s*(?:\\.\\s*(?!slice\\s*\\(\\s*\\))[\\w$]|\\[|\\())`
+  ).test(payloadText);
+}
+
+const wholeStatePush: LintRule = {
+  id: "whole-state-push",
+  severity: "warn",
+  // Only a worker can post, but its state often lives in a helper module.
+  appliesTo: "any",
+  message:
+    "a growing collection is re-sent whole on every push, so the bytes grow with the square of its length",
+  hint: "send only what changed: createSyncedCollection (worker) + useSyncedCollection (view) from @daintreehq/plugin-sdk pull the list once and then push deltas, and handle the pull/push ordering race",
+  check(file) {
+    const grown = appendedCollections(file.masked);
+    if (grown.size === 0) return [];
+    const unbounded = [...grown].filter((name) => !isBounded(file.masked, name));
+    if (unbounded.length === 0) return [];
+    const hits: RuleHit[] = [];
+    for (const m of file.masked.matchAll(POST)) {
+      const open = m.index + m[0].length - 1;
+      const payload = splitArgs(file.masked, open)[1];
+      if (!payload) continue;
+      const payloadText = file.masked.slice(payload[0], payload[1]);
+      // A collection, or the object that owns it (`state` for `state.calls.push`).
+      const sent = unbounded.find((name) => {
+        const segments = name.split(".");
+        return segments.some((_, i) =>
+          payloadReferences(payloadText, segments.slice(0, i + 1).join("."))
+        );
+      });
+      if (!sent) continue;
+      hits.push({
+        offset: m.index,
+        message: `${m[1]} re-sends \`${sent}\`, which only grows, on every push — the bytes sent grow with the square of its length`,
+      });
+    }
+    return hits;
+  },
+};
+
 const VIEW_SUBSCRIBE =
   /\b(?:plugin\s*\.\s*(?:on|onPanel)|usePluginEvent|usePluginPanelEvent)\s*\(/g;
 const HIGH_FREQUENCY =
@@ -164,7 +236,7 @@ const renderOnEveryEvent: LintRule = {
   appliesTo: "view",
   message:
     "state is updated on every event of a high-frequency subscription, so each event schedules an update",
-  hint: "coalesce: useThrottledCallback for replaceable values (progress, latest state), usePluginEventSelector for a slice of a snapshot, a buffer flushed once per frame for appends (throttling drops them), and useVirtualList or useProgressiveList for long lists — or ask the worker to batch",
+  hint: "coalesce: useThrottledCallback for replaceable values (progress, latest state), usePluginEventSelector for a slice of a snapshot, useStreamBuffer (a buffer flushed once per frame for appends such as log lines — lossless, where throttling would drop them), useSyncedCollection for a keyed list the worker changes, and useVirtualList or useProgressiveList for long lists — or ask the worker to batch",
   check(file) {
     const hits: RuleHit[] = [];
     for (const m of file.masked.matchAll(VIEW_SUBSCRIBE)) {
@@ -213,6 +285,7 @@ export const PERF_RULES: LintRule[] = [
   undebouncedSubscription,
   subscriptionWithoutDispose,
   largeInlinePayload,
+  wholeStatePush,
   renderOnEveryEvent,
   bundledReact,
 ];

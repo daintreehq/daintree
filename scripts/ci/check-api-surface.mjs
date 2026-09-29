@@ -3,7 +3,7 @@
 //
 // The package is the public type surface third-party plugins compile against,
 // exposed through its entry points — `.`, `./react`, `./files`, `./data` and
-// `./testing` (each `dist/<entry>.d.ts`), plus the hand-written `./plugin-ui` declaration. Nothing else in CI notices when a code change alters
+// `./testing` (each `dist/<entry>.d.ts`), plus the hand-written `./plugin-ui` and `./view-globals` declarations. Nothing else in CI notices when a code change alters
 // that exported shape: only runtime contract tests are gated. This guard
 // snapshots the built declarations into git-tracked report files so any change
 // to the surface forces a reviewed, committed update.
@@ -62,6 +62,13 @@ const ENTRIES = [
     name: "./plugin-ui",
     dist: path.join(root, "packages/plugin-sdk/plugin-ui.d.ts"),
     snapshot: path.join(root, "packages/plugin-sdk/api-report/plugin-ui.d.ts"),
+  },
+  // Hand-written for the same reason: the ambient `window.electron.plugin`
+  // declaration for plugin views, shipped as-is.
+  {
+    name: "./view-globals",
+    dist: path.join(root, "packages/plugin-sdk/view-globals.d.ts"),
+    snapshot: path.join(root, "packages/plugin-sdk/api-report/view-globals.d.ts"),
   },
 ];
 
