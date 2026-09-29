@@ -4309,6 +4309,18 @@ describe("HelpSessionService", () => {
       }
     });
 
+    it("writes the note under never ask while the global setting is off (#12989)", async () => {
+      mockStoreGet.mockImplementation(storeWith({ daintreeConfirmations: "never-ask" }, false));
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      for (const file of ["CLAUDE.md", "AGENTS.md"]) {
+        const content = await fs.readFile(path.join(result.sessionPath, file), "utf-8");
+        expect(content.match(new RegExp(START, "g")) ?? []).toHaveLength(1);
+        expect(content).toContain("## Daintree Confirmations");
+      }
+    });
+
     it.each([
       ["the global setting is off", {}, false],
       ["the assistant is set to always ask", { daintreeConfirmations: "always-ask" }, true],

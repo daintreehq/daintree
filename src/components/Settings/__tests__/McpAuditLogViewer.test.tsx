@@ -40,7 +40,9 @@ describe("McpAuditLogViewer", () => {
       { ...dispatch("1", "worktree.delete"), authorization: "skip-preference" } as McpLogRecord,
       { ...dispatch("2", "worktree.list"), authorization: "native-grant" } as McpLogRecord,
     ]);
-    expect(screen.getAllByText("Confirmation skipped — Skip permission prompts")).toHaveLength(1);
+    expect(
+      screen.getAllByText("Confirmation skipped — Daintree confirmations setting")
+    ).toHaveLength(1);
   });
 
   it("offers a way out of a filter that matches nothing", () => {

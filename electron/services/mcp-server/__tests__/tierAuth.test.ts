@@ -1662,7 +1662,7 @@ describe("filterIntrospectionResultForSession", () => {
 
       // Mirrors the dispatch gate's skip preference (#12874): a help session
       // told its confirm-gated calls run straight away must not be told they wait.
-      it("clears requiresConfirmation under the skip preference, except for a per-resolved-target tool", () => {
+      it("clears requiresConfirmation under the skip preference, per-resolved-target tools included (#12989)", () => {
         const skipped = policyOf(
           lookup(makeEntry({ id: "worktree.list", danger: "confirm" }), {
             policySnapshot: snapshot({ confirmationsSkipped: true }),
@@ -1683,7 +1683,7 @@ describe("filterIntrospectionResultForSession", () => {
             policySnapshot: snapshot({ tier: "full", confirmationsSkipped: true }),
           })
         );
-        expect(fanOut.requiresConfirmation).toBe(true);
+        expect(fanOut.requiresConfirmation).toBe(false);
       });
 
       it("keeps requiresConfirmation set for a per-resolved-target tool (#12121)", () => {
@@ -1878,24 +1878,35 @@ describe("filterIntrospectionResultForSession", () => {
         expect(pane.confirmationMayEscalate).toBe(false);
       });
 
-      // The skip preference (#12874) covers only what a native grant could, and
-      // neither covers these gates: a declared-safe closeAll still asks, and a
-      // guarded close still reports that it may.
-      it("keeps the assistant's close gates under the skip preference", () => {
-        const closes = {
-          permittedActionIds: new Set([
-            ...permitted,
-            "terminal.close",
-            "terminal.closeMany",
-            "terminal.closeAll",
-          ]),
+      // The skip preference (#12989) waives the assistant's close gates too, so
+      // discovery says none of them asks — without moving the hash.
+      it("clears the assistant's close gates under the skip preference", () => {
+        const permittedIds = new Set([
+          ...permitted,
+          "terminal.close",
+          "terminal.closeMany",
+          "terminal.closeAll",
+        ]);
+        const skipping = {
+          permittedActionIds: permittedIds,
           policySnapshot: snapshot({ tier: "full", confirmationsSkipped: true }),
         };
+        const asking = {
+          permittedActionIds: permittedIds,
+          policySnapshot: snapshot({ tier: "full", confirmationsSkipped: false }),
+        };
         for (const id of ["terminal.close", "terminal.closeMany"]) {
-          expect(policyOf(lookup(makeEntry({ id }), closes)).confirmationMayEscalate).toBe(true);
+          const skipped = policyOf(lookup(makeEntry({ id }), skipping));
+          const asked = policyOf(lookup(makeEntry({ id }), asking));
+          expect(skipped.confirmationMayEscalate).toBe(false);
+          expect(asked.confirmationMayEscalate).toBe(true);
+          expect(skipped.hash).toBe(asked.hash);
         }
-        const closeAll = policyOf(lookup(makeEntry({ id: "terminal.closeAll" }), closes));
-        expect(closeAll.requiresConfirmation).toBe(true);
+        const closeAll = policyOf(lookup(makeEntry({ id: "terminal.closeAll" }), skipping));
+        expect(closeAll.requiresConfirmation).toBe(false);
+        expect(
+          policyOf(lookup(makeEntry({ id: "terminal.closeAll" }), asking)).requiresConfirmation
+        ).toBe(true);
       });
 
       it("never reports escalation for a target already declared confirm", () => {

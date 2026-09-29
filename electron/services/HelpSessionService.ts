@@ -17,7 +17,10 @@ import {
 } from "../../shared/config/agentRegistry.js";
 import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
 import type { HelpAssistantDaintreeConfirmations } from "../../shared/types/ipc/api.js";
-import { assistantSkipsDaintreeConfirmations } from "../../shared/utils/assistantDaintreeConfirmations.js";
+import {
+  assistantSkipsDaintreeConfirmations,
+  isHelpAssistantDaintreeConfirmations,
+} from "../../shared/utils/assistantDaintreeConfirmations.js";
 import {
   DEFAULT_HELP_ASSISTANT_TIER,
   normalizeHelpAssistantTier,
@@ -2400,8 +2403,9 @@ export class HelpSessionService {
       // Opt-in only: anything but an explicit stored `true` keeps user MCP
       // servers and hooks out of the session.
       loadGlobalHooksAndServers: stored.loadGlobalHooksAndServers === true,
-      daintreeConfirmations:
-        stored.daintreeConfirmations === "always-ask" ? "always-ask" : "inherit",
+      daintreeConfirmations: isHelpAssistantDaintreeConfirmations(stored.daintreeConfirmations)
+        ? stored.daintreeConfirmations
+        : "inherit",
     };
   }
 

@@ -1368,8 +1368,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
     // A batch item whose reply the batch waits for: its notice holds on this.
     // `closeApproved` marks a close the batch already put to the user (#12881),
-    // so the item does not ask a second time. Never reachable from a client.
-    batchItem?: { noticeHold?: NoticeHold; closeApproved?: boolean }
+    // so the item does not ask a second time; `confirmationsSkipped` carries the
+    // batch's skip decision so every item runs under the one the batch read.
+    // Never reachable from a client.
+    batchItem?: { noticeHold?: NoticeHold; closeApproved?: boolean; confirmationsSkipped?: boolean }
   ): Promise<CallToolResult> => {
     const actionId = request.params.name;
     const { args, requestKey } = parseToolArguments(request.params.arguments);
@@ -1402,9 +1404,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const rendererOwnedOrigin = sessionStore.isRendererOwnedOrigin(sessionId);
     // Daintree's own assistant only (#12874): not the retired `assistant-pane`
     // origin, not agent panes, not api-key clients. Read live per call, and a
-    // failed read keeps the dialog.
+    // failed read keeps the dialog. A batch item inherits its batch's answer.
     let confirmationsSkipped = false;
-    if (sessionStore.getOrigin(sessionId) === "help") {
+    if (batchItem?.confirmationsSkipped !== undefined) {
+      confirmationsSkipped = batchItem.confirmationsSkipped;
+    } else if (sessionStore.getOrigin(sessionId) === "help") {
       try {
         confirmationsSkipped = readAssistantConfirmationsSkipped?.() === true;
       } catch (err) {
@@ -2633,7 +2637,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // The assistant closing a panel it did not open, or one whose agent is
         // mid-task (#12881). Asked before anything reaches the renderer, like
         // the ownership gate above; a batch has already asked about the whole
-        // set and marks its items so they do not ask again.
+        // set and marks its items so they do not ask again. Under the skip
+        // preference (#12989) it runs without asking, and is audited as such.
         if (
           rendererOwnedOrigin &&
           actionId === "terminal.close" &&
@@ -2645,18 +2650,23 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             terminalId.length > 0 &&
             (await closeNeedsApproval(terminalId))
           ) {
-            // Announced before the wait, so the strip shows the call awaiting
-            // the user rather than nothing at all until they answer.
-            emitToolCallStarted(true);
-            const asked = await askToClose([terminalId]);
-            if ("refusal" in asked) return asked.refusal;
-            if (!asked.approved.has(terminalId)) {
-              const message = `The user did not approve closing '${terminalId}'. Nothing was closed.`;
-              outcome = {
-                kind: "result",
-                value: { ok: false, error: { code: USER_REJECTED_CODE, message } },
-              };
-              return buildToolError({ code: USER_REJECTED_CODE, message });
+            if (confirmationsSkipped) {
+              dispatchAuthorization = "skip-preference";
+              dispatchConfirmed = true;
+            } else {
+              // Announced before the wait, so the strip shows the call awaiting
+              // the user rather than nothing at all until they answer.
+              emitToolCallStarted(true);
+              const asked = await askToClose([terminalId]);
+              if ("refusal" in asked) return asked.refusal;
+              if (!asked.approved.has(terminalId)) {
+                const message = `The user did not approve closing '${terminalId}'. Nothing was closed.`;
+                outcome = {
+                  kind: "result",
+                  value: { ok: false, error: { code: USER_REJECTED_CODE, message } },
+                };
+                return buildToolError({ code: USER_REJECTED_CODE, message });
+              }
             }
           }
         }
@@ -2780,15 +2790,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
           // One question for the whole set (#12881), asked before any item
           // runs: a decline closes nothing, and the items the user approved
-          // carry that approval so none of them asks again.
+          // carry that approval so none of them asks again. Under the skip
+          // preference (#12989) nothing is asked and the batch is audited as
+          // run under it; its items carry the same answer, never an approval.
           let closeApproved: ReadonlySet<string> | undefined;
           const closeIds =
             actionId === "terminal.closeMany" && rendererOwnedOrigin
               ? [...new Set((parsed.data as TerminalCloseManyArgs).terminalIds)]
               : [];
-          const closeNeedsAsking = (await Promise.all(closeIds.map(closeNeedsApproval))).some(
-            Boolean
-          );
+          const closeWouldAsk = (await Promise.all(closeIds.map(closeNeedsApproval))).some(Boolean);
+          if (closeWouldAsk && confirmationsSkipped) {
+            dispatchAuthorization = "skip-preference";
+            dispatchConfirmed = true;
+          }
+          const closeNeedsAsking = closeWouldAsk && !confirmationsSkipped;
           emitToolCallStarted(closeNeedsAsking);
           if (closeNeedsAsking) {
             const asked = await askToClose(closeIds);
@@ -2852,10 +2867,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               itemResult = await handleCallTool(
                 { method: "tools/call", params: { name: item.tool, arguments: item.args } },
                 extra,
-                noticeHold !== undefined || closeApproved !== undefined
+                noticeHold !== undefined || closeApproved !== undefined || confirmationsSkipped
                   ? {
                       ...(noticeHold !== undefined ? { noticeHold } : {}),
                       ...(closeApproved !== undefined ? { closeApproved: true } : {}),
+                      ...(confirmationsSkipped ? { confirmationsSkipped: true } : {}),
                     }
                   : undefined
               );
@@ -3410,19 +3426,19 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // danger: stamping it on a safe call would put "ran without asking" on
         // calls that never could ask. The danger is the per-dispatch one the
         // renderer gates on, so a recipe id or a terminal launch target counts.
-        // It covers what a native grant can cover — a tool whose dialog is where
-        // the user picks its targets still asks — and it wins over a native
-        // grant, which pre-authorizes only the D2 dialog: under the skip there
-        // is no typed-name gate either. The grant's use is still spent. The
-        // assistant's protected close (#12881) is asked above, whatever a grant
-        // says, so the preference never reaches it either.
+        // Unlike a native grant it covers the target-picking tools too
+        // (#12989): `closeAll`, `killAll` and `killBatch` run on every target
+        // the call named, and the bridge attests `killBatch`'s targets itself.
+        // It wins over a native grant, which pre-authorizes only the D2 dialog:
+        // under the skip there is no typed-name gate either. The grant's use is
+        // still spent. The assistant's protected close (#12881) settles the
+        // preference above, where it would otherwise ask.
         const confirmGated =
           entry !== undefined &&
           resolveEffectiveActionDanger(actionId, entry.danger, "agent", args) === "confirm";
         if (
           (dispatchAuthorization === undefined || dispatchAuthorization === "native-grant") &&
           confirmationsSkipped &&
-          isGenericNativeGrantEligible(actionId) &&
           confirmGated
         ) {
           dispatchAuthorization = "skip-preference";

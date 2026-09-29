@@ -344,7 +344,7 @@ function DispatchRow({
         {/* Never shown as "confirmed": nobody was asked (#12874). */}
         {record.authorization === "skip-preference" && (
           <div className="mt-0.5 text-text-secondary">
-            Confirmation skipped — Skip permission prompts
+            Confirmation skipped — Daintree confirmations setting
           </div>
         )}
       </div>

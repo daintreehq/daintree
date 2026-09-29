@@ -377,7 +377,7 @@ export interface StoreSchema {
      */
     modelIds?: Record<string, string>;
     /** Absent in stores written before #12874; read as `"inherit"`. */
-    daintreeConfirmations?: "inherit" | "always-ask";
+    daintreeConfirmations?: "inherit" | "always-ask" | "never-ask";
   };
   pendingErrors: ErrorRecord[];
   errorFingerprints: Record<string, { count: number; firstSeen: number; lastSeen: number }>;
