@@ -19,6 +19,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import type { BadgeFreshnessCause } from "@/components/Layout/FreshnessUtils";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
@@ -275,15 +276,19 @@ function CIStatusItem({ status }: { status: CIStatus }) {
 
 function LabelChip({ name, color }: ForgeLabel) {
   return (
-    <span
+    <Badge
+      size="xs"
+      tone="outline"
+      shape="pill"
       // Neutral chip, provider colour on a dot. A provider's label colour is an
       // arbitrary hex chosen against one background, so painting the name in it
       // guaranteed a label unreadable on either the light or the dark themes.
       // The dot keeps the colour recognisable; the name carries the meaning.
       // Same treatment as the forge dropdown's rows.
       // `inline-flex` + a clamped inner span: `break-words` acts on an element's
-      // own inline content, so the text node gets its own box to wrap in.
-      className="inline-flex items-center gap-1 max-w-full px-1.5 py-0.5 rounded-full border border-divider text-3xs font-medium text-text-secondary"
+      // own inline content, so the text node gets its own box to wrap in; the
+      // badge's `whitespace-nowrap` and `shrink-0` give way for the same reason.
+      className="max-w-full shrink whitespace-normal"
     >
       <span
         className="w-1.5 h-1.5 rounded-full shrink-0"
@@ -291,7 +296,7 @@ function LabelChip({ name, color }: ForgeLabel) {
         aria-hidden="true"
       />
       <span className="min-w-0 [overflow-wrap:anywhere] line-clamp-2">{name}</span>
-    </span>
+    </Badge>
   );
 }
 

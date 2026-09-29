@@ -21,6 +21,13 @@ export const FIELD_INPUT = cn(
 );
 
 /**
+ * Sizes an `Input` or `SelectTrigger` to {@link FIELD_INPUT}'s 32px box, so a
+ * primitive sits level with the fields beside it on the same label rail. The
+ * primitives' default density pads to 34px; `py-0` is what lets `h-8` hold.
+ */
+export const FIELD_CONTROL_SIZE = "h-8 px-2.5 py-0";
+
+/**
  * Combobox triggers are `Button`s. `ghost` is the base because it carries no
  * ring/shadow of its own to fight — the field chrome below is the whole look.
  */

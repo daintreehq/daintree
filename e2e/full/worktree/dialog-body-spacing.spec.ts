@@ -78,7 +78,7 @@ test.describe.serial("AppDialog body spacing", () => {
     await expect(setup).toBeVisible({ timeout: T_MEDIUM });
 
     // The reported symptom: the checkbox sat flush against the select above it.
-    const select = setup.locator("select#git-init-template");
+    const select = setup.locator("#git-init-template");
     const checkbox = setup.getByRole("checkbox", { name: "Create initial commit" });
     await expect(select).toBeVisible({ timeout: T_SHORT });
 

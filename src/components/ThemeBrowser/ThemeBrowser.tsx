@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Check, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
@@ -128,10 +130,11 @@ function ThemeRow({
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-medium text-text-primary truncate">{scheme.name}</span>
           {warnings.length > 0 && (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-3xs text-status-warning shrink-0">
-              <AlertTriangle className="h-2.5 w-2.5" />
-              {warnings.length}
-            </span>
+            <Badge size="xs" tone="warning" shape="pill">
+              <AlertTriangle aria-hidden="true" />
+              <span aria-hidden="true">{warnings.length}</span>
+              <span className="sr-only">{pluralize(warnings.length, "warning")}</span>
+            </Badge>
           )}
         </div>
         <div className="flex items-center gap-1.5 min-w-0">

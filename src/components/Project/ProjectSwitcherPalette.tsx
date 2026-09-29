@@ -34,6 +34,8 @@ import {
   PALETTE_SECTION_LABEL_CLASS,
 } from "@/components/ui/paletteRowStyles";
 import { KbdChord } from "@/components/ui/Kbd";
+import { Input } from "@/components/ui/input";
+import { inlineRenameFieldInputProps } from "@/components/Panel/inlineRenameField";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import {
   ContextMenu,
@@ -1618,6 +1620,14 @@ interface ScratchNameEditorProps {
   ariaLabel: string;
   onCommit: (name: string) => void;
   onCancel: () => void;
+  /**
+   * Blur commits a rename, like any inline rename. It never creates: making a
+   * workspace switches to it, which is too much to do because focus moved, so
+   * a create draft stays open for Enter or Escape instead.
+   */
+  commitOnBlur: boolean;
+  /** Enter and Escape unmount the field; focus goes back to the palette's input. */
+  onReturnFocus?: () => void;
   testId: string;
   /**
    * Spacing the editor inherits from whatever it stands in for. A rename editor
@@ -1640,17 +1650,21 @@ function ScratchNameEditor({
   ariaLabel,
   onCommit,
   onCancel,
+  commitOnBlur,
+  onReturnFocus,
   testId,
   className,
 }: ScratchNameEditorProps) {
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLInputElement>(null);
-  // Committing on blur would fire on Escape's focus restore too, resurrecting the
-  // cancelled edit; explicit Enter is the only commit path.
-  const committedRef = useRef(false);
+  // Set before Enter or Escape settles the edit, so the blur that follows —
+  // unmount, or the focus handed back to the palette — can't commit a cancelled
+  // edit or commit a second time.
+  const settledRef = useRef(false);
 
   useEscapeStack(true, () => {
-    if (committedRef.current) return;
+    if (settledRef.current) return;
+    settledRef.current = true;
     onCancel();
   });
 
@@ -1661,10 +1675,14 @@ function ScratchNameEditor({
     input.select();
   }, []);
 
-  const commit = useCallback(() => {
-    committedRef.current = true;
-    onCommit(value);
-  }, [onCommit, value]);
+  const settle = useCallback(
+    (outcome: () => void) => {
+      settledRef.current = true;
+      outcome();
+      if (onReturnFocus) requestAnimationFrame(onReturnFocus);
+    },
+    [onReturnFocus]
+  );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -1672,17 +1690,23 @@ function ScratchNameEditor({
       if (e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
-        commit();
+        settle(() => onCommit(value));
         return;
       }
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        onCancel();
+        settle(onCancel);
       }
     },
-    [commit, onCancel]
+    [settle, onCommit, onCancel, value]
   );
+
+  const handleBlur = useCallback(() => {
+    if (settledRef.current || !commitOnBlur) return;
+    settledRef.current = true;
+    onCommit(value);
+  }, [commitOnBlur, onCommit, value]);
 
   return (
     <div
@@ -1693,17 +1717,18 @@ function ScratchNameEditor({
     >
       <StatusSlotSpacer />
       <CommandTile icon={FileText} tone="manage" />
-      <input
+      <Input
         ref={inputRef}
+        {...inlineRenameFieldInputProps}
         data-scratch-name-input=""
         data-testid={testId}
-        type="text"
         value={value}
         aria-label={ariaLabel}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
-        onBlur={onCancel}
-        className="flex-1 min-w-0 bg-overlay-soft border border-overlay rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+        onBlur={handleBlur}
+        // The row's own 30px, so opening the editor doesn't shift the list.
+        className="min-w-0 flex-1 px-2 py-1"
       />
     </div>
   );
@@ -1727,6 +1752,7 @@ interface ScratchSectionProps {
   onDeleteAll?: () => void;
   onRename?: (scratchId: string, name: string) => void;
   onSaveAsProject?: (scratchId: string) => void;
+  onReturnFocus?: () => void;
 }
 
 /**
@@ -1754,6 +1780,7 @@ function ScratchSection({
   onDeleteAll,
   onRename,
   onSaveAsProject,
+  onReturnFocus,
 }: ScratchSectionProps) {
   const storedCollapsed = usePreferencesStore(
     (state) => state.projectSwitcherCollapsedBands[PROJECT_SWITCHER_SCRATCH_BAND_KEY]
@@ -1879,6 +1906,8 @@ function ScratchSection({
                       testId="scratch-rename-input"
                       onCommit={(name) => handleRenameCommit(scratch.id, originalName, name)}
                       onCancel={closeEditor}
+                      commitOnBlur
+                      onReturnFocus={onReturnFocus}
                     />
                   );
                 }
@@ -2020,6 +2049,8 @@ function ScratchSection({
                 className="mt-1"
                 onCommit={handleCreateCommit}
                 onCancel={closeEditor}
+                commitOnBlur={false}
+                onReturnFocus={onReturnFocus}
               />
             ) : (
               <button
@@ -2544,6 +2575,7 @@ function ProjectPaletteInner({
               onDeleteAll={onRequestDeleteAllScratches}
               onRename={onRenameScratch}
               onSaveAsProject={onSaveAsProject}
+              onReturnFocus={() => inputRef.current?.focus()}
             />
           </>
         )}

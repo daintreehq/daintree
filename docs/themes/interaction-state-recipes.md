@@ -330,7 +330,7 @@ Rest is a recessed well (`surface-canvas`, or the site's theme hook through `--s
 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
 ```
 
-**Usage:** Rest is `bg-surface-input` with a `border-border-input` edge — the 3:1 boundary a field needs when the edge is all that identifies it. On focus, the outline is added — do NOT change `border-width` or the border colour. Changing width causes layout jitter, and a 1px colour shift is too small an area to be the indicator (WCAG 2.4.13). `focus-visible`, never `focus`: Radix returns focus to a select trigger after a pick, and a ring lit by every mouse choice is noise. Used in `src/components/ui/input.tsx` (`inputVariants`), `src/components/ui/textarea.tsx` (`textareaVariants`) and `src/components/ui/select.tsx` (`selectTriggerVariants`); the settings wrappers and `Worktree/views/WorktreeFormLayout.tsx` compose those rather than restating the recipe. Search fields are the one family with their own treatment (see Search Field); `ProjectIdentityEditor`'s always-autofocused name field is a documented neutral exception for the same reason.
+**Usage:** Rest is `bg-surface-input` with a `border-border-input` edge — the 3:1 boundary a field needs when the edge is all that identifies it. On focus, the outline is added — do NOT change `border-width` or the border colour. Changing width causes layout jitter, and a 1px colour shift is too small an area to be the indicator (WCAG 2.4.13). `focus-visible`, never `focus`: Radix returns focus to a select trigger after a pick, and a ring lit by every mouse choice is noise. Used in `src/components/ui/input.tsx` (`inputVariants`), `src/components/ui/textarea.tsx` (`textareaVariants`) and `src/components/ui/select.tsx` (`selectTriggerVariants`); the settings wrappers and `Worktree/views/WorktreeFormLayout.tsx` compose those rather than restating the recipe. Search fields are the one family with their own treatment (see Search Field). `ProjectIdentityEditor`'s name field is the one neutral field: it is autofocused on every opening, so it keeps this outline's width and offset but paints it in `selection-outline` rather than accent (an `Input` with `focus-visible:outline-selection-outline`), never a border-colour shift. On a dialog form's label rail an `Input` or `SelectTrigger` takes `FIELD_CONTROL_SIZE` so it sits at `FIELD_INPUT`'s 32px.
 
 ---
 
@@ -430,13 +430,18 @@ isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft [.light_&]:hover:bg-ov
 
 ### Inline Rename Input
 
-**Role:** Inline text input for renaming (e.g., tab labels, file names). Neutral, non-accent border.
+**Role:** A name edited in place, where the label it replaces stood: a pane's tab and header title, a scratch workspace row in the project switcher, a custom agent preset's name.
 
 ```tsx
-"text-xs bg-overlay-soft border border-transparent text-text-primary focus:outline-hidden transition-colors";
+import {
+  inlineRenameFieldClassName,
+  inlineRenameFieldInputProps,
+} from "@/components/Panel/inlineRenameField";
 ```
 
-**Usage:** The base border is neutral — `border-transparent` over an `bg-overlay-soft` fill, swapping to `border-status-error` on validation error. Use `text-xs` for compact inline inputs. The current implementation in `TabButton.tsx` (rename input) has converged on this neutral pattern and no longer uses any accent-tinged border. Note it uses `focus:outline-hidden` rather than the accent focus outline — the overlay fill plus the surrounding tab chrome already signal the edit state.
+**Behaviour** is the same everywhere, and it is the part that drifts: select-all when editing starts, since a new name usually replaces the old one; Enter commits, unless it is confirming an IME composition (`e.nativeEvent.isComposing`); blur commits; Escape cancels; and after Enter or Escape unmounts the field, focus goes back to where the rename started (the tab, the rename button, the palette's input). Set a "settled" flag before Enter or Escape acts, so the blur that follows the unmount or the focus hand-back cannot commit a cancelled edit. Spread `inlineRenameFieldInputProps` (spellcheck, autocorrect and autocapitalise off) on every rename field. A field that creates something rather than renaming it (the scratch-workspace name) does not create on blur — creating switches to the new workspace, which is too much to do because focus moved — so its draft stays open for Enter or Escape.
+
+**Look** depends on what the field replaces. Pane chrome (`TabButton.tsx`, the panel header title) uses `inlineRenameFieldClassName`: chrome-free by ruling (#7926), a soft `overlay-soft` wash with a transparent edge, the edge and a deeper wash appearing on focus, no accent. A rename that stands in for a row or a settings label is an `Input` with the standard accent outline, sized to the row it replaces (the scratch row's 30px, the preset label's `compact` density).
 
 ---
 

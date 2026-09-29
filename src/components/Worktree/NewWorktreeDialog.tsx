@@ -3,13 +3,13 @@ import { Callout } from "@/components/ui/Callout";
 import { InlineError } from "@/components/ui/field";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
+import { KbdChord } from "@/components/ui/Kbd";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { FolderGit2, GitBranch } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
@@ -1449,11 +1449,9 @@ export function NewWorktreeDialog({
               data-testid="create-worktree-button"
             >
               {initialPR ? "Check out" : "Create worktree"}
-              <span
-                className="ml-1 rounded-xs bg-text-inverse/15 px-1 py-0.5 font-mono text-3xs leading-none text-text-inverse"
-                aria-hidden="true"
-              >
-                {isMac() ? "\u2318\u21A9" : "Ctrl\u21A9"}
+              {/* Hidden from the name: `aria-keyshortcuts` already says it. */}
+              <span className="inline-flex" aria-hidden="true">
+                <KbdChord shortcut="Cmd+Enter" density="compact" foreground="inverse" />
               </span>
             </Button>
           </div>

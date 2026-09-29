@@ -3,6 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo, createFixtureRepoWithRecipes } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
+import { chooseSelectOption } from "../../helpers/select";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 import { dismissBlockingPalette } from "../../helpers/overlays";
 
@@ -188,7 +189,7 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       const editor = getRecipeEditor(window);
       await expect(editor).toBeVisible({ timeout: T_MEDIUM });
       await editor.locator(SEL.recipeEditor.nameInput).fill("Typed Recipe");
-      await editor.locator(SEL.recipeEditor.terminalType(0)).selectOption("claude");
+      await chooseSelectOption(editor.locator(SEL.recipeEditor.terminalType(0)), "Claude");
 
       // Switching to an agent type reveals the agent-only initial-prompt field —
       // proof the type value drives the conditional terminal marshaling.
@@ -202,7 +203,7 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       await reopenManager.getByLabel("Edit recipe Typed Recipe").click({ force: true });
       const reopened = getRecipeEditor(window, "Edit recipe");
       await expect(reopened).toBeVisible({ timeout: T_MEDIUM });
-      await expect(reopened.locator(SEL.recipeEditor.terminalType(0))).toHaveValue("claude", {
+      await expect(reopened.locator(SEL.recipeEditor.terminalType(0))).toHaveText("Claude", {
         timeout: T_SHORT,
       });
 
@@ -222,7 +223,7 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       const editor = getRecipeEditor(window);
       await expect(editor).toBeVisible({ timeout: T_MEDIUM });
       await editor.locator(SEL.recipeEditor.nameInput).fill("Variable Preview Recipe");
-      await editor.locator(SEL.recipeEditor.terminalType(0)).selectOption("claude");
+      await chooseSelectOption(editor.locator(SEL.recipeEditor.terminalType(0)), "Claude");
 
       const promptField = editor.locator("#terminal-initial-prompt-0");
       await expect(promptField).toBeVisible({ timeout: T_SHORT });
