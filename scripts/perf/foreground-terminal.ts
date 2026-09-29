@@ -150,6 +150,8 @@ for (let round = 0; round < rounds; round++) {
   let ctx: AppContext | undefined;
   try {
     ctx = await launchApp({
+      // Measures visible foreground terminals, so the window must be on screen.
+      headed: true,
       enableWebgl: true,
       windowSize: protocol.window,
       screenshotScale: protocol.scale,

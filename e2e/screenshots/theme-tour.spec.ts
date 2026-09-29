@@ -778,6 +778,7 @@ test("theme tour — interactive", async () => {
     const fakeBinDir = installFakeAgent(repo.dir);
     ctx = await launchApp({
       userDataDir,
+      headed: true,
       windowSize: { width: 1680, height: 1050 },
       env: fakeAgentEnv(fakeBinDir),
       extraArgs: ["--disable-gpu", "--in-process-gpu", "--disable-breakpad", "--noerrdialogs"],

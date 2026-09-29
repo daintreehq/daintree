@@ -23,6 +23,16 @@ npx playwright test e2e/full/terminal/core-terminal-search.spec.ts  # Single fil
 PWDEBUG=1 npx playwright test --project=core                         # Debug mode
 ```
 
+### Background windows
+
+Local macOS runs are invisible by default. Every app window is mapped but transparent and click-through, the app can never be activated (so it has no Dock or Cmd-Tab presence and never takes the menu bar), and it never takes OS focus, so a suite can run while you keep working. Focus is virtual inside the app: the calls that focus a window headed (`show()`, `focus()`, `restore()`, `webContents.focus()`) record it as focused, the ones that take focus away (`blur()`, `hide()`, `minimize()`, close) hand it to another visible window, and `isFocused()`/`getFocusedWindow()` read that record, so focus-gated main-process paths behave as they do headed. The main-process side lives in `electron/setup/e2eBackgroundWindows.ts`, behind `--daintree-e2e-background-windows`.
+
+The first match decides whether a launch is headed: CI or a non-macOS platform (always headed — Linux ignores window opacity, and Windows lets an invisible window take keyboard focus); an explicit `launchApp({ headed })`; `DAINTREE_E2E_HEADED=1` or any `PWDEBUG`; Playwright's `--headed`/`--debug`. Otherwise the launch runs in the background. A spec a human has to watch, or one that measures on-screen behaviour, passes `headed: true`, as the interactive theme tour and `scripts/perf/foreground-terminal.ts` do.
+
+```bash
+npx playwright test --project=core --headed                          # Watch the run
+```
+
 ## Test Suites
 
 Tests are split into twelve Playwright projects:
