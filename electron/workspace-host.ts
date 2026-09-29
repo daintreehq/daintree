@@ -71,6 +71,7 @@ const worktreePorts: MessagePort[] = [];
 // Event types delivered directly to renderers via MessagePort
 const DIRECT_RENDERER_EVENTS = new Set([
   "worktree-update",
+  "worktree-tick",
   "worktree-removed",
   // Host-originated active-worktree changes — fan out direct so the
   // per-view `WorktreeStoreContext` listener (`worktree-activated`) fires in
@@ -321,6 +322,7 @@ async function handleWorktreePortRequest(
 function attachWorktreePort(newPort: MessagePort): void {
   newPort.start();
   worktreePorts.push(newPort);
+  workspaceService.resetEmitGate();
 
   newPort.on("message", (rawMsg: any) => {
     const raw =
@@ -399,8 +401,9 @@ const idleHeapCompactTimer = setInterval(() => {
 idleHeapCompactTimer.unref?.();
 
 // Helper to send events to Main process (and directly to renderers for spontaneous events)
-function sendEvent(event: WorkspaceHostEvent): void {
+function sendEvent(event: WorkspaceHostEvent): boolean {
   idleHeapCompactor.noteActivity();
+  let delivered = true;
   try {
     port.postMessage(event);
   } catch (error) {
@@ -418,6 +421,7 @@ function sendEvent(event: WorkspaceHostEvent): void {
         `[WorkspaceHost] Failed to sanitize event, sending error event instead:`,
         formatErrorMessage(sanitizeError, "Failed to sanitize workspace event")
       );
+      delivered = false;
       port.postMessage({
         type: "error",
         error: `Serialization failed for event type "${(event as any).type}"`,
@@ -431,6 +435,7 @@ function sendEvent(event: WorkspaceHostEvent): void {
       sendToWorktreePorts(event);
     }
   }
+  return delivered;
 }
 
 // Create singleton instance

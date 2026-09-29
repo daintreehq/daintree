@@ -1163,15 +1163,24 @@ export function ReviewHubContent({
     // Per-view worktree MessagePort — the same delivery the worktree store
     // consumes. The main-relayed events:push copy of worktree-update was
     // removed (this component was its only subscriber).
-    const unsubscribe = window.electron.worktreePort.onEvent("worktree-update", (data) => {
+    const unsubscribeUpdate = window.electron.worktreePort.onEvent("worktree-update", (data) => {
       const event = data as { worktree?: { path?: string } };
       if (event?.worktree?.path === worktreePath) {
         debouncedBgRefresh();
       }
     });
+    // A stamp-only update (a watcher flush, a forced status pass) arrives as a
+    // tick; it still means the files on disk may have moved.
+    const unsubscribeTick = window.electron.worktreePort.onEvent("worktree-tick", (data) => {
+      const event = data as { tick?: { path?: string } };
+      if (event?.tick?.path === worktreePath) {
+        debouncedBgRefresh();
+      }
+    });
 
     return () => {
-      unsubscribe();
+      unsubscribeUpdate();
+      unsubscribeTick();
       debouncedBgRefresh.cancel();
       debouncedBgRefreshRef.current = null;
     };

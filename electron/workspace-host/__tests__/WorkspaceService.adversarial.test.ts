@@ -269,7 +269,108 @@ describe("WorkspaceService adversarial", () => {
         firstStatusAt: [1_000, 2_000],
         monitorCount: 3,
       });
-      expect(sentEvents.filter((e) => e.type === "worktree-update")).toHaveLength(5);
+      // A repeat of an unchanged snapshot goes out as a tick, but still goes out.
+      expect(sentEvents.filter((e) => e.type === "worktree-update")).toHaveLength(3);
+      expect(sentEvents.filter((e) => e.type === "worktree-tick")).toHaveLength(2);
+    });
+  });
+
+  describe("worktree-tick emission", () => {
+    type Snap = Record<string, unknown>;
+    function fakeMonitor(initial: Snap) {
+      let current: Snap = { id: "wt-a", worktreeId: "wt-a", generation: 1, ...initial };
+      return {
+        set(next: Snap) {
+          current = { ...current, ...next };
+        },
+        getSnapshot: () => ({ ...current }),
+      };
+    }
+    function emit(monitor: ReturnType<typeof fakeMonitor>) {
+      (service as unknown as { emitUpdate: (m: unknown) => void })["emitUpdate"](monitor);
+    }
+    const types = () => sentEvents.map((e) => e.type);
+
+    it("sends a stamp-only change as a tick and a content change whole", () => {
+      const monitor = fakeMonitor({ modifiedCount: 1, lastGitStatusCheckedAt: 1 });
+      (service["monitors"] as Map<string, unknown>).set("wt-a", monitor);
+
+      emit(monitor);
+      monitor.set({ lastGitStatusCheckedAt: 2 });
+      emit(monitor);
+      monitor.set({ modifiedCount: 2 });
+      emit(monitor);
+
+      expect(types()).toEqual(["worktree-update", "worktree-tick", "worktree-update"]);
+      expect(sentEvents[1]).toMatchObject({
+        tick: { worktreeId: "wt-a", lastGitStatusCheckedAt: 2 },
+      });
+    });
+
+    it.each(["getSnapshotsSync", "getAllStates", "getMonitor"] as const)(
+      "sends the next emit whole after %s hands out content the last emit did not carry",
+      (method) => {
+        const monitor = fakeMonitor({ modifiedCount: 1 });
+        (service["monitors"] as Map<string, unknown>).set("wt-a", monitor);
+        emit(monitor);
+        monitor.set({ modifiedCount: 2 });
+
+        if (method === "getSnapshotsSync") service.getSnapshotsSync();
+        else if (method === "getAllStates") service.getAllStates("req");
+        else service.getMonitor("req", "wt-a");
+        sentEvents.length = 0;
+        emit(monitor);
+
+        expect(types()).toEqual(["worktree-update"]);
+      }
+    );
+
+    it("keeps ticking after a hydration that matched the last emit", () => {
+      const monitor = fakeMonitor({ modifiedCount: 1, lastGitStatusCheckedAt: 1 });
+      (service["monitors"] as Map<string, unknown>).set("wt-a", monitor);
+      emit(monitor);
+      monitor.set({ lastGitStatusCheckedAt: 2 });
+      service.getSnapshotsSync();
+      sentEvents.length = 0;
+      emit(monitor);
+
+      expect(types()).toEqual(["worktree-tick"]);
+    });
+
+    it("sends the next emit whole after a renderer port attaches", () => {
+      const monitor = fakeMonitor({ modifiedCount: 1 });
+      (service["monitors"] as Map<string, unknown>).set("wt-a", monitor);
+      emit(monitor);
+      service.resetEmitGate();
+      sentEvents.length = 0;
+      emit(monitor);
+
+      expect(types()).toEqual(["worktree-update"]);
+    });
+
+    it("sends the next emit whole when main never received the last full snapshot", async () => {
+      const workspaceModule = await import("../WorkspaceService.js");
+      let deliver = false;
+      const events: WorkspaceHostEvent[] = [];
+      const failing = new workspaceModule.WorkspaceService((event: WorkspaceHostEvent) => {
+        events.push(event);
+        return deliver;
+      });
+      const monitor = fakeMonitor({ modifiedCount: 1 });
+      (failing["monitors"] as Map<string, unknown>).set("wt-a", monitor);
+      const emitTo = () =>
+        (failing as unknown as { emitUpdate: (m: unknown) => void })["emitUpdate"](monitor);
+
+      emitTo();
+      deliver = true;
+      emitTo();
+      emitTo();
+
+      expect(events.map((e) => e.type)).toEqual([
+        "worktree-update",
+        "worktree-update",
+        "worktree-tick",
+      ]);
     });
   });
 

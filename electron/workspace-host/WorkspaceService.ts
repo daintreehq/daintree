@@ -111,6 +111,7 @@ import {
 } from "../utils/submoduleInventory.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
 import { StatusTimingRecorder } from "./StatusTimingRecorder.js";
+import { WorktreeEmitGate } from "./WorktreeEmitGate.js";
 import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
 import { withTimeout } from "../utils/withTimeout.js";
 import { sweepWorktreeAdminEntries } from "./worktreeAdminSweep.js";
@@ -449,6 +450,7 @@ function samePath(a: string, b: string): boolean {
 export class WorkspaceService {
   private monitors = new Map<string, WorktreeMonitor>();
   private readonly statusTiming = new StatusTimingRecorder();
+  private readonly emitGate = new WorktreeEmitGate();
   /** Tail of the sweep chain — load, refresh and delete never sweep at once. */
   private pruneSweepTail: Promise<void> = Promise.resolve();
   private pollQueue = new PQueue({
@@ -717,7 +719,9 @@ export class WorkspaceService {
     return this.statusTiming.isLoaded();
   }
 
-  constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {
+  // `sendEvent` returns false when the event could not be delivered to main at
+  // all; anything else counts as delivered.
+  constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => boolean | void) {
     this.fetchCoordinator = new RepoFetchCoordinator({
       onFetchSuccess: (worktreeId) => {
         // A successful fetch updated remote refs, so the next `rev-list` for
@@ -1522,6 +1526,7 @@ export class WorkspaceService {
     this.resourceActionExecutor.cleanupResourceActionState(id);
     monitor.stop();
     this.monitors.delete(id);
+    this.emitGate.forget(monitor);
     this.lruRemove(id);
     // Drop the agent-active flag with the monitor — a same-path worktree
     // recreated later must not inherit a stale elevation. The renderer's
@@ -2035,12 +2040,19 @@ export class WorkspaceService {
 
   private handleMonitorUpdate(monitor: WorktreeMonitor, snapshot: WorktreeSnapshot): void {
     this.statusTiming.noteEmit(monitor, snapshot.worktreeChanges != null);
-    this.sendEvent({
-      type: "worktree-update",
-      worktree: snapshot,
-      epoch: this.epoch,
-      seq: this.nextSeq(),
-    });
+    const tick = this.emitGate.next(monitor, snapshot);
+    if (tick) {
+      this.sendEvent({ type: "worktree-tick", tick, epoch: this.epoch, seq: this.nextSeq() });
+    } else {
+      const delivered = this.sendEvent({
+        type: "worktree-update",
+        worktree: snapshot,
+        epoch: this.epoch,
+        seq: this.nextSeq(),
+      });
+      // Main never saw this snapshot, so it cannot be the base for a tick.
+      if (delivered === false) this.emitGate.forget(monitor);
+    }
     events.emit("sys:worktree:update", snapshot);
   }
 
@@ -2757,7 +2769,9 @@ export class WorkspaceService {
   getAllStates(requestId: string): void {
     const states: WorktreeSnapshot[] = [];
     for (const monitor of this.monitors.values()) {
-      states.push(monitor.getSnapshot());
+      const snapshot = monitor.getSnapshot();
+      this.emitGate.noteOutOfBand(monitor, snapshot);
+      states.push(snapshot);
     }
     this.sendEvent({
       type: "all-states",
@@ -2775,10 +2789,17 @@ export class WorkspaceService {
     });
   }
 
+  /** See {@link WorktreeEmitGate.reset}. */
+  resetEmitGate(): void {
+    this.emitGate.reset();
+  }
+
   getSnapshotsSync(): WorktreeSnapshot[] {
     const states: WorktreeSnapshot[] = [];
     for (const monitor of this.monitors.values()) {
-      states.push(monitor.getSnapshot());
+      const snapshot = monitor.getSnapshot();
+      this.emitGate.noteOutOfBand(monitor, snapshot);
+      states.push(snapshot);
     }
     return states;
   }
@@ -2802,11 +2823,9 @@ export class WorkspaceService {
       return;
     }
 
-    this.sendEvent({
-      type: "monitor",
-      requestId,
-      state: monitor.getSnapshot(),
-    });
+    const snapshot = monitor.getSnapshot();
+    this.emitGate.noteOutOfBand(monitor, snapshot);
+    this.sendEvent({ type: "monitor", requestId, state: snapshot });
   }
 
   setActiveWorktree(
