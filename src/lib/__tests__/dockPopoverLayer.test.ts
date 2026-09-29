@@ -28,12 +28,14 @@ describe("dockPopoverLayer", () => {
 
   it("ignores a second release of the same registration", () => {
     const releaseA = registerDockPopoverLayer();
-    registerDockPopoverLayer();
+    const releaseB = registerDockPopoverLayer();
 
     releaseA();
     releaseA();
-
     expect(getDockPopoverOpen()).toBe(true);
+
+    releaseB();
+    expect(getDockPopoverOpen()).toBe(false);
   });
 });
 
@@ -67,5 +69,6 @@ describe("useDockPopoverLayer", () => {
 
     expect(getDockPopoverOpen()).toBe(true);
     release();
+    expect(getDockPopoverOpen()).toBe(false);
   });
 });

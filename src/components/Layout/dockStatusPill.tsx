@@ -244,10 +244,10 @@ interface DockPopoverListProps {
  * below when macOS hides the scrollbar.
  *
  * Also the popover's registration with the dialog layer (#13081): the list is
- * mounted exactly while the popover paints — through its exit animation, and
- * never after Trash empties under an open popover — so a dialog opened from a
- * row, or arriving from anywhere else, clears it. A layout effect so an
- * already-open dialog is re-tiered before the popover's first paint.
+ * mounted exactly while the popover content is, which `isOpen` is not — Trash
+ * can empty and unmount its content under a popover still marked open — so a
+ * dialog opened from a row, or arriving from anywhere else, clears it. A layout
+ * effect so an already-open dialog is re-tiered before the popover's first paint.
  */
 export const DockPopoverList = forwardRef<HTMLDivElement, DockPopoverListProps>(
   function DockPopoverList({ children, onFocusCapture }, forwardedRef) {

@@ -161,12 +161,25 @@ describe("useDockPopoverLayerSync", () => {
 
   it("leaves a status-pill popover's signal up when the docked one closes", () => {
     renderHook(() => useDockPopoverLayerSync());
-    registerDockPopoverLayer();
+    const releasePill = registerDockPopoverLayer();
 
     act(() => {
       usePanelStore.setState({ activeDockTerminalId: null });
     });
 
     expect(getDockPopoverOpen()).toBe(true);
+    releasePill();
+    expect(getDockPopoverOpen()).toBe(false);
+  });
+
+  it("leaves a status-pill popover's signal up when the view's publisher unmounts", () => {
+    const { unmount } = renderHook(() => useDockPopoverLayerSync());
+    const releasePill = registerDockPopoverLayer();
+
+    unmount();
+
+    expect(getDockPopoverOpen()).toBe(true);
+    releasePill();
+    expect(getDockPopoverOpen()).toBe(false);
   });
 });

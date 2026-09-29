@@ -241,14 +241,15 @@ describe("DockPopoverList dialog-layer registration", () => {
     expect(getDockPopoverOpen()).toBe(false);
   });
 
-  it("releases only its own registration", () => {
+  it("holds its registration independently of another popover's", () => {
     // The docked panel's popover can be up at the same time.
     const releaseDock = registerDockPopoverLayer();
     const { unmount } = render(<DockPopoverList>row</DockPopoverList>);
 
-    unmount();
-
-    expect(getDockPopoverOpen()).toBe(true);
     releaseDock();
+    expect(getDockPopoverOpen()).toBe(true);
+
+    unmount();
+    expect(getDockPopoverOpen()).toBe(false);
   });
 });

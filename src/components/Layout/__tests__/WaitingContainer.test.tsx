@@ -127,6 +127,13 @@ vi.mock("@/components/ui/popover", () => ({
   },
 }));
 
+const markEscapeYieldedMock = vi.fn();
+
+vi.mock("@/lib/dialogEscapeBackstop", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/dialogEscapeBackstop")>()),
+  markEscapeYieldedToDialog: (event: unknown) => markEscapeYieldedMock(event),
+}));
+
 vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: ({
     isOpen,
@@ -197,6 +204,7 @@ function makeGroup(overrides: Partial<TabGroup> = {}): TabGroup {
 }
 
 beforeEach(() => {
+  markEscapeYieldedMock.mockReset();
   activateTerminalMock.mockReset();
   pingTerminalMock.mockReset();
   removePanelMock.mockReset();
@@ -709,6 +717,7 @@ describe("WaitingContainer", () => {
       popoverHandlers.onInteractOutside?.({ preventDefault });
       popoverHandlers.onEscapeKeyDown?.({ preventDefault });
       expect(preventDefault).not.toHaveBeenCalled();
+      expect(markEscapeYieldedMock).not.toHaveBeenCalled();
     });
 
     it("prevents dismiss when the kill confirm dialog is open", () => {
@@ -727,6 +736,8 @@ describe("WaitingContainer", () => {
       expect(pointer.preventDefault).toHaveBeenCalledTimes(1);
       expect(interact.preventDefault).toHaveBeenCalledTimes(1);
       expect(escape.preventDefault).toHaveBeenCalledTimes(1);
+      // Handed on to the confirm's backstop, or Escape closes nothing (#13081).
+      expect(markEscapeYieldedMock).toHaveBeenCalledWith(escape);
     });
   });
 });

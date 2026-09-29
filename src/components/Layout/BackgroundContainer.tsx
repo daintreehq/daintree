@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useExitLaggedCount } from "@/hooks/useExitLaggedCount";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { markEscapeYieldedToDialog } from "@/lib/dialogEscapeBackstop";
 import { cn } from "@/lib/utils";
 import { BellDot } from "@/components/icons";
 import { usePanelStore } from "@/store";
@@ -334,7 +335,12 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
             if (killConfirmId !== null) e.preventDefault();
           }}
           onEscapeKeyDown={(e) => {
-            if (killConfirmId !== null) e.preventDefault();
+            if (killConfirmId === null) return;
+            // The confirm above owns Escape. Without the yield, AppDialog's
+            // backstop sees this popover open and stands down too, and the
+            // keypress closes nothing.
+            e.preventDefault();
+            markEscapeYieldedToDialog(e);
           }}
         >
           <div className="flex flex-col">

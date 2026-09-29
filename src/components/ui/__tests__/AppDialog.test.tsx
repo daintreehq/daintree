@@ -1657,6 +1657,22 @@ describe("AppDialog layering over a dock popover", () => {
     expect(tierOf(confirm)).toBe(modal);
   });
 
+  it.each([
+    ["before", true],
+    ["after", false],
+  ])("clears a list mounted in the same commit, %s the dialog", (_order, listFirst) => {
+    const nested = renderDialogAt("nested");
+    const list = <DockPopoverList key="list">row</DockPopoverList>;
+    const dialog = (
+      <AppDialog key="dialog" isOpen onClose={() => {}}>
+        <span>body</span>
+      </AppDialog>
+    );
+    render(<>{listFirst ? [list, dialog] : [dialog, list]}</>);
+
+    expect(tierOf(screen.getByRole("dialog"))).toBe(nested);
+  });
+
   it("drops back once the popover closes", () => {
     const hide = showPopover();
     const promoted = renderDialogAt();
