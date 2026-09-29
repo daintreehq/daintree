@@ -2,6 +2,7 @@ import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
 import type { LoadedPluginInfo } from "@shared/types/plugin";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ChoiceCard } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { categoryIconFor, PluginIconTile } from "./pluginIcons";
 import { pluginLabel } from "./PluginDetailPane";
@@ -20,15 +21,7 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
   // pane shows on open.
   const signal = pluginSignalFor(plugin);
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={cn(
-        "flex items-start gap-3 p-4 text-left rounded-[var(--radius-lg)] border border-border-default bg-overlay-subtle transition-colors",
-        "hover:bg-overlay-soft hover:border-border-interactive",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-      )}
-    >
+    <ChoiceCard onClick={onSelect} className="items-start gap-3 p-4">
       <PluginIconTile
         manifest={plugin.manifest}
         size="md"
@@ -59,7 +52,7 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
           blurb && <span className="mt-1 text-xs line-clamp-2 text-text-secondary">{blurb}</span>
         )}
       </span>
-    </button>
+    </ChoiceCard>
   );
 }
 
