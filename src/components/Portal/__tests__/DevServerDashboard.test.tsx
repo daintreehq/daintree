@@ -108,20 +108,24 @@ describe("DevServerDashboard", () => {
     expect(screen.getByText("feature-foo")).toBeTruthy();
   });
 
-  it("renders a running server's label and port, keeping routine output to the tooltip", () => {
+  it("renders a running server's label and port, keeping routine output to the tooltip", async () => {
     mockSessions([session({ url: "http://localhost:4321", lastOutput: "ready in 200ms" })]);
     const { container } = render(<DevServerDashboard />);
     expect(screen.getByText("feature-foo")).toBeTruthy();
     expect(screen.getByText(":4321")).toBeTruthy();
     expect(screen.queryByText("ready in 200ms")).toBeNull();
-    // On the text rather than the row, so the action buttons don't inherit it beside their
-    // own tooltips.
+    // Through the app's tooltip, never a native title.
     const row = container.querySelector("li")!;
     expect(row.hasAttribute("title")).toBe(false);
-    const titled = row.querySelectorAll("[title]");
-    expect(titled).toHaveLength(1);
-    expect(titled[0]!.getAttribute("title")).toBe("ready in 200ms");
-    expect(titled[0]!.querySelector("button")).toBeNull();
+    expect(row.querySelectorAll("[title]")).toHaveLength(0);
+    // On the status text rather than the row, so the action buttons don't inherit it beside
+    // their own tooltips.
+    const trigger = screen.getByText(":4321").closest<HTMLElement>("[data-state]")!;
+    expect(trigger).toBeTruthy();
+    expect(row.contains(trigger)).toBe(true);
+    expect(trigger.querySelector("button")).toBeNull();
+    fireEvent.focus(trigger);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("ready in 200ms");
   });
 
   it("shows progress output while a server is starting", () => {

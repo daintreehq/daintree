@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
@@ -44,13 +45,13 @@ function QuarantinedPanelRow({ panel }: QuarantinedPanelRowProps) {
   return (
     <li className="flex items-start justify-between gap-3 py-1.5">
       <div className="min-w-0 flex-1">
-        <p className="truncate text-text-primary" title={displayTitle}>
-          {displayTitle}
-        </p>
+        <TruncatedTooltip content={displayTitle}>
+          <p className="truncate text-text-primary">{displayTitle}</p>
+        </TruncatedTooltip>
         {subtitle && (
-          <p className="truncate text-3xs text-text-secondary" title={subtitle}>
-            {subtitle}
-          </p>
+          <TruncatedTooltip content={subtitle}>
+            <p className="truncate text-3xs text-text-secondary">{subtitle}</p>
+          </TruncatedTooltip>
         )}
       </div>
       {state === "idle" && (

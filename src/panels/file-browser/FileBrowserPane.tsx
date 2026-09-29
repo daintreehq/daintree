@@ -1267,12 +1267,16 @@ export function FileBrowserPane({
                   </TooltipContent>
                 </Tooltip>
               ) : (
-                <span
-                  className="min-w-0 flex-1 truncate text-2xs text-text-secondary"
-                  title={rootHoverPath}
-                >
-                  {rootPath || (basePath ? basename(basePath) : "")}
-                </span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary">
+                      {rootPath || (basePath ? basename(basePath) : "")}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="break-words">
+                    {rootHoverPath}
+                  </TooltipContent>
+                </Tooltip>
               )}
               {rootPath !== "" && (
                 <FileViewerToolbar.IconButton label="Up one level" onClick={handleUpOneLevel}>

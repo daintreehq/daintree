@@ -1,4 +1,5 @@
 import type { InputHTMLAttributes, ReactNode, Ref } from "react";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { FolderOpen } from "lucide-react";
 import { basename, normalize } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
@@ -80,39 +81,40 @@ export function DirectoryPickerField({
 }) {
   return (
     <div className={COMPOUND_FIELD}>
-      <input
-        id={id}
-        type="text"
-        value={value}
-        readOnly
-        aria-readonly="true"
-        placeholder={placeholder}
-        disabled={disabled}
-        title={value || undefined}
-        onClick={onBrowse}
-        onKeyDown={(e) => {
-          if (e.key === " ") {
-            e.preventDefault();
-            onBrowse();
-            return;
-          }
-          // The same Enter every form dialog answers: plain, never mid-composition.
-          if (!isEnterToSubmit(e)) return;
-          if (!value) {
-            e.preventDefault();
-            onBrowse();
-          } else if (onEnter) {
-            e.preventDefault();
-            onEnter();
-          }
-        }}
-        className={cn(
-          COMPOUND_INPUT,
-          "cursor-pointer truncate",
-          // A path reads as a path; the empty prompt reads as copy.
-          value && "font-mono text-xs"
-        )}
-      />
+      <TruncatedTooltip content={value} disabled={!value}>
+        <input
+          id={id}
+          type="text"
+          value={value}
+          readOnly
+          aria-readonly="true"
+          placeholder={placeholder}
+          disabled={disabled}
+          onClick={onBrowse}
+          onKeyDown={(e) => {
+            if (e.key === " ") {
+              e.preventDefault();
+              onBrowse();
+              return;
+            }
+            // The same Enter every form dialog answers: plain, never mid-composition.
+            if (!isEnterToSubmit(e)) return;
+            if (!value) {
+              e.preventDefault();
+              onBrowse();
+            } else if (onEnter) {
+              e.preventDefault();
+              onEnter();
+            }
+          }}
+          className={cn(
+            COMPOUND_INPUT,
+            "cursor-pointer truncate",
+            // A path reads as a path; the empty prompt reads as copy.
+            value && "font-mono text-xs"
+          )}
+        />
+      </TruncatedTooltip>
       <BrowseSlotButton onBrowse={onBrowse} disabled={disabled} label={browseLabel} />
     </div>
   );
@@ -215,15 +217,24 @@ export function PathCaption({ path, className }: { path: string; className?: str
       : "";
   const ancestors = displayPath.slice(0, displayPath.length - leaf.length - separator.length);
 
+  // The ancestors give way first and are clipped whenever anything is, so they
+  // carry the disclosure; a bare leaf carries it itself.
+  const leafSpan = (
+    <span className="max-w-full shrink-0 truncate">
+      {separator}
+      {leaf}
+    </span>
+  );
   return (
-    <p className={cn("flex text-xs font-mono text-text-secondary", className)} title={displayPath}>
-      <span className="min-w-0 truncate">{ancestors}</span>
+    <p className={cn("flex text-xs font-mono text-text-secondary", className)}>
+      {ancestors ? (
+        <TruncatedTooltip content={displayPath}>
+          <span className="min-w-0 truncate">{ancestors}</span>
+        </TruncatedTooltip>
+      ) : null}
       {/* Pinned against the ancestors, but still capped: a leaf wider than the
           dialog would otherwise overflow into a horizontal scroll. */}
-      <span className="max-w-full shrink-0 truncate">
-        {separator}
-        {leaf}
-      </span>
+      {ancestors ? leafSpan : <TruncatedTooltip content={displayPath}>{leafSpan}</TruncatedTooltip>}
     </p>
   );
 }

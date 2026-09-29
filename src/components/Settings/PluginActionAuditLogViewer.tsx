@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Check, Download, RefreshCw } from "lucide-react";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
@@ -259,12 +260,12 @@ export function PluginActionAuditLogViewer({
                     {record.argsPlaintext}
                   </div>
                 ) : record.argsHash ? (
-                  <div
-                    className="mt-0.5 font-mono text-text-secondary truncate"
-                    title={`sha256:${record.argsHash}`}
-                  >
-                    sha256:{record.argsHash.slice(0, 16)}…
-                  </div>
+                  // Always shortened, so the full digest is always on offer.
+                  <TruncatedTooltip content={`sha256:${record.argsHash}`} isTruncated>
+                    <div className="mt-0.5 font-mono text-text-secondary truncate">
+                      sha256:{record.argsHash.slice(0, 16)}…
+                    </div>
+                  </TruncatedTooltip>
                 ) : null}
               </div>
               <div className="text-right text-text-secondary whitespace-nowrap tabular-nums">

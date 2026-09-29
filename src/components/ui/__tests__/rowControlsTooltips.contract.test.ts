@@ -29,36 +29,6 @@ const GLYPH_TOGGLES: Record<string, string> = {
   "src/panels/file-browser/FileTreeView.tsx": "tree disclosure chevron",
 };
 
-/**
- * `title=` on truncating text that predates TruncatedTooltip. This list only
- * shrinks: convert a site and delete its line; never add one.
- */
-const TITLE_ON_TRUNCATE_BASELINE = new Set([
-  "plugins/builtin/sveltekit-builder/renderer/AgentComposer.tsx",
-  "plugins/builtin/sveltekit-builder/renderer/SelectionCard.tsx",
-  "plugins/builtin/sveltekit-builder/renderer/SelectionTrail.tsx",
-  "plugins/builtin/sveltekit-builder/renderer/SiteBuilderSurfaces.tsx",
-  "src/components/DevPreview/DiagnosticsPanel.tsx",
-  "src/components/FileViewer/FileEditorHintBar.tsx",
-  "src/components/HelpPanel/RecentCallsPopover.tsx",
-  "src/components/McpConfirmDialog.tsx",
-  "src/components/Portal/DevServerDashboard.tsx",
-  "src/components/Project/CloneRepoDialog.tsx",
-  "src/components/Project/ProjectResourceBadge.tsx",
-  "src/components/Project/projectDialogFields.tsx",
-  "src/components/Recovery/CrashRecoveryDialog.tsx",
-  "src/components/Recovery/SafeModeBanner.tsx",
-  "src/components/Settings/PluginActionAuditLogViewer.tsx",
-  "src/components/Terminal/ArtifactOverlay.tsx",
-  "src/components/Terminal/DiagnosticCopyButton.tsx",
-  "src/components/Terminal/RestoreRecoveryGate.tsx",
-  "src/components/Worktree/WorktreeCard/CommitInfoTooltip.tsx",
-  "src/components/Worktree/WorktreeCard/EnvironmentPopover.tsx",
-  "src/panels/file-browser/FileBrowserPane.tsx",
-  "src/panels/file-browser/FileTreeView.tsx",
-  "src/panels/file-browser/FolderListingView.tsx",
-]);
-
 /** Elements that already own the keyboard, so text inside must not add a tab stop. */
 const FOCUS_HOST_TAGS = new Set([
   "button",
@@ -176,7 +146,6 @@ describe("truncated text", () => {
   it("never discloses its full text through a native title", () => {
     const violations: string[] = [];
     for (const source of sources) {
-      if (TITLE_ON_TRUNCATE_BASELINE.has(rel(source))) continue;
       visitJsx(source, (opening) => {
         const tag = opening.tagName.getText();
         if (tag[0] !== tag[0]!.toLowerCase() || !attribute(opening, "title")) return;
@@ -185,23 +154,6 @@ describe("truncated text", () => {
       });
     }
     expect(violations).toEqual([]);
-  });
-
-  it("keeps the baseline honest: every listed file still has a site to convert", () => {
-    const stale: string[] = [];
-    for (const file of TITLE_ON_TRUNCATE_BASELINE) {
-      const source = sources.find((s) => rel(s) === file);
-      let found = false;
-      if (source) {
-        visitJsx(source, (opening) => {
-          const tag = opening.tagName.getText();
-          if (tag[0] !== tag[0]!.toLowerCase() || !attribute(opening, "title")) return;
-          if (/\btruncate\b/.test(attribute(opening, "className")?.getText() ?? "")) found = true;
-        });
-      }
-      if (!found) stale.push(file);
-    }
-    expect(stale).toEqual([]);
   });
 
   it("adds no tab stop inside a row that already owns the keyboard", () => {

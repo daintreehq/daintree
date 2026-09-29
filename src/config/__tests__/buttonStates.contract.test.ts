@@ -38,6 +38,8 @@ const ALLOWED: Record<string, string> = {
     "load-more keeps the 5s 'Still working…' copy the loading rules require",
   "plugins/builtin/github/renderer/components/GitHubResourceList.tsx:label":
     "load-more keeps the 5s 'Still working…' copy the loading rules require",
+  "plugins/builtin/github/renderer/components/GitHubResourceList.tsx:spinner":
+    "the same load-more: `loading` would hide the 'Still working…' copy it sits beside",
   "src/components/ui/toaster.tsx:spinner":
     "a toast action morphs spinner → check → success label in place; the sequence is the signal",
 };

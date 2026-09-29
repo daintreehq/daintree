@@ -1,8 +1,21 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  type RenderOptions,
+} from "@testing-library/react";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 import { DiagnosticCopyButton } from "../DiagnosticCopyButton";
+
+// The app root supplies the TooltipProvider.
+function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
+  return rtlRender(ui, { wrapper: TooltipProvider, ...options });
+}
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {

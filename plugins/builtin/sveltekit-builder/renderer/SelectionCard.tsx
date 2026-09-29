@@ -1,7 +1,9 @@
-import { Check, Copy, ExternalLink } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { actionService } from "@/services/ActionService";
-import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import type { SelectedNode } from "../shared/model.js";
@@ -38,7 +40,6 @@ export function SelectionIdentity({
 }) {
   const nodes = selection.selection.nodes;
   const node = nodes[0];
-  const { copy, copiedText } = useCopyWithFeedback({ announcement: "Path copied" });
   if (!node) return null;
   const definition = node.definition;
   // While the page is being asked for the element again, "select again" would
@@ -84,12 +85,11 @@ export function SelectionIdentity({
         <Badge size="sm" tone="neutral" className={component ? undefined : "font-mono"}>
           {component ? "Component" : (definition?.tagName ?? tagFromLabel(node))}
         </Badge>
-        <span
-          className="min-w-0 truncate text-sm font-medium text-text-primary"
-          title={component ?? node.label}
-        >
-          {component ?? displayLabel(node)}
-        </span>
+        <TruncatedTooltip content={component ?? node.label}>
+          <span className="min-w-0 truncate text-sm font-medium text-text-primary">
+            {component ?? displayLabel(node)}
+          </span>
+        </TruncatedTooltip>
       </div>
 
       {/* Row 2, 24px: where it lives — and two things to do about that. The
@@ -100,34 +100,36 @@ export function SelectionIdentity({
         {source && file ? (
           <>
             <SourcePath file={file} line={line} className="min-w-0 flex-1" />
-            <Button
-              variant="ghost"
+            <CopyButton
               size="icon-xs"
-              aria-label={copiedText === source ? "Path copied" : "Copy path"}
-              title="Copy path"
-              onClick={() => void copy(source)}
-            >
-              {copiedText === source ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-            </Button>
+              text={source}
+              aria-label="Copy path"
+              announcement="Path copied"
+              tooltipSide="bottom"
+            />
             {absolute ? (
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                // The glyph, not the hit box, sits on the column edge the
-                // fields below end at.
-                className="-mr-1"
-                aria-label="Open in editor"
-                title="Open in editor"
-                onClick={() =>
-                  void actionService.dispatch(
-                    "file.openInEditor",
-                    line === null ? { path: absolute } : { path: absolute, line },
-                    { source: "user" }
-                  )
-                }
-              >
-                <ExternalLink aria-hidden="true" />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    // The glyph, not the hit box, sits on the column edge the
+                    // fields below end at.
+                    className="-mr-1"
+                    aria-label="Open in editor"
+                    onClick={() =>
+                      void actionService.dispatch(
+                        "file.openInEditor",
+                        line === null ? { path: absolute } : { path: absolute, line },
+                        { source: "user" }
+                      )
+                    }
+                  >
+                    <ExternalLink aria-hidden="true" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Open in editor</TooltipContent>
+              </Tooltip>
             ) : null}
           </>
         ) : (
@@ -203,15 +205,20 @@ export function SourcePath({
   const dir = slash === -1 ? "" : file.slice(0, slash + 1);
   const name = slash === -1 ? file : file.slice(slash + 1);
   const full = `${file}${line === null ? "" : `:${line}`}`;
+  const shownDir = middleTruncatePath(dir, 40);
   return (
     <span
       className={cn(
         "flex min-w-0 items-baseline font-mono text-2xs text-text-secondary",
         className
       )}
-      title={full}
     >
-      {dir ? <span className="min-w-0 shrink truncate">{middleTruncatePath(dir, 40)}</span> : null}
+      {dir ? (
+        // Only the directories ever shorten, so they carry the disclosure.
+        <TruncatedTooltip content={full} isTruncated={shownDir !== dir || undefined}>
+          <span className="min-w-0 shrink truncate">{shownDir}</span>
+        </TruncatedTooltip>
+      ) : null}
       <span className="shrink-0">
         {name}
         {/* Same tone as the path: `text-muted` has no dark-theme floor and the

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import { ProgressBar } from "@/components/ui/ProgressBar";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { InlineError } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { KbdChord } from "@/components/ui/Kbd";
@@ -562,9 +563,9 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       <div className="space-y-2.5 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-3 py-3">
         <div className="space-y-1">
           <span className="text-xs font-medium text-text-secondary">Source</span>
-          <p className="truncate text-xs font-mono text-text-primary" title={normalizedUrl}>
-            {normalizedUrl}
-          </p>
+          <TruncatedTooltip content={normalizedUrl}>
+            <p className="truncate text-xs font-mono text-text-primary">{normalizedUrl}</p>
+          </TruncatedTooltip>
         </div>
         <div className="space-y-1">
           <span className="text-xs font-medium text-text-secondary">Destination</span>

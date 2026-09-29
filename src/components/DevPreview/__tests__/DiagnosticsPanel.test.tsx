@@ -2,19 +2,31 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import {
+  render as rtlRender,
+  screen,
+  fireEvent,
+  waitFor,
+  type RenderOptions,
+} from "@testing-library/react";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { DiagnosticsPanel, describeDiagnosticEvent, describeUpstream } from "../DiagnosticsPanel";
 import type {
   DevPreviewDiagnosticEvent,
   DevPreviewDiagnosticsResult,
 } from "@shared/types/ipc/devPreview";
 
-vi.mock("@/components/ui/tooltip", () => ({
-  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}));
+// The app root supplies the TooltipProvider.
+function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
+  return rtlRender(ui, { wrapper: TooltipProvider, ...options });
+}
+
+/** Makes every element report more content than it has room for. */
+function simulateOverflow() {
+  vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(400);
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(100);
+}
 
 const getDiagnosticsMock = vi.fn<() => Promise<DevPreviewDiagnosticsResult>>();
 
@@ -91,7 +103,8 @@ describe("DiagnosticsPanel", () => {
     expect(await screen.findByText("×7")).toBeTruthy();
   });
 
-  it("keeps long detail text reachable via the title attribute", async () => {
+  it("reveals long detail text in full in a tooltip when clipped", async () => {
+    simulateOverflow();
     const longUrl = `http://localhost:5173/${"a".repeat(150)}`;
     getDiagnosticsMock.mockResolvedValue(
       makeResult([{ type: "url-detected", at: 1000, seq: 0, generation: 1, url: longUrl }])
@@ -99,8 +112,13 @@ describe("DiagnosticsPanel", () => {
     render(<DiagnosticsPanel paneId="panel-1" projectId="project-1" status="running" />);
 
     const item = (await screen.findAllByRole("listitem"))[0]!;
-    const detail = item.querySelector(`[title="${longUrl}"]`);
+    expect(item.querySelectorAll("[title]")).toHaveLength(0);
+    const detail = Array.from(item.querySelectorAll<HTMLElement>("span")).find(
+      (el) => el.textContent === longUrl
+    );
     expect(detail).toBeTruthy();
+    fireEvent.focus(detail!);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(longUrl);
   });
 
   it("refetches when the dev-server status changes", async () => {

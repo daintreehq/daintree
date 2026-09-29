@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import { CrashRecoveryDialog } from "../CrashRecoveryDialog";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { PendingCrash, CrashRecoveryConfig } from "@shared/types/ipc";
 
 const notifyMock = vi.fn();
@@ -202,7 +203,9 @@ function setup(overrides?: {
       onResolve={onResolve}
       onUpdateConfig={onUpdateConfig}
       {...(overrides?.initialError !== undefined && { initialError: overrides.initialError })}
-    />
+    />,
+    // The app root supplies the TooltipProvider.
+    { wrapper: TooltipProvider }
   );
 
   return { onResolve, onUpdateConfig };

@@ -507,7 +507,7 @@ export function GitHubListItem({
                       // graphical control has to clear.
                       RESOURCE_RAIL_SLOT.menu.box,
                       "rounded-lg text-text-secondary",
-                      "hover:bg-overlay-medium hover:text-text-primary",
+                      "hover:bg-overlay-hover hover:text-text-primary",
                       "transition-[background-color,color] duration-150 ease-out",
                       "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                     )}

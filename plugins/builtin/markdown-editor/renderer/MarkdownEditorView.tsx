@@ -12,6 +12,7 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
@@ -470,7 +471,8 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
         onConfirm={handleSaveAs}
         hint={saveAsError ?? undefined}
       >
-        <input
+        <Input
+          density="compact"
           value={saveAsPath ?? ""}
           onChange={(event) => setSaveAsPath(event.target.value)}
           onKeyDown={(event) => {
@@ -479,7 +481,8 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
             void handleSaveAs();
           }}
           aria-label="New file path"
-          className="w-full rounded-md border border-border-default bg-surface-canvas px-2 py-1.5 font-mono text-xs text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+          invalid={saveAsError !== null}
+          className="font-mono"
           data-testid="markdown-editor-save-as-path"
         />
       </ConfirmDialog>

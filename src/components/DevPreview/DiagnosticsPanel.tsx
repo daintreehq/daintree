@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -203,9 +204,9 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
     <>
       <dt className="text-text-secondary">{label}</dt>
-      <dd className="min-w-0 truncate text-text-primary" title={value}>
-        {value}
-      </dd>
+      <TruncatedTooltip content={value}>
+        <dd className="min-w-0 truncate text-text-primary">{value}</dd>
+      </TruncatedTooltip>
     </>
   );
 }
@@ -349,12 +350,11 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
                           <span className={cn(COUNT_BADGE_CLASS, "ml-1")}>×{event.count}</span>
                         )}
                       </span>
-                      <span
-                        className="min-w-0 truncate font-mono text-text-secondary"
-                        title={detail}
-                      >
-                        {detail}
-                      </span>
+                      <TruncatedTooltip content={detail}>
+                        <span className="min-w-0 truncate font-mono text-text-secondary">
+                          {detail}
+                        </span>
+                      </TruncatedTooltip>
                     </li>
                   );
                 })}

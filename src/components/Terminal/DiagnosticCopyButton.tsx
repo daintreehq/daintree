@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { sanitizeErrorText } from "@/utils/errorText";
 
@@ -42,13 +43,14 @@ export function DiagnosticCopyButton({
 
   return (
     <div className={cn("mt-1 flex items-center gap-2 min-w-0", className)}>
-      <span
-        className="text-xs font-mono text-text-secondary truncate min-w-0"
-        title={payload}
-        data-testid="diagnostic-payload"
-      >
-        {payload}
-      </span>
+      <TruncatedTooltip content={payload}>
+        <span
+          className="text-xs font-mono text-text-secondary truncate min-w-0"
+          data-testid="diagnostic-payload"
+        >
+          {payload}
+        </span>
+      </TruncatedTooltip>
       <CopyButton
         label="Copy"
         aria-label="Copy diagnostics"

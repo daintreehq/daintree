@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { ChevronRight } from "lucide-react";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { Button } from "@/components/ui/button";
@@ -312,15 +313,18 @@ function RecentCallRow({ record, now }: { record: McpAuditRecord; now: number })
         />
         {/* Truncated at rest to keep the row one line; expanded, the full id
             wraps so the call can be told apart from its near-namesakes. */}
-        <span
-          title={expanded ? undefined : record.toolId}
-          className={cn(
-            "min-w-0 font-mono text-text-primary",
-            expanded ? "whitespace-normal [overflow-wrap:anywhere]" : "truncate"
-          )}
-        >
-          {record.toolId}
-        </span>
+        {/* Pointer-only: the row is the button, and expanding it is the
+            keyboard's way to the full id. */}
+        <TruncatedTooltip content={record.toolId} disabled={expanded} focusable={false}>
+          <span
+            className={cn(
+              "min-w-0 font-mono text-text-primary",
+              expanded ? "whitespace-normal [overflow-wrap:anywhere]" : "truncate"
+            )}
+          >
+            {record.toolId}
+          </span>
+        </TruncatedTooltip>
         {/* Recency, not duration — calls are almost always sub-100ms, so
             "when did this run" is the metric worth a column. */}
         <TimeAgo

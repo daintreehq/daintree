@@ -2617,6 +2617,9 @@ describe("BulkCreateWorktreeDialog — form layout and batch summary", () => {
     expect(checkbox.getAttribute("aria-label")).toBeNull();
     expect(checkbox.id).toBeTruthy();
     expect(railLabel("Assign to me").htmlFor).toBe(checkbox.id);
+    // The host Checkbox, as New Worktree draws the same setting, not a
+    // hand-rolled switch.
+    expect(checkbox.getAttribute("data-slot")).toBe("checkbox");
   });
 
   it("names the recipe trigger from the rail label", () => {
@@ -2639,7 +2642,7 @@ describe("BulkCreateWorktreeDialog — form layout and batch summary", () => {
 
     render(<BulkCreateWorktreeDialog {...issueProps} />);
 
-    const before = screen.getByRole("checkbox") as HTMLInputElement;
+    const before = screen.getByRole("checkbox") as HTMLButtonElement;
     // Still looking is not the same as found nothing: naming a failure here
     // would be wrong, and disabling would be too.
     expect(before.disabled).toBe(false);
@@ -2651,7 +2654,7 @@ describe("BulkCreateWorktreeDialog — form layout and batch summary", () => {
 
     // Same node, not a re-inserted row: identity arriving must populate the
     // row rather than add one and push everything below it down.
-    const after = screen.getByRole("checkbox") as HTMLInputElement;
+    const after = screen.getByRole("checkbox") as HTMLButtonElement;
     expect(after).toBe(before);
     expect(after.disabled).toBe(false);
     expect(screen.getByText("@octocat")).toBeTruthy();
@@ -2668,9 +2671,9 @@ describe("BulkCreateWorktreeDialog — form layout and batch summary", () => {
 
     // The run loop skips assignment without a login, so a checked box would
     // promise work that never happens.
-    const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
+    const checkbox = screen.getByRole("checkbox") as HTMLButtonElement;
     expect(checkbox.disabled).toBe(true);
-    expect(checkbox.checked).toBe(false);
+    expect(checkbox.getAttribute("aria-checked")).toBe("false");
     expect(screen.getByText("Account unavailable")).toBeTruthy();
   });
 
@@ -2683,9 +2686,9 @@ describe("BulkCreateWorktreeDialog — form layout and batch summary", () => {
       await Promise.resolve();
     });
 
-    const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
+    const checkbox = screen.getByRole("checkbox") as HTMLButtonElement;
     expect(checkbox.disabled).toBe(true);
-    expect(checkbox.checked).toBe(false);
+    expect(checkbox.getAttribute("aria-checked")).toBe("false");
     expect(screen.getByText("Account unavailable")).toBeTruthy();
   });
 
@@ -2698,9 +2701,9 @@ describe("BulkCreateWorktreeDialog — form layout and batch summary", () => {
       await Promise.resolve();
     });
 
-    const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
+    const checkbox = screen.getByRole("checkbox") as HTMLButtonElement;
     expect(checkbox.disabled).toBe(false);
-    expect(checkbox.checked).toBe(true);
+    expect(checkbox.getAttribute("aria-checked")).toBe("true");
 
     fireEvent.click(checkbox);
     expect(mockSetAssignWorktreeToSelf).toHaveBeenCalledWith(false);
@@ -2717,7 +2720,9 @@ describe("BulkCreateWorktreeDialog — form layout and batch summary", () => {
 
     const rows = within(screen.getByRole("list")).getAllByRole("listitem");
     expect(rows).toHaveLength(issueProps.selectedIssues.length);
-    expect(screen.getByText("Has worktree")).toBeTruthy();
+    const skip = screen.getByText("Has worktree");
+    expect(skip.getAttribute("data-slot")).toBe("badge");
+    expect(skip.getAttribute("data-tone")).toBe("warning");
   });
 
   it("keeps the summary, the list and the create button telling the same story", () => {

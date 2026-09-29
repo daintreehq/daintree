@@ -119,18 +119,12 @@ function DevServerRow({
         {/* The log line rides the status line only: on the row it would be inherited
             by the action buttons, and on the name it would sit over that name's own
             full-text reveal. */}
-        <span
-          className="flex min-w-0 items-baseline gap-1.5 text-xs text-text-secondary"
-          title={session.lastOutput}
-        >
-          <span className="shrink-0">{presentation.label}</span>
-          {port && <span className="shrink-0 tabular-nums">:{port}</span>}
-          {detail && (
-            <span className="min-w-0 truncate" title={detail}>
-              {detail}
-            </span>
-          )}
-        </span>
+        <StatusLine
+          label={presentation.label}
+          port={port}
+          detail={detail}
+          lastOutput={session.lastOutput}
+        />
       </div>
       <div className="flex items-center gap-0.5 flex-shrink-0">
         <Tooltip>
@@ -295,5 +289,48 @@ export function DevServerDashboard({ onHide }: { onHide?: () => void }) {
         </ul>
       )}
     </section>
+  );
+}
+
+/**
+ * A shown detail reveals itself when clipped. The last log line, whenever the
+ * row is not already showing it, is the tooltip on the status label: the whole
+ * story for a running server, and what preceded the error for a failed one.
+ */
+function StatusLine({
+  label,
+  port,
+  detail,
+  lastOutput,
+}: {
+  label: string;
+  port: number | string | null | undefined;
+  detail: string | undefined;
+  lastOutput: string | undefined;
+}) {
+  const status = (
+    <span className="flex shrink-0 items-baseline gap-1.5">
+      <span>{label}</span>
+      {port && <span className="tabular-nums">:{port}</span>}
+    </span>
+  );
+  return (
+    <span className="flex min-w-0 items-baseline gap-1.5 text-xs text-text-secondary">
+      {lastOutput && lastOutput !== detail ? (
+        <Tooltip>
+          <TooltipTrigger asChild>{status}</TooltipTrigger>
+          <TooltipContent side="bottom" align="start" className="break-words">
+            {lastOutput}
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        status
+      )}
+      {detail && (
+        <TruncatedTooltip content={detail}>
+          <span className="min-w-0 truncate">{detail}</span>
+        </TruncatedTooltip>
+      )}
+    </span>
   );
 }

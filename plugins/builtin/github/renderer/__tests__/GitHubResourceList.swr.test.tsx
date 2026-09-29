@@ -1,3 +1,4 @@
+import { UI_SPIN_CYCLE_MS } from "@/lib/animationUtils";
 /**
  * @vitest-environment jsdom
  */
@@ -2787,7 +2788,9 @@ describe("GitHubResourceList spinner gate (#6867)", () => {
 
     await vi.advanceTimersByTimeAsync(390);
 
-    const refreshIcon = screen.getByRole("button", { name: /^refresh/i }).querySelector("svg");
+    const refreshIcon = screen
+      .getByRole("button", { name: /^refresh/i })
+      .querySelector("svg")?.parentElement;
     expect(refreshIcon?.classList.contains("animate-spin")).toBe(false);
   });
 
@@ -2805,7 +2808,9 @@ describe("GitHubResourceList spinner gate (#6867)", () => {
 
     await vi.advanceTimersByTimeAsync(450);
 
-    const refreshIcon = screen.getByRole("button", { name: /^refresh/i }).querySelector("svg");
+    const refreshIcon = screen
+      .getByRole("button", { name: /^refresh/i })
+      .querySelector("svg")?.parentElement;
     expect(refreshIcon?.classList.contains("animate-spin")).toBe(true);
   });
 
@@ -2824,7 +2829,9 @@ describe("GitHubResourceList spinner gate (#6867)", () => {
     // Let the fetch settle well within the 400ms gate.
     await vi.advanceTimersByTimeAsync(50);
 
-    const refreshIcon = screen.getByRole("button", { name: /^refresh/i }).querySelector("svg");
+    const refreshIcon = screen
+      .getByRole("button", { name: /^refresh/i })
+      .querySelector("svg")?.parentElement;
     expect(refreshIcon?.classList.contains("animate-spin")).toBe(false);
   });
 
@@ -2863,12 +2870,12 @@ describe("GitHubResourceList spinner gate (#6867)", () => {
     // state and the grid's `aria-busy` flip are the acknowledgement, so a
     // refresh that resolves inside 400ms shows no spinner at all.
     await vi.advanceTimersByTimeAsync(350);
-    const refreshIconBefore = refreshButton.querySelector("svg");
+    const refreshIconBefore = refreshButton.querySelector("svg")?.parentElement;
     expect(refreshIconBefore?.classList.contains("animate-spin")).toBe(false);
 
     await vi.advanceTimersByTimeAsync(100);
     await waitFor(() => {
-      const icon = refreshButton.querySelector("svg");
+      const icon = refreshButton.querySelector("svg")?.parentElement;
       expect(icon?.classList.contains("animate-spin")).toBe(true);
     });
   });
@@ -2893,18 +2900,28 @@ describe("GitHubResourceList spinner gate (#6867)", () => {
 
     // Cross the 400ms gate so the spinner becomes visible.
     await vi.advanceTimersByTimeAsync(450);
-    const refreshIcon = screen.getByRole("button", { name: /^refresh/i }).querySelector("svg");
+    const refreshIcon = screen
+      .getByRole("button", { name: /^refresh/i })
+      .querySelector("svg")?.parentElement;
     expect(refreshIcon?.classList.contains("animate-spin")).toBe(true);
 
     // Resolve immediately — dwell timer kicks in for the remaining 500ms.
     resolveFetch(makeResponse([makeIssue(1)]));
     await vi.advanceTimersByTimeAsync(0);
-    const stillSpinning = screen.getByRole("button", { name: /^refresh/i }).querySelector("svg");
+    const stillSpinning = screen
+      .getByRole("button", { name: /^refresh/i })
+      .querySelector("svg")?.parentElement;
     expect(stillSpinning?.classList.contains("animate-spin")).toBe(true);
 
-    // After the full 500ms minimum dwell elapses, the spinner clears.
+    // After the full 500ms minimum dwell elapses, the spinner clears once the
+    // turn in progress completes (SpinningIcon never snaps back mid-rotation).
     await vi.advanceTimersByTimeAsync(550);
-    const finalIcon = screen.getByRole("button", { name: /^refresh/i }).querySelector("svg");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SPIN_CYCLE_MS);
+    });
+    const finalIcon = screen
+      .getByRole("button", { name: /^refresh/i })
+      .querySelector("svg")?.parentElement;
     expect(finalIcon?.classList.contains("animate-spin")).toBe(false);
   });
 });

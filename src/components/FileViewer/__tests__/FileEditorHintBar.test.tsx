@@ -1,20 +1,24 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  type RenderOptions,
+} from "@testing-library/react";
 import { readFileSync } from "fs";
 import path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FileEditorHintBar, type FileEditorHintBarProps } from "../FileEditorHintBar";
-import type { ReactNode } from "react";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
-// The app root supplies the TooltipProvider. The trigger renders its child
-// as-is; the content is dropped so tooltip text can't collide with queries.
-vi.mock("@/components/ui/tooltip", () => ({
-  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
-  TooltipContent: () => null,
-  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
-  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
-}));
+// The app root supplies the TooltipProvider. Tooltip content only mounts while
+// open, so it can't collide with queries.
+function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
+  return rtlRender(ui, { wrapper: TooltipProvider, ...options });
+}
 
 const BASE: FileEditorHintBarProps = {
   pluginName: "Markdown editor",
@@ -28,9 +32,11 @@ const BASE: FileEditorHintBarProps = {
 const bar = () => screen.getByTestId("file-editor-hint");
 const action = () => screen.getByTestId("file-editor-hint-action") as HTMLButtonElement;
 const dismiss = () => screen.getByTestId("file-editor-hint-dismiss") as HTMLButtonElement;
+/** The sentence: the row's one bare text span, beside the icon and the controls. */
+const messageEl = () => bar().querySelector<HTMLElement>(":scope > span")!;
 const messageOf = (props: Partial<FileEditorHintBarProps>) => {
   render(<FileEditorHintBar {...BASE} {...props} />);
-  const text = bar().querySelector("span[title]")!.textContent ?? "";
+  const text = messageEl().textContent ?? "";
   cleanup();
   return text;
 };
@@ -47,7 +53,10 @@ const source = readFileSync(
  */
 const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("FileEditorHintBar", () => {
   it("renders the offer as neutral chrome, never in a status colour", () => {
@@ -115,16 +124,21 @@ describe("FileEditorHintBar", () => {
     expect(dismiss().getAttribute("aria-label")).toBeTruthy();
   });
 
-  it("lets the message truncate and never the controls", () => {
+  it("lets the message truncate and never the controls", async () => {
     // The priority rule under width pressure: a clipped sentence still points
     // at the button, a clipped button is unusable. The full text stays
-    // recoverable through the title attribute.
+    // recoverable through the app's tooltip, never a native title.
+    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(400);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(100);
     render(<FileEditorHintBar {...BASE} />);
-    const message = bar().querySelector("span[title]") as HTMLElement;
+    const message = messageEl();
     expect(message.className).toMatch(/\bmin-w-0\b/);
     expect(message.className).toMatch(/\btruncate\b/);
-    expect(message.getAttribute("title")).toBe(message.textContent);
+    expect(message.textContent).toBeTruthy();
+    expect(message.hasAttribute("title")).toBe(false);
     expect(bar().className).not.toMatch(/\bflex-wrap\b/);
+    fireEvent.focus(message);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(message.textContent);
   });
 
   it("does not dress the failure in the edit affordance", () => {

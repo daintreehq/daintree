@@ -192,6 +192,22 @@ describe("CommitInfoTooltip", () => {
     expect(container.textContent).not.toMatch(/-by:/);
   });
 
+  it("names every co-author in a wrapping byline, since the card is the disclosure", () => {
+    render(
+      <CommitInfoTooltip
+        lastCommitTimestampMs={Date.now() - 60_000}
+        author={human}
+        commitMessage="Pair on the resolver"
+        commitBody={
+          "Co-authored-by: Sam Okafor <sam@x.dev>\nCo-authored-by: Ana Ruiz <ana@x.dev>\nCo-authored-by: Li Wei <li@x.dev>"
+        }
+      />
+    );
+    const byline = screen.getByText("with Sam Okafor, Ana Ruiz and Li Wei");
+    expect(byline.hasAttribute("title")).toBe(false);
+    expect(byline.className).not.toMatch(/\btruncate\b/);
+  });
+
   it("shows the subject before the author", () => {
     const { container } = render(
       <CommitInfoTooltip
