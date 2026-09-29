@@ -59,6 +59,7 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
+  stopContextMenuPropagation,
 } from "@/components/ui/context-menu";
 import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
@@ -158,7 +159,16 @@ function SortableTab({
   return (
     <ContextMenu modal={false} onOpenChange={setMenuOpen}>
       <Tooltip autoDismiss={false}>
-        <ContextMenuTrigger asChild disabled={isDragging}>
+        {/* The dock's own menu wraps the strip; the tab's replaces it, as the
+            "+" button's does, for a right-click and a touch long-press alike. */}
+        <ContextMenuTrigger
+          asChild
+          disabled={isDragging}
+          onContextMenu={stopContextMenuPropagation}
+          onPointerDown={(e) => {
+            if (e.pointerType !== "mouse") e.stopPropagation();
+          }}
+        >
           <TooltipTrigger asChild>
             <div
               ref={setNodeRef}
