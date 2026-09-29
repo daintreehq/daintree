@@ -3,7 +3,7 @@
 // the names in HOST_FACADE_REQUIRED_EXPORTS and the SDK declares their types in
 // packages/plugin-sdk/plugin-ui.d.ts. Nothing here may import app code
 // statically; the host components load through `fromKit`.
-import { isValidElement, type ComponentType } from "react";
+import { isValidElement, type ComponentType, type ReactNode } from "react";
 import type {
   PluginBadgeProps,
   PluginButtonProps,
@@ -11,35 +11,60 @@ import type {
   PluginCheckboxProps,
   PluginConfirmDialogProps,
   PluginCopyButtonProps,
+  PluginDataTableProps,
   PluginDialogProps,
   PluginDismissButtonProps,
   PluginDropdownMenuProps,
   PluginEmptyStateProps,
+  PluginFormFieldProps,
   PluginIconButtonProps,
   PluginIconProps,
   PluginInputProps,
   PluginKbdChordProps,
   PluginKbdProps,
+  PluginListRowProps,
+  PluginLogViewProps,
+  PluginPaneHeaderProps,
+  PluginPaneStateProps,
+  PluginProgressBarProps,
   PluginScrollShadowProps,
   PluginSearchFieldProps,
   PluginSegmentedControlProps,
   PluginSelectProps,
+  PluginSettingsActionsProps,
+  PluginSettingsGroupProps,
+  PluginSettingsRowProps,
+  PluginSettingsSectionProps,
+  PluginSeverityIconProps,
   PluginSkeletonBoneProps,
   PluginSkeletonProps,
   PluginSkeletonTextProps,
   PluginSpinnerProps,
   PluginSpinningIconProps,
+  PluginSwitchProps,
+  PluginTabsProps,
   PluginTextareaProps,
+  PluginToolbarButtonProps,
+  PluginToolbarProps,
   PluginTooltipProps,
   PluginTruncatedTooltipProps,
+  PluginVirtualListProps,
 } from "@shared/types/plugin-sdk-react";
 import { fromKit } from "./kit";
 
 export { Markdown } from "./Markdown";
 export { getDaintreeTheme, onDidChangeDaintreeTheme, useDaintreeTheme } from "./theme";
+export { useListNavigation } from "./listNavigation";
+export {
+  formatBytes,
+  formatCount,
+  formatDuration,
+  formatRelativeTime,
+  formatTimeAgo,
+} from "./format";
 
 /** The kit's contract version: additive minors, no prop removed within a major. */
-export const PLUGIN_UI_VERSION = "1.0.0";
+export const PLUGIN_UI_VERSION = "1.1.0";
 
 // Tooltips fall back to their trigger, so the control is there from the first
 // frame and only the hover card waits on the kit chunk.
@@ -130,6 +155,64 @@ export const ConfirmDialog: ComponentType<PluginConfirmDialogProps> = fromKit(
 );
 export const Icon: ComponentType<PluginIconProps> = fromKit("Icon", (kit) => kit.Icon);
 
+// 1.1: lists, pane chrome, forms, settings grammar and severity.
+
+// The list components are generic over the row type in the public types; the
+// runtime is the same adapter whatever the rows are.
+export const VirtualList: <T>(props: PluginVirtualListProps<T>) => ReactNode = fromKit(
+  "VirtualList",
+  (kit) => kit.VirtualList
+);
+export const DataTable: <T>(props: PluginDataTableProps<T>) => ReactNode = fromKit(
+  "DataTable",
+  (kit) => kit.DataTable
+);
+export const LogView: ComponentType<PluginLogViewProps> = fromKit("LogView", (kit) => kit.LogView);
+export const PaneHeader: ComponentType<PluginPaneHeaderProps> = fromKit(
+  "PaneHeader",
+  (kit) => kit.PaneHeader
+);
+export const Toolbar: ComponentType<PluginToolbarProps> = fromKit("Toolbar", (kit) => kit.Toolbar);
+export const ToolbarButton: ComponentType<PluginToolbarButtonProps> = fromKit(
+  "ToolbarButton",
+  (kit) => kit.ToolbarButton
+);
+export const PaneState: ComponentType<PluginPaneStateProps> = fromKit(
+  "PaneState",
+  (kit) => kit.PaneState
+);
+export const FormField: ComponentType<PluginFormFieldProps> = fromKit(
+  "FormField",
+  (kit) => kit.FormField
+);
+export const Switch: ComponentType<PluginSwitchProps> = fromKit("Switch", (kit) => kit.Switch);
+export const Tabs: ComponentType<PluginTabsProps> = fromKit("Tabs", (kit) => kit.Tabs);
+export const ProgressBar: ComponentType<PluginProgressBarProps> = fromKit(
+  "ProgressBar",
+  (kit) => kit.ProgressBar
+);
+export const SettingsSection: ComponentType<PluginSettingsSectionProps> = fromKit(
+  "SettingsSection",
+  (kit) => kit.SettingsSection
+);
+export const SettingsGroup: ComponentType<PluginSettingsGroupProps> = fromKit(
+  "SettingsGroup",
+  (kit) => kit.SettingsGroup
+);
+export const SettingsRow: ComponentType<PluginSettingsRowProps> = fromKit(
+  "SettingsRow",
+  (kit) => kit.SettingsRow
+);
+export const SettingsActions: ComponentType<PluginSettingsActionsProps> = fromKit(
+  "SettingsActions",
+  (kit) => kit.SettingsActions
+);
+export const ListRow: ComponentType<PluginListRowProps> = fromKit("ListRow", (kit) => kit.ListRow);
+export const SeverityIcon: ComponentType<PluginSeverityIconProps> = fromKit(
+  "SeverityIcon",
+  (kit) => kit.SeverityIcon
+);
+
 export type {
   PluginMarkdownProps as MarkdownProps,
   PluginButtonProps as ButtonProps,
@@ -168,4 +251,32 @@ export type {
   PluginDaintreeTheme as DaintreeTheme,
   PluginThemeTokenKey as ThemeTokenKey,
   PluginThemeTokens as ThemeTokens,
+  PluginVirtualListProps as VirtualListProps,
+  PluginDataTableProps as DataTableProps,
+  PluginDataTableColumn as DataTableColumn,
+  PluginDataTableSort as DataTableSort,
+  PluginLogViewProps as LogViewProps,
+  PluginLogEntry as LogEntry,
+  PluginPaneHeaderProps as PaneHeaderProps,
+  PluginToolbarProps as ToolbarProps,
+  PluginToolbarButtonProps as ToolbarButtonProps,
+  PluginPaneStateProps as PaneStateProps,
+  PluginFormFieldProps as FormFieldProps,
+  PluginFormFieldControlProps as FormFieldControlProps,
+  PluginSwitchProps as SwitchProps,
+  PluginTabsProps as TabsProps,
+  PluginTabItem as TabItem,
+  PluginProgressBarProps as ProgressBarProps,
+  PluginSettingsSectionProps as SettingsSectionProps,
+  PluginSettingsGroupProps as SettingsGroupProps,
+  PluginSettingsRowProps as SettingsRowProps,
+  PluginSettingsRowControlIds as SettingsRowControlIds,
+  PluginSettingsActionsProps as SettingsActionsProps,
+  PluginListRowProps as ListRowProps,
+  UseListNavigationOptions,
+  UseListNavigationResult,
+  PluginListNavigationContainerProps as ListNavigationContainerProps,
+  PluginListNavigationRowProps as ListNavigationRowProps,
+  PluginSeverity as Severity,
+  PluginSeverityIconProps as SeverityIconProps,
 } from "@shared/types/plugin-sdk-react";

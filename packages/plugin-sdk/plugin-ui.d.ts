@@ -20,7 +20,11 @@
 // effort and may be renamed in a minor version, with the change noted in the
 // release notes. Read an extended token with a fallback.
 //
-// Status vocabulary, shared by `Badge` `tone` and `Callout` `severity`:
+// Error banners are `Callout` with `severity="error"` and a Retry `action`;
+// a pane that failed as a whole is `PaneState` with `kind="error"`. There is
+// no separate banner component.
+//
+// Status vocabulary, shared by `Badge` `tone`, `Callout` `severity` and `SeverityIcon`:
 // `error` ≡ `danger` in colour (the `status-error` class is an alias of the
 // `status-danger` theme token), plus `warning`, `success`, `info` and `neutral`. A Badge renders `error` and
 // `danger` identically; a Callout keeps a separate caution glyph for `danger`.
@@ -31,7 +35,7 @@
 // bodies, menus, select lists, dialogs) take no `className`: they render
 // outside the view's style root, where the view's classes do not apply.
 declare module "@daintreehq/plugin-ui" {
-  import type { ComponentType } from "react";
+  import type { ComponentType, ReactNode } from "react";
   import type {
     PluginBadgeProps,
     PluginButtonProps,
@@ -40,19 +44,33 @@ declare module "@daintreehq/plugin-ui" {
     PluginConfirmDialogProps,
     PluginCopyButtonProps,
     PluginDaintreeTheme,
+    PluginDataTableColumn,
+    PluginDataTableProps,
+    PluginDataTableRowKey,
+    PluginDataTableSort,
     PluginDialogAction,
     PluginDialogProps,
     PluginDismissButtonProps,
     PluginDropdownMenuEntry,
     PluginDropdownMenuProps,
     PluginEmptyStateProps,
+    PluginFormFieldControlProps,
+    PluginFormFieldProps,
     PluginIconButtonProps,
     PluginIconName,
     PluginIconProps,
     PluginInputProps,
     PluginKbdChordProps,
     PluginKbdProps,
+    PluginListNavigationContainerProps,
+    PluginListNavigationRowProps,
+    PluginListRowProps,
+    PluginLogEntry,
+    PluginLogViewProps,
     PluginMarkdownProps,
+    PluginPaneHeaderProps,
+    PluginPaneStateProps,
+    PluginProgressBarProps,
     PluginScrollShadowProps,
     PluginSearchFieldProps,
     PluginSegmentedControlProps,
@@ -60,16 +78,31 @@ declare module "@daintreehq/plugin-ui" {
     PluginSelectOption,
     PluginSelectOptionGroup,
     PluginSelectProps,
+    PluginSettingsActionsProps,
+    PluginSettingsGroupProps,
+    PluginSettingsRowControlIds,
+    PluginSettingsRowProps,
+    PluginSettingsSectionProps,
+    PluginSeverity,
+    PluginSeverityIconProps,
     PluginSkeletonBoneProps,
     PluginSkeletonProps,
     PluginSkeletonTextProps,
     PluginSpinnerProps,
     PluginSpinningIconProps,
+    PluginSwitchProps,
+    PluginTabItem,
+    PluginTabsProps,
     PluginTextareaProps,
     PluginThemeTokenKey,
     PluginThemeTokens,
+    PluginToolbarButtonProps,
+    PluginToolbarProps,
     PluginTooltipProps,
     PluginTruncatedTooltipProps,
+    PluginVirtualListProps,
+    UseListNavigationOptions as PluginUseListNavigationOptions,
+    UseListNavigationResult as PluginUseListNavigationResult,
   } from "@daintreehq/plugin-sdk/react";
 
   export type MarkdownProps = PluginMarkdownProps;
@@ -109,8 +142,37 @@ declare module "@daintreehq/plugin-ui" {
   export type DaintreeTheme = PluginDaintreeTheme;
   export type ThemeTokenKey = PluginThemeTokenKey;
   export type ThemeTokens = PluginThemeTokens;
+  export type VirtualListProps<T = unknown> = PluginVirtualListProps<T>;
+  export type DataTableProps<T = unknown> = PluginDataTableProps<T>;
+  export type DataTableColumn<T = unknown> = PluginDataTableColumn<T>;
+  export type DataTableRowKey<T = unknown> = PluginDataTableRowKey<T>;
+  export type DataTableSort = PluginDataTableSort;
+  export type LogViewProps = PluginLogViewProps;
+  export type LogEntry = PluginLogEntry;
+  export type PaneHeaderProps = PluginPaneHeaderProps;
+  export type ToolbarProps = PluginToolbarProps;
+  export type ToolbarButtonProps = PluginToolbarButtonProps;
+  export type PaneStateProps = PluginPaneStateProps;
+  export type FormFieldProps = PluginFormFieldProps;
+  export type FormFieldControlProps = PluginFormFieldControlProps;
+  export type SwitchProps = PluginSwitchProps;
+  export type TabsProps = PluginTabsProps;
+  export type TabItem = PluginTabItem;
+  export type ProgressBarProps = PluginProgressBarProps;
+  export type SettingsSectionProps = PluginSettingsSectionProps;
+  export type SettingsGroupProps = PluginSettingsGroupProps;
+  export type SettingsRowProps = PluginSettingsRowProps;
+  export type SettingsRowControlIds = PluginSettingsRowControlIds;
+  export type SettingsActionsProps = PluginSettingsActionsProps;
+  export type ListRowProps = PluginListRowProps;
+  export type UseListNavigationOptions = PluginUseListNavigationOptions;
+  export type UseListNavigationResult = PluginUseListNavigationResult;
+  export type ListNavigationContainerProps = PluginListNavigationContainerProps;
+  export type ListNavigationRowProps = PluginListNavigationRowProps;
+  export type Severity = PluginSeverity;
+  export type SeverityIconProps = PluginSeverityIconProps;
 
-  /** The kit's contract version, `"1.0.0"` for this release line. */
+  /** The kit's contract version (semver): `"1.1.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
 
   /**
@@ -172,6 +234,72 @@ declare module "@daintreehq/plugin-ui" {
    * warns in development) rather than throwing.
    */
   export const Icon: ComponentType<IconProps>;
+
+  // Added in 1.1.0.
+
+  /**
+   * A windowed list: only the rows in view are in the DOM, so it stays fast at
+   * tens of thousands of rows. It fills its container's height. For a keyboard
+   * list, spread `useListNavigation().containerProps` onto it, pass its
+   * `activeIndex`, and render each row as a `ListRow` with `getRowProps(index)`.
+   */
+  export const VirtualList: <T>(props: VirtualListProps<T>) => ReactNode;
+  /**
+   * A table with a sticky header and an always-virtualised body. Sorting is
+   * controlled: the table reports `onSortChange` and you sort `rows`. With
+   * `onRowClick` it is a keyboard grid (one tab stop, arrows, Enter).
+   */
+  export const DataTable: <T>(props: DataTableProps<T>) => ReactNode;
+  /**
+   * A bounded, virtualised log that follows the newest line while the reader
+   * is at the bottom. Keeps the newest `maxLines` (5000 by default) on screen.
+   */
+  export const LogView: ComponentType<LogViewProps>;
+  /** A pane's compact title bar: icon, title, a quiet subtitle and trailing actions. */
+  export const PaneHeader: ComponentType<PaneHeaderProps>;
+  /** A row of controls that is one tab stop, Left/Right between them. */
+  export const Toolbar: ComponentType<ToolbarProps>;
+  /** The in-pane toolbar button: icon-only with a tooltip, or icon and a word. */
+  export const ToolbarButton: ComponentType<ToolbarButtonProps>;
+  /** A whole pane's loading, empty or error state, in Daintree's pane frame. */
+  export const PaneState: ComponentType<PaneStateProps>;
+  /** Label, description and error wired to the control inside. */
+  export const FormField: ComponentType<FormFieldProps>;
+  /** An instant on/off switch. Neutral, never accent, when on. */
+  export const Switch: ComponentType<SwitchProps>;
+  /** A tab strip and the active tab's panel. */
+  export const Tabs: ComponentType<TabsProps>;
+  /** A neutral progress bar; indeterminate without a `value`. */
+  export const ProgressBar: ComponentType<ProgressBarProps>;
+  /** A titled block of a settings view. Holds `SettingsGroup`s. */
+  export const SettingsSection: ComponentType<SettingsSectionProps>;
+  /** One surface of related `SettingsRow`s. */
+  export const SettingsGroup: ComponentType<SettingsGroupProps>;
+  /** One setting: label and description on the left, its control on the rail. */
+  export const SettingsRow: ComponentType<SettingsRowProps>;
+  /** The explicit-save row at the end of a group. */
+  export const SettingsActions: ComponentType<SettingsActionsProps>;
+  /** A list row with Daintree's highlight: icon, title, subtitle and trailing meta. */
+  export const ListRow: ComponentType<ListRowProps>;
+  /** The one glyph for each severity. */
+  export const SeverityIcon: ComponentType<SeverityIconProps>;
+
+  /**
+   * The keyboard model of a list: one tab stop, Up/Down/Home/End move the
+   * cursor, Enter or Space selects, typing jumps when `getLabel` is given.
+   */
+  export function useListNavigation(options: UseListNavigationOptions): UseListNavigationResult;
+
+  /** "just now", "5m ago", "11d ago", then the date past 30 days. */
+  export function formatTimeAgo(value: number | string | Date, now?: number): string;
+  /** "5 minutes ago", "in 3 hours", then the date past 30 days. */
+  export function formatRelativeTime(value: number | string | Date, now?: number): string;
+  /** A byte size in 1024 steps: "0 B", "1.5 KB", "3 MB". */
+  export function formatBytes(bytes: number): string;
+  /** A badge count: exact below 1,000, then "1.2k", "23k", "1.2M". Truncates, never rounds up. */
+  export function formatCount(count: number): string;
+  /** An elapsed time in ms: "45s", "12m", "3h 5m", "2d 4h". */
+  export function formatDuration(ms: number): string;
 
   /**
    * The active theme: `colorMode`, `themeId`, and resolved sRGB `tokens` for
