@@ -481,7 +481,8 @@ describe("WelcomeScreen", () => {
   it("shows project path and time ago for listed projects", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    expect(screen.getByText("/alpha")).toBeTruthy();
+    // The path's TruncatedTooltip content renders inline under the tooltip mock.
+    expect(screen.getAllByText("/alpha").length).toBeGreaterThan(0);
     expect(screen.getByText("3000ms ago")).toBeTruthy();
   });
 

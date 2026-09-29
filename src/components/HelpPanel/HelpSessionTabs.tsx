@@ -4,6 +4,7 @@ import { Plus, X } from "lucide-react";
 import { SpinnerCircle, HollowCircle, InteractingCircle } from "@/components/icons";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { cn } from "@/lib/utils";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   ContextMenu,
@@ -493,7 +494,7 @@ export function HelpSessionTabs({
                 "transition-colors duration-150 ease-out",
                 canOpenSession
                   ? "hover:text-text-primary hover:bg-overlay-subtle"
-                  : "opacity-40 cursor-default",
+                  : ARIA_DISABLED_CLASSES,
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
               )}
               aria-label="New session"

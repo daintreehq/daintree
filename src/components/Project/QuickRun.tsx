@@ -20,9 +20,11 @@ import { logError } from "@/utils/logger";
 import { RunningTaskList } from "./RunningTaskList";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { HighlightedText } from "@/components/ui/HighlightedText";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
 import { KbdChord } from "@/components/ui/Kbd";
 import { isMac } from "@/lib/platform";
-import { describeChord, labelWithShortcut } from "@/lib/kbdShortcut";
+import { describeChord } from "@/lib/kbdShortcut";
 
 interface QuickRunProps {
   projectId: string;
@@ -659,7 +661,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
         role="option"
         aria-selected={selected}
         aria-describedby={selected ? SUMMARY_ID : undefined}
-        title={item.value}
+        data-command={item.value}
         // Hover moves the highlight rather than painting a second, lookalike
         // state beside it — so there is only ever one lit row, and it is the
         // one Enter runs.
@@ -678,29 +680,37 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
         {item.type === "typed" ? (
           <>
             <span className="shrink-0">Run</span>
-            <span className={cn("min-w-0 truncate text-text-primary", COMMAND_TEXT_CLASS)}>
-              {item.value}
-            </span>
+            <TruncatedTooltip content={item.value} focusable={false}>
+              <span className={cn("min-w-0 truncate text-text-primary", COMMAND_TEXT_CLASS)}>
+                {item.value}
+              </span>
+            </TruncatedTooltip>
           </>
         ) : (
           <>
-            <span
-              className={cn(
-                "min-w-0 truncate text-text-primary",
-                item.type === "saved" ? "font-medium" : COMMAND_TEXT_CLASS
-              )}
-            >
-              <HighlightedText text={primary} indices={matchRanges(primary, search)} />
-            </span>
-            {secondary && (
+            {/* Pointer-only: the option is driven by aria-activedescendant from
+                the input, so a tab stop on its text would be a second focus. */}
+            <TruncatedTooltip content={primary} focusable={false}>
               <span
                 className={cn(
-                  "min-w-0 flex-1 truncate text-2xs",
-                  secondary === item.value && COMMAND_TEXT_CLASS
+                  "min-w-0 truncate text-text-primary",
+                  item.type === "saved" ? "font-medium" : COMMAND_TEXT_CLASS
                 )}
               >
-                <HighlightedText text={secondary} indices={matchRanges(secondary, search)} />
+                <HighlightedText text={primary} indices={matchRanges(primary, search)} />
               </span>
+            </TruncatedTooltip>
+            {secondary && (
+              <TruncatedTooltip content={secondary} focusable={false}>
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-2xs",
+                    secondary === item.value && COMMAND_TEXT_CLASS
+                  )}
+                >
+                  <HighlightedText text={secondary} indices={matchRanges(secondary, search)} />
+                </span>
+              </TruncatedTooltip>
             )}
           </>
         )}
@@ -708,17 +718,19 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
           // A pointer affordance only — never a tab stop and never inside the
           // option's accessible name, since an option's children are
           // presentational. The keyboard route is Alt+P, named in the footer.
-          <span
-            aria-hidden="true"
-            title={labelWithShortcut(item.type === "saved" ? "Unpin" : "Pin", PIN_COMBO, isMac())}
-            onClick={(e) => {
-              e.stopPropagation();
-              togglePin(item);
-            }}
-            className="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-colors hover:bg-overlay-medium hover:text-text-primary"
-          >
-            {item.type === "saved" ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
-          </span>
+          <RowControlTooltip label={item.type === "saved" ? "Unpin" : "Pin"} shortcut={PIN_COMBO}>
+            <span
+              aria-hidden="true"
+              data-testid="quick-run-pin"
+              onClick={(e) => {
+                e.stopPropagation();
+                togglePin(item);
+              }}
+              className={cn(ROW_CONTROL_CLASS, "ml-auto")}
+            >
+              {item.type === "saved" ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+            </span>
+          </RowControlTooltip>
         )}
       </div>
     );
@@ -739,9 +751,9 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
       {isWorktreeValid && (
         <div className="mb-1.5 flex min-w-0 items-center gap-1 text-2xs text-text-secondary">
           <GitBranch className="h-3 w-3 shrink-0" aria-hidden="true" />
-          <span className="truncate" title={destinationLabel}>
-            {destinationLabel}
-          </span>
+          <TruncatedTooltip content={destinationLabel}>
+            <span className="truncate">{destinationLabel}</span>
+          </TruncatedTooltip>
         </div>
       )}
       <div>
@@ -1059,13 +1071,11 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
               )}
             </div>
             {launchError && (
-              <div
-                role="alert"
-                className="mt-1 truncate text-2xs text-text-primary"
-                title={launchError}
-              >
-                Couldn't start {launchError}
-              </div>
+              <TruncatedTooltip content={`Couldn't start ${launchError}`}>
+                <div role="alert" className="mt-1 truncate text-2xs text-text-primary">
+                  Couldn't start {launchError}
+                </div>
+              </TruncatedTooltip>
             )}
           </>
         )}

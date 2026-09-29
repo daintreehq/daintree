@@ -18,6 +18,7 @@ import {
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import { useDeletedWorktreeCountdown } from "./useDeletedWorktreeCountdown";
 import { Badge } from "@/components/ui/badge";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 interface DeletedWorktreeCardProps {
   worktree: DeletedWorktree;
@@ -190,12 +191,11 @@ export function DeletedWorktreeCard({
               strokeWidth={2.5}
               aria-hidden="true"
             />
-            <span
-              className="truncate font-mono text-2xs font-medium text-text-secondary"
-              title={worktree.title}
-            >
-              {worktree.title}
-            </span>
+            <TruncatedTooltip content={worktree.title}>
+              <span className="truncate font-mono text-2xs font-medium text-text-secondary">
+                {worktree.title}
+              </span>
+            </TruncatedTooltip>
             <Badge size="xs">Deleted</Badge>
           </span>
           <div className="flex items-center gap-2 shrink-0">
@@ -242,12 +242,11 @@ export function DeletedWorktreeCard({
             branch name down to a few characters, and the name is what says
             which worktree this is. */}
         <div className="mt-0.5 flex items-center gap-2">
-          <div
-            className="min-w-0 flex-1 truncate text-xs text-text-muted line-through"
-            title={worktree.path}
-          >
-            {worktree.path}
-          </div>
+          <TruncatedTooltip content={worktree.path}>
+            <div className="min-w-0 flex-1 truncate text-xs text-text-muted line-through">
+              {worktree.path}
+            </div>
+          </TruncatedTooltip>
           {hold !== undefined && (
             <Tooltip>
               <TooltipTrigger asChild>

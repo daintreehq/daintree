@@ -49,6 +49,7 @@ import { isPluginRecipe } from "@shared/types/project";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import { pluralize } from "@/lib/pluralize";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 const EMPTY_WORKTREES = new Map<string, WorktreeSnapshot>();
 
@@ -237,9 +238,9 @@ export function RecipeManager({
       >
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-sm font-medium text-text-primary" title={recipe.name}>
-              {recipe.name}
-            </span>
+            <TruncatedTooltip content={recipe.name}>
+              <span className="truncate text-sm font-medium text-text-primary">{recipe.name}</span>
+            </TruncatedTooltip>
             {isPinned && (
               <Badge size="xs">
                 <Pin aria-hidden />
@@ -257,9 +258,9 @@ export function RecipeManager({
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary">
             {fromPlugin && (
               <>
-                <span className="max-w-[40%] truncate" title={recipe.origin.pluginId}>
-                  From {recipe.origin.pluginId}
-                </span>
+                <TruncatedTooltip content={recipe.origin.pluginId}>
+                  <span className="max-w-[40%] truncate">From {recipe.origin.pluginId}</span>
+                </TruncatedTooltip>
                 <span aria-hidden>·</span>
               </>
             )}

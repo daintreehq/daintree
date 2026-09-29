@@ -28,6 +28,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { pluralize } from "@/lib/pluralize";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 const EDITOR_LABELS: Record<KnownEditorId, string> = {
   vscode: "VS Code",
@@ -216,9 +217,9 @@ export function EditorIntegrationTab() {
         {EDITOR_LABELS[d.id]}
       </span>
       {d.executablePath && (
-        <span className="min-w-0 truncate font-mono text-text-secondary" title={d.executablePath}>
-          {d.executablePath}
-        </span>
+        <TruncatedTooltip content={d.executablePath}>
+          <span className="min-w-0 truncate font-mono text-text-secondary">{d.executablePath}</span>
+        </TruncatedTooltip>
       )}
     </li>
   );

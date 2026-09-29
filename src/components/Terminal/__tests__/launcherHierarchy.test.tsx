@@ -48,6 +48,16 @@ vi.mock("@/components/Pulse", () => ({
 vi.mock("../contentGridTips", () => ({ RotatingTip: () => <div data-testid="band-tip" /> }));
 
 import { ContentGridEmptyState } from "../ContentGridEmptyState";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 const EMPTY_STATE_PATH = resolve(__dirname, "../ContentGridEmptyState.tsx");
 const LAUNCHER_DIR = resolve(__dirname, "..");

@@ -13,6 +13,7 @@ import { useFleetRunStore } from "@/store/fleetRunStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { useFleetWorktreeScope } from "./useFleetWorktreeScope";
@@ -239,7 +240,9 @@ export function FleetCountChip({
                   const worktreeName = worktreeId ? worktrees.get(worktreeId)?.name : undefined;
                   return (
                     // Identity beyond the truncated title lives in the aria-label and
-                    // the native title. A focus-driven unwrap was tried and rejected:
+                    // a tooltip on the title text — a span, so it opens for the
+                    // pointer only; on the button it would open on the focus
+                    // Radix hands the first row. A focus-driven unwrap was tried and rejected:
                     // Radix focuses the first row on open, so the row expanded every
                     // time, and blurring it mid-click moved "Add panes…" between
                     // mousedown and mouseup.
@@ -257,7 +260,6 @@ export function FleetCountChip({
                         ]
                           .filter((part) => part !== null)
                           .join(" ")}
-                        title={worktreeName ? `${title} · ${worktreeName}` : title}
                         className={cn(
                           "flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-left text-xs leading-[inherit] text-text-primary",
                           PALETTE_ROW_FOCUS_CLASS
@@ -270,7 +272,14 @@ export function FleetCountChip({
                             style={{ backgroundColor: dotColor }}
                           />
                         )}
-                        <span className="truncate">{title}</span>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="truncate">{title}</span>
+                          </TooltipTrigger>
+                          <TooltipContent side="right">
+                            {worktreeName ? `${title} · ${worktreeName}` : title}
+                          </TooltipContent>
+                        </Tooltip>
                         {id === focusedId && (
                           <Badge size="xs" data-testid={`fleet-row-primary-${id}`}>
                             Primary

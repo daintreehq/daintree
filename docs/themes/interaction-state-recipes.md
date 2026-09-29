@@ -203,6 +203,22 @@ No row carries a resting fill: a backplate on every row reads as stacked cards, 
 
 ---
 
+### Row Controls
+
+**Role:** An inline control inside a row that is itself the focus target — a palette `option`, a launcher row, a menu item: pin, hide, assign shortcut, launch in dock, set as default.
+
+```tsx
+<RowControlTooltip label="Pin to toolbar" shortcut="Alt+P">
+  <span role="presentation" onClick={…} className={cn(ROW_CONTROL_CLASS, "opacity-0 group-hover:opacity-100")} />
+</RowControlTooltip>
+```
+
+**Usage:** Import both from `src/components/ui/RowControl.tsx`; never respell them. `ROW_CONTROL_CLASS` is a 24px target (WCAG 2.5.8, so never `h-5 w-5`), the Ghost recipe's `overlay-hover` fill, and a transition that names `background-color` beside `opacity` — `transition-opacity` alone snapped the fill while the reveal faded. Inside a 28px menu row it takes `-my-1` rather than shrinking. A control that owns a wider hit zone (the agent menu's set-default gutter) keeps the zone but draws the fill as a centred row control (`group-hover/gutter:`), never a full-height band.
+
+These are `aria-hidden` or `role="presentation"` spans because a real button inside `option`/`menuitem` trips `nested-interactive`. So they have no focus and no keyboard route of their own; the row carries the chord (Alt+P, Alt+H, P, D) in its name or `aria-keyshortcuts`. `RowControlTooltip` is therefore pointer-only by construction: it names the action and shows the chord as keycaps, and it replaces `title=`, which was how every one of these explained itself. Full text of a truncated label uses `TruncatedTooltip`; inside a row that already owns the keyboard pass `focusable={false}` so it adds no tab stop. `rowControlsTooltips.contract.test.ts` pins all three rules, plus the unavailable dim below.
+
+---
+
 ### Brand Mark States
 
 **Role:** Third-party brand marks (agent and product logos) in toolbars, dock rails, panel title bars and palettes. Two inks: the brand colour a step back at rest, the brand colour itself when the mark is active.
@@ -392,8 +408,8 @@ isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft [.light_&]:hover:bg-ov
 
 One treatment per state, owned by `Button` (`src/components/ui/button.tsx`). A site that rebuilds one of these by hand is the inconsistency, not a variant of it.
 
-- **Busy** — `loading`. The spinner overlays the label, which stays in place to hold the width and the accessible name; the button keeps keyboard focus and vetoes activation. Never swap the label to "Saving…", never put a `Spinner` in place of the icon, and never pair it with `disabled` for the same flag — `loading` outranks `disabled`, and the primitive neither natively disables nor dims a busy button. A rotating refresh glyph (`SpinningIcon`) on a refresh control is the one other busy pattern, with a static label.
-- **Unavailable** — `disabled`, or `aria-disabled` plus `ARIA_DISABLED_CLASSES` when focus must survive: 50% opacity and `cursor-not-allowed`. Never 40% or 60%, and never a colour change alone. The ReviewHub primary CTAs keep their documented inset treatment (`REVIEW_HUB_DISABLED_CTA`).
+- **Busy** — `loading`. The spinner overlays the label, which stays in place to hold the width and the accessible name; the button keeps keyboard focus and vetoes activation. Never swap the label to "Saving…", never put a `Spinner` in place of the icon, and never pair it with `disabled` for the same flag — `loading` outranks `disabled`, and the primitive neither natively disables nor dims a busy button. A rotating refresh glyph (`SpinningIcon`) on a refresh control is the one other busy pattern, with a static label. Busy never dims: a hand-rolled busy state (the copy-context button) shows its spinner at full strength with `aria-busy`, and keeps `aria-disabled` for genuine unavailability only.
+- **Unavailable** — `disabled`, or `aria-disabled` plus `ARIA_DISABLED_CLASSES` when focus must survive: 50% opacity and `cursor-not-allowed`. Never 30%, 40%, 60% or 70%, and never a colour change alone. The same 50% applies off `Button` (segmented options, the disabled drag grip); a control whose click still goes somewhere (an agent that needs setup lands on recovery) takes the 50% and keeps its pointer. A row in a palette or menu does not fade at all: its label steps to `text-text-secondary` and the row states the reason ("Setup", "Overridden by Team"), because a fade takes the reason down with it. The ReviewHub primary CTAs keep their documented inset treatment (`REVIEW_HUB_DISABLED_CTA`).
 - **Destructive** — `ghost-danger` (red at rest) for inline and row actions, filled `destructive` for a confirmation's footer. The exception is sidebar chrome (worktree cards, deleted-worktree rows), which stays neutral at rest and turns red on hover and focus: the sidebar repeats these on every card, and its red belongs to the interaction and the confirm. A fix action on an error band (Retry, Restart) is not destructive and is `outline`, like `InlineStatusBanner`'s.
 - **Icon gap** — the size carries it (`default` 8px, `sm` 6px, `xs` 4px). Never add `mr-*`/`ml-*` to an icon inside a Button, and let the size set the glyph too.
 - **Size** — pick the size whose height you want. `sm` forced to `h-6` is `xs`; `icon` forced to `h-7 w-7` is `icon-sm`. A row action under 24px fails WCAG 2.5.8: use `icon-xs` with a negative margin when the row cannot grow.

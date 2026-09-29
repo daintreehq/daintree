@@ -79,6 +79,16 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import type { FleetSavedScope } from "@shared/types";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 const NOW = 1_700_000_000_000;
 const DAY = 24 * 60 * 60 * 1000;

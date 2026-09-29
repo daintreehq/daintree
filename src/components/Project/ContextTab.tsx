@@ -21,6 +21,7 @@ import type {
 } from "@/types";
 import { logError } from "@/utils/logger";
 import { pluralize } from "@/lib/pluralize";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -483,12 +484,11 @@ export function ContextTab({
                             key={file.path}
                             className="flex items-center justify-between gap-2 text-xs"
                           >
-                            <span
-                              className="font-mono text-text-primary truncate"
-                              title={file.path}
-                            >
-                              {file.path}
-                            </span>
+                            <TruncatedTooltip content={file.path}>
+                              <span className="font-mono text-text-primary truncate">
+                                {file.path}
+                              </span>
+                            </TruncatedTooltip>
                             <span className="text-text-secondary shrink-0">
                               {formatBytes(file.size)}
                             </span>

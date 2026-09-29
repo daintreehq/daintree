@@ -12,6 +12,16 @@ vi.mock("@/clients/copyTreeClient", () => ({
 }));
 
 import { ContextTab } from "../ContextTab";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 const mainWorktree = { id: "wt-1", isMainWorktree: true } as unknown as Worktree;
 

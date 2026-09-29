@@ -1565,10 +1565,17 @@ describe("InlineStatusBanner context line truncation", () => {
         animated={false}
       />
     );
+  // The full text is disclosed by TruncatedTooltip, not `title`, so the line is
+  // found by its own text.
+  const lineWithText = (text: string) => {
+    const line = Array.from(document.querySelectorAll("p")).find((p) => p.textContent === text);
+    if (!line) throw new Error(`No context line reading "${text}"`);
+    return line;
+  };
 
   it("splits a middle-truncated path so its final segment survives", () => {
     renderContext("Directory: /a/b/c/project", "middle");
-    const line = screen.getByTitle("Directory: /a/b/c/project");
+    const line = lineWithText("Directory: /a/b/c/project");
     expect(line.children).toHaveLength(2);
     expect(line.children[0]!.className).toContain("truncate");
     expect(line.children[1]!.textContent).toBe("/project");
@@ -1577,14 +1584,12 @@ describe("InlineStatusBanner context line truncation", () => {
 
   it("keeps a trailing separator with the final segment rather than splitting on it", () => {
     renderContext("Directory: /a/b/project/", "middle");
-    expect(screen.getByTitle("Directory: /a/b/project/").children[1]!.textContent).toBe(
-      "/project/"
-    );
+    expect(lineWithText("Directory: /a/b/project/").children[1]!.textContent).toBe("/project/");
   });
 
   it("clips the end by default, as a single run of text", () => {
     renderContext("Directory: /a/b/c/project");
-    const line = screen.getByTitle("Directory: /a/b/c/project");
+    const line = lineWithText("Directory: /a/b/c/project");
     expect(line.children).toHaveLength(0);
     expect(line.className).toContain("truncate");
   });

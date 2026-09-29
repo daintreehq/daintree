@@ -15,6 +15,8 @@ import {
   Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import type { ResourceEnvironment } from "@shared/types/project";
@@ -107,27 +109,36 @@ function IconPickerButton({ currentIcon, onChange }: IconPickerButtonProps) {
           <DisplayIcon />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-auto p-2">
+      <PopoverContent
+        align="end"
+        className="w-auto p-2"
+        // Opening focuses the first icon; that focus is not a request for its
+        // tooltip, so the element it lands on is exempted from a focus open.
+        onOpenAutoFocus={armTooltipFocusSuppression}
+      >
         <div role="group" aria-label="Environment icon" className="grid grid-cols-5 gap-1">
           {ENVIRONMENT_ICON_OPTIONS.map(({ name, label }) => {
             const IconComp = ICON_COMPONENTS[name];
             const isSelected = (currentIcon ?? "Server") === name;
             return (
-              <Button
-                key={name}
-                type="button"
-                variant="ghost"
-                size="icon"
-                pressed={isSelected}
-                aria-label={label}
-                title={label}
-                onClick={() => {
-                  onChange(name);
-                  setIsOpen(false);
-                }}
-              >
-                <IconComp />
-              </Button>
+              <Tooltip key={name}>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    pressed={isSelected}
+                    aria-label={label}
+                    onClick={() => {
+                      onChange(name);
+                      setIsOpen(false);
+                    }}
+                  >
+                    <IconComp />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{label}</TooltipContent>
+              </Tooltip>
             );
           })}
         </div>

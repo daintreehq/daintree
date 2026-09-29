@@ -25,6 +25,13 @@ export interface TruncatedTooltipProps {
   contentClassName?: string;
   disabled?: boolean;
   isTruncated?: boolean;
+  /**
+   * False inside a row that is already the focus target — a button, an option
+   * driven by `aria-activedescendant`, a menu item. The row owns the keyboard
+   * there, and a tab stop on its text would be a second one; the tooltip is
+   * then a pointer disclosure only.
+   */
+  focusable?: boolean;
 }
 
 export function TruncatedTooltip({
@@ -35,6 +42,7 @@ export function TruncatedTooltip({
   contentClassName,
   disabled,
   isTruncated: isTruncatedProp,
+  focusable = true,
 }: TruncatedTooltipProps) {
   const ownDetection = useTruncationDetection();
   const isTruncated = isTruncatedProp ?? ownDetection.isTruncated;
@@ -49,7 +57,7 @@ export function TruncatedTooltip({
   );
 
   const extraProps: Record<string, unknown> = { ref: mergedRef };
-  if (!isFocusable && showTooltip) {
+  if (focusable && !isFocusable && showTooltip) {
     extraProps.tabIndex = 0;
   }
 

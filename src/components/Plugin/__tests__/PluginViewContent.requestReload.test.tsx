@@ -9,6 +9,16 @@ import type {
   PluginWorkerStatus,
 } from "@shared/types/plugin";
 import type { PluginViewContentConfig, PluginViewContentProps } from "../PluginViewContent";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 /**
  * A plugin view asking the host to remount it (#12609).

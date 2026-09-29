@@ -64,6 +64,16 @@ import { usePaletteStore } from "@/store/paletteStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 function makeItem(id: string, title: string): ActionPaletteItemType {
   return {

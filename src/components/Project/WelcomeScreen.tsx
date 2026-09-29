@@ -39,6 +39,7 @@ import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import type { AgentAvailabilityState } from "../../../shared/types/ipc/system";
 import type { GettingStartedChecklistState } from "@/hooks/app/useGettingStartedChecklist";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 interface WelcomeScreenProps {
   gettingStarted: GettingStartedChecklistState;
@@ -467,12 +468,17 @@ function TopProjects({
               <span className="text-sm font-semibold text-text-primary truncate block @min-[1920px]/welcome:text-base">
                 {project.name}
               </span>
-              <span
-                className="text-xs text-text-secondary truncate block @min-[1920px]/welcome:text-sm"
-                title={project.path}
+              {/* Inside the row's button, so a pointer disclosure only. The path is
+                middle-truncated in JS, which CSS overflow detection cannot see. */}
+              <TruncatedTooltip
+                content={project.path}
+                focusable={false}
+                isTruncated={middleTruncate(project.path, 48) !== project.path || undefined}
               >
-                {middleTruncate(project.path, 48)}
-              </span>
+                <span className="text-xs text-text-secondary truncate block @min-[1920px]/welcome:text-sm">
+                  {middleTruncate(project.path, 48)}
+                </span>
+              </TruncatedTooltip>
             </div>
             <span
               className="text-xs text-text-secondary shrink-0 @min-[1920px]/welcome:text-sm"

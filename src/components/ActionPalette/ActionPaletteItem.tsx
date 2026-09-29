@@ -2,9 +2,9 @@ import { memo, useCallback, useMemo } from "react";
 import { Pin, PinOff, EyeOff, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
-import { labelWithShortcut } from "@/lib/kbdShortcut";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
 import { paletteSummary } from "@/lib/paletteSummary";
 import { KbdChord } from "@/components/ui/Kbd";
 import { HighlightedText } from "@/components/ui/HighlightedText";
@@ -25,9 +25,6 @@ export const PIN_SHORTCUT = "Alt+P";
 export const HIDE_SHORTCUT = "Alt+H";
 
 export { paletteSummary };
-
-const ROW_CONTROL_CLASS =
-  "inline-flex items-center justify-center w-6 h-6 rounded-[var(--radius-sm)] bg-transparent border-0 text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors";
 
 interface ActionPaletteItemProps {
   item: ActionPaletteItemType;
@@ -257,59 +254,60 @@ function ActionPaletteItemInner({
           inside `role="option"`, where ARIA treats children as presentational
           and a real <button> trips `nested-interactive`. The palette's focus
           stays on the search input and drives rows via aria-activedescendant;
-          Alt+P and Alt+H reach these from there. `title` keeps the mouse
-          tooltip; `data-testid` keeps them addressable. */}
+          Alt+P and Alt+H reach these from there. `RowControlTooltip` is the
+          mouse tooltip; `data-testid` keeps them addressable. */}
       <div className="shrink-0 flex items-center gap-1.5 min-h-5" aria-hidden="true">
         {canShowHide && (
-          <span
-            role="presentation"
-            data-testid="action-palette-hide"
-            title={labelWithShortcut("Hide from Recently used", HIDE_SHORTCUT, isMac())}
-            onPointerDown={(e) => e.preventDefault()}
-            onClick={handleHideClick}
-            className={cn(
-              ROW_CONTROL_CLASS,
-              "opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100"
-            )}
-          >
-            <EyeOff className="w-3.5 h-3.5" aria-hidden />
-          </span>
+          <RowControlTooltip label="Hide from Recently used" shortcut={HIDE_SHORTCUT}>
+            <span
+              role="presentation"
+              data-testid="action-palette-hide"
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={handleHideClick}
+              className={cn(
+                ROW_CONTROL_CLASS,
+                "opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100"
+              )}
+            >
+              <EyeOff className="w-3.5 h-3.5" aria-hidden />
+            </span>
+          </RowControlTooltip>
         )}
         {canShowPin && (
-          <span
-            role="presentation"
-            data-testid="action-palette-pin"
-            data-pinned={isPinned}
-            title={labelWithShortcut(
-              isPinned ? "Unpin from Favorites" : "Pin to Favorites",
-              PIN_SHORTCUT,
-              isMac()
-            )}
-            onPointerDown={(e) => e.preventDefault()}
-            onClick={handlePinClick}
-            className={cn(
-              ROW_CONTROL_CLASS,
-              !isPinned && "opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100"
-            )}
+          <RowControlTooltip
+            label={isPinned ? "Unpin from Favorites" : "Pin to Favorites"}
+            shortcut={PIN_SHORTCUT}
           >
-            {isPinned ? (
-              <>
-                {/* At rest a pinned row states what it is; the struck-through
-                    glyph is the action, so it appears only where the action is
-                    offered. Showing PinOff at rest read as "not pinned". */}
-                <Pin
-                  className="w-3.5 h-3.5 group-hover:hidden group-aria-selected:hidden"
-                  aria-hidden
-                />
-                <PinOff
-                  className="w-3.5 h-3.5 hidden group-hover:block group-aria-selected:block"
-                  aria-hidden
-                />
-              </>
-            ) : (
-              <Pin className="w-3.5 h-3.5" aria-hidden />
-            )}
-          </span>
+            <span
+              role="presentation"
+              data-testid="action-palette-pin"
+              data-pinned={isPinned}
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={handlePinClick}
+              className={cn(
+                ROW_CONTROL_CLASS,
+                !isPinned && "opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100"
+              )}
+            >
+              {isPinned ? (
+                <>
+                  {/* At rest a pinned row states what it is; the struck-through
+                      glyph is the action, so it appears only where the action is
+                      offered. Showing PinOff at rest read as "not pinned". */}
+                  <Pin
+                    className="w-3.5 h-3.5 group-hover:hidden group-aria-selected:hidden"
+                    aria-hidden
+                  />
+                  <PinOff
+                    className="w-3.5 h-3.5 hidden group-hover:block group-aria-selected:block"
+                    aria-hidden
+                  />
+                </>
+              ) : (
+                <Pin className="w-3.5 h-3.5" aria-hidden />
+              )}
+            </span>
+          </RowControlTooltip>
         )}
 
         {item.shortcut && <KbdChord shortcut={item.shortcut} density="compact" />}

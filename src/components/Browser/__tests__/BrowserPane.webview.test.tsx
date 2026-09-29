@@ -5,6 +5,16 @@ import type { BrowserPaneProps } from "../BrowserPane";
 import { BrowserPane } from "../BrowserPane";
 import { SKELETON_HINT_FIRST_THRESHOLD_MS } from "@/components/ui/Skeleton";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 type MockWebviewElement = HTMLElement & {
   reload: ReturnType<typeof vi.fn>;
