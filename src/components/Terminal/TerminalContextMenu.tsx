@@ -209,13 +209,51 @@ function containPortalOrLongPress(event: React.PointerEvent) {
   else containPortalEvent(event);
 }
 
+type MenuPanel = ReturnType<typeof usePanelStore.getState>["panelsById"][string];
+
 /**
- * Reports the menu content unmounting. Not `onCloseAutoFocus`: Radix defers
- * that to a timeout, so a menu reopened before it fires would be cleared while
- * open again. A layout cleanup runs in the unmount's own commit.
+ * Every pane, tab, dock item and sidebar row keeps this menu mounted, so while
+ * it is closed the panel record is held until one of the fields the closed
+ * menu renders from changes: the branch (kind), the move picker's current
+ * worktree, and existence. Activity, agent-state and focus writes would
+ * otherwise re-render every closed menu. The live menu gets every write.
  */
-function MenuUnmountSignal({ onUnmount }: { onUnmount: (mounted: false) => void }) {
-  useLayoutEffect(() => () => onUnmount(false), [onUnmount]);
+function createMenuPanelSelector(terminalId: string, isMenuLive: boolean) {
+  let held: MenuPanel | undefined;
+  return (state: { panelsById: Record<string, MenuPanel> }): MenuPanel | undefined => {
+    const panel = state.panelsById[terminalId];
+    if (
+      !isMenuLive &&
+      held !== undefined &&
+      panel !== undefined &&
+      panel.kind === held.kind &&
+      panel.worktreeId === held.worktreeId &&
+      panel.location === held.location
+    ) {
+      return held;
+    }
+    held = panel;
+    return panel;
+  };
+}
+
+/**
+ * Keeps the menu live while its content is mounted: raises it for content that
+ * opened without a right-click (a touch long-press), and drops it once the
+ * content unmounts after any exit animation. Raising an already-live menu
+ * would cost a render.
+ */
+function MenuContentMountSignal({
+  isLive,
+  onLiveChange,
+}: {
+  isLive: boolean;
+  onLiveChange: (live: boolean) => void;
+}) {
+  useLayoutEffect(() => {
+    if (!isLive) onLiveChange(true);
+  }, [isLive, onLiveChange]);
+  useLayoutEffect(() => () => onLiveChange(false), [onLiveChange]);
   return null;
 }
 
@@ -245,7 +283,16 @@ function TerminalContextMenuBody({
   forceLocation,
   proxy = false,
 }: TerminalContextMenuProps) {
-  const terminal = usePanelStore((state) => state.panelsById[terminalId]);
+  // Open or still animating out. Raised by the right-click itself, in the same
+  // batch as Radix's open, so the first open frame renders live data — Radix
+  // reports `onOpenChange` only from an effect after that frame commits.
+  // Dropped when the content unmounts, which Radix holds through the exit.
+  const [isMenuLive, setIsMenuLive] = useState(false);
+  const selectPanel = useMemo(
+    () => createMenuPanelSelector(terminalId, isMenuLive),
+    [terminalId, isMenuLive]
+  );
+  const terminal = usePanelStore(selectPanel);
   const maximizeTarget = usePanelStore((s) => s.maximizeTarget);
   const getPanelGroup = usePanelStore((s) => s.getPanelGroup);
 
@@ -260,12 +307,9 @@ function TerminalContextMenuBody({
   }, [maximizeTarget, terminalId, getPanelGroup]);
 
   // Every pane, dock chip and tab carries one of these menus, closed nearly all
-  // the time; only the open menu lists worktrees. Set on open and cleared when
-  // the content unmounts (after the exit animation, so the submenu doesn't
-  // empty out mid-fade), so a git-status pass on any worktree doesn't
-  // re-render every closed menu.
-  const [isMenuMounted, setIsMenuMounted] = useState(false);
-  const worktrees = useSidebarWorktreeOrder({ enabled: isMenuMounted });
+  // the time; only the live menu lists worktrees, so a git-status pass on any
+  // worktree doesn't re-render every closed menu.
+  const worktrees = useSidebarWorktreeOrder({ enabled: isMenuLive });
   // Subscribed so a plugin registering or dropping its kind reaches the menu;
   // the generic panel menu reads its capabilities from this snapshot.
   const panelKindRegistry = useSyncExternalStore(
@@ -366,7 +410,6 @@ function TerminalContextMenuBody({
       // hook never runs for that close; drop the intent rather than let it open
       // the picker on some later, unrelated close.
       if (open) {
-        setIsMenuMounted(true);
         pendingMovePickerRef.current = null;
         pendingHandOverRef.current = null;
         pendingMenuDispatchRef.current = null;
@@ -423,6 +466,17 @@ function TerminalContextMenuBody({
 
   const handleTriggerContextMenu = useCallback(
     (event: React.MouseEvent<HTMLElement>) => {
+      // Radix skips a right-click a nested trigger already claimed, and so does this.
+      if (!event.defaultPrevented) {
+        setIsMenuLive(true);
+        // Radix's trigger runs after this and claims the event when it opens.
+        // Unclaimed — the primitives chunk still loading — no content mounts to
+        // drop the flag, so drop it here.
+        const nativeEvent = event.nativeEvent;
+        queueMicrotask(() => {
+          if (!nativeEvent.defaultPrevented) setIsMenuLive(false);
+        });
+      }
       if (proxy) stopContextMenuPropagation(event);
       captureMovePickerAnchor(event);
     },
@@ -458,14 +512,16 @@ function TerminalContextMenuBody({
   // rejection is fire-and-forget, so the user would see nothing at all. Gate on
   // the same set the handler validates against.
   const isKnownRun = useFleetSnapshotStore(
-    (s) => s.snapshot?.runs.some((run) => run.runId === terminalId) ?? false
+    (s) => isMenuLive && (s.snapshot?.runs.some((run) => run.runId === terminalId) ?? false)
   );
   // Main strips expired snoozes before a row ships, so presence on the snapshot
   // IS "currently snoozed" — the menu needs no clock and never has to decide
   // whether a wake time has passed.
   const isSnoozed = useFleetSnapshotStore(
     (s) =>
-      s.snapshot?.runs.some((run) => run.runId === terminalId && run.snooze !== undefined) ?? false
+      isMenuLive &&
+      (s.snapshot?.runs.some((run) => run.runId === terminalId && run.snooze !== undefined) ??
+        false)
   );
   const sourceRef = useRef<MenuActionSourceValue>("user");
 
@@ -1230,7 +1286,7 @@ function TerminalContextMenuBody({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
-          <MenuUnmountSignal onUnmount={setIsMenuMounted} />
+          <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {layoutSection}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
@@ -1298,7 +1354,7 @@ function TerminalContextMenuBody({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
-          <MenuUnmountSignal onUnmount={setIsMenuMounted} />
+          <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {layoutSection}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
@@ -1365,7 +1421,7 @@ function TerminalContextMenuBody({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
-          <MenuUnmountSignal onUnmount={setIsMenuMounted} />
+          <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {layoutSection}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("duplicate")}>
@@ -1422,7 +1478,7 @@ function TerminalContextMenuBody({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
-          <MenuUnmountSignal onUnmount={setIsMenuMounted} />
+          <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {/* The header's overflow menu renders this same list (#12606). */}
           {getGenericPanelMenuGroups({
             location: currentLocation === "grid" ? "grid" : "dock",
@@ -1491,7 +1547,7 @@ function TerminalContextMenuBody({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
-          <MenuUnmountSignal onUnmount={setIsMenuMounted} />
+          <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
           {hasPty && (
             <>
               <ContextMenuItem

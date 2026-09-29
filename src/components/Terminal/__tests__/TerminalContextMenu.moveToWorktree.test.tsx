@@ -23,6 +23,7 @@ const {
   panelsById,
   menuOpenChange,
   menuCloseAutoFocus,
+  contentMounted,
   pickerProps,
   anchorRef,
 } = vi.hoisted(() => ({
@@ -42,6 +43,9 @@ const {
   // whichever level the selected item sat at.
   menuOpenChange: { current: null as ((open: boolean) => void) | null },
   menuCloseAutoFocus: { current: null as ((event: Event) => void) | null },
+  // Radix mounts the root content only while the menu is open; this stand-in
+  // keeps it mounted unless a test models the closed menu.
+  contentMounted: { current: true },
   pickerProps: {
     current: null as {
       panelId: string;
@@ -101,6 +105,7 @@ vi.mock("@/components/ui/context-menu", () => {
       onCloseAutoFocus?: (event: Event) => void;
     }) => {
       menuCloseAutoFocus.current = onCloseAutoFocus ?? null;
+      if (!contentMounted.current) return null;
       return <div>{children}</div>;
     },
     ContextMenuItem: Item,
@@ -455,19 +460,22 @@ describe("TerminalContextMenu — Move to worktree cap and picker handoff (#1244
     panelsById.current = {};
     menuOpenChange.current = null;
     menuCloseAutoFocus.current = null;
+    contentMounted.current = true;
     pickerProps.current = null;
     anchorRef.current = null;
   });
 
-  it("leaves a closed menu off the worktree list", () => {
+  it("lists worktrees once a right-click opens a closed menu", () => {
     worktreesRef.current = manyWorktrees(3);
     panelsById.current = {
       "panel-1": { id: "panel-1", title: "One", kind: "terminal", worktreeId: "wt-main" },
     };
+    contentMounted.current = false;
     render(renderPanel("panel-1"));
     // Every pane carries a closed menu; none of them tracks worktree churn.
     expect(screen.queryByText("Move to worktree")).toBeNull();
 
+    contentMounted.current = true;
     rightClickPane();
     expect(moveRows()).toHaveLength(3);
   });
