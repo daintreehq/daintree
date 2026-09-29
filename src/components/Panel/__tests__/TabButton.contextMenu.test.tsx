@@ -168,4 +168,27 @@ describe("TabButton — the tab under the pointer owns the menu", () => {
     expect(document.querySelector('[data-context-trigger="back"]')).toBeNull();
     expect(document.querySelector('[data-context-proxy="back"]')).not.toBeNull();
   });
+
+  it("keeps a chosen item's click out of the panel and anything around it", async () => {
+    dispatch.mockResolvedValue({ ok: true });
+    const clicked = vi.fn();
+    render(
+      <TooltipProvider>
+        <div onClick={clicked}>
+          <TerminalContextMenu terminalId="front" forceLocation="grid">
+            <div role="tablist">{tab("back", false)}</div>
+          </TerminalContextMenu>
+        </div>
+      </TooltipProvider>
+    );
+
+    fireEvent.contextMenu(tabNode("back"));
+    const menu = await screen.findByRole("menu");
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Rename browser" }));
+    });
+
+    expect(dispatch).toHaveBeenCalled();
+    expect(clicked).not.toHaveBeenCalled();
+  });
 });

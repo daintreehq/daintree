@@ -139,6 +139,8 @@ interface SessionTabChipProps {
   onSelect: (slot: number) => void;
   onClose: (slot: number) => void;
   onFocusTab: (slot: number) => void;
+  /** Close from the lane's own menu, with focus handed on once the lane is gone. */
+  onMenuClose: (slot: number) => void;
   canOpenSession: boolean;
   onOpenSession?: () => void;
 }
@@ -157,9 +159,11 @@ function SessionTabChip({
   onSelect,
   onClose,
   onFocusTab,
+  onMenuClose,
   canOpenSession,
   onOpenSession,
 }: SessionTabChipProps) {
+  const closingFromMenuRef = useRef(false);
   const stateId = `${tabId}-state`;
   const title = tab.fullTitle ?? tab.label;
   const { ref: labelRef, isTruncated: isLabelTruncated } = useTruncationDetection();
@@ -246,7 +250,14 @@ function SessionTabChip({
           <TooltipContent side="bottom">{tab.fullTitle}</TooltipContent>
         )}
       </Tooltip>
-      <ContextMenuContent>
+      <ContextMenuContent
+        onCloseAutoFocus={(e) => {
+          // Back onto a lane that is closing would read as a cancelled close and
+          // stand the handoff down; the strip moves focus once the lane is gone.
+          if (closingFromMenuRef.current) e.preventDefault();
+          closingFromMenuRef.current = false;
+        }}
+      >
         {onOpenSession && (
           <>
             <ContextMenuItem disabled={!canOpenSession} onSelect={onOpenSession}>
@@ -256,7 +267,12 @@ function SessionTabChip({
             <ContextMenuSeparator />
           </>
         )}
-        <ContextMenuItem onSelect={() => onClose(tab.slot)}>
+        <ContextMenuItem
+          onSelect={() => {
+            closingFromMenuRef.current = true;
+            onMenuClose(tab.slot);
+          }}
+        >
           <X data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Close session
         </ContextMenuItem>
@@ -360,6 +376,14 @@ export function HelpSessionTabs({
     [disarmKeyboardClose, onClose]
   );
 
+  const handleMenuClose = useCallback(
+    (slot: number) => {
+      armKeyboardClose(slot);
+      onClose(slot);
+    },
+    [armKeyboardClose, onClose]
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       // The focused lane, whichever element the key reached the list through.
@@ -437,6 +461,7 @@ export function HelpSessionTabs({
               onSelect={onSelect}
               onClose={handlePointerClose}
               onFocusTab={handleTabFocus}
+              onMenuClose={handleMenuClose}
               canOpenSession={canOpenSession}
               onOpenSession={onOpenSession}
             />

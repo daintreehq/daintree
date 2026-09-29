@@ -4,7 +4,8 @@
  * lanes had none. The lane under the pointer is the one the menu acts on.
  */
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
+import { useState } from "react";
+import { render, screen, cleanup, fireEvent, within, act } from "@testing-library/react";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { HelpSessionTabs, type HelpSessionTab } from "../HelpSessionTabs";
@@ -75,5 +76,36 @@ describe("HelpSessionTabs — each lane owns its menu", () => {
     fireEvent.contextMenu(lane(2));
 
     expect(reached).not.toHaveBeenCalled();
+  });
+
+  it("hands focus to a surviving lane once a menu-closed lane is gone", async () => {
+    function Strip() {
+      const [open, setOpen] = useState(tabs);
+      return (
+        <TooltipProvider>
+          <HelpSessionTabs
+            tabs={open}
+            activeSlot={1}
+            onSelect={vi.fn()}
+            onClose={(slot) => setOpen((all) => all.filter((t) => t.slot !== slot))}
+            idBase="help"
+            panelId="help-body"
+          />
+        </TooltipProvider>
+      );
+    }
+    render(<Strip />);
+    lane(2).focus();
+
+    fireEvent.contextMenu(lane(2));
+    const menu = await screen.findByRole("menu");
+    await act(async () => {
+      fireEvent.keyDown(within(menu).getByRole("menuitem", { name: "Close session" }), {
+        key: "Enter",
+      });
+    });
+
+    expect(lane(2)).toBeNull();
+    expect(document.activeElement).toBe(lane(1));
   });
 });
