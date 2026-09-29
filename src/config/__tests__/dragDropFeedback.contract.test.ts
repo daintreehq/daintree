@@ -126,9 +126,10 @@ describe("drag and drop feedback contract", () => {
       .filter(
         ({ selector }) =>
           /\.sidebar-root|:has\(/.test(selector) ||
-          // Forced colours: the selection mark is a real border there, and it
-          // would sit beside the armed card's frame as a second edge.
-          (selector.includes("[data-active") &&
+          // Forced colours: selection and focus are real borders and
+          // outlines there, and each would sit on or beside the armed card's
+          // dashed frame.
+          (selector.includes(".sidebar-worktree-card") &&
             new RegExp(`${selector.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{`).test(
               FORCED_COLORS_BLOCK
             ))

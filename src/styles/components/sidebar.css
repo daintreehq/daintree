@@ -245,7 +245,7 @@ html[data-dragging="true"]
    restore one here. Invisible in normal mode (these media queries don't match),
    so it doesn't bring the focus ring back for everyone else. */
 @media (forced-colors: active) {
-  [data-worktree-row]:focus-visible .sidebar-worktree-card {
+  [data-worktree-row]:focus-visible .sidebar-worktree-card:not([data-drop-target="true"]) {
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }
