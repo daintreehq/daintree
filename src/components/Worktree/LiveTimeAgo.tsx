@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isValidPastTimestamp } from "@/utils/timestamps";
 import { pluralize } from "@/lib/pluralize";
+import { formatAbsoluteDate, formatMediumDate } from "@/utils/timeAgo";
 
 interface LiveTimeAgoProps {
   timestamp?: number | null;
@@ -18,31 +19,6 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
-
-// Lazy module-level singletons — Intl formatter construction is expensive and
-// the options never vary, so don't rebuild them on every virtualized row mount.
-let absoluteFormatter: Intl.DateTimeFormat | undefined;
-let currentYearFormatter: Intl.DateTimeFormat | undefined;
-
-function getAbsoluteFormatter(): Intl.DateTimeFormat {
-  return (absoluteFormatter ??= new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }));
-}
-
-/**
- * The compact absolute label. The year is dropped while it is the current one:
- * it carries no information there, and "May 6, 2026" takes nearly twice the
- * width of "May 6" from whatever text the label sits beside.
- */
-export function formatAbsoluteDate(timestamp: number, now: number): string {
-  const date = new Date(timestamp);
-  if (date.getFullYear() !== new Date(now).getFullYear()) {
-    return getAbsoluteFormatter().format(date);
-  }
-  return (currentYearFormatter ??= new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-  })).format(date);
-}
 
 /** Milliseconds until local midnight on 1 January, when a yearless label gains its year. */
 function msUntilNextYear(now: number): number {
@@ -136,7 +112,7 @@ export function LiveTimeAgo({ timestamp, className, noTooltip }: LiveTimeAgoProp
       <time
         dateTime={isoDate}
         className={cn("tabular-nums", className)}
-        aria-label={getAbsoluteFormatter().format(new Date(timestamp))}
+        aria-label={formatMediumDate(timestamp)}
       >
         {absoluteLabel}
       </time>
