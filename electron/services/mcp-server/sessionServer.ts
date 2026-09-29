@@ -237,6 +237,16 @@ export interface OwnedMainExecutors {
   ) => Promise<import("../../../shared/types/agentLastMessage.js").AgentLastMessageResult>;
 }
 
+/**
+ * Appended to a pane's refusal from a tool that takes a hand-over (#12980), so
+ * the agent can tell the user what to click. Fixed text: it must not vary with
+ * the refused id — see RESOURCE_NOT_OWNED_CODE.
+ */
+const HAND_OVER_HINT =
+  "If the user started that terminal, they can right-click it, choose 'Hand to orchestrator', " +
+  "and select this agent's pane.";
+const HAND_OVER_GRANT_PATH = "context-menu:hand-to-orchestrator";
+
 type OwnedResourceTool = {
   // `resourceKind`, not `kind`: this repo uses a bare `kind` for panel kinds
   // and guards comparisons against it with a lint rule, and an ownership
@@ -2572,7 +2582,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // user's" — see RESOURCE_NOT_OWNED_CODE for why the three must not be
           // distinguishable.
           if (record === undefined && !inPinnedView) {
-            const message = readsByPinnedView
+            // The hand-over hint is a fact about this caller — a pane the user can
+            // hand terminals to — never about the id, so it reads the same on
+            // every miss and the refusal stays uniform (#12980).
+            const handOverHint =
+              ownedResource.acceptsAdoption &&
+              !readsByPinnedView &&
+              !rendererOwnedOrigin &&
+              sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner);
+            const refusal = readsByPinnedView
               ? `No agent ${ownedResource.resourceKind} with id '${resourceId}' is in the project this ` +
                 `assistant is open in, so '${actionId}' will not read it. Take the id from ` +
                 `'terminal.list' in this project.`
@@ -2584,11 +2602,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 : `No ${ownedResource.resourceKind} with id '${resourceId}' was created by this session, so ` +
                   `'${actionId}' will not act on it. This tool only acts on resources this ` +
                   `connection created; ids from listings may belong to the user, another client, or a plugin.`;
-            outcome = {
-              kind: "result",
-              value: { ok: false, error: { code: RESOURCE_NOT_OWNED_CODE, message } },
-            };
-            return buildToolError({ code: RESOURCE_NOT_OWNED_CODE, message });
+            const error: import("../../../shared/types/actions.js").ActionError = handOverHint
+              ? {
+                  code: RESOURCE_NOT_OWNED_CODE,
+                  message: `${refusal} ${HAND_OVER_HINT}`,
+                  details: { grantPath: HAND_OVER_GRANT_PATH },
+                }
+              : { code: RESOURCE_NOT_OWNED_CODE, message: refusal };
+            outcome = { kind: "result", value: { ok: false, error } };
+            return buildToolError(error);
           }
           ownedResourceId = resourceId;
           ownedResourceRecord = record;
