@@ -23,8 +23,10 @@ describe("useRecipeFocusReload editor-open guard (#9186)", () => {
     expect(content).toContain('document.addEventListener("visibilitychange"');
   });
 
-  it("uses fire-and-forget for loadRecipes (no await)", async () => {
+  it("uses fire-and-forget background loadRecipes (no await)", async () => {
     const content = await readFile(HOOK_PATH, "utf-8");
-    expect(content).toContain("void useRecipeStore.getState().loadRecipes(projectId)");
+    expect(content).toContain(
+      "void useRecipeStore.getState().loadRecipes(projectId, { background: true })"
+    );
   });
 });
