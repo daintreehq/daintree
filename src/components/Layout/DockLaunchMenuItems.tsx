@@ -25,6 +25,7 @@ type MenuComponent = React.ElementType;
 export interface DockLaunchMenuComponents {
   Item: MenuComponent;
   Label: MenuComponent;
+  Meta: MenuComponent;
   Separator: MenuComponent;
 }
 
@@ -111,27 +112,28 @@ export function DockLaunchMenuItems({
         {/* The same trailing mark the launcher's row carries, so a recently
             launched agent is listed once rather than twice. */}
         {isRecent && (
-          <span className="ml-auto pl-2 text-2xs text-text-secondary shrink-0">Recent</span>
+          <C.Meta aria-hidden={false} className="shrink-0">
+            Recent
+          </C.Meta>
         )}
       </C.Item>
     );
   };
 
   const renderPanelItem = (item: DockLaunchPanelItem) => {
-    // The menu has no qualifier column of its own, so this is a new slot rather
-    // than a filled one. It follows the recipe row below — trailing, dimmed,
-    // shrink-proof — except on the colour: that row is on `text-muted`, which
-    // has no dark-theme contrast floor here, and provenance is not decoration.
-    // `role="menuitem"` takes its accessible name from its text content, so the
-    // marker reaches a screen reader by being rendered; an `aria-label` would
-    // only be a second copy to keep in sync.
+    // The shared trailing slot, left audible: `role="menuitem"` takes its
+    // accessible name from its text content, so the marker reaches a screen
+    // reader by being rendered; an `aria-label` would only be a second copy to
+    // keep in sync.
     const originLabel = PANEL_KIND_ORIGIN_LABELS[item.origin];
     return (
       <C.Item key={item.key} onSelect={() => activate(item)}>
         <PanelKindIcon iconId={item.iconId} color={item.color} size={14} className="mr-2" />
         <span className="truncate">{item.name}</span>
         {originLabel && (
-          <span className="ml-auto pl-2 text-2xs text-text-secondary shrink-0">{originLabel}</span>
+          <C.Meta aria-hidden={false} className="shrink-0">
+            {originLabel}
+          </C.Meta>
         )}
       </C.Item>
     );
@@ -145,9 +147,9 @@ export function DockLaunchMenuItems({
     >
       <Workflow className="w-3.5 h-3.5 mr-2 shrink-0" />
       <span className="truncate">{item.name}</span>
-      <span className="ml-auto pl-2 text-2xs text-text-muted shrink-0">
+      <C.Meta aria-hidden={false} className="shrink-0">
         {item.isShadowed ? `${item.scopeLabel} · Overridden by Team` : item.scopeLabel}
-      </span>
+      </C.Meta>
     </C.Item>
   );
 

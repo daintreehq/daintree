@@ -265,3 +265,26 @@ describe("Field slot guards", () => {
     }
   });
 });
+
+describe("FieldError severity", () => {
+  it("leaves severity to the glyph and keeps the words off the status colours", () => {
+    render(
+      <Field>
+        <FieldLabel>Endpoint</FieldLabel>
+        <Input />
+        <FieldError>Enter a URL</FieldError>
+      </Field>
+    );
+    const error = screen.getByText("Enter a URL").closest("[data-slot='field-error']")!;
+    const glyph = error.querySelector("svg");
+    expect(glyph).not.toBeNull();
+    expect(glyph!.getAttribute("aria-hidden")).toBe("true");
+    const colouredWords = [error, ...error.querySelectorAll("*")].filter(
+      (el) =>
+        el.closest("svg") === null && [...el.classList].some((c) => c.startsWith("text-status-"))
+    );
+    expect(colouredWords).toEqual([]);
+    // The described-by text is the words alone.
+    expect(describedTexts(screen.getByRole("textbox"))).toEqual(["Enter a URL"]);
+  });
+});

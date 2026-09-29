@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { InlineError } from "@/components/ui/field";
 import {
   AlertTriangle,
-  ChevronDown,
   ChevronRight,
   Copy,
   Download,
@@ -12,9 +12,12 @@ import {
   MonitorPlay,
   GitPullRequest,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Plug } from "@/components/icons";
 import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
+import { Textarea } from "../ui/textarea";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { SettingsSwitch } from "../Settings/SettingsSwitch";
 import { InlineStatusBanner } from "../Terminal/InlineStatusBanner";
@@ -88,6 +91,8 @@ export function CrashRecoveryDialog({
     () => new Set(panels.filter((p) => !(shouldDeselectSuspects && p.isSuspect)).map((p) => p.id))
   );
   const [resolving, setResolving] = useState(false);
+  // Which action is in flight, so only its button shows busy.
+  const [resolvingKind, setResolvingKind] = useState<CrashRecoveryAction["kind"] | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(initialError ?? null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [showReportPreview, setShowReportPreview] = useState(false);
@@ -125,6 +130,7 @@ export function CrashRecoveryDialog({
     async (action: CrashRecoveryAction) => {
       if (resolving) return;
       setResolving(true);
+      setResolvingKind(action.kind);
       setRecoveryError(null);
       try {
         await onResolve(action);
@@ -136,6 +142,7 @@ export function CrashRecoveryDialog({
         setRecoveryError(formatErrorMessage(err, "Couldn't complete recovery action"));
       } finally {
         setResolving(false);
+        setResolvingKind(null);
       }
     },
     [resolving, onResolve]
@@ -257,9 +264,12 @@ export function CrashRecoveryDialog({
         data-testid="crash-recovery-dialog"
       >
         <AppDialog.Header>
-          <AppDialog.Title icon={<AlertTriangle className="h-5 w-5 text-status-warning" />}>
+          <AppDialog.Title icon={<AlertTriangle className="text-status-warning" />}>
             {getCrashCauseTitle(crash.entry.crashCause)}
           </AppDialog.Title>
+          {/* Disabled, not absent: recovery has to be answered, and the header
+              says so the way every other locked dialog does. */}
+          <AppDialog.CloseButton />
         </AppDialog.Header>
 
         <AppDialog.Body className="space-y-4">
@@ -273,14 +283,14 @@ export function CrashRecoveryDialog({
             <>
               <div className="border border-border-default rounded-lg overflow-hidden">
                 <div className="flex items-center justify-between px-3 py-2 bg-overlay-soft border-b border-border-default">
-                  <button
-                    type="button"
+                  <Button
+                    variant="link"
                     onClick={toggleAll}
-                    className="cursor-pointer text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
+                    className="text-xs"
                     data-testid="toggle-all-button"
                   >
                     {allSelected ? "Deselect all" : "Select all"}
-                  </button>
+                  </Button>
                   <span className="text-xs tabular-nums text-text-secondary">
                     {selectedCount} of {panels.length} selected
                   </span>
@@ -301,7 +311,7 @@ export function CrashRecoveryDialog({
               </div>
 
               {suspectCount > 0 && (
-                <div data-testid="suspect-warning" className="rounded-lg overflow-hidden">
+                <div data-testid="suspect-warning">
                   <InlineStatusBanner
                     severity="warning"
                     icon={AlertTriangle}
@@ -322,11 +332,16 @@ export function CrashRecoveryDialog({
                 <Button
                   variant="contrast"
                   onClick={handleRestoreSelected}
+                  loading={resolvingKind === "restore"}
                   disabled={resolving || selectedCount === 0}
                   className="flex-1"
                   data-testid="restore-selected-button"
                 >
-                  Restore selected (<span className="tabular-nums">{selectedCount}</span>)
+                  {/* One flex item: the button's gap would otherwise space the
+                      parentheses away from the count. */}
+                  <span>
+                    Restore selected (<span className="tabular-nums">{selectedCount}</span>)
+                  </span>
                 </Button>
                 <Button
                   variant="ghost"
@@ -348,7 +363,7 @@ export function CrashRecoveryDialog({
                 type="button"
                 onClick={handleRestoreAll}
                 disabled={resolving}
-                className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-border-default hover:border-accent-primary hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-border-default hover:border-border-strong hover:bg-overlay-subtle text-left transition-colors disabled:opacity-50 disabled:pointer-events-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
                 data-testid="restore-button"
               >
                 <div className="mt-0.5 h-5 w-5 rounded-full bg-overlay-medium flex items-center justify-center shrink-0">
@@ -374,7 +389,7 @@ export function CrashRecoveryDialog({
                 type="button"
                 onClick={() => setShowFreshConfirm(true)}
                 disabled={resolving || showFreshConfirm}
-                className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-border-default hover:border-daintree-border/80 hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-border-default hover:border-border-strong hover:bg-overlay-subtle text-left transition-colors disabled:opacity-50 disabled:pointer-events-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
                 data-testid="fresh-button"
               >
                 <div className="mt-0.5 h-5 w-5 rounded-full bg-daintree-text/10 flex items-center justify-center shrink-0">
@@ -393,7 +408,7 @@ export function CrashRecoveryDialog({
           )}
 
           {recoveryError && (
-            <div className="rounded-lg overflow-hidden" data-testid="recovery-error">
+            <div data-testid="recovery-error">
               <InlineStatusBanner
                 severity="error"
                 title="Recovery failed"
@@ -415,15 +430,19 @@ export function CrashRecoveryDialog({
             <button
               type="button"
               onClick={() => setDetailsOpen((o) => !o)}
-              className="cursor-pointer w-full flex items-center justify-between px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
+              aria-expanded={detailsOpen}
+              className="cursor-pointer w-full flex items-center justify-between px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
               data-testid="details-toggle"
             >
               <span className="font-medium">Error details</span>
-              {detailsOpen ? (
-                <ChevronDown className="h-4 w-4" />
-              ) : (
-                <ChevronRight className="h-4 w-4" />
-              )}
+              <ChevronRight
+                data-animated-chevron
+                className={cn(
+                  "h-4 w-4 transition-transform duration-150 ease-out",
+                  detailsOpen && "rotate-90"
+                )}
+                aria-hidden="true"
+              />
             </button>
 
             {detailsOpen && (
@@ -461,7 +480,7 @@ export function CrashRecoveryDialog({
                 {crash.entry.errorMessage && (
                   <div className="mt-2">
                     <div className="text-xs text-text-secondary mb-1">Error</div>
-                    <pre className="text-xs text-status-danger bg-status-danger/10 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all select-text">
+                    <pre className="text-xs text-text-primary bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] p-2 overflow-x-auto whitespace-pre-wrap break-all select-text">
                       {crash.entry.errorMessage}
                     </pre>
                   </div>
@@ -479,11 +498,10 @@ export function CrashRecoveryDialog({
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="text-xs h-7"
                     onClick={handleOpenLogFile}
                     data-testid="open-log-button"
                   >
-                    <FileText className="h-3 w-3 mr-1" />
+                    <FileText aria-hidden="true" />
                     Open log file
                   </Button>
 
@@ -491,11 +509,10 @@ export function CrashRecoveryDialog({
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="text-xs h-7"
                       onClick={() => copyStack(crash.entry.errorStack!)}
                       data-testid="copy-stack-button"
                     >
-                      <Copy className="h-3 w-3 mr-1" />
+                      <Copy aria-hidden="true" />
                       {stackCopied ? "Copied" : "Copy stack"}
                     </Button>
                   )}
@@ -503,11 +520,10 @@ export function CrashRecoveryDialog({
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="text-xs h-7"
                     onClick={() => setShowReportPreview((o) => !o)}
                     data-testid="report-button"
                   >
-                    <ExternalLink className="h-3 w-3 mr-1" />
+                    <ExternalLink aria-hidden="true" />
                     Report this crash
                   </Button>
                 </div>
@@ -534,7 +550,10 @@ export function CrashRecoveryDialog({
                       Review and edit before submitting. The report is redacted and will be publicly
                       visible on GitHub.
                     </p>
-                    <textarea
+                    <Textarea
+                      variant="code"
+                      density="compact"
+                      aria-label="Crash report"
                       key={crash.entry.id}
                       ref={reportTextRef}
                       defaultValue={reportResult.fullBody}
@@ -545,7 +564,7 @@ export function CrashRecoveryDialog({
                             .usedClipboardFallback
                         )
                       }
-                      className="w-full max-h-48 min-h-32 h-48 resize-y rounded border border-border-default bg-overlay-soft p-2 font-mono text-xs text-text-primary select-text"
+                      className="max-h-48 min-h-32 h-48 select-text"
                       data-testid="report-textarea"
                     />
                     {clipboardFallback && (
@@ -558,29 +577,24 @@ export function CrashRecoveryDialog({
                       </p>
                     )}
                     {reportError && (
-                      <p
-                        className="text-xs text-status-danger bg-status-danger/10 rounded px-2 py-1.5"
-                        data-testid="report-error"
-                      >
+                      <InlineError role="alert" data-testid="report-error">
                         {reportError}
-                      </p>
+                      </InlineError>
                     )}
                     <div className="flex gap-2">
                       <Button
                         variant="contrast"
                         size="sm"
-                        className="text-xs h-7"
                         onClick={() => void handleSubmitReport()}
-                        disabled={submitting}
+                        loading={submitting}
                         data-testid="submit-report-button"
                       >
-                        <ExternalLink className="h-3 w-3 mr-1" />
+                        <ExternalLink aria-hidden="true" />
                         Submit on GitHub
                       </Button>
                       <Button
                         size="sm"
                         variant="ghost"
-                        className="text-xs h-7"
                         onClick={() => setShowReportPreview(false)}
                         data-testid="cancel-report-button"
                       >
@@ -671,11 +685,9 @@ function PanelRow({
       className="flex items-center gap-3 px-3 py-2 hover:bg-overlay-soft cursor-pointer transition-colors"
       data-testid={`panel-row-${panel.id}`}
     >
-      <input
-        type="checkbox"
+      <Checkbox
         checked={selected}
-        onChange={() => onToggle(panel.id)}
-        className="h-3.5 w-3.5 shrink-0"
+        onCheckedChange={() => onToggle(panel.id)}
         data-testid={`panel-checkbox-${panel.id}`}
       />
       <span className="text-text-secondary shrink-0">{getPanelIcon(panel.kind)}</span>

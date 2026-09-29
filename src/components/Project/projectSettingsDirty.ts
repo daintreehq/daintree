@@ -14,6 +14,7 @@ export interface ProjectSettingsSnapshot {
   devServerLoadTimeout: number | undefined;
   turbopackEnabled: boolean;
   daintreeMcpTier: DaintreeMcpTier;
+  daintreeMcpSkipConfirmations: boolean;
   projectIconSvg: string | undefined;
   excludedPaths: string[];
   environmentVariables: Record<string, string>;
@@ -81,7 +82,8 @@ export function createProjectSettingsSnapshot(
   defaultWorktreeMode: string | undefined = undefined,
   turbopackEnabled: boolean = true,
   daintreeMcpTier: DaintreeMcpTier = "off",
-  forgeProviderOverride: string | null = null
+  forgeProviderOverride: string | null = null,
+  daintreeMcpSkipConfirmations: boolean = false
 ): ProjectSettingsSnapshot {
   const envVarRecord: Record<string, string> = {};
   const seenKeys = new Map<string, number>();
@@ -151,6 +153,7 @@ export function createProjectSettingsSnapshot(
     devServerLoadTimeout,
     turbopackEnabled,
     daintreeMcpTier,
+    daintreeMcpSkipConfirmations,
     projectIconSvg,
     excludedPaths: sanitizedPaths,
     environmentVariables: sortedEnvVars,
@@ -225,6 +228,7 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
   if (a.devServerLoadTimeout !== b.devServerLoadTimeout) return false;
   if (a.turbopackEnabled !== b.turbopackEnabled) return false;
   if (a.daintreeMcpTier !== b.daintreeMcpTier) return false;
+  if (a.daintreeMcpSkipConfirmations !== b.daintreeMcpSkipConfirmations) return false;
   if (a.projectIconSvg !== b.projectIconSvg) return false;
   if (a.defaultWorktreeRecipeId !== b.defaultWorktreeRecipeId) return false;
 

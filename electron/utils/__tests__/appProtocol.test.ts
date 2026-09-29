@@ -26,6 +26,13 @@ describe("appProtocol utilities", () => {
       expect(getMimeType("hero.avif")).toBe("image/avif");
     });
 
+    it("serves .mjs as JavaScript, the only type a module import accepts", () => {
+      // A plugin module shared by its worker and its view is naturally `.mjs`;
+      // under nosniff, the octet-stream fallback would fail the import.
+      expect(getMimeType("dist/brief.mjs")).toBe(getMimeType("dist/brief.js"));
+      expect(getMimeType("BRIEF.MJS")).toBe("text/javascript");
+    });
+
     it("maps APNG to its own image type rather than the octet-stream fallback", () => {
       // An .apng is a valid PNG, but nosniff on daintree-file:// means the
       // declared type is final: falling back to application/octet-stream would

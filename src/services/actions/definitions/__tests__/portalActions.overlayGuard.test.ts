@@ -46,6 +46,7 @@ beforeEach(() => {
   getPortalPlaceholderBoundsMock.mockReturnValue(BOUNDS);
   setOverlay(false);
   portalStoreMock.getState.mockReturnValue({
+    isOpen: true,
     tabs: [{ id: "tab-1", url: "https://example.com", title: "One" }],
     activeTabId: "tab-1",
     duplicateTab: duplicateTabMock,

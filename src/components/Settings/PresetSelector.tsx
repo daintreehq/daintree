@@ -2,6 +2,7 @@ import { useId, useMemo, useRef, useState } from "react";
 import { ChevronDown, Check } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { selectTriggerVariants } from "@/components/ui/select";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import type { AgentPreset } from "@/config/agents";
 
@@ -197,13 +198,10 @@ export function PresetSelector({
           // The row label names the control; the value span says what it is set to.
           aria-labelledby={ariaLabelledBy ? `${ariaLabelledBy} ${valueId}` : undefined}
           aria-describedby={ariaDescribedBy}
-          className={cn(
-            "flex items-center gap-2 w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)]",
-            "border border-border-strong bg-surface-canvas text-text-primary transition-colors",
-            // Radix hands focus back to the trigger when the list closes, so a `focus:`
-            // indicator stayed lit after every pick — accent only for keyboard focus.
-            "focus:outline-hidden focus-visible:border-accent-primary"
-          )}
+          // A select's field chrome, focus-visible ring included: Radix hands focus
+          // back to the trigger when the list closes, so a `focus:` indicator
+          // would stay lit after every pick.
+          className={selectTriggerVariants()}
           data-testid="preset-selector-trigger"
         >
           <span
@@ -215,9 +213,11 @@ export function PresetSelector({
             {selectedItem.label}
           </span>
           <ChevronDown
+            data-animated-chevron
             size={14}
+            aria-hidden="true"
             className={cn(
-              "shrink-0 text-text-secondary transition-transform",
+              "shrink-0 text-text-secondary transition-transform duration-150 ease-out",
               open && "rotate-180"
             )}
           />
@@ -226,13 +226,14 @@ export function PresetSelector({
       <PopoverContent
         align="start"
         sideOffset={4}
+        motion="drop"
         className="p-1"
         style={{ width: "var(--radix-popover-trigger-width)" }}
         data-testid="preset-selector-listbox"
         onOpenAutoFocus={(e) => {
           e.preventDefault();
           listboxRef.current?.focus();
-          // Bring the current preset's row, and its rail, into view on opening.
+          // Bring the current preset's row into view on opening.
           document.getElementById(optionDomId(activeIndex))?.scrollIntoView?.({ block: "nearest" });
         }}
       >
@@ -244,7 +245,7 @@ export function PresetSelector({
           tabIndex={0}
           aria-activedescendant={optionDomId(activeIndex)}
           onKeyDown={handleListKeyDown}
-          // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- focus is drawn on the aria-activedescendant option by PALETTE_ROW_CLASS (fill + leading rail)
+          // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- focus is drawn on the aria-activedescendant option by PALETTE_ROW_CLASS (the highlight fill)
           className="overflow-y-auto max-h-80 focus:outline-hidden"
         >
           {renderOption(options[0]!, 0, "preset-option-default")}
@@ -314,14 +315,14 @@ function PresetOption({
       id={domId}
       role="option"
       // The palettes' contract: `aria-selected` is the row Enter acts on, and the
-      // shared row class draws it as a fill plus a leading `selection-outline` rail
-      // (3:1 where the fill alone is ~1.1:1). The committed value is `aria-current`
-      // with a check mark, so the two never compete for one treatment.
+      // shared row class draws it as the highlight fill. The committed value is
+      // `aria-current` with a check mark, so the two never compete for one
+      // treatment.
       aria-selected={isActive}
       aria-current={isSelected ? "true" : undefined}
       data-testid={testid}
       onClick={() => onSelect(item.id)}
-      onMouseMove={onHover}
+      onPointerMove={onHover}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();

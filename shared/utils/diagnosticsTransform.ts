@@ -30,21 +30,82 @@ export function filterSections(
 
 /** Apply find-and-replace redactions to a JSON string. */
 export function applyReplacements(json: string, rules: ReplacementRule[]): string {
+  return applyReplacementsCounted(json, rules).output;
+}
+
+/**
+ * `applyReplacements`, plus what it did: how many matches each rule replaced
+ * (index-aligned with `rules`) and the ranges of the output each replacement
+ * wrote (`[start, end]`, inclusive). Counted in the same ordered pass, so a
+ * later rule that finds nothing because an earlier one already replaced it
+ * reports zero — which is what the saved report will contain. A range a later
+ * rule rewrites is dropped rather than left pointing at text it no longer holds.
+ */
+export function applyReplacementsCounted(
+  json: string,
+  rules: ReplacementRule[]
+): { output: string; counts: number[]; ranges: [number, number][] } {
   let out = json;
-  for (const rule of rules) {
-    if (!rule.find) continue;
+  let ranges: [number, number][] = [];
+  const counts = rules.map(() => 0);
+  rules.forEach((rule, i) => {
+    if (!rule.find) return;
+    // Where each match sat in `out` before this rule, and how long its
+    // replacement is — enough to move the earlier ranges and add new ones.
+    const matches: { start: number; end: number; length: number }[] = [];
     try {
       if (rule.kind === "regex") {
-        out = out.replace(new RegExp(rule.find, "g"), rule.replace);
+        const pattern = new RegExp(rule.find, "g");
+        // A `$` pattern expands per match, so its output length is not known
+        // up front: count it and drop the ranges rather than guess at them.
+        if (rule.replace.includes("$")) {
+          counts[i] = out.match(pattern)?.length ?? 0;
+          out = out.replace(pattern, rule.replace);
+          ranges = [];
+          return;
+        }
+        out = out.replace(pattern, (match: string, ...rest: unknown[]) => {
+          const offset = rest.find((arg): arg is number => typeof arg === "number") ?? 0;
+          matches.push({ start: offset, end: offset + match.length, length: rule.replace.length });
+          return rule.replace;
+        });
       } else {
+        for (
+          let at = out.indexOf(rule.find);
+          at !== -1;
+          at = out.indexOf(rule.find, at + rule.find.length)
+        ) {
+          matches.push({ start: at, end: at + rule.find.length, length: rule.replace.length });
+        }
         out = out.split(rule.find).join(rule.replace);
       }
     } catch {
       // Skip invalid replacements (e.g. an uncompilable regex pattern), the
       // same way an empty `find` is skipped above.
+      return;
     }
-  }
-  return out;
+    counts[i] = matches.length;
+    if (matches.length === 0) return;
+    const shiftAt = (pos: number) => {
+      let delta = 0;
+      for (const m of matches) {
+        if (m.end > pos) break;
+        delta += m.length - (m.end - m.start);
+      }
+      return pos + delta;
+    };
+    const moved = ranges
+      .filter(([s, e]) => !matches.some((m) => m.start <= e && s < m.end))
+      .map(([s, e]): [number, number] => [shiftAt(s), shiftAt(e + 1) - 1]);
+    const added = matches
+      .filter((m) => m.length > 0)
+      .map((m): [number, number] => {
+        const start = shiftAt(m.start);
+        return [start, start + m.length - 1];
+      });
+    ranges = [...moved, ...added].sort((x, y) => x[0] - y[0]);
+  });
+  return { output: out, counts, ranges };
 }
 
 /**

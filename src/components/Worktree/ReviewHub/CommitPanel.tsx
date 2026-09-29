@@ -1,26 +1,90 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useId } from "react";
+import { Callout } from "@/components/ui/Callout";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
 import type { GitPushDestination } from "@shared/types/git";
 import { cn } from "@/lib/utils";
-import { GitCommit, ArrowUpFromLine, Check, CircleX } from "lucide-react";
-import { Spinner } from "@/components/ui/Spinner";
+import { GitCommit, ArrowUpFromLine, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
+import { KbdChord } from "@/components/ui/Kbd";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { isMac } from "@/lib/platform";
+import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
+import { REVIEW_HUB_DISABLED_CTA } from "./reviewHubUtils";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
+import { RefChip } from "@/components/Git/GitOperationPreview";
 
 const MAX_SUBJECT_LENGTH = 72;
 const HISTORY_FETCH_POLL_INTERVAL_MS = 10;
 
-// Fading a chromatic CTA to 50% produces a dusty slab of the accent that still
-// dominates the dialog, and drops the label to ~2.1:1 in every light theme.
-// Neutral disabled surface + muted ink instead. Shared by both primary CTAs so
-// the panel shows one disabled treatment regardless of whether the worktree
-// has a remote.
+// Shared by both primary CTAs so the panel shows one disabled treatment
+// regardless of whether the worktree has a remote.
 const DISABLED_CTA_CLASSES = cn(
-  "aria-disabled:bg-surface-inset aria-disabled:text-text-muted",
-  "aria-disabled:shadow-none aria-disabled:cursor-not-allowed"
+  REVIEW_HUB_DISABLED_CTA,
+  // Forced colours repaint every button ButtonText-on-ButtonFace, which made an
+  // unavailable primary indistinguishable from a live one.
+  "forced-colors:aria-disabled:text-[GrayText] forced-colors:aria-disabled:outline-[GrayText]"
 );
+
+const PRIMARY_SHORTCUT = "Cmd+Enter";
+// How long a push can go without a progress event before the composer says so.
+const PUSH_QUIET_MS = 15_000;
+
+// simple-git reports the first word of git's progress line as the stage.
+const PUSH_STAGE_LABELS: Record<string, string> = {
+  enumerating: "Enumerating objects",
+  counting: "Counting objects",
+  compressing: "Compressing objects",
+  writing: "Writing objects",
+  receiving: "Receiving objects",
+  resolving: "Resolving deltas",
+  remote: "Remote",
+};
+
+function pushStageLabel(stage: string): string {
+  const key = stage.replace(/:$/, "").toLowerCase();
+  return PUSH_STAGE_LABELS[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+function formatFileCount(count: number): string {
+  return `${count} file${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * Every unmet requirement in one sentence, most structural first, so fixing the
+ * named one never uncovers a second the user was not told about.
+ */
+function describeBlockers({
+  isDetachedHead,
+  hasConflicts,
+  needsStaging,
+  needsMessage,
+  stagedSummary,
+}: {
+  isDetachedHead: boolean;
+  hasConflicts: boolean;
+  needsStaging: boolean;
+  needsMessage: boolean;
+  stagedSummary: string;
+}): string {
+  const steps = [
+    isDetachedHead && "switch to a branch",
+    hasConflicts && "resolve merge conflicts",
+    needsStaging && "stage files",
+    needsMessage && "write a commit message",
+  ].filter((step): step is string => typeof step === "string");
+  const joined =
+    steps.length > 1 ? `${steps.slice(0, -1).join(", ")} and ${steps[steps.length - 1]}` : steps[0];
+  if (!joined) return "";
+  if (isDetachedHead) return `Detached HEAD — ${joined} to commit`;
+  const sentence = joined.charAt(0).toUpperCase() + joined.slice(1);
+  // With files staged and nothing structural in the way, the count confirms what
+  // the message will cover.
+  return !needsStaging && !hasConflicts
+    ? `${sentence} · ${stagedSummary}`
+    : `${sentence} to commit`;
+}
 
 interface CommitPanelProps {
   stagedCount: number;
@@ -48,6 +112,12 @@ interface CommitPanelProps {
   skipPushConfirm: boolean;
   /** Persist the per-worktree opt-out preference. Called only when the user confirms the push. */
   onSetSkipPushConfirm: (value: boolean) => void;
+  /**
+   * The staging status on screen is the cached snapshot seeded at open and has
+   * not been re-read yet. Commit and push wait for the live read so they never
+   * act on a file list or branch that may have moved; typing stays open.
+   */
+  isVerifying?: boolean;
 }
 
 export function CommitPanel({
@@ -68,8 +138,14 @@ export function CommitPanel({
   pushTargetBranch,
   skipPushConfirm,
   onSetSkipPushConfirm,
+  isVerifying = false,
 }: CommitPanelProps) {
-  const [isCommitting, setIsCommitting] = useState(false);
+  // Which submit is in flight. Commit & push holds it through the commit and the
+  // refresh that follows, so the composer never looks idle before the push starts.
+  const [pendingAction, setPendingAction] = useState<"commit" | "commit-push" | null>(null);
+  // The count being committed, held from the click: the refresh after the commit
+  // drops the live count to what is left, often zero, before the push begins.
+  const [pendingCount, setPendingCount] = useState(0);
   const [pushConfirmOpen, setPushConfirmOpen] = useState(false);
   const destinationLabel = pushDestination
     ? `${pushDestination.remote}/${pushDestination.branch}`
@@ -80,23 +156,34 @@ export function CommitPanel({
 
   const actionInFlightRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const detachedHeadRef = useRef<HTMLDivElement>(null);
+  const statusRef = useRef<HTMLParagraphElement>(null);
+  // Reset by every progress event: an observation that nothing new has arrived,
+  // never a claim that the push is stuck.
+  const [isPushQuiet, setIsPushQuiet] = useState(false);
+  useEffect(() => {
+    setIsPushQuiet(false);
+    if (!isPushing) return;
+    const timer = setTimeout(() => setIsPushQuiet(true), PUSH_QUIET_MS);
+    return () => clearTimeout(timer);
+  }, [isPushing, pushProgress]);
+  const messageId = useId();
+  const counterId = useId();
+  const statusId = useId();
 
   const subjectLine = commitMessage.split("\n")[0] || "";
-  const hasLineOverflow = /.{73,}/.test(commitMessage);
-  const isBusy = isCommitting || isPushing;
+  const isSubjectOverflow = subjectLine.length > MAX_SUBJECT_LENGTH;
+  const isCommitting = pendingAction !== null && !isPushing;
+  const isBusy = pendingAction !== null || isPushing;
+  const actionsBusy = isBusy || isVerifying;
   const canCommit =
     stagedCount > 0 && commitMessage.trim().length > 0 && !isDetachedHead && !hasConflicts;
 
+  // Ordered by where a blocked click sends focus first.
   const blockers = [
-    { key: "detached-head" as const, active: isDetachedHead, label: "Not on detached HEAD" },
-    { key: "conflicts" as const, active: hasConflicts, label: "No merge conflicts" },
-    { key: "zero-staged" as const, active: stagedCount === 0, label: "Files staged for commit" },
-    {
-      key: "empty-message" as const,
-      active: commitMessage.trim().length === 0,
-      label: "Commit message entered",
-    },
+    { key: "detached-head" as const, active: isDetachedHead },
+    { key: "conflicts" as const, active: hasConflicts },
+    { key: "zero-staged" as const, active: stagedCount === 0 },
+    { key: "empty-message" as const, active: commitMessage.trim().length === 0 },
   ];
 
   const primaryBlocker = blockers.find((b) => b.active) ?? null;
@@ -106,7 +193,7 @@ export function CommitPanel({
     if (!primaryBlocker) return;
     switch (primaryBlocker.key) {
       case "detached-head":
-        detachedHeadRef.current?.focus();
+        statusRef.current?.focus();
         break;
       case "conflicts":
         onFocusBlocker?.("conflicts");
@@ -168,41 +255,45 @@ export function CommitPanel({
   );
 
   const handleCommit = useCallback(async () => {
-    if (!canCommit || isBusy) return;
+    if (!canCommit || actionsBusy) return;
     if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
-    setIsCommitting(true);
+    setPendingCount(stagedCount);
+    setPendingAction("commit");
     try {
       await onCommit(commitMessage);
       onCommitMessageChange("");
     } catch {
       // Error is handled by the parent via setActionError
     } finally {
-      setIsCommitting(false);
+      setPendingAction(null);
       actionInFlightRef.current = false;
     }
-  }, [canCommit, isBusy, commitMessage, onCommit, onCommitMessageChange]);
+  }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommit, onCommitMessageChange]);
 
   const handleCommitAndPush = useCallback(async () => {
-    if (!canCommit || isBusy) return;
+    if (!canCommit || actionsBusy) return;
     if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
+    setPendingCount(stagedCount);
+    setPendingAction("commit-push");
     try {
       await onCommitAndPush(commitMessage);
       onCommitMessageChange("");
     } catch {
       // Error is handled by the parent via setActionError
     } finally {
+      setPendingAction(null);
       actionInFlightRef.current = false;
     }
-  }, [canCommit, isBusy, commitMessage, onCommitAndPush, onCommitMessageChange]);
+  }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommitAndPush, onCommitMessageChange]);
 
   const handlePrimaryClick = useCallback(() => {
     if (isBlocked) {
       focusBlocker();
       return;
     }
-    if (isBusy) return;
+    if (actionsBusy) return;
     if (hasRemote) {
       // D2 confirmation: every remote push is a shared-state mutation. Show
       // the commit message + target branch preview unless the user has opted
@@ -221,7 +312,7 @@ export function CommitPanel({
     }
   }, [
     isBlocked,
-    isBusy,
+    actionsBusy,
     hasRemote,
     pushDestination,
     skipPushConfirm,
@@ -246,7 +337,6 @@ export function CommitPanel({
   }, []);
 
   const progressEntries = [...pushProgress.values()];
-  const hasProgress = progressEntries.length > 0;
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -361,42 +451,93 @@ export function CommitPanel({
     ]
   );
 
-  const blockerTooltip = (
-    <div>
-      <div className="text-2xs font-semibold text-text-secondary mb-2">Cannot commit</div>
-      <ul className="flex flex-col gap-1.5 text-xs">
-        {blockers.map((b) => (
-          <li key={b.key} className="flex items-center gap-2">
-            {b.active ? (
-              <CircleX className="w-3 h-3 text-status-error shrink-0" />
-            ) : (
-              <Check className="w-3 h-3 text-status-success shrink-0" />
-            )}
-            <span className={b.active ? "text-text-primary" : "text-daintree-text/40 line-through"}>
-              {b.label}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
+  const onMac = isMac();
+  const primaryLabel = hasRemote ? "Commit & push" : "Commit";
+  const primaryBusy = hasRemote ? pendingAction === "commit-push" || isPushing : isCommitting;
+  const primaryKeyshortcuts = comboToAriaKeyshortcuts(PRIMARY_SHORTCUT, onMac);
+  const pushTarget = pushTargetBranch ?? destinationLabel;
+  const stagedSummary = `${formatFileCount(stagedCount)} staged`;
 
-  const primaryLabel = hasRemote ? "Commit & Push" : "Commit";
+  // One line under the message box answers "can I commit, and if so what happens".
+  // It replaces a hover-only checklist: the buttons point at it with
+  // aria-describedby, and a blocked click lands focus on whatever it names.
+  let statusTone: "neutral" | "warning" = "neutral";
+  let statusContent: React.ReactNode;
+  let statusTitle: string | undefined;
+  if (isPushing) {
+    statusContent = pushTarget ? (
+      <>
+        Pushing to <span className="font-mono text-text-primary">{pushTarget}</span>
+      </>
+    ) : (
+      "Pushing…"
+    );
+    statusTitle = pushTarget ? `Pushing to ${pushTarget}` : undefined;
+  } else if (isCommitting) {
+    statusContent = `Committing ${formatFileCount(pendingCount)}…`;
+  } else if (isBlocked) {
+    statusTone = isDetachedHead || hasConflicts ? "warning" : "neutral";
+    statusContent = describeBlockers({
+      isDetachedHead,
+      hasConflicts,
+      needsStaging: stagedCount === 0,
+      needsMessage: commitMessage.trim().length === 0,
+      stagedSummary,
+    });
+  } else if (isVerifying) {
+    statusContent = "Checking staged changes…";
+  } else if (hasRemote) {
+    statusContent = destinationLabel ? (
+      <>
+        {stagedSummary} · pushes to{" "}
+        <span className="font-mono text-text-primary">{destinationLabel}</span>
+      </>
+    ) : (
+      `${stagedSummary} · no push destination set`
+    );
+    statusTitle = destinationLabel ? `${stagedSummary} · pushes to ${destinationLabel}` : undefined;
+  } else {
+    statusContent = stagedSummary;
+  }
+
+  const showShortcut = !isBlocked && !actionsBusy;
+  const progressRows = isPushing ? progressEntries : [];
 
   return (
-    <div className="border-t border-divider p-3 space-y-2">
-      {isDetachedHead && (
-        <div
-          ref={detachedHeadRef}
-          tabIndex={-1}
-          className="text-xs text-status-warning bg-status-warning/10 rounded px-2 py-1.5 outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
+    <div className="border-t border-divider p-3 space-y-2" data-testid="review-hub-commit-panel">
+      <div className="flex items-baseline justify-between gap-2">
+        <label htmlFor={messageId} className="text-xs font-medium text-text-secondary">
+          Commit message
+        </label>
+        <span
+          id={counterId}
+          className={cn(
+            "inline-flex items-center gap-1 text-2xs tabular-nums",
+            // Warning ink measured just under 4.5:1 on the light themes. The glyph
+            // carries the tone; the numbers stay in primary ink.
+            isSubjectOverflow ? "font-medium text-text-primary" : "text-text-secondary"
+          )}
         >
-          Detached HEAD — commits are not allowed in this state.
-        </div>
-      )}
+          {isSubjectOverflow && (
+            <AlertTriangle
+              className="w-3 h-3 shrink-0 text-status-warning"
+              aria-hidden="true"
+              data-severity-glyph=""
+            />
+          )}
+          {subjectLine.length}/{MAX_SUBJECT_LENGTH}
+          <span className="sr-only">
+            {isSubjectOverflow
+              ? " characters in the subject line, over the recommended length"
+              : " characters in the subject line"}
+          </span>
+        </span>
+      </div>
 
-      <textarea
+      <Textarea
         ref={textareaRef}
+        id={messageId}
+        data-testid="review-hub-commit-message"
         value={commitMessage}
         onChange={(e) => {
           if (e.target.value !== appliedHistoryMessageRef.current) {
@@ -407,58 +548,118 @@ export function CommitPanel({
           onCommitMessageChange(e.target.value);
         }}
         onKeyDown={handleKeyDown}
-        placeholder="Commit message…"
+        placeholder="Summary on the first line, details below"
+        aria-describedby={counterId}
         rows={2}
         disabled={isBusy || isDetachedHead}
+        variant="code"
+        resize="none"
         style={
           {
-            backgroundImage: `linear-gradient(to right, transparent 72ch, var(--color-border-subtle) 72ch, var(--color-border-subtle) calc(72ch + 1px), transparent calc(72ch + 1px))`,
-            backgroundOrigin: "content-box",
-            backgroundClip: "content-box",
+            // Two layers so the ruler aligns to the text (content box) while the
+            // fill still reaches the border: background-color takes the clip of
+            // the LAST layer, and a single content-box layer left the padding
+            // unpainted, a box inside a box on every theme with its own input fill.
+            backgroundImage: `linear-gradient(to right, transparent 72ch, var(--color-border-subtle) 72ch, var(--color-border-subtle) calc(72ch + 1px), transparent calc(72ch + 1px)), none`,
+            backgroundOrigin: "content-box, padding-box",
+            backgroundClip: "content-box, padding-box",
             backgroundAttachment: "local",
             fieldSizing: "content",
           } as React.CSSProperties
         }
         className={cn(
           // Fallback keeps themes without --review-commit-input-bg byte-identical.
-          "w-full resize-none rounded-md border border-divider bg-[var(--review-commit-input-bg,var(--color-surface-canvas))] px-3 py-2 text-xs font-mono",
-          "min-h-[calc(2lh+1rem)] max-h-[calc(6lh+1rem)] overflow-y-auto",
-          "placeholder:text-text-placeholder text-text-primary",
-          "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30 focus:border-transparent",
-          "disabled:opacity-50 disabled:cursor-not-allowed"
+          "bg-[var(--review-commit-input-bg,var(--color-surface-canvas))]",
+          "min-h-[calc(2lh+1rem)] max-h-[calc(6lh+1rem)] overflow-y-auto"
         )}
       />
-      <div
+
+      <p
+        ref={statusRef}
+        id={statusId}
+        tabIndex={-1}
+        title={statusTitle}
+        data-testid="review-hub-commit-status"
         className={cn(
-          "flex justify-end text-3xs tabular-nums -mt-1",
-          hasLineOverflow ? "text-status-warning" : "text-text-secondary"
+          "flex items-center gap-1.5 min-h-5 text-xs text-text-secondary rounded-[var(--radius-sm)]",
+          // `focus:`, not `focus-visible:`: a blocked click moves focus here by
+          // script, and Chromium would not ring that after a pointer click, so a
+          // mouse user would see nothing happen.
+          "focus:outline focus:outline-2 focus:outline-accent-primary focus:outline-offset-2"
         )}
       >
-        {subjectLine.length}/{MAX_SUBJECT_LENGTH}
-      </div>
+        {statusTone === "warning" && (
+          <AlertTriangle
+            className="w-3.5 h-3.5 shrink-0 text-status-warning"
+            aria-hidden="true"
+            data-severity-glyph=""
+          />
+        )}
+        {/* A blocker wraps so every requirement stays readable at any width; the
+            ready and pushing lines truncate a long destination instead. */}
+        <span className={cn("min-w-0", isBlocked && !isBusy ? "break-words" : "truncate")}>
+          {statusContent}
+        </span>
+        {isPushing && isPushQuiet && (
+          // Its own slot, so a long destination truncating beside it can never
+          // hide the one line explaining a pause.
+          <span className="shrink-0 whitespace-nowrap">
+            · no new progress in the last {PUSH_QUIET_MS / 1000}s
+          </span>
+        )}
+        {showShortcut && (
+          <KbdChord
+            shortcut={PRIMARY_SHORTCUT}
+            density="compact"
+            className="ml-auto shrink-0"
+            aria-label={`${primaryLabel} shortcut`}
+          />
+        )}
+      </p>
 
-      {isPushing && pushTargetBranch && (
-        <div className="text-3xs text-text-secondary truncate">
-          Pushing to <span className="text-text-secondary font-mono">{pushTargetBranch}</span>
-        </div>
-      )}
+      {/* The visible status line is not live — it changes on every keystroke that
+          empties or fills the message. This region speaks the push only. */}
+      <span role="status" className="sr-only">
+        {isPushing && pushTarget ? `Pushing to ${pushTarget}` : ""}
+      </span>
 
-      {isPushing && hasProgress && (
-        <div className="space-y-1">
-          {progressEntries.map((e) => (
-            <div key={e.stage} className="flex items-center gap-2 text-3xs text-text-secondary">
-              <span className="w-20 truncate capitalize">{e.stage}</span>
-              <div className="flex-1 h-1 bg-surface-canvas rounded-full overflow-hidden">
+      {progressRows.length > 0 && (
+        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 text-2xs text-text-secondary">
+          {progressRows.map((e) => {
+            const label = pushStageLabel(e.stage);
+            // Git reports some stages (remote hook output, mostly) with no
+            // percentage. A bar would draw that as 0%; say what was seen instead.
+            if (e.progress == null) {
+              return (
+                <div key={e.stage} className="contents">
+                  <span className="whitespace-nowrap">{label}</span>
+                  <span className="col-span-2 truncate">Reported, no percentage</span>
+                </div>
+              );
+            }
+            const value = Math.min(100, Math.max(0, Math.round(e.progress)));
+            return (
+              <div key={e.stage} className="contents">
+                <span className="whitespace-nowrap">{label}</span>
                 <div
-                  className="h-full bg-primary rounded-full transition-[width] duration-300 ease-out"
-                  style={{ width: `${Math.min(100, Math.max(0, e.progress ?? 0))}%` }}
-                />
+                  role="progressbar"
+                  aria-label={label}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={value}
+                  className="h-1 rounded-full bg-overlay-soft overflow-hidden"
+                >
+                  <div
+                    className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
+                    style={{ width: `${value}%` }}
+                  />
+                </div>
+                <span className="tabular-nums text-right min-w-[4ch]" aria-hidden="true">
+                  {value}%
+                </span>
               </div>
-              {e.progress != null && (
-                <span className="tabular-nums w-8 text-right">{e.progress}%</span>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -489,21 +690,18 @@ export function CommitPanel({
       >
         <div className="flex flex-col gap-2">
           {pushDestination === null && (
-            <div
-              className="rounded border border-status-error/30 bg-status-error/10 px-2 py-1.5 text-2xs text-status-error"
-              data-testid="commit-panel-push-no-destination"
-            >
-              No push destination is configured for this branch. Set an upstream, or configure a
-              push remote, before pushing.
-            </div>
+            <Callout severity="warning" data-testid="commit-panel-push-no-destination">
+              <p>
+                No push destination is configured for this branch. Set an upstream, or configure a
+                push remote, before pushing.
+              </p>
+            </Callout>
           )}
           <div>
-            <span
+            <RefChip
               data-testid="commit-panel-push-confirm-branch"
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs font-mono text-text-primary"
-            >
-              {destinationLabel ?? currentBranch ?? ""}
-            </span>
+              value={destinationLabel ?? currentBranch ?? ""}
+            />
           </div>
           <pre
             data-testid="commit-panel-push-confirm-message"
@@ -514,13 +712,12 @@ export function CommitPanel({
           >
             {commitMessage}
           </pre>
-          <label className="flex items-center gap-2 text-xs text-text-secondary select-none">
-            <input
-              type="checkbox"
+          <label className="flex cursor-pointer items-start gap-2 text-sm text-text-primary select-none">
+            <Checkbox
               data-testid="commit-panel-push-confirm-dont-ask"
               checked={dontAskChecked}
-              onChange={(e) => setDontAskChecked(e.target.checked)}
-              className="shrink-0"
+              onCheckedChange={(checked) => setDontAskChecked(checked === true)}
+              className="mt-0.5"
             />
             Don't ask again for this worktree
           </label>
@@ -528,78 +725,48 @@ export function CommitPanel({
       </ConfirmDialog>
 
       <div className="flex items-center gap-2">
-        {hasRemote ? (
-          <Tooltip delayDuration={300}>
-            <TooltipTrigger asChild>
-              <div className="flex items-center gap-2 flex-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    if (isBlocked) {
-                      focusBlocker();
-                      return;
-                    }
-                    if (isBusy) return;
-                    void handleCommit();
-                  }}
-                  aria-disabled={!canCommit || isBusy || undefined}
-                  className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                >
-                  {isCommitting ? (
-                    <Spinner size="sm" className="mr-1.5" />
-                  ) : (
-                    <GitCommit className="w-3.5 h-3.5 mr-1.5" />
-                  )}
-                  Commit
-                </Button>
-                <Button
-                  variant="default"
-                  size="sm"
-                  onClick={handlePrimaryClick}
-                  aria-disabled={!canCommit || isBusy || undefined}
-                  className={cn("flex-1", DISABLED_CTA_CLASSES)}
-                >
-                  {isPushing ? (
-                    <Spinner size="sm" className="mr-1.5" />
-                  ) : (
-                    <ArrowUpFromLine className="w-3.5 h-3.5 mr-1.5" />
-                  )}
-                  {primaryLabel} ({stagedCount})
-                </Button>
-              </div>
-            </TooltipTrigger>
-            {isBlocked && (
-              <TooltipContent side="top" align="center" className="p-3 max-w-[260px]">
-                {blockerTooltip}
-              </TooltipContent>
-            )}
-          </Tooltip>
-        ) : (
-          <Tooltip delayDuration={300}>
-            <TooltipTrigger asChild>
-              <Button
-                variant="default"
-                size="sm"
-                onClick={handlePrimaryClick}
-                aria-disabled={!canCommit || isBusy || undefined}
-                className={cn("flex-1", DISABLED_CTA_CLASSES)}
-              >
-                {isCommitting ? (
-                  <Spinner size="sm" className="mr-1.5" />
-                ) : (
-                  <GitCommit className="w-3.5 h-3.5 mr-1.5" />
-                )}
-                Commit ({stagedCount})
-              </Button>
-            </TooltipTrigger>
-            {isBlocked && (
-              <TooltipContent side="top" align="center" className="p-3 max-w-[260px]">
-                {blockerTooltip}
-              </TooltipContent>
-            )}
-          </Tooltip>
+        {hasRemote && (
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="review-hub-commit-only"
+            onClick={() => {
+              if (isBlocked) {
+                focusBlocker();
+                return;
+              }
+              if (actionsBusy) return;
+              void handleCommit();
+            }}
+            loading={pendingAction === "commit"}
+            aria-disabled={!canCommit || actionsBusy || undefined}
+            aria-describedby={statusId}
+            // Opacity, as the Button primitive's own disabled state does: a ghost has
+            // no surface to change, and muted ink alone sits too close to its
+            // secondary resting ink to read as unavailable.
+            className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed forced-colors:aria-disabled:text-[GrayText]"
+          >
+            <GitCommit aria-hidden="true" />
+            Commit
+          </Button>
         )}
+        <Button
+          variant="default"
+          size="sm"
+          data-testid="review-hub-commit-primary"
+          data-staged-count={stagedCount}
+          onClick={handlePrimaryClick}
+          aria-disabled={!canCommit || actionsBusy || undefined}
+          aria-describedby={statusId}
+          aria-keyshortcuts={primaryKeyshortcuts}
+          loading={primaryBusy}
+          // Busy keeps the CTA's own fill under the spinner; the inset treatment
+          // is for "can't commit", not "committing".
+          className={cn("flex-1", !primaryBusy && DISABLED_CTA_CLASSES)}
+        >
+          {hasRemote ? <ArrowUpFromLine aria-hidden="true" /> : <GitCommit aria-hidden="true" />}
+          {primaryLabel}
+        </Button>
       </div>
     </div>
   );

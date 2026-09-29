@@ -11,9 +11,16 @@ import { formatTokenCount } from "@/utils/formatTokenCount";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
 import { SubagentChip } from "./SubagentChip";
+import {
+  HEADER_CHIP_CLASS,
+  HEADER_CHIP_FOCUS_CLASS,
+  HEADER_CHIP_SURFACE,
+} from "./terminalHeaderChip";
 import { TerminalDrivenByBadge } from "./TerminalHandOver";
-import { TerminalWatchChip } from "./TerminalWatchChip";
+import { TerminalRateLimitBadge } from "./TerminalRateLimitBadge";
+import { TerminalNotifyChip } from "./TerminalNotifyChip";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { describeExitStatus } from "./exitStatus";
 
 export interface TerminalHeaderContentProps {
   id: string;
@@ -225,6 +232,7 @@ export function TerminalHeaderContent({
   );
 
   // Show command pill only for plain terminals (not agent terminals)
+  const exitStatus = isExited ? describeExitStatus(exitCode) : null;
   const isPlainTerminal = kind == null || kind === "terminal";
   const showCommandPill =
     isPlainTerminal && !agentState && activityStatus === "working" && !!lastCommand;
@@ -256,7 +264,7 @@ export function TerminalHeaderContent({
         <Tooltip>
           <TooltipTrigger asChild>
             <span
-              className="inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded-full text-2xs bg-overlay-soft border border-divider text-text-secondary"
+              className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE)}
               role="status"
               aria-label="Agent finished with no file changes"
             >
@@ -285,9 +293,16 @@ export function TerminalHeaderContent({
           polite live region. The global announcer in useAccessibilityAnnouncements
           routes the transition once with a pane-title prefix, avoiding competing
           live regions across a multi-pane fleet (#9204). */}
-      {isExited && (
-        <span className="text-xs font-mono text-status-error" role="status" aria-live="off">
-          [exit {exitCode}]
+      {exitStatus && (
+        <span
+          className={cn(
+            "text-xs font-mono tabular-nums",
+            exitStatus.failed ? "text-status-error" : "text-text-secondary"
+          )}
+          role="status"
+          aria-live="off"
+        >
+          {exitStatus.badge}
         </span>
       )}
 
@@ -300,7 +315,7 @@ export function TerminalHeaderContent({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded-full border border-dashed border-divider"
+              className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE, "border-dashed")}
               role="status"
               aria-live="off"
               data-testid="terminal-hibernated-badge"
@@ -322,13 +337,22 @@ export function TerminalHeaderContent({
           an orchestrating pane (#12490), naming which one. Self-gating. */}
       {hasPtyKind && <TerminalDrivenByBadge terminalId={id} />}
 
+      {/* Pane-observed rate-limit banner (#12797). Self-gating and expiring. */}
+      {hasPtyKind && <TerminalRateLimitBadge terminalId={id} />}
+
       {/* Command Pill - shows currently running command (inline with title).
-          Slimmed to px-2 py-0.5 to match the row's other small badges. */}
+          The row's one chip box; the command truncates inside it. */}
       {showCommandPill && (
         <Tooltip autoDismiss={false}>
           <TooltipTrigger asChild>
-            <span className="px-2 py-0.5 rounded-full text-2xs font-mono bg-overlay-soft text-text-secondary border border-divider truncate max-w-[20rem]">
-              {lastCommand}
+            <span
+              className={cn(
+                HEADER_CHIP_CLASS,
+                HEADER_CHIP_SURFACE,
+                "min-w-0 max-w-[20rem] shrink font-mono"
+              )}
+            >
+              <span className="truncate">{lastCommand}</span>
             </span>
           </TooltipTrigger>
           <TooltipContent side="bottom">{lastCommand}</TooltipContent>
@@ -340,7 +364,7 @@ export function TerminalHeaderContent({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-medium text-text-primary px-1.5 py-0.5 rounded"
+              className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE)}
               role="status"
               aria-live="off"
             >
@@ -360,16 +384,16 @@ export function TerminalHeaderContent({
           pane's header clips first (#12374). */}
       <SubagentChip terminalId={id} />
 
-      {/* Terminal watches (#12491) — self-gating; shown only while an agent in
-          this pane holds watches that may wake it, and the one place the user
-          can stop them. */}
-      {hasPtyKind && <TerminalWatchChip terminalId={id} />}
+      {/* Terminal notices — self-gating; shown only while an agent in this
+          pane is waiting to hear about other terminals, and the one place the
+          user can stop them. */}
+      {hasPtyKind && <TerminalNotifyChip terminalId={id} />}
 
       {/* Input locked indicator — bare ambient glyph. */}
       {isInputLocked && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="flex items-center text-daintree-text/50 shrink-0" role="status">
+            <div className="flex items-center text-text-secondary shrink-0" role="status">
               <Lock className="w-3.5 h-3.5" aria-hidden="true" />
             </div>
           </TooltipTrigger>
@@ -388,7 +412,10 @@ export function TerminalHeaderContent({
         <Tooltip autoDismiss={false} disableHoverableContent={false}>
           <TooltipTrigger asChild>
             <div
-              className="inline-flex items-center gap-1.5 px-1 text-2xs font-mono shrink-0 rounded-sm tabular-nums"
+              className={cn(
+                "inline-flex items-center gap-1.5 px-1 py-0.5 text-2xs font-mono shrink-0 rounded-sm tabular-nums",
+                HEADER_CHIP_FOCUS_CLASS
+              )}
               role="status"
               aria-live="off"
               tabIndex={0}

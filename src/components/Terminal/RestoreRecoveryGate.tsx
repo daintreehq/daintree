@@ -125,7 +125,7 @@ export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGa
     <div
       ref={containerRef}
       tabIndex={-1}
-      className="flex-1 min-h-0 bg-surface-canvas flex flex-col items-center overflow-auto"
+      className="flex-1 min-h-0 bg-surface-canvas flex flex-col items-center overflow-auto focus-visible:-outline-offset-2"
     >
       <div className="my-auto w-full max-w-lg space-y-4 px-6 py-8">
         <div className="flex items-center gap-2.5">
@@ -160,7 +160,7 @@ export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGa
           {awaitingDestination ? (
             <Button
               size="sm"
-              variant="outline"
+              variant="contrast"
               onClick={() => confirmDestination(panelId, originCwd)}
             >
               Keep original folder
@@ -184,7 +184,7 @@ export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGa
               {recovery.sessionId !== undefined && (
                 <Button
                   size="sm"
-                  variant="outline"
+                  variant="contrast"
                   disabled={isLaunching}
                   onClick={() => {
                     const sessionId = recovery.sessionId;

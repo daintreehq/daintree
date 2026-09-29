@@ -539,8 +539,8 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
     tierListeners[0]?.({
       sessionId: "s1",
       toolId: "t1",
-      tier: "workbench",
-      targetTier: "action",
+      tier: "core",
+      targetTier: "full",
     });
     expect(ctrl.getSnapshot().tierMismatch).not.toBeNull();
 
@@ -566,8 +566,8 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
     tierListeners[0]?.({
       sessionId: "s1",
       toolId: "t1",
-      tier: "workbench",
-      targetTier: "action",
+      tier: "core",
+      targetTier: "full",
     });
     ctrl.approveTierOnce();
     const callsBefore = mockMcpIssueGrant.mock.calls.length;
@@ -584,7 +584,7 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
     tierListeners[0]?.({
       sessionId: "s1",
       toolId: "t1",
-      tier: "workbench",
+      tier: "core",
       targetTier: null,
     });
     expect(ctrl.getSnapshot().tierMismatch).not.toBeNull();
@@ -601,8 +601,8 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
     tierListeners[0]?.({
       sessionId: "sess-9",
       toolId: "t1",
-      tier: "workbench",
-      targetTier: "action",
+      tier: "core",
+      targetTier: "full",
     });
     ctrl.dismissTierMismatch();
     // Cancel must re-arm the banner by clearing the per-session denial
@@ -632,8 +632,8 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
     tierListeners[0]?.({
       sessionId: "sess-r",
       toolId: "t1",
-      tier: "workbench",
-      targetTier: "action",
+      tier: "core",
+      targetTier: "full",
     });
     expect(() => ctrl.dismissTierMismatch()).not.toThrow();
     expect(ctrl.getSnapshot().tierMismatch).toBeNull();
@@ -730,8 +730,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
     tierListeners[0]?.({
       sessionId: "s1",
       toolId: "t1",
-      tier: "workbench",
-      targetTier: "action",
+      tier: "core",
+      targetTier: "full",
     });
   }
 

@@ -22,6 +22,9 @@ vi.mock("@/store/fleetSnapshotStore", () => ({
 vi.mock("@/store/terminalAdoptionStore", () => ({
   setupTerminalAdoptionListeners: vi.fn(() => () => {}),
 }));
+vi.mock("@/store/rateLimitObservationStore", () => ({
+  setupRateLimitObservationListeners: vi.fn(() => () => {}),
+}));
 vi.mock("@/store/systemWakeStore", () => ({
   setupSystemWakeListeners: vi.fn(() => () => {}),
 }));

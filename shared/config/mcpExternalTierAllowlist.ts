@@ -29,10 +29,10 @@ import { ACTIONS_LIST_TOOL } from "./helpAssistantTierAllowlists.js";
  * worktrees, recipes, skills, live IDE context — and drop what the caller can
  * already do for itself. An external agent driving us over MCP sits in a
  * terminal with its own shell and its own `gh`, so git plumbing, forge
- * reads/writes, file reads and project queries are its job, not ours. All of
- * that remains fully available to the in-app assistant via the
- * workbench/action/system tiers in `helpAssistantTierAllowlists.ts`, which no
- * third-party client cap applies to.
+ * reads/writes, file reads and project queries are its job, not ours. The
+ * in-app `core`/`full` tool sets in `helpAssistantTierAllowlists.ts` follow the
+ * same rule, so this list never reaches past what an agent pane at `full` can
+ * call.
  *
  * Budgeted in both dimensions, because the failure is measured in bytes as much
  * as in tools: the count ceiling lives in `tierAuth.test.ts` (against
@@ -260,3 +260,15 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   // bands `destructive-local` and the tool advertises via `destructiveHint`.
   "copyTree.generateAndCopyFile",
 ] as const satisfies readonly BuiltInActionId[];
+
+/**
+ * Arguments of external tools that the external tier is not advertised, because
+ * they only work for a caller with a pane of its own. `notify` types a line
+ * into the caller's own prompt, and an api-key client has none: it is refused
+ * if it sends one anyway, and `replyLines` only shapes that notice. Left off the listing so every such client does not
+ * pay for an argument it can never use on every turn.
+ */
+export const MCP_EXTERNAL_OMITTED_ARGS: Readonly<Record<string, readonly string[] | undefined>> = {
+  "terminal.sendCommandOwned": ["notify", "replyLines"],
+  "agent.launch": ["notify", "replyLines"],
+} satisfies Partial<Record<BuiltInActionId, readonly string[]>>;

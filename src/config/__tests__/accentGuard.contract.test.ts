@@ -128,17 +128,11 @@ const KNOWN_CLOSED_ISSUES = new Set([
 // Legitimate accent usage that will persist after all cleanup PRs land.
 // Each entry must carry a brief rationale.
 const DURABLE_ALLOWLIST = new Set([
-  // Theme browser accent display (theme content, not app chrome)
-  "src/components/ThemeBrowser/ThemeBrowser.tsx",
-
   // The plugin manager's two row components used to sit here for their
   // selected-row accent stripe. Selection is neutral now: it persists while
   // focus moves, so an accent stripe on one row plus an accent focus ring on
   // another put two accents in the same focus region. The accent is the focus
   // anchor alone, and both files came off this list.
-
-  // Current rebase step indicator in the conflict UI (single primary anchor per active focus region)
-  "src/components/Worktree/ReviewHub/ConflictPanel.tsx",
 
   // Worktree overview list: the active-descendant cursor row. The list is a
   // single tab stop whose arrow keys move `aria-activedescendant`, so the
@@ -148,6 +142,28 @@ const DURABLE_ALLOWLIST = new Set([
   // reserved for. Membership is a neutral fill plus a checked box, so the two
   // marks cannot be confused with each other (#11989).
   "src/components/Worktree/WorktreeOverviewRow.tsx",
+
+  // Settings subject picker: the page's subject drawn as the active tab on a
+  // subtab baseline. It replaced a subtab bar on these pages, and the subtab
+  // underline is one of the two accents the settings dialog reserves
+  // (.claude/rules/settings-pages.md). One underline per page, never more.
+  "src/components/Settings/SettingsSubjectPicker.tsx",
+
+  // Document tab family (grid, dock, portal and assistant strips): the selected
+  // tab's 2px underline, the documented "Settings Nav Active" / "Document Tab"
+  // recipe. It is the strip's one selection mark; the other accent in the
+  // strip is the focus ring, and under manual activation the two can sit on
+  // different tabs because they answer different questions (which document is
+  // open, where the keyboard is). Recorded in interaction-state-recipes.md.
+  // Owned here once so the four hosts carry no accent of their own.
+  "src/components/ui/document-tab.tsx",
+
+  // The horizontal tab strip (settings subtabs, the diagnostics dock and the
+  // dev preview's output drawer): the active tab's 2px underline, the
+  // documented "Settings Nav Active" recipe. It is each strip's one selection
+  // mark and the only accent in its arrow-key domain beside the focus ring.
+  // Owned here once so none of the three hosts carries an accent of its own.
+  "src/components/ui/UnderlineTabs.tsx",
 ]);
 
 // Pre-existing accent usage inherited from cleanup buckets #5978-#5986 (all
@@ -157,21 +173,13 @@ const DURABLE_ALLOWLIST = new Set([
 // file no longer contains any non-focus-ring forbidden utility.
 const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
   "#5978-5986-pre-existing": [
-    "src/components/Commands/CommandBuilder.tsx",
-    "src/components/DevPreview/DevPreviewEmptyStates.tsx",
     "src/components/Layout/DockedNonPtyPanelItem.tsx",
     "src/components/Layout/DockedTabGroup.tsx",
     "src/components/Layout/DockedTerminalItem.tsx",
     "src/components/Layout/VoiceRecordingToolbarButton.tsx",
-    "src/components/Panel/TabButton.tsx",
-    "src/components/Recovery/CrashRecoveryDialog.tsx",
-    "src/components/Settings/SettingsDialog.tsx",
-    "src/components/Settings/SettingsSubtabBar.tsx",
     "src/components/Terminal/ContentGridDefault.tsx",
     "src/components/Terminal/HybridInputBar.tsx",
     "src/components/Terminal/VoiceInputButton.tsx",
-    "src/components/TerminalRecipe/RecipeEditor.tsx",
-    "src/components/Worktree/QuickCreatePalette.tsx",
     "src/components/Worktree/WorktreeCard/WorktreeTerminalSection.tsx",
   ],
 };

@@ -1,16 +1,7 @@
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import Fuse, { type IFuseOptions } from "fuse.js";
-import {
-  ChevronRight,
-  Keyboard,
-  Pin,
-  Plug,
-  Plus,
-  Settings2,
-  SlidersHorizontal,
-  SquareTerminal,
-} from "lucide-react";
+import { ChevronRight, Keyboard, Pin, Plug, Plus, Settings2, SquareTerminal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -29,7 +20,7 @@ import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
 import { agentStateDotColor, STATE_LABELS } from "@/components/Worktree/terminalStateConfig";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
-import { describeChord } from "@/lib/kbdShortcut";
+import { comboToAriaKeyshortcuts, describeChord, labelWithShortcut } from "@/lib/kbdShortcut";
 import { notify } from "@/lib/notify";
 import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
@@ -58,7 +49,11 @@ import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { dispatchToolbarVisibility } from "@/lib/toolbarVisibilityDispatch";
 import { normalizeKeyForBinding } from "@/services/keybindingUtils";
 import { useEffectiveCombo, useKeybindingDisplay } from "@/hooks";
-import { TOOLBAR_PIN_LABEL, TOOLBAR_UNPIN_LABEL } from "./toolbarMenuStrings";
+import {
+  TOOLBAR_CUSTOMIZE_ICON,
+  TOOLBAR_PIN_LABEL,
+  TOOLBAR_UNPIN_LABEL,
+} from "./toolbarMenuStrings";
 import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useLauncherDiscovery } from "./useLauncherDiscovery";
@@ -1529,8 +1524,9 @@ function DockLaunchOption({
   // is stated explicitly. The pin verb rides here because children of
   // `role="option"` are presentational, so the pin button's own label never
   // reaches a screen reader — the phrase states both what Alt+P does and,
-  // through the verb, whether the row is already pinned. `aria-keyshortcuts`
-  // stays alongside it as the machine-readable half. The warning is deliberately
+  // through the verb, whether the row is already pinned. The row's own launch
+  // binding is not spoken here: it rides `aria-keyshortcuts`, the way every menu
+  // row carries its keys, so the name stays the row's. The warning is deliberately
   // NOT folded in: `title` alongside an `aria-label` computes as the
   // description, so repeating it here would announce it twice.
   const optionLabel = [
@@ -1548,7 +1544,6 @@ function DockLaunchOption({
       : undefined,
     isRecent ? "Recent" : undefined,
     launchOutcome ? `Launches ${launchOutcome}` : undefined,
-    effectiveCombo ? `Shortcut ${describeChord(effectiveCombo, isMac())}` : undefined,
     agent?.isNew ? "New" : undefined,
     // Stated only where it applies, so the phrase never advertises a key that
     // would do nothing on this row.
@@ -1560,7 +1555,7 @@ function DockLaunchOption({
         ? "Press Left Arrow to close presets"
         : undefined,
     pinTarget
-      ? `Press Alt+P to ${pinTarget.onToolbar ? "unpin from" : "pin to"} toolbar`
+      ? `Press ${describeChord("Alt+P", isMac())} to ${pinTarget.onToolbar ? "unpin from" : "pin to"} toolbar`
       : undefined,
     shortcutAgentId ? "Press F2 to edit shortcut" : undefined,
   ]
@@ -1602,7 +1597,7 @@ function DockLaunchOption({
         // name — with an `aria-label` present it computes as the description, so
         // the warning is announced once and still shows as the mouse tooltip.
         aria-label={optionLabel}
-        aria-keyshortcuts={pinTarget ? "Alt+P" : undefined}
+        aria-keyshortcuts={comboToAriaKeyshortcuts(effectiveCombo, isMac())}
         aria-expanded={row.kind === "item" && rowHasPresets(row) ? isExpanded : undefined}
         title={title}
         // Keeps DOM focus on the search box when a row is clicked or hovered,
@@ -1659,10 +1654,10 @@ function DockLaunchOption({
                 }}
               >
                 <ChevronRight
+                  data-animated-chevron
                   aria-hidden
                   className={cn(
                     "h-3 w-3 text-text-secondary transition-transform duration-150 ease-out",
-                    "motion-reduce:transition-none",
                     isExpanded && "rotate-90"
                   )}
                 />
@@ -1785,10 +1780,14 @@ function DockLaunchOption({
                   // The state rides a data attribute because `aria-pressed` on a
                   // presentational element is ignored — and it was never what
                   // announced the pin anyway. The option's own `aria-label`
-                  // carries "Press Alt+P to pin/unpin to toolbar" and its
+                  // carries "Press Option P to pin/unpin to toolbar" and its
                   // `aria-keyshortcuts` carries the chord.
                   data-pinned={pinTarget.onToolbar}
-                  title={`${pinTarget.onToolbar ? TOOLBAR_UNPIN_LABEL : TOOLBAR_PIN_LABEL} (Alt+P)`}
+                  title={labelWithShortcut(
+                    pinTarget.onToolbar ? TOOLBAR_UNPIN_LABEL : TOOLBAR_PIN_LABEL,
+                    "Alt+P",
+                    isMac()
+                  )}
                   // preventDefault keeps focus on the search box. stopPropagation
                   // belongs on the click below and nowhere else: the row's own
                   // onClick is an ancestor of this one, so the pin must stop the
@@ -1838,17 +1837,15 @@ function DockLaunchOption({
  * recipe `Workflow` as its else — a cue added without a branch drew the wrong
  * icon silently, the presentation half of the routing bug #12218 fixed.
  *
- * `SlidersHorizontal` rather than the `Settings2` the plugin tray's Customize
- * entry carries: that glyph already belongs to Manage agents, the row directly
- * above this one under the same heading, and two neighbours sharing a gear read
- * as one destination listed twice. It is the toolbar's own settings glyph
- * (`ToolbarSettingsButton`), so the row still points where its label says.
+ * Customize toolbar takes the shared toolbar glyph every Customize entry
+ * carries (`TOOLBAR_CUSTOMIZE_ICON`), which also keeps it clear of Manage
+ * agents' `Settings2` in the row directly above.
  */
 const DOCK_LAUNCH_CUE_ICONS: Record<DockLaunchCueId, LucideIcon> = {
   "create-recipe": Workflow,
   "setup-agents": Plug,
   "manage-agents": Settings2,
-  "customize-toolbar": SlidersHorizontal,
+  "customize-toolbar": TOOLBAR_CUSTOMIZE_ICON,
 };
 
 function DockLaunchOptionIcon({ row }: { row: DockLaunchRow }) {

@@ -1,4 +1,5 @@
 import type { ScopeKind } from "./scopeUtils";
+import { Badge } from "@/components/ui/badge";
 
 /**
  * Where the selected preset comes from, beside the preset row's label. The agent's own
@@ -14,12 +15,9 @@ export function ScopeBadge({ scopeKind }: { scopeKind: ScopeKind }) {
         ? { label: "Project · read-only", testid: "preset-badge-project" }
         : { label: "CCR · read-only", testid: "preset-badge-auto" };
   return (
-    <span
-      data-testid={testid}
-      className="rounded-[var(--radius-sm)] bg-overlay-subtle px-1.5 py-0.5 text-2xs text-text-secondary"
-    >
+    <Badge size="xs" data-testid={testid}>
       {label}
-    </span>
+    </Badge>
   );
 }
 

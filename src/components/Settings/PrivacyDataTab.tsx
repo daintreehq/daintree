@@ -19,6 +19,9 @@ import { actionService } from "@/services/ActionService";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { logError } from "@/utils/logger";
 
+/** How long a reset of hidden commands can be undone — the app's standard window. */
+const HIDDEN_COMMANDS_UNDO_MS = 5_000;
+
 type TelemetryLevel = "off" | "errors" | "full";
 type LogRetention = 7 | 30 | 90 | 0;
 type LoadState = "loading" | "ready" | "error";
@@ -327,13 +330,30 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
   };
 
   const hiddenActionCount = useActionPrefsStore((state) => state.hiddenActionIds.length);
+  // Undone rather than confirmed, like the app's other reversible resets: the
+  // list is small, local and put back exactly.
   const handleResetHiddenCommands = () => {
-    useActionPrefsStore.getState().resetHiddenActions();
+    const prefs = useActionPrefsStore.getState();
+    const wasHidden = [...prefs.hiddenActionIds];
+    prefs.resetHiddenActions();
     notify({
       type: "success",
       title: "Hidden commands reset",
       message: "All previously hidden commands will appear in Recently used again.",
       transient: true,
+      priority: "high",
+      duration: HIDDEN_COMMANDS_UNDO_MS,
+      context: { eventKind: "uiFeedback" },
+      action: {
+        label: "Undo",
+        onClick: () => {
+          const current = useActionPrefsStore.getState();
+          // A command pinned since the reset stays pinned: pinning outranks hiding.
+          for (const id of wasHidden) {
+            if (!current.isActionPinned(id)) current.hideAction(id);
+          }
+        },
+      },
     });
   };
 
@@ -432,24 +452,24 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                         )}
                         {entry.events && entry.events.length > 0 && (
                           <>
-                            <button
-                              type="button"
+                            <Button
+                              variant="link"
                               onClick={() => setShowAllEvents((v) => !v)}
                               aria-expanded={showAllEvents}
                               aria-controls="privacy-analytics-events"
-                              className="inline-flex items-center gap-1 text-xs font-medium text-text-primary rounded-[var(--radius-sm)] hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              className="text-xs"
                             >
                               <ChevronRight
                                 aria-hidden="true"
                                 data-animated-chevron
                                 className={cn(
-                                  "w-3.5 h-3.5 text-text-secondary transition-transform duration-150",
+                                  "transition-transform duration-150 ease-out",
                                   showAllEvents && "rotate-90"
                                 )}
                               />
                               {showAllEvents ? "Hide" : "Show"} the {entry.events.length} analytics
                               events
-                            </button>
+                            </Button>
                             {showAllEvents && (
                               <ul id="privacy-analytics-events" className="flex flex-wrap gap-1.5">
                                 {entry.events.map((name) => (
@@ -521,9 +541,9 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                       variant="outline"
                       size="sm"
                       onClick={() => void handleClearCache()}
-                      disabled={cacheClearing}
+                      loading={cacheClearing}
                     >
-                      {cacheClearing ? "Clearing…" : cacheCleared ? "Cache cleared" : "Clear cache"}
+                      {cacheCleared ? "Cache cleared" : "Clear cache"}
                     </Button>
                   }
                 />
@@ -635,22 +655,21 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         onConfirm={handleResetAllData}
         onClose={() => setShowResetConfirm(false)}
         title="Reset all app data?"
-        description="This permanently deletes every setting, API key, recorded session and log on this machine. Daintree then restarts with factory defaults. It can't be undone."
+        description="Deletes every setting, API key, recorded session and log Daintree keeps on this machine, then restarts with factory defaults. Your repositories and their .daintree folders aren't touched."
         confirmLabel="Reset and restart"
+        // D3: nothing survives this and nothing restores it, so it takes the
+        // same typed attestation as the other catastrophic actions.
+        typedNameTarget="Daintree"
       />
 
       <ConfirmDialog
         isOpen={pendingSessionRetention !== null}
         variant="destructive"
         onConfirm={() => void confirmShortenRetention()}
-        onClose={
-          shortenPending
-            ? undefined
-            : () => {
-                setPendingSessionRetention(null);
-                setShortenError(null);
-              }
-        }
+        onClose={() => {
+          setPendingSessionRetention(null);
+          setShortenError(null);
+        }}
         isConfirmLoading={shortenPending}
         hint={shortenError ?? undefined}
         title="Shorten session history?"
@@ -666,14 +685,10 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         isOpen={showClearHistoryConfirm}
         variant="destructive"
         onConfirm={() => void handleClearSessionHistory()}
-        onClose={
-          clearHistoryPending
-            ? undefined
-            : () => {
-                setShowClearHistoryConfirm(false);
-                setClearHistoryError(null);
-              }
-        }
+        onClose={() => {
+          setShowClearHistoryConfirm(false);
+          setClearHistoryError(null);
+        }}
         isConfirmLoading={clearHistoryPending}
         hint={clearHistoryError ?? undefined}
         title="Clear all session history?"

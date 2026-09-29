@@ -1,5 +1,8 @@
 import type { ReactElement } from "react";
-import { cn } from "@/lib/utils";
+import type { FleetSavedScope } from "@shared/types";
+import { Button } from "@/components/ui/button";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { actionService } from "@/services/ActionService";
 import { resolveSavedScopeIds } from "@/services/actions/definitions/fleetActions";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -56,55 +59,75 @@ export function SavedFleetQuickRecall({
         {mode === "append" ? "Add a saved fleet" : "Arm a saved fleet"}
       </span>
       {offers.map(({ scope, count }) => (
-        <button
+        <SavedFleetChip
           key={scope.id}
-          type="button"
-          aria-label={
-            mode === "append"
-              ? `Add ${count} pane${count === 1 ? "" : "s"} from ${scope.name}`
-              : `Arm ${savedFleetAccessibleName(scope, count)}`
-          }
-          title={scope.name}
-          onClick={() => {
-            if (mode === "append") {
-              // Resolved at the click, not from the render: a live rule
-              // re-evaluates on recall, and the armed set may have moved.
-              const { armedIds: armedNow, addToFleet } = useFleetArmingStore.getState();
-              addToFleet(resolveSavedScopeIds(scope).filter((id) => !armedNow.has(id)));
-            } else {
-              void actionService.dispatch(
-                "fleet.recallNamedFleet",
-                { id: scope.id },
-                { source: "user" }
-              );
-            }
-            onRecalled();
-          }}
-          data-testid="fleet-picker-saved-fleet"
-          className={cn(
-            "inline-flex h-6 max-w-[14rem] items-center gap-1.5 rounded-[var(--radius-md)] bg-tint/[0.06] px-2 text-xs text-text-primary",
-            "hover:bg-tint/[0.12] transition-colors duration-150 ease-out",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-          )}
-        >
-          <span className="min-w-0 truncate">{scope.name}</span>
-          <span className="shrink-0 text-2xs tabular-nums text-text-secondary">
-            {mode === "append" ? `+${count}` : formatSavedFleetCount(scope, count)}
-          </span>
-        </button>
+          scope={scope}
+          count={count}
+          mode={mode}
+          onRecalled={onRecalled}
+        />
       ))}
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="xs"
         onClick={onManage}
         data-testid="fleet-picker-saved-manage"
-        className={cn(
-          "inline-flex h-6 items-center rounded-[var(--radius-md)] px-2 text-xs text-text-secondary",
-          "hover:bg-tint/[0.08] hover:text-text-primary transition-colors duration-150 ease-out",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-        )}
+        className="px-2 text-xs"
       >
         Manage…
-      </button>
+      </Button>
     </div>
+  );
+}
+
+/** One recall chip. Its own component so each can measure its own name. */
+function SavedFleetChip({
+  scope,
+  count,
+  mode,
+  onRecalled,
+}: {
+  scope: FleetSavedScope;
+  count: number;
+  mode: SavedFleetQuickRecallProps["mode"];
+  onRecalled: () => void;
+}): ReactElement {
+  const { ref: nameRef, isTruncated: isNameTruncated } = useTruncationDetection();
+  return (
+    <TruncatedTooltip content={scope.name} isTruncated={isNameTruncated}>
+      <Button
+        variant="subtle"
+        size="xs"
+        aria-label={
+          mode === "append"
+            ? `Add ${count} pane${count === 1 ? "" : "s"} from ${scope.name}`
+            : `Arm ${savedFleetAccessibleName(scope, count)}`
+        }
+        onClick={() => {
+          if (mode === "append") {
+            // Resolved at the click, not from the render: a live rule
+            // re-evaluates on recall, and the armed set may have moved.
+            const { armedIds: armedNow, addToFleet } = useFleetArmingStore.getState();
+            addToFleet(resolveSavedScopeIds(scope).filter((id) => !armedNow.has(id)));
+          } else {
+            void actionService.dispatch(
+              "fleet.recallNamedFleet",
+              { id: scope.id },
+              { source: "user" }
+            );
+          }
+          onRecalled();
+        }}
+        data-testid="fleet-picker-saved-fleet"
+        className="max-w-[14rem] gap-1.5 px-2 text-xs text-text-primary"
+      >
+        <span ref={nameRef} className="min-w-0 truncate">
+          {scope.name}
+        </span>
+        <span className="shrink-0 text-2xs tabular-nums text-text-secondary">
+          {mode === "append" ? `+${count}` : formatSavedFleetCount(scope, count)}
+        </span>
+      </Button>
+    </TruncatedTooltip>
   );
 }

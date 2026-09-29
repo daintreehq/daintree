@@ -132,6 +132,48 @@ describe("commandStore adversarial", () => {
     expect(useCommandStore.getState().executionError).toBe("no access");
   });
 
+  it("executeCommand still records a failure that carries no error details", async () => {
+    commandsClientMock.execute.mockResolvedValue({ success: false });
+
+    await useCommandStore.getState().executeCommand("c1", {});
+
+    expect(useCommandStore.getState().executionError).toBeTruthy();
+  });
+
+  it("a run whose builder was closed does not write into the builder opened after it", async () => {
+    let settle: (r: unknown) => void = () => {};
+    commandsClientMock.execute.mockImplementation(() => new Promise((r) => (settle = r)));
+
+    const pending = useCommandStore.getState().executeCommand("c1", {});
+    useCommandStore.getState().closeBuilder();
+    expect(useCommandStore.getState().isExecuting).toBe(false);
+
+    settle({ success: false, error: { code: "X", message: "late failure" } });
+    const result = await pending;
+
+    expect(result.success).toBe(false);
+    expect(useCommandStore.getState().executionError).toBeNull();
+    expect(useCommandStore.getState().isExecuting).toBe(false);
+  });
+
+  it("drops a builder load from an opening that was closed and reopened for the same command", async () => {
+    const resolvers: Array<(v: unknown) => void> = [];
+    commandsClientMock.getBuilder.mockImplementation(() => new Promise((r) => resolvers.push(r)));
+    const cmd = makeCommand("same");
+
+    const first = useCommandStore.getState().openBuilder(cmd, {});
+    useCommandStore.getState().closeBuilder();
+    const second = useCommandStore.getState().openBuilder(cmd, {});
+
+    resolvers[1]?.({ steps: [{ id: "new", title: "New", fields: [] }] });
+    await second;
+    resolvers[0]?.(null);
+    await first;
+
+    expect(useCommandStore.getState().builderLoadError).toBeNull();
+    expect(useCommandStore.getState().builderSteps?.[0]?.id).toBe("new");
+  });
+
   it("loadCommands reentrancy guard blocks duplicate fetches while one is in flight", async () => {
     let resolveList: (v: unknown[]) => void = () => {};
     commandsClientMock.list.mockImplementation(

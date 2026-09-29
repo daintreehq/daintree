@@ -347,6 +347,10 @@ test.describe.serial("E2E: Voice Input — Settings UI", () => {
 
     // Remove key reverts to unconfigured (placeholder returns to the empty-state copy).
     await removeButton.click();
+    await window
+      .getByRole("alertdialog", { name: "Remove the OpenAI API key?" })
+      .getByRole("button", { name: "Remove key" })
+      .click();
     await expect(window.getByPlaceholder("Paste an OpenAI API key", { exact: true })).toBeVisible({
       timeout: T_SHORT,
     });

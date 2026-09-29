@@ -138,7 +138,7 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
 
     const selectAll = window
       .locator(SEL.github.selectionActions)
-      .getByRole("button", { name: /Select all/ });
+      .getByRole("menuitem", { name: /Select all/ });
     await expect(selectAll).toBeVisible();
     // The provider can finish resolving while Radix's popover is animating,
     // remounting the content before Playwright's pointer-stability gate clears.
@@ -226,6 +226,12 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
     // session gets blocked after it was already showing results).
     await openIssuesDropdown(window);
     await expect(window.locator(SEL.github.searchIssues)).toBeVisible({ timeout: T_MEDIUM });
+    // The search field exists while the initial fetch is still loading. Wait
+    // for the empty result before blocking requests, so the test exercises a
+    // live session becoming paused rather than a cold fetch that never starts.
+    await expect(
+      window.locator(SEL.github.listIssues).getByRole("status").filter({ hasText: "No issues" })
+    ).toBeVisible({ timeout: T_MEDIUM });
 
     await pushRateLimitBlocked(ctx.app);
 
@@ -258,15 +264,15 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
     await expect(window.locator(SEL.github.searchPrs)).toBeVisible({ timeout: T_MEDIUM });
   });
 
-  test("token-health banner appears on an unhealthy push and clears when healthy", async () => {
+  test("a token-health push alone raises neither a global banner nor the pill callout", async () => {
     const { window } = ctx;
 
+    // The background probe feeds the inbox, not the UI: only a failed request
+    // for this project's stats points the callout at the pill (#12831).
     await pushTokenHealthUnhealthy(ctx.app);
-    await expect(window.locator(SEL.github.tokenExpiredBanner)).toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.getByText("GitHub token expired")).toHaveCount(0, { timeout: T_MEDIUM });
+    await expect(window.locator(SEL.github.tokenCallout)).toHaveCount(0);
 
     await pushTokenHealthHealthy(ctx.app);
-    await expect(window.locator(SEL.github.tokenExpiredBanner)).not.toBeVisible({
-      timeout: T_MEDIUM,
-    });
   });
 });

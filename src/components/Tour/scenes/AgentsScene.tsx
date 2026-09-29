@@ -1,38 +1,40 @@
 import {
-  ClaudeIcon,
-  CodexIcon,
-  AntigravityIcon,
-  CursorIcon,
-  OpenCodeIcon,
-} from "@/components/icons";
-import { cn } from "@/lib/utils";
-import { ANCHOR, GRID_RECT, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
-import {
+  cn,
+  type CursorStep,
   MockCursor,
-  MockPane,
+  MockMenu,
+  MockSearchField,
+  MockSpotlight,
   MockStreamingLines,
   MockTyping,
   reveal,
   useMockCursor,
-  type CursorStep,
-} from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
-import { MockEmptyGrid, MockMenu, MockSearchField, MockSpotlight } from "./sceneParts";
+} from "@daintreehq/tour/kit";
+import {
+  ANCHOR,
+  MockApp,
+  MockEmptyGrid,
+  MockGrid,
+  MockPane,
+  MockWorktreeCard,
+  MockAgentGlyph,
+} from "@daintreehq/tour/mock-app";
+import { useCue } from "@daintreehq/tour/react";
 
 const LAUNCHER = ANCHOR.launcher;
 const MENU = { x: LAUNCHER.x - 8, y: LAUNCHER.y + 14, width: 164 };
-// The launcher's first agent row, under its search field.
-const CLAUDE_ROW = { x: MENU.x + 50, y: MENU.y + 36 };
-const INPUT_BAR = { x: GRID_RECT.x + 120, y: GRID_RECT.y + GRID_RECT.height - 12 };
-const TERMINAL = { x: GRID_RECT.x + 160, y: GRID_RECT.y + 120 };
+// The launcher's first agent row, on its label.
+const CLAUDE_ROW = { anchor: "menu-0", dx: -32, dy: -4 };
+const INPUT_BAR = { anchor: "claude-input", dx: -114, dy: 5 };
+const TERMINAL = { anchor: "claude-body", dx: -74, dy: -22 };
 const PROMPT = "Add a search box to the header";
 const SEND = { cue: "send" } as const;
 
-const CURSOR: readonly CursorStep[] = [
+export const CURSOR: readonly CursorStep[] = [
   // The pointer rests on the pinned agents as they're named.
-  { cue: "pick", at: ANCHOR["agent-codex"] },
-  { cue: "launcher", at: LAUNCHER },
-  { cue: "launcher", offset: 0.5, at: LAUNCHER, click: true },
+  { cue: "pick", at: { anchor: "agent-codex" } },
+  { cue: "launcher", at: { anchor: "launcher" } },
+  { cue: "launcher", offset: 0.5, at: { anchor: "launcher" }, click: true },
   { cue: "click", at: CLAUDE_ROW },
   { cue: "click", offset: 0.5, at: CLAUDE_ROW, click: true },
   { cue: "type", at: INPUT_BAR },
@@ -148,11 +150,11 @@ export function AgentsScene() {
           </MockSearchField>
         }
         items={[
-          { icon: <ClaudeIcon />, label: "Claude" },
-          { icon: <CodexIcon />, label: "Codex" },
-          { icon: <AntigravityIcon />, label: "Antigravity" },
-          { icon: <CursorIcon />, label: "Cursor" },
-          { icon: <OpenCodeIcon />, label: "OpenCode" },
+          { icon: <MockAgentGlyph agent="claude" />, label: "Claude" },
+          { icon: <MockAgentGlyph agent="codex" />, label: "Codex" },
+          { icon: <MockAgentGlyph agent="antigravity" />, label: "Antigravity" },
+          { icon: <MockAgentGlyph agent="cursor" />, label: "Cursor" },
+          { icon: <MockAgentGlyph agent="opencode" />, label: "OpenCode" },
         ]}
       />
       <MockSpotlight targets={spot} visible={agents && spot.length > 0} />

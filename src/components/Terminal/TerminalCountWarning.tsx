@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { AlertTriangle, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { BANNER_ENTER_DURATION } from "@/lib/animationUtils";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
@@ -114,15 +115,14 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
       description="Consider closing idle panels to keep the board light."
       descriptionExtras={
         completedCount > 0 ? (
-          <button
-            type="button"
-            onClick={handleCleanup}
-            className="mt-1 text-xs underline text-text-secondary hover:text-text-primary transition-colors inline-flex items-center gap-1 outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary rounded-sm"
-          >
-            <Trash2 className="h-3 w-3" />
-            Close <span className="tabular-nums">{completedCount}</span> completed agent
-            {completedCount !== 1 ? "s" : ""}
-          </button>
+          <Button variant="link" onClick={handleCleanup} className="mt-1 text-xs">
+            <Trash2 aria-hidden="true" />
+            {/* One text run, so the underline is not broken at the count. */}
+            <span>
+              Close <span className="tabular-nums">{completedCount}</span> completed agent
+              {completedCount !== 1 ? "s" : ""}
+            </span>
+          </Button>
         ) : undefined
       }
       severity="warning"

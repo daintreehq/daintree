@@ -55,22 +55,64 @@ describe("SidebarContent header reveal — issue #6964", () => {
     return src.slice(start, end);
   }
 
-  it("renders focus-visible outlines on all four header icon buttons — issue #7602", () => {
+  it("builds all four header actions from the shared ghost icon button — issue #7602", () => {
+    // The Button primitive owns the focus ring, hover and press for every one
+    // of them, so none of the four can drift into its own treatment.
     const header = headerSlice(source);
-    const focusVisibleCount = (header.match(/focus-visible:outline-accent-primary/g) ?? []).length;
-    expect(focusVisibleCount).toBe(4);
-    expect(header).toContain("focus-visible:outline focus-visible:outline-2");
+    const buttons = header.match(/<Button\s+variant="ghost"\s+size="icon-xs"/g) ?? [];
+    expect(buttons).toHaveLength(4);
+    expect(header).not.toMatch(/<button\b/);
+    expect(header).not.toMatch(/focus-visible:outline-accent-primary/);
   });
 
-  it("lifts the always-visible create button to text-daintree-text/60 while siblings stay at /40 — issue #7602", () => {
+  it("gives the always-visible create button the same treatment as its revealed siblings", () => {
+    // Visibility is the cluster's only hierarchy: the three secondary actions
+    // are hidden until the header is hovered or focused, and create is not.
+    // Once shown, all four read as one family.
     const header = headerSlice(source);
-    expect(header).toContain("text-daintree-text/60");
-    const fortyCount = (header.match(/text-daintree-text\/40/g) ?? []).length;
-    expect(fortyCount).toBe(4);
+    expect(header).not.toMatch(/text-daintree-text\//);
+    const classNames = [...header.matchAll(/className=\{([^}]*)\}/g)].map((m) => m[1] ?? "");
+    expect(classNames).toHaveLength(4);
+    expect(classNames.every((cls) => cls.includes("SIDEBAR_HEADER_ACTION"))).toBe(true);
   });
 
-  it("respects prefers-reduced-motion via motion-reduce:transition-none", () => {
-    expect(source).toContain("motion-reduce:transition-none");
+  it("keeps the reveal's fade under reduced motion", () => {
+    // The reveal is opacity and visibility only — not motion — so it must not
+    // be switched off under reduced motion.
+    const reveal = source.match(/className="([^"]*group-hover\/header:visible[^"]*)"/)?.[1];
+    expect(reveal).toBeTruthy();
+    expect(reveal).toMatch(/transition-\[opacity,visibility\]/);
+    expect(reveal).not.toMatch(/motion-reduce:/);
+  });
+
+  it("keeps the cluster on screen, and clickable, while the refresh icon is turning", () => {
+    // Keyed off SpinningIcon's own data-spinning rather than isRefreshing, so
+    // the cluster fades back only after the finishing turn, not mid-rotation.
+    const reveal = source.match(/className="([^"]*group-hover\/header:visible[^"]*)"/)?.[1];
+    expect(reveal).toBeTruthy();
+    for (const state of ["visible", "opacity-100", "pointer-events-auto"]) {
+      expect(reveal).toContain(`has-[[data-spinning]]:${state}`);
+    }
+    expect(reveal).not.toMatch(/isRefreshing/);
+    // The refresh button must sit inside that reveal for :has() to see it.
+    const header = headerSlice(source);
+    const revealAt = header.indexOf("has-[[data-spinning]]");
+    const spinnerAt = header.search(/<SpinningIcon\b[^>]*icon=\{RefreshCw\}/);
+    const createAt = header.indexOf('aria-label="Create new worktree"');
+    expect(revealAt).toBeGreaterThan(-1);
+    expect(spinnerAt).toBeGreaterThan(revealAt);
+    expect(spinnerAt).toBeLessThan(createAt);
+  });
+
+  it("counts refreshes dispatched from outside the button as in flight", () => {
+    // The palette, a rebound shortcut and the sidebar context menu dispatch
+    // worktree.refresh directly and never enter the button's transition.
+    expect(source).toMatch(
+      /const \[isRefreshPending, startRefreshTransition\] = useTransition\(\);/
+    );
+    // The counting itself is behaviour-tested in useDispatchedSidebarRefresh.test.
+    expect(source).toMatch(/const isRefreshDispatched = useDispatchedSidebarRefresh\(\);/);
+    expect(source).toMatch(/const isRefreshing = isRefreshPending \|\| isRefreshDispatched;/);
   });
 
   it("delegates the refresh spin to SpinningIcon driven by the raw refresh flag (#11323)", () => {

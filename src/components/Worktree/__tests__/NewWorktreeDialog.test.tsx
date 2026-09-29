@@ -69,7 +69,8 @@ vi.mock("@/config/agents", () => ({
 const mockAddTerminal = vi.fn().mockResolvedValue("new-terminal-id");
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: Object.assign(() => ({}), {
-    getState: () => ({ addPanel: mockAddTerminal }),
+    getState: () => ({ addPanel: mockAddTerminal, panelsById: {} }),
+    subscribe: () => () => {},
   }),
 }));
 
@@ -105,7 +106,43 @@ vi.mock("@/store/preferencesStore", () => ({
       setAssignWorktreeToSelf: vi.fn(),
       lastSelectedWorktreeRecipeIdByProject: {},
       setLastSelectedWorktreeRecipeIdByProject: vi.fn(),
+      lastSelectedWorktreeAgentIdByProject: firstAgentFixtures.lastAgentByProject,
+      setLastSelectedWorktreeAgentIdByProject: mockSetLastAgent,
     }),
+}));
+
+const firstAgentFixtures = vi.hoisted(() => ({
+  lastAgentByProject: {} as Record<string, string | null>,
+  options: [{ id: "claude", name: "Claude", iconId: "claude" }] as {
+    id: string;
+    name: string;
+    iconId: string;
+  }[],
+}));
+const mockSetLastAgent = vi.hoisted(() => vi.fn());
+vi.mock("@/components/Worktree/hooks/useFirstAgentOptions", () => ({
+  useFirstAgentOptions: () => firstAgentFixtures.options,
+}));
+// The real picker is a Popover listbox; the mocked Popover always renders its
+// content, which would leak agent rows into the branch pickers' option queries.
+vi.mock("@/components/Worktree/views/AgentPickerPopover", () => ({
+  AgentPickerPopover: ({
+    agents,
+    selectedAgentId,
+    onSelectAgent,
+  }: {
+    agents: { id: string; name: string }[];
+    selectedAgentId: string | null;
+    onSelectAgent: (id: string | null) => void;
+  }) => (
+    <div data-testid="first-agent-picker" data-selected={selectedAgentId ?? ""}>
+      {agents.map((a) => (
+        <button key={a.id} data-testid={`pick-agent-${a.id}`} onClick={() => onSelectAgent(a.id)}>
+          {a.name}
+        </button>
+      ))}
+    </div>
+  ),
 }));
 
 vi.mock("@/store/projectStore", () => ({
@@ -146,6 +183,7 @@ vi.mock("@/store/worktreeStore", () => ({
 
 const recipePickerCalls = vi.hoisted(() => ({
   last: null as { startingLayoutRecipes: unknown[]; defaultRecipeId: string | undefined } | null,
+  selected: null as { id: string; name: string; terminals: { type: string }[] } | null,
 }));
 // Only `useRecipePicker` is stubbed — `resolveEligibleDefaultRecipeId` stays
 // real so the default-eligibility tests exercise the shipping logic rather than
@@ -158,12 +196,12 @@ vi.mock("@/components/Worktree/hooks/useRecipePicker", async (importOriginal) =>
   }) => {
     recipePickerCalls.last = args;
     return {
-      selectedRecipeId: null,
+      selectedRecipeId: recipePickerCalls.selected?.id ?? null,
       setSelectedRecipeId: vi.fn(),
       recipePickerOpen: false,
       setRecipePickerOpen: vi.fn(),
       recipeSelectionTouchedRef: { current: false },
-      selectedRecipe: null,
+      selectedRecipe: recipePickerCalls.selected ?? null,
     };
   },
 }));
@@ -263,8 +301,9 @@ vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
 }));
 
+const mockNotify = vi.hoisted(() => vi.fn<(payload: { title?: string }) => void>());
 vi.mock("@/lib/notify", () => ({
-  notify: vi.fn(),
+  notify: mockNotify,
 }));
 
 vi.mock("./worktreeCreationErrors", async () => {
@@ -657,7 +696,7 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     });
 
     const createButton = screen.getByTestId("create-worktree-button");
-    expect(createButton.hasAttribute("disabled")).toBe(true);
+    expect(createButton.getAttribute("aria-disabled")).toBe("true");
   });
 });
 
@@ -964,9 +1003,14 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
     const branchInput = screen.getByTestId("branch-name-input");
     expect(branchInput.getAttribute("aria-invalid")).toBeNull();
 
+    const createButton = screen.getByTestId("create-worktree-button");
+    createButton.focus();
     await act(async () => {
-      fireEvent.click(screen.getByTestId("create-worktree-button"));
+      fireEvent.click(createButton);
     });
+
+    // The failed Create hands the cursor to the field its error sits under.
+    expect(document.activeElement).toBe(branchInput);
 
     const alert = screen.getByRole("alert");
     expect(alert.id).toBe("validation-error");
@@ -997,10 +1041,13 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
       fireEvent.change(pathInput, { target: { value: "" } });
     });
 
+    const createButton = screen.getByTestId("create-worktree-button");
+    createButton.focus();
     await act(async () => {
-      fireEvent.click(screen.getByTestId("create-worktree-button"));
+      fireEvent.click(createButton);
     });
 
+    expect(document.activeElement).toBe(pathInput);
     expect(screen.getByRole("alert").textContent).toContain("Please enter a worktree path");
     expect(pathInput.getAttribute("aria-invalid")).toBe("true");
     expect(pathInput.getAttribute("aria-describedby")).toBe("validation-error");
@@ -1021,17 +1068,101 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
     const baseBranchButton = document.getElementById("base-branch");
     expect(baseBranchButton?.getAttribute("aria-invalid")).toBeNull();
 
+    const createButton = screen.getByTestId("create-worktree-button");
+    createButton.focus();
     await act(async () => {
-      fireEvent.click(screen.getByTestId("create-worktree-button"));
+      fireEvent.click(createButton);
     });
 
+    expect(document.activeElement).toBe(baseBranchButton);
     const alerts = screen.getAllByRole("alert");
     const validationAlert = alerts.find((el) => el.id === "validation-error");
     expect(validationAlert).toBeDefined();
-    expect(validationAlert?.textContent).toContain("Please select a base branch");
+    // The list failed, not the pick: the load failure stands in for "select a
+    // base branch" and carries the id the combobox is described by.
+    expect(validationAlert?.textContent).toContain("Failed to load branches");
+    expect(validationAlert?.textContent).not.toContain("Please select a base branch");
 
     expect(baseBranchButton?.getAttribute("aria-invalid")).toBe("true");
     expect(baseBranchButton?.getAttribute("aria-describedby")).toBe("validation-error");
+  });
+
+  it("moves focus to the failing field on a failed Cmd/Ctrl+Enter", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = screen.getByTestId("branch-name-input") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(branchInput, { target: { value: "feature/new-feature" } });
+    });
+    await advanceTimersGradually(1000);
+
+    const pathInput = screen.getByTestId("worktree-path-input") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: "" } });
+    });
+
+    branchInput.focus();
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    });
+
+    expect(screen.getByRole("alert").textContent).toContain("Please enter a worktree path");
+    expect(document.activeElement).toBe(pathInput);
+  });
+
+  it("submits on Cmd/Ctrl+Enter from the name field without completing an open prefix", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = screen.getByTestId("branch-name-input") as HTMLInputElement;
+    const pathInput = screen.getByTestId("worktree-path-input") as HTMLInputElement;
+    branchInput.focus();
+    await act(async () => {
+      fireEvent.change(branchInput, { target: { value: "d" } });
+    });
+    await advanceTimersGradually(1000);
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: "" } });
+    });
+    branchInput.focus();
+    expect(branchInput.getAttribute("aria-expanded")).toBe("true");
+
+    await act(async () => {
+      fireEvent.keyDown(branchInput, { key: "Enter", ctrlKey: true });
+    });
+    await advanceTimersGradually(100);
+
+    expect(branchInput.value).toBe("d");
+    expect(screen.getByRole("alert").textContent).toContain("Please enter a worktree path");
+    expect(document.activeElement).toBe(pathInput);
+  });
+
+  it("keeps a failed branch list on screen while other fields are edited", async () => {
+    mockListBranches.mockRejectedValueOnce(new Error("not a git repository"));
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const failure = () => screen.queryByText(/Failed to load branches: not a git repository/);
+    expect(failure()).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), {
+        target: { value: "feature/new" },
+      });
+    });
+    await advanceTimersGradually(500);
+
+    expect(failure()).not.toBeNull();
+    expect(screen.getByTestId("branch-name-input").getAttribute("aria-invalid")).toBeNull();
+
+    // And retrying reloads the list rather than only dismissing the message.
+    mockListBranches.mockClear();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    await advanceTimersGradually(500);
+    expect(mockListBranches).toHaveBeenCalled();
   });
 
   it("clears aria-invalid when the user types in the failing field", async () => {
@@ -1070,6 +1201,21 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
     });
 
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps spellcheck and text assistance off the branch name and path", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    // Both hold identifiers, not prose: a squiggle under "feature/add-user-auth"
+    // flags nothing wrong, and autocorrect or capitalisation would change it.
+    for (const testId of ["branch-name-input", "worktree-path-input"]) {
+      const input = screen.getByTestId(testId) as HTMLInputElement;
+      expect(input.getAttribute("spellcheck")).toBe("false");
+      expect(input.getAttribute("autocomplete")).toBe("off");
+      expect(input.getAttribute("autocorrect")).toBe("off");
+      expect(input.getAttribute("autocapitalize")).toBe("off");
+    }
   });
 
   it("does not set aria-invalid on any input on initial render", async () => {
@@ -1472,7 +1618,7 @@ describe("NewWorktreeDialog — in-use base branch selection", () => {
     expect(baseBranchLabel()).toBe("develop (current)");
 
     const row = baseBranchOption(IN_USE_BRANCH);
-    expect(row.querySelector('[title^="In use by worktree:"]')).not.toBeNull();
+    expect(row.querySelector("[data-in-use]")).not.toBeNull();
 
     await act(async () => {
       fireEvent.click(row);
@@ -1614,7 +1760,7 @@ describe("NewWorktreeDialog — deferred branch auto-resolve", () => {
     // Re-checking a name we already know is free would re-disable Create in the
     // gap between the blur and the click that caused it, swallowing the click.
     const createButton = screen.getByTestId("create-worktree-button") as HTMLButtonElement;
-    expect(createButton.disabled).toBe(false);
+    expect(createButton.getAttribute("aria-disabled")).toBeNull();
 
     await advanceTimersGradually(500);
     expect(mockGetAvailableBranch).not.toHaveBeenCalled();
@@ -1703,5 +1849,189 @@ describe("NewWorktreeDialog — deferred branch auto-resolve", () => {
       }),
       expect.anything()
     );
+  });
+});
+
+describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
+  const PROMPT = "SENTINEL-PROMPT fix the login bug";
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+    mockDispatch.mockImplementation(async (actionId: string) => {
+      switch (actionId) {
+        case "worktree.create":
+          return { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/test" } };
+        case "worktree.waitUntilReady":
+          return {
+            ok: true,
+            result: {
+              worktreeId: "new-wt-id",
+              setupState: "ready",
+              stage: null,
+              error: null,
+              timedOut: false,
+            },
+          };
+        case "agent.launch":
+          return { ok: true, result: { launched: true, terminalId: "t-1" } };
+        default:
+          return { ok: true, result: undefined };
+      }
+    });
+  });
+
+  afterEach(() => {
+    firstAgentFixtures.lastAgentByProject = {};
+    recipePickerCalls.selected = null;
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function nameBranch() {
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), {
+        target: { value: "feature/test" },
+      });
+    });
+    await advanceTimersGradually(500);
+  }
+
+  async function pickClaudeAndType(prompt: string) {
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pick-agent-claude"));
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("first-agent-prompt"), { target: { value: prompt } });
+    });
+  }
+
+  async function submit() {
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  function actionCalls(actionId: string) {
+    return mockDispatch.mock.calls.filter(([id]) => id === actionId);
+  }
+
+  it("hides the prompt until an agent is picked, and remembers the pick per project", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    expect(screen.queryByTestId("first-agent-prompt")).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pick-agent-claude"));
+    });
+
+    expect(screen.getByTestId("first-agent-prompt")).toBeDefined();
+    expect(mockSetLastAgent).toHaveBeenCalledWith("test-project", "claude");
+  });
+
+  it("preselects the project's remembered agent", async () => {
+    firstAgentFixtures.lastAgentByProject = { "test-project": "claude" };
+    renderDialog();
+    await advanceTimersGradually(500);
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("claude");
+  });
+
+  it("ignores a remembered agent that is no longer available", async () => {
+    firstAgentFixtures.lastAgentByProject = { "test-project": "gone-agent" };
+    renderDialog();
+    await advanceTimersGradually(500);
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("");
+    expect(screen.queryByTestId("first-agent-prompt")).toBeNull();
+  });
+
+  it("restores a Retry's agent and prompt", async () => {
+    renderDialog({ initialAgentId: "claude", initialPrompt: PROMPT });
+    await advanceTimersGradually(500);
+    expect(screen.getByDisplayValue(PROMPT).getAttribute("data-testid")).toBe("first-agent-prompt");
+  });
+
+  it("keeps a Retry's explicit No agent over the remembered agent", async () => {
+    firstAgentFixtures.lastAgentByProject = { "test-project": "claude" };
+    renderDialog({ initialAgentId: null, initialPrompt: "" });
+    await advanceTimersGradually(500);
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("");
+  });
+
+  it("launches the agent once, after setup is ready, with the exact prompt", async () => {
+    const onClose = vi.fn();
+    renderDialog({ onClose });
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickClaudeAndType(PROMPT);
+    await submit();
+
+    expect(onClose).toHaveBeenCalled();
+    expect(mockAddPendingCreation).toHaveBeenCalledWith(
+      "/test/root-worktrees/feature/test",
+      expect.objectContaining({ branch: "feature/test", agentId: "claude", prompt: PROMPT })
+    );
+    const launches = actionCalls("agent.launch");
+    expect(launches).toEqual([
+      [
+        "agent.launch",
+        {
+          agentId: "claude",
+          worktreeId: "new-wt-id",
+          cwd: "/test/root-worktrees/feature/test",
+          prompt: PROMPT,
+        },
+        { source: "user" },
+      ],
+    ]);
+    const order = mockDispatch.mock.calls.map(([id]) => id);
+    expect(order.indexOf("worktree.waitUntilReady")).toBeGreaterThan(
+      order.indexOf("worktree.create")
+    );
+    expect(order.indexOf("agent.launch")).toBeGreaterThan(order.indexOf("worktree.waitUntilReady"));
+    expect(JSON.stringify(mockNotify.mock.calls)).not.toContain("SENTINEL");
+  });
+
+  it("does not wait on setup or launch anything when no agent is picked", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await submit();
+
+    expect(actionCalls("worktree.create")).toHaveLength(1);
+    expect(actionCalls("worktree.waitUntilReady")).toHaveLength(0);
+    expect(actionCalls("agent.launch")).toHaveLength(0);
+  });
+
+  it("hands the agent back instead of starting a second one when the recipe starts an agent", async () => {
+    recipePickerCalls.selected = {
+      id: "r1",
+      name: "Agent recipe",
+      terminals: [{ type: "claude" }],
+    };
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickClaudeAndType(PROMPT);
+    expect(screen.getByText(/This recipe already starts an agent/)).toBeDefined();
+    await submit();
+
+    expect(actionCalls("agent.launch")).toHaveLength(0);
+    const handedBack = mockNotify.mock.calls.find(
+      ([payload]) => payload.title === "Agent not started"
+    );
+    expect(handedBack).toBeDefined();
+    expect(JSON.stringify(handedBack)).not.toContain("SENTINEL");
   });
 });

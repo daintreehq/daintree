@@ -9,6 +9,7 @@ const registeredTaskRuns = new Map<string, () => unknown>();
 // (globalServicesInit value-imports the singleton statically).
 const setMcpRegistry = vi.hoisted(() => vi.fn());
 const setProjectMetadataReader = vi.hoisted(() => vi.fn());
+const setKnownProjectRootsReader = vi.hoisted(() => vi.fn());
 let migrationCurrentVersion = 1;
 let migrationShouldThrow = false;
 let storeFreshAtBoot = false;
@@ -138,6 +139,7 @@ vi.mock("../../services/PluginService.js", () => ({
 
 vi.mock("../../setup/protocols.js", () => ({
   setPluginDirResolver,
+  setPluginTourAudioResolver: vi.fn(),
 }));
 
 vi.mock("../../setup/openFileInstall.js", () => ({
@@ -303,6 +305,7 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     setPendingHibernationStore: vi.fn(),
     setPtyClient: vi.fn(),
     setProjectMetadataReader,
+    setKnownProjectRootsReader,
     startOrphanSweep: vi.fn(),
     validateToken: vi.fn(),
     gcStaleSessions: vi.fn(async () => {}),
@@ -341,6 +344,7 @@ vi.mock("electron", () => ({
   // The update-state pull is registered eagerly here (not from its deferred
   // task), so init touches ipcMain directly.
   ipcMain: { handle: vi.fn() },
+  powerMonitor: { on: vi.fn(), off: vi.fn() },
 }));
 
 import { initGlobalServices, __test__ } from "../globalServicesInit.js";
@@ -348,9 +352,12 @@ import {
   getGlobalServicesInitialized,
   setGlobalServicesInitialized,
   setPtyClientRef,
+  getStopEventLoopLagMonitor,
+  setStopEventLoopLagMonitor,
 } from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
-import { app, ipcMain } from "electron";
+import { app, ipcMain, powerMonitor } from "electron";
+import { startEventLoopLagMonitor } from "../../utils/performance.js";
 import type { Mock } from "vitest";
 import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
@@ -726,6 +733,7 @@ describe("initGlobalServices task ordering", () => {
     // leak into the next — keeps tests independent as the suite grows.
     setMcpRegistry.mockReset();
     setProjectMetadataReader.mockReset();
+    setKnownProjectRootsReader.mockReset();
     pruneOldLogs.mockReset();
     pruneOldLogsAsync.mockReset();
     pruneHeapSnapshots.mockReset();
@@ -843,6 +851,36 @@ describe("initGlobalServices task ordering", () => {
     run!();
 
     expect(registerCommandsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("feeds raw powerMonitor suspend/resume into the event-loop lag monitor (#12887)", async () => {
+    const previousStop = getStopEventLoopLagMonitor();
+    setStopEventLoopLagMonitor(null);
+    vi.mocked(startEventLoopLagMonitor).mockClear();
+
+    try {
+      const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+      await initGlobalServices(fakeRegistry);
+      registeredTaskRuns.get("event-loop-lag-monitor")!();
+
+      expect(startEventLoopLagMonitor).toHaveBeenCalledTimes(1);
+      const powerEvents = vi.mocked(startEventLoopLagMonitor).mock.calls[0][2]!;
+      const onSuspend = vi.fn();
+      const onResume = vi.fn();
+
+      const offSuspend = powerEvents.onSuspend(onSuspend);
+      const offResume = powerEvents.onResume(onResume);
+      expect(powerMonitor.on).toHaveBeenCalledWith("suspend", onSuspend);
+      expect(powerMonitor.on).toHaveBeenCalledWith("resume", onResume);
+
+      offSuspend();
+      offResume();
+      expect(powerMonitor.off).toHaveBeenCalledWith("suspend", onSuspend);
+      expect(powerMonitor.off).toHaveBeenCalledWith("resume", onResume);
+    } finally {
+      getStopEventLoopLagMonitor()?.();
+      setStopEventLoopLagMonitor(previousStop);
+    }
   });
 
   it("wires a lazy ProjectViewManager provider into HibernationService (#10668)", async () => {
@@ -998,6 +1036,20 @@ describe("initGlobalServices task ordering", () => {
 
     expect(setProjectMetadataReader).toHaveBeenCalledWith(expect.any(Function));
     const setIdx = registeredTaskNames.indexOf("__setProjectMetadataReader__");
+    expect(setIdx).toBeGreaterThanOrEqual(0);
+    expect(registeredTaskNames.indexOf("mcp-server")).toBeGreaterThan(setIdx);
+  });
+
+  it("wires the help-session known-roots reader before any deferred task can provision", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    setKnownProjectRootsReader.mockImplementation(() => {
+      registeredTaskNames.push("__setKnownProjectRootsReader__");
+    });
+
+    await initGlobalServices(fakeRegistry);
+
+    expect(setKnownProjectRootsReader).toHaveBeenCalledWith(expect.any(Function));
+    const setIdx = registeredTaskNames.indexOf("__setKnownProjectRootsReader__");
     expect(setIdx).toBeGreaterThanOrEqual(0);
     expect(registeredTaskNames.indexOf("mcp-server")).toBeGreaterThan(setIdx);
   });

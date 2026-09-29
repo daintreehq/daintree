@@ -143,9 +143,6 @@ export const theme: BuiltInThemeSource = {
     "pulse-ring-offset": "#1A2421",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #23322E 25%, #2C3D38 50%, #23322E 75%)",
     "settings-dialog-bg": "#23322E",
-    "settings-kbd-bg": "#21302C",
-    "settings-nav-active-bg": "rgba(74,158,127,0.15)",
-    "settings-nav-hover-bg": "rgba(255,255,255,0.04)",
     "settings-search-bg": "#21302C",
     "settings-sidebar-bg": "rgba(17,22,21,0.70)",
     // Composited settings-sidebar-bg over the shell.
@@ -154,9 +151,8 @@ export const theme: BuiltInThemeSource = {
     "sidebar-active-bg": "rgba(255,255,255,0.065)",
     "sidebar-hover-bg": "rgba(255,255,255,0.048)",
     "toolbar-agent-hover-bg": "rgba(255,255,255,0.06)",
-    // Hover/armed are neutral light, never accent — the accent keeps one
-    // membership fill per region (settings-nav-active-bg). Armed/active hold
-    // the +0.04 alpha step over hover.
+    // Hover/armed are neutral light, never accent. Armed/active hold the
+    // +0.04 alpha step over hover.
     "toolbar-control-active-bg": "rgba(255,255,255,0.12)",
     "toolbar-control-armed-bg": "rgba(255,255,255,0.12)",
     "toolbar-control-armed-shadow": "inset 0 0 0 1px rgba(255,255,255,0.12)",

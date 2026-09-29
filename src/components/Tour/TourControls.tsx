@@ -3,9 +3,8 @@ import { Pause, Play, RotateCcw, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { TOUR_CHAPTERS } from "./tourChapters";
-import type { TourPlayer } from "./TourPlayer";
-import { useTourPlayerState, useTourTime } from "./useTourPlayer";
+import type { TourPlayer } from "@daintreehq/tour";
+import { useTourPlayerState, useTourTime } from "@daintreehq/tour/react";
 
 function formatTime(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
@@ -68,7 +67,7 @@ function ChapterSegment({
           ref={ref}
           type="button"
           aria-label={`Chapter ${index + 1}: ${title}`}
-          className="group flex h-6 min-w-0 flex-1 cursor-pointer items-center rounded-sm outline-hidden transition-[flex-grow] duration-150 ease-out focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
+          className="group flex h-6 min-w-0 flex-1 cursor-pointer items-center rounded-sm outline-hidden transition-[flex-grow] duration-150 ease-out focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           onClick={() => player.goTo(index, { autoplay: true })}
         >
           <span className={segmentBar(played)} />
@@ -124,7 +123,7 @@ function CurrentSegment({
       aria-valuemax={Math.floor(duration)}
       aria-valuenow={Math.floor(time)}
       aria-valuetext={`${spokenTime(time)} of ${spokenTime(duration)}`}
-      className="group flex h-6 min-w-0 flex-[5] cursor-pointer touch-none items-center rounded-sm outline-hidden transition-[flex-grow] duration-150 ease-out focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
+      className="group flex h-6 min-w-0 flex-[5] cursor-pointer touch-none items-center rounded-sm outline-hidden transition-[flex-grow] duration-150 ease-out focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId);
         seekTo(event);
@@ -199,15 +198,17 @@ function IconButton({
  */
 export function TourControls({
   player,
+  chapters,
   onMutedChange,
 }: {
   player: TourPlayer;
+  chapters: readonly { id: string; title: string }[];
   onMutedChange: (muted: boolean) => void;
 }) {
   const state = useTourPlayerState(player);
   const playing = state.status === "playing";
   const ended = state.status === "ended";
-  const chapter = TOUR_CHAPTERS[state.chapterIndex]!;
+  const chapter = chapters[state.chapterIndex]!;
   const carried = useRef(false);
   const [carryFocus] = useState<TrackFocus>(() => ({
     leave: () => {
@@ -223,7 +224,7 @@ export function TourControls({
   return (
     <div className="border-t border-border-subtle bg-surface-panel px-3 pb-2 pt-1">
       <div className="flex items-center gap-1" role="group" aria-label="Chapters">
-        {TOUR_CHAPTERS.map((c, i) => {
+        {chapters.map((c, i) => {
           return i !== state.chapterIndex ? (
             <ChapterSegment
               key={c.id}

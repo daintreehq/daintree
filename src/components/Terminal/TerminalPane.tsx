@@ -8,8 +8,9 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { PaneState } from "@/components/ui/PaneState";
 import { useShallow } from "zustand/react/shallow";
-import { Settings, OctagonAlert, RotateCcw, Hourglass, Folders } from "lucide-react";
+import { AlertTriangle, Plug, OctagonAlert, RotateCcw, Hourglass, Folders } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
@@ -36,6 +37,7 @@ import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
 import { FindCodexSessionAction } from "./FindCodexSessionAction";
 import { RestoreRecoveryGate } from "./RestoreRecoveryGate";
 import { InlineStatusBanner } from "./InlineStatusBanner";
+import { PluginKindSetupStrip } from "@/components/Plugin/PluginSetupStrip";
 import { useForceResumeCycleWatchdog } from "@/hooks/terminal/useForceResumeCycleWatchdog";
 import { useContextInjection } from "@/hooks/useContextInjection";
 import { getRestartBannerVariant } from "./restartStatus";
@@ -50,6 +52,8 @@ import { useShouldSuppressLocalError } from "@/components/Recovery/useShouldSupp
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { CompactErrorList } from "../Errors/CompactErrorList";
 import { AgentCompletionBanner } from "./AgentCompletionBanner";
+import { TerminalScratchpad } from "./TerminalScratchpad";
+import { isScratchpadElement } from "@/lib/terminalScratchpad";
 import { ContentPanel } from "@/components/Panel";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useIsDragging } from "@/components/DragDrop";
@@ -229,6 +233,27 @@ export function BannerSlot({ visible, children }: BannerSlotProps) {
   );
 }
 
+/** Veils the terminal while the PTY host is down; says so while it reconnects. */
+export function TerminalBackendOverlay({ recovering }: { recovering: boolean }) {
+  return (
+    <div
+      className="absolute inset-0 z-50 flex items-center justify-center bg-scrim-strong backdrop-blur-sm"
+      aria-hidden={recovering ? undefined : "true"}
+      role={recovering ? "status" : undefined}
+      aria-live={recovering ? "polite" : undefined}
+    >
+      {/* On its own surface: the scrim's tone flips with the theme, so no text
+          colour reads on it in both polarities. */}
+      {recovering && (
+        <div className="flex flex-col items-center gap-3 rounded-[var(--radius-lg)] border border-border-default bg-surface-panel-elevated px-6 py-4 font-sans">
+          <Spinner size="xl" className="text-text-secondary" />
+          <p className="text-sm text-text-secondary">Reconnecting…</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TerminalStartupPlaceholder({
   agentId,
   onCancel,
@@ -240,7 +265,7 @@ export function TerminalStartupPlaceholder({
   const label = agentName ? `Starting ${agentName}…` : "Starting terminal…";
   // Doherty gate: typical PTY spawns resolve well under the 400ms threshold,
   // so the common case is no spinner at all — only slow or queued spawns
-  // surface one. Mirrors DevPreviewLoadingState.
+  // surface one. Mirrors PaneLoadingState.
   const showSpinner = useDohertyGate(true);
 
   return (
@@ -256,7 +281,7 @@ export function TerminalStartupPlaceholder({
             caption is aria-hidden — the status node above announces it. */}
         {showSpinner && (
           <>
-            <Spinner size="xl" className="text-daintree-text/45" />
+            <Spinner size="xl" className="text-text-secondary" />
             <p aria-hidden="true" className="text-sm text-text-secondary break-words">
               {label}
             </p>
@@ -448,7 +473,9 @@ function TerminalPaneComponent({
     if (!options) return;
 
     removePanel(id);
-    void addPanel(options);
+    // The notes belong to the pane the user was looking at; the launch that
+    // replaces it takes them over (#12835).
+    void addPanel({ ...options, scratchpad: panel.scratchpad });
   };
 
   /**
@@ -466,7 +493,16 @@ function TerminalPaneComponent({
     if (!args) return;
 
     removePanel(id);
-    void actionService.dispatch("agent.launch", args, { source: "user" });
+    const scratchpad = panel.scratchpad;
+    void actionService.dispatch("agent.launch", args, { source: "user" }).then((result) => {
+      if (!scratchpad || !result.ok) return;
+      const launched: unknown = result.result;
+      if (typeof launched !== "object" || launched === null || !("terminalId" in launched)) return;
+      const launchedId = launched.terminalId;
+      if (typeof launchedId === "string" && launchedId) {
+        usePanelStore.getState().seedScratchpad(launchedId, scratchpad);
+      }
+    });
   };
 
   // Fleet arming store for multi-select gestures. Selection treatment is
@@ -545,6 +581,8 @@ function TerminalPaneComponent({
   );
   // Panel kind is always "terminal" for PTY panels; live identity is runtime chrome.
   const kind = "terminal" as const;
+  // The stored kind, which for a PTY-backed plugin panel names the plugin's kind.
+  const storedKind = usePanelStore((state) => state.panelsById?.[id]?.kind);
   const queueCount = usePanelStore((state) => state.commandQueueCountById[id] ?? 0);
   // Live preset color — re-derives from settings whenever the user edits a preset's color
   const presetCustomPresets = useAgentSettingsStore((s) =>
@@ -788,6 +826,10 @@ function TerminalPaneComponent({
   }, [isFocused, isHeldForRecovery]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // The Scratchpad is its own editor: its copy, Enter and Space are the
+    // user's, never the terminal's.
+    if (e.target instanceof Element && isScratchpadElement(e.target, id)) return;
+
     // Handle Cmd+C to copy xterm selection regardless of which child has focus.
     // This is needed because agent terminals focus the hybrid input bar, so
     // xterm's built-in copy handler never receives the copy event.
@@ -1024,6 +1066,10 @@ function TerminalPaneComponent({
     // focus steal. Explicit navigation goes through the handler below.
     if (!isFocused || isHeldForRecovery) return;
 
+    // A click into the Scratchpad of an unfocused pane selects the pane; the
+    // caret it just placed must stay where it is (#12835).
+    if (isScratchpadElement(document.activeElement, id)) return;
+
     // Read selection and focus ownership synchronously, before any handoff.
     // Deciding up front (rather than inside the deferred RAF) also keeps focus
     // from briefly landing on the ContentPanel container, which made screen
@@ -1043,6 +1089,8 @@ function TerminalPaneComponent({
     if (action === "hybridInput") {
       // A RAF defers the handoff until the pane has painted.
       const rafId = requestAnimationFrame(() => {
+        // A click into the notes can land between scheduling and this frame.
+        if (isScratchpadElement(document.activeElement, id)) return;
         inputBarRef.current?.focusWithCursorAtEnd();
       });
       return () => {
@@ -1051,7 +1099,10 @@ function TerminalPaneComponent({
       };
     }
 
-    const rafId = requestAnimationFrame(() => terminalInstanceService.focus(id));
+    const rafId = requestAnimationFrame(() => {
+      if (isScratchpadElement(document.activeElement, id)) return;
+      terminalInstanceService.focus(id);
+    });
     return () => cancelAnimationFrame(rafId);
   }, [
     id,
@@ -1235,8 +1286,8 @@ function TerminalPaneComponent({
           )
         }
       >
-        <Settings className="w-3 h-3 mr-2" />
-        {agentName} Settings
+        <Plug className="w-3.5 h-3.5 mr-2" />
+        {agentName} settings…
       </DropdownMenuItem>
     );
   })();
@@ -1367,6 +1418,10 @@ function TerminalPaneComponent({
           onCancelRetry={handleCancelRetry}
         />
       )}
+
+      {/* A PTY-backed plugin kind's "needs setup" strip, in flow above the
+          terminal rather than over it. Nothing for a plain terminal. */}
+      {storedKind !== undefined && <PluginKindSetupStrip kind={storedKind} />}
 
       <BannerSlot visible={showRestartError}>
         {restartError && (
@@ -1505,9 +1560,18 @@ function TerminalPaneComponent({
           }}
           descriptionExtras={
             injectionStatus === "injecting" ? (
-              <div className="mt-1.5 h-0.5 w-full rounded bg-daintree-border/60">
+              <div
+                role="progressbar"
+                aria-label="Context injection"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(
+                  Math.min(Math.max((injectionProgress?.progress ?? 0) * 100, 0), 100)
+                )}
+                className="mt-1.5 h-0.5 w-full overflow-hidden rounded-full bg-overlay-soft"
+              >
                 <div
-                  className="h-full rounded bg-status-info/60 transition-[width] duration-150 ease-out"
+                  className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
                   style={{
                     width: `${Math.min(Math.max((injectionProgress?.progress ?? 0) * 100, 0), 100)}%`,
                   }}
@@ -1518,160 +1582,159 @@ function TerminalPaneComponent({
         />
       </BannerSlot>
 
-      <div className="flex-1 min-h-0 bg-surface-canvas flex flex-col">
-        {isHeldForRecovery ? (
-          <RestoreRecoveryGate panelId={id} containerRef={recoveryGateRef} />
-        ) : spawnStatus === "missing-cli" && agentId ? (
-          <MissingCliGate
-            agentId={agentId}
-            detail={getPanelCliDetail() ?? { state: "missing", resolvedPath: null, via: null }}
-            onRunAnyway={runMissingCliAnyway}
-            onAvailabilityReady={continueMissingCliLaunch}
-            onOpenAgentSettings={() =>
-              void actionService.dispatch(
-                "app.settings.openTab",
-                { tab: "agents", subtab: agentId },
-                { source: "user" }
-              )
-            }
-          />
-        ) : spawnStatus === "spawning" && !eagerAttach ? (
-          <TerminalStartupPlaceholder agentId={agentId} onCancel={() => onClose()} />
-        ) : spawnStatus === "failed" ? (
-          <div className="flex-1 min-h-0 bg-surface-canvas flex items-center justify-center">
-            <p className="text-sm text-text-secondary">Terminal failed to start</p>
-          </div>
-        ) : (
-          <>
-            <div className="flex-1 relative min-h-0">
-              <div
-                className={cn(
-                  "absolute inset-0",
-                  (isBackendDisconnected || isBackendRecovering) && "pointer-events-none opacity-50"
-                )}
-                onPointerDownCapture={handleXtermPointerDownCapture}
-                onPointerMove={handleXtermPointerMove}
-                onPointerUp={handleXtermPointerNoop}
-              >
-                <Suspense fallback={null}>
-                  <XtermAdapter
-                    key={`${id}-${restartKey}`}
-                    terminalId={id}
-                    launchAgentId={agentId}
-                    detectedAgentId={detectedAgentId}
-                    agentState={agentState}
-                    isInputLocked={isInputLocked}
-                    onReady={handleReady}
-                    onExit={handleExit}
-                    onInput={handleInput}
-                    // Same selection path as a click on the pane, minus the
-                    // event — which is exactly what leaves the shift/cmd fleet
-                    // gestures behind, since those only fire for a real click
-                    // that landed in pane chrome (#11809).
-                    onDropSelect={handleClick}
-                    onAttached={handleAttached}
-                    className="absolute inset-0"
-                    getRefreshTier={getRefreshTierCallback}
-                    cwd={cwd}
-                    hasBottomBar={showHybridInputBar}
-                  />
-                </Suspense>
-                <ArtifactOverlay terminalId={id} worktreeId={worktreeId} cwd={cwd} />
-                {isSearchOpen && (
-                  <TerminalSearchBar
-                    terminalId={id}
-                    onClose={() => {
-                      setIsSearchOpen(false);
-                      // Restore focus to whichever sub-target the user is
-                      // currently using — read at RAF time (not from the
-                      // render closure) so a same-frame preference flip
-                      // between onClose and the focus call is honored.
-                      requestAnimationFrame(() => {
-                        const focusTarget = getTerminalFocusTarget({
-                          preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
-                          hasHybridInputSurface: showHybridInputBar,
-                          isInputDisabled: isHybridInputDisabled,
-                          hybridInputEnabled,
+      <div className="flex-1 min-h-0 flex">
+        <div className="flex-1 min-w-0 min-h-0 bg-surface-canvas flex flex-col">
+          {isHeldForRecovery ? (
+            <RestoreRecoveryGate panelId={id} containerRef={recoveryGateRef} />
+          ) : spawnStatus === "missing-cli" && agentId ? (
+            <MissingCliGate
+              agentId={agentId}
+              detail={getPanelCliDetail() ?? { state: "missing", resolvedPath: null, via: null }}
+              onRunAnyway={runMissingCliAnyway}
+              onAvailabilityReady={continueMissingCliLaunch}
+              onOpenAgentSettings={() =>
+                void actionService.dispatch(
+                  "app.settings.openTab",
+                  { tab: "agents", subtab: agentId },
+                  { source: "user" }
+                )
+              }
+            />
+          ) : spawnStatus === "spawning" && !eagerAttach ? (
+            <TerminalStartupPlaceholder agentId={agentId} onCancel={() => onClose()} />
+          ) : spawnStatus === "failed" ? (
+            <div className="relative flex-1 min-h-0">
+              <PaneState
+                icon={<AlertTriangle className="text-status-warning" />}
+                title="Terminal failed to start"
+              />
+            </div>
+          ) : (
+            <>
+              <div className="flex-1 relative min-h-0">
+                <div
+                  className={cn(
+                    "absolute inset-0",
+                    (isBackendDisconnected || isBackendRecovering) &&
+                      "pointer-events-none opacity-50"
+                  )}
+                  onPointerDownCapture={handleXtermPointerDownCapture}
+                  onPointerMove={handleXtermPointerMove}
+                  onPointerUp={handleXtermPointerNoop}
+                >
+                  <Suspense fallback={null}>
+                    <XtermAdapter
+                      key={`${id}-${restartKey}`}
+                      terminalId={id}
+                      launchAgentId={agentId}
+                      detectedAgentId={detectedAgentId}
+                      agentState={agentState}
+                      isInputLocked={isInputLocked}
+                      onReady={handleReady}
+                      onExit={handleExit}
+                      onInput={handleInput}
+                      // Same selection path as a click on the pane, minus the
+                      // event — which is exactly what leaves the shift/cmd fleet
+                      // gestures behind, since those only fire for a real click
+                      // that landed in pane chrome (#11809).
+                      onDropSelect={handleClick}
+                      onAttached={handleAttached}
+                      className="absolute inset-0"
+                      getRefreshTier={getRefreshTierCallback}
+                      cwd={cwd}
+                      hasBottomBar={showHybridInputBar}
+                    />
+                  </Suspense>
+                  <ArtifactOverlay terminalId={id} worktreeId={worktreeId} cwd={cwd} />
+                  {isSearchOpen && (
+                    <TerminalSearchBar
+                      terminalId={id}
+                      onClose={() => {
+                        setIsSearchOpen(false);
+                        // Restore focus to whichever sub-target the user is
+                        // currently using — read at RAF time (not from the
+                        // render closure) so a same-frame preference flip
+                        // between onClose and the focus call is honored.
+                        requestAnimationFrame(() => {
+                          const focusTarget = getTerminalFocusTarget({
+                            preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
+                            hasHybridInputSurface: showHybridInputBar,
+                            isInputDisabled: isHybridInputDisabled,
+                            hybridInputEnabled,
+                          });
+                          if (focusTarget === "hybridInput") {
+                            inputBarRef.current?.focusWithCursorAtEnd();
+                          } else {
+                            terminalInstanceService.focus(id);
+                          }
                         });
-                        if (focusTarget === "hybridInput") {
-                          inputBarRef.current?.focusWithCursorAtEnd();
-                        } else {
-                          terminalInstanceService.focus(id);
-                        }
-                      });
-                    }}
-                  />
+                      }}
+                    />
+                  )}
+                </div>
+
+                <TerminalChipRow
+                  leading={isFleetPrimary ? <FleetDraftingPill /> : null}
+                  trailing={<TerminalScrollIndicator terminalId={id} />}
+                />
+
+                {(isBackendDisconnected || isBackendRecovering) && (
+                  <TerminalBackendOverlay recovering={isBackendRecovering} />
                 )}
               </div>
 
-              <TerminalChipRow
-                leading={isFleetPrimary ? <FleetDraftingPill /> : null}
-                trailing={<TerminalScrollIndicator terminalId={id} />}
-              />
-
-              {(isBackendDisconnected || isBackendRecovering) && (
-                <div
-                  className="absolute inset-0 z-50 flex items-center justify-center bg-scrim-strong backdrop-blur-sm"
-                  aria-hidden={isBackendDisconnected ? "true" : undefined}
-                  role={isBackendRecovering ? "status" : undefined}
-                  aria-live={isBackendRecovering ? "polite" : undefined}
-                >
-                  {isBackendRecovering && (
-                    <div className="flex flex-col items-center gap-3">
-                      <Spinner size="2xl" className="text-status-warning" />
-                      <span className="text-text-inverse font-medium">Reconnecting...</span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {completedWithChanges && !completionBannerDismissed && (
-              <AgentCompletionBanner
-                fileCount={changedFileCount}
-                onReview={handleOpenReviewHub}
-                onDismiss={() => setCompletionBannerDismissed(true)}
-                onSendToAssistant={assistantAvailable ? handleSendToAssistant : undefined}
-                onSendToAgent={hasAgentTargets ? handleSendToAgent : undefined}
-              />
-            )}
-
-            {showHybridInputBar && (
-              <Suspense fallback={null}>
-                <LazyHybridInputBar
-                  ref={inputBarRef}
-                  terminalId={id}
-                  disabled={isHybridInputDisabled}
-                  cwd={cwd}
-                  agentId={effectiveAgentId}
-                  agentHasLifecycleEvent={stateChangeTrigger !== undefined}
-                  agentState={agentState}
-                  restartKey={restartKey}
-                  onActivate={handleClick}
-                  onSend={({ trackerData, text }) => {
-                    if (!isInputLocked && !isRestarting) {
-                      terminalInstanceService.notifyUserInput(id);
-                      // submit now rejects when the PTY is gone (#8706); the
-                      // single-pane path has no recovery UI for that, so
-                      // swallow to log instead of leaking an unhandled
-                      // rejection. Banners/agent-state surface the dead pane.
-                      terminalClient.submit(id, text).catch((err) => {
-                        logWarn("[TerminalPane] submit failed", { id, error: err });
-                      });
-                      handleInput(trackerData);
-                    }
-                  }}
-                  onSendKey={(key) => {
-                    if (!isInputLocked && !isRestarting) {
-                      terminalInstanceService.notifyUserInput(id);
-                      terminalClient.sendKey(id, key);
-                    }
-                  }}
+              {completedWithChanges && !completionBannerDismissed && (
+                <AgentCompletionBanner
+                  fileCount={changedFileCount}
+                  onReview={handleOpenReviewHub}
+                  onDismiss={() => setCompletionBannerDismissed(true)}
+                  onSendToAssistant={assistantAvailable ? handleSendToAssistant : undefined}
+                  onSendToAgent={hasAgentTargets ? handleSendToAgent : undefined}
                 />
-              </Suspense>
-            )}
-          </>
-        )}
+              )}
+
+              {showHybridInputBar && (
+                <Suspense fallback={null}>
+                  <LazyHybridInputBar
+                    ref={inputBarRef}
+                    terminalId={id}
+                    disabled={isHybridInputDisabled}
+                    cwd={cwd}
+                    agentId={effectiveAgentId}
+                    agentHasLifecycleEvent={stateChangeTrigger !== undefined}
+                    agentState={agentState}
+                    restartKey={restartKey}
+                    onActivate={handleClick}
+                    onSend={({ trackerData, text, imagePaths }) => {
+                      if (!isInputLocked && !isRestarting) {
+                        terminalInstanceService.notifyUserInput(id);
+                        // submit now rejects when the PTY is gone (#8706); the
+                        // single-pane path has no recovery UI for that, so
+                        // swallow to log instead of leaking an unhandled
+                        // rejection. Banners/agent-state surface the dead pane.
+                        const submission =
+                          imagePaths !== undefined && imagePaths.length > 0
+                            ? terminalClient.submitWithImages(id, text, imagePaths)
+                            : terminalClient.submit(id, text);
+                        submission.catch((err) => {
+                          logWarn("[TerminalPane] submit failed", { id, error: err });
+                        });
+                        handleInput(trackerData);
+                      }
+                    }}
+                    onSendKey={(key) => {
+                      if (!isInputLocked && !isRestarting) {
+                        terminalInstanceService.notifyUserInput(id);
+                        terminalClient.sendKey(id, key);
+                      }
+                    }}
+                  />
+                </Suspense>
+              )}
+            </>
+          )}
+        </div>
+        <TerminalScratchpad key={id} terminalId={id} />
       </div>
 
       <UpdateCwdDialog

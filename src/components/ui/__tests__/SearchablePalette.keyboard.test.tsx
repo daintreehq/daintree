@@ -191,6 +191,31 @@ describe("SearchablePalette keyboard navigation (non-composing)", () => {
     expect(onHoverIndex).not.toHaveBeenCalled();
     expect(prevented).toBe(false);
   });
+
+  it("moves the cursor through onSelectIndex, not the hover handler, when both exist", () => {
+    const onHoverIndex = vi.fn();
+    const onSelectIndex = vi.fn();
+    renderPalette({ onHoverIndex, onSelectIndex, selectedIndex: 0 });
+    const input = screen.getByRole("combobox");
+    fireEvent.keyDown(input, { key: "End", keyCode: 35 });
+    expect(onSelectIndex).toHaveBeenCalledWith(items.length - 1);
+    expect(onHoverIndex).not.toHaveBeenCalled();
+  });
+
+  it.each(["Home", "End"])(
+    "leaves %s to the input when the consumer cannot move the cursor",
+    (key) => {
+      renderPalette({ selectedIndex: 1 });
+      const input = screen.getByRole("combobox");
+      const event = new window.KeyboardEvent("keydown", { key, bubbles: true });
+      let prevented = false;
+      event.preventDefault = () => {
+        prevented = true;
+      };
+      input.dispatchEvent(event);
+      expect(prevented).toBe(false);
+    }
+  );
 });
 
 describe("SearchablePalette Tab remap (input)", () => {
@@ -282,5 +307,31 @@ describe("SearchablePalette Escape clears before it closes", () => {
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
 
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("SearchablePalette scroll and bands", () => {
+  it("scrolls an unbanded cursor row into view even when rows carry no id", () => {
+    const scrolled: string[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.textContent ?? "");
+    };
+    renderPalette({ selectedIndex: 1 });
+    expect(scrolled).toContain(items[1]!.id);
+  });
+
+  it("heads each band with an inert option, never a role=group", () => {
+    renderPalette({
+      getSectionLabel: (item: Item) => (items.indexOf(item) < 1 ? "First" : "Second"),
+      renderItem: (item: Item) => (
+        <div key={item.id} id={`palette-option-${item.id}`} role="option" aria-selected={false}>
+          {item.id}
+        </div>
+      ),
+    });
+    const list = screen.getByRole("listbox");
+    expect(list.querySelectorAll('[role="group"]')).toHaveLength(0);
+    const heads = [...list.querySelectorAll('[aria-disabled="true"]')];
+    expect(heads.map((h) => h.getAttribute("aria-label"))).toEqual(["First", "Second"]);
   });
 });

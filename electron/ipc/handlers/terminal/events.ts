@@ -25,6 +25,10 @@ import type {
   TerminalSubmitStatusPayload,
 } from "../../../../shared/types/pty-host.js";
 import type { PtyDataRouting } from "../../../services/pty/types.js";
+import {
+  setSpawnConfirmationTimeoutHandler,
+  settleSpawnConfirmation,
+} from "./spawnConfirmation.js";
 import type { HandlerDependencies } from "../../types.js";
 
 export function registerTerminalEventHandlers(deps: HandlerDependencies): () => void {
@@ -39,7 +43,15 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   // and JSON/base64 churn; see lessons #4899/#4862/#4639). Project-scoped: only
   // the owning project's views host a panel for the terminal, and its cached
   // views must still get every byte, since there is no resync on reactivation.
-  const handlePtyData = (id: string, data: string | Uint8Array, routing?: PtyDataRouting) => {
+  const handlePtyData = (
+    id: string,
+    data: string | Uint8Array,
+    routing?: PtyDataRouting,
+    streamEnd?: number
+  ) => {
+    // Omitted rather than sent as a trailing `undefined` when the host had no
+    // offset, so the wire shape of an unfenced chunk is unchanged.
+    const offsetArg = streamEnd === undefined ? [] : [streamEnd];
     // Recovery for one view whose port threw mid-flush (#12557). Every other
     // destination already has these bytes, so this goes to that view alone — a
     // re-broadcast would double-deliver to the siblings that took it on their
@@ -50,7 +62,7 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
       const holder = resolveLiveWebContents(routing.portRecoveryWebContentsId);
       if (!holder) return;
       try {
-        holder.send(CHANNELS.TERMINAL_DATA, id, data);
+        holder.send(CHANNELS.TERMINAL_DATA, id, data, ...offsetArg);
       } catch {
         // Renderer disposed mid-send; the port teardown already ran.
       }
@@ -69,7 +81,8 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
       exclude,
       CHANNELS.TERMINAL_DATA,
       id,
-      data
+      data,
+      ...offsetArg
     );
   };
   ptyClient.on("data", handlePtyData);
@@ -113,6 +126,7 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
 
   // Spawn result events (success or failure)
   const handleSpawnResult = (id: string, result: SpawnResult) => {
+    settleSpawnConfirmation(id);
     // A hand-over is of one process (#12490): a later launch under the id, or
     // the handed-over launch failing to start, ends it.
     getMcpServerServiceRef()?.handleTerminalSpawnResult(id, result);
@@ -135,6 +149,21 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   };
   ptyClient.on("spawn-result", handleSpawnResult);
   handlers.push(() => ptyClient.off("spawn-result", handleSpawnResult));
+
+  // No answer from the host at all (#12754). Same renderer event as a real
+  // rejection so the pane gets the spawn-error banner, but deliberately not
+  // routed through handleSpawnResult: the spawn may still land, so nothing
+  // main-side may act on it as a final failure.
+  handlers.push(
+    setSpawnConfirmationTimeoutHandler((id, error) => {
+      logWarn("[TerminalSpawn] pty-host has not confirmed spawn", { id, error: error.message });
+      const result: SpawnResult = { success: false, id, error };
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+        name: "terminal:spawn-result",
+        payload: [id, result],
+      });
+    })
+  );
 
   // Geometry the PTY actually holds after a resize. The renderer compares it
   // against its own xterm grid to detect a split the two sides cannot otherwise

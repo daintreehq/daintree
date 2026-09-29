@@ -22,7 +22,6 @@ const onboardingMock = {
   ),
   markChecklistItem: vi.fn(() => Promise.resolve()),
   dismissChecklist: vi.fn(() => Promise.resolve()),
-  markChecklistCelebrationShown: vi.fn(() => Promise.resolve()),
 };
 
 vi.stubGlobal("window", {
@@ -54,11 +53,6 @@ vi.mock("@/services/KeybindingService", () => ({
 
 vi.mock("../../useElectron", () => ({
   isElectronAvailable: () => true,
-}));
-
-let mockReducedMotion = false;
-vi.mock("framer-motion", () => ({
-  useReducedMotion: () => mockReducedMotion,
 }));
 
 type TerminalLike = {
@@ -137,7 +131,6 @@ describe("useGettingStartedChecklist", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     resetAgentDiscoveryStoreForTests();
-    mockReducedMotion = false;
     projectState = { currentProject: null };
     terminalState = { panelsById: {}, panelIds: [], focusedId: null };
     worktreeState = { worktrees: new Map() };
@@ -324,9 +317,8 @@ describe("useGettingStartedChecklist", () => {
     }
 
     it("does not emit a toast, read keybinding, or auto-dismiss when the final item completes", async () => {
-      // Regression guard for #7499: the on-screen CelebrationConfetti is the
-      // sole completion signal. A toast would be redundant (Visible-another-way)
-      // and its CTA would point to an action the user just finished (Helpful).
+      // Regression guard for #7499 and #12837: the checklist's own "All set"
+      // state is the sole completion signal — no toast, no celebration.
       const { result } = renderHook(() => useGettingStartedChecklist(true));
       await flushHydration();
 
@@ -340,8 +332,8 @@ describe("useGettingStartedChecklist", () => {
       expect(notifyMock).not.toHaveBeenCalled();
       expect(getDisplayComboMock).not.toHaveBeenCalled();
       expect(onboardingMock.dismissChecklist).not.toHaveBeenCalled();
-      expect(onboardingMock.markChecklistCelebrationShown).toHaveBeenCalledTimes(1);
-      expect(result.current.showCelebration).toBe(true);
+      expect(result.current.checklist?.items.ranSecondParallelAgent).toBe(true);
+      expect(result.current).not.toHaveProperty("showCelebration");
     });
   });
 
@@ -359,28 +351,139 @@ describe("useGettingStartedChecklist", () => {
       });
     });
 
-    it("keeps panel visible after all items complete (no auto-dismiss)", async () => {
+    function getShowHandler(): () => void {
+      const showCall = vi
+        .mocked(window.addEventListener)
+        .mock.calls.filter((c) => c[0] === "daintree:show-getting-started")
+        .at(-1);
+      expect(showCall).toBeDefined();
+      const listener = showCall![1];
+      const event = new Event("daintree:show-getting-started");
+      return () => (typeof listener === "function" ? listener(event) : listener.handleEvent(event));
+    }
+
+    it("hides the panel once all items complete, without persisting a dismissal", async () => {
       const { result } = renderHook(() => useGettingStartedChecklist(true));
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
+      expect(result.current.visible).toBe(true);
 
       await act(async () => {
         result.current.markItem("ranSecondParallelAgent");
       });
 
-      // Panel stays visible after completion — no auto-dismiss.
-      expect(result.current.visible).toBe(true);
+      expect(result.current.visible).toBe(false);
       expect(result.current.checklist?.dismissed).toBe(false);
-      // dismissChecklist is NOT called on completion.
       expect(onboardingMock.dismissChecklist).not.toHaveBeenCalled();
+    });
 
-      // Advance well past the old 800ms hold — panel remains visible.
+    it("stays hidden when the checklist hydrates already complete", async () => {
+      onboardingMock.getChecklist.mockResolvedValue({
+        items: {
+          openedProject: true,
+          launchedAgent: true,
+          createdWorktree: true,
+          ranSecondParallelAgent: true,
+        },
+        dismissed: false,
+        celebrationShown: false,
+      });
+      const { result } = renderHook(() => useGettingStartedChecklist(true));
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(2000);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(result.current.checklist).not.toBeNull();
+      expect(result.current.visible).toBe(false);
+    });
+
+    it("Help > Getting Started reopens a completed checklist", async () => {
+      onboardingMock.getChecklist.mockResolvedValue({
+        items: {
+          openedProject: true,
+          launchedAgent: true,
+          createdWorktree: true,
+          ranSecondParallelAgent: true,
+        },
+        dismissed: false,
+        celebrationShown: false,
+      });
+      const { result } = renderHook(() => useGettingStartedChecklist(true));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.visible).toBe(false);
+
+      const handleShow = getShowHandler();
+      await act(async () => {
+        handleShow();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(result.current.visible).toBe(true);
+    });
+
+    it("finishing the last item hides a checklist that Help had forced open", async () => {
+      const { result } = renderHook(() => useGettingStartedChecklist(true));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const handleShow = getShowHandler();
+      await act(async () => {
+        handleShow();
+        await vi.advanceTimersByTimeAsync(0);
       });
       expect(result.current.visible).toBe(true);
-      expect(result.current.checklist?.dismissed).toBe(false);
+
+      await act(async () => {
+        result.current.markItem("ranSecondParallelAgent");
+      });
+
+      expect(result.current.visible).toBe(false);
+    });
+
+    it("a push that completes the checklist hides it even when Help had forced it open", async () => {
+      let pushHandler: ((next: ChecklistStateLike) => void) | null = null;
+      const augmentedMock = Object.assign(onboardingMock, {
+        onChecklistPush: (fn: (next: ChecklistStateLike) => void) => {
+          pushHandler = fn;
+          return () => {};
+        },
+      });
+
+      try {
+        const { result } = renderHook(() => useGettingStartedChecklist(true));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        const handleShow = getShowHandler();
+        await act(async () => {
+          handleShow();
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(result.current.visible).toBe(true);
+
+        await act(async () => {
+          pushHandler!({
+            items: {
+              openedProject: true,
+              launchedAgent: true,
+              createdWorktree: true,
+              ranSecondParallelAgent: true,
+            },
+            dismissed: false,
+            celebrationShown: false,
+          });
+        });
+
+        expect(result.current.visible).toBe(false);
+        expect(result.current.checklist?.dismissed).toBe(false);
+      } finally {
+        delete (augmentedMock as Partial<typeof augmentedMock>).onChecklistPush;
+      }
     });
 
     it("onChecklistPush with dismissed:true hides the panel", async () => {
@@ -424,14 +527,10 @@ describe("useGettingStartedChecklist", () => {
       }
     });
 
-    it("manual dismiss after completion hides panel and persists dismissal", async () => {
+    it("manual dismiss hides panel and persists dismissal", async () => {
       const { result } = renderHook(() => useGettingStartedChecklist(true));
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
-      });
-
-      await act(async () => {
-        result.current.markItem("ranSecondParallelAgent");
       });
       expect(result.current.visible).toBe(true);
 
@@ -448,43 +547,6 @@ describe("useGettingStartedChecklist", () => {
         await vi.advanceTimersByTimeAsync(800);
       });
       expect(result.current.visible).toBe(false);
-    });
-  });
-
-  describe("reduced motion", () => {
-    beforeEach(() => {
-      mockReducedMotion = true;
-      onboardingMock.getChecklist.mockResolvedValue({
-        items: {
-          openedProject: true,
-          launchedAgent: true,
-          createdWorktree: true,
-          ranSecondParallelAgent: false,
-        },
-        dismissed: false,
-        celebrationShown: false,
-      });
-    });
-
-    it("completes celebration auto-clear in 0ms when reduced motion is preferred", async () => {
-      const { result } = renderHook(() => useGettingStartedChecklist(true));
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-
-      expect(result.current.showCelebration).toBe(false);
-
-      await act(async () => {
-        result.current.markItem("ranSecondParallelAgent");
-      });
-
-      expect(result.current.showCelebration).toBe(true);
-
-      // Timer fires immediately (0ms).
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      expect(result.current.showCelebration).toBe(false);
     });
   });
 

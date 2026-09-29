@@ -350,6 +350,45 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
     expect(screen.getByTestId("tooltip-content").textContent).toContain("Exit code: 1");
   });
 
+  it("colours the tooltip's exit line as an error only for a non-zero code", () => {
+    mockTerminal = { id: "t1", sessionCost: 0.1 };
+    const exitLine = () =>
+      [...screen.getByTestId("tooltip-content").querySelectorAll("span")].find((el) =>
+        /^Exit/.test(el.textContent ?? "")
+      )!;
+
+    const { rerender } = render(
+      <TerminalAgentIndicator id="t1" agentState="exited" isExited={true} exitCode={1} />
+    );
+    expect(exitLine().className).toContain("text-status-error");
+
+    rerender(<TerminalAgentIndicator id="t1" agentState="exited" isExited={true} exitCode={0} />);
+    expect(exitLine().textContent).toContain("Exit code: 0");
+    expect(exitLine().className).not.toContain("text-status-error");
+
+    rerender(
+      <TerminalAgentIndicator id="t1" agentState="exited" isExited={true} exitCode={null} />
+    );
+    expect(exitLine().textContent).not.toMatch(/:\s*$/);
+    expect(exitLine().className).not.toContain("text-status-error");
+  });
+
+  it("eases the chip between states on the state-change tier and snaps under reduced motion", () => {
+    mockTerminal = { id: "t1" };
+
+    render(<TerminalAgentIndicator id="t1" agentState="working" />);
+
+    const chip = screen.getByRole("status", { name: /agent state/i });
+    const transition = chip.className.split(" ").find((c) => c.startsWith("transition-"));
+    expect(transition).toBeDefined();
+    expect(transition).not.toBe("transition-all");
+    expect(transition).toContain("background-color");
+    expect(transition).toContain("border-color");
+    expect(chip.className).toContain("duration-150");
+    expect(chip.className).toContain("ease-out");
+    expect(chip.className).toContain("reduce-motion:transition-none");
+  });
+
   it("falls back to Agent {state} when no headline", () => {
     mockTerminal = { id: "t1" };
 
@@ -419,7 +458,7 @@ describe("TerminalAgentIndicator — elapsed-state-duration suffix", () => {
     const tooltips = screen.getAllByTestId("tooltip-content");
     const agentTooltip = tooltips.find((el) => el.textContent?.includes("State: working"));
     expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.querySelector(".motion-safe\\:animate-in")).toBeNull();
+    expect(agentTooltip!.querySelector(".animate-in")).toBeNull();
   });
 
   it("renders the duration suffix in an animated span past the 10-second threshold", () => {
@@ -432,12 +471,13 @@ describe("TerminalAgentIndicator — elapsed-state-duration suffix", () => {
     const agentTooltip = tooltips.find((el) => el.textContent?.includes("State: working"));
     expect(agentTooltip).toBeTruthy();
 
-    const animatedSpan = agentTooltip!.querySelector(".motion-safe\\:animate-in");
+    const animatedSpan = agentTooltip!.querySelector(".animate-in");
     expect(animatedSpan).toBeTruthy();
     const cls = animatedSpan!.getAttribute("class")!;
-    expect(cls).toContain("motion-safe:animate-in");
-    expect(cls).toContain("motion-safe:fade-in");
-    expect(cls).toContain("motion-safe:duration-150");
+    expect(cls).toContain("animate-in");
+    expect(cls).toContain("fade-in");
+    // A fade is not motion, so it is never gated on a motion variant.
+    expect(cls).not.toMatch(/motion-(safe|reduce):/);
     expect(cls).not.toMatch(/\bopacity-/);
     expect(animatedSpan!.textContent).toContain("·");
     expect(animatedSpan!.textContent).toContain("30s");

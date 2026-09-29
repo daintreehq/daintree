@@ -1,8 +1,8 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { SearchField } from "@/components/ui/SearchField";
-import { PRESSED_TOGGLE } from "@/components/Diagnostics/toggleStyles";
+import { SearchField, clearSearchBeforeDismiss } from "@/components/ui/SearchField";
+import { FilterChip } from "@/components/ui/FilterChip";
 import { Check, ListFilter } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { EventRecord, EventFilterOptions, EventCategory } from "@/store/eventStore";
@@ -42,6 +42,7 @@ interface EventFiltersProps {
 export function EventFilters({ events, filters, onFiltersChange, className }: EventFiltersProps) {
   const [searchInput, setSearchInput] = useState(filters.search || "");
   const [traceIdInput, setTraceIdInput] = useState(filters.traceId || "");
+  const traceInputRef = useRef<HTMLInputElement>(null);
   const [moreOpen, setMoreOpen] = useState(false);
 
   useEffect(() => {
@@ -172,9 +173,8 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
       )}
     >
       <SearchField
-        size="compact"
-        // h-6 keeps the field level with the xs category chips beside it.
-        fieldClassName="h-6 min-w-[150px] max-w-[260px] flex-1"
+        size="dense"
+        fieldClassName="min-w-[150px] max-w-[260px] flex-1"
         type="search"
         value={searchInput}
         onChange={(e) => handleSearchChange(e.target.value)}
@@ -193,22 +193,18 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
           const count = categoryCounts.get(category) || 0;
           const config = EVENT_CATEGORY_STYLES[category];
           return (
-            <Button
+            <FilterChip
               key={category}
-              variant="subtle"
-              size="xs"
+              selected={isActive}
+              count={count}
               onClick={() => toggleCategoryFilter(category)}
-              data-filter-chip="true"
-              className={cn("gap-1.5", isActive && PRESSED_TOGGLE)}
-              aria-pressed={isActive}
             >
               <span
                 aria-hidden="true"
                 className={cn("h-1.5 w-1.5 rounded-full", CATEGORY_DOT[category])}
               />
-              <span>{config.label}</span>
-              <span className="tabular-nums text-text-secondary">{count}</span>
-            </Button>
+              {config.label}
+            </FilterChip>
           );
         })}
       </div>
@@ -218,7 +214,10 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
           <Button
             variant="subtle"
             size="xs"
-            className={cn(moreFilterCount > 0 && PRESSED_TOGGLE)}
+            // Opens a popover, so it is not a toggle and never looks pressed.
+            // Primary ink and the count say more filters are narrowing the
+            // list, as on the other filter triggers.
+            className={cn(moreFilterCount > 0 && "text-text-primary")}
             aria-label={
               moreFilterCount > 0 ? `More filters, ${moreFilterCount} active` : "More filters"
             }
@@ -228,7 +227,11 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
             {moreFilterCount > 0 ? <span className="tabular-nums">{moreFilterCount}</span> : null}
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="end" sideOffset={6} className="flex max-h-[60vh] w-80 flex-col p-0">
+        <PopoverContent
+          align="end"
+          className="flex max-h-[60vh] w-80 flex-col p-0"
+          onEscapeKeyDown={(e) => clearSearchBeforeDismiss(e, traceInputRef.current, clearTraceId)}
+        >
           <div className="shrink-0 space-y-1 border-b border-divider p-3">
             <label
               htmlFor="event-trace-filter"
@@ -240,11 +243,12 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
             <SearchField
               size="compact"
               id="event-trace-filter"
+              inputRef={traceInputRef}
               value={traceIdInput}
               onChange={(e) => handleTraceIdChange(e.target.value)}
               onClear={clearTraceId}
               clearLabel="Clear trace ID filter"
-              placeholder="Filter by trace ID..."
+              placeholder="Filter by trace ID…"
               className="font-mono placeholder:font-sans"
             />
           </div>

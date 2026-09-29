@@ -1,12 +1,17 @@
 import { useState, useEffect, useCallback } from "react";
 import { ChevronDown, X, Eye, RotateCw } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { terminalClient } from "@/clients";
 import { cn } from "@/lib/utils";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { logError } from "@/utils/logger";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 
@@ -155,8 +160,11 @@ export function RunningTaskList({ worktreeId, onFocusFallback }: RunningTaskList
       const next = rows[at + 1] ?? rows[at - 1];
       const options = { preventScroll: true, focusVisible: keyboard };
       const target = next?.querySelector<HTMLElement>("[data-task-focus]");
-      if (target) target.focus(options);
-      else onFocusFallback?.(options);
+      if (target) {
+        // Focus follows the dismissal; it is not asking for the command's full text.
+        armTooltipFocusSuppression();
+        target.focus(options);
+      } else onFocusFallback?.(options);
     }
     handleDismiss(id);
   };
@@ -241,7 +249,7 @@ function TaskOverflow({
         aria-label={`Show ${tasks.length} earlier ${tasks.length === 1 ? "task" : "tasks"}`}
         className={cn(
           "flex w-full min-h-6 items-center gap-0.5 px-2 rounded-[var(--radius-sm)] text-3xs font-sans transition-colors",
-          "text-text-secondary hover:text-text-primary hover:bg-tint/[0.04]",
+          "text-text-secondary hover:text-text-primary hover:bg-overlay-subtle cursor-pointer",
           "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         )}
       >
@@ -250,7 +258,6 @@ function TaskOverflow({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        sideOffset={6}
         aria-label="Earlier tasks"
         className="p-1 min-w-64 max-w-sm max-h-[var(--radix-popover-content-available-height)] overflow-y-auto"
       >
@@ -306,22 +313,23 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
       data-task-row={terminal.id}
       className={cn(
         "flex items-center gap-1.5 px-2 rounded-[var(--radius-sm)] text-2xs font-mono group",
-        "hover:bg-tint/[0.04] transition-colors"
+        "hover:bg-overlay-subtle transition-colors"
       )}
     >
       {/* Status indicator */}
       <StatusDot status={status} />
 
       {/* Command */}
-      <button
-        type="button"
-        data-task-focus=""
-        onClick={() => onFocus(terminal.id)}
-        className="flex-1 min-h-6 truncate text-left text-text-secondary hover:text-text-primary transition-colors cursor-pointer min-w-0"
-        title={command}
-      >
-        {command}
-      </button>
+      <TruncatedTooltip content={command}>
+        <button
+          type="button"
+          data-task-focus=""
+          onClick={() => onFocus(terminal.id)}
+          className="flex-1 min-h-6 truncate text-left text-text-secondary hover:text-text-primary transition-colors cursor-pointer min-w-0 rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+        >
+          {command}
+        </button>
+      </TruncatedTooltip>
 
       {/* Elapsed time */}
       {/* Elapsed time and the failure word trade places with the actions on
@@ -349,51 +357,69 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
       {/* Actions */}
       <div className="hidden items-center gap-0.5 shrink-0 group-hover:flex group-focus-within:flex">
         {isActive && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onStop(terminal.id);
-            }}
-            className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-status-error"
-            aria-label="Stop task"
-          >
-            <X className="h-3 w-3" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onStop(terminal.id);
+                }}
+                className="[&_svg]:size-3.5 hover:text-status-error"
+                aria-label="Stop task"
+              >
+                <X aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Stop task</TooltipContent>
+          </Tooltip>
         )}
         {status === "failed" && terminal.exitBehavior !== "restart" && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onRestart(terminal.id);
-            }}
-            className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
-            aria-label="Restart task"
-          >
-            <RotateCw className="h-3 w-3" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRestart(terminal.id);
+                }}
+                className="[&_svg]:size-3.5"
+                aria-label="Restart task"
+              >
+                <RotateCw aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Restart task</TooltipContent>
+          </Tooltip>
         )}
         {(status === "failed" || status === "success") && (
-          <button
+          <DismissButton
             onClick={(e) => {
               e.stopPropagation();
               onDismiss(terminal.id, e.currentTarget, e.detail === 0);
             }}
-            className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
-            aria-label="Dismiss"
-          >
-            <X className="h-3 w-3" />
-          </button>
+            aria-label="Dismiss task"
+          />
         )}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onFocus(terminal.id);
-          }}
-          className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
-          aria-label="Focus terminal"
-        >
-          <Eye className="h-3 w-3" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={(e) => {
+                e.stopPropagation();
+                onFocus(terminal.id);
+              }}
+              className="[&_svg]:size-3.5"
+              aria-label="Focus terminal"
+            >
+              <Eye aria-hidden="true" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Focus terminal</TooltipContent>
+        </Tooltip>
       </div>
     </div>
   );

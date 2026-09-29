@@ -3,7 +3,7 @@
 import "./setup/environment.js";
 
 import nodeV8 from "node:v8";
-import { app, BrowserWindow, crashReporter, protocol } from "electron";
+import { app, BrowserWindow, crashReporter, protocol, webContents } from "electron";
 
 // Ask V8 to auto-dump a heap snapshot when the main process is genuinely close
 // to its heap limit. Complements the existing dev-only 600 MB RSS heuristic in
@@ -45,11 +45,14 @@ import {
   shouldRestoreWindowFleet,
 } from "./lifecycle/launchIntent.js";
 import {
+  RESTORE_HYDRATION_WAIT_MS,
   resolvePrimaryRestoreProjectId,
   restoreWindowFleet,
   type CreateWindowResult,
 } from "./lifecycle/windowRestore.js";
+import { restoreFleetAfterCrash, setCrashFleetRestorer } from "./lifecycle/crashWindowRestore.js";
 import { registerShutdownHandler } from "./lifecycle/shutdown.js";
+import { getActiveShutdown } from "./lifecycle/shutdownCoordinator.js";
 import {
   setMainWindow,
   getMainWindow,
@@ -65,7 +68,7 @@ import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import { isWindowBound, reserveWindowForOpen } from "./window/windowOpenState.js";
 import { distributePortsToView } from "./window/portDistribution.js";
-import { findOtherProjectOwner } from "./window/projectOwnership.js";
+import { findOtherProjectOwner, type ProjectOwner } from "./window/projectOwnership.js";
 import { openFolderInNewWindow } from "./window/newWindowOpen.js";
 import { deliverOpenSystemMemoryPressure } from "./window/systemMemoryPressureDelivery.js";
 import { toDisposable } from "./utils/lifecycle.js";
@@ -88,6 +91,7 @@ import {
   getStopDiskSpaceMonitor,
   setStopDiskSpaceMonitor,
   getMainProcessWatchdogClientRef,
+  queueWindowBackgroundProjects,
 } from "./window/windowServices.js";
 import { getMcpServerServiceRef, getResourceProfileService } from "./window/serviceRefs.js";
 import {
@@ -108,6 +112,7 @@ import {
   kickOffEarlyPathRefresh,
 } from "./setup/environment.js";
 import { store } from "./store.js";
+import { recordVersionFirstRun } from "./services/versionFirstRun.js";
 import { initializeLogger, registerLoggerTransport, setLogLevelOverrides } from "./utils/logger.js";
 import { broadcastToVisibleRenderers } from "./ipc/utils.js";
 import {
@@ -120,11 +125,13 @@ import { buildSwitchHydrateResult } from "./services/AppHydrationService.js";
 import { initializeCrashLoopGuard, getCrashLoopGuard } from "./services/CrashLoopGuardService.js";
 import { initializePanelSuspectLedger } from "./services/PanelSuspectLedgerService.js";
 import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
+import { initializeProcessDeathLogger } from "./services/ProcessDeathLogger.js";
 import {
   readLastActiveProjectIdSync,
   readOpenWindowsManifestSync,
 } from "./services/persistence/readLastProjectId.js";
 import {
+  enableOpenWindowsSaves,
   initOpenWindowsTracker,
   resumeOpenWindowsSaves,
   saveOpenWindowsNow,
@@ -242,6 +249,8 @@ protocol.registerSchemesAsPrivileged([
     // handler still echoes Access-Control-Allow-Origin solely for the trusted
     // app document (trustedAppCorsOrigin), which is what lets the renderer read
     // a view module's own text to compile its Tailwind classes (#12220).
+    // stream lets `<audio>` play tour narration straight from the scheme with
+    // ranged reads, as daintree-media:// does (#12773).
     scheme: "plugin",
     privileges: {
       standard: true,
@@ -249,6 +258,7 @@ protocol.registerSchemesAsPrivileged([
       supportFetchAPI: true,
       corsEnabled: true,
       codeCache: true,
+      stream: true,
     },
   },
 ]);
@@ -296,6 +306,12 @@ if (!gotTheLock) {
   // logging filters correctly from the very first log line. Utility processes
   // receive the same map after their first `ready` event.
   setLogLevelOverrides(store.get("logLevelOverrides") ?? {});
+
+  try {
+    recordVersionFirstRun();
+  } catch (error) {
+    console.warn("[MAIN] Failed to record version first-run boundary:", error);
+  }
 
   // Visible-only: log batches are high-frequency and replayable (LOGS_GET_ALL),
   // so cached/frozen project views skip them instead of queueing every flush.
@@ -350,6 +366,9 @@ if (!gotTheLock) {
   // is already pulled into the eager graph via AppHydrationService,
   // CrashRecoveryService, and the ipc/handlers/app/* handlers.
   initializeGpuCrashMonitor();
+  // Before any window or utility process exists, so no child death goes
+  // unlogged — including an external kill of several children at once.
+  initializeProcessDeathLogger();
 
   const windowRegistry = new WindowRegistry();
   setWindowRegistry(windowRegistry);
@@ -362,6 +381,22 @@ if (!gotTheLock) {
   // recorded the focus by the time this reads it. Debounced, so alt-tabbing
   // collapses to one write.
   app.on("browser-window-focus", () => scheduleOpenWindowsSave());
+
+  // Crash metadata and recovery summaries read each live workspace's persisted
+  // layout. Views alone miss projects whose agents outlived an evicted view.
+  getCrashRecoveryService().setLiveWorkspaceIdsProvider(() => {
+    const ids = new Set<string>(getPtyClient()?.getLiveWorkspaceIds() ?? []);
+    for (const ctx of windowRegistry.all()) {
+      try {
+        for (const entry of ctx.services.projectViewManager?.getAllViews() ?? []) {
+          ids.add(entry.projectId);
+        }
+      } catch {
+        // A disposing manager can throw; its projects are skipped this read.
+      }
+    }
+    return ids;
+  });
 
   // Read last-active projectId synchronously from SQLite BEFORE creating any window.
   // This allows the initial WebContentsView to use the correct session partition,
@@ -393,6 +428,8 @@ if (!gotTheLock) {
     opts?: {
       revealMode?: "show" | "showInactive";
       backgroundProjectIds?: readonly string[];
+      /** Hold the result until the renderer reports hydration, at most this long (#12800). */
+      awaitHydrationMs?: number;
       /** Told the window's id as soon as it is registered, before setup awaits anything. */
       onRegistered?: (windowId: number) => void;
     }
@@ -427,7 +464,8 @@ if (!gotTheLock) {
     const closedWindowId = ctx.windowId;
     scheduleOpenWindowsSave();
     win.on("closed", () => saveOpenWindowsNow(closedWindowId));
-    windowRegistry.registerAppViewWebContents(ctx.windowId, appView.webContents.id);
+    const initialWebContentsId = appView.webContents.id;
+    windowRegistry.registerAppViewWebContents(ctx.windowId, initialWebContentsId);
     // Paint-fabric surface views load the same preload as project views; the
     // paintSurface IPC namespace builds its per-window manager lazily and
     // reads the path from here.
@@ -516,26 +554,35 @@ if (!gotTheLock) {
           console.error("[main] closePortsForView failed during cache:", err);
         }
       },
-      onViewCrashed: (wc) => {
+      onViewCrashed: () => {
         // Tear down the per-window PTY MessagePort on renderer crash so the
         // pty-host's PortQueueManager can drop stale queue accounting before
         // reload re-issues a fresh port. Without this, a stale port keeps the
         // safety-timeout pause loop wedged for the entire reload window (#6244).
         if (win.isDestroyed()) return;
-        getPtyClient()?.disconnectMessagePort(win.id);
-        // Revoke help-session tokens pinned to the crashed WebContents (#9151).
-        // The renderer comes back with a brand-new (monotonic) WebContents id,
-        // so the old pin is now a tombstone — every CallTool would return
-        // SESSION_BINDING_GONE and the targeted tier-mismatch / revoked IPCs
-        // would silently no-op against the dead id. Mirrors the synchronous
-        // eviction-hook revoke (lesson #5009); `wc.id` is the dead id the
-        // session pinned at provision time.
-        const crashedWcId = wc.id;
-        import("./services/HelpSessionService.js")
-          .then(({ helpSessionService }) => helpSessionService.revokeByWebContentsId(crashedWcId))
-          .catch((err) => {
-            console.warn("[main] revokeByWebContentsId failed during crash:", err);
-          });
+        try {
+          getPtyClient()?.disconnectMessagePort(win.id);
+        } catch (err) {
+          console.warn("[main] disconnectMessagePort failed during crash:", err);
+        }
+      },
+      onViewRendererGone: (wc) => {
+        // Capture-revoke help sessions pinned to the dead renderer (#9151,
+        // #12954), on every non-clean death of any project view — active,
+        // cached, or outgoing mid-switch — before the recovery branch is
+        // chosen. A crash-reload keeps the same WebContents id, but the
+        // renderer that owned the assistant lane is gone and has no way back
+        // to the live PTY — left running, the next panel open would displace
+        // it with a hard kill and lose the conversation. Capturing here writes
+        // the pending-hibernation entry the reloaded renderer resumes from.
+        // (View recreation after OOM gets a new id instead; either way the old
+        // pin is finished.) Called directly, not through a dynamic import, so
+        // the capture placeholder is written before this hook returns and the
+        // reload is scheduled. A later eviction of the same view finds the
+        // sessions already revoked or joins the in-flight capture.
+        helpSessionService.revokeByWebContentsId(wc.id).catch((err) => {
+          console.warn("[main] revokeByWebContentsId failed during crash:", err);
+        });
       },
       onViewReady: (wc) => {
         // Re-distribute PTY MessagePort on every view load/reload.
@@ -760,6 +807,24 @@ if (!gotTheLock) {
       );
     }
 
+    // Paces a multi-window restore: the next window starts once this one's
+    // renderer has restored its panels and respawned its agents, rather than
+    // while that work is still in flight. Pacing only — a timeout, a close or
+    // a failed hydration all just let the next window go.
+    // By id, never through `appView.webContents`: a project switch during boot
+    // can close the initial view, and reading a closed view's contents throws.
+    const initialContents = webContents.fromId(initialWebContentsId);
+    if (
+      opts?.awaitHydrationMs !== undefined &&
+      initialContents !== undefined &&
+      !initialContents.isDestroyed()
+    ) {
+      await pvm.waitForViewHydrated(initialWebContentsId, {
+        timeoutMs: opts.awaitHydrationMs,
+        signal: ctx.abortController.signal,
+      });
+    }
+
     return "ok";
   }
 
@@ -928,19 +993,78 @@ if (!gotTheLock) {
         ? restoreRecords
         : restoreRecords.map(({ projectId }) => ({ projectId }));
 
-      await restoreWindowFleet({
+      const onBackgroundWindowFailed = (reason: unknown): void => {
+        console.error("[MAIN] Restoring a background window failed:", reason);
+      };
+      const isProjectOwned = (projectId: string): boolean =>
+        findOtherProjectOwner(windowRegistry, projectId, {}) !== null;
+      const isShuttingDown = (): boolean => getActiveShutdown() !== null;
+
+      const startupRestore = restoreWindowFleet({
         records: fleetRecords,
         hadManifest,
         fallbackProjectId,
         createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),
         suppressSaves: suppressOpenWindowsSaves,
         resumeSaves: resumeOpenWindowsSaves,
-        onBackgroundWindowFailed: (reason) => {
-          console.error("[MAIN] Restoring a background window failed:", reason);
-        },
-        isProjectOwned: (projectId) =>
-          findOtherProjectOwner(windowRegistry, projectId, {}) !== null,
+        onBackgroundWindowFailed,
+        isProjectOwned,
+        isShuttingDown,
       });
+
+      // Installed before the startup window boots: its renderer resolves the
+      // crash recovery while `startupRestore` is still pending. The recovery
+      // IPC decides whether this crash is a single one that earns the whole
+      // window set back (#12801); safe mode and loops never trigger it.
+      if (launchIntent === "recovery") {
+        setCrashFleetRestorer((requesterWebContentsId) =>
+          restoreFleetAfterCrash({
+            startupRestore,
+            waitForRequesterHydrated: async () => {
+              const ctx = windowRegistry.getByWebContentsId(requesterWebContentsId);
+              const pvm = ctx?.services.projectViewManager;
+              if (!ctx || !pvm) return false;
+              const outcome = await pvm.waitForViewHydrated(requesterWebContentsId, {
+                timeoutMs: RESTORE_HYDRATION_WAIT_MS,
+                signal: ctx.abortController.signal,
+              });
+              return outcome !== "cancelled" && !ctx.browserWindow.isDestroyed();
+            },
+            adoptBackgroundProjects: (handoffs) => {
+              // One job per window: the queue tracks one pending list per
+              // window, so a second job would overwrite the first's intent.
+              const byWindow = new Map<number, { owner: ProjectOwner; ids: string[] }>();
+              for (const { projectId, backgroundProjectIds } of handoffs) {
+                const owner = findOtherProjectOwner(windowRegistry, projectId, {});
+                if (!owner) continue;
+                const entry = byWindow.get(owner.context.windowId) ?? { owner, ids: [] };
+                entry.ids.push(...backgroundProjectIds.filter((id) => !entry.ids.includes(id)));
+                byWindow.set(owner.context.windowId, entry);
+              }
+              for (const { owner, ids } of byWindow.values()) {
+                queueWindowBackgroundProjects({
+                  windowId: owner.context.windowId,
+                  getManager: () => owner.context.services.projectViewManager,
+                  projectViewManager: owner.projectViewManager,
+                  windowRegistry,
+                  projectIds: ids,
+                });
+              }
+            },
+            readManifest: readOpenWindowsManifestSync,
+            restoreLiveProjects: store.get("sessionRestore")?.enabled !== false,
+            createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),
+            suppressSaves: suppressOpenWindowsSaves,
+            resumeSaves: resumeOpenWindowsSaves,
+            enableSaves: enableOpenWindowsSaves,
+            onBackgroundWindowFailed,
+            isProjectOwned,
+            isShuttingDown,
+          })
+        );
+      }
+
+      await startupRestore;
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);
       // Startup crashes hard-exit without running before-quit, which means

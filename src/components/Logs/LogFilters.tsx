@@ -4,7 +4,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SearchField } from "@/components/ui/SearchField";
-import { PRESSED_TOGGLE } from "@/components/Diagnostics/toggleStyles";
+import { FilterChip } from "@/components/ui/FilterChip";
 import type { LogLevel, LogFilterOptions } from "@/types";
 
 interface LogFiltersProps {
@@ -108,9 +108,8 @@ export function LogFilters({
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-divider px-3 py-1.5">
       <SearchField
-        size="compact"
-        // h-6 keeps the field level with the xs filter chips beside it.
-        fieldClassName="h-6 min-w-[150px] max-w-[260px] flex-1"
+        size="dense"
+        fieldClassName="min-w-[150px] max-w-[260px] flex-1"
         type="search"
         value={searchValue}
         onChange={(e) => setSearchValue(e.target.value)}
@@ -124,20 +123,15 @@ export function LogFilters({
           const isActive = filters.levels?.includes(level) ?? false;
           const count = levelCounts?.[level] ?? 0;
           return (
-            <Button
+            <FilterChip
               key={level}
-              variant="subtle"
-              size="xs"
+              selected={isActive}
+              count={count}
               onClick={() => handleLevelToggle(level)}
-              data-filter-chip="true"
-              className={cn("gap-1.5", isActive && PRESSED_TOGGLE)}
-              aria-pressed={isActive}
-              aria-label={`${label}${count > 0 ? ` (${count})` : ""}`}
             >
               <span aria-hidden="true" className={cn("h-1.5 w-1.5 rounded-full", dot)} />
               {label}
-              {count > 0 && <span className="tabular-nums text-text-secondary">{count}</span>}
-            </Button>
+            </FilterChip>
           );
         })}
       </div>
@@ -148,7 +142,10 @@ export function LogFilters({
             <Button
               variant="subtle"
               size="xs"
-              className={cn(activeSourceCount > 0 && PRESSED_TOGGLE)}
+              // Opens a menu, so it is not a toggle and never looks pressed.
+              // Primary ink and the count say sources are narrowing the list,
+              // as on the other filter triggers.
+              className={cn(activeSourceCount > 0 && "text-text-primary")}
             >
               Sources{activeSourceCount > 0 ? ` (${activeSourceCount})` : ""}
               <ChevronDown />
@@ -156,8 +153,6 @@ export function LogFilters({
           </PopoverTrigger>
           <PopoverContent
             align="start"
-            sideOffset={4}
-            collisionPadding={8}
             className="max-h-[min(240px,var(--radix-popover-content-available-height))] min-w-[200px] overflow-y-auto p-1"
           >
             {availableSources.map((source) => {

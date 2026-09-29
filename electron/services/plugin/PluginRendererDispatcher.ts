@@ -7,6 +7,68 @@ import type {
   ActionDispatchResult,
   PluginActionManifestEntry,
 } from "../../../shared/types/actions.js";
+import type { PluginAgentPane } from "../../../shared/types/plugin.js";
+import { z } from "zod";
+
+/** More panes than any grid holds; a longer answer is truncated, not trusted. */
+const MAX_AGENT_PANES = 256;
+
+const REFUSAL_REASONS = [
+  "unknown-terminal",
+  "not-agent",
+  "exited",
+  "input-bar-off",
+  "backend-unavailable",
+  "input-locked",
+  "restarting",
+  "input-busy",
+  "not-in-grid",
+  "fleet-armed",
+  "project-unavailable",
+  "launch-failed",
+  "prompt-open",
+  "busy",
+] as const satisfies readonly PluginAgentPane["draftRefusal"][];
+
+/**
+ * One pane as a plugin may see it. Built field by field, so whatever else a
+ * renderer puts on the object — and zod strips unknown keys — never reaches a
+ * plugin, and every string is bounded.
+ */
+const AgentPaneSchema = z.object({
+  terminalId: z.string().min(1).max(512),
+  title: z.string().max(1_000),
+  agentId: z.string().min(1).max(200),
+  worktree: z
+    .object({
+      id: z.string().min(1).max(512),
+      name: z.string().max(1_000),
+      branch: z.string().max(1_000).optional(),
+    })
+    .nullable(),
+  observedState: z
+    .enum(["idle", "working", "waiting", "directing", "completed", "exited"])
+    .optional(),
+  isFocused: z.boolean(),
+  canDraft: z.boolean(),
+  draftRefusal: z.enum(REFUSAL_REASONS).optional(),
+});
+
+/**
+ * The renderer's `host.agents.list()` answer, projected to the public shape.
+ * The renderer is ours, but this is the last point before a third-party plugin
+ * reads it: a malformed entry is dropped rather than passed through, and a
+ * non-array answer reads as no panes.
+ */
+export function projectAgentPanes(value: unknown): PluginAgentPane[] {
+  if (!Array.isArray(value)) return [];
+  const panes: PluginAgentPane[] = [];
+  for (const entry of value.slice(0, MAX_AGENT_PANES)) {
+    const parsed = AgentPaneSchema.safeParse(entry);
+    if (parsed.success) panes.push(parsed.data);
+  }
+  return panes;
+}
 
 /**
  * Time budget for a `host.dispatch()` main→renderer round-trip. Matches the MCP
@@ -292,6 +354,24 @@ export class PluginRendererDispatcher {
       fallback: null,
       projectId,
       detail: `Plugin actions.get ${actionId}`,
+    });
+  }
+
+  /**
+   * The agent panes a renderer holds (`host.agents.list()`). Resolves `[]` when
+   * no renderer is available, the round-trip times out, or the view is
+   * destroyed; rejects only when `projectId` is bound and that project has no
+   * live view.
+   */
+  sendAgentsListToRenderer(projectId?: PluginTargetProjectId): Promise<PluginAgentPane[]> {
+    return this.requestFromRenderer<PluginAgentPane[]>({
+      requestChannel: CHANNELS.PLUGIN_AGENTS_LIST_REQUEST,
+      responseChannel: CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE,
+      buildRequest: (requestId) => ({ requestId }),
+      extract: (payload) => projectAgentPanes((payload as { agents?: unknown }).agents),
+      fallback: [],
+      projectId,
+      detail: "Plugin agents.list",
     });
   }
 

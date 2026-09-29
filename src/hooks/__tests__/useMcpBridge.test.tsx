@@ -76,6 +76,7 @@ vi.mock("@/components/Git/gitRemoteOperationPreview", async (importOriginal) => 
 
 import {
   useMcpBridge,
+  PROTECTED_CLOSE_RATIONALE,
   buildMcpConfirmPreview,
   buildTerminalKillBatchTargets,
   resolveMcpConfirmPreviewTarget,
@@ -146,6 +147,8 @@ describe("useMcpBridge", () => {
         sessionOrigin?: "help" | "assistant-pane" | "external";
         offerSessionApproval?: boolean;
         approvalOnly?: boolean;
+        approvalReason?: "above-tier" | "protected-close";
+        authorization?: "tier" | "user" | "session-grant" | "native-grant" | "skip-preference";
       }) => void | Promise<void>)
     | undefined;
   let cleanupManifest: ReturnType<typeof vi.fn>;
@@ -657,6 +660,65 @@ describe("useMcpBridge", () => {
         confirmationDecision: "rejected",
       })
     );
+  });
+
+  // #12881: the assistant closing panels it did not open is asked about as a
+  // checklist, and the rows left checked go back to main to close.
+  it("puts an assistant close to the user as a checklist and reports the rows kept", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "terminal.closeMany", title: "Close" }));
+    mocks.panelsById = {
+      p1: { id: "p1", title: "claude", detectedAgentId: "claude", agentState: "working" },
+      p2: { id: "p2", title: "zsh" },
+    };
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-close",
+      actionId: "terminal.closeMany",
+      args: { terminalIds: ["p1", "p2"] },
+      sessionOrigin: "help",
+      approvalOnly: true,
+      approvalReason: "protected-close",
+    });
+
+    await Promise.resolve();
+    const pending = useMcpConfirmStore.getState().current;
+    expect(pending?.approvalReason).toBe("protected-close");
+    expect(pending?.danger).toBe("confirm");
+    expect(pending?.dangerRationale).toBe(PROTECTED_CLOSE_RATIONALE);
+    expect(pending?.selectableTargets?.map((t) => t.id)).toEqual(["p1", "p2"]);
+    expect(pending?.selectionConfirmLabel?.verb).toBe("Close");
+
+    useMcpConfirmStore.getState().resolveCurrent("approved", ["p2"]);
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-close",
+      result: { ok: true, result: { selectedTargetIds: ["p2"] } },
+      confirmationDecision: "approved",
+    });
+  });
+
+  it("keeps an above-tier close as a plain approval, without the close checklist", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "terminal.closeMany", title: "Close" }));
+
+    renderHook(() => useMcpBridge());
+
+    void dispatchHandler?.({
+      requestId: "req-above-close",
+      actionId: "terminal.closeMany",
+      args: { terminalIds: ["p1"] },
+      sessionOrigin: "external",
+      approvalOnly: true,
+    });
+
+    await Promise.resolve();
+    const pending = useMcpConfirmStore.getState().current;
+    expect(pending?.approvalReason).toBe("above-tier");
+    expect(pending?.selectableTargets).toBeUndefined();
+    expect(pending?.dangerRationale).toBeUndefined();
   });
 
   it("refuses an approval-only request for an action this view does not know", async () => {
@@ -1475,6 +1537,81 @@ describe("useMcpBridge", () => {
     useMcpConfirmStore.getState().resolveCurrent("approved");
     await dispatched;
     expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs a force delete under the skip preference without the typed-name gate (#12874)", async () => {
+    // Same D3 worktree as the native-grant case above. The skip preference is
+    // the user's standing "don't ask", typed name included, so nothing is
+    // raised and the delete is dispatched on its pre-confirmation.
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    mocks.worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/repo/wt-1",
+      name: "wt-1",
+      branch: "main",
+      isCurrent: false,
+      isMainWorktree: false,
+    });
+
+    renderHook(() => useMcpBridge());
+
+    await dispatchHandler?.({
+      requestId: "req-skip",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1", force: true },
+      confirmed: true,
+      authorization: "skip-preference",
+    });
+
+    expect(useMcpConfirmStore.getState().current).toBeNull();
+    expect(mocks.buildPreview).not.toHaveBeenCalled();
+    expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "worktree.delete",
+      expect.objectContaining({ worktreeId: "wt-1", force: true }),
+      expect.objectContaining({ source: "agent", confirmed: true })
+    );
+  });
+
+  it("still demotes a force delete a native grant covered, however it is labelled (#12874)", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    mocks.worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/repo/wt-1",
+      name: "wt-1",
+      branch: "main",
+      isCurrent: false,
+      isMainWorktree: false,
+    });
+    mocks.buildPreview.mockResolvedValue({
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      hasTrackedChanges: false,
+      hasUntrackedFiles: false,
+      changes: [],
+      rootPath: "/repo/wt-1",
+      submodules: { status: "verified", risk: emptySubmoduleRisk() },
+    });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-grant-labelled",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1", force: true },
+      confirmed: true,
+      authorization: "native-grant",
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.typedNameTarget).toBe("main");
+    });
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    useMcpConfirmStore.getState().resolveCurrent("rejected");
+    await dispatched;
+    expect(mocks.dispatch).not.toHaveBeenCalled();
   });
 
   it("still honours a native grant for a force delete that is only D2 (#12115)", async () => {

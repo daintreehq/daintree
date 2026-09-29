@@ -295,3 +295,35 @@ describe("serializePtyPanel — an assigned session id never persists in the com
     expect(serializePtyPanel(panel).command).toBe("claude");
   });
 });
+
+describe("serializePtyPanel — scratchpad (#12835)", () => {
+  it("writes the notes, their collapsed state and width", () => {
+    const scratchpad = { content: "- check the build\n", collapsed: true, width: 320 };
+    const snapshot = serializePtyPanel(makePanel({ scratchpad }));
+    expect(snapshot.scratchpad).toEqual(scratchpad);
+  });
+
+  it("writes an open, empty scratchpad so it reopens after a restart", () => {
+    const snapshot = serializePtyPanel(
+      makePanel({ scratchpad: { content: "", collapsed: false } })
+    );
+    expect(snapshot.scratchpad).toEqual({ content: "", collapsed: false });
+  });
+
+  it("omits the field for a terminal that never opened one", () => {
+    const snapshot = serializePtyPanel(makePanel());
+    expect("scratchpad" in snapshot).toBe(false);
+  });
+
+  it("keeps a held pane's notes while dropping its process state", () => {
+    const snapshot = serializePtyPanel(
+      makePanel({
+        restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+        agentSessionId: "sess-1",
+        scratchpad: { content: "resume later", collapsed: false },
+      })
+    );
+    expect(snapshot.agentSessionId).toBeUndefined();
+    expect(snapshot.scratchpad?.content).toBe("resume later");
+  });
+});

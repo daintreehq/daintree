@@ -232,6 +232,7 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
+import { logBuffer } from "../LogBuffer.js";
 import { getPluginManifestSchema } from "../../schemas/plugin.js";
 import {
   makeProjectPluginInstanceKey,
@@ -1395,6 +1396,45 @@ describe("project plugin load errors", () => {
     // A lazy failure has no controller mutation behind it, so without its own
     // push the manager would keep describing this plugin as clean.
     expect(lastPushedRows()?.[0]?.loadError?.message).toContain("project-boom");
+  });
+
+  /** This instance's `main:PluginService` entries in the shared log buffer. */
+  function fileLogEntries(message: string): Array<Record<string, unknown>> {
+    return logBuffer
+      .getAll()
+      .filter(
+        (e) =>
+          e.source === "main:PluginService" &&
+          e.message === message &&
+          e.context?.instanceId === INSTANCE_KEY
+      )
+      .map((e) => e.context ?? {});
+  }
+
+  it("leaves a durable trail that tells a lazy load apart from a failed activation (#12804)", async () => {
+    logBuffer.clear();
+    const service = await openWithPlugin(
+      "export function activate() { throw new Error('project-boom'); }"
+    );
+
+    // Loaded but never triggered: the log says so, so a missing activation reads
+    // as "never activated" rather than "never loaded".
+    expect(fileLogEntries("Project plugin loaded")).toEqual([
+      expect.objectContaining({
+        pluginId: PLUGIN_ID,
+        projectId: PROJECT_ID,
+        activation: "lazy",
+        version: "1.0.0",
+      }),
+    ]);
+    expect(fileLogEntries("Plugin failed to load")).toHaveLength(0);
+
+    await service.activatePluginForView(PANEL_KIND_ID);
+
+    const failures = fileLogEntries("Plugin failed to load");
+    expect(failures).toHaveLength(1);
+    expect(String(failures[0].loadErrorMessage)).toContain("project-boom");
+    expect(fileLogEntries("Plugin worker state changed").map((c) => c.state)).toContain("starting");
   });
 
   it("keeps the instance key out of the persisted provenance record", async () => {

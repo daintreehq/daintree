@@ -44,7 +44,7 @@ type TerminalProcessOptions = ConstructorParameters<typeof TerminalProcess>[1];
 type TerminalProcessDeps = ConstructorParameters<typeof TerminalProcess>[3];
 
 function createTerminal(
-  emitData: (id: string, data: string | Uint8Array) => void,
+  emitData: (id: string, data: string, streamEnd: number) => void,
   options?: Partial<TerminalProcessOptions>
 ): TerminalProcess {
   return new TerminalProcess(
@@ -100,8 +100,8 @@ describe("TerminalProcess background output streaming", () => {
     ptyOnDataCallback!("beta");
 
     expect(emitData).toHaveBeenCalledTimes(2);
-    expect(emitData).toHaveBeenNthCalledWith(1, "t1", "alpha");
-    expect(emitData).toHaveBeenNthCalledWith(2, "t1", "beta");
+    expect(emitData).toHaveBeenNthCalledWith(1, "t1", "alpha", 5);
+    expect(emitData).toHaveBeenNthCalledWith(2, "t1", "beta", 9);
 
     terminal.dispose();
   });
@@ -119,8 +119,8 @@ describe("TerminalProcess background output streaming", () => {
     // No deferral: each background chunk reaches the renderer fan-out immediately,
     // exactly like a foreground chunk. The OSC 9;4 heartbeat also stays per-chunk.
     expect(emitData).toHaveBeenCalledTimes(2);
-    expect(emitData).toHaveBeenNthCalledWith(1, "t1", "chunk-a");
-    expect(emitData).toHaveBeenNthCalledWith(2, "t1", "chunk-b");
+    expect(emitData).toHaveBeenNthCalledWith(1, "t1", "chunk-a", 7);
+    expect(emitData).toHaveBeenNthCalledWith(2, "t1", "chunk-b", 14);
     expect(feed).toHaveBeenCalledTimes(2);
 
     // Advancing timers must NOT fan out any additional (coalesced) batch — there
@@ -156,7 +156,7 @@ describe("TerminalProcess background output streaming", () => {
     ptyOnDataCallback!("pre-kill");
     // Already delivered — nothing is held waiting for teardown to flush.
     expect(emitData).toHaveBeenCalledTimes(1);
-    expect(emitData).toHaveBeenCalledWith("t1", "pre-kill");
+    expect(emitData).toHaveBeenCalledWith("t1", "pre-kill", 8);
 
     terminal.kill("user requested");
     vi.advanceTimersByTime(1000);

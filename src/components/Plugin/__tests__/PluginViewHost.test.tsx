@@ -250,6 +250,46 @@ describe("makePluginViewHost", () => {
     }
   });
 
+  it("draws the setup strip above the view, outside it, only when a setting is required", async () => {
+    vi.doMock("@/components/Plugin/PluginViewContent", () => ({
+      makePluginViewContent: () => () => <div data-testid="content-probe" />,
+    }));
+    vi.doMock("@/components/Plugin/PluginSetupStrip", () => ({
+      PluginSetupStrip: ({ pluginId }: { pluginId: string }) => (
+        <div data-testid="strip-probe">{pluginId}</div>
+      ),
+    }));
+
+    try {
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const props = {
+        title: "Dashboard",
+        isFocused: false,
+        onFocus: (): void => {},
+        onClose: (): void => {},
+      };
+      const Required = makePluginViewHost(makeConfig({ hasRequiredSettings: true }));
+      const { unmount } = render(<Required id="panel-required" {...props} />);
+
+      const strip = screen.getByTestId("strip-probe");
+      const content = screen.getByTestId("content-probe");
+      expect(strip.textContent).toBe("acme");
+      expect(
+        strip.compareDocumentPosition(content) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+      expect(strip.contains(content)).toBe(false);
+      unmount();
+
+      const Plain = makePluginViewHost(makeConfig());
+      render(<Plain id="panel-plain" {...props} />);
+      expect(screen.getByTestId("content-probe")).toBeTruthy();
+      expect(screen.queryByTestId("strip-probe")).toBeNull();
+    } finally {
+      vi.doUnmock("@/components/Plugin/PluginViewContent");
+      vi.doUnmock("@/components/Plugin/PluginSetupStrip");
+    }
+  });
+
   it("renders an inline error when extensionId is missing", async () => {
     const { makePluginViewHost } = await import("../PluginViewHost");
     const Host = makePluginViewHost(makeConfig({ extensionId: undefined }));

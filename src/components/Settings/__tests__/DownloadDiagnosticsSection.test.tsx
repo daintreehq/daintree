@@ -68,33 +68,28 @@ describe("DownloadDiagnosticsSection — collecting state", () => {
     expect(glyphCount()).toBe(0);
   });
 
-  it("swaps the label when collecting starts", () => {
+  // Busy is the Button's `loading` state: the label stays put (it holds the
+  // width and the accessible name) and the button keeps keyboard focus.
+  it("keeps the label while collecting", () => {
     render(<DownloadDiagnosticsSection />);
     const idleLabel = getButton().textContent;
 
     setCollecting(true);
 
-    expect(getButton().textContent).not.toBe(idleLabel);
+    expect(getButton().textContent).toBe(idleLabel);
   });
 
-  it("ends the busy label with a real ellipsis rather than three periods", () => {
+  it("marks the button busy only while collecting, without natively disabling it", () => {
     render(<DownloadDiagnosticsSection />);
+    expect(getButton().getAttribute("aria-busy")).toBeNull();
+
     setCollecting(true);
-
-    const busyLabel = getButton().textContent ?? "";
-    expect(busyLabel).toMatch(/…$/);
-    expect(busyLabel).not.toContain("...");
-  });
-
-  it("disables the button only while collecting", () => {
-    render(<DownloadDiagnosticsSection />);
+    expect(getButton().getAttribute("aria-busy")).toBe("true");
+    expect(getButton().getAttribute("aria-disabled")).toBe("true");
     expect(getButton().disabled).toBe(false);
-
-    setCollecting(true);
-    expect(getButton().disabled).toBe(true);
 
     setCollecting(false);
-    expect(getButton().disabled).toBe(false);
+    expect(getButton().getAttribute("aria-busy")).toBeNull();
   });
 
   it("renders the collection failure message from the store", () => {

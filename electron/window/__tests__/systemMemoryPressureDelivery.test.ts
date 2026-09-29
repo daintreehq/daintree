@@ -24,12 +24,14 @@ const DEGRADED: SystemMemoryPressurePayload = {
   swapUsedPercent: 91,
   swapKind: "swap",
   fseventsdRssMb: null,
+  kernelPressureLevel: null,
 };
 const NORMAL: SystemMemoryPressurePayload = {
   status: "normal",
   swapUsedPercent: null,
   swapKind: "swap",
   fseventsdRssMb: null,
+  kernelPressureLevel: null,
 };
 
 interface FakeWebContents {

@@ -545,20 +545,192 @@ describe("PluginSettingsForm", () => {
     expect(textarea.getAttribute("aria-invalid")).toBe("true");
   });
 
-  it("renders a scope badge per field", async () => {
+  it("shows an installed plugin's fields in their one home each, with a scope badge", async () => {
+    currentProjectId = "proj-1";
+    const plugin = makePlugin([
+      { id: "u", type: "string", label: "U" },
+      { id: "p", type: "string", label: "P", scope: "project" },
+      { id: "l", type: "string", label: "L", scope: "local" },
+    ]);
+
+    // The plugin manager holds what applies to every project, and points on.
+    const manager = render(<PluginSettingsForm plugin={plugin} viewScope="user" />);
+    expect(await screen.findByText("All projects")).toBeTruthy();
+    expect(screen.queryByLabelText("P")).toBeNull();
+    expect(screen.queryByLabelText("L")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open project settings" })).toBeTruthy();
+    manager.unmount();
+
+    // Project settings hold what differs per project, and point back.
+    render(<PluginSettingsForm plugin={plugin} viewScope="project" />);
+    // Named for what a change reaches: one project, or every project.
+    expect(await screen.findByText("This project")).toBeTruthy();
+    expect(screen.getByText("This project, this machine")).toBeTruthy();
+    expect(screen.queryByText("All projects")).toBeNull();
+    expect(screen.queryByLabelText("U")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open plugin manager" })).toBeTruthy();
+  });
+
+  it("shows every field of a project plugin in its project home, and none in the manager", async () => {
+    currentProjectId = "proj-1";
+    const plugin = {
+      ...makePlugin([
+        { id: "u", type: "string", label: "U" },
+        { id: "p", type: "string", label: "P", scope: "project" },
+      ]),
+      origin: "project" as const,
+    };
+    render(<PluginSettingsForm plugin={plugin} viewScope="project" />);
+    expect(await screen.findByLabelText("U")).toBeTruthy();
+    expect(screen.getByLabelText("P")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Open (plugin manager|project settings)/ })).toBe(
+      null
+    );
+  });
+
+  it("shows an unstored required field as unset, with its default as the way to set it", async () => {
     render(
       <PluginSettingsForm
         plugin={makePlugin([
-          { id: "u", type: "string", label: "U" },
-          { id: "p", type: "string", label: "P", scope: "project" },
-          { id: "l", type: "string", label: "L", scope: "local" },
+          { id: "region", type: "string", label: "Region", required: true, default: "us" },
+          { id: "port", type: "number", label: "Port", default: 80 },
         ])}
       />
     );
-    // Named for what a change reaches: one project, or every project.
-    expect(await screen.findByText("All projects")).toBeTruthy();
-    expect(screen.getByText("This project")).toBeTruthy();
-    expect(screen.getByText("This project, this machine")).toBeTruthy();
+    const input = (await screen.findByLabelText("Region")) as HTMLInputElement;
+    // A default never satisfies a required setting, so the field doesn't wear it
+    // as a value: it is empty, and the row says so and names the default.
+    const row0 = input.closest<HTMLElement>("[data-settings-row]")!;
+    await waitFor(() => expect(row0.textContent).toContain("Not set yet"));
+    expect(input.value).toBe("");
+    const row = input.closest<HTMLElement>("[data-settings-row]")!;
+    expect(row.textContent).toContain("Not set yet");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    fireEvent.blur(input);
+    expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
+
+    // An optional field with a default needs no acceptance: its default applies.
+    const port = (await screen.findByLabelText("Port")) as HTMLInputElement;
+    await waitFor(() => expect(port.value).toBe("80"));
+    expect(screen.getAllByRole("button", { name: /^Use / })).toHaveLength(1);
+
+    fireEvent.click(within(row).getByRole("button", { name: "Use \u201cus\u201d" }));
+    await waitFor(() =>
+      expect(pluginApi.setSettingValue).toHaveBeenCalledWith(
+        "acme.test",
+        "region",
+        "us",
+        "user",
+        null
+      )
+    );
+    await waitFor(() => expect(input.value).toBe("us"));
+    expect(row.textContent).not.toContain("Not set yet");
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Use / })).toBeNull();
+  });
+
+  it("offers no default acceptance once a required value is stored", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ values: { region: "eu" } }));
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([
+          { id: "region", type: "string", label: "Region", required: true, default: "us" },
+        ])}
+      />
+    );
+    const input = (await screen.findByLabelText("Region")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("eu"));
+    expect(screen.queryByRole("button", { name: /^Use / })).toBeNull();
+    expect(screen.queryByText(/Not set yet/)).toBeNull();
+  });
+
+  it("drops a validation error once the field is back to its saved value", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ values: { port: 8080 } }));
+    render(
+      <PluginSettingsForm plugin={makePlugin([{ id: "port", type: "number", label: "Port" }])} />
+    );
+    const input = (await screen.findByLabelText("Port")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("8080"));
+
+    fireEvent.change(input, { target: { value: "eighty" } });
+    fireEvent.blur(input);
+    const row = input.closest<HTMLElement>("[data-settings-row]")!;
+    await waitFor(() => expect(row.textContent).toContain("Enter a valid number"));
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+
+    fireEvent.change(input, { target: { value: "8080" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(row.textContent).not.toContain("Enter a valid number"));
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
+  });
+
+  it("offers a failed write again from its row, and a rejected draft only its correction", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ values: { port: 8080 } }));
+    pluginApi.setSettingValue.mockRejectedValueOnce(new Error("EACCES"));
+    render(
+      <PluginSettingsForm plugin={makePlugin([{ id: "port", type: "number", label: "Port" }])} />
+    );
+    const input = (await screen.findByLabelText("Port")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("8080"));
+    const row = input.closest<HTMLElement>("[data-settings-row]")!;
+
+    fireEvent.change(input, { target: { value: "9090" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(row.textContent).toContain("EACCES"));
+    fireEvent.click(within(row).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(pluginApi.setSettingValue).toHaveBeenCalledTimes(2));
+    expect(pluginApi.setSettingValue.mock.calls[1]).toEqual(
+      pluginApi.setSettingValue.mock.calls[0]
+    );
+    await waitFor(() => expect(row.textContent).not.toContain("EACCES"));
+
+    // Not a number: nothing was written, so there is nothing to retry — only to fix.
+    fireEvent.change(input, { target: { value: "ninety" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(row.textContent).toContain("Enter a valid number"));
+    expect(within(row).queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("says a path couldn't be checked, rather than that it's fine, and checks again", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ values: { out: "/srv/data" } }));
+    pluginApi.pathExists.mockRejectedValueOnce(new Error("EIO")).mockResolvedValue(false);
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([
+          { id: "out", type: "directory", label: "Data folder", mustExist: true },
+        ])}
+      />
+    );
+    const input = (await screen.findByLabelText("Data folder")) as HTMLInputElement;
+    const row = input.closest<HTMLElement>("[data-settings-row]")!;
+    await waitFor(() =>
+      expect(row.textContent).toContain("Couldn't check that this folder still exists")
+    );
+    // Not known to be wrong, so the field isn't marked invalid.
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    fireEvent.click(within(row).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(row.textContent).toContain("This folder no longer exists"));
+  });
+
+  it("puts a picked path back when saving it fails", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ values: { out: "/srv/old" } }));
+    pluginApi.pickPath.mockResolvedValue("/srv/new");
+    pluginApi.setSettingValue.mockRejectedValueOnce(new Error("EACCES"));
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([{ id: "out", type: "directory", label: "Output folder" }])}
+      />
+    );
+    const input = (await screen.findByLabelText("Output folder")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("/srv/old"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    const row = input.closest<HTMLElement>("[data-settings-row]")!;
+    await waitFor(() => expect(row.textContent).toContain("EACCES"));
+    // The field shows what is saved, not the pick that wasn't.
+    expect(input.value).toBe("/srv/old");
   });
 
   it("disables project-scoped fields when no project is active", async () => {
@@ -566,6 +738,7 @@ describe("PluginSettingsForm", () => {
     render(
       <PluginSettingsForm
         plugin={makePlugin([{ id: "p", type: "string", label: "P", scope: "project" }])}
+        viewScope="project"
       />
     );
     const input = (await screen.findByLabelText("P")) as HTMLInputElement;

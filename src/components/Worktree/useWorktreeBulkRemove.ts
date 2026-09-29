@@ -5,9 +5,12 @@ import { notify } from "@/lib/notify";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isPathStrictlyInside } from "@shared/utils/path";
+import { isMac, isWindows } from "@/lib/platform";
 import {
   buildWorktreeDeletePreview,
   fetchWorktreeTeardownPreview,
+  observedAtRiskCommits,
   settleWorktreeDeleteOutcome,
   splitDisplayChanges,
   submoduleFileCount,
@@ -79,7 +82,14 @@ export function bulkRemoveExclusion(target: BulkRemoveTarget): BulkRemoveExclusi
   // confirm owes a preview of the content it destroys. Falling back to the
   // cached snapshot here is the exact bug this surface is fixing, so the target
   // leaves the batch instead — the rest of the selection still runs.
-  if (status.state === "failed") return { kind: "verify-failed" };
+  if (status.state === "failed") {
+    // Commits the submodule walk DID observe before the parent read failed
+    // refuse the delete on their own, whatever a retry of the parent says — so
+    // this is the push-or-fetch exclusion, not a retryable one.
+    return observedAtRiskCommits(status)
+      ? { kind: "blocked", block: "at-risk-commits" }
+      : { kind: "verify-failed" };
+  }
   const block = worktreeDeleteBlockedBy(status);
   // `force` does not reach these: `guardSubmoduleDelete` throws on both before
   // it reads the flag, so sending them would spend the typed-count consent on a
@@ -125,12 +135,33 @@ export function isBulkRemoveRetryable(target: BulkRemoveTarget): boolean {
  * just written into rendered with no warning at all.
  */
 export function describeBulkRemoveRisks(target: BulkRemoveTarget): string[] {
+  const risks = describeBulkRemoveLosses(target);
+  const aheadCount = bulkRemoveAheadCount(target);
+  if (aheadCount > 0) {
+    risks.push(`${aheadCount} unpushed commit${aheadCount === 1 ? "" : "s"}`);
+  }
+  return risks;
+}
+
+/**
+ * Unpushed commits on this target: fresh when the same `git status
+ * --porcelain -b` reported it, the seed only where git named no upstream, in
+ * which case `ahead` is absent rather than 0.
+ */
+export function bulkRemoveAheadCount(target: BulkRemoveTarget): number {
+  const status = target.status;
+  return status.state === "verified"
+    ? (status.preview.ahead ?? target.aheadCount)
+    : target.aheadCount;
+}
+
+/**
+ * The content the removal itself discards — {@link describeBulkRemoveRisks}
+ * without the unpushed-commit count, which a named branch keeps.
+ */
+export function describeBulkRemoveLosses(target: BulkRemoveTarget): string[] {
   const risks: string[] = [];
   const status = target.status;
-  // Fresh when the same `git status --porcelain -b` reported it; the seed only
-  // where git named no upstream, in which case `ahead` is absent rather than 0.
-  const aheadCount =
-    status.state === "verified" ? (status.preview.ahead ?? target.aheadCount) : target.aheadCount;
   if (status.state === "verified") {
     const { changes, rootPath, submodules } = status.preview;
     // Counted over files only: a submodule's own parent row stands for the
@@ -154,10 +185,43 @@ export function describeBulkRemoveRisks(target: BulkRemoveTarget): string[] {
       risks.push(`${pointerOnly.length} submodule change${pointerOnly.length === 1 ? "" : "s"}`);
     }
   }
-  if (aheadCount > 0) {
-    risks.push(`${aheadCount} unpushed commit${aheadCount === 1 ? "" : "s"}`);
-  }
   return risks;
+}
+
+/**
+ * Everything a target's row states, as one comparable value: whether it is in
+ * the batch, why not, the files and nested files it would discard, the
+ * commits it holds, and the teardown it runs. Two reads with the same key
+ * show the user the same thing.
+ */
+export function bulkRemoveEvidenceKey(target: BulkRemoveTarget): string {
+  const status = target.status;
+  const exclusion = bulkRemoveExclusion(target);
+  const risk =
+    status.state === "verified"
+      ? status.preview.submodules.risk
+      : status.state === "failed"
+        ? (status.submodules?.risk ?? null)
+        : null;
+  return JSON.stringify({
+    state: status.state,
+    exclusion,
+    changes:
+      status.state === "verified"
+        ? status.preview.changes.map((c) => `${c.status}:${c.path}`).sort()
+        : null,
+    // Kept apart: a nested file moving from untracked to modified changes the
+    // row's glyph and the loss line's wording.
+    dirty: risk ? [...risk.dirtyFiles].sort() : null,
+    untracked: risk ? [...risk.untrackedFiles].sort() : null,
+    // What `splitDisplayChanges` reads to describe a submodule pointer row.
+    entries: risk
+      ? risk.entries.map((e) => `${e.path}:${e.state}:${e.headOid ?? ""}:${e.recordedOid}`).sort()
+      : null,
+    commits: risk ? risk.atRiskCommits.map((c) => c.oid).sort() : null,
+    ahead: bulkRemoveAheadCount(target),
+    teardown: target.teardown ?? null,
+  });
 }
 
 interface UseWorktreeBulkRemoveArgs {
@@ -170,6 +234,8 @@ export interface UseWorktreeBulkRemoveReturn {
   isConfirmOpen: boolean;
   targets: BulkRemoveTarget[];
   excludedMainCount: number;
+  /** The selected main worktrees, by branch (or name), so the confirm can list them. */
+  excludedMainNames: string[];
   /** Targets the fresh preview cleared — what the typed gate consents to. */
   eligibleCount: number;
   /** True until every snapshotted target's preview has settled. */
@@ -190,6 +256,11 @@ export interface UseWorktreeBulkRemoveReturn {
   typedNameTarget: string;
   canConfirm: boolean;
   isExecuting: boolean;
+  /**
+   * True while the confirm re-reads every eligible target before dispatching
+   * (part of {@link isExecuting}). A change found there holds the run.
+   */
+  isRechecking: boolean;
   handleRemoveClick: () => void;
   handleRetryPreviews: () => void;
   handleConfirm: () => Promise<void>;
@@ -228,6 +299,31 @@ const DELETE_CONCURRENCY = 4;
 const DEV_PREVIEW_STEP_TIMEOUT_MS = 30_000;
 
 /**
+ * `fn` over `items`, at most `limit` at a time, settled per item — so one
+ * rejection can't discard the others and nothing is left running unobserved.
+ */
+async function settleEach<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      try {
+        results[index] = { status: "fulfilled", value: await fn(items[index]!) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+/**
  * Reject with `reason` if `pending` has not settled inside `ms`.
  *
  * Deliberately not p-queue's `timeout`: that rejects the queue's WRAPPER, which
@@ -256,14 +352,14 @@ function withDeadline<T>(pending: Promise<T>, ms: number, reason: string): Promi
 function deriveTargets(
   selectedIds: Set<string>,
   worktreeMap: Map<string, WorktreeState>
-): { targets: BulkRemoveTarget[]; excludedMainCount: number } {
+): { targets: BulkRemoveTarget[]; excludedMainCount: number; excludedMainNames: string[] } {
   const targets: BulkRemoveTarget[] = [];
-  let excludedMainCount = 0;
+  const excludedMainNames: string[] = [];
   for (const id of selectedIds) {
     const worktree = worktreeMap.get(id);
     if (!worktree) continue;
     if (worktree.isMainWorktree === true) {
-      excludedMainCount++;
+      excludedMainNames.push(worktree.branch ?? worktree.name);
       continue;
     }
     targets.push({
@@ -275,7 +371,7 @@ function deriveTargets(
       status: { state: "pending" },
     });
   }
-  return { targets, excludedMainCount };
+  return { targets, excludedMainCount: excludedMainNames.length, excludedMainNames };
 }
 
 /** One target's delete attempt, folded rather than mutated into counters. */
@@ -284,6 +380,8 @@ interface BulkRemoveResult {
   name: string;
   reason: string | null;
   stoppedDevServer: boolean;
+  /** Never attempted because a worktree nested inside it failed first. */
+  keptForNested?: boolean;
 }
 
 /**
@@ -306,18 +404,19 @@ export function useWorktreeBulkRemove({
   const [isExecuting, setIsExecuting] = useState(false);
   const [isPreviewPending, setIsPreviewPending] = useState(false);
   const [isRetryingPreviews, setIsRetryingPreviews] = useState(false);
+  const [isRechecking, setIsRechecking] = useState(false);
 
   // Snapshot the live derivation when the user clicks Remove. Reading
   // back through `useMemo(() => derive(...), [worktreeMap, selectedIds])`
   // would silently drop entries from the dialog as deletes land mid-run.
   const targetsRef = useRef<BulkRemoveTarget[]>([]);
-  const excludedMainRef = useRef<number>(0);
+  const excludedMainRef = useRef<string[]>([]);
 
   // Display state mirrors the snapshot. We render from state so the
   // dialog updates immediately when it opens, but the source of truth
   // for the run is the ref.
   const [displayTargets, setDisplayTargets] = useState<BulkRemoveTarget[]>([]);
-  const [displayExcludedMain, setDisplayExcludedMain] = useState(0);
+  const [displayExcludedMain, setDisplayExcludedMain] = useState<string[]>([]);
 
   // Rapid double-click guard. Sync via ref so the second click within
   // the same render tick can't bypass the gate (a state-based guard
@@ -371,14 +470,14 @@ export function useWorktreeBulkRemove({
   }, []);
 
   const openWithPreviews = useCallback(
-    (targets: BulkRemoveTarget[], excludedMainCount: number) => {
+    (targets: BulkRemoveTarget[], excludedMainNames: string[]) => {
       previewSessionRef.current += 1;
       const session = previewSessionRef.current;
       setPreviewSession(session);
       targetsRef.current = targets;
-      excludedMainRef.current = excludedMainCount;
+      excludedMainRef.current = excludedMainNames;
       setDisplayTargets(targets);
-      setDisplayExcludedMain(excludedMainCount);
+      setDisplayExcludedMain(excludedMainNames);
       setIsPreviewPending(true);
       setIsConfirmOpen(true);
       runPreviews(session, targets);
@@ -388,7 +487,10 @@ export function useWorktreeBulkRemove({
 
   const handleRemoveClick = useCallback(() => {
     if (isExecutingRef.current) return;
-    const { targets, excludedMainCount } = deriveTargets(selectedIds, worktreeMap);
+    const { targets, excludedMainCount, excludedMainNames } = deriveTargets(
+      selectedIds,
+      worktreeMap
+    );
     if (targets.length === 0) {
       // All selections were main worktrees — nothing to do. Surface a
       // single info toast so the user understands why the action is
@@ -405,7 +507,7 @@ export function useWorktreeBulkRemove({
       }
       return;
     }
-    openWithPreviews(targets, excludedMainCount);
+    openWithPreviews(targets, excludedMainNames);
   }, [selectedIds, worktreeMap, clearSelection, openWithPreviews]);
 
   // Re-runs the whole frozen set, not just the failures, so every row's
@@ -428,9 +530,9 @@ export function useWorktreeBulkRemove({
     // out-of-dialog consumer would still reflect the previous open.
     previewSessionRef.current += 1;
     targetsRef.current = [];
-    excludedMainRef.current = 0;
+    excludedMainRef.current = [];
     setDisplayTargets([]);
-    setDisplayExcludedMain(0);
+    setDisplayExcludedMain([]);
     setIsPreviewPending(false);
     setIsRetryingPreviews(false);
   }, []);
@@ -455,6 +557,61 @@ export function useWorktreeBulkRemove({
     isExecutingRef.current = true;
     setIsExecuting(true);
 
+    // Re-read every target about to run before anything is dispatched
+    // (#11343's rule for the single delete): an agent can write into a
+    // worktree between the preview the user read and the click, and the typed
+    // count consents to what was on screen, not to what is on disk now. Any
+    // difference holds the whole run and puts the new evidence in front of
+    // the user with the consent cleared. A read that fails comes back
+    // `failed`, which excludes its target — the hold fails closed.
+    const session = previewSessionRef.current;
+    setIsRechecking(true);
+    const reread = await settleEach(targets, PREVIEW_CONCURRENCY, async (target) => {
+      const [outcome, teardown] = await Promise.all([
+        settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(target.id)),
+        fetchWorktreeTeardownPreview(target.id),
+      ]);
+      return { ...target, status: outcome, teardown };
+    });
+    // Neither read rejects today; if one ever does, it is a read that failed,
+    // and a failed read excludes its target rather than waving it through.
+    const fresh = reread.map((entry, index): BulkRemoveTarget =>
+      entry.status === "fulfilled"
+        ? entry.value
+        : { ...targets[index]!, status: { state: "failed", submodules: null } }
+    );
+    if (!mountedRef.current || previewSessionRef.current !== session) {
+      isExecutingRef.current = false;
+      if (mountedRef.current) {
+        setIsRechecking(false);
+        setIsExecuting(false);
+      }
+      return;
+    }
+    setIsRechecking(false);
+    const changed = fresh.some(
+      (next, index) => bulkRemoveEvidenceKey(next) !== bulkRemoveEvidenceKey(targets[index]!)
+    );
+    if (changed) {
+      const byId = new Map(fresh.map((target) => [target.id, target]));
+      const next = targetsRef.current.map((target) => byId.get(target.id) ?? target);
+      targetsRef.current = next;
+      // A new generation: `consentKey` moves with it, which clears the count
+      // typed against the evidence that just changed.
+      previewSessionRef.current += 1;
+      setPreviewSession(previewSessionRef.current);
+      setDisplayTargets(next);
+      isExecutingRef.current = false;
+      setIsExecuting(false);
+      useAnnouncerStore
+        .getState()
+        .announce(
+          "Something changed since the check. Review the list and confirm again.",
+          "assertive"
+        );
+      return;
+    }
+
     // No queue-level `timeout`. p-queue's timeout rejects the WRAPPER and
     // cancels nothing (9.3.3 hands `pTimeout` no signal), so the old 30s
     // ceiling rejected `addAll` — orphaning up to three still-running deletes
@@ -466,57 +623,97 @@ export function useWorktreeBulkRemove({
     const total = targets.length;
 
     try {
+      const removeOne = (target: BulkRemoveTarget) =>
+        queue.add<BulkRemoveResult>(async () => {
+          try {
+            // Stop dev preview BEFORE `git worktree remove` (#9084). On
+            // Windows the dev server's directory lock would otherwise block
+            // the removal outright. A stop failure is folded into the
+            // partial-failure path so the bulk run can continue with other
+            // targets. Call `stopByWorktree` unconditionally — it filters
+            // every session itself and no-ops cleanly when none match, so
+            // it survives the case where `getByWorktree` only reports one
+            // panel's session of several sharing the worktreeId.
+            const existing = await withDeadline(
+              window.electron.devPreview.getByWorktree({ worktreeId: target.id }),
+              DEV_PREVIEW_STEP_TIMEOUT_MS,
+              "Timed out checking for a running dev server"
+            );
+            const hadDevPreview = existing !== null;
+            await withDeadline(
+              window.electron.devPreview.stopByWorktree({ worktreeId: target.id }),
+              DEV_PREVIEW_STEP_TIMEOUT_MS,
+              "Timed out stopping the dev server"
+            );
+            await worktreeClient.delete(target.id, { force: true, deleteBranch: false });
+            return {
+              ok: true,
+              name: target.branch ?? target.name,
+              reason: null,
+              stoppedDevServer: hadDevPreview,
+            };
+          } catch (err) {
+            const reason = formatErrorMessage(err, "Removal failed");
+            logError(`Bulk remove failed for ${target.id}`, err);
+            return {
+              ok: false,
+              name: target.branch ?? target.name,
+              reason,
+              stoppedDevServer: false,
+            };
+          }
+        });
+
+      // Removing a worktree deletes everything under its directory, and the
+      // host refuses while a registered worktree is still nested inside. So a
+      // selected nested worktree has to be gone before its ancestor starts,
+      // and an ancestor whose nested worktree failed is kept. The wait happens
+      // BEFORE `queue.add`, never inside a task: an ancestor parked in a queue
+      // slot could fill every slot while its descendants wait behind it.
+      // A nested worktree outside the run is the host's to judge: it probes
+      // the folder, where this snapshot can only guess.
+      const caseInsensitive = isMac() || isWindows();
+      const runs = new Map<string, Promise<BulkRemoveResult>>();
+      const run = (target: BulkRemoveTarget): Promise<BulkRemoveResult> => {
+        const existing = runs.get(target.id);
+        if (existing) return existing;
+        const nested = targets.filter(
+          (other) =>
+            other.id !== target.id &&
+            isPathStrictlyInside(other.path, target.path, { caseInsensitive })
+        );
+        const pending = Promise.allSettled(nested.map(run)).then((nestedResults) => {
+          const kept = nested.filter((_, index) => {
+            const entry = nestedResults[index];
+            return entry?.status !== "fulfilled" || !entry.value.ok;
+          });
+          if (kept.length === 0) return removeOne(target);
+          const keptNames = kept.map((other) => other.branch ?? other.name).join(", ");
+          return {
+            ok: false,
+            name: target.branch ?? target.name,
+            reason:
+              kept.length === 1
+                ? `Kept because ${keptNames} inside it wasn't removed`
+                : `Kept because ${kept.length} worktrees inside it weren't removed: ${keptNames}`,
+            stoppedDevServer: false,
+            keptForNested: true,
+          };
+        });
+        runs.set(target.id, pending);
+        return pending;
+      };
+
       // `allSettled` over individual `add()` calls, never `addAll`: that is
       // `Promise.all` underneath, so one rejected submission discards every
       // sibling's result.
-      const settled = await Promise.allSettled(
-        targets.map((target) =>
-          queue.add<BulkRemoveResult>(async () => {
-            try {
-              // Stop dev preview BEFORE `git worktree remove` (#9084). On
-              // Windows the dev server's directory lock would otherwise block
-              // the removal outright. A stop failure is folded into the
-              // partial-failure path so the bulk run can continue with other
-              // targets. Call `stopByWorktree` unconditionally — it filters
-              // every session itself and no-ops cleanly when none match, so
-              // it survives the case where `getByWorktree` only reports one
-              // panel's session of several sharing the worktreeId.
-              const existing = await withDeadline(
-                window.electron.devPreview.getByWorktree({ worktreeId: target.id }),
-                DEV_PREVIEW_STEP_TIMEOUT_MS,
-                "Timed out checking for a running dev server"
-              );
-              const hadDevPreview = existing !== null;
-              await withDeadline(
-                window.electron.devPreview.stopByWorktree({ worktreeId: target.id }),
-                DEV_PREVIEW_STEP_TIMEOUT_MS,
-                "Timed out stopping the dev server"
-              );
-              await worktreeClient.delete(target.id, { force: true, deleteBranch: false });
-              return {
-                ok: true,
-                name: target.branch ?? target.name,
-                reason: null,
-                stoppedDevServer: hadDevPreview,
-              };
-            } catch (err) {
-              const reason = formatErrorMessage(err, "Removal failed");
-              logError(`Bulk remove failed for ${target.id}`, err);
-              return {
-                ok: false,
-                name: target.branch ?? target.name,
-                reason,
-                stoppedDevServer: false,
-              };
-            }
-          })
-        )
-      );
+      const settled = await Promise.allSettled(targets.map(run));
 
       let successCount = 0;
       let stoppedDevServerCount = 0;
       let stoppedDevServerName: string | null = null;
       const failures: Array<{ name: string; reason: string }> = [];
+      const keptFailures: Array<{ name: string; reason: string }> = [];
       settled.forEach((entry, index) => {
         const target = targets[index];
         const fallbackName = target ? (target.branch ?? target.name) : "worktree";
@@ -544,9 +741,14 @@ export function useWorktreeBulkRemove({
         if (result.ok) {
           successCount++;
         } else {
-          failures.push({ name: result.name, reason: result.reason ?? "Removal failed" });
+          const failure = { name: result.name, reason: result.reason ?? "Removal failed" };
+          // An ancestor kept for its nested worktree only echoes that failure;
+          // the nested one carries the cause, so it leads the summary.
+          if (result.keptForNested) keptFailures.push(failure);
+          else failures.push(failure);
         }
       });
+      failures.push(...keptFailures);
 
       const announce = useAnnouncerStore.getState().announce;
       if (failures.length === 0) {
@@ -606,6 +808,7 @@ export function useWorktreeBulkRemove({
     } finally {
       isExecutingRef.current = false;
       setIsExecuting(false);
+      setIsRechecking(false);
       setIsConfirmOpen(false);
       resetSnapshot();
       clearSelection();
@@ -618,7 +821,8 @@ export function useWorktreeBulkRemove({
   return {
     isConfirmOpen,
     targets: displayTargets,
-    excludedMainCount: displayExcludedMain,
+    excludedMainCount: displayExcludedMain.length,
+    excludedMainNames: displayExcludedMain,
     eligibleCount,
     isPreviewPending,
     hasRetryablePreviews,
@@ -630,6 +834,7 @@ export function useWorktreeBulkRemove({
     typedNameTarget: eligibleCount === 1 ? "1 worktree" : `${eligibleCount} worktrees`,
     canConfirm: !isPreviewPending && eligibleCount > 0,
     isExecuting,
+    isRechecking,
     handleRemoveClick,
     handleRetryPreviews,
     handleConfirm,

@@ -5,6 +5,7 @@ import { RecipeRunnerList } from "./RecipeRunnerList";
 import { RecipeRunnerEmpty } from "./RecipeRunnerEmpty";
 import { InlineStatusBanner } from "../InlineStatusBanner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Button } from "@/components/ui/button";
 
 interface RecipeRunnerProps {
   activeWorktreeId: string | null | undefined;
@@ -144,13 +145,9 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
           menu is not a visible path, so the band names the one that is. */}
       {!runner.showSearch && (
         <div className="mt-1 flex justify-center">
-          <button
-            type="button"
-            onClick={runner.handleManage}
-            className="rounded-[var(--radius-sm)] px-2 py-1 text-xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
-          >
+          <Button variant="ghost" size="xs" onClick={runner.handleManage} className="px-2 text-xs">
             Manage recipes
-          </button>
+          </Button>
         </div>
       )}
       {deleteDialog}

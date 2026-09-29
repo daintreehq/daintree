@@ -7,6 +7,8 @@ const ipcMainMock = vi.hoisted(() => ({
 
 const crashServiceMock = vi.hoisted(() => ({
   restoreBackup: vi.fn(() => false),
+  getDeselectedProjectPanels: vi.fn((): Record<string, string[]> => ({})),
+  hasProjectPanelLayouts: vi.fn(() => false),
   setPanelFilter: vi.fn(),
   resetToFresh: vi.fn(),
   clearPendingCrash: vi.fn(),
@@ -34,8 +36,24 @@ vi.mock("../../../../services/CrashRecoveryService.js", () => ({
   getCrashRecoveryService: () => crashServiceMock,
 }));
 
+type StateUpdater = (existing: unknown) => unknown;
+const projectStoreMock = vi.hoisted(() => ({
+  enqueueProjectStateUpdate: vi.fn(async (_projectId: string, _updater: StateUpdater) => {}),
+}));
+
+vi.mock("../../../../services/ProjectStore.js", () => ({
+  projectStore: projectStoreMock,
+}));
+
 vi.mock("../../../../services/CrashLoopGuardService.js", () => ({
   getCrashLoopGuard: () => crashLoopGuardMock,
+}));
+
+const requestCrashFleetRestoreMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../../lifecycle/crashWindowRestore.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../lifecycle/crashWindowRestore.js")>()),
+  requestCrashFleetRestore: requestCrashFleetRestoreMock,
 }));
 
 vi.mock("../../../../utils/performance.js", () => ({
@@ -58,8 +76,13 @@ describe("registerCrashRecoveryHandlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     crashServiceMock.restoreBackup.mockReturnValue(false);
+    crashServiceMock.getDeselectedProjectPanels.mockReturnValue({});
+    crashServiceMock.hasProjectPanelLayouts.mockReturnValue(false);
+    projectStoreMock.enqueueProjectStateUpdate.mockImplementation(async () => {});
     crashServiceMock.setPanelFilter.mockClear();
     crashServiceMock.resetToFresh.mockClear();
+    crashLoopGuardMock.isSafeMode.mockReturnValue(false);
+    crashLoopGuardMock.getCrashCount.mockReturnValue(0);
   });
 
   it("registers all four crash-recovery channels", () => {
@@ -142,6 +165,258 @@ describe("registerCrashRecoveryHandlers", () => {
         ).rejects.toThrow("Crash recovery restore failed");
 
         expect(crashServiceMock.clearPendingCrash).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("per-project panel selection (#12884)", () => {
+      it("removes deselected panels from each project's layout before restoring", async () => {
+        crashServiceMock.getDeselectedProjectPanels.mockReturnValue({ projA: ["t2", "t3"] });
+        const order: string[] = [];
+        let written: unknown;
+        projectStoreMock.enqueueProjectStateUpdate.mockImplementation(
+          async (_projectId: string, updater: StateUpdater) => {
+            order.push("remove");
+            written = updater({
+              projectId: "projA",
+              sidebarWidth: 350,
+              terminals: [{ id: "t1" }, { id: "t2" }, { id: "t3" }, { id: "t4" }],
+              tabGroups: [
+                { id: "g1", location: "grid", activeTabId: "t2", panelIds: ["t1", "t2", "t4"] },
+                { id: "g2", location: "grid", activeTabId: "t3", panelIds: ["t3", "t4"] },
+              ],
+              terminalSizes: { t1: { cols: 80, rows: 24 }, t2: { cols: 80, rows: 24 } },
+              draftInputs: { t3: "draft", t4: "keep" },
+            });
+          }
+        );
+        crashServiceMock.restoreBackup.mockImplementation(() => {
+          order.push("restore");
+          return true;
+        });
+        registerCrashRecoveryHandlers();
+        const handler = getHandlerFn("crash-recovery:resolve");
+
+        await handler(FAKE_EVENT, { kind: "restore", panelIds: ["t1", "t4"] });
+
+        expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalledWith(
+          "projA",
+          expect.any(Function)
+        );
+        expect(order).toEqual(["remove", "restore"]);
+        expect(written).toEqual({
+          projectId: "projA",
+          sidebarWidth: 350,
+          terminals: [{ id: "t1" }, { id: "t4" }],
+          tabGroups: [{ id: "g1", location: "grid", activeTabId: "t1", panelIds: ["t1", "t4"] }],
+          terminalSizes: { t1: { cols: 80, rows: 24 } },
+          draftInputs: { t4: "keep" },
+        });
+      });
+
+      it("skips the write when the project no longer holds the deselected panels", async () => {
+        crashServiceMock.getDeselectedProjectPanels.mockReturnValue({ projA: ["gone"] });
+        crashServiceMock.restoreBackup.mockReturnValue(true);
+        let result: unknown = "unset";
+        projectStoreMock.enqueueProjectStateUpdate.mockImplementation(
+          async (_projectId: string, updater: StateUpdater) => {
+            result = updater({ projectId: "projA", sidebarWidth: 350, terminals: [{ id: "t1" }] });
+          }
+        );
+        registerCrashRecoveryHandlers();
+
+        await getHandlerFn("crash-recovery:resolve")(FAKE_EVENT, {
+          kind: "restore",
+          panelIds: ["t1"],
+        });
+
+        expect(result).toBeNull();
+      });
+
+      it("fails the restore and keeps it retryable when a layout write fails", async () => {
+        crashServiceMock.getDeselectedProjectPanels.mockReturnValue({ projA: ["t2"] });
+        crashServiceMock.restoreBackup.mockReturnValue(true);
+        projectStoreMock.enqueueProjectStateUpdate.mockRejectedValue(new Error("EACCES"));
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        registerCrashRecoveryHandlers();
+        const handler = getHandlerFn("crash-recovery:resolve");
+
+        await expect(
+          Promise.resolve().then(() => handler(FAKE_EVENT, { kind: "restore", panelIds: ["t1"] }))
+        ).rejects.toThrow("Crash recovery restore failed");
+        expect(crashServiceMock.restoreBackup).not.toHaveBeenCalled();
+        expect(crashServiceMock.clearPendingCrash).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("rollback and filter hand-off (#12884)", () => {
+      function stateFor(projectId: string, ids: string[]) {
+        return { projectId, sidebarWidth: 350, terminals: ids.map((id) => ({ id })) };
+      }
+
+      function trackWrites(failFor?: string) {
+        const disk = new Map<string, unknown>([
+          ["projA", stateFor("projA", ["a1", "a2"])],
+          ["projB", stateFor("projB", ["b1", "b2"])],
+        ]);
+        projectStoreMock.enqueueProjectStateUpdate.mockImplementation(
+          async (projectId: string, updater: StateUpdater) => {
+            const next = updater(disk.get(projectId));
+            if (next === null) return;
+            if (projectId === failFor && next !== undefined) {
+              const current = disk.get(projectId) as { terminals: unknown[] };
+              if ((next as { terminals: unknown[] }).terminals.length < current.terminals.length) {
+                throw new Error("EACCES");
+              }
+            }
+            disk.set(projectId, next);
+          }
+        );
+        return disk;
+      }
+
+      it("restores already-narrowed projects when a later project write fails", async () => {
+        crashServiceMock.getDeselectedProjectPanels.mockReturnValue({
+          projA: ["a2"],
+          projB: ["b2"],
+        });
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        const disk = trackWrites("projB");
+        registerCrashRecoveryHandlers();
+
+        await expect(
+          Promise.resolve().then(() =>
+            getHandlerFn("crash-recovery:resolve")(FAKE_EVENT, {
+              kind: "restore",
+              panelIds: ["a1", "b1"],
+            })
+          )
+        ).rejects.toThrow("Crash recovery restore failed");
+
+        expect(disk.get("projA")).toEqual(stateFor("projA", ["a1", "a2"]));
+        expect(disk.get("projB")).toEqual(stateFor("projB", ["b1", "b2"]));
+        expect(crashServiceMock.restoreBackup).not.toHaveBeenCalled();
+      });
+
+      it("restores narrowed projects when restoreBackup then fails", async () => {
+        crashServiceMock.getDeselectedProjectPanels.mockReturnValue({ projA: ["a2"] });
+        crashServiceMock.restoreBackup.mockReturnValue(false);
+        const disk = trackWrites();
+        registerCrashRecoveryHandlers();
+
+        await expect(
+          Promise.resolve().then(() =>
+            getHandlerFn("crash-recovery:resolve")(FAKE_EVENT, {
+              kind: "restore",
+              panelIds: ["a1"],
+            })
+          )
+        ).rejects.toThrow("Crash recovery restore failed");
+
+        expect(disk.get("projA")).toEqual(stateFor("projA", ["a1", "a2"]));
+      });
+
+      it("skips a malformed tab group instead of failing the restore", async () => {
+        crashServiceMock.getDeselectedProjectPanels.mockReturnValue({ projA: ["a2"] });
+        crashServiceMock.restoreBackup.mockReturnValue(true);
+        let written: { tabGroups?: unknown[] } | undefined;
+        projectStoreMock.enqueueProjectStateUpdate.mockImplementation(
+          async (_projectId: string, updater: StateUpdater) => {
+            written = updater({
+              ...stateFor("projA", ["a1", "a2", "a3"]),
+              tabGroups: [
+                { id: "bad", location: "grid", activeTabId: "a1", panelIds: null },
+                { id: "g", location: "grid", activeTabId: "a1", panelIds: ["a1", "a2", "a3"] },
+              ],
+            }) as typeof written;
+          }
+        );
+        registerCrashRecoveryHandlers();
+
+        await getHandlerFn("crash-recovery:resolve")(FAKE_EVENT, {
+          kind: "restore",
+          panelIds: ["a1", "a3"],
+        });
+
+        expect(written?.tabGroups).toEqual([
+          { id: "g", location: "grid", activeTabId: "a1", panelIds: ["a1", "a3"] },
+        ]);
+      });
+
+      it("hands the legacy hydration filter over only for a legacy panel list", async () => {
+        crashServiceMock.restoreBackup.mockReturnValue(true);
+        crashServiceMock.hasProjectPanelLayouts.mockReturnValue(true);
+        registerCrashRecoveryHandlers();
+
+        await getHandlerFn("crash-recovery:resolve")(FAKE_EVENT, {
+          kind: "restore",
+          panelIds: ["a1"],
+        });
+
+        expect(crashServiceMock.setPanelFilter).not.toHaveBeenCalled();
+        expect(crashServiceMock.clearPendingCrash).toHaveBeenCalled();
+      });
+    });
+
+    describe("window set after a crash (#12801)", () => {
+      it.each([0, 1])(
+        "asks for the whole window set back after a successful restore at crash count %i",
+        async (count) => {
+          crashServiceMock.restoreBackup.mockReturnValue(true);
+          crashLoopGuardMock.getCrashCount.mockReturnValue(count);
+          registerCrashRecoveryHandlers();
+          const handler = getHandlerFn("crash-recovery:resolve");
+
+          await handler(FAKE_EVENT, { kind: "restore", panelIds: ["p1"] });
+
+          expect(requestCrashFleetRestoreMock).toHaveBeenCalledWith(1);
+          // Pending cleared first, so windows the fleet opens never see the dialog.
+          expect(crashServiceMock.clearPendingCrash.mock.invocationCallOrder[0]).toBeLessThan(
+            requestCrashFleetRestoreMock.mock.invocationCallOrder[0]
+          );
+        }
+      );
+
+      it("keeps the one recovery window in a crash loop", async () => {
+        crashServiceMock.restoreBackup.mockReturnValue(true);
+        crashLoopGuardMock.getCrashCount.mockReturnValue(2);
+        registerCrashRecoveryHandlers();
+        const handler = getHandlerFn("crash-recovery:resolve");
+
+        await handler(FAKE_EVENT, { kind: "restore", panelIds: ["p1"] });
+
+        expect(requestCrashFleetRestoreMock).not.toHaveBeenCalled();
+      });
+
+      it("keeps the one recovery window in safe mode", async () => {
+        crashServiceMock.restoreBackup.mockReturnValue(true);
+        crashLoopGuardMock.isSafeMode.mockReturnValue(true);
+        registerCrashRecoveryHandlers();
+        const handler = getHandlerFn("crash-recovery:resolve");
+
+        await handler(FAKE_EVENT, { kind: "restore", panelIds: ["p1"] });
+
+        expect(requestCrashFleetRestoreMock).not.toHaveBeenCalled();
+      });
+
+      it("opens no windows when the backup restore fails", async () => {
+        crashServiceMock.restoreBackup.mockReturnValue(false);
+        registerCrashRecoveryHandlers();
+        const handler = getHandlerFn("crash-recovery:resolve");
+
+        await expect(
+          Promise.resolve().then(() => handler(FAKE_EVENT, { kind: "restore", panelIds: ["p1"] }))
+        ).rejects.toThrow("Crash recovery restore failed");
+
+        expect(requestCrashFleetRestoreMock).not.toHaveBeenCalled();
+      });
+
+      it("opens no windows when the user starts fresh", async () => {
+        registerCrashRecoveryHandlers();
+        const handler = getHandlerFn("crash-recovery:resolve");
+
+        await handler(FAKE_EVENT, { kind: "fresh" });
+
+        expect(requestCrashFleetRestoreMock).not.toHaveBeenCalled();
       });
     });
 

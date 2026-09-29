@@ -1,4 +1,4 @@
-import { UI_EXIT_DURATION } from "../lib/animationUtils";
+import { UI_EXIT_DURATION, UI_EXIT_EASING } from "../lib/animationUtils";
 import { prefersReducedMotion } from "../lib/appThemeViewTransition";
 import { flushFinalCls } from "./layoutShiftMonitor";
 import { flushPendingPerfMarks, startSteadyStatePerfFlush } from "./performance";
@@ -99,7 +99,7 @@ export function removeStartupSkeleton(): void {
               { opacity: [1, 0] },
               {
                 duration: UI_EXIT_DURATION,
-                easing: "ease-out",
+                easing: UI_EXIT_EASING,
                 pseudoElement: "::view-transition-old(root)",
                 fill: "forwards",
               }

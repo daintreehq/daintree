@@ -15,7 +15,7 @@ export function registerWorkspaceActions(actions: ActionRegistry): void {
     id: "workspace.list",
     title: "List workspaces",
     description:
-      "List every project and scratch Daintree knows about, open or not, so a client can look up a workspace id rather than derive one by hashing a path. workspaceId is what the Daintree-Workspace-Id header binds to; kind is project or scratch. hasLiveView says whether a view is open, not whether an id is valid — absence from this list is what makes an id wrong.",
+      "List every project and scratch workspace Daintree knows, open or not, to look up a workspace id instead of hashing a path. workspaceId is what the Daintree-Workspace-Id header binds to. hasLiveView says a view is open; only absence from this list makes an id wrong.",
     category: "workspace",
     kind: "query",
     danger: "safe",

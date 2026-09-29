@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { fireEvent, render } from "@testing-library/react";
+import { useState } from "react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 class ResizeObserverStub {
@@ -83,5 +84,67 @@ describe("SearchablePalette hover wiring", () => {
   it("supplies a stable noop hover callback when onHoverIndex is omitted", () => {
     const { getByTestId } = renderPalette();
     expect(() => fireEvent.pointerMove(getByTestId("row-b"))).not.toThrow();
+  });
+
+  it("moves the cursor with the pointer without scrolling it, but still reveals for the keys", () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    function Harness() {
+      const [selectedIndex, setSelectedIndex] = useState(0);
+      return (
+        <SearchablePalette<Item>
+          isOpen
+          query=""
+          results={items}
+          selectedIndex={selectedIndex}
+          onQueryChange={() => {}}
+          onSelectPrevious={() => setSelectedIndex((i) => Math.max(0, i - 1))}
+          onSelectNext={() => setSelectedIndex((i) => Math.min(items.length - 1, i + 1))}
+          onConfirm={() => {}}
+          onClose={() => {}}
+          getItemId={(item) => item.id}
+          onHoverIndex={setSelectedIndex}
+          renderItem={(item, index, isSelected, hoverIndex) => (
+            <button
+              key={item.id}
+              data-testid={`row-${item.id}`}
+              aria-selected={isSelected}
+              onPointerMove={() => hoverIndex(index)}
+            >
+              {item.id}
+            </button>
+          )}
+          label="Test"
+          ariaLabel="Test palette"
+          tier="command"
+        />
+      );
+    }
+
+    const { getByTestId, getByRole } = render(<Harness />);
+    scrollIntoView.mockClear();
+
+    // jsdom has no pointer, so `:hover` is stubbed onto the row being pointed at.
+    const realMatches = Element.prototype.matches;
+    let hovered: Element | null = null;
+    Element.prototype.matches = function (this: Element, selector: string) {
+      if (selector === ":hover") return this === hovered;
+      return realMatches.call(this, selector);
+    } as typeof realMatches;
+
+    // The row under the pointer takes the cursor, and stays where it is.
+    hovered = getByTestId("row-c");
+    fireEvent.pointerMove(getByTestId("row-c"));
+    expect(getByTestId("row-c").getAttribute("aria-selected")).toBe("true");
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    // The keys still bring the row they land on into view — even when it is
+    // the row beneath the resting pointer.
+    hovered = getByTestId("row-b");
+    fireEvent.keyDown(getByRole("combobox"), { key: "ArrowUp" });
+    expect(getByTestId("row-b").getAttribute("aria-selected")).toBe("true");
+    expect(scrollIntoView).toHaveBeenCalled();
+    Element.prototype.matches = realMatches;
   });
 });

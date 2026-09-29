@@ -42,9 +42,10 @@ const {
   mockGetHelpAssistantSettings: vi.fn().mockResolvedValue({
     docSearch: true,
     daintreeControl: true,
-    tier: "action" as const,
+    tier: "core" as const,
     bypassPermissions: false,
     auditRetention: 7,
+    modelIds: { claude: "", codex: "", gemini: "" },
     customArgs: "",
   }),
   mockGetAgentVersion: vi.fn().mockResolvedValue({
@@ -528,7 +529,7 @@ function resetState() {
     sessionId: "sess-default",
     sessionPath: "/help",
     token: "tok-default",
-    tier: "action",
+    tier: "core",
     mcpUrl: null,
     windowId: 1,
   });
@@ -542,9 +543,10 @@ function resetState() {
   mockGetHelpAssistantSettings.mockResolvedValue({
     docSearch: true,
     daintreeControl: true,
-    tier: "action" as const,
+    tier: "core" as const,
     bypassPermissions: false,
     auditRetention: 7,
+    modelIds: { claude: "", codex: "", gemini: "" },
     customArgs: "",
   });
   mockGetAgentVersion.mockReset();
@@ -630,7 +632,7 @@ beforeEach(() => {
           onSessionRevoked: vi.fn(() => () => {}),
           onGrantLifecycle: vi.fn(() => () => {}),
           onTurnOutcomeAlert: vi.fn(() => () => {}),
-          setSessionTier: vi.fn().mockResolvedValue({ sessionId: "", tier: "workbench" }),
+          setSessionTier: vi.fn().mockResolvedValue({ sessionId: "", tier: "core" }),
           resetDenialCounts: vi.fn().mockResolvedValue(undefined),
           issueGrant: vi.fn().mockResolvedValue({
             sessionId: "",
@@ -700,7 +702,7 @@ describe("HelpPanel — + New session destructive reset", () => {
       sessionId: "sess-fresh",
       sessionPath: "/sessions/fresh",
       token: "tok-fresh",
-      tier: "action",
+      tier: "core",
       mcpUrl: null,
       windowId: 1,
     });
@@ -778,7 +780,7 @@ describe("HelpPanel — + New session destructive reset", () => {
       sessionId: "sess-fresh",
       sessionPath: "/sessions/fresh",
       token: "tok-fresh",
-      tier: "action",
+      tier: "core",
       mcpUrl: null,
       windowId: 1,
     });
@@ -806,7 +808,7 @@ describe("HelpPanel — + New session destructive reset", () => {
       sessionId: "sess-fresh",
       sessionPath: "/sessions/fresh",
       token: "tok-fresh",
-      tier: "action",
+      tier: "core",
       mcpUrl: null,
       windowId: 1,
     });
@@ -842,7 +844,7 @@ describe("HelpPanel — + New session destructive reset", () => {
       sessionId: "sess-fresh",
       sessionPath: "/sessions/fresh",
       token: "tok-fresh",
-      tier: "action",
+      tier: "core",
       mcpUrl: null,
       windowId: 1,
     });
@@ -868,7 +870,7 @@ describe("HelpPanel — + New session destructive reset", () => {
       sessionId: "sess-fresh",
       sessionPath: "/sessions/fresh",
       token: "tok-fresh",
-      tier: "action",
+      tier: "core",
       mcpUrl: null,
       windowId: 1,
     });
@@ -967,9 +969,10 @@ describe("HelpPanel — + New session destructive reset", () => {
     mockGetHelpAssistantSettings.mockResolvedValue({
       docSearch: true,
       daintreeControl: true,
-      tier: "action" as const,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
+      modelIds: { claude: "", codex: "", gemini: "" },
       customArgs: "--model sonnet",
     });
     mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "fresh-term" } });
@@ -977,7 +980,7 @@ describe("HelpPanel — + New session destructive reset", () => {
       sessionId: "sess-fresh",
       sessionPath: "/sessions/fresh",
       token: "tok-fresh",
-      tier: "action",
+      tier: "core",
       mcpUrl: null,
       windowId: 1,
     });
@@ -1141,7 +1144,7 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
       sessionId: "sess-fresh",
       sessionPath: "/sessions/fresh",
       token: "tok-fresh",
-      tier: "action",
+      tier: "core",
       mcpUrl: null,
       windowId: 1,
     });
@@ -1238,12 +1241,14 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     };
   }
 
-  // Found by `title` rather than `aria-label`: the close control is pointer-only and
-  // `aria-hidden`, because a focusable control beside a `tab` is what makes a roving
-  // tabindex impossible and would leave a stray non-`tab` child in the tablist. The
-  // keyboard route is Delete on the focused tab, covered in HelpSessionTabs.test.tsx.
+  // Found by its family hook rather than by role: the close control is pointer-only and
+  // `aria-hidden`, because a focusable control inside a `tab` is the nesting ARIA
+  // forbids. The keyboard route is Delete on the focused tab, covered in
+  // HelpSessionTabs.test.tsx.
   function closeButtonFor(container: HTMLElement, label: string): HTMLButtonElement {
-    const button = container.querySelector<HTMLButtonElement>(`button[title="Close ${label}"]`);
+    const button = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-document-tab-close]")
+    ).find((b) => b.getAttribute("aria-label") === `Close ${label}`);
     if (!button) throw new Error(`no close button for ${label}`);
     return button;
   }
@@ -1338,8 +1343,18 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     const tabs = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
 
     expect(tabs.map((t) => t.getAttribute("aria-label"))).toEqual(["Session 1", "fix auth tests"]);
-    expect(tabs[1]!.getAttribute("title")).toBe("fix auth tests");
-    expect(tabs[0]!.hasAttribute("title")).toBe(false);
+    // Full titles reach the pointer through the app tooltip, never a native `title`.
+    expect(tabs.some((t) => t.hasAttribute("title"))).toBe(false);
+    // The task title is what shows, not the lane number it replaced. Read without the
+    // tab's screen-reader state text, which is a description rather than the label.
+    const visible = (t: HTMLElement) => {
+      const copy = t.cloneNode(true);
+      if (!(copy instanceof HTMLElement)) throw new Error("tab did not clone");
+      copy.querySelectorAll(".sr-only").forEach((n) => n.remove());
+      return copy.textContent;
+    };
+    expect(visible(tabs[1]!)).toBe("fix auth tests");
+    expect(visible(tabs[0]!)).toBe("Session 1");
     expect(closeButtonFor(container, "fix auth tests")).toBeTruthy();
   });
 
@@ -1353,11 +1368,17 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
 
     const { container } = render(<HelpPanel width={380} />);
     const tab = container.querySelectorAll<HTMLElement>('[role="tab"]')[1]!;
-    const label = tab.textContent!;
+    // The visible label only — the tab also holds its screen-reader state text.
+    const label = tab.querySelector(".truncate")!.textContent!;
 
     expect(label.endsWith("…")).toBe(true);
     expect(Array.from(label).length).toBeLessThanOrEqual(28);
-    expect(tab.getAttribute("title")).toBe(long);
+    expect(tab.hasAttribute("title")).toBe(false);
+    // Capped from the title's own opening, not replaced by something else.
+    expect(long.startsWith(label.slice(0, -1).trimEnd())).toBe(true);
+    // The whole title is the tab's name, and the tooltip that reveals it is driven off the
+    // label being capped — opened and read in HelpSessionTabs.test.tsx, since this suite
+    // stubs the tooltip primitives out.
     expect(tab.getAttribute("aria-label")).toBe(long);
   });
 

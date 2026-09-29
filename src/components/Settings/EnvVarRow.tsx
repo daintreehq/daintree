@@ -3,6 +3,7 @@ import { Eye, EyeOff, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SettingsInlineError } from "@/components/Settings/SettingsGroup";
 
 /**
  * The editable `NAME = value` row shared by the global Environment page and the
@@ -130,19 +131,16 @@ export function EnvVarRow({
             aria-describedby={error ? errorId : undefined}
           />
           {sensitive && (
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={onToggleReveal}
-              className="absolute right-1 top-1/2 -translate-y-1/2 flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
+              className="absolute right-1 top-1/2 -translate-y-1/2 [&_svg]:size-4"
               aria-pressed={revealed}
-              aria-label={`${revealed ? "Hide" : "Show"} value${name ? ` of ${name}` : ""}`}
+              aria-label={`Show value${name ? ` of ${name}` : ""}`}
             >
-              {revealed ? (
-                <EyeOff className="h-4 w-4" aria-hidden="true" />
-              ) : (
-                <Eye className="h-4 w-4" aria-hidden="true" />
-              )}
-            </button>
+              {revealed ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+            </Button>
           )}
         </div>
         <Button
@@ -154,9 +152,9 @@ export function EnvVarRow({
           <Trash2 />
         </Button>
         {error && (
-          <p id={errorId} className="col-span-3 mt-1 text-xs text-status-error">
+          <SettingsInlineError id={errorId} className="col-span-3 mt-1">
             {error}
-          </p>
+          </SettingsInlineError>
         )}
       </div>
     </div>

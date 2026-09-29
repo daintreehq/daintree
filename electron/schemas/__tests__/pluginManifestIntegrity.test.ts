@@ -193,6 +193,56 @@ describe("view → panel cross-reference (#10620)", () => {
   });
 });
 
+describe("location: settings views", () => {
+  function settingsView(id: string): Record<string, unknown> {
+    return { id, componentPath: "./view/settings.js", location: "settings" };
+  }
+
+  it("accepts one settings view with no panel of its own", () => {
+    const result = manifestWith({ views: [settingsView("prefs")] });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a settings view beside panel views", () => {
+    const result = manifestWith({
+      panels: [panel("rich")],
+      views: [view("rich"), settingsView("prefs")],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a second settings view", () => {
+    const result = manifestWith({ views: [settingsView("a"), settingsView("b")] });
+    expect(result.success).toBe(false);
+    expect(issueWithCode(result, "settings_view_duplicate")?.path).toEqual([
+      "contributes",
+      "views",
+      1,
+      "location",
+    ]);
+  });
+
+  it("rejects a settings view that shares a panel's id", () => {
+    const result = manifestWith({ panels: [panel("rich")], views: [settingsView("rich")] });
+    expect(result.success).toBe(false);
+    expect(errorCodes(result)).toContain("settings_view_panel_id_collision");
+  });
+
+  it("rejects a project surface that names a settings view", () => {
+    const result = getPluginManifestSchema("project").safeParse({
+      name: "acme.my-plugin",
+      version: "1.0.0",
+      scope: "project",
+      contributes: {
+        views: [settingsView("prefs")],
+        surfaces: { emptyCanvas: { viewId: "prefs" } },
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(errorCodes(result)).toContain("surface_view_ref_settings");
+  });
+});
+
 describe("MCP server ${settings:*} token references (#10620)", () => {
   it("accepts tokens that name declared settings across command/args/env", () => {
     const result = manifestWith({

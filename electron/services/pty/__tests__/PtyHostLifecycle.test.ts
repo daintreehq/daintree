@@ -554,6 +554,30 @@ describe("PtyHostLifecycle", () => {
     }
   });
 
+  it("logs an external kill of the host as terminated from outside, not a crash", async () => {
+    const { lifecycle, callbacks } = makeLifecycle();
+    lifecycle.start();
+    lifecycle.markReady();
+
+    mockChild.emit("exit", 0);
+    shared.appMock.emit(
+      "child-process-gone",
+      {} as Electron.Event,
+      {
+        type: "Utility",
+        name: "daintree-pty-host",
+        reason: "killed",
+        exitCode: 15,
+      } as Electron.Details
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    const warns = (callbacks.callbacks.logWarn as Mock).mock.calls.map((c) => c[0] as string);
+    const line = warns.find((m) => m.startsWith("[PtyClient] Pty Host daintree-pty-host "));
+    expect(line).toContain(process.platform === "win32" ? "exit code 15" : "SIGTERM");
+    expect(line).toContain("from outside the process");
+  });
+
   it("ignores child-process-gone for unrelated utility processes", async () => {
     const { lifecycle, callbacks } = makeLifecycle();
     lifecycle.start();

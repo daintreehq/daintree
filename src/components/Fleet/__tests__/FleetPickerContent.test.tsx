@@ -219,6 +219,28 @@ describe("FleetPickerContent + useFleetPicker", () => {
       expect(captured.picker?.selectedIds.has("t1")).toBe(true);
     });
 
+    it("cancels Shift+mousedown on a row and keeps the row's focus (#12926)", async () => {
+      seedTerminals([makeTerminal("t1"), makeTerminal("t2")]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      const captured: { picker?: ReturnType<typeof useFleetPicker> } = {};
+      renderHarness([makeWorktreeSnap("wt-1", "main")], {
+        mode: "cold-start",
+        onCommit: () => {},
+        capturePicker: (p) => {
+          captured.picker = p;
+        },
+      });
+      await act(async () => {});
+      const row = screen.getByTestId("fp-row-t2");
+      expect(fireEvent.mouseDown(row, { shiftKey: true, button: 0 })).toBe(false);
+      expect(document.activeElement).toBe(row);
+      await act(async () => {
+        fireEvent.click(row, { shiftKey: true });
+      });
+      expect(captured.picker?.selectedIds.has("t2")).toBe(true);
+      expect(fireEvent.mouseDown(row, { button: 0 })).toBe(true);
+    });
+
     it("Cmd+A selects all visible terminals", async () => {
       seedTerminals([makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3")]);
       useWorktreeSelectionStore.setState({ activeWorktreeId: null });

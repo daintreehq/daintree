@@ -38,6 +38,7 @@ import "@/index.css";
  *   ?theme=daintree|bondi|namib|…   built-in theme id
  *   ?case=ladder|growth|tiles       which arrangement to render
  *   ?draft=empty|short|reported|overflow   the seeded draft (ladder case)
+ *   ?case=controls                  the control row at rest and disabled (the states spec hovers it)
  *   ?stash=1                        seed a stashed draft, adding the third trailing button
  */
 
@@ -110,8 +111,24 @@ function Ready({ children }: { children: ReactNode }) {
 
 const noop = () => {};
 
-function Bar({ terminalId, agentId }: { terminalId: string; agentId: BuiltInAgentId }) {
-  return <HybridInputBar terminalId={terminalId} onSend={noop} cwd={CWD} agentId={agentId} />;
+function Bar({
+  terminalId,
+  agentId,
+  disabled,
+}: {
+  terminalId: string;
+  agentId: BuiltInAgentId;
+  disabled?: boolean;
+}) {
+  return (
+    <HybridInputBar
+      terminalId={terminalId}
+      onSend={noop}
+      cwd={CWD}
+      agentId={agentId}
+      disabled={disabled}
+    />
+  );
 }
 
 /**
@@ -137,6 +154,7 @@ const GROWTH_WIDTH = 360;
 const GROWTH_DRAFTS: DraftName[] = ["empty", "short", "reported", "overflow"];
 const SIDEBAR_WIDTHS = [380, 430] as const;
 const SIDEBAR_DRAFTS: DraftName[] = ["short", "reported", "sidebar"];
+const CONTROL_STATES = ["enabled", "disabled"] as const;
 
 // Every pane the chosen case will mount, seeded here at module scope so no
 // component writes a store during render — a re-render would repeat the write
@@ -149,6 +167,9 @@ switch (caseName) {
     SIDEBAR_WIDTHS.forEach((w) =>
       SIDEBAR_DRAFTS.forEach((d) => seedPane(`sidebar-${w}-${d}`, DRAFTS[d]))
     );
+    break;
+  case "controls":
+    CONTROL_STATES.forEach((state) => seedPane(`controls-${state}`, DRAFTS.short));
     break;
   case "tiles":
     TILE_AGENTS.forEach((_agent, i) => {
@@ -234,7 +255,25 @@ function Tiles() {
   );
 }
 
+/**
+ * The control row — `❯`, attach, stash and mic — as one enabled and one
+ * disabled composer. The vertical padding leaves room for a tooltip on either
+ * side, so a hover capture shows which way it opened.
+ */
+function Controls() {
+  return (
+    <div className="flex w-fit flex-col gap-24 py-16 pl-8 pr-40" data-preview-case="controls">
+      {CONTROL_STATES.map((state) => (
+        <Column key={state} width={420} label={`420px · ${state}`}>
+          <Bar terminalId={`controls-${state}`} agentId="claude" disabled={state === "disabled"} />
+        </Column>
+      ))}
+    </div>
+  );
+}
+
 const CASES: Record<string, () => ReactNode> = {
+  controls: Controls,
   ladder: Ladder,
   growth: Growth,
   sidebar: Sidebar,

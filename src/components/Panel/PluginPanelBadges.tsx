@@ -4,6 +4,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { usePanelBadges, usePluginPanelBadgeStore } from "@/store/pluginPanelBadgeStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
+import { cn } from "@/lib/utils";
+import { HEADER_CHIP_CLASS } from "@/components/Terminal/terminalHeaderChip";
 
 /**
  * Live badges a plugin set on this panel via `host.setPanelBadge` (#10585),
@@ -58,7 +60,7 @@ function BadgeIndicator({ pluginId, badge }: { pluginId: string; badge: PluginPa
       <span
         role="status"
         aria-label={badge.tooltip ?? `${pluginName}: ${badge.text}`}
-        className={`shrink-0 rounded px-1 text-3xs font-medium leading-4 ${LABEL_COLOR[color]}`}
+        className={cn(HEADER_CHIP_CLASS, "border-transparent", LABEL_COLOR[color])}
       >
         {badge.text}
       </span>

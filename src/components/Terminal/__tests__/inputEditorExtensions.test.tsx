@@ -41,7 +41,13 @@ import {
   createChipBackspaceKeymap,
   isChipSelected,
   createSlashChipField,
+  imageChipField,
+  addImageChip,
+  readImageChipPaths,
+  minimalDocChange,
+  createComboboxAttributes,
 } from "../inputEditorExtensions";
+import { appendAgentContextToDraft, formatAgentContextBlock } from "@shared/utils/agentContextDrag";
 import type { SlashCommand } from "@shared/types";
 
 function makeSlashCommand(label: string, description = ""): SlashCommand {
@@ -717,6 +723,86 @@ describe("createCustomKeymap", () => {
     expect(onEnter).not.toHaveBeenCalled();
     expect(view.state.doc.toString()).toContain("\n");
     view.destroy();
+  });
+});
+
+describe("readImageChipPaths (#12792)", () => {
+  function makeEditor(doc: string) {
+    return new EditorView({
+      parent: document.createElement("div"),
+      state: EditorState.create({ doc, extensions: [imageChipField] }),
+    });
+  }
+
+  it("returns chip paths in document order, whatever order they were added in", () => {
+    const view = makeEditor("/a/one.png and /a/two.png");
+    view.dispatch({
+      effects: [
+        addImageChip.of({ from: 15, to: 25, filePath: "/a/two.png", thumbnailUrl: "" }),
+        addImageChip.of({ from: 0, to: 10, filePath: "/a/one.png", thumbnailUrl: "" }),
+      ],
+    });
+
+    expect(readImageChipPaths(view)).toEqual(["/a/one.png", "/a/two.png"]);
+    view.destroy();
+  });
+
+  it("drops a chip once an edit inside it removes it", () => {
+    const view = makeEditor("/a/one.png ");
+    view.dispatch({
+      effects: addImageChip.of({ from: 0, to: 10, filePath: "/a/one.png", thumbnailUrl: "" }),
+    });
+    view.dispatch({ changes: { from: 3, to: 4, insert: "x" } });
+
+    expect(readImageChipPaths(view)).toEqual([]);
+    view.destroy();
+  });
+
+  it("returns nothing without a view", () => {
+    expect(readImageChipPaths(null)).toEqual([]);
+  });
+
+  it("keeps an attached image through a handoff appended to the draft", () => {
+    // image → handoff → submit: the input bar syncs an outside write with
+    // `minimalDocChange`, and the send reads the attachments off the field.
+    const typed = "/a/one.png fix this";
+    const view = makeEditor(typed);
+    view.dispatch({
+      effects: addImageChip.of({ from: 0, to: 10, filePath: "/a/one.png", thumbnailUrl: "" }),
+    });
+    const draft = appendAgentContextToDraft(
+      typed,
+      formatAgentContextBlock({ text: "Card body", title: "Card", sourceLabel: "Kanban" })
+    );
+
+    view.dispatch({ changes: minimalDocChange(view.state.doc.toString(), draft)! });
+
+    expect(view.state.doc.toString()).toBe(draft);
+    expect(readImageChipPaths(view)).toEqual(["/a/one.png"]);
+    view.destroy();
+  });
+});
+
+describe("minimalDocChange", () => {
+  it("is an insertion at the end for an append", () => {
+    expect(minimalDocChange("abc", "abc\n\nxyz")).toEqual({ from: 3, to: 3, insert: "\n\nxyz" });
+  });
+
+  it("replaces only the differing middle", () => {
+    expect(minimalDocChange("keep OLD tail", "keep NEW! tail")).toEqual({
+      from: 5,
+      to: 8,
+      insert: "NEW!",
+    });
+  });
+
+  it("is nothing when the text is unchanged", () => {
+    expect(minimalDocChange("same", "same")).toBeNull();
+  });
+
+  it("handles a deletion and a full rewrite", () => {
+    expect(minimalDocChange("abcdef", "abef")).toEqual({ from: 2, to: 4, insert: "" });
+    expect(minimalDocChange("abc", "xyz")).toEqual({ from: 0, to: 3, insert: "xyz" });
   });
 });
 
@@ -1740,21 +1826,34 @@ describe("chipEntranceTheme", () => {
     }
   });
 
-  it("disables the animation under prefers-reduced-motion", () => {
+  // Reduced motion keeps the fade and drops the rise: the override swaps to a
+  // keyframe that animates opacity alone, never to `animation: none`.
+  function expectFadeOnly(rule: string, label: string) {
+    const name = /animation:\s*([\w-]+)/.exec(rule)?.[1];
+    expect(name, `${label} keeps an animation`).toBeTruthy();
+    expect(name).not.toBe("none");
+    const css = readGeneratedCss([chipEntranceTheme]);
+    const keyframes = extractAtRuleBody(css, `@keyframes ${name}`);
+    expect(keyframes, `${label} keyframe`).toContain("opacity");
+    expect(keyframes, `${label} keyframe moves`).not.toMatch(/transform|translate|scale/);
+  }
+
+  it("keeps only the fade under prefers-reduced-motion", () => {
     const css = readGeneratedCss([chipEntranceTheme]);
     const reducedBlock = extractAtRuleBody(css, "@media (prefers-reduced-motion: reduce)");
     for (const selector of ALL_CHIP_SELECTORS) {
-      const rule = extractRuleBody(reducedBlock, selector);
-      expect(rule, `${selector} reduced-motion override`).toContain("animation: none");
+      expectFadeOnly(
+        extractRuleBody(reducedBlock, selector),
+        `${selector} reduced-motion override`
+      );
     }
   });
 
-  it("disables the animation under body[data-reduce-animations='true']", () => {
+  it("keeps only the fade under body[data-reduce-animations='true']", () => {
     const css = readGeneratedCss([chipEntranceTheme]);
     for (const selector of ALL_CHIP_SELECTORS) {
       const composed = `body[data-reduce-animations="true"] ${selector}`;
-      const rule = extractRuleBody(css, composed);
-      expect(rule, `${composed} override`).toContain("animation: none");
+      expectFadeOnly(extractRuleBody(css, composed), `${composed} override`);
     }
   });
 });
@@ -2394,5 +2493,33 @@ describe("@file chip widget rendering", () => {
     expect(chipEl?.classList.contains("cm-chip-pending-delete")).toBe(true);
 
     view.destroy();
+  });
+});
+
+describe("createComboboxAttributes", () => {
+  const attrsFor = (attrs: Parameters<typeof createComboboxAttributes>[0]) => {
+    const state = EditorState.create({ extensions: [createComboboxAttributes(attrs)] });
+    return Object.assign({}, ...state.facet(EditorView.contentAttributes)) as Record<
+      string,
+      string
+    >;
+  };
+
+  it("points at the list and its active row only while the list is showing", () => {
+    const open = attrsFor({ listboxId: "lb", expanded: true, activeOptionId: "lb-option-2" });
+    expect(open.role).toBe("combobox");
+    expect(open["aria-expanded"]).toBe("true");
+    expect(open["aria-controls"]).toBe("lb");
+    expect(open["aria-activedescendant"]).toBe("lb-option-2");
+
+    const closed = attrsFor({ listboxId: "lb", expanded: false, activeOptionId: "lb-option-2" });
+    expect(closed.role).toBe("combobox");
+    expect(closed["aria-expanded"]).toBe("false");
+    expect(closed["aria-controls"]).toBeUndefined();
+    expect(closed["aria-activedescendant"]).toBeUndefined();
+  });
+
+  it("adds nothing before the composer has a list to point at", () => {
+    expect(attrsFor(null).role).toBeUndefined();
   });
 });

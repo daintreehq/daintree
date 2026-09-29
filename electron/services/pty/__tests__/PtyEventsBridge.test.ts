@@ -33,6 +33,39 @@ describe("bridgePtyEvent", () => {
     });
   });
 
+  it("forwards a rate-limit observation (#12797)", () => {
+    const payloads: unknown[] = [];
+    events.on("agent:rate-limit-observed", (payload) => payloads.push(payload));
+
+    const handled = bridgePtyEvent({
+      type: "agent-rate-limit-observed",
+      terminalId: "term-1",
+      observedAt: 1_000,
+      timestamp: 1_000,
+    });
+
+    expect(handled).toBe(true);
+    expect(payloads).toEqual([{ terminalId: "term-1", observedAt: 1_000, timestamp: 1_000 }]);
+  });
+
+  it("forwards a handback with its code, and drops a code of the wrong shape", () => {
+    const codes: Array<string | undefined> = [];
+    events.on("agent:handback-observed", (payload) => codes.push(payload.code));
+    const handback = { message: "done", observedAt: 1_000, truncated: false };
+
+    for (const code of ["k7f3qa", "../etc", undefined]) {
+      bridgePtyEvent({
+        type: "agent-handback-observed",
+        terminalId: "term-1",
+        handback,
+        ...(code !== undefined ? { code } : {}),
+        timestamp: 1_000,
+      });
+    }
+
+    expect(codes).toEqual(["k7f3qa", undefined, undefined]);
+  });
+
   it("forwards waitingReason from agent-state events", () => {
     const payloads: Array<{ waitingReason?: string }> = [];
     events.on("agent:state-changed", (payload) => {

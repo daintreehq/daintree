@@ -3,6 +3,8 @@ import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { getGitRecoveryHint } from "@shared/utils/gitOperationErrors";
 import { isClientGitError } from "@/utils/clientGitError";
 import { isGeneratedFile } from "../generatedFileClassifier";
+import { cn } from "@/lib/utils";
+import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 
 export type DiffMode = "working-tree" | "base-branch";
 
@@ -369,6 +371,23 @@ export function sortFiles(
  * looks exactly like an unpinned one.
  */
 export const REVIEW_HUB_STICKY_BAND = "sticky top-0 z-10 bg-surface-canvas";
+
+/**
+ * The count beside a section title ("Conflicted 4", "Staged 3 files"). One
+ * wash for every section so a header never reads as more or less urgent than
+ * its neighbour purely because its chip was tinted differently.
+ */
+export const REVIEW_HUB_COUNT_CHIP = cn(COUNT_BADGE_CLASS, "ml-1.5");
+
+/**
+ * Disabled treatment for the hub's full-width primary CTAs (Commit, Push,
+ * Continue). Fading a chromatic CTA to 50% produces a dusty slab of the accent
+ * that still dominates the dialog, and drops the label to ~2.1:1 in every light
+ * theme. Neutral inset surface + muted ink instead. Keyed on `aria-disabled`
+ * so the button stays focusable; the caller vetoes activation itself.
+ */
+export const REVIEW_HUB_DISABLED_CTA =
+  "aria-disabled:bg-surface-inset aria-disabled:text-text-muted aria-disabled:shadow-none aria-disabled:cursor-not-allowed";
 
 export type BulkScope = "selection" | "shown" | "all";
 

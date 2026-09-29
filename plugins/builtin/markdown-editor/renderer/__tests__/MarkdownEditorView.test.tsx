@@ -255,9 +255,9 @@ describe("MarkdownEditorView (#12323)", () => {
     await screen.findByText("File changed on disk");
     const before = editorView();
     fireEvent.click(screen.getByRole("button", { name: "Load disk version" }));
-    expect(await screen.findByText("Discard the draft of 'plan.md'?")).toBeTruthy();
+    expect(await screen.findByText("Discard changes to 'plan.md'?")).toBeTruthy();
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Discard draft" }));
+      fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
     });
     await waitFor(() => expect(editorView()).not.toBe(before));
     expect(editorView().state.doc.toString()).toBe("# Plan\n\nBody\n\ntheirs\n");
@@ -286,7 +286,7 @@ describe("MarkdownEditorView (#12323)", () => {
     });
     expect(dispatchMock).toHaveBeenCalledWith(
       "file.view",
-      { path: "/repo/docs/spec.md", rootPath: "/repo" },
+      { path: "/repo/docs/spec.md", rootPath: "/repo", confineToRoot: true },
       { source: "user" }
     );
     expect(cm.state.doc.toString()).toBe("[spec](./spec.md)\ndraft");
@@ -305,6 +305,13 @@ describe("MarkdownEditorView (#12323)", () => {
       window.dispatchEvent(new Event("daintree:find-in-panel"));
     });
     expect(document.querySelector(".cm-search")).not.toBeNull();
+    // The shared search field, with replace controls since this editor is editable.
+    const query = document.querySelector<HTMLInputElement>(
+      ".cm-search .search-field > input.search-field-input[main-field]"
+    );
+    expect(query).not.toBeNull();
+    expect(document.activeElement).toBe(query);
+    expect(document.querySelector(".cm-search input.cm-textfield[name=replace]")).not.toBeNull();
   });
 
   it("unmounting the view keeps the draft — it is document state", async () => {

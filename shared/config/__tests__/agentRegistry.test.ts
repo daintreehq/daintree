@@ -201,10 +201,9 @@ describe("agentRegistry", () => {
   });
 
   describe("assistant support", () => {
-    it("returns claude, codex, and daintree-assistant as the stable-tier assistant agents", () => {
+    it("returns claude and codex as the stable-tier assistant agents", () => {
       const ids = getAssistantSupportedAgentIds();
-      expect(ids).toEqual(expect.arrayContaining(["claude", "codex", "daintree-assistant"]));
-      expect(ids).toHaveLength(3);
+      expect(ids).toEqual(["claude", "codex"]);
     });
 
     it("claude has structured assistant supports at stable tier", () => {
@@ -288,16 +287,16 @@ describe("agentRegistry", () => {
       expect(wired).not.toContain("cursor");
     });
 
-    it("daintree-assistant is wired at stable tier and shown in the assistant picker (#10634)", () => {
-      expect(getAssistantWiredAgentIds()).toContain("daintree-assistant");
-      expect(getAssistantSupportedAgentIds()).toContain("daintree-assistant");
+    it("daintree-assistant is retired from the assistant picker and provisioning", () => {
+      expect(getAssistantWiredAgentIds()).not.toContain("daintree-assistant");
+      expect(getAssistantSupportedAgentIds()).not.toContain("daintree-assistant");
       expect(getAgentConfig("daintree-assistant")?.supports).toMatchObject({
         mcpInjection: "env-only",
         settingsOverlay: false,
         permissionBypass: false,
         trustDialog: false,
         versionProbe: true,
-        tier: "stable",
+        tier: "deprecated",
       });
     });
 
@@ -482,8 +481,7 @@ describe("agentRegistry", () => {
     it("empty user registry produces same supported list as before", () => {
       setUserRegistry({});
       const ids = getAssistantSupportedAgentIds();
-      expect(ids).toEqual(expect.arrayContaining(["claude", "codex", "daintree-assistant"]));
-      expect(ids).toHaveLength(3);
+      expect(ids).toEqual(["claude", "codex"]);
     });
 
     it("supported list returns built-ins in BUILT_IN_AGENT_IDS order then user-defined", () => {
@@ -505,9 +503,8 @@ describe("agentRegistry", () => {
         // Built-ins first, in BUILT_IN_AGENT_IDS order
         expect(ids[0]).toBe("claude");
         expect(ids[1]).toBe("codex");
-        expect(ids[2]).toBe("daintree-assistant");
         // Then user-defined agents in registration order
-        const userDefinedIds = ids.slice(3);
+        const userDefinedIds = ids.slice(2);
         expect(userDefinedIds[0]).toBe("zzz-last-agent");
         expect(userDefinedIds[1]).toBe("aaa-first-agent");
       } finally {
@@ -1689,6 +1686,23 @@ describe("claude providerTemplates descriptions", () => {
       expect(template.description).toBeTruthy();
       expect(template.description!.length).toBeLessThanOrEqual(60);
     }
+  });
+
+  // #12783: the flag hides Monitor, PushNotification and claude.ai connectors
+  // from Claude Code, so Daintree must never pre-fill it on the user's behalf.
+  it("never pre-fills CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", () => {
+    const config = getAgentConfig("claude");
+    expect(config?.env?.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBeUndefined();
+    for (const template of config?.providerTemplates ?? []) {
+      expect(template.env?.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, template.id).toBeUndefined();
+    }
+  });
+
+  it("warns that the nonessential-traffic suggestion removes Monitor", () => {
+    const suggestion = getAgentConfig("claude")?.envSuggestions?.find(
+      (s) => s.key === "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
+    );
+    expect(suggestion?.hint).toContain("Monitor");
   });
 });
 

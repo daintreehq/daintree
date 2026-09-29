@@ -1,3 +1,5 @@
+import type { HelpAssistantTier } from "./maps.js";
+
 /**
  * Result classification for an MCP tool dispatch.
  *
@@ -39,9 +41,10 @@ export type McpAuditResult =
  * prompt text.
  *
  * `tier` records the source-tier classification of the connection that
- * issued the call (`workbench`, `action`, `system`, `external`). Sessions
- * that are not yet stamped fall back to `"workbench"` — the most
- * restrictive tier — so an unstamped session can never elevate access.
+ * issued the call (`core`, `full`, `external`). Sessions that are not yet
+ * stamped fall back to `"core"` — the smaller in-app tool set — so an
+ * unstamped session can never elevate access. Records written before the
+ * core/full split carry the old ladder names and are displayed verbatim.
  */
 /**
  * Outcome of a user-facing confirmation modal for `danger: "confirm"` MCP
@@ -65,16 +68,31 @@ export type McpConfirmationDecision = "approved" | "rejected" | "timeout";
 export type McpApprovalScope = "once" | "session";
 
 /**
+ * Why main is asking the user about a call it has not run (#12692, #12881).
+ * `above-tier` is an agent pane reaching past its project's MCP tier.
+ * `protected-close` is Daintree's own assistant closing panels it did not open,
+ * or whose agent was last seen working or waiting: the question is whether to
+ * lose those panels, so the dialog lists them.
+ */
+export type McpApprovalReason = "above-tier" | "protected-close";
+
+/**
  * What authorized an agent pane's dispatch past the ordinary confirmation
  * (#12692), stamped on its audit record so an automatic run can be told apart
  * from one a person approved.
  *
- * - `tier`: the project's `system` tier pre-authorized it.
+ * - `tier`: the project's `system` tier pre-authorized it. Only written by
+ *   builds before the core/full split; no tier pre-authorizes a call now.
+ * - `project-setting`: the project's "Skip confirmations" setting at the `full`
+ *   tier pre-authorized it (#12876).
  * - `user`: the user approved this call in the dialog.
  * - `session-grant`: an earlier "Allow for this session" covered it.
  * - `native-grant`: a native automation grant covered it (#10648).
+ * - `skip-preference`: a help session ran it without asking because the
+ *   assistant inherits "Skip permission prompts" (#12874). Not a confirmation.
  */
-export type McpDispatchAuthorization = "tier" | "user" | "session-grant" | "native-grant";
+export type McpDispatchAuthorization =
+  "tier" | "project-setting" | "user" | "session-grant" | "native-grant" | "skip-preference";
 
 /**
  * Audit-record severity tier. Derived from the dispatch result at record-write
@@ -193,12 +211,12 @@ export interface McpAuditRecord {
   confirmationDecision?: McpConfirmationDecision;
   /**
    * For `unauthorized` outcomes, the lowest help-session tier that would have
-   * permitted the dispatch — `workbench`, `action`, or `system`. Set at
+   * permitted the dispatch — `core` or `full`. Set at
    * record-write time from the static `TIER_ALLOWLISTS`. `null` means the
    * tool isn't permitted at any tier (unknown tool). Optional and absent on
    * non-unauthorized outcomes.
    */
-  tierHint?: "workbench" | "action" | "system" | null;
+  tierHint?: HelpAssistantTier | null;
   /**
    * For `unauthorized` outcomes only, true when the renderer banner was
    * suppressed for this denial because the per-`(sessionId, toolId)`

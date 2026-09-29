@@ -216,7 +216,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "errors.recent",
     title: "Recent errors",
     description:
-      "List recent entries from the diagnostics error log, covering runtime and inter-process failures, newest first. This is a separate store from the user's notification inbox, so a full picture usually means reading both. Dismissed entries are left out by default, so an empty list means nothing was recorded or everything recorded has been dismissed.",
+      "List recent diagnostics error-log entries (runtime and inter-process failures), newest first. Separate from the notification inbox; read both for a full picture. Dismissed entries are omitted by default.",
     category: "errors",
     kind: "query",
     danger: "safe",
@@ -230,12 +230,12 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
           .max(50)
           .default(20)
           .optional()
-          .describe("Max errors to return (default: 20, max: 50)"),
+          .describe("Max errors (default 20, max 50)"),
         includesDismissed: z
           .boolean()
           .default(false)
           .optional()
-          .describe("Include dismissed errors (default: false — active errors only)"),
+          .describe("Include dismissed errors (default false)"),
       })
       .optional(),
     resultSchema: z.object({ errors: z.array(z.unknown()) }),
@@ -271,7 +271,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "notifications.recent",
     title: "Recent notifications",
     description:
-      "List recent entries from the notification inbox — the completion, waiting and informational messages raised for the user, including quiet ones that never surfaced as a toast — newest first. This is a separate store from the diagnostics error log, so a full picture of what went wrong usually means reading both. It never fails; an empty list means nothing was notified.",
+      "List recent notification-inbox entries (completion, waiting and info messages, including quiet ones never toasted), newest first. Separate from the diagnostics error log; read both for a full picture. Never fails.",
     category: "diagnostics",
     kind: "query",
     danger: "safe",
@@ -285,7 +285,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
           .max(50)
           .default(20)
           .optional()
-          .describe("Max notifications to return (default: 20, max: 50)"),
+          .describe("Max notifications (default 20, max 50)"),
         type: z
           .enum(["success", "error", "info", "warning"])
           .optional()
@@ -294,7 +294,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
           .boolean()
           .default(false)
           .optional()
-          .describe("Only return notifications not yet seen as a toast (default: false)"),
+          .describe("Only ones not yet seen as a toast (default false)"),
       })
       .optional(),
     resultSchema: z.object({ notifications: z.array(z.unknown()) }),

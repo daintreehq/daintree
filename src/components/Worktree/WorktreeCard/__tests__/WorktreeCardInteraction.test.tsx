@@ -257,8 +257,13 @@ describe("WorktreeCard disabled drag handle (issue #8395)", () => {
     expect(cardSource).not.toContain('aria-label="Manual reorder paused while filter is active"');
   });
 
-  it("shows the disabled explanation in a TooltipContent", () => {
-    expect(cardSource).toContain("Manual reorder paused while filter is active");
+  it("shows the caller's disabled reason in the grip's TooltipContent", () => {
+    // Only search and group-by-type disable reorder; status filters do not, so
+    // a generic "filter is active" line was wrong under exactly those filters.
+    expect(cardSource).not.toContain("Manual reorder paused while filter is active");
+    expect(cardSource).toMatch(
+      /isDragHandleDisabled\s*\?\s*\(\s*<Tooltip>[\s\S]*?<TooltipContent[^>]*>\s*\{dragDisabledReason\b[\s\S]*?<\/TooltipContent>/
+    );
   });
 
   it("wraps the disabled grip in a Tooltip with TooltipTrigger asChild", () => {
@@ -341,7 +346,7 @@ function selectOverlayClasses(): string {
 
 /** A banner root's class string, anchored on its unique test id. */
 function bannerRootClasses(testId: string): string {
-  const tag = openingTagWith(detailsSource, "div", `data-testid="${testId}"`);
+  const tag = openingTagWith(detailsSource, "Callout", `data-testid="${testId}"`);
   const classes = tag.match(/className="([^"]+)"/)?.[1];
   if (classes === undefined) throw new Error(`no root className for [data-testid="${testId}"]`);
   return classes;
@@ -416,6 +421,16 @@ describe("collapsed alarm reaches the select overlay", () => {
     expect(cardSource).toMatch(/handleSelectFocus[\s\S]{0,200}matches\(":focus-visible"\)/);
     expect(openingTagWith(cardSource, "WorktreeHeader", "isKeyboardFocused=")).toMatch(
       /isKeyboardFocused=\{isSelectFocusVisible\}/
+    );
+  });
+});
+
+describe("WorktreeCard Shift+click text selection (issue #12926)", () => {
+  // Chromium extends the page selection on Shift+mousedown, before the card's
+  // click handler sees the modifier, so the guard has to sit on mousedown.
+  it("cancels Shift+mousedown on the multi-select card root", () => {
+    expect(cardSource).toMatch(
+      /onMouseDown=\{isMultiSelectEnabled \? suppressShiftClickTextSelection : undefined\}\s*onClick=\{handleCardClick\}/
     );
   });
 });

@@ -47,9 +47,10 @@ export function _resetForgeProviderMetaCacheForTest(): void {
 /**
  * Subscribes to main-process forge token-health pushes (providerId-keyed) and
  * writes the unhealthy flag plus the full provider-reported snapshot to the
- * provider-keyed health store. The renderer surfaces the state via
- * `<ForgeTokenBanner />`, which is a persistent inline banner — toasts were a
- * poor fit for state that persists until the user reconnects.
+ * provider-keyed health store. This is the background probe: it feeds the
+ * inbox record below and the health reads (Review Hub, worktree actions), but
+ * never the forge pill's token callout, which only a failed request for the
+ * current project raises (#12831).
  */
 export function useForgeTokenHealth(): void {
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
@@ -92,9 +93,9 @@ export function useForgeTokenHealth(): void {
       if (isUnhealthy && !wasUnhealthy && !inboxedRef.current.has(id)) {
         inboxedRef.current.add(id);
         // Inbox-only signal (priority "low" → no toast) for an expired token.
-        // The persistent `<ForgeTokenBanner />` and toolbar indicator are the
-        // primary surfaces; this row gives keyboard/screen-reader users a
-        // durable record without the intrusive toast that used to fire here.
+        // The forge pill's dimmed state and callout are the primary surfaces;
+        // this row gives keyboard/screen-reader users a durable record without
+        // the intrusive toast that used to fire here.
         // Shares `supersedeKey` with the recovery row below so the recovery
         // archives it — one active row per token-expiry event.
         // No `correlationId`: it would only thread this row so that a second

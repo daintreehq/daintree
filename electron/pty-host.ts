@@ -213,7 +213,7 @@ let initialPoolWarmDeferred = false;
 
 // Zero-copy ring buffers for terminal I/O (set via init-buffers message)
 // Visual buffers: consumed by renderer (xterm.js) - critical path, sharded for isolation
-// Analysis buffer: consumed by Web Worker - best-effort, can drop frames
+// Analysis buffer: best-effort, can drop frames; no renderer consumer since #12886
 let visualBuffers: SharedRingBuffer[] = [];
 let visualSignalView: Int32Array | null = null;
 let analysisBuffer: SharedRingBuffer | null = null;
@@ -899,7 +899,7 @@ function toStringForIpc(data: string | Uint8Array): string {
 }
 
 // Wire up PtyManager events
-ptyManager.on("data", (id: string, data: string | Uint8Array) => {
+ptyManager.on("data", (id: string, data: string | Uint8Array, _routing, streamEnd) => {
   // Throughput-rate gauge accumulation — raw PTY byte/packet counts before
   // any path routing, suspension gating, or chunk wrapping. Gated so the hot
   // path is untouched when metrics are disabled (the default).
@@ -1009,7 +1009,11 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
         // never written for an engaged terminal, so nothing double-delivers.
         const workerConn = terminalWorkerConnections.get(windowId)?.get(id);
         const sink = workerConn?.engaged ? workerConn : conn;
-        if (sink.batcher.write(id, chunk, byteCount, owned, interactive, recentInput)) {
+        const accepted =
+          streamEnd === undefined
+            ? sink.batcher.write(id, chunk, byteCount, owned, interactive, recentInput)
+            : sink.batcher.write(id, chunk, byteCount, owned, interactive, recentInput, streamEnd);
+        if (accepted) {
           visualWritten = true;
           // Identified by the view Main brokered the port to, not by window:
           // the window's holder can change between here and Main routing the
@@ -1312,8 +1316,8 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
       // whenever no port-less view forced the fallback open.
       sendEvent(
         portDeliveredWebContentsIds.length > 0
-          ? { type: "data", id, data: dataString, portDeliveredWebContentsIds }
-          : { type: "data", id, data: dataString }
+          ? { type: "data", id, data: dataString, portDeliveredWebContentsIds, streamEnd }
+          : { type: "data", id, data: dataString, streamEnd }
       );
       ipcDataEmitted = true;
 
@@ -1515,6 +1519,25 @@ events.on("agent:state-transition-dropped", (payload) => {
       timestamp: payload.timestamp,
     });
   }
+});
+
+events.on("agent:handback-observed", (payload) => {
+  sendEvent({
+    type: "agent-handback-observed",
+    terminalId: payload.terminalId,
+    handback: payload.handback,
+    ...(payload.code !== undefined ? { code: payload.code } : {}),
+    timestamp: payload.timestamp,
+  });
+});
+
+events.on("agent:rate-limit-observed", (payload) => {
+  sendEvent({
+    type: "agent-rate-limit-observed",
+    terminalId: payload.terminalId,
+    observedAt: payload.observedAt,
+    timestamp: payload.timestamp,
+  });
 });
 
 events.on("agent:detected", (payload) => {

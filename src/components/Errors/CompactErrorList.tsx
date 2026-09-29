@@ -213,12 +213,13 @@ function ErrorOverflow({
             // boundary the card's own overlay controls draw.
             onClick={(e) => e.stopPropagation()}
             // Past the glyph column, so the count reads as part of the list above.
-            className="ml-3.5 text-xs"
+            className="ml-3.5"
           >
             {errors.length} more {errors.length === 1 ? "error" : "errors"}
             <ChevronDown
+              data-animated-chevron
               aria-hidden="true"
-              className={cn("transition-transform duration-150", open && "rotate-180")}
+              className={cn("transition-transform duration-150 ease-out", open && "rotate-180")}
             />
           </Button>
         </PopoverTrigger>
@@ -226,8 +227,6 @@ function ErrorOverflow({
           ref={contentRef}
           align="start"
           alignOffset={frame?.offset}
-          sideOffset={2}
-          collisionPadding={8}
           aria-label="More errors"
           // Radix focuses the first tabbable on open, which for a clamped
           // message is the message itself — and focus opens its tooltip over

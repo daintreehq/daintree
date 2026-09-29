@@ -431,13 +431,13 @@ describe("HelpSessionController — subscribe / getSnapshot", () => {
 
     // Simulate a tier-mismatch event firing
     const fire = tierListeners[0]!;
-    fire({ sessionId: "s1", toolId: "t1", tier: "workbench", targetTier: "action" });
+    fire({ sessionId: "s1", toolId: "t1", tier: "core", targetTier: "full" });
     expect(listener).toHaveBeenCalled();
     expect(ctrl.getSnapshot().tierMismatch).toEqual({
       sessionId: "s1",
       toolId: "t1",
-      tier: "workbench",
-      targetTier: "action",
+      tier: "core",
+      targetTier: "full",
       projectId: null,
     });
 

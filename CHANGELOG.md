@@ -1,5 +1,122 @@
 # Changelog
 
+## [0.39.0] - 2026-09-29
+
+A second design pass takes buttons, fields, menus, tabs, dialogs, focus rings and motion down to one family each, and first opens of palettes, dialogs and settings now land in the opening frame. Project plugins can run as full applications with their own database and agent tools, and the assistant can hand work to other agents and get their replies back over a slimmer two-tier MCP surface.
+
+### Breaking Changes
+
+- The MCP workbench/action/system tiers are replaced by two tool sets: Core (27 orchestration tools, the default) and Full (Core plus 49 more). Git and forge writes, file reads, UI navigation and screenshot capture are no longer exposed over MCP, and stored tiers map to the nearest set (#12839)
+
+### Features
+
+**Agents and worktrees**
+
+- The new worktree dialog can start an agent with a first prompt once setup is ready, and remembers the choice per project (#12823)
+- New worktrees copy gitignored local files such as `.env` and certificates listed in a `.worktreeinclude` file (#12817)
+- A per-terminal Scratchpad: a docked Markdown notepad beside the pane, toggled from its header and cleared when the terminal closes for good (#12836, #12933, #12945)
+- Diff lines, ranges and files take notes with stale detection, and "Send notes" pastes them into an agent terminal (#12818)
+- Settings › Agents shows the Codex account quota, and agent headers show a "Rate limit seen" chip when a pane's output matches a rate limit (#12821)
+- The subagent chip shows which children are blocked or failed and sorts them first (#12908)
+- The base branch picker names the worktree that already holds a branch (#12978)
+- The dictation shortcut stops dictation from anywhere and moves to `Cmd+.` (`Ctrl+.` on Windows, `Ctrl+Alt+.` on Linux) (#12833)
+- An agent preset can be made the default from the keyboard (#12961)
+
+**Daintree Assistant and MCP**
+
+- The assistant launches and drives other agents over MCP and gets their replies back: agents end with a `DAINTREE-DONE` marker, and the reply is typed into the caller's pane or returned from the wait (#12839, #12847)
+- New batch tools `agent.launchMany`, `terminal.sendCommandMany` and `terminal.closeMany`, and `terminal.sendKeys` gains `choose` (#12839)
+- The Daintree Assistant backend is retired; sessions start on the CLI's own default model unless one is picked from the list, and the choice is kept per agent (#12824, #12877)
+- First run of the assistant panel asks which agent runs it when more than one is installed (#12839)
+- A "Daintree confirmations" setting lets assistant sessions follow Skip permission prompts or always ask, and a project's existing skip-confirm opt-in carries across the upgrade (#12889, #12890)
+- The help assistant opens the redacting Diagnostics Review instead of zipping raw logs, reads the last message of panes in its view, and asks before closing panels it didn't open (#12895, #12899, #12901)
+
+**Plugins**
+
+- Project plugins can work as full applications: a SQLite database declared in `contributes.databases` (`host.db`) with "Back up data…", panel menu actions, drag-to-agent hand-off, required settings, a richer `host.fs` and PDF rendering (#12842)
+- Each plugin gets one named MCP server with a single Off / Read only / Read and write access setting and read-only `database_schema` and `database_query` tools for declared databases; enabling it warns that an installed plugin's database spans every project (#12849, #12868, #12873)
+- `agentMcp` tools can declare destructive, idempotent and open-world hints, and the per-endpoint cap rises from 8 to 16 (#12875, #12924)
+
+**Review Hub, diff and forge**
+
+- The PR checks popover opens on a pass/fail summary with failures first (#12905)
+- The commit composer lists blockers inline and reports push progress plainly (#12907)
+- Conflict rows lead with Open and Mark resolved, which re-checks the file for leftover markers before staging (#12909)
+- The compare worktrees dialog labels its pickers and groups files by directory (#12910)
+- The image diff viewer compares both versions at one scale with a keyboard-operable divider (#12921)
+- The forge token banner becomes a callout on the issues pill, shown only when a stored token is invalid, under-scoped or SSO-blocked (#12834)
+- The issues, PRs and commits dropdowns share one layout with distinct offline, bad-token and error states (#12952)
+
+**Worktree cleanup**
+
+- Deleted-worktree rows show each terminal's agent state and cleanup countdown, and open a session in one click (#12917)
+- The bulk remove confirm groups worktrees by outcome and re-reads the batch before it runs (#12918)
+
+**Design system**
+
+- Buttons, text fields, selects, checkboxes, segmented controls, tabs, menus, badges and chips each have one shared design, with one highlighted-row style and one focus ring across the app (#12929, #12934–#12944, #12949)
+- Every icon button explains itself with the shared tooltip, and every keyboard shortcut is drawn as the user's live binding (#12928, #12939)
+- Dialogs share one footer and close control, Enter submits single-line forms, and previously unguarded destructive actions confirm or offer Undo (#12932)
+- Pane loading, empty and error states, validation errors and callouts look the same everywhere (#12943, #12947)
+- Surfaces of the same kind open and close with the same motion, and "Reduce UI animations" now covers dialogs, palettes, menus, toasts and plugin views (#12958)
+- Context and dropdown menu rows carry one icon per concept (#12953)
+- Worktree palette and keyboard shortcut search highlights why a row matched (#12971)
+- The Bondi Beach theme is refined for contrast (#12950)
+
+**Diagnostics, settings and panels**
+
+- Diagnostics review shows a match count per redaction rule, marks each replacement in the preview, and adds a "Since updating to {version}" log window (#12892, #12915)
+- The Import .env dialog masks secret-looking values (#12919)
+- The CLI agents, Code forge and project Plugins pages share one subject switcher, and project plugin failures show on their row with Retry (#12920, #12923, #12925)
+- Dev Preview setup, empty and error states each offer one primary action and show the full command (#12912)
+
+### Bug Fixes
+
+**Terminals**
+
+- Dropped and pasted images attach for Claude and Codex panes (#12813)
+- A project's first terminal no longer opens blank when the pooled shell sits on a blocking prompt (#12756)
+- Panes that lose sync with the host recover from its snapshot instead of staying blank (#12760)
+- Restore no longer prints half-received escape sequences as text (#12814)
+- Claude presets no longer pre-fill `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, which turned off Claude Code's Monitor tool, push notifications and connectors (#12826)
+- A clean exit reads as neutral in the terminal header (#12967)
+
+**Worktrees**
+
+- Deleting a worktree is refused while another worktree is nested inside it (#12811)
+- Automatic `git worktree prune` no longer destroys absorbed submodule stores (#12812)
+- Shift+click multi-select on worktree cards no longer throws (#12927)
+- Saving a forge token no longer toasts "Refresh failed" (#12762)
+
+**Stability and recovery**
+
+- After a single crash, recovery restores the full window set, and renderer deaths no longer count as fatal crashes (#12819, #12900)
+- Waiting-agent alerts are no longer swallowed while the screen is locked or idle (#12808)
+- System sleep is no longer reported as event-loop lag (#12896)
+- Pinned assistant views no longer crowd projects out of the view cache (#12897)
+- Every child-process death is logged, and diagnostics bundles include crash records and pty-host logs (#12956, #12959)
+- Oversized-changeset warnings no longer flood `daintree.log` (#12805)
+
+**Interface**
+
+- The toast options menu no longer opens under its toast, and the severity edge renders (#12906)
+- F2 renames a focused tab, settings search opens the first result on Enter, Escape in the browser address bar reverts before focusing the page, and terminal font size applies on each step (#12963, #12964, #12965, #12970, #12973)
+- Copying a path or branch confirms with a toast, with Retry on failure (#12960, #12966)
+- The sidebar refresh button spins while any refresh runs (#12972)
+- The Daintree Tour narrates and draws each platform's own shortcuts (#12763)
+
+### Performance
+
+- First opens of palettes, dialogs, dropdowns and settings tabs drop from about 300 ms to 15–80 ms (#12841)
+- Terminals release rendering resources while the window is hidden (#12810)
+- Restored windows come back one at a time, so the visible one isn't competing (#12807)
+- On macOS, memory reclaim responds to the kernel's memory-pressure level (#12815)
+- Tour narration stays out of the startup bundle (#12758)
+
+### Other Changes
+
+- Celebratory milestone toasts and checklist confetti are removed (#12840)
+
 ## [0.38.0] - 2026-09-25
 
 A release-long design pass, judged against real rendered captures: every settings page is rebuilt on one layout grammar, and palettes, search fields, banners, dialogs and destructive confirms each become one family that says what is true. Opening a project across windows gets one set of rules: one live view per project, and external opens never replace an occupied window. The Daintree Tour ships as a narrated walkthrough of the app.

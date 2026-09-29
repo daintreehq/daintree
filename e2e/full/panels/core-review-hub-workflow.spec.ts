@@ -157,22 +157,22 @@ test.describe.serial("Core: Review Hub Workflow", () => {
     const diffModeGroup = window.locator(SEL.reviewHub.diffMode);
     await expect(diffModeGroup).toBeVisible({ timeout: T_SHORT });
 
-    // "Working tree" button is pressed initially.
-    const workingTreeBtn = diffModeGroup.locator("button", { hasText: "Working tree" });
-    await expect(workingTreeBtn).toHaveAttribute("aria-pressed", "true", { timeout: T_SHORT });
+    // "Working tree" segment is checked initially.
+    const workingTreeBtn = diffModeGroup.getByRole("radio", { name: "Working tree" });
+    await expect(workingTreeBtn).toHaveAttribute("aria-checked", "true", { timeout: T_SHORT });
 
     // This fixture is opened on its main worktree, so the current branch IS the
     // base branch — you can't diff a branch against itself. The "vs <branch>"
     // button must be present but disabled, and clicking it must NOT switch modes.
-    const baseBranchBtn = diffModeGroup.locator("button", { hasText: /^vs / });
+    const baseBranchBtn = diffModeGroup.getByRole("radio", { name: /^vs / });
     await expect(baseBranchBtn).toBeVisible({ timeout: T_SHORT });
     await expect(baseBranchBtn).toBeDisabled({ timeout: T_SHORT });
-    await expect(baseBranchBtn).toHaveAttribute("aria-pressed", "false", { timeout: T_SHORT });
+    await expect(baseBranchBtn).toHaveAttribute("aria-checked", "false", { timeout: T_SHORT });
 
     // A force-click on the disabled control is inert: working-tree mode stays
     // active and the clean state stays visible.
     await baseBranchBtn.click({ force: true });
-    await expect(workingTreeBtn).toHaveAttribute("aria-pressed", "true", { timeout: T_SHORT });
+    await expect(workingTreeBtn).toHaveAttribute("aria-checked", "true", { timeout: T_SHORT });
 
     const hub = window.locator(SEL.reviewHub.container);
     await expect(hub.locator(SEL.reviewHub.cleanState)).toBeVisible({ timeout: T_MEDIUM });

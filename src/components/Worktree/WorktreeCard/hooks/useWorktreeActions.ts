@@ -7,6 +7,7 @@ import { useRecipeStore } from "@/store/recipeStore";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 export type ConfirmDialogState =
   | { isOpen: false }
@@ -180,7 +181,7 @@ export function useWorktreeActions({
       createElement(
         "span",
         {
-          className: "text-2xs font-semibold uppercase tracking-wider text-text-secondary",
+          className: SECTION_LABEL_CLASS,
         },
         hasCommands ? "Commands that will run" : "Teardown commands"
       ),

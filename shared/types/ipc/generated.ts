@@ -166,9 +166,17 @@ export interface GeneratedIpcInvokeMap {
     args: [__0: { terminalId: string }];
     result: import("./agentSubagents.js").AgentSubagentsResult;
   };
+  "codex:read-quota": {
+    args: [];
+    result: import("./agentQuota.js").CodexQuotaResult;
+  };
   "codex:read-subagent-transcript": {
     args: [__0: { terminalId: string; subagentId: string }];
     result: import("./agentSubagents.js").AgentSubagentTranscriptResult;
+  };
+  "codex:refresh-quota": {
+    args: [];
+    result: import("./agentQuota.js").CodexQuotaResult;
   };
   "codex:resolve-resume-latest-session": {
     args: [__0: { cwd: string }];
@@ -926,13 +934,9 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./mcpServer.js").McpLogRecord[];
   };
-  "mcp-server:get-pane-wake-enabled": {
-    args: [];
-    result: boolean;
-  };
-  "mcp-server:get-pane-watch-state": {
+  "mcp-server:get-pane-notify-state": {
     args: [terminalId: string];
-    result: import("../terminalWatch.js").PaneWatchState | null;
+    result: import("../terminalNotify.js").PaneNotifyState | null;
   };
   "mcp-server:get-runtime-state": {
     args: [];
@@ -1013,19 +1017,15 @@ export interface GeneratedIpcInvokeMap {
     args: [enabled: boolean];
     result: import("./mcpServer.js").McpServerStatusSnapshot;
   };
-  "mcp-server:set-pane-wake-enabled": {
-    args: [enabled: boolean];
-    result: boolean;
-  };
   "mcp-server:set-port": {
     args: [port: number | null];
     result: import("./mcpServer.js").McpServerStatusSnapshot;
   };
   "mcp-server:set-session-tier": {
-    args: [payload: { sessionId: string; tier: "action" | "workbench" | "system" }];
-    result: { sessionId: string; tier: "action" | "workbench" | "system" };
+    args: [payload: { sessionId: string; tier: import("./maps.js").HelpAssistantTier }];
+    result: { sessionId: string; tier: import("./maps.js").HelpAssistantTier };
   };
-  "mcp-server:stop-pane-watches": {
+  "mcp-server:stop-pane-notices": {
     args: [terminalId: string];
     result: void;
   };
@@ -1037,14 +1037,6 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../menu.js").ShowContextMenuPayload];
     result: string | null;
   };
-  "milestones:get": {
-    args: [];
-    result: Record<string, boolean>;
-  };
-  "milestones:mark-shown": {
-    args: [milestoneId: string];
-    result: void;
-  };
   "onboarding:checklist-dismiss": {
     args: [];
     result: void;
@@ -1052,10 +1044,6 @@ export interface GeneratedIpcInvokeMap {
   "onboarding:checklist-get": {
     args: [];
     result: import("./maps.js").ChecklistState;
-  };
-  "onboarding:checklist-mark-celebration-shown": {
-    args: [];
-    result: void;
   };
   "onboarding:checklist-mark-item": {
     args: [item: import("./maps.js").ChecklistItemId];
@@ -1102,15 +1090,15 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "onboarding:tour-dismiss-invite": {
-    args: [];
+    args: [tourId: string];
     result: import("./maps.js").TourOnboardingState;
   };
   "onboarding:tour-set-muted": {
     args: [muted: boolean];
-    result: import("./maps.js").TourOnboardingState;
+    result: boolean;
   };
   "onboarding:tour-set-progress": {
-    args: [update: import("./maps.js").TourProgressUpdate];
+    args: [tourId: string, update: import("./maps.js").TourProgressUpdate];
     result: import("./maps.js").TourOnboardingState;
   };
   "os-dnd:get-state": {
@@ -1138,12 +1126,18 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
-  "plugin-agent-mcp:list-project-endpoints": {
+  "plugin-agent-mcp:list-project-plugins": {
     args: [];
     result: import("./pluginAgentMcp.js").ProjectAgentToolsSnapshot;
   };
-  "plugin-agent-mcp:set-project-endpoint-enabled": {
-    args: [payload: { pluginInstanceId: string; endpointId: string; enabled: boolean }];
+  "plugin-agent-mcp:set-plugin-access": {
+    args: [
+      payload: {
+        pluginInstanceId: string;
+        access: "off" | "read-only" | "read-write" | null;
+        scope: "project" | "all-projects";
+      },
+    ];
     result: import("./pluginAgentMcp.js").ProjectAgentToolsSnapshot;
   };
   "plugin-capability:acknowledge-consent": {
@@ -1213,6 +1207,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin:agents-get": {
     args: [];
     result: Record<string, import("../../config/agentRegistry.js").AgentConfig>;
+  };
+  "plugin:backup-databases": {
+    args: [pluginId: string];
+    result: import("./pluginDataBackup.js").PluginDataBackupOutcome;
   };
   "plugin:bg-update-check-latest": {
     args: [];
@@ -1403,6 +1401,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("../plugin.js").PluginSettingsUiValues;
   };
+  "plugin:settings-required-status": {
+    args: [pluginId: string, projectId: string | null];
+    result: import("../plugin.js").PluginRequiredSettingsStatus;
+  };
   "plugin:settings-reveal-secret": {
     args: [
       pluginId: string,
@@ -1425,6 +1427,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin:toolbar-buttons": {
     args: [];
     result: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
+  };
+  "plugin:tours-get": {
+    args: [];
+    result: import("../plugin.js").PluginTourDescriptor[];
   };
   "plugin:uninstall": {
     args: [pluginId: string, deleteSettings?: boolean | undefined];
@@ -1480,10 +1486,6 @@ export interface GeneratedIpcInvokeMap {
   };
   "portal:show": {
     args: [payload: import("../portal.js").PortalShowPayload];
-    result: void;
-  };
-  "portal:show-new-tab-menu": {
-    args: [payload: import("../portal.js").PortalShowNewTabMenuPayload];
     result: void;
   };
   "privacy:clear-cache": {
@@ -1882,10 +1884,6 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./terminal.js").BackendTerminalInfo[];
   };
-  "terminal:get-analysis-buffer": {
-    args: [];
-    result: SharedArrayBuffer | null;
-  };
   "terminal:get-available": {
     args: [];
     result: import("./terminal.js").BackendTerminalInfo[];
@@ -2026,6 +2024,7 @@ export interface GeneratedIpcInvokeMap {
       text: string,
       submissionToken?: string | undefined,
       handbackCode?: string | undefined,
+      imagePaths?: string[] | undefined,
     ];
     result: void;
   };

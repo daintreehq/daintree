@@ -4,7 +4,7 @@ import { logError } from "@/utils/logger";
 
 const DISCONNECTED: HelpSessionLiveStatus = {
   connected: false,
-  tier: "workbench",
+  tier: "core",
   activeGrants: [],
 };
 

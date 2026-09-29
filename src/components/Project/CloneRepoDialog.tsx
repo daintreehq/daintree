@@ -1,5 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
+import { InlineError } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
+import { cn } from "@/lib/utils";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Check, CircleSlash, FolderOpen, LogIn } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
@@ -36,6 +39,7 @@ import type { ProjectCreationIdentity } from "@shared/types";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { isClientGitError } from "@/utils/clientGitError";
 import { isClientAppError } from "@/utils/clientAppError";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 interface CloneError {
   message: string;
@@ -487,9 +491,8 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     // Enter acts as Retry too — startClone resets `error` internally, so this
     // matches the on-screen Retry button instead of going dead after a failure.
-    // Enter that confirms an IME candidate is composition, not submission.
-    if (e.nativeEvent.isComposing) return;
-    if (e.key === "Enter" && canClone && !isCloning && !isComplete) {
+    if (!isEnterToSubmit(e)) return;
+    if (canClone && !isCloning && !isComplete) {
       e.preventDefault();
       void startClone();
     }
@@ -535,23 +538,22 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   // What pressing Clone will do, said once — or, until it can, the first thing
   // still in the way. Blockers are checked before the summary so a path from an
   // earlier valid state never stands in for why Clone went dark.
-  const outcomeHint =
-    urlProblem !== null ? (
-      <span id={urlProblemId} className="truncate">
-        {urlProblem}
-      </span>
-    ) : parentPath.trim() === "" ? (
-      <span className="truncate">Choose a location to continue</span>
-    ) : folderNameError !== null ? (
-      <span className="truncate">Fix the folder name to continue</span>
-    ) : destinationPath === null ? (
-      <span className="truncate">Name the folder to continue</span>
-    ) : (
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className="shrink-0">Clones into</span>
-        <PathCaption path={destinationPath} className="min-w-0 text-text-primary" />
-      </span>
-    );
+  const outcomeHint = urlIsInvalid ? (
+    <span className="truncate">Fix the repository URL to continue</span>
+  ) : urlProblem !== null ? (
+    <span className="truncate">{urlProblem}</span>
+  ) : parentPath.trim() === "" ? (
+    <span className="truncate">Choose a location to continue</span>
+  ) : folderNameError !== null ? (
+    <span className="truncate">Fix the folder name to continue</span>
+  ) : destinationPath === null ? (
+    <span className="truncate">Name the folder to continue</span>
+  ) : (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <span className="shrink-0">Clones into</span>
+      <PathCaption path={destinationPath} className="min-w-0 text-text-primary" />
+    </span>
+  );
 
   const summary =
     destinationPath !== null ? (
@@ -607,13 +609,13 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       dismissible={!isCloning && !canFinalize}
       initialFocus="none"
     >
-      <AppDialog.Header className="py-3">
+      <AppDialog.Header>
         {/* Neutral, not accent: the header glyph is decoration, and this focus
             region's one load-bearing accent is the keyboard focus ring. */}
         <AppDialog.Title icon={<FolderGit2 className="h-4 w-4 text-text-secondary" />}>
           Clone repository
         </AppDialog.Title>
-        {!isCloning && !canFinalize && <AppDialog.CloseButton />}
+        <AppDialog.CloseButton />
       </AppDialog.Header>
 
       <AppDialog.Body className="space-y-5">
@@ -688,7 +690,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               >
                 {currentStage && (
                   <div
-                    className="h-full rounded-full bg-daintree-text/60 transition-[width] duration-150 ease-out"
+                    className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
                     style={{ width: `${stagePercent(currentStage)}%` }}
                   />
                 )}
@@ -767,26 +769,31 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                   label="URL"
                   htmlFor="clone-repo-url"
                   hint={
-                    <div className="flex min-w-0 items-center gap-1.5 text-xs">
-                      <Checkbox
-                        id="clone-shallow"
-                        checked={shallowClone}
-                        onCheckedChange={(checked) => setShallowClone(checked === true)}
-                        disabled={isCloning}
-                        aria-describedby={shallowHintId}
-                      />
-                      <label
-                        htmlFor="clone-shallow"
-                        className="ml-0.5 cursor-pointer text-text-secondary hover:text-text-primary"
-                      >
-                        Shallow clone
-                      </label>
-                      <span aria-hidden="true" className="text-text-secondary">
-                        ·
-                      </span>
-                      <span id={shallowHintId} className="truncate text-text-secondary">
-                        Latest commit only, limits history
-                      </span>
+                    <div className="flex flex-col gap-2">
+                      {urlIsInvalid && urlProblem !== null && (
+                        <InlineError id={urlProblemId}>{urlProblem}</InlineError>
+                      )}
+                      <div className="flex min-w-0 items-center gap-1.5 text-xs">
+                        <Checkbox
+                          id="clone-shallow"
+                          checked={shallowClone}
+                          onCheckedChange={(checked) => setShallowClone(checked === true)}
+                          disabled={isCloning}
+                          aria-describedby={shallowHintId}
+                        />
+                        <label
+                          htmlFor="clone-shallow"
+                          className="ml-0.5 cursor-pointer text-text-secondary hover:text-text-primary"
+                        >
+                          Shallow clone
+                        </label>
+                        <span aria-hidden="true" className="text-text-secondary">
+                          ·
+                        </span>
+                        <span id={shallowHintId} className="truncate text-text-secondary">
+                          Latest commit only, limits history
+                        </span>
+                      </div>
                     </div>
                   }
                 >
@@ -815,6 +822,10 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                     id="clone-parent-dir"
                     value={parentPath}
                     onBrowse={() => void pickDirectory()}
+                    // Enter here answers like the dialog's other fields do.
+                    onEnter={() => {
+                      if (canClone && !isCloning && !isComplete) void startClone();
+                    }}
                     disabled={isCloning}
                     browseLabel="Browse for a location"
                   />
@@ -824,9 +835,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                   htmlFor="clone-folder-name"
                   hint={
                     folderNameError && (
-                      <p id={folderNameErrorId} className="text-xs text-status-error">
-                        {folderNameError}
-                      </p>
+                      <InlineError id={folderNameErrorId}>{folderNameError}</InlineError>
                     )
                   }
                 >
@@ -879,38 +888,39 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
           </Button>
         ) : mode === "running" ? (
           <Button ref={footerActionRef} variant="outline" onClick={stopClone} loading={isStopping}>
-            {isStopping ? "Stopping…" : "Stop clone"}
+            Stop clone
           </Button>
         ) : error ? (
           <div className="flex shrink-0 items-center gap-3">
-            <Button variant="ghost" size="sm" onClick={onCancel}>
+            <Button variant="ghost" onClick={onCancel}>
               Close
             </Button>
             <Button
               ref={footerActionRef}
               variant="contrast"
-              size="sm"
-              onClick={() => void startClone()}
-              disabled={isCloning || !canClone}
+              onClick={() => {
+                if (isCloning || !canClone) return;
+                void startClone();
+              }}
+              aria-disabled={isCloning || !canClone || undefined}
+              className={cn((isCloning || !canClone) && ARIA_DISABLED_CLASSES)}
             >
               Retry
             </Button>
           </div>
         ) : (
           <div className="flex shrink-0 items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={isCloning ? stopClone : onCancel}
-              loading={isStopping}
-            >
-              {isCloning ? (isStopping ? "Stopping…" : "Stop clone") : "Cancel"}
+            <Button variant="ghost" onClick={isCloning ? stopClone : onCancel} loading={isStopping}>
+              {isCloning ? "Stop clone" : "Cancel"}
             </Button>
             <Button
               variant="contrast"
-              size="sm"
-              onClick={() => void startClone()}
-              disabled={!canClone}
+              onClick={() => {
+                if (!canClone) return;
+                void startClone();
+              }}
+              aria-disabled={!canClone || undefined}
+              className={cn(!canClone && ARIA_DISABLED_CLASSES)}
               loading={isCloning}
               aria-keyshortcuts="Enter"
             >

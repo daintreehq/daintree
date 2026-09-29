@@ -1,9 +1,10 @@
 import * as React from "react";
 import type * as ContextMenuPrimitiveType from "@radix-ui/react-context-menu";
-import { Slot } from "@radix-ui/react-slot";
+import { Slot, Slottable } from "@radix-ui/react-slot";
 import { Check, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { OVERLAY_MOTION_CLASS } from "./overlayMotion";
+import { BrandSurfaceReset } from "@/components/icons/BrandSurface";
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
@@ -15,8 +16,10 @@ import {
   useOverlayFocusRestoreValue,
 } from "./overlay-focus-restore";
 import { actionService } from "@/services/ActionService";
-import { useAriaKeyshortcuts } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks";
+import { KbdChord } from "./Kbd";
 import type { ActionId, ActionDispatchOptions } from "@shared/types/actions";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 type ContextMenuRootProps = React.ComponentProps<typeof ContextMenuPrimitiveType.Root>;
 
@@ -193,7 +196,7 @@ const ContextMenuSubTrigger = React.forwardRef<
     <SubTrigger
       ref={ref}
       className={cn(
-        "flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[state=open]:bg-overlay-raised",
+        "flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors duration-150 ease-out data-[highlighted]:bg-overlay-highlight focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[state=open]:bg-overlay-highlight",
         inset && "pl-8",
         className
       )}
@@ -223,25 +226,30 @@ const ContextMenuSubContent = React.forwardRef<
   const SubContent = radix.ContextMenuPrimitive.SubContent;
   return (
     <Portal>
-      <SubContent
-        ref={shadowRef}
-        sideOffset={sideOffset}
-        collisionPadding={collisionPadding}
-        style={{ transformOrigin: "var(--radix-context-menu-content-transform-origin)", ...style }}
-        className={cn(
-          // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
-          "app-no-drag",
-          "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
-          OVERLAY_MOTION_CLASS,
-          className
-        )}
-        {...props}
-        data-dock-popover-child={isDockPopoverChild ? "" : undefined}
-      >
-        {topShadow}
-        {children}
-        {bottomShadow}
-      </SubContent>
+      <BrandSurfaceReset>
+        <SubContent
+          ref={shadowRef}
+          sideOffset={sideOffset}
+          collisionPadding={collisionPadding}
+          style={{
+            transformOrigin: "var(--radix-context-menu-content-transform-origin)",
+            ...style,
+          }}
+          className={cn(
+            // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
+            "app-no-drag",
+            "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
+            OVERLAY_MOTION_CLASS,
+            className
+          )}
+          {...props}
+          data-dock-popover-child={isDockPopoverChild ? "" : undefined}
+        >
+          {topShadow}
+          {children}
+          {bottomShadow}
+        </SubContent>
+      </BrandSurfaceReset>
     </Portal>
   );
 });
@@ -313,47 +321,79 @@ const ContextMenuContent = React.forwardRef<
     const Content = radix.ContextMenuPrimitive.Content;
     return (
       <Portal>
-        <Content
-          ref={shadowRef}
-          collisionPadding={collisionPadding}
-          style={{
-            transformOrigin: "var(--radix-context-menu-content-transform-origin)",
-            ...style,
-          }}
-          className={cn(
-            // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
-            "app-no-drag",
-            "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
-            OVERLAY_MOTION_CLASS,
-            className
-          )}
-          {...props}
-          onPointerDown={handlePointerDown}
-          onPointerDownOutside={handlePointerDownOutside}
-          onInteractOutside={handleInteractOutside}
-          onKeyDown={handleKeyDown}
-          onClick={handleClick}
-          onCloseAutoFocus={handleCloseAutoFocus}
-          data-dock-popover-child={isDockPopoverChild ? "" : undefined}
-        >
-          {topShadow}
-          {children}
-          {bottomShadow}
-        </Content>
+        {/* Context reaches through a portal even though the DOM does not, so a
+            menu opened from the toolbar would otherwise measure its brand marks
+            against the toolbar's surface instead of this floating one. */}
+        <BrandSurfaceReset>
+          <Content
+            ref={shadowRef}
+            collisionPadding={collisionPadding}
+            style={{
+              transformOrigin: "var(--radix-context-menu-content-transform-origin)",
+              ...style,
+            }}
+            className={cn(
+              // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
+              "app-no-drag",
+              "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
+              OVERLAY_MOTION_CLASS,
+              className
+            )}
+            {...props}
+            onPointerDown={handlePointerDown}
+            onPointerDownOutside={handlePointerDownOutside}
+            onInteractOutside={handleInteractOutside}
+            onKeyDown={handleKeyDown}
+            onClick={handleClick}
+            onCloseAutoFocus={handleCloseAutoFocus}
+            data-dock-popover-child={isDockPopoverChild ? "" : undefined}
+          >
+            {topShadow}
+            {children}
+            {bottomShadow}
+          </Content>
+        </BrandSurfaceReset>
       </Portal>
     );
   }
 );
 ContextMenuContent.displayName = "ContextMenuContent";
 
+interface ContextMenuShortcutProps {
+  /** The canonical combo (`"Cmd+Shift+P"`), never a pre-formatted display string. */
+  shortcut: string | null | undefined;
+  className?: string;
+}
+
+/* The trailing key column, drawn by `KbdChord` like every other shortcut in the
+ * app, bare because every row of a menu can carry one. `aria-hidden`: the glyph
+ * run is not part of the item's name (WCAG 2.5.3) — the item carries the keys
+ * as `aria-keyshortcuts` instead. */
+const ContextMenuShortcut = ({ shortcut, className }: ContextMenuShortcutProps) => {
+  if (!shortcut || !shortcut.trim()) return null;
+  return (
+    <span aria-hidden="true" className={cn("ml-auto shrink-0 pl-4", className)}>
+      <KbdChord shortcut={shortcut} density="bare" />
+    </span>
+  );
+};
+ContextMenuShortcut.displayName = "ContextMenuShortcut";
+
 type ContextMenuItemProps = React.ComponentPropsWithoutRef<typeof ContextMenuPrimitiveType.Item> & {
   inset?: boolean;
   destructive?: boolean;
+  /**
+   * The action whose live binding this row shows. Draws it in the trailing key
+   * column and sets `aria-keyshortcuts` from the same combo, so the visible
+   * keys and the announced ones cannot drift apart. Draws nothing when the
+   * action is unbound.
+   */
+  keybinding?: string;
 };
 
-const ContextMenuItem = React.forwardRef<
+const ContextMenuItemBase = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitiveType.Item>,
-  ContextMenuItemProps
+  Omit<ContextMenuItemProps, "keybinding">
 >(({ className, inset, destructive, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
   if (!radix) return null;
@@ -362,7 +402,7 @@ const ContextMenuItem = React.forwardRef<
     <Item
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors duration-150 ease-out data-[highlighted]:bg-overlay-highlight focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         inset && "pl-8",
         destructive &&
           "text-status-danger data-[highlighted]:text-status-danger data-[highlighted]:bg-status-danger/10",
@@ -373,6 +413,37 @@ const ContextMenuItem = React.forwardRef<
     />
   );
 });
+ContextMenuItemBase.displayName = "ContextMenuItemBase";
+
+/* A row that shows an action's binding. Its own component so only rows that
+ * carry one subscribe to keybinding changes. */
+const ContextMenuKeyboundItem = React.forwardRef<
+  React.ElementRef<typeof ContextMenuPrimitiveType.Item>,
+  Omit<ContextMenuItemProps, "keybinding"> & { keybinding: string }
+>(({ keybinding, children, ...props }, ref) => {
+  const combo = useEffectiveCombo(keybinding);
+  const ariaKeyshortcuts = useAriaKeyshortcuts(keybinding);
+  return (
+    <ContextMenuItemBase ref={ref} aria-keyshortcuts={ariaKeyshortcuts} {...props}>
+      {/* Slottable: with `asChild` the child stays the slotted element and the
+          key column is appended inside it, not beside it. */}
+      <Slottable>{children}</Slottable>
+      <ContextMenuShortcut shortcut={combo} />
+    </ContextMenuItemBase>
+  );
+});
+ContextMenuKeyboundItem.displayName = "ContextMenuKeyboundItem";
+
+const ContextMenuItem = React.forwardRef<
+  React.ElementRef<typeof ContextMenuPrimitiveType.Item>,
+  ContextMenuItemProps
+>(({ keybinding, ...props }, ref) =>
+  keybinding ? (
+    <ContextMenuKeyboundItem ref={ref} keybinding={keybinding} {...props} />
+  ) : (
+    <ContextMenuItemBase ref={ref} {...props} />
+  )
+);
 ContextMenuItem.displayName = "ContextMenuItem";
 
 type ContextMenuActionItemProps = ContextMenuItemProps & {
@@ -445,26 +516,12 @@ const ContextMenuLabel = React.forwardRef<
   return (
     <Label
       ref={ref}
-      className={cn(
-        "px-2.5 py-1.5 text-2xs font-bold tracking-wider uppercase text-text-secondary",
-        inset && "pl-8",
-        className
-      )}
+      className={cn(LIST_LABEL_CLASS, "px-2.5 py-1.5", inset && "pl-8", className)}
       {...props}
     />
   );
 });
 ContextMenuLabel.displayName = "ContextMenuLabel";
-
-const ContextMenuShortcut = ({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) => {
-  return (
-    <span
-      className={cn("ml-auto pl-2 text-2xs font-mono text-text-secondary", className)}
-      {...props}
-    />
-  );
-};
-ContextMenuShortcut.displayName = "ContextMenuShortcut";
 
 /* Trailing muted slot for item METADATA — a count, a state, a reason an item is
  * disabled. Deliberately not `ContextMenuShortcut`: a count is not a keybinding,
@@ -498,7 +555,7 @@ const ContextMenuCheckboxItem = React.forwardRef<
     <CheckboxItem
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors duration-150 ease-out data-[highlighted]:bg-overlay-highlight focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}
       checked={checked}
@@ -544,7 +601,7 @@ const ContextMenuRadioItem = React.forwardRef<
     <RadioItem
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors duration-150 ease-out data-[highlighted]:bg-overlay-highlight focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}
       {...props}

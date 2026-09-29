@@ -17,7 +17,7 @@ export const ForgeListViewSchema = z
   .enum(["summary", "full"])
   .optional()
   .describe(
-    "Row detail: 'summary' (default) drops each row's body and raw provider payload, keeping the fields needed to choose an item; 'full' returns the complete provider object."
+    "'summary' (default) drops each row's body and raw payload; 'full' returns the whole provider object."
   );
 
 export type ForgeListView = "summary" | "full";

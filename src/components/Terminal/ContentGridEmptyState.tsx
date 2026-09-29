@@ -41,12 +41,11 @@ const SECTION_ENTRY_MARKER = "launcher-section-enter";
 // runs its own entry then. A project switch re-enters nothing, which is why the
 // reveal below has to replay these by hand.
 //
-// Two suppressors, both needed, exactly as `ContentFadeIn` does it:
-// `motion-safe:` covers the OS preference, and the `launcher-section-enter`
-// marker registers these sections with the reduce-motion block in `index.css`,
-// which is what honours Daintree's own reduce-animations toggle — a `body`
-// attribute no Tailwind variant can reach from here. Performance mode is
-// already killed globally.
+// Two suppressors: `motion-safe:` (the OS preference and the in-app toggle,
+// through the app-aware variant in `design-contract.css`) keeps the keyframes
+// off, and the `launcher-section-enter` marker's reduce-motion rule in
+// `index.css` clears the opacity the stagger's `fill-mode-backwards` would
+// otherwise hold. Performance mode is already killed globally.
 //
 // The duration is the shared entry tier (`--duration-200`), fed to the
 // animation's own slot rather than via `duration-200`. That utility would also
@@ -82,9 +81,9 @@ const SECTION_ENTRY_DELAY_5 =
 const SECTION_ENTRY_DELAY_6 =
   "motion-safe:[--tw-animation-delay:180ms] motion-safe:fill-mode-backwards";
 
-// Both of the entry's suppressors are CSS-only — `motion-safe:` reads the OS
-// preference and the `launcher-section-enter` rule reads the in-app toggle — so
-// neither can stop a replay driven from JS. Restating the same triple check
+// Both of the entry's suppressors are CSS-only — `motion-safe:` and the
+// `launcher-section-enter` rule each read both preferences — so neither can stop
+// a replay driven from JS. Restating the same triple check
 // `triggerPanelTransition` makes keeps the replay from restarting animations
 // those rules have already flattened to nothing.
 function isMotionSuppressed(): boolean {
@@ -357,7 +356,7 @@ export function ContentGridEmptyState({
                         <button
                           type="button"
                           onClick={handleOpenProjectSettings}
-                          className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2 shrink-0 rounded-full p-1 text-text-secondary opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-text-primary group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+                          className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2 shrink-0 rounded-full p-1 text-text-secondary opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-text-primary group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                           aria-label="Project settings"
                         >
                           <Settings className="h-3.5 w-3.5" />
@@ -403,7 +402,7 @@ export function ContentGridEmptyState({
                   title="Worktree deleted"
                   description="Its leftover terminals stay in the sidebar row until they close — drag them to another worktree to keep them"
                   action={
-                    <Button variant="outline" size="sm" onClick={handleGoToMainWorktree}>
+                    <Button variant="contrast" size="sm" onClick={handleGoToMainWorktree}>
                       Go to main worktree
                     </Button>
                   }
@@ -430,7 +429,7 @@ export function ContentGridEmptyState({
                 description="Worktrees let you work on multiple tasks in isolated environments"
                 action={
                   <Button
-                    variant="outline"
+                    variant="contrast"
                     size="sm"
                     onClick={() => {
                       void actionService.dispatch("project.add", undefined, { source: "user" });

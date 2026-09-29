@@ -139,7 +139,11 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
   });
 
   it.each([
-    ["working", { agentState: "working" }],
+    // Gemini is not known to queue mid-turn input, so it keeps the hold.
+    [
+      "working, in a CLI not known to queue input",
+      { agentState: "working", detectedAgentId: "gemini" },
+    ],
     ["at an approval", { waitingReason: "approval" }],
     ["at a question", { waitingReason: "question" }],
     ["at an error", { waitingReason: "error" }],
@@ -149,6 +153,32 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     const terminal = createTerminal();
     settleAtPrompt(terminal, Date.now() - 5_000);
     Object.assign(info(terminal), patch);
+
+    terminal.submit("wake", "tok-1", undefined, "settled-prompt");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock).not.toHaveBeenCalled();
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+  });
+
+  it("queues a guarded submission behind the turn of a CLI that queues mid-turn input", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), { agentState: "working", lastStateChange: Date.now() - 1_000 });
+
+    terminal.submit("wake", "tok-1", undefined, "settled-prompt");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["wake", "\r"]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+  });
+
+  it("holds even a queueing CLI when something was typed since its turn began", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), { agentState: "working", lastStateChange: Date.now() - 1_000 });
+    terminal.write("half a thought");
+    ptyWriteMock.mockClear();
 
     terminal.submit("wake", "tok-1", undefined, "settled-prompt");
     await vi.advanceTimersByTimeAsync(3_000);
@@ -176,6 +206,7 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
 
     // A user prompt holds the lane; the agent starts working on it before the
     // guarded line gets its turn.
+    info(terminal).detectedAgentId = "gemini";
     terminal.submit("user prompt");
     terminal.submit("wake", "tok-1", undefined, "settled-prompt");
     info(terminal).agentState = "working";

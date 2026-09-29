@@ -20,7 +20,7 @@ export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
       // status and detected runners and changes nothing (#11548).
       title: "Inspect branch for review",
       description:
-        "Inspect a worktree and report a go/no-go verdict on whether review checks can start, naming what is blocking if not. Despite the name it prepares nothing and runs nothing — it is read-only, and running a detected check is a separate step. Use it to avoid launching checks against a dirty or conflicted tree.",
+        "Inspect a worktree and report go/no-go on starting review checks, naming blockers. Read-only despite the name: it prepares and runs nothing. Use it to avoid running checks on a dirty or conflicted tree.",
       category: "worktree",
       kind: "query",
       danger: "safe",
@@ -31,7 +31,7 @@ export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
             .string()
             .optional()
             .describe(
-              "Project ID for runner detection. Defaults to the current project. Pass explicitly when the worktree belongs to a different project."
+              "Project for runner detection (default: current). Pass it when the worktree belongs to another project."
             ),
         },
         { legacy: ["cwd"] }

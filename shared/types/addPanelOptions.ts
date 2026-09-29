@@ -11,6 +11,7 @@ import type {
   FileBrowserTreeSnapshot,
   SessionLostReason,
   PanelRestoreRecovery,
+  TerminalScratchpad,
 } from "./panel.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
@@ -212,6 +213,11 @@ export interface AddPanelOptionsBase {
    */
   replacesRestoreRecovery?: boolean;
   /**
+   * PTY-only. The terminal's Scratchpad (#12835), carried by restore. A live
+   * panel's own notes outrank this when the call lands on an existing record.
+   */
+  scratchpad?: TerminalScratchpad;
+  /**
    * User-initiated focus timestamp from the saved snapshot, propagated
    * from the hydration boundary (`statePatcher.ts:buildArgsFor*` →
    * `sanitizeLastActiveAt`) to the live panel. Read by
@@ -334,6 +340,8 @@ export interface FilePanelOptions extends AddPanelOptionsBase {
   fileViewMode?: FileViewMode;
   /** 1-based line to scroll to on first render. Open-time hint; never persisted. */
   initialLine?: number;
+  /** Explicit containment root for every read of the file; see `FilePanelData`. Never persisted. */
+  fileContainmentRoot?: string;
 }
 
 /**

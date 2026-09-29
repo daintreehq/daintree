@@ -14,6 +14,7 @@ import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
   ReactElement,
+  ReactNode,
   Ref,
   RefCallback,
 } from "react";
@@ -29,6 +30,7 @@ import {
 import type {
   ChangeData,
   DiffType,
+  EventMap,
   HunkData,
   HunkTokens,
   RenderGutter,
@@ -41,24 +43,27 @@ import "react-diff-view/style/index.css";
 // Our overrides — must come after the library stylesheet it overrides.
 import "./DiffViewer.css";
 import {
-  Check,
   ChevronRight,
   ChevronsDown,
   ChevronsUp,
-  Copy,
   ExternalLink,
   FileDiff as FileDiffIcon,
   FileQuestion,
   FileWarning,
   FileX,
+  MessageSquarePlus,
   UnfoldVertical,
 } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import { join } from "@shared/utils/path";
 import { getLanguageForFile } from "@/components/FileViewer/languageUtils";
 import { useScopedSelectAll } from "@/hooks/useScopedSelectAll";
 import { actionService } from "@/services/ActionService";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DIFF_SOFT_COLLAPSE_BYTES,
   getFilePath,
@@ -72,6 +77,23 @@ import type { SideRanges } from "./diffTokenRanges";
 import { isLanguageFailed } from "./diffRefractor";
 import { diffTokenizeClient } from "@/services/DiffTokenizeService";
 import { formatBytes } from "@/lib/formatBytes";
+import { selectDiffNotes, useDiffNotesStore } from "@/store/diffNotesStore";
+import {
+  buildDiffLineIndex,
+  hashLineRange,
+  lineForChange,
+  placeDiffNote,
+  sortDiffNotes,
+  type DiffNote,
+  type DiffNoteAnchor,
+  type DiffNoteSide,
+} from "./diffNotes";
+import {
+  clearComposerDraft,
+  DiffNoteCard,
+  DiffNoteComposer,
+  type DiffNoteCardPlacement,
+} from "./DiffNoteWidgets";
 
 export { _resetLangStateForTests, _flushLangLoadsForTests } from "./diffRefractor";
 
@@ -132,6 +154,15 @@ export interface DiffViewerProps {
   onToggleCollapse?: () => void;
   /** Fired after a file's token pass commits (highlighting, search marks) — the signal that .diff-search-match spans are scannable */
   onTokensRendered?: () => void;
+  /**
+   * Enables review notes for a local diff of this worktree. Omit for diffs
+   * whose lines can't be handed back to an agent working in a worktree.
+   */
+  annotations?: DiffViewerAnnotations;
+}
+
+export interface DiffViewerAnnotations {
+  worktreePath: string;
 }
 
 /**
@@ -420,6 +451,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
     onRetry,
     onToggleCollapse,
     onTokensRendered,
+    annotations,
   },
   ref
 ) {
@@ -586,13 +618,9 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           title="Couldn't load diff"
           action={
             onRetry && (
-              <button
-                type="button"
-                onClick={onRetry}
-                className="px-3 py-1.5 text-xs font-medium rounded bg-border-default hover:bg-daintree-border/80 text-text-primary transition-colors"
-              >
+              <Button variant="outline" size="sm" onClick={onRetry}>
                 Retry
-              </button>
+              </Button>
             )
           }
           instant
@@ -630,6 +658,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           fullFile={effectiveFullFile}
           onToggleCollapse={onToggleCollapse}
           onTokensRendered={onTokensRendered}
+          annotations={annotations}
         />
       ))}
     </div>
@@ -640,7 +669,6 @@ const EXPAND_STEP = 50;
 const EXPAND_ALL_MAX = 60;
 const INITIAL_VISIBLE_HUNKS = 30;
 const SHOW_MORE_HUNKS_STEP = 60;
-const COPY_FEEDBACK_MS = 2000;
 
 interface HunkHeaderProps {
   hunk: HunkData;
@@ -651,40 +679,20 @@ interface HunkHeaderProps {
 }
 
 function HunkCopyButton({ hunk }: { hunk: HunkData }) {
-  const [copied, setCopied] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    };
-  }, []);
-
-  const handleCopy = async () => {
-    // New-side text (what the code looks like after the change); a pure
-    // deletion falls back to the removed lines so the button never copies "".
+  // New-side text (what the code looks like after the change); a pure
+  // deletion falls back to the removed lines so the button never copies "".
+  const copyText = () => {
     const newSide = hunk.changes.filter((c) => c.type !== "delete").map((c) => c.content);
-    const lines = newSide.length ? newSide : hunk.changes.map((c) => c.content);
-    try {
-      await navigator.clipboard.writeText(lines.join("\n"));
-      setCopied(true);
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      timeoutRef.current = setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
-    } catch {
-      // Silently fail
-    }
+    return (newSide.length ? newSide : hunk.changes.map((c) => c.content)).join("\n");
   };
 
   return (
-    <button
-      type="button"
-      className="diff-hunk-header-copy"
-      data-copied={copied || undefined}
-      onClick={() => void handleCopy()}
-      aria-label={copied ? "Copied!" : "Copy hunk"}
-      title={copied ? "Copied!" : "Copy hunk (new side)"}
-    >
-      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-    </button>
+    <CopyButton
+      text={copyText}
+      className="diff-hunk-header-copy -my-1"
+      aria-label="Copy hunk"
+      tooltip="Copy hunk (new side)"
+    />
   );
 }
 
@@ -700,24 +708,36 @@ function HunkHeader({ hunk, gapStart, hiddenCount, onExpand }: HunkHeaderProps) 
             </button>
           ) : (
             <>
-              <button
-                type="button"
-                title={`Show ${EXPAND_STEP} lines above this hunk`}
-                onClick={() =>
-                  onExpand(Math.max(hunk.oldStart - EXPAND_STEP, gapStart), hunk.oldStart)
-                }
-              >
-                <ChevronsUp className="w-3 h-3" />
-                Expand up
-              </button>
-              <button
-                type="button"
-                title={`Show ${EXPAND_STEP} lines below the previous hunk`}
-                onClick={() => onExpand(gapStart, Math.min(gapStart + EXPAND_STEP, hunk.oldStart))}
-              >
-                <ChevronsDown className="w-3 h-3" />
-                Expand down
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onExpand(Math.max(hunk.oldStart - EXPAND_STEP, gapStart), hunk.oldStart)
+                    }
+                  >
+                    <ChevronsUp className="w-3 h-3" />
+                    Expand up
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">Show {EXPAND_STEP} lines above this hunk</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onExpand(gapStart, Math.min(gapStart + EXPAND_STEP, hunk.oldStart))
+                    }
+                  >
+                    <ChevronsDown className="w-3 h-3" />
+                    Expand down
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  Show {EXPAND_STEP} lines below the previous hunk
+                </TooltipContent>
+              </Tooltip>
               <button type="button" onClick={() => onExpand(gapStart, hunk.oldStart)}>
                 Expand all {hiddenCount}
               </button>
@@ -752,7 +772,14 @@ interface FileDiffProps {
   onToggleCollapse?: () => void;
   /** Fired after this file's token pass commits */
   onTokensRendered?: () => void;
+  annotations?: DiffViewerAnnotations;
 }
+
+const EMPTY_NOTES: readonly DiffNote[] = [];
+const EMPTY_KEYS: string[] = [];
+
+type DiffNoteDraft =
+  { kind: "file" } | { kind: "lines"; side: DiffNoteSide; startLine: number; endLine: number };
 
 function FileDiff({
   file,
@@ -765,6 +792,7 @@ function FileDiff({
   fullFile,
   onToggleCollapse,
   onTokensRendered,
+  annotations,
 }: FileDiffProps) {
   const relPath = getFilePath(file);
   const language = useMemo(() => {
@@ -861,6 +889,153 @@ function FileDiff({
     },
     [movedKeys]
   );
+
+  const notesWorktree = annotations?.worktreePath ?? "";
+  const notesEnabled = notesWorktree !== "" && relPath !== "";
+  const fileNotes = useDiffNotesStore(
+    useShallow((state) =>
+      notesEnabled ? selectDiffNotes(state, notesWorktree, relPath) : EMPTY_NOTES
+    )
+  );
+  const [noteDraft, setNoteDraft] = useState<DiffNoteDraft | null>(null);
+  const draftOwnerId = useId();
+  useEffect(() => {
+    setNoteDraft(null);
+    clearComposerDraft(draftOwnerId);
+  }, [file, draftOwnerId]);
+  useEffect(() => () => clearComposerDraft(draftOwnerId), [draftOwnerId]);
+
+  // Anchors are checked against every rendered row, expanded context included,
+  // so a note written on revealed context still matches once it is revealed.
+  const renderedLineIndex = useMemo(
+    () => (notesEnabled ? buildDiffLineIndex(renderedHunks) : null),
+    [notesEnabled, renderedHunks]
+  );
+  const visibleChangeKeys = useMemo(() => {
+    if (!notesEnabled || isCollapsed) return null;
+    const keys = new Set<string>();
+    for (const hunk of visibleHunks) {
+      for (const change of hunk.changes) keys.add(getChangeKey(change));
+    }
+    return keys;
+  }, [notesEnabled, isCollapsed, visibleHunks]);
+
+  const draftPlacement = useMemo<{
+    anchor: DiffNoteAnchor;
+    keys: string[];
+  } | null>(() => {
+    if (!noteDraft) return null;
+    if (noteDraft.kind === "file") return { anchor: { kind: "file" }, keys: [] };
+    if (!renderedLineIndex) return null;
+    const { side, startLine, endLine } = noteDraft;
+    const contentHash = hashLineRange(renderedLineIndex, side, startLine, endLine);
+    if (contentHash === null) return null;
+    const lines = side === "old" ? renderedLineIndex.old : renderedLineIndex.new;
+    const keys: string[] = [];
+    for (let line = startLine; line <= endLine; line++) {
+      const info = lines.get(line);
+      if (info) keys.push(info.key);
+    }
+    return { anchor: { kind: "lines", side, startLine, endLine, contentHash }, keys };
+  }, [noteDraft, renderedLineIndex]);
+
+  const closeNoteDraft = useCallback(() => {
+    setNoteDraft(null);
+    clearComposerDraft(draftOwnerId);
+  }, [draftOwnerId]);
+
+  // Notes that can't sit under their lines — file notes, stale ones, and any
+  // whose rows are collapsed or not yet revealed — are listed above the table
+  // so none of them drops out of sight.
+  const { rowNotes, detachedNotes } = useMemo(() => {
+    const rows = new Map<string, DiffNote[]>();
+    const detached: { note: DiffNote; placement: DiffNoteCardPlacement }[] = [];
+    if (!renderedLineIndex) return { rowNotes: rows, detachedNotes: detached };
+    for (const note of sortDiffNotes(fileNotes)) {
+      const placement = placeDiffNote(note, renderedLineIndex);
+      if (placement.status === "anchored" && visibleChangeKeys?.has(placement.widgetKey)) {
+        const existing = rows.get(placement.widgetKey);
+        if (existing) existing.push(note);
+        else rows.set(placement.widgetKey, [note]);
+      } else {
+        detached.push({
+          note,
+          placement:
+            placement.status === "stale" || placement.status === "unplaced"
+              ? placement.status
+              : undefined,
+        });
+      }
+    }
+    return { rowNotes: rows, detachedNotes: detached };
+  }, [fileNotes, renderedLineIndex, visibleChangeKeys]);
+
+  const draftWidgetKey =
+    draftPlacement && draftPlacement.anchor.kind === "lines"
+      ? draftPlacement.keys[draftPlacement.keys.length - 1]
+      : undefined;
+
+  const widgets = useMemo(() => {
+    if (rowNotes.size === 0 && !draftWidgetKey) return undefined;
+    const result: Record<string, ReactNode> = {};
+    const keys = new Set(rowNotes.keys());
+    if (draftWidgetKey) keys.add(draftWidgetKey);
+    for (const key of keys) {
+      result[key] = (
+        <div className="diff-note-thread">
+          {rowNotes.get(key)?.map((note) => (
+            <DiffNoteCard key={note.id} note={note} />
+          ))}
+          {key === draftWidgetKey && draftPlacement && (
+            <DiffNoteComposer
+              ownerId={draftOwnerId}
+              worktreePath={notesWorktree}
+              filePath={relPath}
+              anchor={draftPlacement.anchor}
+              onDone={closeNoteDraft}
+            />
+          )}
+        </div>
+      );
+    }
+    return result;
+  }, [
+    rowNotes,
+    draftWidgetKey,
+    draftPlacement,
+    draftOwnerId,
+    notesWorktree,
+    relPath,
+    closeNoteDraft,
+  ]);
+
+  // Click a line number to note that line; shift-click extends the open draft
+  // across a contiguous run of rows on the same side.
+  const gutterEvents = useMemo<EventMap | undefined>(() => {
+    if (!notesEnabled) return undefined;
+    return {
+      onClick: ({ change }, event) => {
+        const target = change ? lineForChange(change) : null;
+        if (!target) return;
+        const { side: noteSide, line } = target;
+        setNoteDraft((current) => {
+          if (event.shiftKey && current?.kind === "lines" && current.side === noteSide) {
+            const startLine = Math.min(current.startLine, line);
+            const endLine = Math.max(current.endLine, line);
+            if (
+              renderedLineIndex &&
+              hashLineRange(renderedLineIndex, noteSide, startLine, endLine) !== null
+            ) {
+              return { kind: "lines", side: noteSide, startLine, endLine };
+            }
+          }
+          return { kind: "lines", side: noteSide, startLine: line, endLine: line };
+        });
+      },
+    };
+  }, [notesEnabled, renderedLineIndex]);
+
+  const selectedChanges = draftPlacement?.keys.length ? draftPlacement.keys : EMPTY_KEYS;
 
   const searchRanges = useMemo(
     () => (searchQuery && !isCollapsed ? computeSearchRanges(visibleHunks, searchQuery) : null),
@@ -1131,26 +1306,6 @@ function FileDiff({
 
   const firstHunkLine = file.hunks?.[0]?.newStart;
 
-  const [fileCopied, setFileCopied] = useState(false);
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    return () => {
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-    };
-  }, []);
-
-  const handleCopyFileDiff = useCallback(async () => {
-    if (!rawText) return;
-    try {
-      await navigator.clipboard.writeText(rawText);
-      setFileCopied(true);
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-      copyTimeoutRef.current = setTimeout(() => setFileCopied(false), COPY_FEEDBACK_MS);
-    } catch {
-      // Silently fail
-    }
-  }, [rawText]);
-
   const handleOpenInEditor = () => {
     if (!absolutePath) return;
     void actionService.dispatch(
@@ -1241,16 +1396,22 @@ function FileDiff({
                 </button>
               ) : (
                 <>
-                  <button
-                    type="button"
-                    title={`Show ${EXPAND_STEP} lines below the last hunk`}
-                    onClick={() =>
-                      handleExpandContext(trailingGapStart, trailingGapStart + EXPAND_STEP)
-                    }
-                  >
-                    <ChevronsDown className="w-3 h-3" />
-                    Expand down
-                  </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleExpandContext(trailingGapStart, trailingGapStart + EXPAND_STEP)
+                        }
+                      >
+                        <ChevronsDown className="w-3 h-3" />
+                        Expand down
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      Show {EXPAND_STEP} lines below the last hunk
+                    </TooltipContent>
+                  </Tooltip>
                   <button
                     type="button"
                     onClick={() => handleExpandContext(trailingGapStart, oldTotalLines + 1)}
@@ -1277,6 +1438,9 @@ function FileDiff({
         renderGutter={renderGutter}
         renderToken={renderTokenWithInvisibles}
         generateLineClassName={generateLineClassName}
+        widgets={widgets}
+        selectedChanges={selectedChanges}
+        gutterEvents={gutterEvents}
         optimizeSelection
       >
         {renderHunkRows}
@@ -1285,7 +1449,7 @@ function FileDiff({
         <button
           type="button"
           onClick={handleShowMoreHunks}
-          className="flex w-full items-center justify-center gap-2 px-3 py-2 text-xs text-text-muted hover:bg-tint/5 transition-colors"
+          className="flex w-full items-center justify-center gap-2 px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         >
           <UnfoldVertical className="w-3 h-3" />
           Show {Math.min(hiddenHunkCount, SHOW_MORE_HUNKS_STEP)} more{" "}
@@ -1354,27 +1518,56 @@ function FileDiff({
                 {deletions > 0 && <span className="text-status-danger">-{deletions}</span>}
               </span>
             )}
+            {notesEnabled && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => setNoteDraft({ kind: "file" })}
+                    aria-label="Add file note"
+                    // The copy beside it is a CopyButton; one glyph size per row.
+                    className="shrink-0 [&_svg]:size-3.5"
+                  >
+                    <MessageSquarePlus aria-hidden="true" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Add file note</TooltipContent>
+              </Tooltip>
+            )}
             {rawText && (
-              <button
-                onClick={() => void handleCopyFileDiff()}
-                title={fileCopied ? "Copied!" : "Copy file diff"}
-                aria-label={fileCopied ? "Copied!" : "Copy file diff"}
-                className="shrink-0 flex items-center px-1.5 py-0.5 rounded hover:bg-tint/5 hover:text-text-primary transition-colors"
-              >
-                {fileCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-              </button>
+              <CopyButton text={rawText} aria-label="Copy file diff" tooltipSide="bottom" />
             )}
             {absolutePath && (
-              <button
-                onClick={handleOpenInEditor}
-                title={`Open in editor${firstHunkLine ? ` at line ${firstHunkLine}` : ""}`}
-                className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded hover:bg-tint/5 hover:text-text-primary transition-colors"
-              >
-                <ExternalLink className="w-3 h-3" />
-                Open
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="xs" onClick={handleOpenInEditor}>
+                    <ExternalLink />
+                    Open
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  Open in editor{firstHunkLine ? ` at line ${firstHunkLine}` : ""}
+                </TooltipContent>
+              </Tooltip>
             )}
           </div>
+        </div>
+      )}
+      {notesEnabled && (detachedNotes.length > 0 || draftPlacement?.anchor.kind === "file") && (
+        <div className="diff-note-thread" data-testid="diff-file-notes">
+          {detachedNotes.map(({ note, placement }) => (
+            <DiffNoteCard key={note.id} note={note} placement={placement} />
+          ))}
+          {draftPlacement?.anchor.kind === "file" && (
+            <DiffNoteComposer
+              ownerId={draftOwnerId}
+              worktreePath={notesWorktree}
+              filePath={relPath}
+              anchor={draftPlacement.anchor}
+              onDone={closeNoteDraft}
+            />
+          )}
         </div>
       )}
       {collapseDecision.collapse && (
@@ -1382,10 +1575,12 @@ function FileDiff({
           onClick={handleToggleCollapse}
           aria-expanded={!isCollapsed}
           {...(!isCollapsed ? { "aria-controls": diffRegionId } : {})}
-          className="flex w-full items-center gap-2 px-3 py-2 text-xs text-text-muted hover:bg-tint/5 transition-colors"
+          className="flex w-full items-center gap-2 px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         >
           <ChevronRight
-            className={`h-3 w-3 shrink-0 transition-transform duration-150 ${isCollapsed ? "" : "rotate-90"}`}
+            data-animated-chevron
+            aria-hidden="true"
+            className={`h-3 w-3 shrink-0 transition-transform duration-150 ease-out ${isCollapsed ? "" : "rotate-90"}`}
           />
           <span className="text-left">
             {collapseDecision.reason === "generated"
@@ -1402,7 +1597,7 @@ function FileDiff({
           <div
             id={diffRegionId}
             ref={regionRef}
-            className="diff-file-centered"
+            className="diff-file-centered focus-visible:-outline-offset-2"
             tabIndex={0}
             role="region"
             aria-label={relPath || "Diff"}
@@ -1422,7 +1617,7 @@ function FileDiff({
             <div
               id={diffRegionId}
               ref={nativeScrollerRef}
-              className="diff-file-scroll"
+              className="diff-file-scroll focus-visible:-outline-offset-2"
               data-proxy-active={(usesNativeHScrollProxy && hasHOverflow) || undefined}
               tabIndex={0}
               role="region"

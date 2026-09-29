@@ -115,6 +115,34 @@ vi.mock("@/store/cliAvailabilityStore", () => ({
   ) => selector({ availability: mockAvailability.value }),
 }));
 
+// The real dialog frame pulls in the app's hook barrel, which this suite's module
+// mocks can't satisfy; a stand-in keeps the reset flow observable.
+vi.mock("@/components/ui/ConfirmDialog", () => ({
+  ConfirmDialog: ({
+    isOpen,
+    title,
+    confirmLabel,
+    onConfirm,
+    onClose,
+  }: {
+    isOpen: boolean;
+    title: string;
+    confirmLabel: string;
+    onConfirm: () => void;
+    onClose: () => void;
+  }) =>
+    isOpen ? (
+      <div role="alertdialog" aria-label={title}>
+        <button type="button" onClick={onClose}>
+          Cancel
+        </button>
+        <button type="button" onClick={onConfirm}>
+          {confirmLabel}
+        </button>
+      </div>
+    ) : null,
+}));
+
 vi.mock("@shared/config/agentIds", () => {
   const BUILT_IN_AGENT_IDS = ["claude", "gemini", "codex"] as const;
   const ASSISTANT_ONLY_AGENT_IDS = [] as const;
@@ -1437,5 +1465,31 @@ describe("ToolbarSettingsTab — move menu and agent inventory", () => {
     expect(disclosure.getAttribute("aria-expanded")).toBe("true");
     const gemini = getByLabelText(switchName("Gemini agent"));
     expect(poolGroup(container, "Agents")!.contains(gemini)).toBe(true);
+  });
+});
+
+describe("ToolbarSettingsTab — reset", () => {
+  beforeEach(() => {
+    clearStoreMocks();
+    vi.mocked(useSortable).mockImplementation(defaultSortable);
+    mockToolbarState = makeToolbarState();
+    mockAgentSettings = null;
+  });
+
+  it("asks before resetting, and resets only on confirm", () => {
+    const { getByRole, queryByRole } = render(<ToolbarSettingsTab />);
+    fireEvent.click(getByRole("button", { name: /reset toolbar/i }));
+    expect(resetMock).not.toHaveBeenCalled();
+
+    const confirm = getByRole("alertdialog", { name: "Reset toolbar?" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
+    expect(resetMock).not.toHaveBeenCalled();
+    expect(queryByRole("alertdialog")).toBeNull();
+
+    fireEvent.click(getByRole("button", { name: /reset toolbar/i }));
+    fireEvent.click(
+      within(getByRole("alertdialog")).getByRole("button", { name: "Reset toolbar" })
+    );
+    expect(resetMock).toHaveBeenCalledTimes(1);
   });
 });

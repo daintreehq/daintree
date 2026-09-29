@@ -50,7 +50,6 @@ export const CHANNELS = {
   TERMINAL_GET_SERIALIZED_STATE: "terminal:get-serialized-state",
   TERMINAL_GET_SERIALIZED_STATES: "terminal:get-serialized-states",
   TERMINAL_GET_SHARED_BUFFERS: "terminal:get-shared-buffers",
-  TERMINAL_GET_ANALYSIS_BUFFER: "terminal:get-analysis-buffer",
   TERMINAL_GET_INFO: "terminal:get-info",
   TERMINAL_ACKNOWLEDGE_DATA: "terminal:acknowledge-data",
   TERMINAL_FORCE_RESUME: "terminal:force-resume",
@@ -377,11 +376,9 @@ export const CHANNELS = {
   PORTAL_GO_BACK: "portal:go-back",
   PORTAL_GO_FORWARD: "portal:go-forward",
   PORTAL_RELOAD: "portal:reload",
-  PORTAL_SHOW_NEW_TAB_MENU: "portal:show-new-tab-menu",
   PORTAL_NAV_EVENT: "portal:nav-event",
   PORTAL_FOCUS: "portal:focus",
   PORTAL_BLUR: "portal:blur",
-  PORTAL_NEW_TAB_MENU_ACTION: "portal:new-tab-menu-action",
   PORTAL_TAB_EVICTED: "portal:tab-evicted",
   PORTAL_TABS_EVICTED: "portal:tabs-evicted",
 
@@ -520,6 +517,8 @@ export const CHANNELS = {
   CODEX_READ_SUBAGENT_TRANSCRIPT: "codex:read-subagent-transcript",
   CODEX_RESOLVE_RESUME_LATEST_SESSION: "codex:resolve-resume-latest-session",
   CODEX_FIND_SESSIONS: "codex:find-sessions",
+  CODEX_READ_QUOTA: "codex:read-quota",
+  CODEX_REFRESH_QUOTA: "codex:refresh-quota",
 
   CLAUDE_LIST_SUBAGENTS: "claude:list-subagents",
   CLAUDE_READ_SUBAGENT_TRANSCRIPT: "claude:read-subagent-transcript",
@@ -768,13 +767,10 @@ export const CHANNELS = {
    * key rotation (revoke-all) stays a separate action (#8778).
    */
   MCP_SERVER_DISCONNECT_BEARER: "mcp-server:disconnect-bearer",
-  /** Whether terminal watches may wake the watching pane (#12491). */
-  MCP_SERVER_GET_PANE_WAKE_ENABLED: "mcp-server:get-pane-wake-enabled",
-  MCP_SERVER_SET_PANE_WAKE_ENABLED: "mcp-server:set-pane-wake-enabled",
-  /** One pane's terminal-watch state, for its chrome to hydrate on mount (#12491). */
-  MCP_SERVER_GET_PANE_WATCH_STATE: "mcp-server:get-pane-watch-state",
-  /** The pane chrome's "stop": every watch the pane holds goes (#12491). */
-  MCP_SERVER_STOP_PANE_WATCHES: "mcp-server:stop-pane-watches",
+  /** One pane's pending terminal notices, for its chrome to hydrate on mount. */
+  MCP_SERVER_GET_PANE_NOTIFY_STATE: "mcp-server:get-pane-notify-state",
+  /** The pane chrome's "stop": every notice the pane has pending goes. */
+  MCP_SERVER_STOP_PANE_NOTICES: "mcp-server:stop-pane-notices",
   /**
    * Hand a running terminal to an orchestrating agent pane, or take it back
    * (#12490). Renderer-only by construction: no action or MCP tool reaches
@@ -856,15 +852,10 @@ export const CHANNELS = {
   ONBOARDING_CHECKLIST_GET: "onboarding:checklist-get",
   ONBOARDING_CHECKLIST_DISMISS: "onboarding:checklist-dismiss",
   ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
-  ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN: "onboarding:checklist-mark-celebration-shown",
   ONBOARDING_CHECKLIST_PUSH: "onboarding:checklist-push",
   ONBOARDING_TOUR_DISMISS_INVITE: "onboarding:tour-dismiss-invite",
   ONBOARDING_TOUR_SET_PROGRESS: "onboarding:tour-set-progress",
   ONBOARDING_TOUR_SET_MUTED: "onboarding:tour-set-muted",
-
-  // Milestone channels
-  MILESTONES_GET: "milestones:get",
-  MILESTONES_MARK_SHOWN: "milestones:mark-shown",
 
   // Shortcut Hints channels
   SHORTCUT_HINTS_GET_COUNTS: "shortcut-hints:get-counts",
@@ -1083,6 +1074,8 @@ export const CHANNELS = {
   PLUGIN_RESTART_WORKER: "plugin:restart-worker",
   PLUGIN_AGENTS_GET: "plugin:agents-get",
   PLUGIN_RECIPES_GET: "plugin:recipes-get",
+  /** Plugin tours visible in the sender's project (#12773). */
+  PLUGIN_TOURS_GET: "plugin:tours-get",
   /** Append one run timestamp to a plugin recipe's sidecar metadata (#11860). */
   PLUGIN_RECIPE_RECORD_USE: "plugin:recipe-record-use",
   /** Patch the user-owned half of a plugin recipe (empty-state pin, auto-assign). */
@@ -1101,6 +1094,8 @@ export const CHANNELS = {
   PLUGIN_SETTINGS_SET_VALUE: "plugin:settings-set-value",
   PLUGIN_SETTINGS_DELETE_VALUE: "plugin:settings-delete-value",
   PLUGIN_SETTINGS_REVEAL_SECRET: "plugin:settings-reveal-secret",
+  /** Which declared `required` settings a plugin still has unset, for the panel setup strip. */
+  PLUGIN_SETTINGS_REQUIRED_STATUS: "plugin:settings-required-status",
   /** Cancel an in-flight plugin install by its job id (#11302). */
   PLUGIN_CANCEL_INSTALL: "plugin:cancel-install",
   /** Phase/entry progress for an in-flight install, targeted at the initiating window (#11302). */
@@ -1109,6 +1104,8 @@ export const CHANNELS = {
   PLUGIN_PICK_PATH: "plugin:pick-path",
   /** Existence probe for a stored plugin `mustExist` path setting. */
   PLUGIN_PATH_EXISTS: "plugin:path-exists",
+  /** Snapshot a plugin's existing databases to a file or folder the user picks. */
+  PLUGIN_BACKUP_DATABASES: "plugin:backup-databases",
   /** Opt-in background plugin update check (#10893): read the enabled setting. */
   PLUGIN_BG_UPDATE_CHECK_SETTINGS_GET: "plugin:bg-update-check-settings-get",
   /** Opt-in background plugin update check (#10893): set the enabled setting. */
@@ -1127,6 +1124,10 @@ export const CHANNELS = {
   PLUGIN_ACTIONS_GET_REQUEST: "plugin:actions-get-request",
   /** Bridge: renderer returns the single projected action entry (or null) to the main process. */
   PLUGIN_ACTIONS_GET_RESPONSE: "plugin:actions-get-response",
+  /** Bridge: main process asks the renderer for the project's agent panes (`host.agents.list`). */
+  PLUGIN_AGENTS_LIST_REQUEST: "plugin:agents-list-request",
+  /** Bridge: renderer returns the project's agent panes to the main process. */
+  PLUGIN_AGENTS_LIST_RESPONSE: "plugin:agents-list-response",
   /** Bridge: main process asks the renderer to render an imperative plugin UI prompt (#10522). */
   PLUGIN_UI_PROMPT_REQUEST: "plugin:ui-prompt-request",
   /** Bridge: renderer returns the user's answer to a plugin UI prompt (fire-and-forget). */
@@ -1220,8 +1221,8 @@ export const CHANNELS = {
   // Per-project consent for plugin agent tools (`contributes.agentMcp`).
   // Renderer-only by design: an action here would be on the MCP tool surface,
   // and an agent must never be able to grant itself a plugin's tools.
-  PLUGIN_AGENT_MCP_LIST_PROJECT_ENDPOINTS: "plugin-agent-mcp:list-project-endpoints",
-  PLUGIN_AGENT_MCP_SET_PROJECT_ENDPOINT_ENABLED: "plugin-agent-mcp:set-project-endpoint-enabled",
+  PLUGIN_AGENT_MCP_LIST_PROJECT_PLUGINS: "plugin-agent-mcp:list-project-plugins",
+  PLUGIN_AGENT_MCP_SET_PLUGIN_ACCESS: "plugin-agent-mcp:set-plugin-access",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

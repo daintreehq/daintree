@@ -96,7 +96,7 @@ describe("@daintreehq/plugin-sdk/react — React stays external", () => {
     // `--no-dts`; if it ever became an array again, two builds would race over
     // this file and one of the entries would be missing here.
     const outputs = Object.keys(metafile.outputs).map((out) => path.basename(out));
-    for (const entry of ["index.js", "react.js", "files.js", "testing.js"]) {
+    for (const entry of ["index.js", "react.js", "files.js", "data.js", "testing.js"]) {
       expect(outputs, `metafile is missing ${entry}`).toContain(entry);
     }
   });

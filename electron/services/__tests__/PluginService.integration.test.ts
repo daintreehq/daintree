@@ -194,6 +194,7 @@ type PluginManifestShape = {
     skills?: unknown[];
     processTools?: unknown[];
     recipes?: unknown[];
+    tours?: unknown[];
   };
 };
 
@@ -2330,5 +2331,72 @@ describe("PluginService integration — recipe contributions (issue #11860)", ()
 
     const restored = second.getPluginRecipes().find((r) => r.id === "acme.keeps-meta.pinned");
     expect(restored?.lastUsedAt).toBe(1234);
+  });
+});
+
+describe("PluginService integration — tour contributions (#12773)", () => {
+  it("registers a loaded plugin's tours under its authority, broadcasts them, and retracts them on unload", async () => {
+    await writePlugin("acme.tour-plugin", {
+      name: "acme.tour-plugin",
+      version: "1.0.0",
+      displayName: "Acme Tours",
+      contributes: {
+        tours: [
+          {
+            id: "welcome",
+            title: "Welcome Tour",
+            componentPath: "dist/tour.js",
+            audioHosts: ["cdn.example.com"],
+            chapters: [
+              { id: "intro", duration: 4, audioUrl: "tours/intro.ogg", narrationHash: "3fa9c21e" },
+              {
+                id: "outro",
+                duration: 3,
+                audioUrl: "https://cdn.example.com/outro.ogg",
+                narrationHash: "0b7d1c44",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    await Promise.resolve();
+
+    const [tour] = service.getPluginTours();
+    expect(tour).toMatchObject({
+      id: "acme.tour-plugin.welcome",
+      pluginId: "acme.tour-plugin",
+      pluginName: "Acme Tours",
+    });
+    // Every URL rides this load's opaque authority and view generation.
+    const moduleUrl = new URL(tour!.moduleUrl);
+    const authority = moduleUrl.hostname;
+    expect(service.getPluginRootByAuthority(authority)).toBe(path.join(tmpDir, "acme.tour-plugin"));
+    expect(moduleUrl.pathname).toMatch(/^\/__dtv-\d+\/dist\/tour\.js$/);
+    expect(tour!.chapters[0]!.audioUrl).toMatch(/\/tours\/intro\.ogg$/);
+    expect(tour!.chapters[1]!.audioUrl).toMatch(/\/__dta\/welcome\/outro$/);
+    expect(service.getPluginTourRemoteAudio(authority, "welcome", "outro")?.url).toBe(
+      "https://cdn.example.com/outro.ogg"
+    );
+
+    expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith("events:push", {
+      name: "plugin:tours-changed",
+      payload: { tours: [expect.objectContaining({ id: "acme.tour-plugin.welcome" })] },
+    });
+
+    vi.mocked(broadcastToRenderer).mockClear();
+    service.unloadPlugin("acme.tour-plugin");
+    await Promise.resolve();
+
+    expect(service.getPluginTours()).toEqual([]);
+    // The audio route dies with the authority.
+    expect(service.getPluginTourRemoteAudio(authority, "welcome", "outro")).toBeUndefined();
+    expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith("events:push", {
+      name: "plugin:tours-changed",
+      payload: { tours: [] },
+    });
   });
 });

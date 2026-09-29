@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { InlineError } from "@/components/ui/field";
+import { Callout } from "@/components/ui/Callout";
+import { ChevronRight, RefreshCw } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { McpServerContribution } from "@shared/types/plugin";
 import type {
@@ -80,13 +84,14 @@ interface PluginMcpServersSectionProps {
 export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServersSectionProps) {
   const [servers, setServers] = useState<PluginMcpServerInfo[]>([]);
   const [loading, setLoading] = useState(true);
+  // Past the Doherty threshold only, so a fast read never flashes bones — the
+  // bones' own delayed pulse is switched off in performance mode.
+  const showLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [stderr, setStderr] = useState<Record<string, StderrState>>({});
   const [restarting, setRestarting] = useState<Record<string, boolean>>({});
   const [restartError, setRestartError] = useState<Record<string, string>>({});
-
-  const showLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -195,7 +200,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
 
   // `isOpen` comes from committed render state, not from inside the updater:
   // React 19 only runs a functional updater synchronously on its eager-state
-  // path (no pending lanes). With the poll's setServers or useDeferredLoading's
+  // path (no pending lanes). With the poll's setServers or another update
   // timer in flight, the updater is deferred — so deriving `willOpen` inside it
   // left it stale, returned before getStderr() ran, and stranded the disclosure
   // on a perpetual "Loading output…". Keep the updater pure.
@@ -259,8 +264,14 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
   if (rows.length === 0) {
     return (
       <div className="space-y-3">
-        {showLoading && <p className="text-xs text-text-secondary">Loading…</p>}
-        {!loading && <p className="text-xs text-text-secondary">This plugin has no MCP servers.</p>}
+        {showLoading && (
+          <Skeleton label="Loading MCP servers" className="space-y-2">
+            <SkeletonBone immediate className="h-10 w-full rounded-[var(--radius-md)]" />
+          </Skeleton>
+        )}
+        {!loading && !error && (
+          <p className="text-xs text-text-secondary">This plugin has no MCP servers.</p>
+        )}
         {error && <SectionError message={error} />}
       </div>
     );
@@ -313,19 +324,15 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
               </div>
 
               {row.info?.lastError && status === "crashed" && (
-                <div className="mx-3 mb-2.5 flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-                  <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-                  <p className="text-2xs text-status-danger break-words select-text">
-                    {row.info.lastError}
-                  </p>
-                </div>
+                <Callout severity="error" size="compact" className="mx-3 mb-2.5">
+                  <p className="break-words select-text">{row.info.lastError}</p>
+                </Callout>
               )}
 
               {rowRestartError && (
-                <div className="mx-3 mb-2.5 flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-                  <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-                  <p className="text-2xs text-status-danger break-words">{rowRestartError}</p>
-                </div>
+                <Callout severity="error" size="compact" className="mx-3 mb-2.5">
+                  <p>{rowRestartError}</p>
+                </Callout>
               )}
 
               {hasOutput && (
@@ -336,11 +343,14 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
                     aria-expanded={isOpen}
                     className="flex items-center gap-1.5 w-full px-3 py-2 text-2xs text-text-secondary hover:text-text-primary transition-[color] duration-150"
                   >
-                    {isOpen ? (
-                      <ChevronDown className="w-3.5 h-3.5 shrink-0" />
-                    ) : (
-                      <ChevronRight className="w-3.5 h-3.5 shrink-0" />
-                    )}
+                    <ChevronRight
+                      data-animated-chevron
+                      className={cn(
+                        "w-3.5 h-3.5 shrink-0 transition-transform duration-150 ease-out",
+                        isOpen && "rotate-90"
+                      )}
+                      aria-hidden="true"
+                    />
                     <span>{isOpen ? "Hide output" : "View output"}</span>
                   </button>
                   {isOpen && (
@@ -364,7 +374,7 @@ function StderrView({ state }: { state: StderrState | undefined }) {
     return <p className="text-2xs text-text-secondary">Loading output…</p>;
   }
   if (state.error) {
-    return <p className="text-2xs text-status-danger">{state.error}</p>;
+    return <InlineError className="text-2xs">{state.error}</InlineError>;
   }
   const result = state.result;
   if (!result || result.lines.length === 0) {
@@ -387,9 +397,8 @@ function StderrView({ state }: { state: StderrState | undefined }) {
 
 function SectionError({ message }: { message: string }) {
   return (
-    <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-      <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-      <p className="text-2xs text-status-danger break-words">{message}</p>
-    </div>
+    <Callout severity="error" size="compact">
+      <p>{message}</p>
+    </Callout>
   );
 }

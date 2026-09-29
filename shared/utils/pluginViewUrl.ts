@@ -51,3 +51,31 @@ export function stripPluginViewGeneration(pathValue: string): StrippedPluginView
   if (rest.length === 0) return null;
   return { path: rest, generation };
 }
+
+/**
+ * Reserved first segment (after any view generation) of the host's route to a
+ * tour chapter's remote narration: `__dta/<tourId>/<chapterId>`. The renderer's
+ * `media-src` cannot list every host a plugin declares, so remote audio plays
+ * through `plugin://` and main fetches it from the URL its own registry holds —
+ * the request names a chapter, never a destination. Reserved like `__dtv-`.
+ */
+export const PLUGIN_TOUR_AUDIO_SEGMENT = "__dta";
+
+/** Plugin-relative path of a chapter's remote-audio route. */
+export function pluginTourAudioPath(tourId: string, chapterId: string): string {
+  return `${PLUGIN_TOUR_AUDIO_SEGMENT}/${encodeURIComponent(tourId)}/${encodeURIComponent(chapterId)}`;
+}
+
+/**
+ * Parse a generation-stripped, decoded path as a remote-audio route. `null`
+ * when the path is not under the reserved segment; `"invalid"` when it is but
+ * does not name exactly one tour and one chapter.
+ */
+export function parsePluginTourAudioPath(
+  pathValue: string
+): { tourId: string; chapterId: string } | "invalid" | null {
+  const segments = pathValue.split("/");
+  if (segments[0] !== PLUGIN_TOUR_AUDIO_SEGMENT) return null;
+  if (segments.length !== 3 || !segments[1] || !segments[2]) return "invalid";
+  return { tourId: segments[1], chapterId: segments[2] };
+}

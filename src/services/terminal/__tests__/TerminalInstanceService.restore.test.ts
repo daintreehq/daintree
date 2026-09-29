@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { terminalInstanceService } from "../TerminalInstanceService";
 import { INCREMENTAL_RESTORE_CONFIG } from "../types";
+import { PARSER_GROUND } from "@shared/utils/terminalPartialEscapeTail";
 
 vi.mock("@xterm/addon-webgl", () => ({
   WebglAddon: vi.fn().mockImplementation(() => ({
@@ -177,7 +178,10 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     expect(result).toBe(true);
     expect(mockTerminal.reset).toHaveBeenCalledTimes(1);
     expect(mockTerminal.write).toHaveBeenCalledTimes(1);
-    expect(mockTerminal.write).toHaveBeenCalledWith(smallState, expect.any(Function));
+    expect(mockTerminal.write).toHaveBeenCalledWith(
+      PARSER_GROUND + smallState,
+      expect.any(Function)
+    );
 
     terminalInstanceService.destroy(id);
   });
@@ -218,7 +222,8 @@ describe("TerminalInstanceService - Incremental Restore", () => {
       .map((call: any) => call[0].length)
       .reduce((sum: number, len: number) => sum + len, 0);
 
-    expect(totalWritten).toBe(largeState.length);
+    // One CAN leads the replay.
+    expect(totalWritten).toBe(largeState.length + 1);
 
     terminalInstanceService.destroy(id);
   });

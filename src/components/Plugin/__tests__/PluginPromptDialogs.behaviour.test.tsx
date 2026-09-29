@@ -65,7 +65,8 @@ function seed(params: PluginUiPromptParams): ReturnType<typeof vi.fn> {
   usePluginRuntimeStore.setState({
     pluginMetaById: new Map([[PLUGIN_ID, { devMode: false, displayName: "Release Helper" }]]),
   });
-  const resolve = vi.fn<(value: PluginUiPromptResultValue) => void>();
+  const resolve =
+    vi.fn<(value: PluginUiPromptResultValue | PromiseLike<PluginUiPromptResultValue>) => void>();
   usePluginPromptStore.setState({
     queue: [],
     current: { promptId: "p1", pluginId: PLUGIN_ID, params, resolve },

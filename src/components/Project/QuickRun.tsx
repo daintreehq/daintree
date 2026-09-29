@@ -3,7 +3,6 @@ import {
   CornerDownLeft,
   LayoutGrid,
   PanelBottom,
-  ChevronUp,
   ChevronDown,
   GitBranch,
   Pin,
@@ -23,6 +22,7 @@ import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/
 import { HighlightedText } from "@/components/ui/HighlightedText";
 import { KbdChord } from "@/components/ui/Kbd";
 import { isMac } from "@/lib/platform";
+import { describeChord, labelWithShortcut } from "@/lib/kbdShortcut";
 
 interface QuickRunProps {
   projectId: string;
@@ -74,7 +74,7 @@ const SECTION_LABELS: Record<SuggestionSection, string> = {
 };
 const SECTION_ORDER: readonly SuggestionSection[] = ["saved", "script", "history"];
 
-const PIN_KEY_LABEL = isMac() ? "⌥P" : "Alt+P";
+const PIN_COMBO = "Alt+P";
 const SUMMARY_ID = "quick-run-summary";
 
 /** Commands are set in the mono face, which draws them without ligatures. */
@@ -98,7 +98,7 @@ function PinHint({
           <span className="mr-1">Edit</span>
         </>
       )}
-      <KbdChord shortcut="Alt+P" density="compact" />
+      <KbdChord shortcut={PIN_COMBO} density="compact" />
       {saved ? "Unpin" : "Pin"}
     </span>
   );
@@ -205,17 +205,21 @@ export function QuickRunToggle({ expanded, onToggle }: QuickRunToggleProps) {
         expanded
           ? "bg-overlay-soft text-text-primary"
           : "text-text-secondary hover:bg-overlay-soft hover:text-text-primary",
-        "focus-visible:outline-hidden focus-visible:bg-overlay-medium focus-visible:text-text-primary"
+        "focus-visible:bg-overlay-medium focus-visible:text-text-primary",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
       )}
     >
       <span>
         Run<span className="@max-[280px]/footer:hidden"> command</span>
       </span>
-      {expanded ? (
-        <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
-      ) : (
-        <ChevronUp className="h-3 w-3 shrink-0" aria-hidden="true" />
-      )}
+      <ChevronDown
+        data-animated-chevron
+        className={cn(
+          "h-3 w-3 shrink-0 transition-transform duration-150 ease-out",
+          !expanded && "rotate-180"
+        )}
+        aria-hidden="true"
+      />
     </button>
   );
 }
@@ -659,7 +663,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
         // Hover moves the highlight rather than painting a second, lookalike
         // state beside it — so there is only ever one lit row, and it is the
         // one Enter runs.
-        onMouseMove={() => {
+        onPointerMove={() => {
           if (!selected) setFocusedSuggestionIndex(index);
         }}
         onClick={() => {
@@ -706,7 +710,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
           // presentational. The keyboard route is Alt+P, named in the footer.
           <span
             aria-hidden="true"
-            title={`${item.type === "saved" ? "Unpin" : "Pin"} (${PIN_KEY_LABEL})`}
+            title={labelWithShortcut(item.type === "saved" ? "Unpin" : "Pin", PIN_COMBO, isMac())}
             onClick={(e) => {
               e.stopPropagation();
               togglePin(item);
@@ -929,9 +933,8 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                           // beside it made two marks compete for the same job.
                           // A high-contrast neutral reads as the primary
                           // action and stays theme-aware by construction.
-                          runTarget
-                            ? "text-text-primary hover:bg-overlay-medium"
-                            : "cursor-not-allowed text-text-muted"
+                          "text-text-primary enabled:hover:bg-overlay-medium",
+                          "disabled:opacity-50 disabled:cursor-not-allowed"
                         )}
                         // Not "Run command": that is the footer toggle's name,
                         // and two controls sharing it read as one to a
@@ -949,7 +952,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
               {listOpen && (
                 <div
                   onMouseDown={(e) => e.preventDefault()}
-                  className="absolute bottom-full left-0 right-0 z-50 mb-1 flex max-h-72 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default bg-surface-panel-elevated shadow-[var(--theme-shadow-floating)]"
+                  className="absolute bottom-full left-0 right-0 z-50 mb-1 flex max-h-72 flex-col overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay"
                 >
                   <div
                     role="listbox"
@@ -1048,7 +1051,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                     </div>
                     {highlighted && (
                       <span className="sr-only">
-                        {`${canComplete ? "Tab to edit, " : ""}${PIN_KEY_LABEL} to ${highlighted.type === "saved" ? "unpin" : "pin"}`}
+                        {`${canComplete ? "Tab to edit, " : ""}${describeChord(PIN_COMBO, isMac())} to ${highlighted.type === "saved" ? "unpin" : "pin"}`}
                       </span>
                     )}
                   </div>

@@ -409,6 +409,21 @@ export type RestoreRecoveryReason =
   /** Filed under a worktree this project no longer has. */
   | "destination-unavailable";
 
+/**
+ * A terminal's Scratchpad (#12835): throwaway Markdown notes that belong to the
+ * pane itself. Absent means the column is not shown. It rides the panel record,
+ * so a worktree move, restart or trash-and-restore keeps it, and permanently
+ * removing the terminal discards it with the record. Persisted.
+ */
+export interface TerminalScratchpad {
+  /** Markdown source, kept exactly as typed. */
+  content: string;
+  /** Hidden behind the header's expand control. Only a scratchpad with content collapses. */
+  collapsed: boolean;
+  /** Column width in px; absent means the default. */
+  width?: number;
+}
+
 export interface PanelRestoreRecovery {
   reason: RestoreRecoveryReason;
   /**
@@ -686,6 +701,8 @@ export interface PtyPanelData extends BasePanelData {
    * before that choice holds it again rather than launching fresh.
    */
   restoreRecovery?: PanelRestoreRecovery;
+  /** Notes column beside the terminal (#12835). Persisted. */
+  scratchpad?: TerminalScratchpad;
 }
 
 export interface BrowserPanelData extends BasePanelData {
@@ -807,6 +824,14 @@ export interface FilePanelData extends BasePanelData {
    * restored panel opens at the top rather than at a stale position.
    */
   initialLine?: number;
+  /**
+   * An explicit containment root the opener pinned for untrusted input, such
+   * as a link clicked in rendered Markdown. When set, it replaces the inferred
+   * worktree/project/parent-directory root, so every read of this file is
+   * realpath-contained to it. Open-time only, like `initialLine`: absent from
+   * `serializeFile`, and dropped when the panel moves to another file.
+   */
+  fileContainmentRoot?: string;
 }
 
 /**

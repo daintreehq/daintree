@@ -42,10 +42,7 @@ vi.mock("@/store/pluginRuntimeStore", () => ({
   ),
 }));
 
-let mockKeybindingDisplay: Record<string, string | null> = {};
-
 vi.mock("@/hooks", () => ({
-  useKeybindingDisplay: (actionId: string) => mockKeybindingDisplay[actionId] ?? null,
   useAriaKeyshortcuts: () => undefined,
   useShortcutHintHover: () => ({}),
 }));
@@ -88,15 +85,18 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     children,
     onSelect,
     onKeyDown,
+    keybinding,
     ...props
   }: {
     children: React.ReactNode;
     onSelect?: (e: Event) => void;
     onKeyDown?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
+    keybinding?: string;
   } & React.HTMLAttributes<HTMLDivElement>) => (
     <div
       role="menuitem"
       tabIndex={0}
+      data-keybinding={keybinding}
       onClick={(e) => onSelect?.(e as unknown as Event)}
       onKeyDown={onKeyDown}
       {...props}
@@ -118,9 +118,6 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     </div>
   ),
   DropdownMenuSeparator: () => <hr data-testid="menu-separator" />,
-  DropdownMenuShortcut: ({ children }: { children: React.ReactNode }) => (
-    <span data-testid="menu-shortcut">{children}</span>
-  ),
 }));
 
 const { PluginTrayButton, PluginToolbarButton, groupPluginToolbarButtons } =
@@ -147,7 +144,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockPinnedButtons = {};
   mockPluginMetaById = new Map();
-  mockKeybindingDisplay = {};
 });
 
 describe("groupPluginToolbarButtons", () => {
@@ -203,6 +199,19 @@ describe("groupPluginToolbarButtons", () => {
 });
 
 describe("PluginTrayButton", () => {
+  it("keeps a row's full label reachable when it is too long for the menu", () => {
+    const label = "Audit every dependency licence across the monorepo workspaces";
+    const { getByTestId } = render(
+      <PluginTrayButton configs={configMap(config({ id: "acme.a", label }))} />
+    );
+    const row = getByTestId("plugin-tray-row-acme.a");
+    const labelEl = Array.from(row.querySelectorAll("span")).find((el) => el.textContent === label);
+    expect(labelEl).toBeDefined();
+    // Truncation is visual only: the text node stays whole, and the clipped
+    // label says the rest on hover.
+    expect(labelEl!.getAttribute("title")).toBe(label);
+  });
+
   it("renders nothing when no plugin contributes a toolbar button", () => {
     const { container } = render(<PluginTrayButton configs={new Map()} />);
     expect(container.innerHTML).toBe("");
@@ -279,13 +288,16 @@ describe("PluginTrayButton", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it("shows the contribution's keyboard shortcut when one is bound", () => {
-    mockKeybindingDisplay = { "acme.greet": "⌘⇧G" };
+  it("shows the contribution's own action binding in the row's key column", () => {
+    // The menu primitive draws the live binding (and its aria-keyshortcuts) for
+    // the action it is handed; the row's job is to hand it the right one.
     const { getByTestId } = render(
       <PluginTrayButton configs={configMap(config({ id: "acme.a", actionId: "acme.greet" }))} />
     );
 
-    expect(getByTestId("menu-shortcut").textContent).toBe("⌘⇧G");
+    expect(getByTestId("plugin-tray-row-acme.a").getAttribute("data-keybinding")).toBe(
+      "acme.greet"
+    );
   });
 
   it("right-click targets the tray itself, not an individual contribution", () => {

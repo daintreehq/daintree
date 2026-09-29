@@ -65,11 +65,11 @@ describe("PluginToolbarButton", () => {
   });
 
   it("falls back to the generic plugin glyph for an unrecognized id", () => {
-    expect(renderButton("no-such-icon")).toBe(registryGlyph("package"));
+    expect(renderButton("no-such-icon")).toBe(registryGlyph("puzzle"));
   });
 
   it("does not resolve agent brand ids on the toolbar", () => {
     // The toolbar has no brand-icon path, which is why the CLI warns here.
-    expect(renderButton("claude")).toBe(registryGlyph("package"));
+    expect(renderButton("claude")).toBe(registryGlyph("puzzle"));
   });
 });

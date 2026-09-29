@@ -1,14 +1,9 @@
 import { useState } from "react";
-import {
-  AlertTriangle,
-  ChevronDown,
-  ChevronRight,
-  CircleCheck,
-  CircleX,
-  ExternalLink,
-  Loader2,
-} from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
+import { AlertTriangle, ChevronRight, CircleCheck, CircleX, ExternalLink } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { systemClient } from "@/clients";
+import { Button } from "@/components/ui/button";
 import type { PrerequisiteCheckResult, PrerequisiteSpec } from "@shared/types";
 import type { AgentInstallBlock } from "@shared/config/agentRegistry";
 import { detectOS } from "@/lib/agentInstall";
@@ -58,33 +53,37 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
             {/* No disclosure while the steps are mandatory: a toggle that
                 cannot fold them would be a control that does nothing. */}
             {installBlocks && !blocking && (
-              <button
-                type="button"
+              <Button
+                variant="link"
                 onClick={() => setExpanded(!showSteps)}
                 aria-expanded={showSteps}
                 aria-controls={`install-panel-${spec.tool}`}
-                className="inline-flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline shrink-0"
+                className="shrink-0 text-2xs"
               >
-                {showSteps ? (
-                  <ChevronDown className="w-3 h-3" />
-                ) : (
-                  <ChevronRight className="w-3 h-3" />
-                )}
+                <ChevronRight
+                  data-animated-chevron
+                  className={cn(
+                    "transition-transform duration-150 ease-out",
+                    showSteps && "rotate-90"
+                  )}
+                  aria-hidden="true"
+                />
                 How to install
-              </button>
+              </Button>
             )}
             {check.installUrl && (
-              <a
-                href={check.installUrl}
-                aria-label={`Open the ${label} download page`}
-                className="inline-flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary shrink-0"
-                onClick={(e) => {
-                  e.preventDefault();
-                  void systemClient.openExternal(check.installUrl!);
-                }}
-              >
-                <ExternalLink className="w-3 h-3" />
-              </a>
+              <Button asChild variant="ghost" size="icon-xs" className="shrink-0">
+                <a
+                  href={check.installUrl}
+                  aria-label={`Open the ${label} download page`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void systemClient.openExternal(check.installUrl!);
+                  }}
+                >
+                  <ExternalLink aria-hidden="true" />
+                </a>
+              </Button>
             )}
           </div>
         ) : check?.version ? (
@@ -112,7 +111,7 @@ export function StatusIcon({
   loading: boolean;
 }) {
   if (loading) {
-    return <Loader2 className="w-4 h-4 text-text-secondary animate-spin shrink-0" />;
+    return <Spinner className="text-text-secondary" />;
   }
   if (check?.available && check.meetsMinVersion) {
     return <CircleCheck className="w-4 h-4 text-status-success shrink-0" />;

@@ -15,6 +15,8 @@ import {
   GitBranch,
   MoreHorizontal,
   Pin,
+  PinOff,
+  Clipboard,
 } from "lucide-react";
 import { Plug, Workflow } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
@@ -37,17 +39,10 @@ import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
-import {
-  FIELD_FOCUS,
-  FIELD_INPUT,
-  FIELD_SURFACE,
-  FormGrid,
-  FormRow,
-} from "@/components/Worktree/views";
+import { RecipeImportDialog } from "@/components/TerminalRecipe/RecipeImportDialog";
 import { getRecipeTerminalSummary } from "@/components/Terminal/utils/recipeUtils";
 import { nextDuplicateName } from "@/components/Terminal/RecipeRunner/recipeRunnerUtils";
 import { getRecipeScope, worktreeDisplayName } from "@/utils/recipeScope";
-import { cn } from "@/lib/utils";
 import type { TerminalRecipe } from "@/types";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { isPluginRecipe } from "@shared/types/project";
@@ -94,7 +89,6 @@ export function RecipeManager({
   const saveToRepo = useRecipeStore((s) => s.saveToRepo);
   const exportRecipe = useRecipeStore((s) => s.exportRecipe);
   const exportRecipeToFile = useRecipeStore((s) => s.exportRecipeToFile);
-  const importRecipe = useRecipeStore((s) => s.importRecipe);
   const importRecipeFromFile = useRecipeStore((s) => s.importRecipeFromFile);
   const updateRecipe = useRecipeStore((s) => s.updateRecipe);
   const createRecipe = useRecipeStore((s) => s.createRecipe);
@@ -124,9 +118,6 @@ export function RecipeManager({
   const [recipeToDeleteAfterSave, setRecipeToDeleteAfterSave] = useState<string | null>(null);
   const [exportFeedback, setExportFeedback] = useState<string | null>(null);
   const [showImportDialog, setShowImportDialog] = useState(false);
-  const [importScope, setImportScope] = useState<"global" | "project">("project");
-  const [importJson, setImportJson] = useState("");
-  const [importError, setImportError] = useState<string | null>(null);
   const exportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Kept mounted between opens; a filter left from last time would reopen the
@@ -232,22 +223,6 @@ export function RecipeManager({
     setRecipeToDeleteAfterSave(null);
   };
 
-  const handleImportRecipe = async () => {
-    setImportError(null);
-    const targetProjectId = importScope === "global" ? undefined : currentProject?.id;
-    if (importScope === "project" && !targetProjectId) {
-      setImportError("No project selected");
-      return;
-    }
-    try {
-      await importRecipe(targetProjectId, importJson);
-      setShowImportDialog(false);
-      setImportJson("");
-    } catch (err) {
-      setImportError(formatErrorMessage(err, "Failed to import recipe"));
-    }
-  };
-
   const resolveWorktreeName = (worktreeId: string) =>
     worktreeDisplayName(worktrees.get(worktreeId));
 
@@ -286,18 +261,18 @@ export function RecipeManager({
               {recipe.name}
             </span>
             {isPinned && (
-              <Badge>
+              <Badge size="xs">
                 <Pin aria-hidden />
                 Pinned
               </Badge>
             )}
             {fromPlugin && (
-              <Badge>
+              <Badge size="xs">
                 <Lock aria-hidden />
                 Read-only
               </Badge>
             )}
-            {isShadowed && <Badge>Overridden by team recipe</Badge>}
+            {isShadowed && <Badge size="xs">Overridden by team recipe</Badge>}
           </div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary">
             {fromPlugin && (
@@ -336,9 +311,9 @@ export function RecipeManager({
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
-                  size="icon"
+                  size="icon-sm"
                   onClick={() => onEditRecipe(recipe)}
-                  className="h-7 w-7 text-text-secondary hover:text-text-primary"
+                  className="text-text-secondary hover:text-text-primary"
                   aria-label={`Edit recipe ${recipe.name}`}
                 >
                   <Pencil />
@@ -353,8 +328,8 @@ export function RecipeManager({
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-text-secondary hover:text-text-primary data-[state=open]:bg-overlay-raised"
+                    size="icon-sm"
+                    className="text-text-secondary hover:text-text-primary data-[state=open]:bg-overlay-raised"
                     aria-label={
                       exported
                         ? `Recipe ${recipe.name} exported to clipboard`
@@ -375,33 +350,37 @@ export function RecipeManager({
                   )
                 }
               >
-                <Pin className="mr-2 h-3.5 w-3.5" />
+                {isPinned ? (
+                  <PinOff data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                ) : (
+                  <Pin data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                )}
                 {isPinned ? "Unpin from canvas" : "Pin to canvas"}
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => void handleDuplicateRecipe(recipe)}>
-                <CopyPlus className="mr-2 h-3.5 w-3.5" />
+                <CopyPlus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Duplicate recipe
               </DropdownMenuItem>
               {!isInRepoRecipeId(recipe) && currentProject && (
                 <DropdownMenuItem onSelect={() => setRecipeToSave(recipe.id)}>
-                  <FolderGit2 className="mr-2 h-3.5 w-3.5" />
+                  <FolderGit2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   Save as team recipe…
                 </DropdownMenuItem>
               )}
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => void handleExportRecipe(recipe.id)}>
-                <Copy className="mr-2 h-3.5 w-3.5" />
+                <Copy data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Copy as JSON
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => void exportRecipeToFile(recipe.id)}>
-                <FileUp className="mr-2 h-3.5 w-3.5" />
+                <FileUp data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Export to file…
               </DropdownMenuItem>
               {!fromPlugin && (
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem destructive onSelect={() => setRecipeToDelete(recipe.id)}>
-                    <Trash2 className="mr-2 h-3.5 w-3.5" />
+                    <Trash2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                     Delete recipe…
                   </DropdownMenuItem>
                 </>
@@ -526,12 +505,7 @@ export function RecipeManager({
     <>
       <AppDialog isOpen={isOpen} onClose={onClose} size="lg">
         <AppDialog.Header>
-          <AppDialog.Title>
-            <span className="flex items-center gap-2">
-              <Workflow className="h-5 w-5" />
-              Recipe manager
-            </span>
-          </AppDialog.Title>
+          <AppDialog.Title icon={<Workflow />}>Recipe manager</AppDialog.Title>
           <AppDialog.CloseButton />
         </AppDialog.Header>
 
@@ -548,7 +522,7 @@ export function RecipeManager({
               description="A recipe launches a set of terminals and agents together in one click."
               action={
                 <div className="flex flex-col items-center gap-2">
-                  <Button variant="outline" size="sm" onClick={() => onCreateRecipe("project")}>
+                  <Button variant="contrast" size="sm" onClick={() => onCreateRecipe("project")}>
                     <Plus />
                     New project recipe
                   </Button>
@@ -605,11 +579,13 @@ export function RecipeManager({
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" sideOffset={4}>
                     <DropdownMenuItem onSelect={() => setShowImportDialog(true)}>
+                      <Clipboard data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Import from clipboard…
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onSelect={() => void importRecipeFromFile(currentProject?.id)}
                     >
+                      <FileDown data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Import from file…
                     </DropdownMenuItem>
                   </DropdownMenuContent>
@@ -685,78 +661,11 @@ export function RecipeManager({
         onClose={() => setRecipeToDeleteAfterSave(null)}
       />
 
-      <AppDialog
+      <RecipeImportDialog
         isOpen={showImportDialog}
-        onClose={() => {
-          setShowImportDialog(false);
-          setImportJson("");
-          setImportError(null);
-        }}
-        size="md"
-      >
-        <AppDialog.Header>
-          <AppDialog.Title>Import recipe</AppDialog.Title>
-          <AppDialog.CloseButton />
-        </AppDialog.Header>
-
-        <AppDialog.Body>
-          <FormGrid>
-            <FormRow label="Import as" htmlFor="recipe-import-scope">
-              <select
-                id="recipe-import-scope"
-                value={importScope}
-                onChange={(e) => setImportScope(e.target.value as "global" | "project")}
-                className={cn(FIELD_INPUT, "pr-8")}
-              >
-                <option value="project">Project Recipe</option>
-                <option value="global">Global Recipe</option>
-              </select>
-            </FormRow>
-          </FormGrid>
-
-          {/* Off the rail deliberately: pasted recipe JSON needs the dialog's
-              full width more than it needs a label column. */}
-          <textarea
-            value={importJson}
-            onChange={(e) => setImportJson(e.target.value)}
-            data-testid="recipe-import-textarea"
-            aria-label="Recipe JSON"
-            aria-describedby={importError ? "recipe-import-error" : undefined}
-            placeholder='{"name": "My Recipe", "terminals": [...]}'
-            className={cn(
-              FIELD_SURFACE,
-              FIELD_FOCUS,
-              "mt-3 w-full h-48 px-2.5 py-2 text-sm text-text-primary font-mono resize-none",
-              "placeholder:text-text-placeholder"
-            )}
-            spellCheck={false}
-          />
-          {importError && (
-            <div
-              id="recipe-import-error"
-              className="mt-3 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/10 p-3 text-sm text-status-error"
-            >
-              {importError}
-            </div>
-          )}
-        </AppDialog.Body>
-
-        <AppDialog.Footer>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setShowImportDialog(false);
-              setImportJson("");
-              setImportError(null);
-            }}
-          >
-            Cancel
-          </Button>
-          <Button variant="contrast" onClick={handleImportRecipe} disabled={!importJson.trim()}>
-            Import
-          </Button>
-        </AppDialog.Footer>
-      </AppDialog>
+        onClose={() => setShowImportDialog(false)}
+        projectId={currentProject?.id}
+      />
     </>
   );
 }

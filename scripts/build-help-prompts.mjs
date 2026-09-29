@@ -24,7 +24,6 @@ const TARGETS = [
       path.join(SRC_DIR, "CLAUDE.head.md"),
       SHARED_HEAD,
       SHARED_TASKS,
-      path.join(SRC_DIR, "CLAUDE.tasks.md"),
       SHARED,
       path.join(SRC_DIR, "CLAUDE.transcript.md"),
       SHARED_TAIL,

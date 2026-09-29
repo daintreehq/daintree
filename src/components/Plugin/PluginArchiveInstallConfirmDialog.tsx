@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import { AlertCircle, AlertTriangle, FileArchive, Users } from "lucide-react";
+import { Callout } from "@/components/ui/Callout";
+import { FileArchive, Users } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { notify } from "@/lib/notify";
@@ -10,6 +11,8 @@ import { BUILT_IN_PLUGIN_CAPABILITIES } from "@shared/types/plugin";
 import type { BuiltInPluginCapability, PluginAuthor } from "@shared/types/plugin";
 import { CAPABILITY_META, CapabilityRow, type CapabilitySeverity } from "./capabilityMeta";
 import { PluginGlyphTile, pluginIconForIdentity } from "./pluginIcons";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { Badge } from "@/components/ui/badge";
 
 // Read-time gate: a double-clicked archive opens this dialog without the user
 // asking for it, so the primary button stays disabled long enough that a click
@@ -132,7 +135,7 @@ export function PluginArchiveInstallConfirmDialog() {
   return (
     <ConfirmDialog
       isOpen={true}
-      onClose={isInstalling ? undefined : () => dismiss(current.intentId)}
+      onClose={() => dismiss(current.intentId)}
       // min-w-0 + break-words: the heading is a flex row, so an unbroken
       // attacker-controlled run would otherwise refuse to shrink and clip
       // against the dialog edge; the clamp above bounds the wrapped height.
@@ -156,13 +159,9 @@ export function PluginArchiveInstallConfirmDialog() {
         <ArchivePermissions capabilities={current.manifest.capabilities} />
         <ArchiveRecipes recipes={current.manifest.recipes} />
         {error !== null && (
-          <div
-            role="alert"
-            className="flex items-start gap-2 px-2.5 py-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20"
-          >
-            <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-            <p className="text-2xs text-status-danger break-words min-w-0">{error}</p>
-          </div>
+          <Callout severity="error" role="alert">
+            <p>{error}</p>
+          </Callout>
         )}
       </div>
     </ConfirmDialog>
@@ -195,9 +194,9 @@ function ArchiveIdentityCard({ intent }: { intent: PendingPluginArchiveInstall }
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-sm font-medium text-text-primary truncate">{label}</span>
-            <span className="inline-block shrink-0 px-1.5 py-0.5 rounded-sm text-3xs font-mono tabular-nums bg-overlay-subtle border border-daintree-border/50 text-text-secondary max-w-[10rem] truncate">
-              v{manifest.version}
-            </span>
+            <Badge size="xs" tone="outline" className="max-w-[10rem] font-mono tabular-nums">
+              <span className="truncate">v{manifest.version}</span>
+            </Badge>
           </div>
           <div className="mt-0.5 text-2xs font-mono text-text-secondary truncate">
             {manifest.name}
@@ -235,7 +234,7 @@ function ArchiveRecipes({ recipes }: { recipes: { count: number; names: string[]
   if (recipes.count === 0) return null;
   return (
     <div className="space-y-2">
-      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">Recipes</h4>
+      <h4 className={SECTION_LABEL_CLASS}>Recipes</h4>
       <p className="text-xs text-text-secondary">
         Adds {recipes.count} launch {recipes.count === 1 ? "recipe" : "recipes"}, available in every
         project. Each starts terminals that run commands or agents.
@@ -289,28 +288,20 @@ function ArchivePermissions({ capabilities }: { capabilities: readonly string[] 
 
   return (
     <div className="space-y-2">
-      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
-        Permissions
-      </h4>
+      <h4 className={SECTION_LABEL_CLASS}>Permissions</h4>
       {granted.length === 0 ? (
         <p className="text-xs text-text-secondary">No special permissions</p>
       ) : (
         <>
           {worst === "danger" && (
-            <div className="flex items-start gap-2 px-2.5 py-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-              <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-              <p className="text-2xs text-status-danger break-words">
-                Can run arbitrary commands on your machine
-              </p>
-            </div>
+            <Callout severity="danger">
+              <p>Can run arbitrary commands on your machine</p>
+            </Callout>
           )}
           {worst === "warning" && (
-            <div className="flex items-start gap-2 px-2.5 py-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
-              <AlertTriangle className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5" />
-              <p className="text-2xs text-status-warning break-words">
-                Requests sensitive permissions — review before installing
-              </p>
-            </div>
+            <Callout severity="warning">
+              <p>Requests sensitive permissions — review before installing</p>
+            </Callout>
           )}
           <ul className="space-y-2 pt-0.5">
             {granted.map((capability: BuiltInPluginCapability) => (

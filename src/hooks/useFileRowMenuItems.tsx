@@ -266,7 +266,6 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
   }, [filePluginItems]);
 
   const reveal = useMemo(() => revealCopy(), []);
-  const insertShortcutHint = isMac() ? "⌘I" : "Ctrl+I";
   const insertAriaKeyshortcuts = comboToAriaKeyshortcuts(INSERT_FILE_REFERENCE_COMBO, isMac());
 
   const copyToClipboard = useCallback((text: string, errorTitle: string) => {
@@ -406,7 +405,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
             <AtSign className={ICON_CLASS} />
             {INSERT_LABEL}
             {canInsert ? (
-              <ContextMenuShortcut>{insertShortcutHint}</ContextMenuShortcut>
+              <ContextMenuShortcut shortcut={INSERT_FILE_REFERENCE_COMBO} />
             ) : (
               <ContextMenuMeta>{insertRefusalMeta}</ContextMenuMeta>
             )}
@@ -514,7 +513,6 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       insertRefusalLabel,
       insert,
       insertAriaKeyshortcuts,
-      insertShortcutHint,
       reveal,
       copyToClipboard,
       handleCopyContext,

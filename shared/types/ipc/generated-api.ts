@@ -84,9 +84,15 @@ export interface GeneratedElectronAPI {
     listSubagents(
       ...args: IpcInvokeMap["codex:list-subagents"]["args"]
     ): Promise<IpcInvokeMap["codex:list-subagents"]["result"]>;
+    readQuota(
+      ...args: IpcInvokeMap["codex:read-quota"]["args"]
+    ): Promise<IpcInvokeMap["codex:read-quota"]["result"]>;
     readSubagentTranscript(
       ...args: IpcInvokeMap["codex:read-subagent-transcript"]["args"]
     ): Promise<IpcInvokeMap["codex:read-subagent-transcript"]["result"]>;
+    refreshQuota(
+      ...args: IpcInvokeMap["codex:refresh-quota"]["args"]
+    ): Promise<IpcInvokeMap["codex:refresh-quota"]["result"]>;
     resolveResumeLatestSession(
       ...args: IpcInvokeMap["codex:resolve-resume-latest-session"]["args"]
     ): Promise<IpcInvokeMap["codex:resolve-resume-latest-session"]["result"]>;
@@ -368,12 +374,9 @@ export interface GeneratedElectronAPI {
     getLogRecords(
       ...args: IpcInvokeMap["mcp-server:get-log-records"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:get-log-records"]["result"]>;
-    getPaneWakeEnabled(
-      ...args: IpcInvokeMap["mcp-server:get-pane-wake-enabled"]["args"]
-    ): Promise<IpcInvokeMap["mcp-server:get-pane-wake-enabled"]["result"]>;
-    getPaneWatchState(
-      ...args: IpcInvokeMap["mcp-server:get-pane-watch-state"]["args"]
-    ): Promise<IpcInvokeMap["mcp-server:get-pane-watch-state"]["result"]>;
+    getPaneNotifyState(
+      ...args: IpcInvokeMap["mcp-server:get-pane-notify-state"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:get-pane-notify-state"]["result"]>;
     getRuntimeState(
       ...args: IpcInvokeMap["mcp-server:get-runtime-state"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:get-runtime-state"]["result"]>;
@@ -428,18 +431,15 @@ export interface GeneratedElectronAPI {
     setEnabled(
       ...args: IpcInvokeMap["mcp-server:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:set-enabled"]["result"]>;
-    setPaneWakeEnabled(
-      ...args: IpcInvokeMap["mcp-server:set-pane-wake-enabled"]["args"]
-    ): Promise<IpcInvokeMap["mcp-server:set-pane-wake-enabled"]["result"]>;
     setPort(
       ...args: IpcInvokeMap["mcp-server:set-port"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:set-port"]["result"]>;
     setSessionTier(
       ...args: IpcInvokeMap["mcp-server:set-session-tier"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:set-session-tier"]["result"]>;
-    stopPaneWatches(
-      ...args: IpcInvokeMap["mcp-server:stop-pane-watches"]["args"]
-    ): Promise<IpcInvokeMap["mcp-server:stop-pane-watches"]["result"]>;
+    stopPaneNotices(
+      ...args: IpcInvokeMap["mcp-server:stop-pane-notices"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:stop-pane-notices"]["result"]>;
   };
   menu: {
     showApplication(
@@ -448,14 +448,6 @@ export interface GeneratedElectronAPI {
     showContext(
       ...args: IpcInvokeMap["menu:show-context"]["args"]
     ): Promise<IpcInvokeMap["menu:show-context"]["result"]>;
-  };
-  milestones: {
-    get(
-      ...args: IpcInvokeMap["milestones:get"]["args"]
-    ): Promise<IpcInvokeMap["milestones:get"]["result"]>;
-    markShown(
-      ...args: IpcInvokeMap["milestones:mark-shown"]["args"]
-    ): Promise<IpcInvokeMap["milestones:mark-shown"]["result"]>;
   };
   onboarding: {
     complete(
@@ -482,9 +474,6 @@ export interface GeneratedElectronAPI {
     markAgentsSeen(
       ...args: IpcInvokeMap["onboarding:mark-agents-seen"]["args"]
     ): Promise<IpcInvokeMap["onboarding:mark-agents-seen"]["result"]>;
-    markChecklistCelebrationShown(
-      ...args: IpcInvokeMap["onboarding:checklist-mark-celebration-shown"]["args"]
-    ): Promise<IpcInvokeMap["onboarding:checklist-mark-celebration-shown"]["result"]>;
     markChecklistItem(
       ...args: IpcInvokeMap["onboarding:checklist-mark-item"]["args"]
     ): Promise<IpcInvokeMap["onboarding:checklist-mark-item"]["result"]>;
@@ -536,6 +525,9 @@ export interface GeneratedElectronAPI {
     activateStagedProjectPlugin(
       ...args: IpcInvokeMap["plugin:project-activate-staged"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-activate-staged"]["result"]>;
+    backupDatabases(
+      ...args: IpcInvokeMap["plugin:backup-databases"]["args"]
+    ): Promise<IpcInvokeMap["plugin:backup-databases"]["result"]>;
     cancelInstall(
       ...args: IpcInvokeMap["plugin:cancel-install"]["args"]
     ): Promise<IpcInvokeMap["plugin:cancel-install"]["result"]>;
@@ -599,12 +591,18 @@ export interface GeneratedElectronAPI {
     getRecipes(
       ...args: IpcInvokeMap["plugin:recipes-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:recipes-get"]["result"]>;
+    getRequiredSettingsStatus(
+      ...args: IpcInvokeMap["plugin:settings-required-status"]["args"]
+    ): Promise<IpcInvokeMap["plugin:settings-required-status"]["result"]>;
     getRuntimeStatuses(
       ...args: IpcInvokeMap["plugin:runtime-statuses-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:runtime-statuses-get"]["result"]>;
     getSettingValues(
       ...args: IpcInvokeMap["plugin:settings-get-values"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-get-values"]["result"]>;
+    getTours(
+      ...args: IpcInvokeMap["plugin:tours-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:tours-get"]["result"]>;
     getWorktreeStatus(
       ...args: IpcInvokeMap["plugin:worktree-status-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:worktree-status-get"]["result"]>;
@@ -703,12 +701,12 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["plugin:validate-manifest"]["result"]>;
   };
   pluginAgentMcp: {
-    listProjectEndpoints(
-      ...args: IpcInvokeMap["plugin-agent-mcp:list-project-endpoints"]["args"]
-    ): Promise<IpcInvokeMap["plugin-agent-mcp:list-project-endpoints"]["result"]>;
-    setProjectEndpointEnabled(
-      ...args: IpcInvokeMap["plugin-agent-mcp:set-project-endpoint-enabled"]["args"]
-    ): Promise<IpcInvokeMap["plugin-agent-mcp:set-project-endpoint-enabled"]["result"]>;
+    listProjectPlugins(
+      ...args: IpcInvokeMap["plugin-agent-mcp:list-project-plugins"]["args"]
+    ): Promise<IpcInvokeMap["plugin-agent-mcp:list-project-plugins"]["result"]>;
+    setPluginAccess(
+      ...args: IpcInvokeMap["plugin-agent-mcp:set-plugin-access"]["args"]
+    ): Promise<IpcInvokeMap["plugin-agent-mcp:set-plugin-access"]["result"]>;
   };
   pluginCapability: {
     acknowledgeConsent(
@@ -780,9 +778,6 @@ export interface GeneratedElectronAPI {
     show(
       ...args: IpcInvokeMap["portal:show"]["args"]
     ): Promise<IpcInvokeMap["portal:show"]["result"]>;
-    showNewTabMenu(
-      ...args: IpcInvokeMap["portal:show-new-tab-menu"]["args"]
-    ): Promise<IpcInvokeMap["portal:show-new-tab-menu"]["result"]>;
   };
   privacy: {
     clearCache(

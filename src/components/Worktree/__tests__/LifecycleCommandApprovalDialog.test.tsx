@@ -26,6 +26,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     cancelLabel?: string;
     confirmDisabled?: boolean;
     isConfirmLoading?: boolean;
+    isBusy?: boolean;
     onConfirm: () => void;
     onClose?: () => void;
     confirmCooldownMs?: number;
@@ -36,7 +37,11 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
       <div>
         <h2>{props.title}</h2>
         {props.children}
-        <button type="button" disabled={!props.onClose} onClick={props.onClose}>
+        <button
+          type="button"
+          disabled={!props.onClose || props.isConfirmLoading || props.isBusy}
+          onClick={props.onClose}
+        >
           {props.cancelLabel ?? "Cancel"}
         </button>
         <button

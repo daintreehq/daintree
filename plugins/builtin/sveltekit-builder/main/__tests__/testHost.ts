@@ -170,6 +170,19 @@ export function createTestHost(allowedRoot: string): TestHost {
         read(via, target);
         return new Uint8Array(await fs.readFile(contain(target)));
       },
+      readFileWithRevision: async (target) => {
+        read(via, target);
+        const bytes = await fs.readFile(contain(target));
+        return { contents: bytes.toString("utf8"), revision: sha(bytes) };
+      },
+      mkdir: async (target) => {
+        await fs.mkdir(contain(target), { recursive: true });
+      },
+      appendFile: async (target, contents) => {
+        const resolved = contain(target);
+        writes.push({ path: resolved, contents });
+        await fs.appendFile(resolved, contents, "utf8");
+      },
       // The host's bounded read, over the same disk. It refuses a non-regular
       // file and anything past the cap, but goes through this handle's own
       // `readFileBytes` rather than its own descriptor: the fd-level guarantee

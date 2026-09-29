@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Info, AlertTriangle, XCircle, CheckCircle2, Pin } from "lucide-react";
+import { Info, AlertTriangle, XCircle, CheckCircle2, Pin } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -112,7 +114,9 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
           // opt-out goes here, not on the pointer-events-none wrapper (#12347).
           "app-no-drag",
           "relative flex flex-col w-full max-w-[360px]",
-          "rounded-[var(--radius-sm)] border-l-[3px] border border-tint/[0.08]",
+          // The severity edge must follow `border`: cn() resolves conflicts
+          // last-wins, and a later `border` erases a left width set before it.
+          "rounded-[var(--radius-sm)] border border-tint/[0.08] border-l-[3px]",
           "bg-surface-panel/85 backdrop-blur-xl",
           "px-3 py-2.5 pr-2",
           "text-sm text-text-primary",
@@ -122,7 +126,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
           // which `transform` in a transition list does NOT cover — list it
           // explicitly or the slide snaps and only the fade animates.
           "transition-[translate,opacity]",
-          "motion-reduce:transition-none motion-reduce:duration-0",
+          "motion-reduce:transition-opacity motion-reduce:translate-none",
           isVisible
             ? "pointer-events-auto translate-x-0 opacity-100"
             : "pointer-events-none translate-x-8 opacity-0",
@@ -149,36 +153,22 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
             While you were away
           </h4>
           <div className="flex items-center gap-0.5">
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={() => setIsPinned((p) => !p)}
-              aria-label={isPinned ? "Unpin summary" : "Pin summary"}
-              aria-pressed={isPinned}
-              className={cn(
-                "shrink-0 rounded-[var(--radius-xs)]",
-                "h-6 w-6 flex items-center justify-center",
-                "text-daintree-text/40 transition-colors duration-150",
-                "hover:text-daintree-text/80 hover:bg-tint/10",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                isPinned && "text-daintree-text/80"
-              )}
+              // A toggle's name stays put; `pressed` announces the state.
+              aria-label="Pin summary"
+              pressed={isPinned}
+              className="[&_svg]:size-3.5"
             >
-              <Pin className={cn("h-3.5 w-3.5", isPinned && "fill-current")} />
-            </button>
-            <button
-              type="button"
+              <Pin aria-hidden="true" className={cn(isPinned && "fill-current")} />
+            </Button>
+            <DismissButton
               onClick={state.dismiss}
               aria-label="Dismiss summary"
-              className={cn(
-                "shrink-0 rounded-[var(--radius-xs)]",
-                "h-6 w-6 flex items-center justify-center",
-                "text-daintree-text/40 transition-colors duration-150",
-                "hover:text-daintree-text/80 hover:bg-tint/10",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-              )}
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
+              tooltipClassName="z-[var(--z-toast-overlay)]"
+            />
           </div>
         </div>
 
@@ -224,19 +214,16 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
         </ul>
 
         <div className="mt-2 flex flex-wrap gap-1.5">
-          <button
-            type="button"
+          {/* Neutral, like the toast's primary action: the card's edge carries
+              severity, and a status-tinted label is only contrast-gated at 3:1. */}
+          <Button
+            variant="outline"
+            size="sm"
+            data-notification-action="primary"
             onClick={handleOpenNotifications}
-            className={cn(
-              "px-2.5 py-1 rounded-[var(--radius-xs)]",
-              "text-xs font-medium",
-              "bg-status-info/10 text-status-info",
-              "hover:bg-status-info/20 transition-colors",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-            )}
           >
-            Open Notifications
-          </button>
+            Open notifications
+          </Button>
         </div>
       </div>
     </div>,

@@ -25,6 +25,10 @@ import {
 import { defineIpcNamespace, op } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { isHandbackCode } from "../../../../shared/utils/handback.js";
+import {
+  isImageAttachmentPath,
+  MAX_SUBMIT_IMAGE_PATHS,
+} from "../../../../shared/utils/imageAttachmentInput.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import type { TerminalSubmissionLookup } from "../../../../shared/types/terminalSubmission.js";
 import type { TerminalOutputActivityLookup } from "../../../../shared/types/terminalStatus.js";
@@ -113,7 +117,8 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     id: string,
     text: string,
     submissionToken?: string,
-    handbackCode?: string
+    handbackCode?: string,
+    imagePaths?: string[]
   ): Promise<void> => {
     try {
       if (typeof id !== "string" || typeof text !== "string") {
@@ -140,6 +145,21 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
         throw new AppError({
           code: "VALIDATION",
           message: "handbackCode must be six characters from [a-z0-9]",
+          context: { terminalId: id },
+        });
+      }
+      // Composer image chips (#12792). Each must be a path the pty-host could
+      // paste as an attachment; anything else is refused whole rather than
+      // filtered, since a caller sending it is not the composer.
+      if (
+        imagePaths !== undefined &&
+        (!Array.isArray(imagePaths) ||
+          imagePaths.length > MAX_SUBMIT_IMAGE_PATHS ||
+          !imagePaths.every((path) => typeof path === "string" && isImageAttachmentPath(path)))
+      ) {
+        throw new AppError({
+          code: "VALIDATION",
+          message: `imagePaths must be at most ${MAX_SUBMIT_IMAGE_PATHS} absolute local image paths`,
           context: { terminalId: id },
         });
       }
@@ -179,7 +199,11 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
           context: { terminalId: id },
         });
       }
-      ptyClient.submit(id, text, submissionToken, handbackCode);
+      if (imagePaths !== undefined && imagePaths.length > 0) {
+        ptyClient.submit(id, text, submissionToken, handbackCode, undefined, imagePaths);
+      } else {
+        ptyClient.submit(id, text, submissionToken, handbackCode);
+      }
     } catch (error) {
       // Preserve AppError shape so the renderer sees the embedded errno
       // token in the message — wrapping would lose the prefix.

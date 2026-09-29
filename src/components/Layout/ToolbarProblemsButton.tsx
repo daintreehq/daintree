@@ -40,11 +40,12 @@ export function ToolbarProblemsButton({
   const watcherUnreliable = watcherDegraded || topologyWatcherDark;
   // Prefer the more specific phrasing when only the topology watcher is dark;
   // ENOSPC/EMFILE degradation takes precedence when both are set.
-  const watcherAriaSuffix = watcherDegraded
-    ? ", file watching degraded"
+  const watcherStatus = watcherDegraded
+    ? "File watching degraded"
     : topologyWatcherDark
-      ? ", worktree list may be stale"
-      : "";
+      ? "Worktree list may be stale"
+      : null;
+  const errorSummary = `${errorCount} error${errorCount !== 1 ? "s" : ""}`;
   const diagnosticsShortcut = useEffectiveCombo("panel.toggleDiagnostics");
   const diagnosticsAriaShortcut = useAriaKeyshortcuts("panel.toggleDiagnostics");
   const diagnosticsHover = useShortcutHintHover("panel.toggleDiagnostics");
@@ -63,7 +64,7 @@ export function ToolbarProblemsButton({
                 data-toolbar-item={dataToolbarItem}
                 onClick={onToggleProblems}
                 className={cn(toolbarIconButtonClass, "relative")}
-                aria-label={`Problems: ${errorCount} error${errorCount !== 1 ? "s" : ""}${watcherAriaSuffix}`}
+                aria-label={`Problems: ${errorSummary}${watcherStatus ? `, ${watcherStatus.toLowerCase()}` : ""}`}
                 aria-keyshortcuts={diagnosticsAriaShortcut}
                 aria-expanded={isDockOpen}
                 aria-controls={DIAGNOSTICS_DOCK_REGION_ID}
@@ -87,7 +88,16 @@ export function ToolbarProblemsButton({
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {createTooltipContent("Show problems panel", diagnosticsShortcut)}
+              <span className="flex flex-col gap-0.5">
+                {createTooltipContent(
+                  isDockOpen ? "Hide problems panel" : "Show problems panel",
+                  diagnosticsShortcut
+                )}
+                <span className="text-text-secondary">
+                  {errorCount > 0 ? errorSummary : "No errors"}
+                </span>
+                {watcherStatus && <span className="text-text-secondary">{watcherStatus}</span>}
+              </span>
             </TooltipContent>
           </Tooltip>
         </span>

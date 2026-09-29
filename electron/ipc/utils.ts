@@ -112,11 +112,15 @@ const leakyBucketQueues = new Map<string, LeakyBucketState>();
 let restoreQuota = 0;
 let restoreQuotaTimer: ReturnType<typeof setTimeout> | null = null;
 
+/**
+ * Arm the restore-spawn bypass budget. Every window's init calls this, so while
+ * a quota is live a later call must not refill it: resetting per window handed
+ * each restored window a fresh budget and the quota never limited a multi-window
+ * restore as a whole (#12800). Once it expires, the next window arms a new one.
+ */
 export function armRestoreQuota(count: number, ttlMs: number): void {
+  if (restoreQuotaTimer !== null) return;
   restoreQuota = count;
-  if (restoreQuotaTimer !== null) {
-    clearTimeout(restoreQuotaTimer);
-  }
   restoreQuotaTimer = setTimeout(() => {
     restoreQuota = 0;
     restoreQuotaTimer = null;

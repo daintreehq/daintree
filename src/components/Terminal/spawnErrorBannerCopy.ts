@@ -70,6 +70,11 @@ export const SPAWN_ERROR_BANNER_COPY = {
     description: () =>
       "This terminal already has a running process, so the existing one was kept. Retry to restart it.",
   },
+  SPAWN_TIMEOUT: {
+    title: "Terminal hasn't started",
+    description: () =>
+      "The terminal backend hasn't confirmed the launch. It may be busy — retry, or wait for it to catch up.",
+  },
   UNKNOWN: {
     title: "Couldn't start terminal",
     description: (error) => boundedErrorText(error.message),

@@ -67,21 +67,25 @@ export const config: AgentConfig = {
       "Run 'codex auth login' after installing to authenticate",
     ],
   },
-  // Offline fallback for when `codex debug models --bundled` can't be probed.
-  // Ordered to match the CLI's own `priority`. Explicit tier slugs, not the
-  // bare `gpt-5.6` family alias: the CLI doesn't validate `--model` against an
+  // The picker's model set, in the CLI's own `priority` order. Curated, so it
+  // outranks the live `codex debug models --bundled` probe, which still lists
+  // the previous generation; the probe only prunes IDs an older CLI lacks.
+  // Explicit tier slugs: the CLI doesn't validate `--model` against an
   // allowlist, so an unlisted slug silently falls back to generic metadata
   // instead of failing loudly.
   models: [
-    { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", shortLabel: "Sol" },
-    { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", shortLabel: "Terra" },
-    { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", shortLabel: "Luna" },
-    { id: "gpt-5.5", name: "GPT-5.5", shortLabel: "GPT-5.5" },
+    { id: "gpt-6-astra", name: "GPT-6 Astra", shortLabel: "Astra" },
+    { id: "gpt-6-sol", name: "GPT-6 Sol", shortLabel: "Sol" },
+    { id: "gpt-6-luna", name: "GPT-6 Luna", shortLabel: "Luna" },
   ],
   curatedModels: true,
   contextWindow: 128_000,
   capabilities: {
     scrollback: 10000,
+    launchMcp: { format: "codex-config-overrides" },
+    // Mid-turn the composer queues a submitted message (see the quit note
+    // below), so a terminal notice need not wait for this pane to settle.
+    queuesInputWhileWorking: true,
     blockAltScreen: true,
     blockMouseReporting: true,
     resizeStrategy: "settled",
@@ -97,6 +101,8 @@ export const config: AgentConfig = {
         "Codex's ambient animation behind the prompt. Off keeps idle panes from repainting continuously.",
     },
     supportsBracketedPaste: true,
+    // Composer shows `[Image #N]` for a lone bracketed-pasted image path (#12792).
+    imageInput: "bracketed-path",
     softNewlineSequence: "\n",
     ignoredInputSequences: ["\n", "\x1b\r"],
     // Advertises "esc to interrupt" while working. Distinct from the Ctrl-C

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuditService, type AuditOutcome, type McpAuditLogStore } from "../auditLog.js";
+import type { McpTier } from "../shared.js";
 import {
   type McpAuditResult,
   isAuditRecord,
@@ -39,9 +40,9 @@ describe("AuditService.appendRecord", () => {
     // service trusts what it's handed.
     const { service } = makeFixture();
     service.appendRecord({
-      toolId: "files.search",
+      toolId: "actions.search",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 10,
       outcome: successOutcome,
@@ -51,60 +52,136 @@ describe("AuditService.appendRecord", () => {
     expect(record!.argsSummary).toBe('{"q":"<redacted>"}');
   });
 
-  // #12692: a dispatch the tier ran without asking must be distinguishable
-  // from one a person approved, and from one nothing pre-authorized.
+  // #12692: a dispatch a session approval ran without asking must be
+  // distinguishable from one a person approved, and from one nothing
+  // pre-authorized.
   it("records what pre-authorized a dispatch, and nothing when nothing did", () => {
     const { service } = makeFixture();
     const base = {
-      toolId: "worktree.delete",
+      toolId: "worktree.deleteOwned",
       sessionId: "sess-1",
-      tier: "system" as const,
+      tier: "core" as const,
       args: {},
       durationMs: 1,
       outcome: successOutcome,
       argsSummary: "{}",
     };
-    service.appendRecord({ ...base, authorization: "tier" });
+    service.appendRecord({ ...base, authorization: "session-grant" });
     service.appendRecord({ ...base, authorization: "user", confirmationDecision: "approved" });
     service.appendRecord(base);
 
     // Newest first.
     const [plain, approved, auto] = service.getRecords();
-    expect(auto!.authorization).toBe("tier");
+    expect(auto!.authorization).toBe("session-grant");
     expect(approved).toMatchObject({ authorization: "user", confirmationDecision: "approved" });
     expect(plain).not.toHaveProperty("authorization");
   });
 
   it("populates tierHint on unauthorized records using the static allowlist", () => {
     const { service } = makeFixture();
-    // `agent.terminal` is in the action tier; from a workbench session
-    // attempting to invoke it, the minimum permitting tier is `action`.
+    // `terminal.new` is a `full` addon; from a core session attempting to
+    // invoke it, the minimum permitting tier is `full`.
     service.appendRecord({
-      toolId: "agent.terminal",
+      toolId: "terminal.new",
       sessionId: "sess-1",
-      tier: "workbench",
+      tier: "core",
       args: {},
       durationMs: 0,
       outcome: unauthorizedOutcome,
       argsSummary: "{}",
     });
-    const [actionTierRecord] = service.getRecords();
-    expect(actionTierRecord!.result).toBe("unauthorized");
-    expect(actionTierRecord!.tierHint).toBe("action");
+    const [fullTierRecord] = service.getRecords();
+    expect(fullTierRecord!.result).toBe("unauthorized");
+    expect(fullTierRecord!.tierHint).toBe("full");
 
-    // `git.commit` is gated by the system tier; even an action-tier
-    // session needs to be elevated to system.
+    // A core tool refused to an external client still names `core` — the
+    // external allowlist is a peer, never the hint.
+    service.appendRecord({
+      toolId: "terminal.moveToWorktree",
+      sessionId: "sess-1",
+      tier: "external",
+      args: {},
+      durationMs: 0,
+      outcome: unauthorizedOutcome,
+      argsSummary: "{}",
+    });
+    expect(service.getRecords()[0]!.tierHint).toBe("core");
+  });
+
+  it("reads the hint from the caller's own surface when its origin is known", () => {
+    // The two origins hold different forms of the same panel tools, so a hint
+    // read from the wrong one names a tier that could never admit the caller.
+    const { service } = makeFixture();
+    const hintFor = (toolId: string, rendererOwnedOrigin: boolean) => {
+      service.appendRecord({
+        toolId,
+        sessionId: "sess-1",
+        tier: "core",
+        args: {},
+        durationMs: 0,
+        outcome: unauthorizedOutcome,
+        argsSummary: "{}",
+        rendererOwnedOrigin,
+      });
+      return service.getRecords()[0]!.tierHint;
+    };
+
+    // An agent pane refused the unscoped close: no pane tier carries it.
+    expect(hintFor("terminal.close", false)).toBeNull();
+    expect(hintFor("terminal.close", true)).toBe("core");
+    // The assistant refused an owned twin: its lists never carry one.
+    expect(hintFor("terminal.sendCommandOwned", true)).toBeNull();
+    expect(hintFor("terminal.sendCommandOwned", false)).toBe("core");
+    // Nothing is persisted about the origin itself.
+    expect(service.getRecords()[0]).not.toHaveProperty("rendererOwnedOrigin");
+  });
+
+  it("places an owned twin at the tier that carries it outside the assistant", () => {
+    // Owned twins are on no renderer-owned list, so when the caller did not say
+    // which origin it is the hint falls through to the surface of the sessions
+    // that can reach them. Without that fallthrough every refusal of one would
+    // read as "not in either tool set".
+    const { service } = makeFixture();
+    const hints: Record<string, unknown> = {};
+    for (const toolId of [
+      "terminal.sendCommandOwned",
+      "terminal.closeOwned",
+      "terminal.injectOwned",
+    ]) {
+      service.appendRecord({
+        toolId,
+        sessionId: "sess-1",
+        tier: "external",
+        args: {},
+        durationMs: 0,
+        outcome: unauthorizedOutcome,
+        argsSummary: "{}",
+      });
+      hints[toolId] = service.getRecords()[0]!.tierHint;
+    }
+    expect(hints).toEqual({
+      "terminal.sendCommandOwned": "core",
+      "terminal.closeOwned": "core",
+      "terminal.injectOwned": "full",
+    });
+  });
+
+  it("sets tierHint to null for a tool neither tool set carries", () => {
+    // `git.commit` was reachable at the old top rung and left MCP with the
+    // core/full split, so no elevation could admit it.
+    const { service } = makeFixture();
     service.appendRecord({
       toolId: "git.commit",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "full",
       args: {},
       durationMs: 0,
       outcome: unauthorizedOutcome,
       argsSummary: "{}",
     });
-    const records = service.getRecords();
-    expect(records[0]!.tierHint).toBe("system");
+    const [record] = service.getRecords();
+    expect(record!.result).toBe("unauthorized");
+    expect(record!.tierHint).toBeNull();
   });
 
   it("sets tierHint to null for unknown tools on unauthorized records", () => {
@@ -112,7 +189,7 @@ describe("AuditService.appendRecord", () => {
     service.appendRecord({
       toolId: "definitely.notATool",
       sessionId: "sess-1",
-      tier: "workbench",
+      tier: "core",
       args: {},
       durationMs: 0,
       outcome: unauthorizedOutcome,
@@ -127,7 +204,7 @@ describe("AuditService.appendRecord", () => {
     service.appendRecord({
       toolId: "agent.launch",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 5,
       outcome: successOutcome,
@@ -142,7 +219,7 @@ describe("AuditService.appendRecord", () => {
     service.appendRecord({
       toolId: "agent.launch",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 5,
       outcome: successOutcome,
@@ -156,9 +233,9 @@ describe("AuditService.appendRecord — turnId, severity, schemaVersion", () => 
   it("persists turnId when provided", () => {
     const { service } = makeFixture();
     service.appendRecord({
-      toolId: "agent.terminal",
+      toolId: "terminal.new",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 10,
       outcome: successOutcome,
@@ -172,9 +249,9 @@ describe("AuditService.appendRecord — turnId, severity, schemaVersion", () => 
   it("turnId is absent when not provided", () => {
     const { service } = makeFixture();
     service.appendRecord({
-      toolId: "agent.terminal",
+      toolId: "terminal.new",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 10,
       outcome: successOutcome,
@@ -189,7 +266,7 @@ describe("AuditService.appendRecord — turnId, severity, schemaVersion", () => 
     service.appendRecord({
       toolId: "agent.launch",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 5,
       outcome: successOutcome,
@@ -234,7 +311,7 @@ describe("AuditService.appendRecord — turnId, severity, schemaVersion", () => 
     service.appendRecord({
       toolId: "agent.launch",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 5,
       outcome,
@@ -252,9 +329,9 @@ describe("AuditService.appendRecord — resultMeta (#10014)", () => {
   it("persists retryAfter on rate_limited records and round-trips through getRecords", () => {
     const { service } = makeFixture();
     service.appendRecord({
-      toolId: "agent.terminal",
+      toolId: "terminal.new",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 0,
       outcome: { kind: "rate_limited", retryAfter: 5 },
@@ -271,7 +348,7 @@ describe("AuditService.appendRecord — resultMeta (#10014)", () => {
     service.appendRecord({
       toolId: "agent.launch",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 5,
       outcome: successOutcome,
@@ -284,27 +361,27 @@ describe("AuditService.appendRecord — resultMeta (#10014)", () => {
   it("does not backfill resultMeta on gate outcomes that omit it (unauthorized / dedup / collision)", () => {
     const { service } = makeFixture();
     service.appendRecord({
-      toolId: "agent.terminal",
+      toolId: "terminal.new",
       sessionId: "sess-1",
-      tier: "workbench",
+      tier: "core",
       args: {},
       durationMs: 0,
       outcome: { kind: "unauthorized" },
       argsSummary: "{}",
     });
     service.appendRecord({
-      toolId: "agent.terminal",
+      toolId: "terminal.new",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 0,
       outcome: { kind: "dedup" },
       argsSummary: "{}",
     });
     service.appendRecord({
-      toolId: "agent.terminal",
+      toolId: "terminal.new",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 0,
       outcome: { kind: "collision" },
@@ -327,7 +404,7 @@ describe("AuditService.appendRecord — startedAt (#12122)", () => {
     service.appendRecord({
       toolId: "worktree.list",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 40,
       startedAt,
@@ -351,7 +428,7 @@ describe("AuditService.appendRecord — startedAt (#12122)", () => {
       service.appendRecord({
         toolId: "worktree.list",
         sessionId: "sess-1",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 250,
         startedAt,
@@ -377,9 +454,9 @@ describe("AuditService.appendRecord — startedAt (#12122)", () => {
     ];
     outcomes.forEach((outcome, i) => {
       service.appendRecord({
-        toolId: "agent.terminal",
+        toolId: "terminal.new",
         sessionId: "sess-1",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 0,
         startedAt: 1_767_225_600_000 + i,
@@ -400,7 +477,7 @@ describe("AuditService.appendRecord — startedAt (#12122)", () => {
     service.appendRecord({
       toolId: "agent.launch",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 5,
       outcome: successOutcome,
@@ -431,6 +508,9 @@ describe("AuditService.recordAuth401 pre-auth records", () => {
     expect(record!.schemaVersion).toBe(1);
     expect(record!.durationMs).toBe(0);
     expect(record!.argsSummary).toBe("pre-auth request rejected");
+    // The request never resolved a tier, so the row must not read as one on
+    // the core/full/external ladder.
+    expect(record!.tier).toBe("unauthenticated");
     expect(record!.repeatCount).toBeUndefined();
     // A 401 is rejected before any CallTool handler exists, so there is no
     // start to record — the key must stay absent rather than be invented
@@ -497,7 +577,7 @@ describe("AuditService.recordAuth401 pre-auth records", () => {
     service.appendRecord({
       toolId: "agent.launch",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 5,
       outcome: successOutcome,
@@ -531,6 +611,9 @@ describe("AuditService hydrate — backward compat", () => {
     const records = service.getRecords();
     expect(records).toHaveLength(1);
     expect(records[0]!.id).toBe("old-1");
+    // Rows written before the core/full split carry the old ladder names; they
+    // are history, so hydrate keeps them verbatim rather than relabelling them.
+    expect(records[0]!.tier).toBe("action");
   });
 
   it("leaves startedAt absent on rows written before the field existed (#12122)", () => {
@@ -580,7 +663,7 @@ describe("AuditService hydrate — backward compat", () => {
       timestamp: 1000,
       toolId: "agent.launch",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       argsSummary: "{}",
       result: "success",
       durationMs: 50,
@@ -604,7 +687,7 @@ describe("AuditService hydrate — backward compat", () => {
       timestamp: 1000,
       toolId: "agent.launch",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       argsSummary: "{}",
       result: "success",
       durationMs: 50,
@@ -628,7 +711,7 @@ describe("AuditService persistence routing", () => {
     service.appendRecord({
       toolId: "agent.launch",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 5,
       outcome: successOutcome,
@@ -659,8 +742,8 @@ describe("AuditService.appendGrantRecord — tier records (#9151)", () => {
       toolId: "*",
       ttlMs: 1800000,
       expiresAt: 5000,
-      tier: "action",
-      previousTier: "workbench",
+      tier: "full",
+      previousTier: "core",
     });
     const logRecords = service.getLogRecords();
     expect(logRecords).toHaveLength(1);
@@ -671,8 +754,8 @@ describe("AuditService.appendGrantRecord — tier records (#9151)", () => {
       toolId: "*",
       ttlMs: 1800000,
       expiresAt: 5000,
-      tier: "action",
-      previousTier: "workbench",
+      tier: "full",
+      previousTier: "core",
     });
     // Tier records are grant records — excluded from the dispatch-only view.
     expect(service.getRecords()).toHaveLength(0);
@@ -685,15 +768,15 @@ describe("AuditService.appendGrantRecord — tier records (#9151)", () => {
       sessionId: "sess-2",
       toolId: "*",
       ttlMs: 0,
-      previousTier: "action",
-      tier: "workbench",
+      previousTier: "full",
+      tier: "core",
     });
     const [record] = service.getLogRecords();
     expect(record).toMatchObject({
       type: "tier.decayed",
       sessionId: "sess-2",
-      previousTier: "action",
-      tier: "workbench",
+      previousTier: "full",
+      tier: "core",
     });
     // No expiresAt on decay — the elevation window already closed.
     expect("expiresAt" in record!).toBe(false);
@@ -704,7 +787,7 @@ describe("AuditService.appendGrantRecord — tier records (#9151)", () => {
     service.appendGrantRecord({
       type: "grant.issued",
       sessionId: "sess-3",
-      toolId: "files.search",
+      toolId: "project.runCheck",
       ttlMs: 60000,
       expiresAt: 9000,
     });
@@ -767,7 +850,7 @@ describe("AuditService anomaly detection", () => {
     service.appendRecord({
       toolId: opts.toolId ?? "test.tool",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: opts.durationMs ?? 10,
       outcome: opts.failed ? failureOutcome : successOutcome,
@@ -800,7 +883,7 @@ describe("AuditService anomaly detection", () => {
       service.appendRecord({
         toolId: opts.toolId ?? "test.tool",
         sessionId: opts.sessionId ?? "sess-1",
-        tier: (opts.tier as "workbench" | "action" | "system" | "external") ?? "action",
+        tier: (opts.tier as McpTier | undefined) ?? "core",
         args: {},
         durationMs: opts.durationMs ?? 10,
         outcome:
@@ -837,7 +920,7 @@ describe("AuditService anomaly detection", () => {
   it("first-seen: seeds known combos from existing records on first call", () => {
     const service = makeRecords(50, (i) => ({
       toolId: i % 2 === 0 ? "tool.a" : "tool.b",
-      tier: "action",
+      tier: "core",
       durationMs: 10,
     }));
     const stats = service.getAuditStats();
@@ -848,7 +931,7 @@ describe("AuditService anomaly detection", () => {
   it("first-seen: emits signal for new combo added after first call", () => {
     const service = makeRecords(50, () => ({
       toolId: "tool.a",
-      tier: "action",
+      tier: "core",
       durationMs: 10,
     }));
     service.getAuditStats(); // seed known combos
@@ -873,7 +956,7 @@ describe("AuditService anomaly detection", () => {
   it("first-seen: passive read (markSeen=false) does not consume the signal", () => {
     const service = makeRecords(50, () => ({
       toolId: "tool.a",
-      tier: "action",
+      tier: "core",
       durationMs: 10,
     }));
     service.getAuditStats(); // seed baseline known combos
@@ -917,7 +1000,7 @@ describe("AuditService anomaly detection", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(t0);
 
-    const service = makeRecords(50, () => ({ toolId: "tool.a", tier: "action" }));
+    const service = makeRecords(50, () => ({ toolId: "tool.a", tier: "core" }));
     service.getAuditStats(); // seed baseline known combos
     service.appendRecord({
       toolId: "tool.new",
@@ -941,7 +1024,7 @@ describe("AuditService anomaly detection", () => {
   it("first-seen: knownCombinations survives clear()", () => {
     const service = makeRecords(50, () => ({
       toolId: "tool.a",
-      tier: "action",
+      tier: "core",
       durationMs: 10,
     }));
     service.getAuditStats(); // seed
@@ -950,7 +1033,7 @@ describe("AuditService anomaly detection", () => {
     service.appendRecord({
       toolId: "tool.a",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 5,
       outcome: successOutcome,
@@ -961,7 +1044,7 @@ describe("AuditService anomaly detection", () => {
       service.appendRecord({
         toolId: "tool.a",
         sessionId: "sess-1",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 5,
         outcome: successOutcome,
@@ -978,7 +1061,7 @@ describe("AuditService anomaly detection", () => {
   it("first-seen: a combo used before the first read still fires", () => {
     const service = makeRecords(50, () => ({
       toolId: "tool.a",
-      tier: "action",
+      tier: "core",
       durationMs: 10,
     }));
 
@@ -1003,7 +1086,7 @@ describe("AuditService anomaly detection", () => {
       timestamp: 1000 + i,
       toolId: "tool.a",
       sessionId: "sess-old",
-      tier: "action",
+      tier: "core",
       argsSummary: "{}",
       result: "success",
       durationMs: 10,
@@ -1160,7 +1243,7 @@ describe("AuditService anomaly detection", () => {
       service.appendRecord({
         toolId: "test.tool",
         sessionId: "sess-1",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 10,
         outcome: successOutcome,
@@ -1170,7 +1253,7 @@ describe("AuditService anomaly detection", () => {
     service.appendRecord({
       toolId: "test.tool",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 5000,
       outcome: {
@@ -1194,7 +1277,7 @@ describe("AuditService anomaly detection", () => {
       service.appendRecord({
         toolId: "test.tool",
         sessionId: "sess-1",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 10,
         outcome: successOutcome,
@@ -1206,7 +1289,7 @@ describe("AuditService anomaly detection", () => {
       service.appendRecord({
         toolId: "test.tool",
         sessionId: "sess-1",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 5,
         outcome: {
@@ -1232,7 +1315,7 @@ describe("AuditService anomaly detection", () => {
       service.appendRecord({
         toolId: "test.tool",
         sessionId: "sess-1",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 10,
         outcome: successOutcome,
@@ -1243,7 +1326,7 @@ describe("AuditService anomaly detection", () => {
       service.appendRecord({
         toolId: "test.tool",
         sessionId: "sess-1",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 5,
         outcome: {
@@ -1267,7 +1350,7 @@ describe("AuditService anomaly detection", () => {
       service.appendRecord({
         toolId: "tool.b",
         sessionId: "sess-1",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 10,
         outcome: successOutcome,
@@ -1279,7 +1362,7 @@ describe("AuditService anomaly detection", () => {
       service.appendRecord({
         toolId,
         sessionId: "sess-1",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 5,
         outcome: {
@@ -1326,7 +1409,7 @@ describe("AuditService anomaly detection", () => {
         service.appendRecord({
           toolId,
           sessionId: "sess-1",
-          tier: "action",
+          tier: "core",
           args: {},
           durationMs: base + i,
           outcome: successOutcome,
@@ -1339,7 +1422,7 @@ describe("AuditService anomaly detection", () => {
       service.appendRecord({
         toolId: "tool.e",
         sessionId: "sess-1",
-        tier: "action",
+        tier: "core",
         args: {},
         durationMs: 5000 + i * 50,
         outcome: successOutcome,
@@ -1461,7 +1544,7 @@ describe("shared narrowers — isGrantRecord / isAuditRecord (#10027)", () => {
       timestamp: 1,
       toolId: "agent.launch",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       argsSummary: "{}",
       result: "success" as const,
       durationMs: 5,
@@ -1478,7 +1561,7 @@ describe("shared narrowers — isGrantRecord / isAuditRecord (#10027)", () => {
       id: "grant-1",
       timestamp: 1,
       sessionId: "sess-1",
-      toolId: "files.search",
+      toolId: "project.runCheck",
       ttlMs: 60000,
     };
     expect(isGrantRecord(record)).toBe(true);
@@ -1493,7 +1576,7 @@ describe("shared narrowers — isGrantRecord / isAuditRecord (#10027)", () => {
       timestamp: 1,
       toolId: "t",
       sessionId: "s",
-      tier: "action",
+      tier: "core",
       argsSummary: "{}",
       result: "success" as const,
       durationMs: 0,
@@ -1515,7 +1598,7 @@ describe("shared narrowers — isGrantRecord / isAuditRecord (#10027)", () => {
       timestamp: 1,
       toolId: "t",
       sessionId: "s",
-      tier: "action",
+      tier: "core",
       argsSummary: "{}",
       result: "success" as const,
       durationMs: 0,
@@ -1569,7 +1652,7 @@ describe("AuditService.getLogRecords — union preservation (#10027)", () => {
     service.appendRecord({
       toolId: "agent.launch",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       args: {},
       durationMs: 5,
       outcome: successOutcome,
@@ -1584,8 +1667,8 @@ describe("AuditService.getLogRecords — union preservation (#10027)", () => {
       sessionId: "sess-1",
       toolId: "*",
       ttlMs: 1800000,
-      tier: "action",
-      previousTier: "workbench",
+      tier: "full",
+      previousTier: "core",
     });
     const log = service.getLogRecords();
     expect(log).toHaveLength(2);
@@ -1602,9 +1685,9 @@ describe("AuditService.pruneByAge (#10776)", () => {
     return {
       id: `r-${String(timestamp)}`,
       timestamp,
-      toolId: "files.search",
+      toolId: "actions.search",
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       argsSummary: "{}",
       result: "success" as McpAuditResult,
       durationMs: 1,
@@ -1717,7 +1800,7 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
     service: AuditService,
     opts: {
       toolId?: string;
-      tier?: "workbench" | "action" | "system" | "external";
+      tier?: McpTier;
       durationMs?: number;
       outcome?: AuditOutcome;
       argsSummary?: string;
@@ -1728,7 +1811,7 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
     service.appendRecord({
       toolId: opts.toolId ?? "tool.a",
       sessionId: opts.sessionId ?? "sess-1",
-      tier: opts.tier ?? "action",
+      tier: opts.tier ?? "core",
       args: {},
       durationMs: opts.durationMs ?? 10,
       outcome: opts.outcome ?? successOutcome,
@@ -1750,7 +1833,7 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
       timestamp: Date.now() - 60_000 + i,
       toolId,
       sessionId: "sess-1",
-      tier: "action",
+      tier: "core",
       argsSummary: "{}",
       result,
       durationMs,
@@ -1943,7 +2026,7 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
       {
         kind: "latency-drift",
         toolId: "tool.a",
-        tier: "action",
+        tier: "core",
         severity: "warning",
         timestamp: rawDrift[0]!.timestamp,
         zScore: rawDrift[0]!.zScore,

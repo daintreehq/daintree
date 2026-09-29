@@ -73,6 +73,8 @@ vi.mock("../../window/windowRef.js", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
+  // A project plugin's settings writes are announced to its own project only.
+  broadcastToProjectRenderers: vi.fn(),
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,
@@ -281,7 +283,7 @@ type ServiceWithSettingsManager = {
 
 async function setupSettingsService(
   pluginId: string,
-  settings?: Array<{ id: string; type: string; scope?: SettingsScope }>
+  settings?: Array<{ id: string; type: string; scope?: SettingsScope; default?: unknown }>
 ): Promise<{ service: PluginService; settingsRoot: string }> {
   const pluginsRoot = path.join(tmpDir, "plugins");
   const dir = path.join(pluginsRoot, pluginId);
@@ -590,6 +592,46 @@ describe("createHost — settings", () => {
     expect(JSON.parse(raw)).toEqual({ ref: "branch-x" });
   });
 
+  it("set and onDidChange target the declared scope when no scope is given", async () => {
+    const projectDir = path.join(tmpDir, "proj-declared-set");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });
+    const { service } = await setupSettingsService("acme.settings-declared-set", [
+      { id: "channel", type: "string", scope: "project" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-declared-set");
+    const heard: unknown[] = [];
+    await host.settings.onDidChange("channel", (v) => heard.push(v));
+
+    await host.settings.set("channel", "x");
+
+    const raw = await fs.readFile(
+      path.join(projectDir, ".daintree", "plugin-settings", "acme.settings-declared-set.json"),
+      "utf-8"
+    );
+    expect(JSON.parse(raw)).toEqual({ channel: "x" });
+    expect(heard).toEqual(["x"]);
+    await expect(host.settings.set("channel", "y", "user")).rejects.toThrow(
+      /declared in "project"/
+    );
+  });
+
+  it("get answers the declared default while nothing is stored", async () => {
+    const projectDir = path.join(tmpDir, "proj-default");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });
+    const { service } = await setupSettingsService("acme.settings-default", [
+      { id: "channel", type: "string", scope: "project", default: "blog" },
+      { id: "tags", type: "json", default: ["a"] },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-default");
+
+    expect(await host.settings.get("channel")).toBe("blog");
+    const tags = await host.settings.get<string[]>("tags");
+    tags?.push("mutated");
+    expect(await host.settings.get("tags")).toEqual(["a"]);
+    await host.settings.set("channel", "x");
+    expect(await host.settings.get("channel")).toBe("x");
+  });
+
   it("get throws when the explicit scope conflicts with the declared scope", async () => {
     const projectDir = path.join(tmpDir, "proj-conflict");
     projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });
@@ -658,7 +700,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     await expect(waiter).resolves.toBeUndefined();
   });
 
-  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, context-menu items, agents, and recipes to the target webContents", async () => {
+  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, context-menu items, agents, recipes, and tours to the target webContents", async () => {
     const service = new PluginService(tmpDir);
     await service.activateStartupFinishedPlugins();
     const send = vi.fn();
@@ -666,7 +708,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.pushSnapshotTo(wc);
 
-    expect(send).toHaveBeenCalledTimes(7);
+    expect(send).toHaveBeenCalledTimes(8);
     // Every replay goes through the EVENTS_PUSH channel — the same channel the
     // renderer hooks' persistent push listeners consume, so no renderer-side
     // changes are needed for the cold-restore path.
@@ -681,6 +723,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     expect(names).toContain("plugin:context-menu-items-changed");
     expect(names).toContain("plugin:agents-changed");
     expect(names).toContain("plugin:recipes-changed");
+    expect(names).toContain("plugin:tours-changed");
     // The renderer menu-items channel was removed (#10465) — guard against the
     // cold-restore replay accidentally re-emitting it.
     expect(names).not.toContain("plugin:menu-items-changed");
@@ -724,7 +767,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.pushSnapshotTo(wc);
 
-    expect(send).toHaveBeenCalledTimes(7);
+    expect(send).toHaveBeenCalledTimes(8);
     const names = send.mock.calls.map((c) => (c[1] as { name?: string })?.name);
     expect(names).toContain("plugin:panel-kinds-changed");
     expect(names).toContain("plugin:toolbar-buttons-changed");
@@ -732,6 +775,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     expect(names).toContain("plugin:context-menu-items-changed");
     expect(names).toContain("plugin:agents-changed");
     expect(names).toContain("plugin:recipes-changed");
+    expect(names).toContain("plugin:tours-changed");
   });
 
   it("pushSnapshotTo() skips a destroyed webContents", async () => {
@@ -759,7 +803,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.activateStartupFinishedPlugins();
     await inFlight;
-    expect(send).toHaveBeenCalledTimes(7);
+    expect(send).toHaveBeenCalledTimes(8);
   });
 
   it("pushSnapshotTo() does not send after dispose()", async () => {

@@ -20,9 +20,11 @@ import {
   Pencil,
   Pin,
   PinOff,
-  Clipboard,
-  Square,
+  Copy,
+  Settings,
+  CircleStop,
   X,
+  Check,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { BrandSurface, FolderTree, Folders } from "@/components/icons";
@@ -72,7 +74,10 @@ import { buildLauncherToolbarMeta, useLauncherToolbarCatalog } from "./launcherT
 import { LauncherToolbarButton } from "./LauncherToolbarButton";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
-import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
+import {
+  DEFAULT_PLUGIN_BUTTON_ICON,
+  resolvePluginIcon,
+} from "@/components/icons/pluginIconRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -80,8 +85,8 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuMeta,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -91,7 +96,6 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useToolbarOverflow } from "@/hooks/useToolbarOverflow";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import {
@@ -99,7 +103,6 @@ import {
   useDohertyGate,
   useEffectiveCombo,
   useKeepMounted,
-  useKeybindingDisplay,
   useShortcutHintHover,
 } from "@/hooks";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
@@ -210,6 +213,21 @@ for (const [id, meta] of Object.entries(TOOLBAR_BUTTON_METADATA)) {
   if (!meta) continue;
   overflowMenuMetaInit[id] = { label: meta.label, icon: meta.icon };
 }
+// The action behind each overflow item's shortcut: the same binding its
+// visible button shows.
+const OVERFLOW_KEYBINDING_BY_ID: Partial<Record<string, string>> = {
+  "copy-tree": "worktree.copyTree",
+  "notification-center": "notifications.toggle",
+  "command-palette": "action.palette.open",
+  "resume-sessions": "terminal.resumeSessions",
+  "dev-server": "devServer.start",
+  settings: "app.settings",
+  problems: "panel.toggleDiagnostics",
+  terminal: "agent.terminal",
+  browser: "agent.browser",
+  "file-browser": "worktree.openFileBrowserPanel",
+};
+
 export const OVERFLOW_MENU_META: Partial<Record<AnyToolbarButtonId, OverflowMenuMeta>> =
   overflowMenuMetaInit;
 
@@ -246,9 +264,9 @@ interface OverflowMenuProps {
   // Per-item availability for the inlined launcher panel rows, mirroring the
   // gates the launcher applies to its own rows.
   panelTrayDisabled: Partial<Record<string, boolean>>;
-  // Shortcut display strings keyed by toolbar button id, so each overflow item
-  // shows the same hint its visible button does (issue #9821).
-  shortcutById: Partial<Record<string, string | null>>;
+  // Action ids keyed by toolbar button id, so each overflow item shows the
+  // same live binding its visible button does (issue #9821).
+  keybindingById: Partial<Record<string, string>>;
 }
 
 // Overflow `…` menu. A component (not just a render helper) so the trigger can
@@ -273,13 +291,14 @@ function OverflowMenu({
   pluginTrayGroups,
   launcherAgentIds,
   panelTrayDisabled,
-  shortcutById,
+  keybindingById,
 }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
   // Read here rather than threaded through props: the overflow copy-tree item
   // mirrors the visible button's disabled states, and in-flight copies can
   // start from routes that never touch this menu (MCP, Cmd+Shift+C).
   const isCopyingTree = useCopyTreeRunStore((s) => s.activeRunCount > 0);
+  const showCopyingSpinner = useDohertyGate(isCopyingTree);
   // Snapshot of the repo stats taken when the menu opens. The stats live in
   // ForgeStatsToolbarButton's hook and are exposed through its imperative
   // handle, so they can't be read during render (refs aren't reactive — the
@@ -332,11 +351,10 @@ function OverflowMenu({
   const tooltipText = `More — ${n} hidden${observations.length > 0 ? ` · ${observations.join(" · ")}` : ""}`;
   const ariaLabel = `More toolbar items — ${n} hidden${observations.length > 0 ? `, ${observations.join(", ")}` : ""}`;
 
-  const countSuffix = (id: AnyToolbarButtonId) => {
-    if (id === "problems" && errorCount > 0) return ` (${errorCount})`;
-    if (id === "notification-center" && notificationUnreadCount > 0)
-      return ` (${notificationUnreadCount})`;
-    return "";
+  const overflowCount = (id: AnyToolbarButtonId) => {
+    if (id === "problems" && errorCount > 0) return errorCount;
+    if (id === "notification-center" && notificationUnreadCount > 0) return notificationUnreadCount;
+    return null;
   };
 
   return (
@@ -399,12 +417,20 @@ function OverflowMenu({
               return [
                 <DropdownMenuGroup key="forge-group">
                   <DropdownMenuLabel>Git</DropdownMenuLabel>
-                  <DropdownMenuItem key="forge-commits" disabled>
+                  <DropdownMenuItem
+                    key="forge-commits"
+                    disabled
+                    aria-label={
+                      repoStats?.commitCount != null
+                        ? `Commits, ${formatCountExact(repoStats.commitCount)}`
+                        : undefined
+                    }
+                  >
                     <GitCommit className="mr-2 h-3.5 w-3.5" />
-                    Commits{" "}
-                    {repoStats?.commitCount != null
-                      ? `(${formatCountExact(repoStats.commitCount)})`
-                      : ""}
+                    Commits
+                    {repoStats?.commitCount != null && (
+                      <DropdownMenuMeta>{formatCountExact(repoStats.commitCount)}</DropdownMenuMeta>
+                    )}
                   </DropdownMenuItem>
                 </DropdownMenuGroup>,
                 ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
@@ -416,27 +442,47 @@ function OverflowMenu({
                 <DropdownMenuItem
                   key="forge-issues"
                   onClick={() => forgeStatsRef.current?.openIssues()}
+                  aria-label={
+                    repoStats?.issueCount != null
+                      ? `Issues, ${formatCountExact(repoStats.issueCount)}`
+                      : undefined
+                  }
                 >
                   <CircleDot className="mr-2 h-3.5 w-3.5 text-pr-open" />
-                  Issues{" "}
-                  {repoStats?.issueCount != null
-                    ? `(${formatCountExact(repoStats.issueCount)})`
-                    : ""}
+                  Issues
+                  {repoStats?.issueCount != null && (
+                    <DropdownMenuMeta>{formatCountExact(repoStats.issueCount)}</DropdownMenuMeta>
+                  )}
                 </DropdownMenuItem>
-                <DropdownMenuItem key="forge-prs" onClick={() => forgeStatsRef.current?.openPrs()}>
+                <DropdownMenuItem
+                  key="forge-prs"
+                  onClick={() => forgeStatsRef.current?.openPrs()}
+                  aria-label={
+                    repoStats?.prCount != null
+                      ? `Pull requests, ${formatCountExact(repoStats.prCount)}`
+                      : undefined
+                  }
+                >
                   <GitPullRequest className="mr-2 h-3.5 w-3.5 text-pr-merged" />
-                  Pull Requests{" "}
-                  {repoStats?.prCount != null ? `(${formatCountExact(repoStats.prCount)})` : ""}
+                  Pull requests
+                  {repoStats?.prCount != null && (
+                    <DropdownMenuMeta>{formatCountExact(repoStats.prCount)}</DropdownMenuMeta>
+                  )}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   key="forge-commits"
                   onClick={() => forgeStatsRef.current?.openCommits()}
+                  aria-label={
+                    repoStats?.commitCount != null
+                      ? `Commits, ${formatCountExact(repoStats.commitCount)}`
+                      : undefined
+                  }
                 >
                   <GitCommit className="mr-2 h-3.5 w-3.5" />
-                  Commits{" "}
-                  {repoStats?.commitCount != null
-                    ? `(${formatCountExact(repoStats.commitCount)})`
-                    : ""}
+                  Commits
+                  {repoStats?.commitCount != null && (
+                    <DropdownMenuMeta>{formatCountExact(repoStats.commitCount)}</DropdownMenuMeta>
+                  )}
                 </DropdownMenuItem>
               </DropdownMenuGroup>,
               ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
@@ -454,7 +500,7 @@ function OverflowMenu({
                 <DropdownMenuGroup key={`plugin-tray-${group.pluginId}`}>
                   <DropdownMenuLabel>{group.displayName}</DropdownMenuLabel>
                   {group.buttons.map((config) => {
-                    const Icon = resolvePluginIcon(config.iconId);
+                    const Icon = resolvePluginIcon(config.iconId, DEFAULT_PLUGIN_BUTTON_ICON);
                     return (
                       <DropdownMenuItem
                         key={config.id}
@@ -515,12 +561,10 @@ function OverflowMenu({
                     key={`launcher-${item.id}`}
                     disabled={panelTrayDisabled[item.id]}
                     onClick={() => overflowActions[item.id]?.()}
+                    keybinding={keybindingById[item.id]}
                   >
                     <Icon className="mr-2 h-3.5 w-3.5" />
                     <span className="flex-1">{item.label}</span>
-                    {shortcutById[item.id] && (
-                      <DropdownMenuShortcut>{shortcutById[item.id]}</DropdownMenuShortcut>
-                    )}
                   </DropdownMenuItem>
                 );
               }),
@@ -542,21 +586,48 @@ function OverflowMenu({
             ];
           }
           const Icon = meta.icon;
-          const shortcut = shortcutById[id];
           // Mirror the visible copy-tree button, which is aria-disabled both
           // when no worktree is active ("Open a worktree first" tooltip) and
           // while a copy is in flight — without this the overflow item would
           // look live yet silently close with no feedback, since its handler
           // guards on the same two conditions.
           const disabled = id === "copy-tree" && (!hasActiveWorktree || isCopyingTree);
+          // The in-flight reason is spelled out, as the visible button's
+          // spinner and "Copying…" name do — a greyed row alone reads as
+          // unavailable rather than busy. The label carries it rather than a
+          // trailing meta, which would widen the open menu and snap it back
+          // narrower the moment the copy lands.
+          const copying = id === "copy-tree" && isCopyingTree;
+          const count = overflowCount(id);
           return [
-            <DropdownMenuItem key={id} disabled={disabled} onClick={() => overflowActions[id]?.()}>
-              <Icon className="mr-2 h-3.5 w-3.5" />
-              <span className="flex-1">
-                {meta.label}
-                {countSuffix(id)}
-              </span>
-              {shortcut && <DropdownMenuShortcut>{shortcut}</DropdownMenuShortcut>}
+            <DropdownMenuItem
+              key={id}
+              disabled={disabled}
+              onClick={() => overflowActions[id]?.()}
+              keybinding={keybindingById[id]}
+            >
+              {copying && showCopyingSpinner ? (
+                <Spinner size="sm" className="mr-2" />
+              ) : (
+                <Icon className="mr-2 h-3.5 w-3.5" />
+              )}
+              {id === "copy-tree" ? (
+                // Both labels share one grid cell so the row is always as wide
+                // as the longer one: the open menu keeps its width when a copy
+                // starts or lands under the pointer.
+                <span className="grid flex-1">
+                  <span className="[grid-area:1/1]">
+                    {copying ? "Copying context…" : meta.label}
+                  </span>
+                  <span aria-hidden="true" className="invisible [grid-area:1/1]">
+                    Copying context…
+                  </span>
+                </span>
+              ) : (
+                <span className="flex-1">{meta.label}</span>
+              )}
+              {/* Audible: the count belongs in the row's accessible name. */}
+              {count !== null && <DropdownMenuMeta aria-hidden={false}>{count}</DropdownMenuMeta>}
             </DropdownMenuItem>,
           ];
         })}
@@ -565,11 +636,8 @@ function OverflowMenu({
   );
 }
 
-// Overflow menu item for a built-in agent. A standalone component (hoisted, so
-// OverflowMenu above can reference it) so the per-agent keybinding lookup
-// (`useKeybindingDisplay`) runs at component scope rather than inside a `.map()`
-// callback (rules of hooks). Restores the two signals the bare overflow item
-// dropped: the colored agent-state dot and the keyboard shortcut hint.
+// Overflow menu item for a built-in agent. Restores the two signals the bare
+// overflow item dropped: the colored agent-state dot and the keyboard shortcut.
 function AgentOverflowItem({
   id,
   label,
@@ -583,10 +651,9 @@ function AgentOverflowItem({
   attentionState: AttentionAgentState | null;
   onSelect: () => void;
 }) {
-  const shortcut = useKeybindingDisplay(`agent.${id}`);
   const dotColor = attentionState ? agentStateDotColor(attentionState) : null;
   return (
-    <DropdownMenuItem onClick={onSelect}>
+    <DropdownMenuItem onClick={onSelect} keybinding={`agent.${id}`}>
       <span className="relative mr-2 inline-flex h-3.5 w-3.5 items-center justify-center">
         <Icon className="h-3.5 w-3.5" />
         {dotColor && (
@@ -607,7 +674,6 @@ function AgentOverflowItem({
           <span className="sr-only">{` — ${STATE_LABELS[attentionState]}`}</span>
         )}
       </span>
-      {shortcut && <DropdownMenuShortcut>{shortcut}</DropdownMenuShortcut>}
     </DropdownMenuItem>
   );
 }
@@ -757,6 +823,19 @@ export function Toolbar({
     announcement: copyTreeAnnouncement,
     clearNotice: clearCopyTreeNotice,
   } = useCopyTreeCompletionNotice(copyTreeButtonRef, { suppress: copyTreeOpen });
+  // A new run supersedes the last one's confirmation — from every route, not
+  // just this button's menu, which already clears it on open. Left standing, a
+  // run that then fails would hand the check back to the earlier success. On
+  // the store's own start rather than the rendered flag, so a run that begins
+  // and settles before a render still retires it, and the clear can't land
+  // after that run's own announcement.
+  useEffect(
+    () =>
+      useCopyTreeRunStore.subscribe((state, prev) => {
+        if (state.activeRunCount > prev.activeRunCount) clearCopyTreeNotice();
+      }),
+    [clearCopyTreeNotice]
+  );
 
   const hasActiveVoiceRecording = useVoiceRecordingStore(
     (state) =>
@@ -782,16 +861,6 @@ export function Toolbar({
 
   const { handleCopyTree, handleCopyTreeWithOptions } = useWorktreeActions();
   const sidebarShortcut = useEffectiveCombo("nav.toggleSidebar");
-  const copyTreeShortcut = useKeybindingDisplay("worktree.copyTree");
-  const devServerShortcut = useKeybindingDisplay("devServer.start");
-  const notificationsShortcut = useKeybindingDisplay("notifications.toggle");
-  const commandPaletteShortcut = useKeybindingDisplay("action.palette.open");
-  const resumeSessionsShortcut = useKeybindingDisplay("terminal.resumeSessions");
-  const settingsShortcut = useKeybindingDisplay("app.settings");
-  const problemsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
-  const terminalShortcut = useKeybindingDisplay("agent.terminal");
-  const browserShortcut = useKeybindingDisplay("agent.browser");
-  const fileBrowserShortcut = useKeybindingDisplay("worktree.openFileBrowserPanel");
   const copyTreeCombo = useEffectiveCombo("worktree.copyTree");
   const devServerCombo = useEffectiveCombo("devServer.start");
   const fileBrowserCombo = useEffectiveCombo("worktree.openFileBrowserPanel");
@@ -1202,7 +1271,7 @@ export function Toolbar({
                   toolbarIconButtonClass,
                   "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                 )}
-                aria-label="Toggle Sidebar"
+                aria-label="Toggle sidebar"
                 aria-pressed={!isFocusMode}
                 aria-keyshortcuts={sidebarAriaShortcut}
               >
@@ -1452,18 +1521,25 @@ export function Toolbar({
                           aria-label={isCopyingTree ? "Copying…" : "Copy context"}
                           aria-keyshortcuts={copyTreeAriaShortcut}
                         >
-                          {showCopyingSpinner ? <Spinner /> : <Folders />}
+                          {showCopyingSpinner ? (
+                            <Spinner />
+                          ) : copyTreeNotice && !isCopyingTree ? (
+                            // Same Copy→Check swap as CopyButton, held for the
+                            // notice's window so the glyph and the tooltip
+                            // clear together.
+                            <Check className="animate-checkbox-check" />
+                          ) : (
+                            <Folders />
+                          )}
                         </Button>
                       </ContextMenuTrigger>
                     </DropdownMenuTrigger>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom" className="font-medium">
+                  <TooltipContent side="bottom">
                     {copyTreeNotice ? (
                       <span className="flex flex-col gap-0.5">
-                        <span>{copyTreeNotice.title}</span>
-                        <span className="font-normal text-text-secondary">
-                          {copyTreeNotice.message}
-                        </span>
+                        <span className="font-medium">{copyTreeNotice.title}</span>
+                        <span className="text-text-secondary">{copyTreeNotice.message}</span>
                       </span>
                     ) : isCopyingTree ? (
                       "Copying…"
@@ -1475,7 +1551,7 @@ export function Toolbar({
                   </TooltipContent>
                 </Tooltip>
                 <CopyTreeMenuContent
-                  shortcut={copyTreeShortcut}
+                  shortcut={copyTreeCombo}
                   onCopyFullContext={handleCopyTreeFullContext}
                   onRunRecent={handleCopyTreeRunRecent}
                   onOpenContextSettings={handleOpenContextSettings}
@@ -1610,7 +1686,6 @@ export function Toolbar({
       sidebarShortcut,
       sidebarAriaShortcut,
       sidebarHintHover,
-      copyTreeShortcut,
       copyTreeCombo,
       copyTreeAriaShortcut,
       currentProject,
@@ -2132,19 +2207,6 @@ export function Toolbar({
     [agentAvailability]
   );
 
-  const overflowShortcutById: Partial<Record<string, string | null>> = {
-    "copy-tree": copyTreeShortcut,
-    "notification-center": notificationsShortcut,
-    "command-palette": commandPaletteShortcut,
-    "resume-sessions": resumeSessionsShortcut,
-    "dev-server": devServerShortcut,
-    settings: settingsShortcut,
-    problems: problemsShortcut,
-    terminal: terminalShortcut,
-    browser: browserShortcut,
-    "file-browser": fileBrowserShortcut,
-  };
-
   const renderOverflowMenu = (
     overflowIds: AnyToolbarButtonId[],
     side: "left" | "right",
@@ -2167,7 +2229,7 @@ export function Toolbar({
       pluginTrayGroups={pluginTrayGroups}
       launcherAgentIds={launcherAgentIds}
       panelTrayDisabled={panelTrayDisabled}
-      shortcutById={overflowShortcutById}
+      keybindingById={OVERFLOW_KEYBINDING_BY_ID}
     />
   );
 
@@ -2215,11 +2277,12 @@ export function Toolbar({
       : chipState === "detached"
         ? `detached at ${shortSha(headSha) ?? "unknown commit"}`
         : undefined;
-  const { copy: copyPillPath } = useCopyWithFeedback({ announcement: "Path copied" });
+  // Routed through the switcher row's copy so the two "Copy path" rows confirm
+  // the same way; the menu closes on select, leaving nothing else to show it.
   const handleCopyProjectPath = useCallback(() => {
     if (!currentProject) return;
-    void copyPillPath(currentProject.path);
-  }, [currentProject, copyPillPath]);
+    projectSwitcher.copyPath(currentProject.path);
+  }, [currentProject, projectSwitcher]);
   const handlePillTogglePin = useCallback(() => {
     if (!currentProject) return;
     void projectSwitcher.togglePinProject(currentProject.id);
@@ -2262,13 +2325,14 @@ export function Toolbar({
   const handlePillContextMenuCloseAutoFocus = useCallback(
     (event: Event) => {
       suppressPillTooltipForFocusRestore();
-      event.preventDefault();
       const pendingProjectId = pendingIdentityEditRef.current;
       pendingIdentityEditRef.current = null;
       // A project swapped in during the exit animation is a different project
       // than the one the user right-clicked; drop the request rather than
-      // opening the editor over it.
+      // opening the editor over it. Every other close keeps the shared
+      // restore policy, so a keyboard dismissal lands back on the pill.
       if (pendingProjectId === null || pendingProjectId !== currentProject?.id) return;
+      event.preventDefault();
       setIdentityEditorProjectId(pendingProjectId);
     },
     [currentProject?.id, suppressPillTooltipForFocusRestore]
@@ -2329,7 +2393,7 @@ export function Toolbar({
                 <div
                   data-fullscreen={isFullscreen ? "true" : undefined}
                   className={cn(
-                    "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
+                    "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120 motion-reduce:transition-none",
                     // A zero-width flex item still owns a gap on each side;
                     // the negative margin folds the group's gap back in so
                     // fullscreen's first button lands at the same inset a
@@ -2403,6 +2467,7 @@ export function Toolbar({
                         onSelect={projectSwitcher.selectRow}
                         onHoverProject={projectSwitcher.onHoverProject}
                         onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
+                        onHoverRow={projectSwitcher.hoverRow}
                         fleetLiveness={projectSwitcher.fleetLiveness}
                         onClose={handlePillDropdownClose}
                         onDropdownCloseAutoFocus={suppressPillTooltipForFocusRestore}
@@ -2477,48 +2542,52 @@ export function Toolbar({
                         row's "Move or rename project…", which relocates the
                         folder on disk. */}
                       <ContextMenuItem onSelect={handleEditProjectIdentity}>
-                        <Pencil className="mr-2 h-3.5 w-3.5" />
+                        <Pencil data-menu-icon className="mr-2 h-3.5 w-3.5" />
                         Edit name and icon…
                       </ContextMenuItem>
                       <ContextMenuItem onSelect={handlePillTogglePin}>
                         {activeSearchableProject?.isPinned ? (
                           <>
-                            <PinOff className="mr-2 h-3.5 w-3.5" />
+                            <PinOff data-menu-icon className="mr-2 h-3.5 w-3.5" />
                             Unpin project
                           </>
                         ) : (
                           <>
-                            <Pin className="mr-2 h-3.5 w-3.5" />
+                            <Pin data-menu-icon className="mr-2 h-3.5 w-3.5" />
                             Pin project
                           </>
                         )}
                       </ContextMenuItem>
                       <ContextMenuItem onSelect={handleCopyProjectPath}>
-                        <Clipboard className="mr-2 h-3.5 w-3.5" />
+                        <Copy data-menu-icon className="mr-2 h-3.5 w-3.5" />
                         Copy path
                       </ContextMenuItem>
                       <ContextMenuSeparator />
                       <ContextMenuItem onSelect={handleOpenProjectSettings}>
-                        Project settings
+                        <Settings data-menu-icon className="mr-2 h-3.5 w-3.5" />
+                        Project settings…
                       </ContextMenuItem>
                       {activeSearchableProject && activeSearchableProject.processCount > 0 && (
-                        <ContextMenuItem onSelect={() => handleStopProject(currentProject.id)}>
-                          <Square className="mr-2 h-3.5 w-3.5" />
+                        <ContextMenuItem
+                          destructive
+                          onSelect={() => handleStopProject(currentProject.id)}
+                        >
+                          <CircleStop data-menu-icon className="mr-2 h-3.5 w-3.5" />
                           Stop all agents
                         </ContextMenuItem>
                       )}
                       <ContextMenuItem
+                        destructive
                         onSelect={() => handleCloseProject(currentProject.id)}
-                        className="text-status-error focus:text-status-error"
                       >
-                        <X className="mr-2 h-3.5 w-3.5" />
+                        <X data-menu-icon className="mr-2 h-3.5 w-3.5" />
                         Close project
                       </ContextMenuItem>
                     </ContextMenuContent>
                   )}
                 </ContextMenu>
                 {currentProject && (
-                  <TooltipContent side="bottom" className="max-w-[28rem]">
+                  <TooltipContent side="bottom">
                     <ToolbarProjectPillTooltipBody
                       name={currentProject.name}
                       branchLabel={pillBranchLabel}
@@ -2527,7 +2596,7 @@ export function Toolbar({
                   </TooltipContent>
                 )}
                 {!currentProject && currentScratch && (
-                  <TooltipContent side="bottom" className="max-w-[28rem]">
+                  <TooltipContent side="bottom">
                     <ToolbarProjectPillTooltipBody
                       name={currentScratch.name}
                       branchLabel={undefined}
@@ -2578,7 +2647,7 @@ export function Toolbar({
                   aria-hidden="true"
                   data-fullscreen={isFullscreen ? "true" : undefined}
                   className={cn(
-                    "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
+                    "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120 motion-reduce:transition-none",
                     isFullscreen && "w-0 -ml-1.5"
                   )}
                   style={isFullscreen ? undefined : { width: `${WINDOWS_CAPTION_WIDTH_PX}px` }}

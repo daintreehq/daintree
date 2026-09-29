@@ -2,9 +2,19 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { readFileSync } from "fs";
 import path from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FileEditorHintBar, type FileEditorHintBarProps } from "../FileEditorHintBar";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. The trigger renders its child
+// as-is; the content is dropped so tooltip text can't collide with queries.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 const BASE: FileEditorHintBarProps = {
   pluginName: "Markdown editor",

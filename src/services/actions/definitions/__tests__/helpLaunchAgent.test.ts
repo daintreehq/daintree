@@ -119,12 +119,18 @@ describe("help.launchAgent", () => {
               sessionId: "sess-default",
               sessionPath: "/mock/help",
               token: "tok-default",
-              tier: "action",
+              tier: "core",
               mcpUrl: null,
               windowId: 1,
             }),
             revokeSession: vi.fn().mockResolvedValue(undefined),
             markTerminal: vi.fn().mockResolvedValue(undefined),
+          },
+          helpAssistant: {
+            getSettings: vi.fn().mockResolvedValue({ modelIds: {}, customArgs: "" }),
+          },
+          agentCapabilities: {
+            getResolvedModelList: vi.fn().mockResolvedValue(null),
           },
         },
       },
@@ -189,6 +195,66 @@ describe("help.launchAgent", () => {
       expect.objectContaining({ agentId: "codex", cwd: "/mock/help" }),
       { source: "user" }
     );
+  });
+
+  it("launches with the CLI default model and custom args", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    (window.electron.helpAssistant.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
+      modelIds: {},
+      customArgs: "--verbose",
+    });
+
+    await action.run({ agentId: "codex" }, stubCtx);
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({
+        agentId: "codex",
+        agentLaunchFlags: ["--verbose"],
+      }),
+      { source: "user" }
+    );
+  });
+
+  it("adds no launch flags for an explicit CLI default", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    (window.electron.helpAssistant.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
+      modelIds: { claude: "" },
+      customArgs: "",
+    });
+
+    await action.run({ agentId: "claude" }, stubCtx);
+
+    const payload = mockDispatch.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("agentLaunchFlags");
+  });
+
+  it("never launches an agent with a model saved for a different agent", async () => {
+    vi.mocked(window.electron.help.getFolderPath).mockResolvedValue("/mock/help");
+    vi.mocked(window.electron.helpAssistant.getSettings).mockResolvedValue({
+      docSearch: true,
+      daintreeControl: true,
+      runbookSearch: true,
+      tier: "core",
+      bypassPermissions: false,
+      auditRetention: 7,
+      modelIds: { claude: "opus" },
+      customArgs: "",
+      idleHibernateMinutes: 5,
+      debugLogging: false,
+      loadGlobalHooksAndServers: false,
+      daintreeConfirmations: "inherit",
+    });
+
+    await action.run({ agentId: "codex" }, stubCtx);
+
+    const [, dispatchArg] = mockDispatch.mock.calls[0] ?? [];
+    expect(dispatchArg).toMatchObject({ agentId: "codex" });
+    expect(dispatchArg).not.toHaveProperty("agentLaunchFlags");
   });
 
   it("uses the user's preferred default agent when available", async () => {
@@ -370,7 +436,7 @@ describe("help.launchAgent", () => {
       sessionId: "sess-1",
       sessionPath: "/sessions/sess-1",
       token: "tok-abc",
-      tier: "action",
+      tier: "core",
       mcpUrl: "http://127.0.0.1:45454/sse",
       windowId: 5,
     });
@@ -446,7 +512,7 @@ describe("help.launchAgent", () => {
       sessionId: "sess-s1",
       sessionPath: "/sessions/sess-s1",
       token: "tok-s1",
-      tier: "action",
+      tier: "core",
       mcpUrl: null,
       windowId: 3,
     });
@@ -597,7 +663,7 @@ describe("help.launchAgent", () => {
       sessionId: "sess-fail",
       sessionPath: "/sessions/sess-fail",
       token: "tok-fail",
-      tier: "action",
+      tier: "core",
       mcpUrl: null,
       windowId: 1,
     });
@@ -624,7 +690,7 @@ describe("help.launchAgent", () => {
       sessionId: "sess-orphan",
       sessionPath: "/sessions/sess-orphan",
       token: "tok-orphan",
-      tier: "action",
+      tier: "core",
       mcpUrl: null,
       windowId: 1,
     });

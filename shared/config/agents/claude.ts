@@ -102,14 +102,20 @@ export const config: AgentConfig = {
   contextWindow: 200_000,
   capabilities: {
     scrollback: 10000,
+    launchMcp: { format: "claude-mcp-config" },
     resizeStrategy: "default",
     supportsBracketedPaste: true,
+    // Composer shows `[Image #N]` for a lone bracketed-pasted image path (#12792).
+    imageInput: "bracketed-path",
     softNewlineSequence: "\x1b\r",
     ignoredInputSequences: ["\x1b\r"],
     quitSubmitMode: "single-write",
     // Prints "esc to interrupt" in its own working footer — the same hint the
     // primary patterns below match on.
     interrupt: "double-escape",
+    // A message submitted mid-turn shows as queued and is read at the next
+    // step, so a terminal notice need not wait for this pane to settle.
+    queuesInputWhileWorking: true,
     // Not reliably carried by `--resume`, so it rides the persisted launch
     // flags and is re-passed on every relaunch.
     appendSystemPrompt: { flag: "--append-system-prompt" },
@@ -163,9 +169,6 @@ export const config: AgentConfig = {
     // the same id again, which is how spawn restores an untouched pane (#12371).
     assignSessionIdArgs: (sessionId: string) => ["--session-id", sessionId],
   },
-  env: {
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-  },
   help: {
     args: [],
   },
@@ -195,16 +198,16 @@ export const config: AgentConfig = {
     { key: "ANTHROPIC_DEFAULT_SONNET_MODEL", hint: "Override Sonnet model ID" },
     { key: "ANTHROPIC_DEFAULT_HAIKU_MODEL", hint: "Override Haiku model ID" },
     { key: "API_TIMEOUT_MS", hint: "Request timeout in ms (e.g. 3000000)" },
-    { key: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", hint: "1 to disable telemetry" },
+    {
+      key: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+      hint: "Any value stops telemetry and updates, and hides Monitor",
+    },
   ],
   providerTemplates: [
     {
       id: "anthropic-native",
       name: "Anthropic (native)",
       description: "Direct Anthropic API connection.",
-      env: {
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-      },
     },
     {
       id: "zai",
@@ -216,7 +219,6 @@ export const config: AgentConfig = {
         ANTHROPIC_DEFAULT_SONNET_MODEL: "glm-4.7",
         ANTHROPIC_DEFAULT_HAIKU_MODEL: "glm-4.5-air",
         API_TIMEOUT_MS: "3000000",
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       },
     },
     {
@@ -225,7 +227,6 @@ export const config: AgentConfig = {
       description: "Model routing via OpenRouter.",
       env: {
         ANTHROPIC_BASE_URL: "https://openrouter.ai/api/v1",
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       },
     },
     {
@@ -234,7 +235,6 @@ export const config: AgentConfig = {
       description: "OpenAI-compatible via DeepSeek.",
       env: {
         ANTHROPIC_BASE_URL: "https://api.deepseek.com/v1",
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       },
     },
     {
@@ -243,16 +243,12 @@ export const config: AgentConfig = {
       description: "Local models via Ollama — no API key needed.",
       env: {
         ANTHROPIC_BASE_URL: "http://localhost:11434/v1",
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       },
     },
     {
       id: "custom-openai",
       name: "Custom (OpenAI-compatible)",
       description: "Custom OpenAI-compatible endpoint.",
-      env: {
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-      },
     },
   ],
   completionSources: [

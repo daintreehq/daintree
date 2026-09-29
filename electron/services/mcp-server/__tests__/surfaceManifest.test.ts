@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 import { McpSurfaceResultSchema } from "../../../../shared/types/mcpSurface.js";
-import { TIER_ALLOWLISTS, type McpTier } from "../shared.js";
+import { NON_RENDERER_OWNED_TIER_ALLOWLISTS, TIER_ALLOWLISTS, type McpTier } from "../shared.js";
 import { shouldExposeTool } from "../tierAuth.js";
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "../surfaceManifest.js";
 
@@ -23,15 +23,15 @@ function entry(overrides: Partial<ActionManifestEntry> & { id: string }): Action
 
 /**
  * A manifest covering every branch the builder can take, built from ids that are
- * really on the workbench/action/system rungs so the tier reporting is exercised
- * against the live allowlists rather than invented ones.
+ * really in the core/full tool sets so the tier reporting is exercised against
+ * the live allowlists rather than invented ones.
  */
 function realisticManifest(): ActionManifestEntry[] {
   return [
     entry({ id: "actions.list" }),
     entry({ id: MCP_SURFACE_TOOL_ID }),
     entry({ id: "terminal.new", kind: "command" }),
-    entry({ id: "git.commit", kind: "command", danger: "confirm" }),
+    entry({ id: "worktree.resource.teardown", kind: "command", danger: "confirm" }),
   ];
 }
 
@@ -40,13 +40,13 @@ describe("buildSurfaceManifest", () => {
     const manifest = [
       entry({ id: "actions.list" }),
       entry({ id: "terminal.new", kind: "command" }),
-      entry({ id: "git.commit", kind: "command", danger: "confirm" }),
+      entry({ id: "worktree.resource.teardown", kind: "command", danger: "confirm" }),
       entry({ id: "actions.persistedStores", mcpVisibility: "hidden" }),
       entry({ id: "actions.getContext", danger: "restricted" }),
       entry({ id: "not.a.real.tool" }),
     ];
 
-    for (const tier of ["workbench", "action", "system", "external"] as const) {
+    for (const tier of ["core", "full", "external"] as const) {
       const expected = manifest
         .filter((e) => shouldExposeTool(e, tier))
         .map((e) => e.id)
@@ -61,8 +61,8 @@ describe("buildSurfaceManifest", () => {
     const forward = realisticManifest();
     const reversed = [...forward].reverse();
 
-    const a = buildSurfaceManifest(forward, "system", APP_VERSION);
-    const b = buildSurfaceManifest(reversed, "system", APP_VERSION);
+    const a = buildSurfaceManifest(forward, "full", APP_VERSION);
+    const b = buildSurfaceManifest(reversed, "full", APP_VERSION);
 
     expect(a.tools.map((t) => t.id)).toEqual([...a.tools.map((t) => t.id)].sort());
     expect(b.tools).toEqual(a.tools);
@@ -70,7 +70,7 @@ describe("buildSurfaceManifest", () => {
   });
 
   it("stamps a usable shape version, the app version it was given, and the caller tier", () => {
-    const result = buildSurfaceManifest(realisticManifest(), "action", APP_VERSION);
+    const result = buildSurfaceManifest(realisticManifest(), "core", APP_VERSION);
 
     // Asserting equality against the imported constant would compare the
     // implementation with itself. What a client needs is that the field is a
@@ -78,11 +78,11 @@ describe("buildSurfaceManifest", () => {
     expect(Number.isInteger(result.manifestVersion)).toBe(true);
     expect(result.manifestVersion).toBeGreaterThan(0);
     expect(result.appVersion).toBe(APP_VERSION);
-    expect(result.tier).toBe("action");
+    expect(result.tier).toBe("core");
   });
 
   it("returns an empty, still-valid surface for an empty manifest", () => {
-    const result = buildSurfaceManifest([], "workbench", APP_VERSION);
+    const result = buildSurfaceManifest([], "core", APP_VERSION);
 
     expect(result.tools).toEqual([]);
     expect(McpSurfaceResultSchema.safeParse(result).success).toBe(true);
@@ -96,14 +96,14 @@ describe("buildSurfaceManifest", () => {
     // this catches — neither side is a copy of the other.
     const advertised = Object.keys(McpSurfaceResultSchema.shape).sort();
     const emitted = Object.keys(
-      buildSurfaceManifest(realisticManifest(), "system", APP_VERSION)
+      buildSurfaceManifest(realisticManifest(), "full", APP_VERSION)
     ).sort();
 
     expect(emitted).toEqual(advertised);
   });
 
   it("satisfies the schema published as the tool's outputSchema", () => {
-    for (const tier of ["workbench", "action", "system", "external"] as const) {
+    for (const tier of ["core", "full", "external"] as const) {
       const result = buildSurfaceManifest(realisticManifest(), tier, APP_VERSION);
       expect(McpSurfaceResultSchema.safeParse(result).success).toBe(true);
     }
@@ -112,25 +112,54 @@ describe("buildSurfaceManifest", () => {
 
 describe("per-tool tier", () => {
   it("reports the minimum in-app rung for a ladder caller", () => {
-    const result = buildSurfaceManifest(realisticManifest(), "system", APP_VERSION);
-
     // Derived from the live allowlists rather than hardcoded, so moving a tool
     // between rungs cannot make this pass by being edited in lockstep. The
     // invariant: the reported rung permits the tool, and every rung below it
     // does not — that is what "minimum" means, and it is the demotion answer.
-    const rungs = ["workbench", "action", "system"] as const;
-    expect(result.tools.length).toBeGreaterThan(0);
-    for (const tool of result.tools) {
-      const reported = rungs.indexOf(tool.tier as (typeof rungs)[number]);
-      expect(reported).toBeGreaterThanOrEqual(0);
-      expect(TIER_ALLOWLISTS[rungs[reported]!].has(tool.id)).toBe(true);
-      for (const lower of rungs.slice(0, reported)) {
-        expect(TIER_ALLOWLISTS[lower].has(tool.id)).toBe(false);
+    // Asked of the lists the caller's origin is admitted against.
+    const rungs = ["core", "full"] as const;
+    for (const rendererOwnedOrigin of [false, true]) {
+      const allowlists = rendererOwnedOrigin ? TIER_ALLOWLISTS : NON_RENDERER_OWNED_TIER_ALLOWLISTS;
+      const result = buildSurfaceManifest(realisticManifest(), "full", APP_VERSION, {
+        workspaceBound: false,
+        rendererOwnedOrigin,
+      });
+      expect(result.tools.length).toBeGreaterThan(0);
+      for (const tool of result.tools) {
+        const reported = rungs.indexOf(tool.tier as (typeof rungs)[number]);
+        expect(reported).toBeGreaterThanOrEqual(0);
+        expect(allowlists[rungs[reported]!].has(tool.id)).toBe(true);
+        for (const lower of rungs.slice(0, reported)) {
+          expect(allowlists[lower].has(tool.id)).toBe(false);
+        }
       }
+      // Guard the guard: an all-core fixture would satisfy the loop vacuously,
+      // so prove the fixture actually spans rungs.
+      expect(new Set(result.tools.map((t) => t.tier)).size).toBeGreaterThan(1);
     }
-    // Guard the guard: an all-workbench fixture would satisfy the loop
-    // vacuously, so prove the fixture actually spans rungs.
-    expect(new Set(result.tools.map((t) => t.tier)).size).toBeGreaterThan(1);
+  });
+
+  it("places an owned twin on the ladder of the origin that can reach it", () => {
+    // The twins sit on no renderer-owned list, so an origin-blind lookup would
+    // find no rung and fall back to the caller's own tier — telling a `full`
+    // pane that its core-set send would not survive a demotion.
+    const twins = ["terminal.sendCommandOwned", "terminal.closeOwned", "terminal.injectOwned"];
+    const result = buildSurfaceManifest(
+      twins.map((id) => entry({ id, kind: "command" })),
+      "full",
+      APP_VERSION
+    );
+
+    expect(result.tools.map((t) => t.id)).toEqual([...twins].sort());
+    for (const tool of result.tools) {
+      expect(TIER_ALLOWLISTS.full.has(tool.id)).toBe(false);
+      expect(tool.tier).toBe(
+        NON_RENDERER_OWNED_TIER_ALLOWLISTS.core.has(tool.id) ? "core" : "full"
+      );
+    }
+    // At least one twin must sit below the caller's tier, or the fallback
+    // would produce the same answer and the test would have no teeth.
+    expect(result.tools.some((t) => t.tier === "core")).toBe(true);
   });
 
   it("reports `external` for every tool an external caller sees", () => {
@@ -141,8 +170,8 @@ describe("per-tool tier", () => {
   });
 
   it("never reports a rung above the caller's own tier", () => {
-    const order: Record<string, number> = { workbench: 0, action: 1, system: 2 };
-    for (const tier of ["workbench", "action", "system"] as const) {
+    const order: Record<string, number> = { core: 0, full: 1 };
+    for (const tier of ["core", "full"] as const) {
       const result = buildSurfaceManifest(realisticManifest(), tier, APP_VERSION);
       for (const tool of result.tools) {
         expect(order[tool.tier]).toBeLessThanOrEqual(order[tier]);
@@ -158,7 +187,7 @@ describe("hints", () => {
       entry({ id: "terminal.new", kind: "command" }),
     ];
     const byId = new Map(
-      buildSurfaceManifest(manifest, "system", APP_VERSION).tools.map((t) => [t.id, t])
+      buildSurfaceManifest(manifest, "full", APP_VERSION).tools.map((t) => [t.id, t])
     );
 
     expect(byId.get("actions.list")).toMatchObject({ readOnlyHint: true, idempotentHint: true });
@@ -173,7 +202,7 @@ describe("hints", () => {
         mcpAnnotations: { readOnlyHint: true, idempotentHint: true },
       }),
     ];
-    const [tool] = buildSurfaceManifest(manifest, "action", APP_VERSION).tools;
+    const [tool] = buildSurfaceManifest(manifest, "full", APP_VERSION).tools;
 
     expect(tool).toMatchObject({ readOnlyHint: true, idempotentHint: true });
   });
@@ -184,7 +213,7 @@ describe("hints", () => {
     const oneOverride = (mcpAnnotations: Record<string, boolean>) =>
       buildSurfaceManifest(
         [entry({ id: "terminal.new", kind: "command", mcpAnnotations })],
-        "action",
+        "full",
         APP_VERSION
       ).tools[0]!;
 
@@ -203,7 +232,7 @@ describe("hints", () => {
     // a `??`-style fallback.
     const [tool] = buildSurfaceManifest(
       [entry({ id: "actions.list", kind: "query", mcpAnnotations: { idempotentHint: false } })],
-      "workbench",
+      "full",
       APP_VERSION
     ).tools;
 
@@ -213,11 +242,7 @@ describe("hints", () => {
 
 describe("deprecation", () => {
   it("omits the field for a tool that is not deprecated", () => {
-    const [tool] = buildSurfaceManifest(
-      [entry({ id: "actions.list" })],
-      "workbench",
-      APP_VERSION
-    ).tools;
+    const [tool] = buildSurfaceManifest([entry({ id: "actions.list" })], "full", APP_VERSION).tools;
 
     expect(tool).not.toHaveProperty("deprecated");
   });
@@ -231,7 +256,7 @@ describe("deprecation", () => {
       entry({ id: "actions.search", deprecated: { reason: "No replacement" } }),
     ];
     const byId = new Map(
-      buildSurfaceManifest(manifest, "workbench", APP_VERSION).tools.map((t) => [t.id, t])
+      buildSurfaceManifest(manifest, "full", APP_VERSION).tools.map((t) => [t.id, t])
     );
 
     expect(byId.get("actions.list")?.deprecated).toEqual({
@@ -243,7 +268,7 @@ describe("deprecation", () => {
 });
 
 describe("hash", () => {
-  const hashOf = (manifest: ActionManifestEntry[], tier: McpTier = "system"): string =>
+  const hashOf = (manifest: ActionManifestEntry[], tier: McpTier = "full"): string =>
     buildSurfaceManifest(manifest, tier, APP_VERSION).hash;
 
   it("is a full lowercase hex sha256", () => {
@@ -252,8 +277,8 @@ describe("hash", () => {
 
   it("does not depend on the app version", () => {
     const manifest = realisticManifest();
-    expect(buildSurfaceManifest(manifest, "system", "1.0.0").hash).toBe(
-      buildSurfaceManifest(manifest, "system", "2.0.0").hash
+    expect(buildSurfaceManifest(manifest, "full", "1.0.0").hash).toBe(
+      buildSurfaceManifest(manifest, "full", "2.0.0").hash
     );
   });
 
@@ -310,10 +335,10 @@ describe("hash", () => {
     // `safe` → `confirm` rewrites the invocation contract — the call now blocks
     // on a user dialog — while leaving every reported field identical. A client
     // that trusted the hash to spot that would be silently wrong.
-    const base = [entry({ id: "actions.list" })];
-    const gated = [entry({ id: "actions.list", danger: "confirm" })];
+    const base = [entry({ id: "actions.search" })];
+    const gated = [entry({ id: "actions.search", danger: "confirm" })];
 
-    expect(hashOf(gated, "workbench")).not.toBe(hashOf(base, "workbench"));
+    expect(hashOf(gated, "core")).not.toBe(hashOf(base, "core"));
   });
 
   it("ignores description edits, so wording changes never read as drift", () => {
@@ -426,6 +451,12 @@ describe("hash", () => {
     // `entry.inputSchema` (see MCP_SURFACE_MANIFEST_VERSION). That dropped the
     // `additionalProperties: false` the advertised view injects, so every v1
     // digest is stale by construction.
+    //
+    // Re-frozen at `full` for v3, the core/full split, with the algorithm untouched:
+    // the tier names are part of the preimage, and the surface this pinned at
+    // `action` (with `actions.list` reported as `workbench`) can no longer be
+    // built. That legacy preimage still hashes to e19447a2…efe4 under the
+    // current code; only the surface moved.
     const frozen: ActionManifestEntry[] = [
       entry({
         id: "actions.list",
@@ -440,8 +471,8 @@ describe("hash", () => {
       entry({ id: "terminal.new", kind: "command", danger: "safe" }),
     ];
 
-    expect(buildSurfaceManifest(frozen, "action", APP_VERSION).hash).toBe(
-      "e19447a203b1badebb082cd110c51768030ab6f4057afc804b9ba746a679efe4"
+    expect(buildSurfaceManifest(frozen, "full", APP_VERSION).hash).toBe(
+      "9e18cad35e47aec474582a605315a717165f473e07d29efbb900528e2ed6de79"
     );
   });
 
@@ -458,9 +489,7 @@ describe("hash", () => {
   it("differs across tiers even when one surface is a subset of another", () => {
     const manifest = realisticManifest();
 
-    const hashes = (["workbench", "action", "system", "external"] as const).map((t) =>
-      hashOf(manifest, t)
-    );
+    const hashes = (["core", "full", "external"] as const).map((t) => hashOf(manifest, t));
     expect(new Set(hashes).size).toBe(hashes.length);
   });
 });
@@ -490,9 +519,9 @@ describe("buildSurfaceManifest with a workspace-bound session (#11789)", () => {
     // Stated against an independently-derived expectation rather than against
     // `shouldExposeTool` — comparing the builder to its own gate would pass
     // just as happily with that gate deleted.
-    // `recipe.run`, not `git.commit`: the confirm-gated entry has to be one the
-    // external tier actually permits, or neither report would list it and the
-    // comparison would hold vacuously.
+    // `recipe.run`, not `worktree.resource.teardown`: the confirm-gated entry
+    // has to be one the external tier actually permits, or neither report
+    // would list it and the comparison would hold vacuously.
     const manifest = [
       entry({ id: "actions.list" }),
       entry({ id: "terminal.new", kind: "command" }),
@@ -529,7 +558,7 @@ describe("buildSurfaceManifest with a workspace-bound session (#11789)", () => {
 
   it("does not narrow a non-external tier, so the pinned Assistant is unaffected", () => {
     const manifest = realisticManifest();
-    for (const tier of ["workbench", "action", "system"] as const) {
+    for (const tier of ["core", "full"] as const) {
       expect(buildSurfaceManifest(manifest, tier, APP_VERSION, BOUND)).toEqual(
         buildSurfaceManifest(manifest, tier, APP_VERSION)
       );

@@ -7,6 +7,11 @@ vi.mock("@/lib/notify", () => ({
   notify: (...args: unknown[]) => mockNotify(...args),
 }));
 
+const mockLogWarn = vi.fn();
+vi.mock("@/utils/logger", () => ({
+  logWarn: (...args: unknown[]) => mockLogWarn(...args),
+}));
+
 const mockRefreshPullRequests = vi.fn().mockResolvedValue(undefined);
 vi.mock("@/clients", () => ({
   worktreeClient: { refreshPullRequests: () => mockRefreshPullRequests() },
@@ -21,23 +26,49 @@ vi.mock("@/store/projectStore", () => ({
 }));
 
 const mockRequest = vi.fn();
+let readyCallbacks: Array<() => void> = [];
+let portReady = false;
+const mockOnReady = vi.fn((callback: () => void) => {
+  if (portReady) callback();
+  readyCallbacks.push(callback);
+  return () => {
+    const idx = readyCallbacks.indexOf(callback);
+    if (idx >= 0) readyCallbacks.splice(idx, 1);
+  };
+});
+
+async function attachPort(): Promise<void> {
+  portReady = true;
+  // Mirrors preload: iterate the live array, so an in-loop unsubscribe would skip a listener.
+  for (const cb of readyCallbacks) cb();
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 type ActionFactory = () => AnyActionDefinition;
 
 describe("worktree service action definitions", () => {
   const registry = new Map<string, ActionFactory>();
+  const runRefresh = () => registry.get("worktree.refresh")!().run!(undefined, {});
 
   beforeAll(async () => {
     (globalThis as unknown as { window: Window }).window = globalThis.window ?? ({} as Window);
     (window as unknown as { electron: unknown }).electron = {
-      worktreePort: { request: (...args: unknown[]) => mockRequest(...args) },
+      worktreePort: {
+        request: (...args: unknown[]) => mockRequest(...args),
+        onReady: (callback: () => void) => mockOnReady(callback),
+      },
     };
 
     const { registerWorktreeServiceActions } = await import("../worktreeServiceActions");
     registerWorktreeServiceActions(registry as never, {} as never);
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Flush any refresh a previous test left waiting on the port.
+    await attachPort();
+    readyCallbacks = [];
+    portReady = false;
     vi.clearAllMocks();
     mockRequest.mockResolvedValue({ ok: true });
     mockRefreshPullRequests.mockResolvedValue(undefined);
@@ -51,6 +82,35 @@ describe("worktree service action definitions", () => {
     expect(registry.has("worktree.refresh")).toBe(true);
     expect(registry.has("worktree.reconcileTopology")).toBe(true);
   });
+
+  it.each([
+    ["succeeds", () => mockRequest.mockResolvedValueOnce({ ok: true })],
+    ["fails", () => mockRequest.mockRejectedValueOnce(new Error("Worktree port timed out"))],
+    [
+      "defers on a missing port",
+      () => mockRequest.mockRejectedValueOnce(new Error("[BrokerError|HOST_EXITED] not ready")),
+    ],
+  ])(
+    "worktree.refresh settles every refresh it starts when the host %s",
+    async (_label, arrange) => {
+      // The sidebar counts in-flight refreshes off this pair, so a start with no
+      // settle would leave its refresh icon spinning for good.
+      arrange();
+      const events: string[] = [];
+      const record = (e: Event) => events.push(e.type);
+      window.addEventListener("daintree:refresh-sidebar", record);
+      window.addEventListener("daintree:refresh-sidebar-settled", record);
+      try {
+        const run = runRefresh();
+        expect(events).toEqual(["daintree:refresh-sidebar"]);
+        await run;
+        expect(events).toEqual(["daintree:refresh-sidebar", "daintree:refresh-sidebar-settled"]);
+      } finally {
+        window.removeEventListener("daintree:refresh-sidebar", record);
+        window.removeEventListener("daintree:refresh-sidebar-settled", record);
+      }
+    }
+  );
 
   it("worktree.refresh requests a host refresh and does not notify on success", async () => {
     const def = registry.get("worktree.refresh")!();
@@ -75,6 +135,82 @@ describe("worktree service action definitions", () => {
     expect(payload.type).toBe("error");
     expect(payload.title).toBe("Refresh failed");
     expect(payload.message).toContain("Worktree port timed out");
+  });
+
+  it.each([
+    ["HOST_EXITED", "Worktree port not ready"],
+    ["HOST_EXITED", "Worktree port replaced"],
+    ["APP_SHUTDOWN", "Broker disposed"],
+  ])(
+    "worktree.refresh logs instead of toasting when the port is unavailable (%s: %s)",
+    async (code, message) => {
+      // The exact shape preload's encodeBrokerError produces across contextBridge.
+      mockRequest.mockRejectedValueOnce(new Error(`[BrokerError|${code}] ${message}`));
+
+      await runRefresh();
+
+      expect(mockNotify).not.toHaveBeenCalled();
+      expect(mockLogWarn).toHaveBeenCalledWith("Worktree refresh deferred: port unavailable", {
+        code,
+        reason: message,
+      });
+      // The pool-wide PR refresh doesn't depend on this view's port.
+      expect(mockRefreshPullRequests).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("worktree.refresh runs a port-not-ready refresh once the port attaches", async () => {
+    mockRequest.mockRejectedValueOnce(
+      new Error("[BrokerError|HOST_EXITED] Worktree port not ready")
+    );
+    await runRefresh();
+    // A second miss before the port arrives coalesces into the same pending refresh.
+    mockRequest.mockRejectedValueOnce(
+      new Error("[BrokerError|HOST_EXITED] Worktree port not ready")
+    );
+    await runRefresh();
+
+    const otherListener = vi.fn();
+    expect(readyCallbacks).toHaveLength(1);
+    readyCallbacks.push(otherListener);
+    mockRequest.mockClear();
+
+    await attachPort();
+
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+    expect(mockRequest).toHaveBeenCalledWith("refresh");
+    expect(otherListener).toHaveBeenCalledTimes(1);
+    expect(readyCallbacks).toEqual([otherListener]);
+
+    // Later re-attaches don't repeat it.
+    mockRequest.mockClear();
+    await attachPort();
+    expect(mockRequest).not.toHaveBeenCalled();
+    expect(mockNotify).not.toHaveBeenCalled();
+  });
+
+  it("worktree.refresh does not defer a refresh when the app is shutting down", async () => {
+    mockRequest.mockRejectedValueOnce(new Error("[BrokerError|APP_SHUTDOWN] Broker disposed"));
+    await runRefresh();
+
+    expect(mockOnReady).not.toHaveBeenCalled();
+  });
+
+  it("worktree.refresh toasts a broker timeout without the transport prefix", async () => {
+    mockRequest.mockRejectedValueOnce(
+      new Error("[BrokerError|TIMEOUT] Request timeout: refresh (10000ms)")
+    );
+
+    await runRefresh();
+
+    expect(mockNotify).toHaveBeenCalledTimes(1);
+    expect(mockNotify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Refresh failed",
+        message: "Request timeout: refresh (10000ms)",
+      })
+    );
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
   it("worktree.refresh surfaces an error toast when the host reports ok:false (watchdog tripped)", async () => {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback } from "react";
+import { isPointerClaimed } from "@/lib/pointerClaim";
 import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
@@ -24,6 +25,8 @@ interface PanelPaletteProps {
   onSelectPrevious: () => void;
   onSelectNext: () => void;
   onSelect: (kind: PanelKindOption) => void;
+  /** Moves the cursor to the row under the pointer, so pointer and keys share one highlight. */
+  onHoverIndex?: (index: number) => void;
   onConfirm: () => void;
   onClose: () => void;
 }
@@ -45,6 +48,7 @@ export function PanelPalette({
   onSelectPrevious,
   onSelectNext,
   onSelect,
+  onHoverIndex,
   onConfirm,
   onClose,
 }: PanelPaletteProps) {
@@ -60,6 +64,9 @@ export function PanelPalette({
   useEffect(() => {
     if (selectedIndex >= 0 && results[selectedIndex]) {
       const node = itemsRef.current.get(results[selectedIndex].id);
+      // A row under the pointer was just claimed by it; revealing it would
+      // scroll a half-visible row out from under the pointer.
+      if (isPointerClaimed(node)) return;
       node?.scrollIntoView({ block: "nearest" });
     }
   }, [selectedIndex, results]);
@@ -140,6 +147,9 @@ export function PanelPalette({
         id={`panel-option-${kind.id}`}
         tabIndex={-1}
         onPointerDown={(e) => e.preventDefault()}
+        onPointerMove={
+          onHoverIndex && index !== selectedIndex ? () => onHoverIndex(index) : undefined
+        }
         role="option"
         aria-selected={index === selectedIndex}
         ref={(el) => {
@@ -149,7 +159,7 @@ export function PanelPalette({
         className={cn(
           PALETTE_ROW_CLASS,
           "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
-          "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
+          "text-text-secondary"
         )}
         onClick={() => onSelect(kind)}
       >

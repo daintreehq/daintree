@@ -33,6 +33,15 @@ export function isTuiReservedKey(event: KeyboardEvent): boolean {
 }
 
 /**
+ * The copy and paste keys a terminal honours, as canonical combos for display.
+ * Not registry bindings — the handlers below and the native Edit menu own them —
+ * so they are fixed per platform rather than rebindable.
+ */
+export function terminalClipboardCombos(mac: boolean): { copy: string; paste: string } {
+  return mac ? { copy: "Cmd+C", paste: "Cmd+V" } : { copy: "Ctrl+Shift+C", paste: "Ctrl+Shift+V" };
+}
+
+/**
  * Standard terminal clipboard conventions on Windows/Linux: Ctrl+Shift+C /
  * Ctrl+Shift+V and Shift+Insert (pastes the CLIPBOARD selection — the async
  * clipboard API doesn't expose X11 PRIMARY). macOS terminals use Cmd+C/V via

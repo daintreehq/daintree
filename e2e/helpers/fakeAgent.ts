@@ -12,7 +12,15 @@
  * plus the idle debounce, = `waiting`.
  */
 
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "fs";
 import path from "path";
 import type { Page } from "@playwright/test";
 import { T_MEDIUM } from "./timeouts";
@@ -38,6 +46,7 @@ interface FakeAgentEvent {
 const CONTROL_FILE = "control.in";
 const EVENTS_FILE = "events.log";
 const STDIN_FILE = "stdin.log";
+const LAUNCH_FILE = "launch.json";
 
 export interface FakeAgentOptions {
   /**
@@ -63,6 +72,15 @@ export interface FakeAgentOptions {
    * directing state listens on. Everything received lands in the stdin log.
    */
   queryOnFocus?: boolean;
+  /**
+   * Run several instances off one binary: each keys its control, events and
+   * stdin files on the `DAINTREE_PANE_ID` Daintree gives its pane, takes
+   * commands only through its own control file, and logs everything it
+   * receives on stdin once trusted. It also clears the trust dialog off the
+   * screen when trusted, so an idle instance reads as sitting at its prompt.
+   * Address an instance with the `paneId` argument of the helpers below.
+   */
+  perPane?: boolean;
 }
 
 /**
@@ -74,6 +92,7 @@ export function installFakeAgent(repoDir: string, options: FakeAgentOptions = {}
   const streamLinesPerSec = Math.max(0, Math.floor(options.streamLinesPerSec ?? 0));
   const controlChannel = options.controlChannel === true;
   const queryOnFocus = options.queryOnFocus === true;
+  const perPane = options.perPane === true;
   const binDir = path.join(repoDir, ".e2e bin");
   mkdirSync(binDir, { recursive: true });
 
@@ -93,13 +112,22 @@ export function installFakeAgent(repoDir: string, options: FakeAgentOptions = {}
       `const streamOnToken = ${JSON.stringify(FAKE_AGENT_STREAM_ON)};`,
       `const streamOffToken = ${JSON.stringify(FAKE_AGENT_STREAM_OFF)};`,
       `const streamLinesPerSec = ${streamLinesPerSec};`,
-      `const controlChannel = ${controlChannel};`,
+      `const perPane = ${perPane};`,
+      `const controlChannel = ${controlChannel} || perPane;`,
       `const queryOnFocus = ${queryOnFocus};`,
       `const markOutput = ${JSON.stringify(FAKE_AGENT_MARK_OUTPUT)};`,
-      `const controlFile = require('path').join(__dirname, ${JSON.stringify(CONTROL_FILE)});`,
-      `const eventsFile = require('path').join(__dirname, ${JSON.stringify(EVENTS_FILE)});`,
-      `const stdinFile = require('path').join(__dirname, ${JSON.stringify(STDIN_FILE)});`,
+      "const paneTag = perPane ? '.' + String(process.env.DAINTREE_PANE_ID || 'unknown').replace(/[^A-Za-z0-9_-]/g, '_') : '';",
+      "const named = (base) => { const dot = base.lastIndexOf('.'); return require('path').join(__dirname, base.slice(0, dot) + paneTag + base.slice(dot)); };",
+      `const controlFile = named(${JSON.stringify(CONTROL_FILE)});`,
+      `const eventsFile = named(${JSON.stringify(EVENTS_FILE)});`,
+      `const stdinFile = named(${JSON.stringify(STDIN_FILE)});`,
       "const fs = require('fs');",
+      // Which pane this is and the Daintree MCP bearer it was launched with, so
+      // a spec can find a pane Daintree opened on its own (an assistant lane)
+      // and call Daintree as that pane.
+      "if (perPane) fs.writeFileSync(named(" +
+        JSON.stringify(LAUNCH_FILE) +
+        "), JSON.stringify({ paneId: process.env.DAINTREE_PANE_ID || null, mcpToken: process.env.DAINTREE_MCP_TOKEN || null, argv: process.argv.slice(2), at: Date.now() }));",
       // OSC 9;4 taskbar-progress: state 1 = working, state 0 = idle hint.
       "const OSC_WORKING = '\\u001b]9;4;1;0\\u0007';",
       "const OSC_IDLE = '\\u001b]9;4;0;0\\u0007';",
@@ -179,6 +207,7 @@ export function installFakeAgent(repoDir: string, options: FakeAgentOptions = {}
       "  const input = String(chunk);",
       "  if (!trusted && /[\\r\\n]/.test(input)) {",
       "    trusted = true;",
+      "    if (perPane) process.stdout.write('\\u001b[2J\\u001b[H');",
       `    console.log('${FAKE_AGENT_READY}');`,
       "    if (queryOnFocus) process.stdout.write('\\u001b[?1004h');",
       "    if (controlChannel) setInterval(pollControl, 20);",
@@ -186,8 +215,9 @@ export function installFakeAgent(repoDir: string, options: FakeAgentOptions = {}
       "    return;",
       "  }",
       "  if (!trusted) return;",
+      "  if (perPane) fs.appendFileSync(stdinFile, input);",
       "  if (queryOnFocus) {",
-      "    fs.appendFileSync(stdinFile, input);",
+      "    if (!perPane) fs.appendFileSync(stdinFile, input);",
       "    if (input.includes('\\u001b[I')) process.stdout.write('\\u001b[6n\\u001b[c\\u001b]11;?\\u0007');",
       "  }",
       "  if (input.includes(stopToken)) { shutdown(); return; }",
@@ -238,8 +268,16 @@ export async function ptyWrite(page: Page, terminalId: string, data: string): Pr
     .catch(() => false);
 }
 
-function readEvents(binDir: string): FakeAgentEvent[] {
-  const file = path.join(binDir, EVENTS_FILE);
+/** The file-name tag a `perPane` instance adds, mirrored from the binary. */
+function paneFile(binDir: string, base: string, paneId?: string): string {
+  if (paneId === undefined) return path.join(binDir, base);
+  const dot = base.lastIndexOf(".");
+  const tag = "." + paneId.replace(/[^A-Za-z0-9_-]/g, "_");
+  return path.join(binDir, base.slice(0, dot) + tag + base.slice(dot));
+}
+
+function readEvents(binDir: string, paneId?: string): FakeAgentEvent[] {
+  const file = paneFile(binDir, EVENTS_FILE, paneId);
   if (!existsSync(file)) return [];
   const text = readFileSync(file, "utf8");
   // Only newline-terminated records: the agent may be mid-append.
@@ -252,26 +290,52 @@ function readEvents(binDir: string): FakeAgentEvent[] {
 
 /**
  * Run a command in a `controlChannel` fake agent without touching its PTY, and
- * resolve with the agent's own record of when it took effect.
+ * resolve with the agent's own record of when it took effect. `paneId` names
+ * one instance of a `perPane` binary.
  */
 export async function sendFakeAgentCommand(
   binDir: string,
   cmd: FakeAgentCommand,
-  timeoutMs = T_MEDIUM
+  timeoutMs = T_MEDIUM,
+  paneId?: string
 ): Promise<FakeAgentEvent> {
-  const seen = readEvents(binDir).length;
-  appendFileSync(path.join(binDir, CONTROL_FILE), `${cmd}\n`);
+  const seen = readEvents(binDir, paneId).length;
+  appendFileSync(paneFile(binDir, CONTROL_FILE, paneId), `${cmd}\n`);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const event = readEvents(binDir)[seen];
+    const event = readEvents(binDir, paneId)[seen];
     if (event) return event;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`fake agent did not acknowledge "${cmd}" within ${timeoutMs}ms`);
 }
 
-/** Everything a `queryOnFocus` fake agent has received on stdin since launch. */
-export function readFakeAgentStdin(binDir: string): string {
-  const file = path.join(binDir, STDIN_FILE);
+export interface FakeAgentLaunch {
+  paneId: string;
+  /** The Daintree MCP bearer the pane was launched with, when it had one. */
+  mcpToken: string | null;
+  /** Arguments Daintree started the CLI with, a launch prompt among them. */
+  argv: string[];
+  at: number;
+}
+
+/** Every `perPane` instance started from this binary, oldest first. */
+export function listFakeAgentLaunches(binDir: string): FakeAgentLaunch[] {
+  const [stem, ext] = LAUNCH_FILE.split(".");
+  return readdirSync(binDir)
+    .filter(
+      (name) => name.startsWith(`${stem}.`) && name.endsWith(`.${ext}`) && name !== LAUNCH_FILE
+    )
+    .map((name) => JSON.parse(readFileSync(path.join(binDir, name), "utf8")) as FakeAgentLaunch)
+    .filter((launch) => typeof launch.paneId === "string")
+    .sort((a, b) => a.at - b.at);
+}
+
+/**
+ * Everything a `queryOnFocus` fake agent, or one `perPane` instance, has
+ * received on stdin since launch.
+ */
+export function readFakeAgentStdin(binDir: string, paneId?: string): string {
+  const file = paneFile(binDir, STDIN_FILE, paneId);
   return existsSync(file) ? readFileSync(file, "utf8") : "";
 }

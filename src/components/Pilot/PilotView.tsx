@@ -35,10 +35,12 @@ import {
 import { BAND_GLYPH, BAND_GLYPH_TONE, PilotRunState } from "./PilotRunState";
 import { PilotFilterBar } from "./PilotFilterBar";
 import { PilotFooterHint } from "./PilotFooterHint";
+import { pilotDrillKeys, pilotParkKeys } from "./pilotKeys";
 import { PilotParkEditor, type PilotGateCandidate, type PilotParkTarget } from "./PilotParkEditor";
 import { isMac } from "@/lib/platform";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
+import { Button } from "@/components/ui/button";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import {
   usePaletteTreeNavigation,
@@ -198,8 +200,12 @@ function quietPhrase(count: number): string {
   return count === 1 ? "Agent has gone quiet" : `${count} agents have gone quiet`;
 }
 
-/** The resting tone. Selected is the shared row class's to own, off the attribute. */
-const ROW_TONE = "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary";
+/**
+ * The resting tone. Selected is the shared row class's to own, off the
+ * attribute — and the pointer moves that selection rather than painting a
+ * second row of its own.
+ */
+const ROW_TONE = "text-text-secondary";
 
 /**
  * 16px, down from the switcher's 32px.
@@ -626,7 +632,7 @@ function PilotFooter({
         )}
         {parkLabel !== null && (
           <PilotFooterHint
-            keys={isMac() ? "⌥↵" : "Alt+↵"}
+            keys={pilotParkKeys(isMac())}
             label={parkLabel}
             onClick={onPark}
             testId="pilot-park-hint"
@@ -634,7 +640,7 @@ function PilotFooter({
         )}
         {drillLabel !== null && (
           <PilotFooterHint
-            keys={isMac() ? "⌘↵" : "Ctrl+↵"}
+            keys={pilotDrillKeys(isMac())}
             label={drillLabel}
             onClick={onDrill}
             testId="pilot-drill-hint"
@@ -1714,20 +1720,16 @@ export function PilotView() {
             */}
             {scopedName !== null && (
               <div className="mb-1.5 flex min-w-0 items-center gap-1 text-2xs leading-none">
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="xs"
                   data-testid="pilot-scope-back"
                   onClick={showFleet}
-                  className={cn(
-                    "flex shrink-0 items-center gap-0.5 rounded-[var(--radius-sm)] py-0.5 pr-1.5 pl-0.5",
-                    "text-text-secondary transition-colors",
-                    "hover:bg-overlay-subtle hover:text-text-primary",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-                  )}
+                  className="shrink-0 gap-0.5 pr-1.5 pl-0.5 text-2xs focus-visible:-outline-offset-2"
                 >
-                  <ChevronLeft className="h-3 w-3" aria-hidden="true" />
+                  <ChevronLeft aria-hidden="true" />
                   All agents
-                </button>
+                </Button>
                 <span aria-hidden="true" className="shrink-0 text-daintree-text/25">
                   /
                 </span>
@@ -1901,8 +1903,9 @@ export function PilotView() {
             {...(bandFilter !== "all" ? { filterLabel: PILOT_BAND_FILTER_LABEL[bandFilter] } : {})}
             noMatchContent={
               bandFilter === "all" ? undefined : (
-                <button
-                  type="button"
+                <Button
+                  variant="subtle"
+                  size="sm"
                   data-testid="pilot-clear-filter"
                   onClick={() => {
                     setBandFilter("all");
@@ -1912,14 +1915,9 @@ export function PilotView() {
                     // is no row to arrow to either.
                     searchRef.current?.focus();
                   }}
-                  className={cn(
-                    "rounded-[var(--radius-sm)] px-2 py-1 text-xs text-text-secondary transition-colors",
-                    "hover:bg-overlay-subtle hover:text-text-primary",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-                  )}
                 >
                   Clear filter
-                </button>
+                </Button>
               )
             }
           />

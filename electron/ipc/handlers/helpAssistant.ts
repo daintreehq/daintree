@@ -6,12 +6,18 @@ import type { IpcContext } from "../types.js";
 import { HELP_ASSISTANT_METHOD_CHANNELS } from "./helpAssistant.preload.js";
 import type {
   HelpAssistantAuditRetention,
+  HelpAssistantDaintreeConfirmations,
   HelpAssistantIdleHibernateMinutes,
   HelpAssistantSettings,
   HelpSessionLiveStatus,
 } from "../../../shared/types/ipc/api.js";
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
+import {
+  DEFAULT_HELP_ASSISTANT_TIER,
+  normalizeHelpAssistantTier,
+} from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { hasShellMetachar } from "../../../shared/utils/shellEscape.js";
+import { applyModelIdPatch, sanitizeModelIdMap } from "../../utils/helpAssistantModels.js";
 import type * as McpServerServiceModule from "../../services/McpServerService.js";
 
 type McpServerSingleton = typeof McpServerServiceModule.mcpServerService;
@@ -26,34 +32,35 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
 }
 
 const CUSTOM_ARGS_MAX_LEN = 10000;
-// A model ID is a single CLI token (e.g. "claude-sonnet-4-6"); cap well above
-// any realistic ID so a corrupted store value can't bloat the launch command.
-const MODEL_ID_MAX_LEN = 200;
 
 const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   docSearch: true,
   daintreeControl: true,
-  tier: "action",
+  runbookSearch: true,
+  tier: DEFAULT_HELP_ASSISTANT_TIER,
   bypassPermissions: false,
   auditRetention: 7,
-  modelId: "",
+  modelIds: {},
   customArgs: "",
   idleHibernateMinutes: 5,
   debugLogging: false,
   loadGlobalHooksAndServers: false,
+  daintreeConfirmations: "inherit",
 };
 
 const HELP_ASSISTANT_KEYS = [
   "docSearch",
   "daintreeControl",
+  "runbookSearch",
   "tier",
   "bypassPermissions",
   "auditRetention",
-  "modelId",
+  "modelIds",
   "customArgs",
   "idleHibernateMinutes",
   "debugLogging",
   "loadGlobalHooksAndServers",
+  "daintreeConfirmations",
 ] as const satisfies ReadonlyArray<keyof HelpAssistantSettings>;
 
 const KNOWN_KEYS: ReadonlySet<string> = new Set(HELP_ASSISTANT_KEYS);
@@ -68,8 +75,12 @@ function isValidIdleHibernateMinutes(value: unknown): value is HelpAssistantIdle
   );
 }
 
+function isValidDaintreeConfirmations(value: unknown): value is HelpAssistantDaintreeConfirmations {
+  return value === "inherit" || value === "always-ask";
+}
+
 function isValidHelpAssistantTier(value: unknown): value is HelpAssistantTier {
-  return value === "workbench" || value === "action" || value === "system";
+  return value === "core" || value === "full";
 }
 
 function sanitizeCustomArgs(value: unknown): string | undefined {
@@ -80,30 +91,13 @@ function sanitizeCustomArgs(value: unknown): string | undefined {
   return collapsed.slice(0, CUSTOM_ARGS_MAX_LEN);
 }
 
-// A valid model ID is a single shell-safe token. The empty string is valid and
-// means "use the CLI default" (no `--model` injected). Anything with internal
-// whitespace, control characters, a leading `-` (would inject a bare flag), or
-// shell metacharacters is rejected outright rather than coerced — the picker
-// only ever emits clean IDs, so a dirty value is corruption, not a near-miss to
-// salvage. Whitespace/control chars are checked, not stripped, so a tab or
-// newline can't be silently collapsed into a bogus token.
-function sanitizeModelId(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  if (trimmed === "") return "";
-  // eslint-disable-next-line no-control-regex
-  if (/[\s\x00-\x1f\x7f]/.test(trimmed)) return undefined;
-  if (trimmed.startsWith("-")) return undefined;
-  if (hasShellMetachar(trimmed)) return undefined;
-  return trimmed.slice(0, MODEL_ID_MAX_LEN);
-}
-
 function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
   if (!stored || typeof stored !== "object") return {};
   const out: Partial<HelpAssistantSettings> = {};
   const record = stored as Record<string, unknown>;
   if (typeof record.docSearch === "boolean") out.docSearch = record.docSearch;
   if (typeof record.daintreeControl === "boolean") out.daintreeControl = record.daintreeControl;
+  if (typeof record.runbookSearch === "boolean") out.runbookSearch = record.runbookSearch;
   if (typeof record.debugLogging === "boolean") out.debugLogging = record.debugLogging;
   if (typeof record.loadGlobalHooksAndServers === "boolean") {
     out.loadGlobalHooksAndServers = record.loadGlobalHooksAndServers;
@@ -112,10 +106,12 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
   // new fields aren't stored, derive them from the old boolean. New writes
   // never touch `skipPermissions`, so once a user has saved the new fields
   // the legacy fallback is dormant.
-  if (isValidHelpAssistantTier(record.tier)) {
-    out.tier = record.tier;
+  // A tier stored before the core/full split is read onto the new pair.
+  const storedTier = normalizeHelpAssistantTier(record.tier);
+  if (storedTier) {
+    out.tier = storedTier;
   } else if (typeof record.skipPermissions === "boolean") {
-    out.tier = record.skipPermissions ? "system" : "action";
+    out.tier = record.skipPermissions ? "full" : "core";
   }
   if (typeof record.bypassPermissions === "boolean") {
     out.bypassPermissions = record.bypassPermissions;
@@ -123,11 +119,14 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
     out.bypassPermissions = record.skipPermissions;
   }
   if (isValidAuditRetention(record.auditRetention)) out.auditRetention = record.auditRetention;
+  if (isValidDaintreeConfirmations(record.daintreeConfirmations)) {
+    out.daintreeConfirmations = record.daintreeConfirmations;
+  }
   if (isValidIdleHibernateMinutes(record.idleHibernateMinutes)) {
     out.idleHibernateMinutes = record.idleHibernateMinutes;
   }
-  const sanitizedModelId = sanitizeModelId(record.modelId);
-  if (sanitizedModelId !== undefined) out.modelId = sanitizedModelId;
+  const sanitizedModelIds = sanitizeModelIdMap(record.modelIds);
+  if (sanitizedModelIds !== undefined) out.modelIds = sanitizedModelIds;
   const sanitizedArgs = sanitizeCustomArgs(record.customArgs);
   if (sanitizedArgs !== undefined) out.customArgs = sanitizedArgs;
   return out;
@@ -142,7 +141,7 @@ export function getHelpAssistantSettings(): HelpAssistantSettings {
 // session — the renderer renders this as a quiet idle state, never a spinner.
 const DISCONNECTED_LIVE_STATUS: HelpSessionLiveStatus = {
   connected: false,
-  tier: "workbench",
+  tier: DEFAULT_HELP_ASSISTANT_TIER,
   activeGrants: [],
 };
 
@@ -150,7 +149,7 @@ const DISCONNECTED_LIVE_STATUS: HelpSessionLiveStatus = {
 // api-key/loopback sessions. Help-session bearers are never external, but
 // narrow defensively so the IPC surface only ever exposes a HelpAssistantTier.
 function narrowToHelpAssistantTier(tier: string): HelpAssistantTier {
-  return isValidHelpAssistantTier(tier) ? tier : "workbench";
+  return isValidHelpAssistantTier(tier) ? tier : "core";
 }
 
 export const helpAssistantNamespace = defineIpcNamespace({
@@ -174,9 +173,11 @@ export const helpAssistantNamespace = defineIpcNamespace({
           if (field === "auditRetention" && !isValidAuditRetention(value)) continue;
           if (field === "idleHibernateMinutes" && !isValidIdleHibernateMinutes(value)) continue;
           if (field === "tier" && !isValidHelpAssistantTier(value)) continue;
+          if (field === "daintreeConfirmations" && !isValidDaintreeConfirmations(value)) continue;
           if (
             (field === "docSearch" ||
               field === "daintreeControl" ||
+              field === "runbookSearch" ||
               field === "bypassPermissions" ||
               field === "debugLogging" ||
               field === "loadGlobalHooksAndServers") &&
@@ -190,10 +191,15 @@ export const helpAssistantNamespace = defineIpcNamespace({
             if (sanitized === undefined) continue;
             storedValue = sanitized;
           }
-          if (field === "modelId") {
-            const sanitized = sanitizeModelId(value);
-            if (sanitized === undefined) continue;
-            storedValue = sanitized;
+          if (field === "modelIds") {
+            // Merged per agent against what's stored, never a whole-map
+            // replace, so a stale renderer snapshot can't erase another
+            // agent's choice. Written as one object under a fixed path so a
+            // dotted agent ID stays a literal key.
+            const current = sanitizeModelIdMap(store.get("helpAssistant")?.modelIds) ?? {};
+            const next = applyModelIdPatch(current, value);
+            if (next === undefined) continue;
+            storedValue = next;
           }
           if (field === "daintreeControl" && value === true) {
             const previous = store.get("helpAssistant")?.daintreeControl ?? true;

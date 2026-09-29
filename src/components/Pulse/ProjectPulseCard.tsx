@@ -1,5 +1,4 @@
 import { useEffect, useCallback, useId, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { PulseRangeDays } from "@shared/types";
 import type { ForgeProjectHealthPayload } from "@shared/types/ipc/forge";
@@ -20,7 +19,12 @@ import {
   GitMerge,
   WifiOff,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Activity } from "@/components/icons";
 import { PulseHeatmap, getPulseHeatLevelBackground } from "./PulseHeatmap";
@@ -42,10 +46,14 @@ interface ProjectPulseCardProps {
   className?: string;
 }
 
-const RANGE_OPTIONS: { value: PulseRangeDays; label: string; srLabel: string }[] = [
-  { value: 60, label: "60d", srLabel: "60 days" },
-  { value: 120, label: "120d", srLabel: "120 days" },
-  { value: 180, label: "180d", srLabel: "180 days" },
+type RangeKey = `${PulseRangeDays}`;
+
+const RANGE_DAYS: Record<RangeKey, PulseRangeDays> = { "60": 60, "120": 120, "180": 180 };
+
+const RANGE_OPTIONS: SegmentedRadioOption<RangeKey>[] = [
+  { value: "60", label: "60d", ariaLabel: "60 days" },
+  { value: "120", label: "120d", ariaLabel: "120 days" },
+  { value: "180", label: "180d", ariaLabel: "180 days" },
 ];
 
 function CIStatusIcon({ status }: { status: ForgeProjectHealthPayload["ciStatus"] }) {
@@ -494,29 +502,6 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     [setRangeDays, fetchPulse, worktreeId]
   );
 
-  // ARIA radio-group keyboard contract: arrow keys cycle the selection and
-  // move focus to the newly-selected option. Tab enters/exits the group at
-  // the active button only.
-  const rangeButtonRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const handleRangeKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLDivElement>) => {
-      if (event.altKey || event.shiftKey) return;
-      const isForward = event.key === "ArrowRight" || event.key === "ArrowDown";
-      const isBackward = event.key === "ArrowLeft" || event.key === "ArrowUp";
-      if (!isForward && !isBackward) return;
-      event.preventDefault();
-      const currentIndex = RANGE_OPTIONS.findIndex((opt) => opt.value === rangeDays);
-      const safeIndex = currentIndex === -1 ? 0 : currentIndex;
-      const nextIndex = isForward
-        ? (safeIndex + 1) % RANGE_OPTIONS.length
-        : (safeIndex - 1 + RANGE_OPTIONS.length) % RANGE_OPTIONS.length;
-      const next = RANGE_OPTIONS[nextIndex]!;
-      handleRangeChange(next.value);
-      rangeButtonRefs.current[nextIndex]?.focus();
-    },
-    [rangeDays, handleRangeChange]
-  );
-
   if (isLoading && !pulse) {
     return <PulseSkeleton className={className} />;
   }
@@ -561,13 +546,15 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <div className="flex items-center gap-2 text-text-primary" role="alert">
             <AlertCircle className="w-4 h-4 text-status-error" aria-hidden="true" />
             <span className="text-xs">{error}</span>
-            <button
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={handleRefresh}
-              className="pulse-control ml-auto rounded-md p-1 text-text-secondary transition-colors hover:text-text-primary"
+              className="pulse-control ml-auto"
               aria-label="Retry now"
             >
-              <RefreshCw className="w-3 h-3" aria-hidden="true" />
-            </button>
+              <RefreshCw aria-hidden="true" />
+            </Button>
           </div>
           {isRetrying && (
             <div
@@ -629,47 +616,31 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
         </div>
 
         <div className="flex items-center gap-2">
-          <div
-            className="pulse-range flex items-center rounded-md border border-transparent text-2xs font-medium"
-            role="radiogroup"
+          {/* `pulse-range` keeps the theme's own range-track hook (a
+              per-theme extension, within ~1.1:1 of the inset track everywhere),
+              so the card's themed header still owns the track colour. */}
+          <SegmentedRadioGroup<RangeKey>
+            className="pulse-range"
+            density="compact"
             aria-label="Activity range"
-            onKeyDown={handleRangeKeyDown}
-          >
-            {RANGE_OPTIONS.map((option, index) => {
-              const isActive = option.value === rangeDays;
-              return (
-                <button
-                  key={option.value}
-                  ref={(el) => {
-                    rangeButtonRefs.current[index] = el;
-                  }}
-                  type="button"
-                  role="radio"
-                  onClick={() => handleRangeChange(option.value)}
-                  className={cn(
-                    "rounded-md border px-2 py-1 transition-colors",
-                    isActive
-                      ? "bg-overlay-selected border-border-strong text-text-primary"
-                      : "pulse-control border-transparent text-text-secondary hover:text-text-primary"
-                  )}
-                  aria-checked={isActive}
-                  tabIndex={isActive ? 0 : -1}
-                >
-                  <span aria-hidden="true">{option.label}</span>
-                  <span className="sr-only">{option.srLabel}</span>
-                </button>
-              );
-            })}
-          </div>
+            options={RANGE_OPTIONS}
+            value={`${rangeDays}`}
+            onChange={(next) => handleRangeChange(RANGE_DAYS[next])}
+          />
 
-          <button
-            onClick={handleRefresh}
-            disabled={isLoading}
-            className="pulse-control rounded-md p-1.5 text-text-secondary transition-colors hover:text-text-primary disabled:opacity-50 disabled:pointer-events-none"
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => {
+              if (!isLoading) handleRefresh();
+            }}
+            // Not `disabled`: pressing it would drop keyboard focus to the page.
+            aria-disabled={isLoading}
+            className="pulse-control aria-disabled:cursor-not-allowed"
             aria-label="Refresh"
           >
             <SpinningIcon icon={RefreshCw} active={isLoading} className="w-3 h-3" />
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -713,16 +684,17 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
         <div className="border-t border-border-default pt-3">
           <PulseSummary pulse={pulse} />
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={handleRefresh}
             disabled={isLoading}
-            className="pulse-control mt-2 inline-flex items-center text-2xs text-text-secondary transition-colors hover:text-text-primary disabled:opacity-50 disabled:pointer-events-none"
+            className="pulse-control mt-2 -ml-2.5 text-2xs"
             aria-label={`Refresh — last updated ${updatedLabel}`}
             data-testid="pulse-last-updated"
           >
             <span>Updated {updatedLabel}</span>
-          </button>
+          </Button>
         </div>
       </div>
     </div>

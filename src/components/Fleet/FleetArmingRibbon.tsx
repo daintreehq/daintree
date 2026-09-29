@@ -1,16 +1,34 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import { AlertCircle, AlertTriangle, MoreHorizontal, X } from "lucide-react";
-import { AnimatePresence, m, useReducedMotion } from "framer-motion";
+import {
+  AlertCircle,
+  AlertTriangle,
+  CheckSquare,
+  Clock,
+  Focus,
+  MoreHorizontal,
+  Radio,
+  X,
+  Zap,
+} from "lucide-react";
+import { AnimatePresence, m } from "framer-motion";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { useEscapeStack, useDeferredLoading } from "@/hooks";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import {
+  UI_DOHERTY_THRESHOLD,
+  UI_ENTER_DURATION,
+  UI_ENTER_EASING_FM,
+  UI_EXIT_DURATION,
+  UI_EXIT_EASING_FM,
+} from "@/lib/animationUtils";
 import "./fleetRawInputBroadcast";
 import { useFleetEscapeChords } from "./useFleetEscapeChords";
 import { useFleetRibbonFlashes } from "./useFleetRibbonFlashes";
 import { buildConfirmMessage, type FleetConfirmActionId } from "./buildConfirmMessage";
 import { FleetCountChip } from "./FleetCountChip";
+import { FLEET_EXIT_COMBO } from "./fleetKeys";
 import { FleetFailureBanner } from "./FleetFailureBanner";
 import { SavedFleetsSection } from "./SavedFleetsSection";
 import { SaveFleetDialog } from "./SaveFleetDialog";
@@ -33,7 +51,8 @@ import { usePanelStore } from "@/store/panelStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { actionService } from "@/services/ActionService";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Kbd } from "@/components/ui/Kbd";
+import { KbdChord } from "@/components/ui/Kbd";
+import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import {
   FLEET_RIBBON_ICON_BUTTON_CLASS,
   FLEET_RIBBON_SHELL_CLASS,
@@ -44,6 +63,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuMeta,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -186,7 +206,7 @@ export function FleetArmingRibbon(): ReactElement | null {
     useShallow((s) => s.settings?.fleetSavedScopes ?? [])
   );
   const ribbonRef = useRef<HTMLDivElement | null>(null);
-  const reduceMotion = useReducedMotion();
+  const reduceMotion = useShouldSkipMotion();
 
   useEffect(() => {
     if (armedCount < 2 && popoverOpen) {
@@ -499,10 +519,10 @@ export function FleetArmingRibbon(): ReactElement | null {
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-3 text-2xs text-text-secondary">
               <span className="inline-flex items-center gap-1">
-                <Kbd>Enter</Kbd> to confirm
+                <KbdChord shortcut="Enter" density="compact" /> to confirm
               </span>
               <span className="inline-flex items-center gap-1">
-                <Kbd>Esc</Kbd> to cancel
+                <KbdChord shortcut="Escape" density="compact" /> to cancel
               </span>
             </div>
           </div>
@@ -533,44 +553,44 @@ export function FleetArmingRibbon(): ReactElement | null {
           armByState("waiting", "current", false);
         }}
         {...previewItemHandlers(() => computePreviewByState("waiting", "current"))}
+        aria-label={`All waiting — this worktree, ${presetCounts.waitingCurrent}`}
       >
+        <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         All waiting — this worktree
-        <span className="ml-auto text-2xs tabular-nums text-text-secondary">
-          {presetCounts.waitingCurrent}
-        </span>
+        <DropdownMenuMeta>{presetCounts.waitingCurrent}</DropdownMenuMeta>
       </DropdownMenuItem>
       <DropdownMenuItem
         onSelect={() => {
           armByState("waiting", "all", false);
         }}
         {...previewItemHandlers(() => computePreviewByState("waiting", "all"))}
+        aria-label={`All waiting — all worktrees, ${presetCounts.waitingAll}`}
       >
+        <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         All waiting — all worktrees
-        <span className="ml-auto text-2xs tabular-nums text-text-secondary">
-          {presetCounts.waitingAll}
-        </span>
+        <DropdownMenuMeta>{presetCounts.waitingAll}</DropdownMenuMeta>
       </DropdownMenuItem>
       <DropdownMenuItem
         onSelect={() => {
           armByState("working", "current", false);
         }}
         {...previewItemHandlers(() => computePreviewByState("working", "current"))}
+        aria-label={`All working — this worktree, ${presetCounts.workingCurrent}`}
       >
+        <Zap data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         All working — this worktree
-        <span className="ml-auto text-2xs tabular-nums text-text-secondary">
-          {presetCounts.workingCurrent}
-        </span>
+        <DropdownMenuMeta>{presetCounts.workingCurrent}</DropdownMenuMeta>
       </DropdownMenuItem>
       <DropdownMenuItem
         onSelect={() => {
           armByState("working", "all", false);
         }}
         {...previewItemHandlers(() => computePreviewByState("working", "all"))}
+        aria-label={`All working — all worktrees, ${presetCounts.workingAll}`}
       >
+        <Zap data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         All working — all worktrees
-        <span className="ml-auto text-2xs tabular-nums text-text-secondary">
-          {presetCounts.workingAll}
-        </span>
+        <DropdownMenuMeta>{presetCounts.workingAll}</DropdownMenuMeta>
       </DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuItem
@@ -578,11 +598,11 @@ export function FleetArmingRibbon(): ReactElement | null {
           armAll("current");
         }}
         {...previewItemHandlers(() => computePreviewAll("current"))}
+        aria-label={`All in this worktree, ${presetCounts.eligibleCurrent}`}
       >
+        <CheckSquare data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         All in this worktree
-        <span className="ml-auto text-2xs tabular-nums text-text-secondary">
-          {presetCounts.eligibleCurrent}
-        </span>
+        <DropdownMenuMeta>{presetCounts.eligibleCurrent}</DropdownMenuMeta>
       </DropdownMenuItem>
       {armedCount > 0 ? (
         <>
@@ -592,6 +612,7 @@ export function FleetArmingRibbon(): ReactElement | null {
               void actionService.dispatch("fleet.scope.enter", undefined, { source: "user" });
             }}
           >
+            <Focus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Focus selection
           </DropdownMenuItem>
           <DropdownMenuItem
@@ -599,6 +620,7 @@ export function FleetArmingRibbon(): ReactElement | null {
               clear();
             }}
           >
+            <Radio data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Clear selection
           </DropdownMenuItem>
         </>
@@ -611,30 +633,29 @@ export function FleetArmingRibbon(): ReactElement | null {
     </>
   );
 
-  // Entrance is a low-bounce spring (~200ms). Exit is critically damped and
-  // faster (~120ms) so the bar tucks away cleanly without overshoot —
-  // important when the user is about to refocus an unarmed pane. Framer
-  // Motion 12 reads `transition` from inside the exit variant when present,
-  // overriding the top-level `transition` for exit only.
+  // The entry/exit tier every other surface enters and leaves on: 200ms in on
+  // the decelerate curve, 120ms out on the accelerate one, so the bar tucks
+  // away before the user refocuses an unarmed pane. Framer Motion 12 reads
+  // `transition` from inside the exit variant when present, overriding the
+  // top-level `transition` for exit only. Reduced motion keeps the fade and
+  // drops the slide.
+  const enter = { duration: UI_ENTER_DURATION / 1000, ease: UI_ENTER_EASING_FM };
+  const leave = { duration: UI_EXIT_DURATION / 1000, ease: UI_EXIT_EASING_FM };
   const ribbonMotionProps = reduceMotion
     ? {
         initial: { opacity: 0 },
         animate: { opacity: 1 },
-        exit: { opacity: 0 },
-        transition: { duration: 0.12 },
+        exit: { opacity: 0, transition: leave },
+        transition: enter,
       }
     : {
         initial: { y: "-100%", opacity: 0 },
         animate: { y: 0, opacity: 1 },
-        exit: {
-          y: "-100%",
-          opacity: 0,
-          transition: { duration: 0.12, ease: [0.4, 0, 0.2, 1] as const },
-        },
-        transition: { type: "spring" as const, duration: 0.2, bounce: 0.12 },
+        exit: { y: "-100%", opacity: 0, transition: leave },
+        transition: enter,
       };
 
-  const exitChordLabel = isMac() ? "⌘Esc" : "Ctrl+Esc";
+  const exitAriaShortcut = comboToAriaKeyshortcuts(FLEET_EXIT_COMBO, isMac());
 
   return (
     <>
@@ -760,12 +781,13 @@ export function FleetArmingRibbon(): ReactElement | null {
               <button
                 type="button"
                 onClick={exitFleet}
-                aria-label={`Exit fleet mode (${exitChordLabel})`}
+                aria-label="Exit fleet mode"
+                aria-keyshortcuts={exitAriaShortcut}
                 data-testid="fleet-exit"
                 className={FLEET_RIBBON_TEXT_BUTTON_CLASS}
               >
                 <span>Exit</span>
-                <Kbd>{exitChordLabel}</Kbd>
+                <KbdChord shortcut={FLEET_EXIT_COMBO} density="compact" />
               </button>
             </div>
             {/* A 2px delivery track along the bottom edge: the only graphical

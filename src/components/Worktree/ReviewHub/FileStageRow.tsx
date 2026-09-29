@@ -4,12 +4,15 @@ import type { RefObject } from "react";
 import type { StagingFileEntry } from "@shared/types";
 import type { GitStatus } from "@shared/types";
 import { cn } from "@/lib/utils";
+import { PathTail } from "@/components/ui/PathTail";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Plus, Minus } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
 import { isGeneratedFile } from "../generatedFileClassifier";
+import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 
 const STATUS_CONFIG: Record<GitStatus, { label: string; bg: string; text: string }> = {
   modified: {
@@ -147,8 +150,8 @@ function FileStageRowComponent({
   );
 
   const handleViewedChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      onViewedChange?.(e.target.checked);
+    (checked: boolean | "indeterminate") => {
+      onViewedChange?.(checked === true);
     },
     [onViewedChange]
   );
@@ -158,12 +161,18 @@ function FileStageRowComponent({
     e.stopPropagation();
   }, []);
 
+  // A viewed file recedes by its content only: the row's controls and focus
+  // rings stay at full strength, since they are still live. Every element that
+  // carries the dim also transitions opacity, so the row recedes as one piece.
+  const viewedDim = viewed && "opacity-60";
+
   const row = (
     <div
       ref={rowRef}
       id={id}
       role="option"
       data-row-index={rowIndex}
+      onMouseDown={suppressShiftClickTextSelection}
       onClick={handleClick}
       data-testid={`file-stage-row-${file.path}`}
       data-selected={isSelected || undefined}
@@ -176,8 +185,7 @@ function FileStageRowComponent({
         // The row whose menu is open lifts to a neutral raised tier — a
         // distinct level from the selection's subtle fill, so it reads as
         // "the menu targets this row" rather than as a second selection.
-        "data-[state=open]:bg-overlay-raised",
-        viewed && "opacity-60"
+        "data-[state=open]:bg-overlay-raised"
       )}
       // Below the windowing threshold the staging lists still render every
       // changed file, and a big changeset (lockfiles, codegen) mounts thousands
@@ -213,41 +221,42 @@ function FileStageRowComponent({
           onClick={handleClick}
           aria-label={`View diff: ${file.path}`}
           className={cn(
-            "relative flex min-w-0 flex-1 items-baseline rounded text-left",
-            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+            "relative -mx-1 flex min-w-0 flex-1 items-baseline rounded px-1 text-left",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
           )}
         >
           <span
             aria-hidden="true"
             className={cn(
               "inline-flex items-center justify-center rounded-sm px-1 mr-2 shrink-0",
-              "text-3xs font-medium leading-4 h-4 min-w-[16px]",
+              "text-3xs font-medium leading-4 h-4 min-w-[16px] transition-opacity duration-150 ease-out",
               config.bg,
-              config.text
+              config.text,
+              viewedDim
             )}
           >
             {config.label}
           </span>
           {dir && (
-            <span
+            <PathTail
               data-testid="file-stage-row-dir"
               className={cn(
-                "shrink truncate font-mono text-2xs transition-colors",
+                "shrink font-mono text-2xs transition-[color,opacity] duration-150 ease-out",
+                viewedDim,
                 generated
                   ? "text-text-placeholder"
                   : "text-text-secondary group-hover/stagerow:text-text-primary"
               )}
             >
-              {dir}/
-            </span>
+              {`${dir}/`}
+            </PathTail>
           )}
           <span
             data-testid="file-stage-row-base"
             className={cn(
-              "shrink truncate font-medium font-mono text-2xs transition-colors",
-              generated
-                ? "text-daintree-text/40"
-                : "text-text-primary group-hover/stagerow:text-text-primary"
+              "shrink truncate font-medium font-mono text-2xs transition-[color,opacity] duration-150 ease-out",
+              viewedDim,
+              generated ? "text-daintree-text/40" : "text-text-primary"
             )}
           >
             {base}
@@ -259,12 +268,12 @@ function FileStageRowComponent({
         <div
           data-testid="file-stage-row-churn"
           className={cn(
-            "ml-2 flex items-center gap-1 shrink-0 text-3xs tabular-nums",
-            generated && "opacity-60"
+            "ml-2 flex items-center gap-1 shrink-0 text-3xs tabular-nums transition-opacity duration-150 ease-out",
+            (generated || viewed) && "opacity-60"
           )}
         >
-          {insertions > 0 && <span className="text-status-success/80">+{insertions}</span>}
-          {deletions > 0 && <span className="text-status-error/80">-{deletions}</span>}
+          {insertions > 0 && <span className="text-status-success">+{insertions}</span>}
+          {deletions > 0 && <span className="text-status-error">-{deletions}</span>}
         </div>
       )}
 
@@ -279,17 +288,13 @@ function FileStageRowComponent({
                 viewed ? "text-text-secondary" : "text-text-placeholder hover:text-text-secondary"
               )}
             >
-              <input
-                type="checkbox"
+              <Checkbox
+                size="sm"
                 checked={viewed}
-                onChange={handleViewedChange}
-                aria-label={
-                  viewed ? `Mark ${file.path} as not viewed` : `Mark ${file.path} as viewed`
-                }
-                className={cn(
-                  "w-3 h-3 rounded cursor-pointer accent-status-success",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                )}
+                onCheckedChange={handleViewedChange}
+                // Constant, as a toggle's name must be: the checked state is
+                // announced by the checkbox itself.
+                aria-label={`Mark ${file.path} as viewed`}
               />
               <span>Viewed</span>
             </label>
@@ -307,15 +312,12 @@ function FileStageRowComponent({
             onClick={handleToggle}
             className={cn(
               "w-5 h-5 flex items-center justify-center rounded shrink-0 ml-2 transition-colors",
+              "text-text-secondary hover:text-text-primary focus-visible:text-text-primary",
               "hover:bg-tint/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             )}
             aria-label={isStaged ? `Unstage ${file.path}` : `Stage ${file.path}`}
           >
-            {isStaged ? (
-              <Minus className="w-3 h-3 text-text-secondary" />
-            ) : (
-              <Plus className="w-3 h-3 text-text-secondary" />
-            )}
+            {isStaged ? <Minus className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
           </button>
         </TooltipTrigger>
         <TooltipContent side="left">{isStaged ? "Unstage" : "Stage"}</TooltipContent>

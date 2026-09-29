@@ -155,7 +155,7 @@ vi.mock("../../utils/openExternal.js", () => ({
 }));
 
 vi.mock("../../services/CrashRecoveryService.js", () => ({
-  getCrashRecoveryService: vi.fn(() => ({ recordCrash: vi.fn() })),
+  getCrashRecoveryService: vi.fn(() => ({ recordCrash: vi.fn(), recordRendererGone: vi.fn() })),
 }));
 
 vi.mock("../../services/ProcessMemoryMonitor.js", () => ({
@@ -206,6 +206,7 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
 vi.mock("../../utils/logger.js", () => ({
   logInfo: vi.fn(),
   logWarn: vi.fn(),
+  logError: vi.fn(),
   createLogger: vi.fn(() => ({
     debug: vi.fn(),
     info: vi.fn(),

@@ -169,6 +169,18 @@ describe("EnvironmentVariablesEditor", () => {
       expect(screen.getByText("visible")).toBeTruthy();
     });
 
+    /** A token under a neutral name is still a token. */
+    it("masks a secret-looking global value even under an ordinary name", () => {
+      render(
+        <EnvironmentVariablesEditor
+          {...defaultProps}
+          globalEnvironmentVariables={{ UPSTREAM: "sk-ant-api03-Zq8w3EhTn5vB7mJdX2fK" }}
+        />
+      );
+
+      expect(screen.queryByText("sk-ant-api03-Zq8w3EhTn5vB7mJdX2fK")).toBeNull();
+    });
+
     it("can add project vars via Add Variable button even with globals present", () => {
       const onChange = vi.fn();
       render(

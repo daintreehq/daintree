@@ -15,6 +15,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { compareProjectsByMode, type OtherProjectsSortMode } from "@/lib/projectSort";
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { notify } from "@/lib/notify";
+import { copyPathWithFeedback } from "@/lib/copyPathFeedback";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { logError } from "@/utils/logger";
@@ -347,6 +348,11 @@ export interface UseProjectSwitcherPaletteReturn {
   setQuery: (query: string) => void;
   selectPrevious: () => void;
   selectNext: () => void;
+  /**
+   * Moves the cursor to the row the pointer is over, by id — the same state the
+   * arrow keys drive, so there is only ever one highlighted row.
+   */
+  hoverRow: (rowId: string) => void;
   selectProject: (project: SearchableProject, source?: ProjectSwitchSelectSource) => void;
   /**
    * Commits a row of {@link results}, dispatching on its kind. The palette's
@@ -925,7 +931,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const openRelocation = useProjectRelocationStore((state) => state.open);
   const projectStats = useProjectStatsStore((state) => state.stats);
 
-  const { copy: copyToClipboard } = useCopyWithFeedback();
+  const { copy: copyToClipboard } = useCopyWithFeedback({ announcement: false });
 
   const scratches = useScratchStore((state) => state.scratches);
   const currentScratch = useScratchStore((state) => state.currentScratch);
@@ -1774,6 +1780,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const selectNext = useCallback(() => step(1), [step]);
 
+  const hoverRow = useCallback((rowId: string) => setSelectedRowId(rowId), []);
+
   const selectProject = useCallback(
     async (project: SearchableProject, source?: ProjectSwitchSelectSource) => {
       // Picking the project already on screen is a "never mind", not a dead
@@ -1967,13 +1975,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   );
 
   const copyPath = useCallback(
-    (path: string) => {
-      void copyToClipboard(path).then((ok) => {
-        if (ok) {
-          notify({ type: "info", title: "Path copied", message: path, transient: true });
-        }
-      });
-    },
+    (path: string) => copyPathWithFeedback(copyToClipboard, path),
     [copyToClipboard]
   );
 
@@ -2554,6 +2556,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     setQuery,
     selectPrevious,
     selectNext,
+    hoverRow,
     selectProject,
     selectRow,
     onHoverProject,

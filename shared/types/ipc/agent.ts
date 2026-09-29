@@ -141,6 +141,17 @@ export interface AgentStateTransitionDroppedPayload {
 }
 
 /** Agent detected payload */
+/**
+ * A pane's output showed an agent rate-limit banner (#12797). Timestamps only:
+ * the banner text is terminal content and never leaves the pty host.
+ */
+export interface AgentRateLimitObservedPayload {
+  terminalId: string;
+  /** Epoch ms the banner first appeared in the pane's viewport. */
+  observedAt: number;
+  timestamp: number;
+}
+
 export interface AgentDetectedPayload {
   /** Terminal ID where agent was detected */
   terminalId: string;

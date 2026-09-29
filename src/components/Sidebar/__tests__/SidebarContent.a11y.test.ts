@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 
 const SIDEBAR_CONTENT_PATH = path.resolve(__dirname, "../SidebarContent.tsx");
+const BADGE_PATH = path.resolve(__dirname, "../WorktreesReconnectingBadge.tsx");
 
 describe("SidebarContent accessibility — issue #9662", () => {
   let source: string;
@@ -12,19 +13,17 @@ describe("SidebarContent accessibility — issue #9662", () => {
   });
 
   describe("reconnecting indicator — one-shot screen-reader announcement", () => {
-    it("hides the per-tick visual reconnecting span from the accessibility tree", () => {
+    it("hides the per-tick visual reconnecting span from the accessibility tree", async () => {
       // The visible "Reconnecting… last updated Xs ago" text is rewritten every
       // second by the 1Hz tick. If it stayed inside an aria-live region the AT
       // would re-announce on every tick. The span must be aria-hidden so those
       // mutations never reach assistive tech.
-      const reconnectingSpan = source.match(
-        /\{showReconnecting && \(\s*<span[\s\S]*?Reconnecting…[\s\S]*?<\/span>\s*\)\}/
-      );
-      expect(reconnectingSpan).not.toBeNull();
-      const span = reconnectingSpan![0];
-      expect(span).toMatch(/aria-hidden="true"/);
+      expect(source).toMatch(/\{showReconnecting && \(\s*<WorktreesReconnectingBadge/);
+      const span = await fs.readFile(BADGE_PATH, "utf-8");
+      // The badge's root is aria-hidden, before anything it renders.
+      expect(span).toMatch(/return \(\s*<span\s+aria-hidden="true"/);
       // The ticking relative time must live inside the aria-hidden span.
-      expect(span).toMatch(/formatRelativeTime\(reconnectingAt\)/);
+      expect(span).toMatch(/formatRelativeTime\(escalatedSince\)/);
       // And the live-region attributes must be gone from that span.
       expect(span).not.toMatch(/role="status"/);
       expect(span).not.toMatch(/aria-live=/);
@@ -72,7 +71,7 @@ describe("SidebarContent accessibility — issue #9662", () => {
       // button focusable while the re-entry guard in handleRefreshAll blocks
       // activation.
       const refreshButton = source.match(
-        /<button[^>]*onClick=\{handleRefreshAll\}[\s\S]*?aria-label="Refresh sidebar"/
+        /<(?:button|Button)[^>]*onClick=\{handleRefreshAll\}[\s\S]*?aria-label="Refresh sidebar"/
       );
       expect(refreshButton).not.toBeNull();
       const button = refreshButton![0];
@@ -83,14 +82,16 @@ describe("SidebarContent accessibility — issue #9662", () => {
       expect(button).not.toMatch(/[^-]disabled=\{/);
     });
 
-    it("uses aria-disabled: Tailwind variants for the disabled styling", () => {
+    it("styles the busy state with aria-disabled: variants but never dims it", () => {
+      // Busy, not unavailable (see ARIA_DISABLED_CLASSES): the spinner is the
+      // only sign a refresh is running, so fading the button fades the signal.
       const refreshButton = source.match(
-        /<button[^>]*onClick=\{handleRefreshAll\}[\s\S]*?aria-label="Refresh sidebar"/
+        /<(?:button|Button)[^>]*onClick=\{handleRefreshAll\}[\s\S]*?aria-label="Refresh sidebar"/
       );
       const button = refreshButton![0];
-      expect(button).toMatch(/aria-disabled:opacity-40/);
+      expect(button).not.toMatch(/aria-disabled:opacity-/);
       expect(button).toMatch(/aria-disabled:cursor-not-allowed/);
-      expect(button).not.toMatch(/[^-]disabled:opacity-40/);
+      expect(button).not.toMatch(/[^-]disabled:opacity-\d+/);
     });
 
     it("keeps the handleRefreshAll re-entry guard that suppresses activation", () => {

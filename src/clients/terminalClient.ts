@@ -13,7 +13,7 @@ import type {
   SpawnResult,
   SerializedTerminalSnapshot,
 } from "@shared/types";
-import type { PaneWatchState } from "@shared/types/terminalWatch";
+import type { PaneNotifyState } from "@shared/types/terminalNotify";
 import type {
   HostMemoryPauseSnapshot,
   PtyHostToRendererMessage,
@@ -24,6 +24,7 @@ import type { PanelTitleMode } from "@shared/types/panel";
 import type { TerminalSubmissionLookup } from "@shared/types/terminalSubmission";
 import type { TerminalOutputActivityLookup } from "@shared/types/terminalStatus";
 import { normalizeTerminalGridDimension } from "@shared/types/terminal";
+import { isImageAttachmentPath, MAX_SUBMIT_IMAGE_PATHS } from "@shared/utils/imageAttachmentInput";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { logDebug, logWarn } from "@/utils/logger";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
@@ -35,8 +36,10 @@ let expectedToken: string | null = null;
 let pendingPort: MessagePort | null = null;
 let pendingToken: string | null = null;
 
-const dataCallbacks = new Map<string, Set<(data: string | Uint8Array) => void>>();
-const earlyDataBuffer = new Map<string, Array<string | Uint8Array>>();
+type TerminalDataCallback = (data: string | Uint8Array, streamEnd?: number) => void;
+
+const dataCallbacks = new Map<string, Set<TerminalDataCallback>>();
+const earlyDataBuffer = new Map<string, Array<{ data: string | Uint8Array; streamEnd?: number }>>();
 const earlyDataBufferBytes = new Map<string, number>();
 const pendingPortAckBytes = new Map<string, number[]>();
 // The early buffer only needs to cover the spawn→attach race window — late
@@ -193,8 +196,10 @@ function installPortDataHandler(port: MessagePort): void {
         }
         queue.push(byteCount);
 
+        const streamEnd = msg.streamEnd;
         for (const cb of cbs) {
-          cb(msg.data);
+          if (streamEnd === undefined) cb(msg.data);
+          else cb(msg.data, streamEnd);
         }
       } else {
         // Early-buffer path: no xterm write will happen yet, ACK immediately
@@ -210,14 +215,14 @@ function installPortDataHandler(port: MessagePort): void {
           buf = [];
           earlyDataBuffer.set(msg.id, buf);
         }
-        buf.push(msg.data);
+        buf.push({ data: msg.data, streamEnd: msg.streamEnd });
         let bytes = (earlyDataBufferBytes.get(msg.id) ?? 0) + earlyChunkSize(msg.data);
         // Evict oldest-first so the buffer holds the most recent output; the
         // attach-time flush is best-effort anyway and the serialized restore
         // replays anything older.
         while (buf.length > MAX_EARLY_BUFFER_CHUNKS || bytes > MAX_EARLY_BUFFER_BYTES) {
           if (buf.length === 1) break;
-          bytes -= earlyChunkSize(buf.shift()!);
+          bytes -= earlyChunkSize(buf.shift()!.data);
         }
         earlyDataBufferBytes.set(msg.id, bytes);
       }
@@ -388,6 +393,22 @@ export const terminalClient = {
   },
 
   /**
+   * {@link submit} for a composer draft carrying image chips (#12792).
+   * `imagePaths` are absolute and each also appears in `text`, in order; an
+   * agent that takes a lone pasted path as an image attachment gets each one
+   * that way, and every other agent gets `text` exactly as `submit` sends it.
+   */
+  submitWithImages: (id: string, text: string, imagePaths: string[]): Promise<void> => {
+    // Main refuses the whole submission over one path it cannot attach, so a
+    // chip that could never be an attachment (a UNC share, say) is dropped
+    // here and simply stays text — the draft still goes out.
+    const attachable = imagePaths.filter(isImageAttachmentPath).slice(0, MAX_SUBMIT_IMAGE_PATHS);
+    return attachable.length === 0
+      ? window.electron.terminal.submit(id, text)
+      : window.electron.terminal.submit(id, text, undefined, undefined, attachable);
+  },
+
+  /**
    * Resolve one submission token across several terminals (#12337). Answers
    * `found` / `absent` / `unreadable` per id, so a terminal that could not be
    * read is never mistaken for one holding no record.
@@ -527,7 +548,7 @@ export const terminalClient = {
     return window.electron.terminal.restore(id);
   },
 
-  onData: (id: string, callback: (data: string | Uint8Array) => void): (() => void) => {
+  onData: (id: string, callback: TerminalDataCallback): (() => void) => {
     // Register in per-terminal callback set for MessagePort data dispatch
     let cbs = dataCallbacks.get(id);
     if (!cbs) {
@@ -541,8 +562,9 @@ export const terminalClient = {
     if (buffered) {
       earlyDataBuffer.delete(id);
       earlyDataBufferBytes.delete(id);
-      for (const data of buffered) {
-        callback(data);
+      for (const chunk of buffered) {
+        if (chunk.streamEnd === undefined) callback(chunk.data);
+        else callback(chunk.data, chunk.streamEnd);
       }
     }
 
@@ -552,9 +574,13 @@ export const terminalClient = {
     // messagePortConnected was true, but that caused data loss when the pty-host's per-window
     // project filter routed data through IPC instead of MessagePort (e.g., during project
     // switch when windowProjectMap hasn't updated yet).
-    const ipcCleanup = window.electron.terminal.onData(id, (data: string | Uint8Array) => {
-      callback(data);
-    });
+    const ipcCleanup = window.electron.terminal.onData(
+      id,
+      (data: string | Uint8Array, streamEnd?: number) => {
+        if (streamEnd === undefined) callback(data);
+        else callback(data, streamEnd);
+      }
+    );
 
     return () => {
       const set = dataCallbacks.get(id);
@@ -897,12 +923,12 @@ export const terminalClient = {
     window.electron.terminal.onSubmitStatus(callback),
 
   /**
-   * Listen for a pane's terminal-watch state (#12491): whether an agent in it
-   * holds watches that may wake it, and where its next wake stands. Sent only
-   * to the owning project's views. Callers filter by `terminalId`.
+   * Listen for a pane's pending terminal notices: whether an agent in it is
+   * waiting to hear about other terminals, and where its next line stands.
+   * Sent only to the owning project's views. Callers filter by `terminalId`.
    */
-  onWatchState: (callback: (data: PaneWatchState) => void): (() => void) =>
-    window.electron.terminal.onWatchState(callback),
+  onNotifyState: (callback: (data: PaneNotifyState) => void): (() => void) =>
+    window.electron.terminal.onNotifyState(callback),
 
   /**
    * Listen for terminal reliability metrics (pause-start/end, suspend,

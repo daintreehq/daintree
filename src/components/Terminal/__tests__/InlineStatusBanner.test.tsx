@@ -4,7 +4,11 @@ import { createPortal } from "react-dom";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { AlertTriangle, CheckCircle2, FileEdit, Info, XCircle } from "lucide-react";
-import { InlineStatusBanner, type InlineStatusBannerSeverity } from "../InlineStatusBanner";
+import {
+  InlineStatusBanner,
+  type BannerAction,
+  type InlineStatusBannerSeverity,
+} from "../InlineStatusBanner";
 import { WindowControlsInsetProvider } from "@/components/ui/WindowControlsInset";
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -687,10 +691,9 @@ describe("InlineStatusBanner", () => {
     expect(root.className).not.toContain("transition-all");
   });
 
-  it("suppresses the entrance transition when data-reduce-animations is true", () => {
-    document.body.setAttribute("data-reduce-animations", "true");
-    try {
-      const { container } = render(
+  it("keeps the entrance fade but drops its slide when data-reduce-animations is true", () => {
+    const render250 = () =>
+      render(
         <InlineStatusBanner
           icon={Info}
           title="Animated"
@@ -698,9 +701,16 @@ describe("InlineStatusBanner", () => {
           animated={true}
           actions={[]}
         />
-      );
-      const root = container.firstElementChild as HTMLElement;
-      expect(root.className).not.toContain("duration-250");
+      ).container.firstElementChild as HTMLElement;
+    const full = render250().className.split(/\s+/);
+    document.body.setAttribute("data-reduce-animations", "true");
+    try {
+      const reduced = render250().className.split(/\s+/);
+      // Same entrance under either preference: reduced motion is handled by the
+      // app-aware `motion-reduce:` variant, never by dropping the transition.
+      expect(reduced).toEqual(full);
+      expect(reduced).toContain("motion-reduce:transition-opacity");
+      expect(reduced).toContain("motion-reduce:translate-none");
     } finally {
       document.body.removeAttribute("data-reduce-animations");
     }
@@ -812,6 +822,31 @@ describe("InlineStatusBanner family invariants", () => {
     }
   });
 
+  // Forced colours flatten outline and ghost to one stroke; the index.css hook
+  // restores the heavier border only on actions marked as the recommended one.
+  it("marks the recommended action for the forced-colors hook, and only it", () => {
+    const actions: BannerAction[] = [
+      { id: "a", label: "Retry", variant: "dangerFilled", onClick: () => {} },
+      { id: "b", label: "Later", variant: "dismiss", onClick: () => {} },
+      { id: "c", label: "Discard", variant: "danger", onClick: () => {} },
+      { id: "d", label: "Open", onClick: () => {} },
+    ];
+    render(
+      <InlineStatusBanner
+        title="t"
+        severity="warning"
+        animated={false}
+        onClose={() => {}}
+        actions={actions}
+      />
+    );
+    const marked = screen
+      .getAllByRole("button")
+      .filter((b) => b.getAttribute("data-notification-action") === "primary")
+      .map((b) => b.textContent);
+    expect(marked).toEqual(["Retry", "Open"]);
+  });
+
   it("places the dismiss after the actions in the single-line layout, never between controls", () => {
     render(
       <InlineStatusBanner
@@ -879,6 +914,183 @@ describe("InlineStatusBanner family invariants", () => {
 });
 
 describe("InlineStatusBanner focus handoff on any removal", () => {
+  it("never hands focus past a surviving banner to what sits beside the stack", () => {
+    vi.useFakeTimers();
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => {
+        setTimeout(() => cb(0), 0);
+        return 1;
+      });
+    try {
+      // The assistant panel's shape: a stack of banners directly above a
+      // terminal, whose input would take the user's next keystrokes.
+      function Panel() {
+        const [open, setOpen] = useState(["a", "b"]);
+        const [replaced, setReplaced] = useState(false);
+        return (
+          <div>
+            {open.map((id) => (
+              <InlineStatusBanner
+                key={id}
+                title={id}
+                severity="warning"
+                animated={false}
+                closeAriaLabel={`Dismiss ${id}`}
+                onClose={() => setOpen((ids) => ids.filter((x) => x !== id))}
+                actions={
+                  id === "a" && !replaced
+                    ? [{ id: "swap", label: "Swap", onClick: () => setReplaced(true) }]
+                    : undefined
+                }
+              />
+            ))}
+            {replaced && (
+              <InlineStatusBanner
+                title="replacement"
+                severity="info"
+                animated={false}
+                closeAriaLabel="Dismiss replacement"
+                onClose={() => {}}
+              />
+            )}
+            <textarea aria-label="Terminal input" />
+          </div>
+        );
+      }
+      const view = render(<Panel />);
+      const button = (name: string) => screen.getByRole("button", { name });
+
+      // The bottom banner leaves: the one above survives, so focus steps back
+      // to its nearest control rather than down into the terminal.
+      button("Dismiss b").focus();
+      fireEvent.click(button("Dismiss b"));
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(document.activeElement).toBe(button("Dismiss a"));
+      view.unmount();
+    } finally {
+      raf.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("lands on the banner that replaced the one that left", () => {
+    vi.useFakeTimers();
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => {
+        setTimeout(() => cb(0), 0);
+        return 1;
+      });
+    try {
+      function Stack() {
+        const [approved, setApproved] = useState(false);
+        return (
+          <div>
+            <InlineStatusBanner
+              title="top"
+              severity="error"
+              animated={false}
+              onClose={() => {}}
+              closeAriaLabel="Dismiss top"
+            />
+            {/* Separate slots, as HelpPanelBanners renders them: the asking
+                banner unmounts and a different one mounts in the same commit. */}
+            {!approved && (
+              <InlineStatusBanner
+                title="asking"
+                severity="warning"
+                animated={false}
+                actions={[{ id: "allow", label: "Allow", onClick: () => setApproved(true) }]}
+              />
+            )}
+            {approved && (
+              <InlineStatusBanner
+                title="granted"
+                severity="neutral"
+                animated={false}
+                action={{ id: "revoke", label: "Revoke", onClick: () => {} }}
+              />
+            )}
+            <InlineStatusBanner
+              title="bottom"
+              severity="info"
+              animated={false}
+              onClose={() => {}}
+              closeAriaLabel="Dismiss bottom"
+            />
+            <textarea aria-label="Terminal input" />
+          </div>
+        );
+      }
+      const view = render(<Stack />);
+      const allow = screen.getByRole("button", { name: "Allow" });
+      allow.focus();
+      fireEvent.click(allow);
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Revoke" }));
+      view.unmount();
+    } finally {
+      raf.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the user's place in a stack: focus goes to the survivor after, else before", () => {
+    vi.useFakeTimers();
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => {
+        setTimeout(() => cb(0), 0);
+        return 1;
+      });
+    try {
+      function Stack() {
+        const [open, setOpen] = useState(["a", "b", "c", "d"]);
+        return (
+          <div>
+            {open.map((id) => (
+              <InlineStatusBanner
+                key={id}
+                title={id}
+                severity="warning"
+                animated={false}
+                closeAriaLabel={`Dismiss ${id}`}
+                onClose={() => setOpen((ids) => ids.filter((x) => x !== id))}
+              />
+            ))}
+          </div>
+        );
+      }
+      const view = render(<Stack />);
+      const dismiss = (id: string) => screen.getByRole("button", { name: `Dismiss ${id}` });
+
+      // The middle one hands focus down to the banner that now stands in its place.
+      dismiss("b").focus();
+      fireEvent.click(dismiss("b"));
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(document.activeElement).toBe(dismiss("c"));
+
+      // The last one has nothing after it, so focus steps back up — not to the top.
+      dismiss("d").focus();
+      fireEvent.click(dismiss("d"));
+      act(() => {
+        vi.runAllTimers();
+      });
+      expect(document.activeElement).toBe(dismiss("c"));
+      view.unmount();
+    } finally {
+      raf.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("hands focus back when an action, not the ×, unmounts the banner", () => {
     vi.useFakeTimers();
     const raf = vi

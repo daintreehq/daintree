@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { ChevronRight, ShieldBan, KeyRound, Wrench, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons";
@@ -170,6 +173,8 @@ export function GeneralTab({
   const [isSaving, setIsSaving] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
   const [cliAvailability, setCliAvailability] = useState<CliAvailability | null>(null);
+  // Past the Doherty threshold only, like every settings list's bones.
+  const showAgentsLoading = useDeferredLoading(cliAvailability === null, UI_DOHERTY_THRESHOLD);
   const [cliCheckFailed, setCliCheckFailed] = useState(false);
   const [isRecheckingAgents, setIsRecheckingAgents] = useState(false);
   const availabilityRequestRef = useRef(0);
@@ -812,9 +817,17 @@ export function GeneralTab({
                   }}
                 />
               ) : !cliAvailability ? (
-                <SettingsGroup>
-                  <SettingsEmptyRow>Checking which agents are installed…</SettingsEmptyRow>
-                </SettingsGroup>
+                showAgentsLoading ? (
+                  <SettingsGroup>
+                    <Skeleton
+                      label="Checking which agents are installed"
+                      className="space-y-3 px-4 py-3"
+                    >
+                      <SkeletonBone immediate className="h-5 w-2/3" />
+                      <SkeletonBone immediate className="h-5 w-1/2" />
+                    </Skeleton>
+                  </SettingsGroup>
+                ) : null
               ) : (
                 (() => {
                   const allAgentIds = getAgentIds();
@@ -981,7 +994,7 @@ export function GeneralTab({
                               <ChevronRight
                                 data-animated-chevron
                                 className={cn(
-                                  "w-3.5 h-3.5 text-text-secondary transition-transform duration-150 group-hover:text-text-primary",
+                                  "w-3.5 h-3.5 text-text-secondary transition-transform duration-150 ease-out group-hover:text-text-primary",
                                   showReadyAgents ? "rotate-90" : "rotate-0"
                                 )}
                               />
@@ -1140,7 +1153,7 @@ export function GeneralTab({
                   <ChevronRight
                     data-animated-chevron
                     className={cn(
-                      "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 group-hover:text-text-primary",
+                      "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out group-hover:text-text-primary",
                       isShortcutsOpen ? "rotate-90" : "rotate-0"
                     )}
                     aria-hidden="true"

@@ -322,3 +322,96 @@ describe("useScopedSelectAll", () => {
     expect([...added].every((handler) => removed.has(handler))).toBe(true);
   });
 });
+
+// A plugin view can mount several Markdown blocks beside its own controls, so a
+// block claims only its own chord rather than the whole pane's.
+function Block({ testId, text }: { testId: string; text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useScopedSelectAll(ref, true, "self");
+  return (
+    <div data-testid={testId} ref={ref}>
+      <p>{text}</p>
+      <a href="#x" data-testid={`${testId}-link`}>
+        link
+      </a>
+    </div>
+  );
+}
+
+function SelfScopedHarness() {
+  return (
+    <div data-testid="pane" data-panel-id="pane-1" tabIndex={-1}>
+      <button type="button" data-testid="plugin-button">
+        Save
+      </button>
+      <Block testId="first" text="first block" />
+      <Block testId="second" text="second block" />
+    </div>
+  );
+}
+
+function placeCaretIn(element: Element): void {
+  const range = document.createRange();
+  range.setStart(element.firstChild!.firstChild!, 2);
+  range.collapse(true);
+  const selection = window.getSelection()!;
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+describe("useScopedSelectAll with self scope", () => {
+  it("gives the chord to the block the user last clicked into, not the first mounted", () => {
+    const { getByTestId } = render(<SelfScopedHarness />);
+    placeCaretIn(getByTestId("second"));
+
+    const event = pressSelectAll(getByTestId("pane"));
+
+    expect(event.defaultPrevented).toBe(true);
+    expectSelectedWholeOf(getByTestId("second"));
+  });
+
+  it("follows the caret to the other block", () => {
+    const { getByTestId } = render(<SelfScopedHarness />);
+    placeCaretIn(getByTestId("first"));
+
+    pressSelectAll(getByTestId("pane"));
+
+    expectSelectedWholeOf(getByTestId("first"));
+  });
+
+  // Tabbing to a link moves focus but leaves the old selection where it was.
+  // The block the user is now in wins; the first-mounted block holding the
+  // stale selection must not claim the chord on its way through.
+  it("gives the chord to the focused block over one still holding the selection", () => {
+    const { getByTestId } = render(<SelfScopedHarness />);
+    placeCaretIn(getByTestId("first"));
+
+    const event = pressSelectAll(getByTestId("second-link"));
+
+    expect(event.defaultPrevented).toBe(true);
+    expectSelectedWholeOf(getByTestId("second"));
+  });
+
+  it("declines when neither focus nor the selection is in any block", () => {
+    const { getByTestId } = render(<SelfScopedHarness />);
+
+    const event = pressSelectAll(getByTestId("plugin-button"));
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(selectedText()).toBe("");
+  });
+
+  it("stays inside its pane even while it holds the selection", () => {
+    const { getByTestId } = render(
+      <>
+        <SelfScopedHarness />
+        <div data-testid="other-pane" data-panel-id="pane-2" tabIndex={-1} />
+      </>
+    );
+    placeCaretIn(getByTestId("first"));
+
+    const event = pressSelectAll(getByTestId("other-pane"));
+
+    expect(event.defaultPrevented).toBe(false);
+  });
+});

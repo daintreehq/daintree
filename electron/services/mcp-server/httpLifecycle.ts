@@ -9,6 +9,7 @@ import type { WindowRegistry } from "../../window/WindowRegistry.js";
 import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { assistantSkipsDaintreeConfirmations } from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import { summarizeMcpArgs, summarizeMcpResult } from "../../../shared/utils/mcpArgsSummary.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
@@ -39,6 +40,7 @@ import type {
   HelpSessionBearerRecord,
   McpActiveClientInfo,
   McpBearerIdentity,
+  McpDispatchAuthorization,
   McpIssueGrantResult,
   McpIssueNativeGrantResult,
   McpRevokeNativeGrantResult,
@@ -59,7 +61,7 @@ import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js"
 import { buildMcpClientConfig } from "../../../shared/config/mcpClientConfigs.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
-import { helpWatchKey, paneWatchKey } from "./terminalWatch.js";
+import { helpNotifyKey, paneNotifyKey } from "./terminalNotify.js";
 import type { AbusePolicy } from "./abusePolicy.js";
 import {
   DEFAULT_PORT,
@@ -94,7 +96,8 @@ export interface HttpLifecycleDeps {
     args: unknown,
     confirmed?: boolean,
     callerInfo?: McpBearerIdentity,
-    sessionOrigin?: McpSessionOrigin
+    sessionOrigin?: McpSessionOrigin,
+    authorization?: McpDispatchAuthorization
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Pinned variants used for help-session bearers — route to the renderer
   // WebContents that minted the bearer at provision time (#7002). Optional
@@ -108,7 +111,8 @@ export interface HttpLifecycleDeps {
     args: unknown,
     confirmed?: boolean,
     contextOverride?: import("../../../shared/types/actions.js").ActionContext,
-    sessionOrigin?: McpSessionOrigin
+    sessionOrigin?: McpSessionOrigin,
+    approval?: Pick<WorkspaceDispatchOptions, "approvalOnly" | "approvalReason" | "authorization">
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Workspace-bound variants used for external sessions that named a workspace
   // at handshake (#11789) and for agent panes bound to their launch workspace
@@ -177,8 +181,15 @@ export interface HttpLifecycleDeps {
   ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
   handleTerminalReadLastMessageOwned: import("./sessionServer.js").OwnedMainExecutors["handleTerminalReadLastMessageOwned"];
   isTerminalIdInUse: (terminalId: string) => boolean;
-  /** Terminal watches (#12491). Absent, every watch tool answers not-eligible. */
-  terminalWatch?: import("./terminalWatch.js").TerminalWatchHandlers;
+  readTerminalAgentState?: import("./sessionServer.js").SessionServerDeps["readTerminalAgentState"];
+  /**
+   * Whether the pty-host's record places a terminal as an agent pane of this
+   * workspace (#12883). `false` for anything it cannot place.
+   */
+  isAgentPaneInWorkspace?: (terminalId: string, workspaceId: string) => Promise<boolean>;
+  /** Terminal notices. Absent, `terminal.notifyWhenIdle` and `notify: true` answer not-eligible. */
+  terminalNotify?: import("./terminalNotify.js").TerminalNotifyHandlers;
+  replyWaiter?: Pick<import("./replyWaiter.js").ReplyWaiterService, "wait">;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   // Per-WebContents manifest cache read for pinned help sessions (#9887). Lets
   // the pinned `getCachedManifest` closure return the session's own window's
@@ -489,19 +500,19 @@ export class HttpLifecycle {
   }
 
   /**
-   * The pane a pane bearer's watches may wake (#12491): its own terminal,
-   * keyed by the ownership principal so a reconnect finds the same watches.
-   * Null for every other bearer, and for a pane bearer without a principal.
+   * The pane a pane bearer's notices are typed into: its own terminal, keyed
+   * by the ownership principal so a reconnect finds the same notices. Null for
+   * every other bearer, and for a pane bearer without a principal.
    */
   private resolveOwnPane(
     authHeader: string,
     ownershipPrincipal: string | null
-  ): import("./terminalWatch.js").OwnPane | null {
+  ): import("./terminalNotify.js").OwnPane | null {
     if (ownershipPrincipal === null) return null;
     const token = extractBearerToken(authHeader);
     if (!token) return null;
     const terminalId = this.paneTerminalResolver?.(token) ?? null;
-    return terminalId === null ? null : { key: paneWatchKey(ownershipPrincipal), terminalId };
+    return terminalId === null ? null : { key: paneNotifyKey(ownershipPrincipal), terminalId };
   }
 
   /**
@@ -1282,7 +1293,7 @@ export class HttpLifecycle {
 
     // Plugin endpoints authenticate their own credentials and nothing else, so
     // they branch off before the orchestration gate: a plugin grant must never
-    // reach `isAuthorized`, whose fallback would score it as a workbench bearer.
+    // reach `isAuthorized`, whose fallback would score it as a core bearer.
     if (url.pathname.startsWith(PLUGIN_MCP_ROUTE_PREFIX)) {
       if (this.pluginRouteHandler && this.port !== null) {
         await this.pluginRouteHandler.handle(req, res, url, this.port);
@@ -1777,7 +1788,7 @@ export class HttpLifecycle {
     sessionId: string,
     workspaceBinding?: McpWorkspaceBinding,
     paneBinding?: PaneWorkspaceBinding,
-    ownPane?: import("./terminalWatch.js").OwnPane | null
+    ownPane?: import("./terminalNotify.js").OwnPane | null
   ): import("./sessionServer.js").SessionServerDeps {
     const pinnedDispatch = this.deps.dispatchActionForWebContents;
     const pinnedManifest = this.deps.requestManifestForWebContents;
@@ -1823,6 +1834,45 @@ export class HttpLifecycle {
     // assistant's own spawns to "an external client did this" (#11808). Read
     // here, before the closure, never inside it.
     const sessionOrigin = this.deps.sessionStore.getOrigin(sessionId);
+
+    // The view captured with the pin, so a webContents id recycled after the
+    // view is gone never resolves as the one the assistant was opened in.
+    const pinnedWebContents =
+      pinnedWebContentsId !== null ? webContentsModule.fromId(pinnedWebContentsId) : undefined;
+    /**
+     * Whether a terminal is in the workspace of this session's pinned view
+     * (#12883) — the whole boundary for the assistant's reads of panes it did
+     * not create, so every unknown refuses. Re-resolved per call rather than at
+     * build: the view can be torn down, or the pin dropped, while the session
+     * lives on. Only this view's own manager is asked; never the focused
+     * window's or the active project's.
+     */
+    const pinnedWorkspaceId = (): string | null => {
+      if (pinnedWebContentsId === null || !pinnedWebContents) return null;
+      if (this.deps.sessionStore.sessionWebContentsMap.get(sessionId) !== pinnedWebContentsId) {
+        return null;
+      }
+      const live = webContentsModule.fromId(pinnedWebContentsId);
+      if (live !== pinnedWebContents || live.isDestroyed()) return null;
+      return (
+        this.registry
+          ?.getByWebContentsId(pinnedWebContentsId)
+          ?.services.projectViewManager?.getWorkspaceRefForWebContents(pinnedWebContentsId)
+          ?.workspaceId ?? null
+      );
+    };
+    const isTerminalInPinnedWorkspace = async (terminalId: string): Promise<boolean> => {
+      try {
+        const workspaceId = pinnedWorkspaceId();
+        if (!workspaceId || !this.deps.isAgentPaneInWorkspace) return false;
+        if (!(await this.deps.isAgentPaneInWorkspace(terminalId, workspaceId))) return false;
+        // The record lookup is a round trip, and the view can go, or be
+        // repointed, while it is out.
+        return pinnedWorkspaceId() === workspaceId;
+      } catch {
+        return false;
+      }
+    };
 
     /**
      * A bound session whose workspace route is unwired must fail, never fall
@@ -1876,7 +1926,8 @@ export class HttpLifecycle {
     const dispatchAction: import("./sessionServer.js").SessionServerDeps["dispatchAction"] = (
       actionId,
       args,
-      confirmed
+      confirmed,
+      authorization
     ) => {
       if (boundWorkspaceId !== null) {
         // A bound external session records no context: unlike a help session,
@@ -1902,7 +1953,9 @@ export class HttpLifecycle {
               args,
               confirmed,
               sessionOrigin,
-              paneDispatchOptions
+              authorization !== undefined
+                ? { ...paneDispatchOptions, authorization }
+                : paneDispatchOptions
             )
           : Promise.reject(missingWorkspaceRoute());
       }
@@ -1914,14 +1967,27 @@ export class HttpLifecycle {
         // the model's turn (#8317). Absent for context-less sessions, in
         // which case pinned dispatch falls back to live renderer context.
         const boundContext = this.deps.sessionStore.sessionContextMap.get(sessionId);
-        return pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
+        return authorization !== undefined
+          ? pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin, {
+              authorization,
+            })
+          : pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
       }
       // Unpinned external/api-key dispatch — surface the requesting bearer's
       // identity so the confirm dialog can name the client (#9157). Returns
       // null (→ undefined) for help-session bearers, so callerInfo never
       // reaches the renderer for the assistant's own dispatches.
       const callerInfo = this.getBearerInfoForSession(sessionId) ?? undefined;
-      return this.deps.dispatchAction(actionId, args, confirmed, callerInfo, sessionOrigin);
+      return authorization !== undefined
+        ? this.deps.dispatchAction(
+            actionId,
+            args,
+            confirmed,
+            callerInfo,
+            sessionOrigin,
+            authorization
+          )
+        : this.deps.dispatchAction(actionId, args, confirmed, callerInfo, sessionOrigin);
     };
 
     /**
@@ -1941,6 +2007,32 @@ export class HttpLifecycle {
                 })
               : Promise.reject(missingWorkspaceRoute())
         : undefined;
+
+    /**
+     * Ask the user whether Daintree's own assistant may close panels it did not
+     * open, or whose agent is busy, without closing anything yet (#12881).
+     * Routed to the window the session is pinned to, where the close would
+     * land. With no pin there is nobody to ask, so this rejects and the session
+     * server refuses the close rather than running it unasked.
+     */
+    const requestCloseApproval: import("./sessionServer.js").SessionServerDeps["requestCloseApproval"] =
+      (actionId, args) => {
+        const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
+        if (id === undefined || !pinnedDispatch) {
+          return Promise.reject(
+            new Error("No Daintree window is pinned to this session to ask the user.")
+          );
+        }
+        return pinnedDispatch(
+          id,
+          actionId,
+          args,
+          false,
+          this.deps.sessionStore.sessionContextMap.get(sessionId),
+          sessionOrigin,
+          { approvalOnly: true, approvalReason: "protected-close" }
+        );
+      };
 
     const getCachedManifest: import("./sessionServer.js").SessionServerDeps["getCachedManifest"] =
       () => {
@@ -2136,6 +2228,10 @@ export class HttpLifecycle {
       dispatchAction,
       revealOwnedRun,
       ...(requestApproval !== undefined ? { requestApproval } : {}),
+      ...(requestApproval !== undefined && paneBinding?.skipConfirmations === true
+        ? { paneSkipConfirmations: true }
+        : {}),
+      requestCloseApproval,
       handleWaitUntilIdle: this.deps.handleWaitUntilIdle,
       handleWaitUntilIdleBatch: this.deps.handleWaitUntilIdleBatch,
       handleSkillsSearch: this.deps.handleSkillsSearch,
@@ -2144,7 +2240,14 @@ export class HttpLifecycle {
       handleTerminalGetStatusViewless: this.deps.handleTerminalGetStatusViewless,
       handleTerminalReadLastMessageOwned: this.deps.handleTerminalReadLastMessageOwned,
       isTerminalIdInUse: this.deps.isTerminalIdInUse,
-      ...(this.deps.terminalWatch !== undefined ? { terminalWatch: this.deps.terminalWatch } : {}),
+      ...(this.deps.readTerminalAgentState !== undefined
+        ? { readTerminalAgentState: this.deps.readTerminalAgentState }
+        : {}),
+      isTerminalInPinnedWorkspace,
+      ...(this.deps.replyWaiter !== undefined ? { replyWaiter: this.deps.replyWaiter } : {}),
+      ...(this.deps.terminalNotify !== undefined
+        ? { terminalNotify: this.deps.terminalNotify }
+        : {}),
       // A pane bearer's own terminal is fixed for the bearer's life and was
       // resolved at handshake; a help lane's is read per call, because its
       // binding follows the PTY that currently serves it.
@@ -2152,7 +2255,7 @@ export class HttpLifecycle {
         if (ownPane) return ownPane;
         if (helpSessionId === null) return null;
         const terminalId = this.helpSessionTerminalResolver?.(helpSessionId) ?? null;
-        return terminalId === null ? null : { key: helpWatchKey(helpSessionId), terminalId };
+        return terminalId === null ? null : { key: helpNotifyKey(helpSessionId), terminalId };
       },
       appendAuditRecord: (input) => {
         // Scrub structural secrets BEFORE the truncation step inside
@@ -2205,6 +2308,13 @@ export class HttpLifecycle {
         helpSessionId !== null
           ? this.deps.turnOutcomeService.getCurrentTurnIdForSession(helpSessionId)
           : null,
+      // Live, never snapshotted (#12874): "Always ask" takes effect on the
+      // assistant's next call. sessionServer consults it for help sessions only.
+      readAssistantConfirmationsSkipped: () =>
+        assistantSkipsDaintreeConfirmations(
+          store.get("helpAssistant")?.daintreeConfirmations,
+          store.get("agentSettings")?.globalSkipPermissions
+        ),
       notifyToolCallStarted,
       notifyToolCallSettled,
       notifyDisplayImage,
@@ -2228,7 +2338,7 @@ export class HttpLifecycle {
     if (!sessionId || typeof sessionId !== "string") {
       throw new Error("Invalid sessionId");
     }
-    if (tier !== "workbench" && tier !== "action" && tier !== "system") {
+    if (tier !== "core" && tier !== "full") {
       throw new Error("Invalid tier");
     }
     const current = this.deps.sessionStore.sessionTierMap.get(sessionId);
@@ -2259,7 +2369,7 @@ export class HttpLifecycle {
       // session that wasn't minted by it. Reject loudly.
       throw new Error("Caller is not the pinned renderer for this session");
     }
-    const order: McpTier[] = ["workbench", "action", "system", "external"];
+    const order: McpTier[] = ["core", "full", "external"];
     const currentRank = order.indexOf(current);
     const newRank = order.indexOf(tier);
     if (newRank < currentRank) {
@@ -2270,8 +2380,8 @@ export class HttpLifecycle {
     // Bound the renderer-approved elevation: after MCP_TIER_ELEVATION_TTL_MS
     // of awake time the session silently decays back to its pre-elevation
     // baseline. `current` is only the candidate — on a chained elevation
-    // `armTierElevationTimer` keeps the baseline the first one captured, so
-    // workbench→action→system still decays all the way to workbench. A stale
+    // `armTierElevationTimer` keeps the baseline the first one captured, so a
+    // chain of elevations still decays all the way to where it started. A stale
     // elevation therefore can't outlive the user's intent (#8462), which is
     // why the banner no longer labels this "always" (#12119). Each approval
     // refreshes the window from now; a chained re-elevation preserves the
@@ -2281,7 +2391,7 @@ export class HttpLifecycle {
     // (via the pinned session), the target tier, the pre-elevation tier, and
     // the bounded window. Only genuine elevations are logged — a same-tier
     // call (`newRank === currentRank`) arms no timer and changes nothing, so
-    // recording an `action → action` row would be misleading noise.
+    // recording a `core → core` row would be misleading noise.
     // Best-effort: an audit-write failure must never block the elevation.
     if (newRank > currentRank) {
       try {

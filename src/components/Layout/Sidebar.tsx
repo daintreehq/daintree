@@ -11,14 +11,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import {
-  FolderOpen,
-  GitBranchPlus,
-  RefreshCw,
-  Ruler,
-  Settings,
-  SlidersHorizontal,
-} from "lucide-react";
+import { FolderGit2, FolderOpen, GitBranchPlus, RefreshCw, Ruler, Settings } from "lucide-react";
 
 interface SidebarProps {
   width: number;
@@ -59,7 +52,7 @@ export function Sidebar({
   // The sidebar now mounts in every workspace kind (#11499), so the background
   // menu has to stop offering worktree-shaped commands to workspaces that have
   // no worktrees. Absent rather than disabled, matching the rows themselves: a
-  // greyed-out "New Worktree…" in a scratch is the same dead-control lie in a
+  // greyed-out "New worktree…" in a scratch is the same dead-control lie in a
   // quieter font.
   //
   // Every entry keys off the view's own workspace, never the globally broadcast
@@ -231,11 +224,11 @@ export function Sidebar({
           <>
             <ContextMenuActionItem actionId="worktree.createDialog.open">
               <GitBranchPlus className={ICON_CLASS} />
-              New Worktree…
+              New worktree…
             </ContextMenuActionItem>
             <ContextMenuActionItem actionId="worktree.refresh">
               <RefreshCw className={ICON_CLASS} />
-              Refresh Sidebar
+              Refresh sidebar
             </ContextMenuActionItem>
             <ContextMenuSeparator />
           </>
@@ -246,7 +239,7 @@ export function Sidebar({
           disabled={!revealPath}
         >
           <FolderOpen className={ICON_CLASS} />
-          {projectId != null ? "Reveal Project in Finder" : "Reveal Workspace in Finder"}
+          {projectId != null ? "Reveal project in Finder" : "Reveal workspace in Finder"}
         </ContextMenuActionItem>
         {projectId != null && (
           <ContextMenuActionItem actionId="project.settings.open">
@@ -257,12 +250,12 @@ export function Sidebar({
         <ContextMenuSeparator />
         <ContextMenuActionItem actionId="ui.sidebar.resetWidth">
           <Ruler className={ICON_CLASS} />
-          Reset Sidebar Width
+          Reset sidebar width
         </ContextMenuActionItem>
         {isGitBackedWorkspace && (
           <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "worktree" }}>
-            <SlidersHorizontal className={ICON_CLASS} />
-            Worktree Settings…
+            <FolderGit2 className={ICON_CLASS} />
+            Worktree settings…
           </ContextMenuActionItem>
         )}
       </ContextMenuContent>

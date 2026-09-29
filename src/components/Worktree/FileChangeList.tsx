@@ -144,7 +144,7 @@ function FileChangeRow({
               aria-label={`Open ${change.relativePath}`}
               className={cn(
                 "group/filerow flex items-center text-xs font-mono hover:bg-tint/5 rounded-[var(--radius-md)] px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
                 // The row whose menu is open lifts to a neutral raised tier
                 // so it reads as "the menu targets this row" — these rows
                 // are ~20px and densely stacked, and the menu otherwise
@@ -184,10 +184,10 @@ function FileChangeRow({
 
               <div className="ml-2 flex items-center gap-2 shrink-0 text-2xs">
                 {(change.insertions ?? 0) > 0 && (
-                  <span className="text-status-success/80">+{change.insertions}</span>
+                  <span className="text-status-success">+{change.insertions}</span>
                 )}
                 {(change.deletions ?? 0) > 0 && (
-                  <span className="text-status-error/80">-{change.deletions}</span>
+                  <span className="text-status-error">-{change.deletions}</span>
                 )}
                 <FileDecorationBadge decoration={decoration} />
               </div>
@@ -412,7 +412,10 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
           // hover bleed overflows the container, and with overflow-y set,
           // `visible` on x computes to `auto` — a horizontal scrollbar. The
           // container's padding absorbs the bleed; anything longer truncates.
-          "overflow-y-auto overflow-x-hidden",
+          // `contain-paint` makes the scrollport a hard paint boundary: with
+          // only the overflow clip, mid-scroll frames painted row text far
+          // down the sidebar, outside this box (#12828).
+          "overflow-y-auto overflow-x-hidden contain-paint",
           isStale && "surface-stale"
         )}
         aria-busy={isStale || undefined}

@@ -96,6 +96,11 @@ export interface ReconciliationWatchdogDeps {
   isStoreHidden: (id: string) => boolean;
   /** Repair: store visibility poisoned to false for a genuinely on-screen terminal. */
   repairStoreVisibility: (id: string) => void;
+  /**
+   * Repair (#12754): probe a never-fed pane for host output it missed. Returns
+   * whether a probe (an IPC round trip) was started.
+   */
+  probeMissingOutput?: (id: string, managed: ManagedTerminal, now: number) => boolean;
 }
 
 /**
@@ -648,6 +653,22 @@ export class TerminalReconciliationWatchdog {
       );
       this.deps.ensureWebGL(id, managed);
       return 1;
+    }
+
+    // Last, because it is the only layer that can't be seen from renderer state
+    // alone: a healthy-looking pane that has never received a byte while its
+    // host did (#12754). Held while anything is still queued for it or a
+    // hydration replay owns it — those are output on its way, not output lost.
+    if (
+      this.deps.probeMissingOutput &&
+      managed.hasReceivedOutput !== true &&
+      !managed.pendingWrites &&
+      this.deps.getQueuedBytes(id) === 0 &&
+      managed.scrollbackRestoreState !== "pending" &&
+      managed.scrollbackRestoreState !== "in-progress"
+    ) {
+      if (heavyBudget <= 0) return 0;
+      return this.deps.probeMissingOutput(id, managed, now) ? 1 : 0;
     }
 
     return 0;

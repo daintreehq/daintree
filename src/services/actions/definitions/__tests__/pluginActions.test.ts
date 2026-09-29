@@ -1,13 +1,23 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const clientMocks = vi.hoisted(() => ({
   validateManifest: vi.fn(),
   getDiagnosticsSnapshot: vi.fn(),
   getProjectPlugins: vi.fn(),
   reloadProjectPlugins: vi.fn(),
+  list: vi.fn(),
+  backupDatabases: vi.fn(),
 }));
 
 vi.mock("@/clients/pluginClient", () => ({ pluginClient: clientMocks }));
+
+const notifyMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+
+const revealMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("@/clients/systemClient", () => ({
+  systemClient: { showItemInFolderUnconfined: revealMock },
+}));
 
 const panelState = vi.hoisted(() => ({
   panelsById: {} as Record<string, { id: string; kind?: string; title: string }>,
@@ -29,6 +39,8 @@ import {
 import { usePluginPanelReloadConfirmStore } from "@/store/pluginPanelReloadConfirmStore";
 import { ConfirmationStagedError } from "../../confirmationStaged";
 import { DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/config/actionIds";
+import { usePluginManagerStore } from "@/store/pluginManagerStore";
+import { useProjectStore } from "@/store/projectStore";
 
 /**
  * These actions ignore the callbacks entirely — they reach main through the
@@ -561,5 +573,248 @@ describe("plugin.reloadPanel (#12611)", () => {
     await expect(run("plugin.reloadPanel", { panelId: "plugin-2" })).rejects.toBeInstanceOf(
       ConfirmationStagedError
     );
+  });
+});
+
+describe("plugin.openSettings", () => {
+  const PROJECT_KEY = "project__project-1__acme.linear";
+
+  function loaded(
+    instanceId: string,
+    overrides: {
+      settings?: Array<{ id: string; scope?: "user" | "project" | "local" }>;
+      declaresView?: boolean;
+    } = {}
+  ) {
+    const parts = instanceId.split("__");
+    const isProject = parts.length === 3;
+    return {
+      instanceId,
+      origin: isProject ? "project" : "global",
+      projectId: isProject ? parts[1] : null,
+      manifest: {
+        name: isProject ? parts[2] : instanceId,
+        contributes: {
+          settings: overrides.settings ?? [{ id: "apiKey" }],
+          views: overrides.declaresView
+            ? [{ id: "prefs", componentPath: "dist/prefs.js", location: "settings" }]
+            : [],
+        },
+      },
+    };
+  }
+
+  async function openSettings(args: unknown, ctx: ActionContext = PROJECT_1) {
+    const onOpenSettingsTab = vi.fn();
+    const registry: ActionRegistry = new Map();
+    registerPluginActions(registry, { ...stubCallbacks(), onOpenSettingsTab });
+    const result = await registry.get("plugin.openSettings")!().run(args, ctx);
+    return { result, onOpenSettingsTab };
+  }
+
+  beforeEach(() => {
+    usePluginManagerStore.setState({ isOpen: false, settingsRequest: null });
+    vi.spyOn(useProjectStore, "getState").mockReturnValue(
+      // Only `currentProject` is read, as the fallback when the context has none.
+      Object.assign(Object.create(null), { currentProject: null })
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("sends an installed plugin's own settings to the plugin manager", async () => {
+    clientMocks.list.mockResolvedValue([loaded("acme.linear")]);
+
+    const { result, onOpenSettingsTab } = await openSettings({
+      pluginId: "acme.linear",
+      key: "apiKey",
+    });
+
+    // What was requested, not a claim that anything was landed on yet.
+    expect(result).toEqual({
+      pluginId: "acme.linear",
+      home: "plugin-manager",
+      requestedKey: "apiKey",
+    });
+    expect(onOpenSettingsTab).not.toHaveBeenCalled();
+    const state = usePluginManagerStore.getState();
+    expect(state.isOpen).toBe(true);
+    expect(state.settingsRequest).toMatchObject({
+      pluginId: "acme.linear",
+      key: "apiKey",
+      home: "manager",
+    });
+  });
+
+  it("sends an installed plugin's project-scoped key to Project settings → Plugins", async () => {
+    clientMocks.list.mockResolvedValue([
+      loaded("acme.linear", { settings: [{ id: "apiKey" }, { id: "team", scope: "project" }] }),
+    ]);
+
+    const { result, onOpenSettingsTab } = await openSettings({
+      pluginId: "acme.linear",
+      key: "team",
+    });
+
+    expect(result).toMatchObject({ home: "project-settings", requestedKey: "team" });
+    expect(onOpenSettingsTab).toHaveBeenCalledWith({ tab: "project:plugins" });
+    expect(usePluginManagerStore.getState().isOpen).toBe(false);
+    expect(usePluginManagerStore.getState().settingsRequest?.home).toBe("project");
+  });
+
+  it("refuses a project-scoped destination with no project open, instead of rerouting it", async () => {
+    clientMocks.list.mockResolvedValue([
+      loaded("acme.linear", { settings: [{ id: "apiKey" }, { id: "team", scope: "local" }] }),
+      loaded("acme.projectonly", { settings: [{ id: "team", scope: "project" }] }),
+    ]);
+
+    await expect(openSettings({ pluginId: "acme.linear", key: "team" }, {})).rejects.toThrow(
+      /keeps "team" in Project settings, and no project is open/
+    );
+    // Nothing the manager would show: keyless is refused the same way.
+    await expect(openSettings({ pluginId: "acme.projectonly" }, {})).rejects.toThrow(
+      /no project is open/
+    );
+    expect(usePluginManagerStore.getState().settingsRequest).toBeNull();
+    // Its own settings still open in the manager without a project.
+    const { result } = await openSettings({ pluginId: "acme.linear" }, {});
+    expect(result).toMatchObject({ home: "plugin-manager", requestedKey: null });
+  });
+
+  it("keeps an installed plugin's exact identity when a project plugin shares its id", async () => {
+    clientMocks.list.mockResolvedValue([loaded("acme.linear"), loaded(PROJECT_KEY)]);
+
+    // The id an installed plugin's own host and panels pass is its manifest id.
+    const installed = await openSettings({ pluginId: "acme.linear" });
+    expect(installed.result).toMatchObject({ home: "plugin-manager" });
+    expect(usePluginManagerStore.getState().settingsRequest?.pluginId).toBe("acme.linear");
+
+    const project = await openSettings({ pluginId: PROJECT_KEY });
+    expect(project.result).toMatchObject({ home: "project-settings" });
+    expect(usePluginManagerStore.getState().settingsRequest?.pluginId).toBe(PROJECT_KEY);
+  });
+
+  it("resolves a manifest id to this project's own plugin when nothing installed has it", async () => {
+    clientMocks.list.mockResolvedValue([loaded(PROJECT_KEY)]);
+
+    const { result, onOpenSettingsTab } = await openSettings({ pluginId: "acme.linear" });
+    expect(result).toEqual({
+      pluginId: "acme.linear",
+      home: "project-settings",
+      requestedKey: null,
+    });
+    expect(onOpenSettingsTab).toHaveBeenCalledWith({ tab: "project:plugins" });
+    expect(usePluginManagerStore.getState().settingsRequest?.pluginId).toBe(PROJECT_KEY);
+  });
+
+  it("never reaches another project's plugin", async () => {
+    const otherKey = "project__project-2__acme.linear";
+    clientMocks.list.mockResolvedValue([loaded(otherKey)]);
+
+    await expect(openSettings({ pluginId: otherKey })).rejects.toThrow(/No plugin/);
+    await expect(openSettings({ pluginId: "acme.linear" })).rejects.toThrow(/No plugin/);
+  });
+
+  it("ignores an undeclared key, refuses a plugin with no settings, and reads a view off the manifest", async () => {
+    clientMocks.list.mockResolvedValue([
+      loaded("acme.linear"),
+      loaded("acme.bare", { settings: [] }),
+      // Declared but stopped: no module URL, and its settings are still reachable.
+      loaded("acme.custom", { settings: [], declaresView: true }),
+    ]);
+
+    const { result } = await openSettings({ pluginId: "acme.linear", key: "nope" });
+    expect(result).toMatchObject({ home: "plugin-manager", requestedKey: null });
+    await expect(openSettings({ pluginId: "acme.bare" })).rejects.toThrow(/has no settings/);
+    const custom = await openSettings({ pluginId: "acme.custom" });
+    expect(custom.result).toMatchObject({ home: "plugin-manager" });
+  });
+
+  it("is reachable from menus and a plugin's own host, and from no agent", () => {
+    const def = definition("plugin.openSettings");
+    expect(def.denyPluginDispatch).not.toBe(true);
+    expect(DENY_PLUGIN_DISPATCH_ACTION_IDS).not.toContain("plugin.openSettings");
+    expect(def.mcpVisibility).toBe("hidden");
+  });
+});
+
+describe("plugin.backupDatabases", () => {
+  beforeEach(() => {
+    clientMocks.backupDatabases.mockReset();
+    notifyMock.mockReset();
+    revealMock.mockClear();
+  });
+
+  it("names only the plugin, and main does the rest", async () => {
+    clientMocks.backupDatabases.mockResolvedValue({ status: "cancelled" });
+    await run("plugin.backupDatabases", { pluginId: "acme.ledger" });
+
+    expect(clientMocks.backupDatabases).toHaveBeenCalledWith("acme.ledger");
+  });
+
+  it("says nothing when the dialog was dismissed", async () => {
+    clientMocks.backupDatabases.mockResolvedValue({ status: "cancelled" });
+    await run("plugin.backupDatabases", { pluginId: "acme.ledger" });
+
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("says so when the plugin has nothing on disk yet", async () => {
+    clientMocks.backupDatabases.mockResolvedValue({ status: "no-data", pluginName: "Ledger" });
+    await run("plugin.backupDatabases", { pluginId: "acme.ledger" });
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const payload = notifyMock.mock.calls[0]![0];
+    expect(payload.type).toBe("info");
+    expect(payload.message).toBe("Ledger has no data to back up yet");
+    expect(payload.action).toBeUndefined();
+  });
+
+  it("reports where one file went, with a way to reveal it", async () => {
+    clientMocks.backupDatabases.mockResolvedValue({
+      status: "saved",
+      pluginName: "Ledger",
+      paths: ["/Users/me/Downloads/ledger.db"],
+    });
+    await run("plugin.backupDatabases", { pluginId: "acme.ledger" });
+
+    const payload = notifyMock.mock.calls[0]![0];
+    expect(payload.type).toBe("success");
+    expect(payload.title).toBe("Ledger data backed up");
+    expect(payload.message).toContain("/Users/me/Downloads/ledger.db");
+    payload.action.onClick();
+    expect(revealMock).toHaveBeenCalledWith("/Users/me/Downloads/ledger.db");
+  });
+
+  it("reports a folder of files by their count and folder", async () => {
+    clientMocks.backupDatabases.mockResolvedValue({
+      status: "saved",
+      pluginName: "Ledger",
+      paths: ["C:\\Backups\\a.db", "C:\\Backups\\b.db"],
+    });
+    await run("plugin.backupDatabases", { pluginId: "acme.ledger" });
+
+    expect(notifyMock.mock.calls[0]![0].message).toBe("2 databases saved to C:\\Backups");
+  });
+
+  it("reports a failure in main's words with one way to try again, and still fails", async () => {
+    clientMocks.backupDatabases.mockRejectedValue(new Error("backup.db already exists in /tmp."));
+
+    await expect(run("plugin.backupDatabases", { pluginId: "acme.ledger" })).rejects.toThrow(
+      "already exists"
+    );
+    const payload = notifyMock.mock.calls[0]![0];
+    expect(payload.type).toBe("error");
+    expect(payload.message).toBe("backup.db already exists in /tmp.");
+    expect(payload.action.label).toBe("Try again");
+  });
+
+  it("is UI only: closed to plugins and hidden from agents", () => {
+    const def = definition("plugin.backupDatabases");
+    expect(def.denyPluginDispatch).toBe(true);
+    expect(DENY_PLUGIN_DISPATCH_ACTION_IDS).toContain("plugin.backupDatabases");
+    expect(def.mcpVisibility).toBe("hidden");
   });
 });

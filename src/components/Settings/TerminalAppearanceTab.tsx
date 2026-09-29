@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { useTerminalColorSchemeStore, useTerminalFontStore } from "@/store";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { BUILT_IN_SCHEMES } from "@/config/terminalColorSchemes";
@@ -26,6 +27,25 @@ import { logError } from "@/utils/logger";
 
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 24;
+// Stepper clicks and held arrow keys fire a change per step; the sample follows each one,
+// but the setting (and every open terminal's refit) waits for the steps to settle.
+const LIVE_FONT_SIZE_DEBOUNCE_MS = 250;
+
+type FontSizeParse = { ok: true; value: number } | { ok: false; error: string };
+
+function parseFontSize(raw: string): FontSizeParse {
+  const parsed = Number(raw.trim());
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+    return { ok: false, error: "Font size must be a whole number" };
+  }
+  if (parsed < MIN_FONT_SIZE || parsed > MAX_FONT_SIZE) {
+    return {
+      ok: false,
+      error: `Font size must be between ${MIN_FONT_SIZE} and ${MAX_FONT_SIZE} px`,
+    };
+  }
+  return { ok: true, value: parsed };
+}
 
 const SYSTEM_STACK = "Menlo, Monaco, Consolas, monospace";
 
@@ -76,34 +96,96 @@ export function TerminalAppearanceTab({
     effectiveSubtab === "terminal" ? fontSizeError != null : false
   );
 
-  useEffect(() => {
-    setFontSizeInput(String(fontSize));
-  }, [fontSize]);
-
   const selectedFontFamilyId: FontFamilyId = fontFamily.includes("JetBrains Mono")
     ? "jetbrains"
     : "system";
 
+  const liveApplyRef = useRef<{ timer: ReturnType<typeof setTimeout>; flush: () => void } | null>(
+    null
+  );
+
+  const cancelLiveApply = () => {
+    if (liveApplyRef.current) {
+      clearTimeout(liveApplyRef.current.timer);
+      liveApplyRef.current = null;
+    }
+  };
+
+  // A size changed from anywhere else (a zoom shortcut, another window) outranks a
+  // draft still waiting on its debounce, which would otherwise save over it.
+  useEffect(() => {
+    cancelLiveApply();
+    setFontSizeInput(String(fontSize));
+  }, [fontSize]);
+
+  // A step the user saw in the sample is a step they expect kept, even if the dialog
+  // closes before the debounce settles.
+  useEffect(() => {
+    const live = liveApplyRef;
+    return () => {
+      const pending = live.current;
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      live.current = null;
+      pending.flush();
+    };
+  }, []);
+
   // A rejected size stays in the field beside its error, so what the user typed and
   // what is wrong with it are read together. The terminals keep the last applied size.
-  const handleFontSizeBlur = async () => {
-    const parsed = Number(fontSizeInput.trim());
-    if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
-      setFontSizeError("Font size must be a whole number");
-      return;
-    }
-    if (parsed < MIN_FONT_SIZE || parsed > MAX_FONT_SIZE) {
-      setFontSizeError(`Font size must be between ${MIN_FONT_SIZE} and ${MAX_FONT_SIZE} px`);
+  const commitFontSize = async () => {
+    cancelLiveApply();
+    const result = parseFontSize(fontSizeInput);
+    if (!result.ok) {
+      setFontSizeError(result.error);
       return;
     }
 
-    if (parsed === fontSize) {
+    if (result.value === fontSize) {
       setFontSizeError(null);
       return;
     }
 
-    await applyFontSize(parsed);
+    await applyFontSize(result.value);
   };
+
+  const handleFontSizeChange = (raw: string) => {
+    setFontSizeInput(raw);
+    if (fontSizeError) {
+      setFontSizeError(null);
+    }
+    cancelLiveApply();
+    const result = parseFontSize(raw);
+    if (!result.ok || result.value === fontSize) return;
+    const flush = () => void applyFontSize(result.value);
+    liveApplyRef.current = {
+      timer: setTimeout(() => {
+        liveApplyRef.current = null;
+        flush();
+      }, LIVE_FONT_SIZE_DEBOUNCE_MS),
+      flush,
+    };
+  };
+
+  const handleFontSizeKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.nativeEvent.isComposing) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void commitFontSize();
+      return;
+    }
+    if (e.key === "Escape" && fontSizeInput !== String(fontSize)) {
+      // Revert the draft first; only an already-clean field lets Escape close the dialog.
+      e.preventDefault();
+      e.stopPropagation();
+      cancelLiveApply();
+      setFontSizeInput(String(fontSize));
+      setFontSizeError(null);
+    }
+  };
+
+  const draftFontSize = parseFontSize(fontSizeInput);
+  const sampleFontSize = draftFontSize.ok ? draftFontSize.value : fontSize;
 
   const applyFontSize = async (parsed: number) => {
     setFontSizeError(null);
@@ -212,22 +294,21 @@ export function TerminalAppearanceTab({
                   label="Font size"
                   description={`${MIN_FONT_SIZE}–${MAX_FONT_SIZE} px · Default: ${DEFAULT_TERMINAL_FONT_SIZE} px`}
                   isModified={fontSize !== DEFAULT_TERMINAL_FONT_SIZE}
-                  onReset={() => void applyFontSize(DEFAULT_TERMINAL_FONT_SIZE)}
+                  onReset={() => {
+                    cancelLiveApply();
+                    void applyFontSize(DEFAULT_TERMINAL_FONT_SIZE);
+                  }}
                   suffix="px"
                   min={MIN_FONT_SIZE}
                   max={MAX_FONT_SIZE}
                   value={fontSizeInput}
-                  onChange={(e) => {
-                    setFontSizeInput(e.target.value);
-                    if (fontSizeError) {
-                      setFontSizeError(null);
-                    }
-                  }}
-                  onBlur={() => void handleFontSizeBlur()}
+                  onChange={(e) => handleFontSizeChange(e.target.value)}
+                  onKeyDown={handleFontSizeKeyDown}
+                  onBlur={() => void commitFontSize()}
                   aria-label="Terminal font size"
                   error={fontSizeError ?? undefined}
                 />
-                <FontSampleRow fontFamily={fontFamily} fontSize={fontSize} />
+                <FontSampleRow fontFamily={fontFamily} fontSize={sampleFontSize} />
                 {fontError && (
                   <div className="px-4 py-3">
                     <InlineStatusBanner

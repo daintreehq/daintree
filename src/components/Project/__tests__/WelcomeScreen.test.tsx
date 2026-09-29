@@ -279,7 +279,6 @@ function makeGettingStarted(
     visible,
     collapsed: false,
     checklist,
-    showCelebration: false,
     dismiss: vi.fn(),
     toggleCollapse: vi.fn(),
     notifyOnboardingComplete: vi.fn(),

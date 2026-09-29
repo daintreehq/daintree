@@ -33,7 +33,7 @@ const MAX_CONFIG_BYTES = 256 * 1024;
 
 // Daintree's own server names. A user entry must never shadow them: the
 // `daintree` entry carries the session bearer and the tier boundary.
-const RESERVED_MCP_SERVER_NAMES = new Set(["daintree", "daintree-docs"]);
+const RESERVED_MCP_SERVER_NAMES = new Set(["daintree", "daintree-docs", "daintree-runbooks"]);
 
 // Bare-key safe (TOML `-c mcp_servers.<name>.…` for Codex) and a valid Claude
 // tool-name prefix (`mcp__<name>__*`).

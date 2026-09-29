@@ -389,6 +389,34 @@ describe("LiveWorkerIngest", () => {
     expect(h.ingest.hasFallenBack()).toBe(false);
   });
 
+  it("drops diverted output a host snapshot restore already painted (#12791)", async () => {
+    const h = makeLiveHarness({ auto: false });
+    // A fetch-and-restore committed a fence at offset 10 while these chunks
+    // were held: the first is inside the snapshot, the second is new.
+    h.deps.getStreamFence = () => 10;
+    h.ingest.setDesired(true);
+    await until(() => h.host.engageRequested, "engage requested");
+    h.ingest.feedDiverted("COVERED\r\n", { start: 1, end: 10 });
+    h.ingest.feedDiverted("FRESH\r\n", { start: 10, end: 17 });
+    h.host.engage();
+    await until(() => h.ingest.isWorkerActive(), "worker mode");
+    // Late covered chunk on the window path while the worker is live.
+    h.ingest.feedDiverted("LATE\r\n", { start: 4, end: 10 });
+
+    h.ingest.setDesired(false);
+    await until(() => h.host.lastDrainId !== null, "release requested");
+    h.host.release(h.host.lastDrainId!);
+    await until(() => !h.ingest.shouldDivert(), "release");
+    await drain(h.mirror.terminal);
+
+    const text = bufferText(h.mirror.terminal);
+    expect(text).toContain("FRESH");
+    expect(text).not.toContain("COVERED");
+    expect(text).not.toContain("LATE");
+    // Dropped or not, each diverted chunk settled its ledger exactly once.
+    expect(h.deps.ackDiverted).toHaveBeenCalledTimes(3);
+  });
+
   it("release is zero-loss: port stragglers land before post-flip window bytes", async () => {
     const h = makeLiveHarness({ auto: false });
     h.ingest.setDesired(true);

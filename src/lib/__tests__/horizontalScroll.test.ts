@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { getHorizontalScrollState, calculateScrollAmount } from "../horizontalScroll";
+import {
+  getHorizontalScrollState,
+  calculateScrollAmount,
+  getWheelHorizontalDelta,
+  type WheelDeltaInput,
+} from "../horizontalScroll";
 
 describe("getHorizontalScrollState", () => {
   describe("isOverflowing", () => {
@@ -193,5 +198,40 @@ describe("calculateScrollAmount", () => {
 
   it("should handle boundary value at 750px (600 / 0.8)", () => {
     expect(calculateScrollAmount(750)).toBe(600);
+  });
+});
+
+describe("getWheelHorizontalDelta", () => {
+  const wheel = (over: Partial<WheelDeltaInput> = {}): WheelDeltaInput => ({
+    deltaX: 0,
+    deltaY: 100,
+    deltaMode: 0,
+    ctrlKey: false,
+    ...over,
+  });
+
+  it("leaves any event carrying horizontal movement to the browser", () => {
+    for (const deltaX of [-3, 0.5, 40]) {
+      expect(getWheelHorizontalDelta(wheel({ deltaX }), 800)).toBe(0);
+    }
+  });
+
+  it("never remaps a pinch-zoom (ctrl) wheel", () => {
+    expect(getWheelHorizontalDelta(wheel({ ctrlKey: true }), 800)).toBe(0);
+  });
+
+  it("moves the rail in the wheel's direction for a vertical-only notch", () => {
+    expect(getWheelHorizontalDelta(wheel({ deltaY: 100 }), 800)).toBeGreaterThan(0);
+    expect(getWheelHorizontalDelta(wheel({ deltaY: -100 }), 800)).toBeLessThan(0);
+    expect(getWheelHorizontalDelta(wheel({ deltaY: 0 }), 800)).toBe(0);
+  });
+
+  it("converts line and page deltas into pixels rather than moving a few px", () => {
+    const pixel = getWheelHorizontalDelta(wheel({ deltaY: 3, deltaMode: 0 }), 800);
+    const line = getWheelHorizontalDelta(wheel({ deltaY: 3, deltaMode: 1 }), 800);
+    expect(line).toBeGreaterThan(pixel * 10);
+    expect(getWheelHorizontalDelta(wheel({ deltaY: 1, deltaMode: 2 }), 800)).toBe(
+      getWheelHorizontalDelta(wheel({ deltaY: 2, deltaMode: 2 }), 400)
+    );
   });
 });

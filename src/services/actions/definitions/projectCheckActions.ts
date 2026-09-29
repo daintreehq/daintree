@@ -25,7 +25,7 @@ export function registerProjectCheckActions(
       id: "project.runCheck",
       title: "Run project check",
       description:
-        "Run one of a project's detected commands and report its exit code and output. A command that fails is reported as a failed check rather than an error, so read the result rather than relying on the call succeeding. Detection finds every runnable script, not just checks, so verify an unfamiliar command before running it. Never use this for long-lived servers: they block until the timeout expires.",
+        "Run one detected project command and report its exit code and output. A failing command is a failed check, not an error, so read the result. Detection lists every script, not just checks: verify an unfamiliar one first. Never for long-lived servers; they block until timeout.",
       category: "project",
       kind: "command",
       danger: "safe",
@@ -36,25 +36,16 @@ export function registerProjectCheckActions(
       denyPluginDispatch: true,
       scope: "renderer",
       argsSchema: z.object({
-        projectId: z
-          .string()
-          .min(1)
-          .describe(
-            "Identifies the project whose runner should be executed, using an id from the project-listing capability."
-          ),
+        projectId: z.string().min(1).describe("Project id from the project listing."),
         runnerId: z
           .string()
           .min(1)
-          .describe(
-            "Identifies which detected command to run, using an id from runner detection. Detection surfaces every runnable script, not only checks, so confirm what an unfamiliar id actually runs first."
-          ),
+          .describe("Runner id from detection; confirm what an unfamiliar id runs first."),
         cwd: z
           .string()
           .min(1)
           .optional()
-          .describe(
-            "Directory to run in. Must be the project root or one of its worktrees. Defaults to the project root."
-          ),
+          .describe("The project root or one of its worktrees (default: project root)."),
         timeoutMs: z
           .number()
           .int()
@@ -62,7 +53,7 @@ export function registerProjectCheckActions(
           .max(PROJECT_CHECK_MAX_TIMEOUT_MS)
           .optional()
           .describe(
-            `Wall-clock ceiling in milliseconds (default ${PROJECT_CHECK_DEFAULT_TIMEOUT_MS}, min ${PROJECT_CHECK_MIN_TIMEOUT_MS}, max ${PROJECT_CHECK_MAX_TIMEOUT_MS}). The process tree is killed when it elapses.`
+            `Wall-clock ceiling in ms (default ${PROJECT_CHECK_DEFAULT_TIMEOUT_MS}, min ${PROJECT_CHECK_MIN_TIMEOUT_MS}, max ${PROJECT_CHECK_MAX_TIMEOUT_MS}); the process tree is killed at expiry.`
           ),
       }),
       resultSchema: z.object({

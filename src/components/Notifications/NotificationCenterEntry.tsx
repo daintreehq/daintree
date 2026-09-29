@@ -13,9 +13,13 @@ import {
   Archive,
   Mail,
   MailOpen,
+  BellMinus,
+  BellOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { actionService } from "@/services/ActionService";
@@ -33,6 +37,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuMeta,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuSub,
@@ -49,6 +54,7 @@ import {
 import { useNotificationSource } from "./notificationSource";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUIStore } from "@/store/uiStore";
+import { CountBadge } from "@/components/ui/badge";
 
 const snoozedUntilFormatter = new Intl.DateTimeFormat(undefined, {
   weekday: "short",
@@ -329,21 +335,19 @@ export function NotificationCenterEntry({
               {entry.title}
             </p>
             {showChip && (
-              <span
+              <CountBadge
                 key={bumpKey}
-                aria-label={formatNotificationCountAriaLabel(safeCount)}
+                // Spoken as "N events"; the capped glyph ("99+") is for the eye.
+                label={formatNotificationCountAriaLabel(safeCount)}
                 // Handle for the forced-colors repaint — the tint fill is forced
                 // to Canvas there, leaving a bare numeral that reads as part of
                 // the title.
                 data-notification-count="true"
                 style={{ animationDuration: `${DURATION_150}ms` }}
-                className={cn(
-                  "shrink-0 rounded-full bg-tint/15 px-1.5 py-0.5 text-3xs font-medium leading-none text-text-secondary tabular-nums min-w-[2.5ch] text-center",
-                  bumpKey > 0 && "animate-badge-bump"
-                )}
+                className={cn("min-w-[2.5ch]", bumpKey > 0 && "animate-badge-bump")}
               >
                 {formatNotificationCountGlyph(safeCount)}
-              </span>
+              </CountBadge>
             )}
           </div>
         )}
@@ -367,18 +371,18 @@ export function NotificationCenterEntry({
           </p>
         )}
         {showChip && !entry.title && (
-          <span
+          <CountBadge
             key={bumpKey}
-            aria-label={formatNotificationCountAriaLabel(safeCount)}
+            label={formatNotificationCountAriaLabel(safeCount)}
             data-notification-count="true"
             style={{ animationDuration: `${DURATION_150}ms` }}
             className={cn(
-              "col-span-2 row-start-2 mt-0.5 justify-self-start rounded-full bg-tint/15 px-1.5 py-0.5 text-3xs font-medium leading-none text-text-secondary tabular-nums min-w-[2.5ch] text-center",
+              "col-span-2 row-start-2 mt-0.5 justify-self-start min-w-[2.5ch]",
               bumpKey > 0 && "animate-badge-bump"
             )}
           >
             {formatNotificationCountGlyph(safeCount)}
-          </span>
+          </CountBadge>
         )}
         {/* Where it came from, and on a snoozed row when it comes back: quiet
             lines under the message rather than more weight on the title line.
@@ -417,14 +421,15 @@ export function NotificationCenterEntry({
               const manifest = actionService.get(action.actionId as ActionId);
               const isAvailable = manifest !== null && manifest.enabled;
               const button = (
-                <button
-                  type="button"
-                  // Handle for the `forced-colors: active` block in index.css.
-                  // Primary is marked by its status-info fill and border, and
-                  // the UA flattens both — so "Pull and rebase" and "Open
-                  // review" render as the same white pill and the recommended
-                  // action stops being recommended. Same fix as the destructive
-                  // button in that block: a heavier border.
+                <Button
+                  // Same mapping as the toast, grid bar and inline banners: the
+                  // recommended action is outlined, the alternative is ghost,
+                  // and severity stays on the row's icon.
+                  variant={action.variant === "secondary" ? "ghost" : "outline"}
+                  size="xs"
+                  // Handle for the `forced-colors: active` block in index.css:
+                  // the UA flattens outline and ghost to the same border, so
+                  // this restores the primary's heavier one.
                   data-notification-action={
                     action.variant === "secondary" ? "secondary" : "primary"
                   }
@@ -438,27 +443,14 @@ export function NotificationCenterEntry({
                           )
                       : undefined
                   }
+                  // A list row takes the inline banner's trim: no raised shadow.
                   className={cn(
-                    "h-6 rounded-[var(--radius-sm)] px-2 text-2xs font-medium transition-colors",
-                    isAvailable
-                      ? action.variant === "secondary"
-                        ? "border border-border-strong text-text-secondary hover:bg-overlay-medium"
-                        : // The primary used to ink its label from `status-info`,
-                          // which `shared/theme/contrast.ts` only gates at 3:1 —
-                          // no body-text guarantee. It measured 4.46:1 against
-                          // its own fill while the secondary beside it measured
-                          // 7.6:1, so the button with primary chrome read as the
-                          // weaker, near-disabled one, and `prefers-contrast:
-                          // more` lifted the secondary and left it behind. Keep
-                          // status-info as the fill and border (that is what
-                          // marks it primary) and take the label from the gated
-                          // text ramp.
-                          "border border-status-info/30 bg-status-info/15 text-text-primary hover:bg-status-info/20"
-                      : "border border-border-subtle text-text-muted cursor-not-allowed"
+                    "px-2 shadow-none inset-shadow-none",
+                    !isAvailable && ARIA_DISABLED_CLASSES
                   )}
                 >
                   {action.label}
-                </button>
+                </Button>
               );
               const key = `${action.actionId}-${index}`;
               // Why it can't run, on the button itself: it stays focusable
@@ -811,12 +803,13 @@ function RowOptionsMenu({
         onSnooze?.(option);
       }}
     >
+      <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
       {SNOOZE_LABEL[option]}
       {/* The commitment, before it's made: "Until tomorrow" is 8:00 AM, and
           "Until next week" is Monday. */}
-      <span className="ml-auto pl-6 text-text-secondary tabular-nums">
+      <DropdownMenuMeta aria-hidden={false} className="pl-6">
         {formatSnoozeWake(resolveSnoozeDuration(option))}
-      </span>
+      </DropdownMenuMeta>
     </DropdownMenuItem>
   ));
 
@@ -879,21 +872,21 @@ function RowOptionsMenu({
                 without these a pointer user could only read or archive one
                 notification by learning `u` and `e`, or by doing it to all. */}
             {onToggleRead && (
-              <DropdownMenuItem onSelect={onToggleRead}>
+              <DropdownMenuItem onSelect={onToggleRead} aria-keyshortcuts="U">
                 {isRead ? (
                   <Mail data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 ) : (
                   <MailOpen data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 )}
                 {isRead ? "Mark as unread" : "Mark as read"}
-                <DropdownMenuShortcut aria-hidden="true">U</DropdownMenuShortcut>
+                <DropdownMenuShortcut shortcut="U" />
               </DropdownMenuItem>
             )}
             {onArchive && (
-              <DropdownMenuItem onSelect={onArchive}>
+              <DropdownMenuItem onSelect={onArchive} aria-keyshortcuts="E">
                 <Archive data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Archive
-                <DropdownMenuShortcut aria-hidden="true">E</DropdownMenuShortcut>
+                <DropdownMenuShortcut shortcut="E" />
               </DropdownMenuItem>
             )}
             {supportsSnooze &&
@@ -953,11 +946,7 @@ function RowOptionsMenu({
                     .then(() => refreshProjectOverrides(projectId));
                 }}
               >
-                {/* No shim. The gutter these two need in a menu that also offers
-                Snooze / Copy / Report is allocated by the `:has([data-menu-icon])`
-                rule in index.css, and withdrawn when every icon-bearing item is
-                filtered out — an entry with no correlationId and no panelId
-                leaves only these, and with no projectId either, only this one. */}
+                <BellMinus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Silence {EVENT_KIND_LABEL[eventKind]}
                 {entry.context?.projectId && eventKind !== "uiFeedback" ? " from this project" : ""}
               </DropdownMenuItem>
@@ -972,6 +961,7 @@ function RowOptionsMenu({
                     .then(() => refreshProjectOverrides(projectId));
                 }}
               >
+                <BellOff data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Mute project notifications
               </DropdownMenuItem>
             )}

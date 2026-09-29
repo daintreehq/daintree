@@ -19,7 +19,7 @@ export function setPortBatchThroughputDelayMs(ms: number): void {
 
 export interface PortBatcherDeps {
   portQueueManager: PortQueueManager;
-  postMessage: (id: string, data: Uint8Array, bytes: number) => void;
+  postMessage: (id: string, data: Uint8Array, bytes: number, streamEnd?: number) => void;
   onError: (error: unknown, failedBatches: PortBatcherFailedBatch[]) => void;
   /**
    * The UI-focused terminal id for this window, or null when none is focused.
@@ -41,12 +41,16 @@ interface PendingTerminal {
   // backing ArrayBuffer and may transfer it without copying. Any non-owned
   // write flips this false for the rest of the entry's life.
   owned: boolean;
+  // Stream offset just past the last chunk. A merged batch carries only this,
+  // so the entry must hold a contiguous run of the stream.
+  streamEnd: number | undefined;
 }
 
 export interface PortBatcherFailedBatch {
   id: string;
   data: Uint8Array;
   bytes: number;
+  streamEnd?: number;
 }
 
 type FlushMode = "idle" | "latency" | "throughput";
@@ -76,11 +80,25 @@ export class PortBatcher {
     byteCount: number,
     owned = false,
     interactive = false,
-    recentInput = false
+    recentInput = false,
+    streamEnd?: number
   ): boolean {
     if (this.disposed) return false;
 
     let entry = this.pendingChunks.get(id);
+    // A rejected chunk leaves a hole in this window's stream. Merging across
+    // it would give the batch a start offset it doesn't have, so post what is
+    // pending first and start a fresh entry.
+    if (
+      entry &&
+      entry.bytes > 0 &&
+      (streamEnd === undefined
+        ? entry.streamEnd !== undefined
+        : streamEnd - byteCount !== entry.streamEnd)
+    ) {
+      this.flushTerminal(id);
+      entry = undefined;
+    }
     const terminalPending = entry?.bytes ?? 0;
     if (this.deps.portQueueManager.isAtCapacity(id, terminalPending + byteCount)) {
       // Flush any pending data for this terminal before rejecting to prevent
@@ -99,6 +117,7 @@ export class PortBatcher {
         immediateHandle: null,
         timeoutHandle: null,
         owned,
+        streamEnd,
       };
       this.pendingChunks.set(id, entry);
     } else {
@@ -106,6 +125,7 @@ export class PortBatcher {
     }
     entry.chunks.push(data);
     entry.bytes += byteCount;
+    entry.streamEnd = streamEnd;
     this.totalPendingBytes += byteCount;
 
     if (this.totalPendingBytes >= PORT_BATCH_THRESHOLD_BYTES) {
@@ -188,19 +208,22 @@ export class PortBatcher {
     let data: Uint8Array = new Uint8Array(0);
     try {
       data = mergeChunks(entry.chunks, entry.bytes, entry.owned);
-      this.deps.postMessage(id, data, entry.bytes);
+      this.post(id, data, entry);
       this.deps.portQueueManager.addBytes(id, entry.bytes);
       this.deps.portQueueManager.applyBackpressure(
         id,
         this.deps.portQueueManager.getUtilization(id)
       );
     } catch (error) {
-      const failedBatches: PortBatcherFailedBatch[] = [{ id, data, bytes: entry.bytes }];
+      const failedBatches: PortBatcherFailedBatch[] = [
+        { id, data, bytes: entry.bytes, streamEnd: entry.streamEnd },
+      ];
       for (const [failedId, pending] of snapshot) {
         failedBatches.push({
           id: failedId,
           data: mergeChunks(pending.chunks, pending.bytes, pending.owned),
           bytes: pending.bytes,
+          streamEnd: pending.streamEnd,
         });
       }
       this.deps.onError(error, failedBatches);
@@ -235,14 +258,14 @@ export class PortBatcher {
     let data: Uint8Array = new Uint8Array(0);
     try {
       data = mergeChunks(entry.chunks, entry.bytes, entry.owned);
-      this.deps.postMessage(id, data, entry.bytes);
+      this.post(id, data, entry);
       this.deps.portQueueManager.addBytes(id, entry.bytes);
       this.deps.portQueueManager.applyBackpressure(
         id,
         this.deps.portQueueManager.getUtilization(id)
       );
     } catch (error) {
-      this.deps.onError(error, [{ id, data, bytes: entry.bytes }]);
+      this.deps.onError(error, [{ id, data, bytes: entry.bytes, streamEnd: entry.streamEnd }]);
     }
   }
 
@@ -253,6 +276,11 @@ export class PortBatcher {
     this.pendingChunks.clear();
     this.totalPendingBytes = 0;
     this.disposed = true;
+  }
+
+  private post(id: string, data: Uint8Array, entry: PendingTerminal): void {
+    if (entry.streamEnd === undefined) this.deps.postMessage(id, data, entry.bytes);
+    else this.deps.postMessage(id, data, entry.bytes, entry.streamEnd);
   }
 
   private cancelEntryTimers(entry: PendingTerminal): void {

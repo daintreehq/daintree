@@ -42,9 +42,10 @@ const {
   mockGetHelpAssistantSettings: vi.fn().mockResolvedValue({
     docSearch: true,
     daintreeControl: true,
-    tier: "action" as const,
+    tier: "core" as const,
     bypassPermissions: false,
     auditRetention: 7,
+    modelIds: { claude: "", codex: "", gemini: "" },
     customArgs: "",
   }),
   mockGetAgentVersion: vi.fn().mockResolvedValue({
@@ -499,7 +500,7 @@ function resetState() {
     sessionId: "sess-default",
     sessionPath: "/help",
     token: "tok-default",
-    tier: "action",
+    tier: "core",
     mcpUrl: null,
     windowId: 1,
   });
@@ -513,9 +514,10 @@ function resetState() {
   mockGetHelpAssistantSettings.mockResolvedValue({
     docSearch: true,
     daintreeControl: true,
-    tier: "action" as const,
+    tier: "core" as const,
     bypassPermissions: false,
     auditRetention: 7,
+    modelIds: { claude: "", codex: "", gemini: "" },
     customArgs: "",
   });
   mockGetAgentVersion.mockReset();
@@ -601,7 +603,7 @@ beforeEach(() => {
           onSessionRevoked: vi.fn(() => () => {}),
           onGrantLifecycle: vi.fn(() => () => {}),
           onTurnOutcomeAlert: vi.fn(() => () => {}),
-          setSessionTier: vi.fn().mockResolvedValue({ sessionId: "", tier: "workbench" }),
+          setSessionTier: vi.fn().mockResolvedValue({ sessionId: "", tier: "core" }),
           resetDenialCounts: vi.fn().mockResolvedValue(undefined),
           issueGrant: vi.fn().mockResolvedValue({
             sessionId: "",
@@ -701,7 +703,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     );
   });
 
-  it("renders the configure-in-settings fallback and no Start CTA when no single launchable agent (#10699)", () => {
+  it("asks which agent runs the assistant, instead of a Start CTA, when several could", () => {
     helpPanelState.autoLaunchEnabled = false;
     helpPanelState.preferredAgentId = null;
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
@@ -709,9 +711,73 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
 
     render(<HelpPanel width={380} />);
 
+    expect(screen.getByTestId("help-choose-agent-claude")).toBeTruthy();
+    expect(screen.getByTestId("help-choose-agent-codex")).toBeTruthy();
+    expect(screen.queryByTestId("help-start-assistant")).toBeNull();
+    expect(screen.queryByText(/Configure an assistant agent in settings/i)).toBeNull();
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+  });
+
+  it("stores the chosen agent as the default and starts it", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "chosen-term" } });
+
+    render(<HelpPanel width={380} />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("help-choose-agent-codex"));
+    });
+
+    expect(helpPanelState.setPreferredAgent).toHaveBeenCalledWith("codex");
+    expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenCalledWith(true);
+    expect(mockProvisionSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "codex" })
+    );
+  });
+
+  it("starts the chosen agent without another agent's saved model (#12872)", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    mockGetHelpAssistantSettings.mockResolvedValue({
+      docSearch: true,
+      daintreeControl: true,
+      tier: "core" as const,
+      bypassPermissions: false,
+      auditRetention: 7,
+      modelIds: { claude: "opus", codex: "gpt-6-astra" },
+      customArgs: "",
+    });
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "chosen-term" } });
+
+    render(<HelpPanel width={380} />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("help-choose-agent-codex"));
+    });
+
+    const launch = mockDispatch.mock.calls.find(([id]) => id === "agent.launch");
+    expect(launch?.[1]).toMatchObject({
+      agentId: "codex",
+      agentLaunchFlags: ["--model", "gpt-6-astra"],
+    });
+  });
+
+  it("falls back to settings when no installed agent can run the assistant", () => {
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.availability = {};
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+
+    render(<HelpPanel width={380} />);
+
     expect(
       screen.getByText(/Configure an assistant agent in settings to get started/i)
     ).toBeTruthy();
+    expect(screen.queryByTestId("help-agent-chooser")).toBeNull();
     expect(screen.queryByTestId("help-start-assistant")).toBeNull();
   });
 
@@ -849,9 +915,10 @@ describe("HelpPanel — customArgs threading", () => {
     mockGetHelpAssistantSettings.mockResolvedValue({
       docSearch: true,
       daintreeControl: true,
-      tier: "action" as const,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
+      modelIds: { claude: "", codex: "", gemini: "" },
       customArgs: "--model sonnet --verbose",
     });
     mockGetFolderPath.mockResolvedValue("/help");
@@ -874,9 +941,10 @@ describe("HelpPanel — customArgs threading", () => {
     mockGetHelpAssistantSettings.mockResolvedValue({
       docSearch: true,
       daintreeControl: true,
-      tier: "action" as const,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
+      modelIds: { claude: "", codex: "", gemini: "" },
       customArgs: "",
     });
     mockGetFolderPath.mockResolvedValue("/help");
@@ -897,9 +965,10 @@ describe("HelpPanel — customArgs threading", () => {
     mockGetHelpAssistantSettings.mockResolvedValue({
       docSearch: true,
       daintreeControl: true,
-      tier: "action" as const,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
+      modelIds: { claude: "", codex: "", gemini: "" },
       customArgs: "   \t  ",
     });
     mockGetFolderPath.mockResolvedValue("/help");
@@ -921,9 +990,10 @@ describe("HelpPanel — customArgs threading", () => {
     mockGetHelpAssistantSettings.mockResolvedValue({
       docSearch: true,
       daintreeControl: true,
-      tier: "action" as const,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
+      modelIds: { claude: "", codex: "", gemini: "" },
       customArgs: "--model sonnet",
     });
     mockGetFolderPath.mockResolvedValue("/help");

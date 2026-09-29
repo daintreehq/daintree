@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TerminalRestoreController, safeChunkSlice } from "../TerminalRestoreController";
 import { INCREMENTAL_RESTORE_CONFIG, type ManagedTerminal } from "../types";
 import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
+import { PARSER_GROUND } from "@shared/utils/terminalPartialEscapeTail";
 
 /** Wrap a payload in the snapshot envelope the IPC now returns (#11552). */
 function snapshot(data: string, cols = 80, rows = 24): SerializedTerminalSnapshot {
@@ -166,7 +167,10 @@ describe("TerminalRestoreController", () => {
 
       expect(result).toBe(true);
       expect(mockTerminal.reset).toHaveBeenCalledTimes(1);
-      expect(mockTerminal.write).toHaveBeenCalledWith(smallState, expect.any(Function));
+      expect(mockTerminal.write).toHaveBeenCalledWith(
+        PARSER_GROUND + smallState,
+        expect.any(Function)
+      );
     });
 
     it("delegates to incremental for large state", () => {
@@ -280,7 +284,8 @@ describe("TerminalRestoreController", () => {
       const totalWritten = mockTerminal.write.mock.calls
         .map((call: [string, ...unknown[]]) => call[0].length)
         .reduce((sum: number, len: number) => sum + len, 0);
-      expect(totalWritten).toBe(largeState.length);
+      // One CAN leads the replay.
+      expect(totalWritten).toBe(largeState.length + 1);
     });
 
     it("falls back to scheduler.postTask when yield is unavailable", async () => {
@@ -303,7 +308,8 @@ describe("TerminalRestoreController", () => {
       const totalWritten = mockTerminal.write.mock.calls
         .map((call: [string, ...unknown[]]) => call[0].length)
         .reduce((sum: number, len: number) => sum + len, 0);
-      expect(totalWritten).toBe(data.length);
+      // One CAN leads the replay.
+      expect(totalWritten).toBe(data.length + 1);
     });
 
     it("does not split surrogate pairs across chunks", async () => {
@@ -328,9 +334,7 @@ describe("TerminalRestoreController", () => {
       await promise;
 
       const chunks = mockTerminal.write.mock.calls.map((call: [string, ...unknown[]]) => call[0]);
-      const totalWritten = chunks.reduce((sum: number, c: string) => sum + c.length, 0);
-      expect(totalWritten).toBe(state.length);
-      expect((chunks as string[]).join("")).toBe(state);
+      expect((chunks as string[]).join("")).toBe(PARSER_GROUND + state);
 
       for (const chunk of chunks as string[]) {
         if (chunk.length === 0) continue;
@@ -434,7 +438,8 @@ describe("TerminalRestoreController", () => {
       const totalWritten = mockTerminal.write.mock.calls
         .map((call: [string, ...unknown[]]) => call[0].length)
         .reduce((sum: number, len: number) => sum + len, 0);
-      expect(totalWritten).toBe(data.length);
+      // One CAN leads the replay.
+      expect(totalWritten).toBe(data.length + 1);
     });
   });
 
@@ -608,6 +613,176 @@ describe("TerminalRestoreController", () => {
     });
   });
 
+  describe("recoverMissingOutput (#12754)", () => {
+    async function deferredFetch() {
+      const { terminalClient } = await import("@/clients");
+      let resolveFetch!: (value: SerializedTerminalSnapshot | null) => void;
+      vi.mocked(terminalClient.getSerializedState).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveFetch = resolve;
+          })
+      );
+      return (value: SerializedTerminalSnapshot | null) => resolveFetch(value);
+    }
+
+    it("repaints a never-fed pane from a non-empty host snapshot", async () => {
+      const resolveFetch = await deferredFetch();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.recoverMissingOutput("t1");
+      await flushMicrotasks();
+      resolveFetch(snapshot("oh-my-zsh update prompt", 170, 24));
+      const outcome = await promise;
+
+      expect(outcome).toBe("recovered");
+      expect(mockTerminal.reset).toHaveBeenCalledTimes(1);
+      expect(mockTerminal.write).toHaveBeenCalledWith(
+        PARSER_GROUND + "oh-my-zsh update prompt",
+        expect.any(Function)
+      );
+      expect(managed.hasReceivedOutput).toBe(true);
+    });
+
+    it("leaves a silent pane untouched when the host mirror is empty too", async () => {
+      const resolveFetch = await deferredFetch();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.recoverMissingOutput("t1");
+      await flushMicrotasks();
+      resolveFetch(snapshot(""));
+      const outcome = await promise;
+
+      expect(outcome).toBe("no-host-output");
+      expect(mockTerminal.reset).not.toHaveBeenCalled();
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+      expect(managed.hasReceivedOutput).toBeUndefined();
+    });
+
+    it("abandons without a reset when live output lands during the fetch, releasing it once", async () => {
+      const resolveFetch = await deferredFetch();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.recoverMissingOutput("t1");
+      await flushMicrotasks();
+      // The delayed first chunk arrives while the snapshot (which also holds
+      // it) is in flight — restoring now would print it twice.
+      managed.deferredOutput.push({ data: "prompt$ ", chunkCount: 1 });
+      resolveFetch(snapshot("prompt$ "));
+      const outcome = await promise;
+
+      expect(outcome).toBe("live-output");
+      expect(mockTerminal.reset).not.toHaveBeenCalled();
+      expect(mockTerminal.write).not.toHaveBeenCalled();
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+      expect(writeDataSpy).toHaveBeenCalledTimes(1);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "prompt$ ", 1);
+      expect(managed.deferredOutput).toHaveLength(0);
+    });
+
+    it("does nothing for a pane that has already received output", async () => {
+      const { terminalClient } = await import("@/clients");
+      vi.mocked(terminalClient.getSerializedState).mockClear();
+      instances.set("t1", makeManagedTerminal({ hasReceivedOutput: true }));
+
+      expect(await controller.recoverMissingOutput("t1")).toBe("live-output");
+      expect(terminalClient.getSerializedState).not.toHaveBeenCalled();
+    });
+
+    it("reports stale when the terminal is replaced during the fetch", async () => {
+      const resolveFetch = await deferredFetch();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.recoverMissingOutput("t1");
+      await flushMicrotasks();
+      instances.set("t1", makeManagedTerminal());
+      resolveFetch(snapshot("data"));
+
+      expect(await promise).toBe("stale");
+      expect(mockTerminal.reset).not.toHaveBeenCalled();
+    });
+
+    it("does not count a failed fetch as a failure when live output arrived meanwhile", async () => {
+      const { terminalClient } = await import("@/clients");
+      let rejectFetch!: (err: Error) => void;
+      vi.mocked(terminalClient.getSerializedState).mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            rejectFetch = reject;
+          })
+      );
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.recoverMissingOutput("t1");
+      await flushMicrotasks();
+      managed.deferredOutput.push({ data: "late", chunkCount: 1 });
+      rejectFetch(new Error("host gone"));
+
+      expect(await promise).toBe("live-output");
+      expect(managed.lastScrollbackRestoreError).toBeUndefined();
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "late", 1);
+    });
+
+    it("reports stale when a newer restore supersedes the probe before its fetch rejects", async () => {
+      const { terminalClient } = await import("@/clients");
+      let rejectFetch!: (err: Error) => void;
+      vi.mocked(terminalClient.getSerializedState).mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            rejectFetch = reject;
+          })
+      );
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.recoverMissingOutput("t1");
+      await flushMicrotasks();
+      managed.restoreGeneration += 1;
+      rejectFetch(new Error("host gone"));
+
+      expect(await promise).toBe("stale");
+      expect(managed.lastScrollbackRestoreError).toBeUndefined();
+    });
+
+    it("reports stale, not failed, when a newer restore supersedes a large replay", async () => {
+      const resolveFetch = await deferredFetch();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+      const big = "x".repeat(INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes + 1);
+
+      const promise = controller.recoverMissingOutput("t1");
+      await flushMicrotasks();
+      resolveFetch(snapshot(big));
+      await flushMicrotasks();
+      // A newer restore claims the terminal mid-replay.
+      managed.restoreGeneration += 1;
+      await flushScheduler();
+      await flushMicrotasks();
+
+      expect(await promise).toBe("stale");
+      expect(managed.lastScrollbackRestoreError).toBeUndefined();
+    });
+
+    it("reports failed with a classified error when the fetch rejects", async () => {
+      const { terminalClient } = await import("@/clients");
+      vi.mocked(terminalClient.getSerializedState).mockRejectedValue(new Error("host gone"));
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      expect(await controller.recoverMissingOutput("t1")).toBe("failed");
+      expect(managed.lastScrollbackRestoreError).toMatchObject({
+        type: "error",
+        message: "host gone",
+      });
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+    });
+  });
+
   describe("failure-path deferred replay (synchronous restore)", () => {
     it("replays deferred output when terminal.reset throws mid-restore", () => {
       const managed = makeManagedTerminal({
@@ -661,7 +836,12 @@ describe("TerminalRestoreController", () => {
       // The resize must land between reset and write: xterm parses
       // asynchronously, so a grid corrected after write() returns would arrive
       // too late and the payload would lay out at the wrong width anyway.
-      expect(trace).toEqual(["reset", "resize:80x24", "write:payload", "resize:170x24"]);
+      expect(trace).toEqual([
+        "reset",
+        "resize:80x24",
+        `write:${PARSER_GROUND}payload`,
+        "resize:170x24",
+      ]);
       expect(managed.terminal.cols).toBe(170);
     });
 
@@ -687,7 +867,10 @@ describe("TerminalRestoreController", () => {
       await flushMicrotasks();
 
       expect(mockTerminal.resize).not.toHaveBeenCalled();
-      expect(mockTerminal.write).toHaveBeenCalledWith("payload", expect.any(Function));
+      expect(mockTerminal.write).toHaveBeenCalledWith(
+        PARSER_GROUND + "payload",
+        expect.any(Function)
+      );
     });
 
     it("refuses a geometry no terminal could have been captured at", async () => {
@@ -714,7 +897,10 @@ describe("TerminalRestoreController", () => {
       await flushMicrotasks();
 
       expect(mockTerminal.resize).not.toHaveBeenCalled();
-      expect(mockTerminal.write).toHaveBeenCalledWith("payload", expect.any(Function));
+      expect(mockTerminal.write).toHaveBeenCalledWith(
+        PARSER_GROUND + "payload",
+        expect.any(Function)
+      );
     });
 
     it("does not return an opened pane to a collapsed grid when the replay closes (#12442)", async () => {
@@ -733,7 +919,10 @@ describe("TerminalRestoreController", () => {
       await flushMicrotasks();
 
       expect(trace).not.toContain("resize:2x1");
-      expect(mockTerminal.write).toHaveBeenCalledWith("payload", expect.any(Function));
+      expect(mockTerminal.write).toHaveBeenCalledWith(
+        PARSER_GROUND + "payload",
+        expect.any(Function)
+      );
       expect(managed.isSerializedRestoreInProgress).toBe(false);
     });
 

@@ -26,7 +26,8 @@ import type {
   TerminalAdoptionEntry,
   TerminalAdoptionResult,
 } from "../../../shared/types/ipc/mcpServer.js";
-import type { PaneWatchState } from "../../../shared/types/terminalWatch.js";
+import type { PaneNotifyState } from "../../../shared/types/terminalNotify.js";
+import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
 
 type McpServerSingleton = typeof McpServerServiceModule.mcpServerService;
 type McpPaneConfigSingleton = typeof McpPaneConfigServiceModule.mcpPaneConfigService;
@@ -223,8 +224,8 @@ export const mcpServerNamespace = defineIpcNamespace({
       MCP_SERVER_METHOD_CHANNELS.setSessionTier,
       async (
         ctx,
-        payload: { sessionId: string; tier: "workbench" | "action" | "system" }
-      ): Promise<{ sessionId: string; tier: "workbench" | "action" | "system" }> => {
+        payload: { sessionId: string; tier: HelpAssistantTier }
+      ): Promise<{ sessionId: string; tier: HelpAssistantTier }> => {
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
         }
@@ -232,7 +233,7 @@ export const mcpServerNamespace = defineIpcNamespace({
         if (typeof sessionId !== "string" || !sessionId) {
           throw new Error("Invalid sessionId");
         }
-        if (tier !== "workbench" && tier !== "action" && tier !== "system") {
+        if (tier !== "core" && tier !== "full") {
           throw new Error("Invalid tier");
         }
         const svc = await getMcpServerService();
@@ -242,7 +243,7 @@ export const mcpServerNamespace = defineIpcNamespace({
         const result = svc.setSessionTier(sessionId, tier, ctx.webContentsId);
         return {
           sessionId: result.sessionId,
-          tier: result.tier as "workbench" | "action" | "system",
+          tier: result.tier as HelpAssistantTier,
         };
       },
       { withContext: true }
@@ -436,39 +437,24 @@ export const mcpServerNamespace = defineIpcNamespace({
         return svc.filterOrchestratorPanes(paneConfig.listOrchestratorPanes());
       }
     ),
-    getPaneWakeEnabled: op(
-      MCP_SERVER_METHOD_CHANNELS.getPaneWakeEnabled,
-      async (): Promise<boolean> => {
-        const svc = await getMcpServerService();
-        return svc.isPaneWakeEnabled();
-      }
-    ),
-    setPaneWakeEnabled: op(
-      MCP_SERVER_METHOD_CHANNELS.setPaneWakeEnabled,
-      async (enabled: boolean): Promise<boolean> => {
-        if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean");
-        const svc = await getMcpServerService();
-        return svc.setPaneWakeEnabled(enabled);
-      }
-    ),
-    getPaneWatchState: op(
-      MCP_SERVER_METHOD_CHANNELS.getPaneWatchState,
-      async (terminalId: string): Promise<PaneWatchState | null> => {
+    getPaneNotifyState: op(
+      MCP_SERVER_METHOD_CHANNELS.getPaneNotifyState,
+      async (terminalId: string): Promise<PaneNotifyState | null> => {
         if (typeof terminalId !== "string" || terminalId.length === 0) {
           throw new Error("terminalId must be a non-empty string");
         }
         const svc = await getMcpServerService();
-        return svc.getPaneWatchState(terminalId);
+        return svc.getPaneNotifyState(terminalId);
       }
     ),
-    stopPaneWatches: op(
-      MCP_SERVER_METHOD_CHANNELS.stopPaneWatches,
+    stopPaneNotices: op(
+      MCP_SERVER_METHOD_CHANNELS.stopPaneNotices,
       async (terminalId: string): Promise<void> => {
         if (typeof terminalId !== "string" || terminalId.length === 0) {
           throw new Error("terminalId must be a non-empty string");
         }
         const svc = await getMcpServerService();
-        svc.stopPaneWatches(terminalId);
+        svc.stopPaneNotices(terminalId);
       }
     ),
     disconnectBearer: op(

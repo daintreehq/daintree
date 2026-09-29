@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render as rtlRender,
+  screen,
+  type RenderOptions,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProjectPluginDetailPane, ProjectPluginSection } from "../ProjectPluginSection";
 import {
@@ -7,6 +13,12 @@ import {
   useProjectPluginStore,
 } from "@/store/projectPluginStore";
 import type { ProjectPluginInfo, ProjectPluginState } from "@shared/types/plugin";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
+  return rtlRender(ui, { wrapper: TooltipProvider, ...options });
+}
 
 const activateStagedProjectPlugin = vi.fn<(pluginId: string) => Promise<void>>();
 const setProjectPluginTrust = vi.fn<(decision: string) => Promise<void>>();

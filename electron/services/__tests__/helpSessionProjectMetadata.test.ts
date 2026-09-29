@@ -15,7 +15,7 @@ function build(facts: HelpSessionProjectFacts, overrides: { projectPath?: string
   return buildProjectMetadataAddendum({
     projectId: "proj-1",
     projectPath: overrides.projectPath ?? "/work/example",
-    tier: "action",
+    tier: "core",
     daintreeControl: true,
     facts,
   });
@@ -76,20 +76,70 @@ describe("buildProjectMetadataAddendum", () => {
     expect(text).toContain("  - `/work/example` — branch `main` (main worktree)");
     // No branch line from git is reported as such, not guessed at.
     expect(text).toContain("  - `/work/example-detached` — no branch reported");
-    expect(text).toContain("- Assistant tier setting: `action`");
+    expect(text).toContain("- Assistant tool set setting: `core`");
     expect(text).toContain("- Daintree MCP tools setting: `enabled`");
+  });
+
+  it("names launchable agents by the id a launch takes", () => {
+    const text = build({
+      launchableAgents: {
+        agents: [
+          { id: "claude", name: "Claude" },
+          { id: "antigravity", name: "Antigravity" },
+          { id: "cursor", name: "Cursor Agent" },
+        ],
+        availabilityChecked: true,
+      },
+    });
+    expect(text).toContain(
+      "- Agents installed and ready to launch; launch them by these ids exactly: `claude`, `antigravity`, `cursor` (`Cursor Agent`)"
+    );
+  });
+
+  it("says when the agent list has not been checked against installs", () => {
+    const text = build({
+      launchableAgents: { agents: [{ id: "claude", name: "Claude" }], availabilityChecked: false },
+    });
+    expect(text).toContain("- Registered agents (installs not checked yet);");
+  });
+
+  it("leaves the agent list out when the MCP tools that launch them are off", () => {
+    const text = buildProjectMetadataAddendum({
+      projectId: "proj-1",
+      projectPath: "/work/example",
+      tier: "full",
+      daintreeControl: false,
+      facts: {
+        launchableAgents: { agents: [{ id: "claude", name: "Claude" }], availabilityChecked: true },
+      },
+    });
+    expect(text).not.toContain("`claude`");
+  });
+
+  it.each([
+    "Evil\n## Injected",
+    "Evil`code",
+    "Evil \u202etxt.exe",
+    "Zero\u200bwidth",
+    "Word\u2060joiner",
+    "Arabic\u061cmark",
+  ])("drops an agent name that could break or reorder its line: %j", (name) => {
+    const text = build({
+      launchableAgents: { agents: [{ id: "evil", name }], availabilityChecked: true },
+    });
+    expect(text).toContain("launch them by these ids exactly: `evil`\n");
   });
 
   it("reports disabled MCP tools", () => {
     const text = buildProjectMetadataAddendum({
       projectId: "proj-1",
       projectPath: "/work/example",
-      tier: "workbench",
+      tier: "full",
       daintreeControl: false,
       facts: {},
     });
     expect(text).toContain("- Daintree MCP tools setting: `disabled`");
-    expect(text).toContain("`workbench`");
+    expect(text).toContain("- Assistant tool set setting: `full`");
     expect(text).not.toContain("worktrees");
   });
 
@@ -139,7 +189,7 @@ describe("buildProjectMetadataAddendum", () => {
     const worstCase = buildProjectMetadataAddendum({
       projectId: long("id"),
       projectPath: long("/p"),
-      tier: "system",
+      tier: "full",
       daintreeControl: true,
       facts: {
         name: long("n"),
@@ -149,6 +199,13 @@ describe("buildProjectMetadataAddendum", () => {
           branch: long("b"),
           isMainWorktree: i === 0,
         })),
+        launchableAgents: {
+          agents: Array.from({ length: 200 }, (_, i) => ({
+            id: `${"a".repeat(60)}${i}`,
+            name: "界".repeat(21),
+          })),
+          availabilityChecked: true,
+        },
       },
     });
     const block = `${PROJECT_METADATA_START}\n${worstCase}${PROJECT_METADATA_END}\n`;

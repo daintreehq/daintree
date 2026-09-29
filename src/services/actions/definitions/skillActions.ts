@@ -9,7 +9,7 @@ import { z } from "zod";
  * (electron/services/mcp-server/sessionServer.ts) and runs against the
  * main-process skill registry, because the renderer holds no skill data (parsed
  * plugin markdown lives in main). `run()` throws if the renderer ever invokes
- * them directly. Skills are read-only knowledge tools → workbench tier.
+ * them directly. Skills are read-only knowledge tools in the `full` tool set.
  */
 export function registerSkillActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("skills.search", () =>
@@ -17,7 +17,7 @@ export function registerSkillActions(actions: ActionRegistry, _callbacks: Action
       id: "skills.search",
       title: "Search skills",
       description:
-        "Find plugin-contributed skills: reusable written instructions and workflows, such as a review rubric or a test-driven-development procedure, that plugins ship for an agent to follow. This returns names and summaries only, so load a skill by id to read its instructions. Omitting a query lists available skills, but only to the capped limit, and the result never says whether more were left out.",
+        "Find plugin-contributed skills: reusable instructions and workflows, such as a review rubric or a TDD procedure. Returns names and summaries only; load one by id to read it. Without a query it lists skills up to the limit, never saying if more exist.",
       category: "agent",
       kind: "query",
       danger: "safe",
@@ -27,16 +27,14 @@ export function registerSkillActions(actions: ActionRegistry, _callbacks: Action
           query: z
             .string()
             .optional()
-            .describe(
-              "Keywords to match. Omit or pass an empty string to list skills unfiltered, still bounded by the result limit."
-            ),
+            .describe("Keywords. Omit or empty to list unfiltered, still bounded by the limit."),
           limit: z
             .number()
             .int()
             .min(1)
             .max(50)
             .optional()
-            .describe("Maximum number of matches to return (default 20, max 50)."),
+            .describe("Max matches (default 20, max 50)."),
         })
         .optional(),
       resultSchema: z.object({
@@ -67,18 +65,13 @@ export function registerSkillActions(actions: ActionRegistry, _callbacks: Action
       id: "skills.load",
       title: "Load skill",
       description:
-        "Read the full instructions of one plugin-contributed skill, so they can be followed as part of the current task. Find the id with a skills search first — ids are namespaced by plugin and cannot be guessed reliably. An id that matches nothing fails rather than returning empty.",
+        "Read the full instructions of one plugin-contributed skill, to follow in the current task. Get the id from a skills search; ids are plugin-namespaced and not guessable. An unknown id fails.",
       category: "agent",
       kind: "query",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        id: z
-          .string()
-          .min(1)
-          .describe(
-            "Identifies the skill to load, using an id from a skills search. Ids are namespaced by the contributing plugin and cannot be guessed reliably."
-          ),
+        id: z.string().min(1).describe("Skill id from a skills search."),
       }),
       resultSchema: z.object({
         id: z.string(),

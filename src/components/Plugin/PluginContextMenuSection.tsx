@@ -1,3 +1,4 @@
+import { Puzzle } from "lucide-react";
 import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
 import { useMenuActionSource } from "@/components/ui/menu-source";
 import { actionService } from "@/services/ActionService";
@@ -65,7 +66,11 @@ export function PluginContextMenuSection({
             void actionService.dispatch(entry.item.actionId, dispatchArgs, { source })
           }
         >
-          {entry.item.label}
+          {/* The manifest names no icon, so every contributed row takes the
+              plugin glyph the panel menus give theirs (`genericPanelMenu.ts`),
+              and the host menu's icon column stays unbroken. */}
+          <Puzzle data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span className="truncate">{entry.item.label}</span>
         </Item>
       ))}
     </>

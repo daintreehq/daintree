@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   getProjectById: vi.fn(),
   getProjectByPath: vi.fn(),
   getProjectSettings: vi.fn(),
+  getAllProjectIdentities: vi.fn(),
   listWorktrees: vi.fn(),
   listRemotes: vi.fn(),
   listMatchingProviders: vi.fn(),
@@ -14,13 +15,14 @@ vi.mock("../ProjectStore.js", () => ({
     getProjectById: mocks.getProjectById,
     getProjectByPath: mocks.getProjectByPath,
     getProjectSettings: mocks.getProjectSettings,
+    getAllProjectIdentities: mocks.getAllProjectIdentities,
   },
 }));
 
 vi.mock("../GitServiceCache.js", () => ({
   gitServiceCache: {
-    getGitService: () => ({
-      listWorktrees: mocks.listWorktrees,
+    getGitService: (root: string) => ({
+      listWorktrees: () => mocks.listWorktrees(root),
       listRemotes: mocks.listRemotes,
     }),
   },
@@ -30,7 +32,11 @@ vi.mock("../forgeProviderRegistry.js", () => ({
   listMatchingProviders: mocks.listMatchingProviders,
 }));
 
-import { readHelpSessionProjectFacts } from "../helpSessionProjectMetadataReader.js";
+import {
+  listLaunchableAgents,
+  readHelpSessionKnownRoots,
+  readHelpSessionProjectFacts,
+} from "../helpSessionProjectMetadataReader.js";
 
 describe("readHelpSessionProjectFacts", () => {
   beforeEach(() => {
@@ -55,6 +61,7 @@ describe("readHelpSessionProjectFacts", () => {
       name: "Example",
       worktrees: [{ path: "/work/example", branch: "main", isMainWorktree: false }],
       forgeRemote: { name: "origin", url: "https://github.com/acme/x.git" },
+      launchableAgents: { agents: expect.any(Array), availabilityChecked: false },
     });
     expect(mocks.getProjectById).toHaveBeenCalledWith("proj-1");
     expect(mocks.listRemotes).toHaveBeenCalledWith("/work/example");
@@ -139,5 +146,82 @@ describe("readHelpSessionProjectFacts", () => {
     const facts = await readHelpSessionProjectFacts("proj-1", "/work/example");
     expect(facts.worktrees).toBeUndefined();
     expect(facts.name).toBe("Example");
+  });
+});
+
+describe("readHelpSessionKnownRoots", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.getAllProjectIdentities.mockReset().mockReturnValue([
+      { id: "a", path: "/work/a", name: "A" },
+      { id: "b", path: "/work/b", name: "B" },
+    ]);
+    mocks.listWorktrees.mockReset().mockImplementation(async (root: string) => {
+      if (root === "/work/a") {
+        return [
+          { path: "/work/a", branch: "main", bare: false, isMainWorktree: true },
+          { path: "/elsewhere/a-fix", branch: "fix", bare: false, isMainWorktree: false },
+        ];
+      }
+      if (root === "/work/b") {
+        return [
+          { path: "/work/b.git", branch: "", bare: true, isMainWorktree: true },
+          { path: "/work/b-worktrees/x", branch: "x", bare: false, isMainWorktree: false },
+        ];
+      }
+      throw new Error("not a git repository");
+    });
+  });
+
+  it("collects the served project, every registered project and their non-bare worktrees", async () => {
+    const roots = await readHelpSessionKnownRoots("/work/served");
+    expect(roots.sort()).toEqual(
+      ["/elsewhere/a-fix", "/work/a", "/work/b", "/work/b-worktrees/x", "/work/served"].sort()
+    );
+  });
+
+  it("keeps a project's own root when its worktree lookup fails or hangs", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      mocks.listWorktrees.mockImplementation((root: string) =>
+        root === "/work/a" ? new Promise(() => {}) : Promise.reject(new Error("gone"))
+      );
+      const pending = readHelpSessionKnownRoots("/work/a");
+      await vi.advanceTimersByTimeAsync(3000);
+      expect((await pending).sort()).toEqual(["/work/a", "/work/b"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still returns the served project when the registry can't be read", async () => {
+    mocks.getAllProjectIdentities.mockImplementation(() => {
+      throw new Error("sqlite is gone");
+    });
+    mocks.listWorktrees.mockResolvedValue([]);
+    await expect(readHelpSessionKnownRoots("/work/served")).resolves.toEqual(["/work/served"]);
+  });
+});
+
+describe("listLaunchableAgents", () => {
+  it("lists only launchable agents once the CLIs were probed, built-ins first", () => {
+    const listed = listLaunchableAgents({
+      claude: "ready",
+      antigravity: "unauthenticated",
+      codex: "missing",
+      grok: "blocked",
+    } as never);
+    expect(listed.availabilityChecked).toBe(true);
+    expect(listed.agents.map((agent) => agent.id)).toEqual(["claude", "antigravity"]);
+    expect(listed.agents.find((agent) => agent.id === "antigravity")?.name).toBe("Antigravity");
+  });
+
+  it("lists every registered agent, and never the assistant's own, before a probe", () => {
+    const listed = listLaunchableAgents(null);
+    const ids = listed.agents.map((agent) => agent.id);
+    expect(listed.availabilityChecked).toBe(false);
+    expect(ids).toContain("antigravity");
+    expect(ids).not.toContain("daintree-assistant");
   });
 });

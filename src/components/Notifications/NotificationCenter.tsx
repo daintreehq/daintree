@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { Archive, ArrowDown, Bell, CheckCheck, Clock, Ellipsis, Moon, Trash2 } from "lucide-react";
+import {
+  Archive,
+  ArrowDown,
+  Bell,
+  CalendarClock,
+  CheckCheck,
+  Clock,
+  Ellipsis,
+  Moon,
+  Trash2,
+} from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import {
   useNotificationHistoryStore,
@@ -11,6 +21,7 @@ import { resolveSnoozeDuration, type SnoozeDurationOption } from "@shared/utils/
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
@@ -59,6 +70,14 @@ import {
   UNKNOWN_PROJECT_LABEL,
   worktreeNameFromId,
 } from "@/lib/notificationSourceLabel";
+import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+  PANE_TOOLBAR_TEXT_BUTTON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { CountBadge } from "@/components/ui/badge";
+import { FilterChip } from "@/components/ui/FilterChip";
 
 // Three, not five. Even as compact previews, five pinned rows took three
 // quarters of a laptop-height list, so the first screen held one row of what
@@ -70,18 +89,6 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
   minute: "2-digit",
 });
-
-/**
- * The panel's one small-button shape: Resume, Manage, and the divider's mark
- * read. Bordered because bare text at the end of a line of text didn't read
- * as a control, and ringed because nothing in the app supplies a focus ring
- * for an element that doesn't declare one.
- */
-const SMALL_BUTTON_CLASS = cn(
-  "inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-border-strong px-1.5 py-0.5",
-  "text-2xs font-medium text-text-secondary transition-colors hover:bg-overlay-medium hover:text-text-primary",
-  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-);
 
 /**
  * Whether a kind ships switched on, so that it being off is the user's doing.
@@ -1147,9 +1154,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               <button
                 type="button"
                 onClick={handleMarkAllRead}
-                className="toolbar-icon-button inline-flex items-center gap-1 px-1.5 py-1 rounded-[var(--radius-sm)] text-2xs text-text-secondary whitespace-nowrap"
+                className={PANE_TOOLBAR_TEXT_BUTTON_CLASS}
               >
-                <CheckCheck className="w-3 h-3" aria-hidden="true" />
+                <CheckCheck className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
                 Mark all read
               </button>
             )}
@@ -1165,9 +1172,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     <button
                       type="button"
                       aria-label="Pause notifications"
-                      className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-text-secondary"
+                      className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
                     >
-                      <Moon className="w-3 h-3" aria-hidden="true" />
+                      <Moon className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
                     </button>
                   </DropdownMenuTrigger>
                 </TooltipTrigger>
@@ -1176,13 +1183,16 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               <DropdownMenuContent align="end" className="min-w-[180px]">
                 <DropdownMenuLabel>Pause notifications</DropdownMenuLabel>
                 <DropdownMenuItem onSelect={() => handleMuteFor(60 * 60 * 1000)}>
+                  <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   For 1 hour
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={handleMuteUntilMorning}>
+                  <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   {morningLabel}
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={openNotificationSettings}>
+                  <CalendarClock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   Schedule quiet hours…
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -1193,10 +1203,10 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   <DropdownMenuTrigger asChild>
                     <button
                       type="button"
-                      className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-text-secondary"
+                      className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
                       aria-label="More notification actions"
                     >
-                      <Ellipsis className="w-3 h-3" aria-hidden="true" />
+                      <Ellipsis className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
                     </button>
                   </DropdownMenuTrigger>
                 </TooltipTrigger>
@@ -1218,6 +1228,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   aria-label="Notification settings"
                   onSelect={openNotificationSettings}
                 >
+                  <Bell data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   Notification settings…
                 </DropdownMenuItem>
                 {entries.length > 0 && (
@@ -1255,35 +1266,36 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           // surfaces line up with surfaces.
           <div className="flex flex-wrap items-center gap-1.5 pl-4 pr-2 pb-2">
             <FilterChip
-              label="All"
               selected={filter === "all"}
-              onSelect={() => {
+              onClick={() => {
                 setFilter("all");
                 setFrozenUnreadIds(null);
               }}
-            />
+            >
+              All
+            </FilterChip>
+            <FilterChip selected={filter === "unread"} onClick={() => setFilter("unread")}>
+              Unread
+            </FilterChip>
             <FilterChip
-              label="Unread"
-              selected={filter === "unread"}
-              onSelect={() => setFilter("unread")}
-            />
-            <FilterChip
-              label="Archived"
               selected={filter === "archived"}
-              onSelect={() => {
+              onClick={() => {
                 setFilter("archived");
                 setFrozenUnreadIds(null);
               }}
-            />
+            >
+              Archived
+            </FilterChip>
             {hasSnoozedThreads && (
               <FilterChip
-                label="Snoozed"
                 selected={filter === "snoozed"}
-                onSelect={() => {
+                onClick={() => {
                   setFilter("snoozed");
                   setFrozenUnreadIds(null);
                 }}
-              />
+              >
+                Snoozed
+              </FilterChip>
             )}
           </div>
         )}
@@ -1316,26 +1328,33 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
             ))}
           </div>
           {isSessionMuted && (
-            <button
-              type="button"
+            <Button
+              variant="subtle"
+              size="xs"
               onClick={handleResumeNotifications}
               aria-label="Resume notifications"
-              // A border, because without one this was bare text sitting at the
+              // Bordered, because without one this was bare text sitting at the
               // end of a line of bare text. It only read as a control under
               // `forced-colors: active`, where the UA supplies the border this
-              // was missing — which is the tell that it was missing. Matches the
-              // secondary row action, so the panel has one button shape.
-              className={SMALL_BUTTON_CLASS}
+              // was missing — which is the tell that it was missing. Resume,
+              // Manage and both mark-read actions share this one small-button
+              // shape, so the panel has one.
+              className="shrink-0 px-1.5 text-2xs focus-visible:-outline-offset-2"
             >
               Resume
-            </button>
+            </Button>
           )}
           {/* Quiet hours too: they explained the silence and then left the way
               to change them two menus away. */}
           {!isSessionMuted && (hasSilences || isScheduledMuted) && (
-            <button type="button" onClick={openNotificationSettings} className={SMALL_BUTTON_CLASS}>
+            <Button
+              variant="subtle"
+              size="xs"
+              onClick={openNotificationSettings}
+              className="shrink-0 px-1.5 text-2xs focus-visible:-outline-offset-2"
+            >
               Manage
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -1504,7 +1523,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               "text-2xs font-medium text-text-secondary",
               "hover:text-text-primary hover:border-border-strong",
               "hover:bg-[linear-gradient(var(--color-overlay-hover),var(--color-overlay-hover))]",
-              "transition-[translate,opacity] motion-reduce:transition-none",
+              "transition-[translate,opacity] motion-reduce:transition-opacity motion-reduce:translate-y-0",
               showJumpPill
                 ? "opacity-100 translate-y-0 pointer-events-auto"
                 : "opacity-0 translate-y-2 pointer-events-none"
@@ -1536,48 +1555,6 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
         }}
       />
     </div>
-  );
-}
-
-/**
- * One filter segment. Four copies of the same twelve-class string is three
- * chances to let them drift, and the forced-colors handle below has to be on
- * every one of them or the mode it exists for is the mode it misses.
- *
- * No accent in either state, deliberately: membership in a segmented control is
- * exactly the "multi-element, non-load-bearing" case the accent rule excludes,
- * and the accent here is spent on focus.
- */
-function FilterChip({
-  label,
-  selected,
-  onSelect,
-}: {
-  label: string;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      // Handle for the `forced-colors: active` block in index.css, shared with
-      // the worktree filter popover's chips. There the UA
-      // flattens `bg-filter-selected-bg-strong` to Canvas and paints every chip
-      // as the same outlined pill, so which filter you are looking at becomes
-      // unreadable — the same failure the destructive-button rule in that block
-      // already solves, and solved the same way: a heavier border.
-      data-filter-chip="true"
-      onClick={onSelect}
-      className={cn(
-        "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
-        selected
-          ? "bg-filter-selected-bg-strong text-text-primary font-medium"
-          : "text-text-secondary hover:text-text-primary hover:bg-tint/[0.04]"
-      )}
-    >
-      {label}
-    </button>
   );
 }
 
@@ -1624,9 +1601,7 @@ function NeedsAttentionSection({
 } & RovingSectionProps) {
   return (
     <div data-testid="needs-attention-section" className="border-b border-divider">
-      <div className="pl-4 pr-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-text-secondary">
-        Needs attention
-      </div>
+      <div className={cn(LIST_LABEL_CLASS, "pl-4 pr-3 pt-2 pb-1")}>Needs attention</div>
       <div role="group" aria-label="Needs attention">
         {groups.map((group, idx) => {
           const flatIndex = indexOffset + idx;
@@ -1752,9 +1727,7 @@ function ChronoSection({
   return (
     <div data-testid="chrono-section">
       {!groupByContext && hasPinnedAbove && !dividerLeads && (
-        <div className="pl-4 pr-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-text-secondary">
-          {sectionLabel}
-        </div>
+        <div className={cn(LIST_LABEL_CLASS, "pl-4 pr-3 pt-2 pb-1")}>{sectionLabel}</div>
       )}
       {groupByContext && (
         <ContextSectionHeader
@@ -1807,7 +1780,7 @@ function ChronoSection({
               {groupKey === earlierKey && (
                 <div
                   data-testid="notification-earlier-boundary"
-                  className="pl-4 pr-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-text-secondary"
+                  className={cn(LIST_LABEL_CLASS, "pl-4 pr-3 pt-2 pb-1")}
                 >
                   Earlier
                 </div>
@@ -2046,9 +2019,9 @@ function ContextSectionHeader({
           </span>
           {/* Beside the name it counts, not beside the button — at the far end
             it read as part of "Mark read". */}
-          <span className="shrink-0 tabular-nums" aria-label={`${count} notifications`}>
+          <CountBadge label={`${count} ${count === 1 ? "notification" : "notifications"}`}>
             {count}
-          </span>
+          </CountBadge>
           {newCount > 0 && (
             <span data-testid="context-section-new" className="shrink-0 tabular-nums">
               · {newCount} new
@@ -2056,16 +2029,14 @@ function ContextSectionHeader({
           )}
         </span>
         {hasUnread && (
-          <button
-            type="button"
+          <Button
+            variant="subtle"
+            size="xs"
             onClick={onMarkRead}
-            className={cn(
-              "shrink-0 inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 text-text-secondary hover:text-text-primary hover:bg-overlay-medium transition-colors",
-              PALETTE_ROW_FOCUS_CLASS
-            )}
+            className="shrink-0 px-1.5 text-2xs focus-visible:-outline-offset-2"
           >
             Mark read
-          </button>
+          </Button>
         )}
       </div>
     </div>
@@ -2086,20 +2057,24 @@ function NewSinceLastLookedDivider({
       ref={ref}
       tabIndex={-1}
       data-testid="new-since-last-looked"
-      className="flex items-center gap-2 pl-4 pr-3 py-1 bg-overlay-raised text-3xs font-medium uppercase tracking-wide text-text-secondary outline-hidden"
+      className={cn(
+        LIST_LABEL_CLASS,
+        "flex items-center gap-2 pl-4 pr-3 py-1 bg-overlay-raised outline-hidden"
+      )}
     >
       <span>New since you last looked</span>
       {unreadCount > 0 && (
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="xs"
           onClick={onMarkRead}
-          // Bordered like Resume and the secondary row action — the panel's one
-          // small-button shape. Bare, it was the same grey and size as the
-          // label beside it and read as more of the label.
-          className={cn(SMALL_BUTTON_CLASS, "ml-auto normal-case tracking-normal")}
+          // Bordered like Resume — the panel's one small-button shape. Bare, it
+          // was the same grey and size as the label beside it and read as more
+          // of the label.
+          className="ml-auto shrink-0 px-1.5 text-2xs normal-case tracking-normal focus-visible:-outline-offset-2"
         >
           {unreadCount === 1 ? "Mark this read" : `Mark these ${unreadCount} read`}
-        </button>
+        </Button>
       )}
     </div>
   );

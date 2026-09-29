@@ -3,12 +3,18 @@ import { useShallow } from "zustand/react/shallow";
 import { CircleStop, Play, RotateCw, Server, X } from "lucide-react";
 import type { DevPreviewSessionState, DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useAllDevSessions } from "@/store/allDevSessionsStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { worktreeLabels } from "@/lib/worktreeLabels";
 import { useSkeletonFloor, useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
 
 // Status dot colors reuse the dev-server semantic tokens (--color-server-*),
 // the same ones DevPreview's ConsoleDrawer uses — NOT the panel-state-* border
@@ -45,8 +51,7 @@ const STOPPED_STATUSES: ReadonlySet<DevPreviewSessionStatus> = new Set([
   "restored-stopped",
 ]);
 
-const actionClass =
-  "toolbar-icon-button flex w-6 h-6 items-center justify-center rounded-[var(--radius-md)] text-text-secondary disabled:opacity-30 disabled:cursor-not-allowed";
+const actionClass = PANE_TOOLBAR_ICON_BUTTON_CLASS;
 
 function extractPort(session: DevPreviewSessionState): string | null {
   const target = session.url ?? session.predictedUrl;
@@ -102,17 +107,22 @@ function DevServerRow({
   const stopLabel = isDismissableError ? "Dismiss error" : "Stop";
 
   return (
-    <li
-      title={session.lastOutput}
-      className="group flex items-center gap-2.5 pl-3 pr-2 py-1.5 hover:bg-overlay-subtle transition-colors duration-150"
-    >
+    <li className="group flex items-center gap-2.5 pl-3 pr-2 py-1.5 hover:bg-overlay-subtle transition-colors duration-150">
       <span
         className={cn("status-mark flex-shrink-0 w-2 h-2 rounded-full", presentation.dotClass)}
         aria-hidden="true"
       />
       <div className="flex flex-col min-w-0 flex-1">
-        <span className="truncate text-xs font-medium text-text-primary">{worktreeName}</span>
-        <span className="flex min-w-0 items-baseline gap-1.5 text-xs text-text-secondary">
+        <TruncatedTooltip content={worktreeName}>
+          <span className="truncate text-xs font-medium text-text-primary">{worktreeName}</span>
+        </TruncatedTooltip>
+        {/* The log line rides the status line only: on the row it would be inherited
+            by the action buttons, and on the name it would sit over that name's own
+            full-text reveal. */}
+        <span
+          className="flex min-w-0 items-baseline gap-1.5 text-xs text-text-secondary"
+          title={session.lastOutput}
+        >
           <span className="shrink-0">{presentation.label}</span>
           {port && <span className="shrink-0 tabular-nums">:{port}</span>}
           {detail && (
@@ -123,35 +133,47 @@ function DevServerRow({
         </span>
       </div>
       <div className="flex items-center gap-0.5 flex-shrink-0">
-        <button
-          type="button"
-          onClick={handleRestart}
-          disabled={!worktreeId}
-          aria-label={`${restartLabel} dev server for ${worktreeName}`}
-          title={restartLabel}
-          className={actionClass}
-        >
-          {isStopped ? <Play className="w-3.5 h-3.5" /> : <RotateCw className="w-3.5 h-3.5" />}
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={handleRestart}
+              disabled={!worktreeId}
+              aria-label={`${restartLabel} dev server for ${worktreeName}`}
+              className={actionClass}
+            >
+              {isStopped ? (
+                <Play className={PANE_TOOLBAR_ICON_CLASS} />
+              ) : (
+                <RotateCw className={PANE_TOOLBAR_ICON_CLASS} />
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{restartLabel}</TooltipContent>
+        </Tooltip>
         {!isStopped && (
-          <button
-            type="button"
-            onClick={handleStop}
-            disabled={!canStop}
-            aria-label={
-              isDismissableError
-                ? `Dismiss error for ${worktreeName}`
-                : `Stop dev server for ${worktreeName}`
-            }
-            title={stopLabel}
-            className={actionClass}
-          >
-            {isDismissableError ? (
-              <X className="w-3.5 h-3.5" />
-            ) : (
-              <CircleStop className="w-3.5 h-3.5" />
-            )}
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={handleStop}
+                disabled={!canStop}
+                aria-label={
+                  isDismissableError
+                    ? `Dismiss error for ${worktreeName}`
+                    : `Stop dev server for ${worktreeName}`
+                }
+                className={actionClass}
+              >
+                {isDismissableError ? (
+                  <X className={PANE_TOOLBAR_ICON_CLASS} />
+                ) : (
+                  <CircleStop className={PANE_TOOLBAR_ICON_CLASS} />
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{stopLabel}</TooltipContent>
+          </Tooltip>
         )}
       </div>
     </li>
@@ -222,15 +244,19 @@ export function DevServerDashboard({ onHide }: { onHide?: () => void }) {
         )}
         <div className="flex-1" />
         {onHide && (
-          <button
-            type="button"
-            onClick={onHide}
-            aria-label="Hide dev servers"
-            title="Hide dev servers"
-            className={actionClass}
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={onHide}
+                aria-label="Hide dev servers"
+                className={actionClass}
+              >
+                <X className={PANE_TOOLBAR_ICON_CLASS} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Hide dev servers</TooltipContent>
+          </Tooltip>
         )}
       </header>
       {showSkeleton ? (

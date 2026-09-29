@@ -1,8 +1,11 @@
+import { useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SettingsRow } from "../SettingsGroup";
 import { stripCcrPrefix } from "./scopeUtils";
 import type { AgentPreset } from "@/config/agents";
 import { resolveDangerousMode, resolveInlineMode } from "@shared/types";
+import { isSecretEnvEntry, maskSecretValue } from "@/utils/secretDetection";
 
 interface ReadOnlyDetailProps {
   scopeKind: "ccr" | "project";
@@ -49,6 +52,19 @@ export function ReadOnlyDetail({
 
   const value = (text: string) => <span className="text-sm text-text-primary">{text}</span>;
 
+  // Keyed by preset as well as name, so switching presets never carries a
+  // revealed value across.
+  const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set());
+  const revealKey = (k: string) => `${selectedPreset.id}\u0000${k}`;
+  const toggleReveal = (k: string) =>
+    setRevealed((prev) => {
+      const next = new Set(prev);
+      const id = revealKey(k);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   return (
     <>
       <SettingsRow
@@ -75,14 +91,45 @@ export function ReadOnlyDetail({
           layout="stacked"
           control={
             <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1 font-mono text-xs select-text">
-              {env.map(([k, v]) => (
-                <div key={k} className="contents">
-                  <dt className="text-text-primary">{k}</dt>
-                  {/* Wrapped, never truncated: an endpoint or model id is exactly what
-                      someone opens this to read. */}
-                  <dd className="break-all text-text-secondary">{v}</dd>
-                </div>
-              ))}
+              {env.map(([k, v]) => {
+                const secret = isSecretEnvEntry(k, v);
+                const masked = secret && !revealed.has(revealKey(k));
+                return (
+                  <div key={k} className="contents">
+                    <dt className="text-text-primary">{k}</dt>
+                    {/* Wrapped, never truncated: an endpoint or model id is exactly
+                        what someone opens this to read. A token is not — router
+                        presets carry auth tokens, and this panel is read on shared
+                        screens — so it is masked until asked for. */}
+                    <dd className="flex min-w-0 items-start gap-2">
+                      <span className="min-w-0 flex-1 break-all text-text-secondary">
+                        {masked ? (
+                          <>
+                            <span aria-hidden="true">{maskSecretValue(v)}</span>
+                            <span className="sr-only">Hidden</span>
+                          </>
+                        ) : (
+                          v
+                        )}
+                      </span>
+                      {secret && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          className="-my-1 shrink-0"
+                          onClick={() => toggleReveal(k)}
+                          aria-pressed={!masked}
+                          aria-label={`Show value of ${k}`}
+                          data-testid="preset-env-reveal"
+                        >
+                          {masked ? <Eye aria-hidden="true" /> : <EyeOff aria-hidden="true" />}
+                        </Button>
+                      )}
+                    </dd>
+                  </div>
+                );
+              })}
             </dl>
           }
         />

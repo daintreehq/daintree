@@ -17,13 +17,15 @@ import {
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
+import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import {
   getPanelKindRegistrySnapshot,
   panelKindHasPty,
   subscribeToPanelKindRegistry,
 } from "@shared/config/panelKindRegistry";
 import type { ActionId } from "@shared/types/actions";
-import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
+import { terminalClipboardCombos } from "@/services/terminalReservedKeys";
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import {
   consultPanelCloseGuards,
@@ -66,13 +68,17 @@ import {
   ArrowDownFromLine,
   Bell,
   BellOff,
+  CirclePlay,
   Clipboard,
   Copy,
   CopyPlus,
+  DatabaseBackup,
   ExternalLink,
   Globe,
   Info,
   Link,
+  CircleStop,
+  Clock,
   Lock,
   Maximize2,
   Mic,
@@ -87,7 +93,9 @@ import {
   RadioTower,
   RefreshCw,
   RotateCcw,
+  RotateCw,
   Send,
+  Settings,
   Trash2,
   Unlock,
 } from "lucide-react";
@@ -106,14 +114,27 @@ import {
 import { MenuActionSourceContext, type MenuActionSourceValue } from "@/components/ui/menu-source";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { PopoverAnchor } from "@/components/ui/popover";
+import {
+  getRegisteredTourIdsSnapshot,
+  subscribeToTourRegistry,
+} from "@/components/Tour/tourRegistry";
 import { MoveToWorktreePicker } from "@/components/Panel/MoveToWorktreePicker";
 import {
   GENERIC_PANEL_RELOAD_ACTION_ID,
+  GENERIC_PANEL_TOUR_ACTION_ID,
+  GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
+  GENERIC_PANEL_PLUGIN_BACKUP_ACTION_ID,
   canReloadPanelKind,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
+  isPluginMenuCommandId,
+  pluginMenuCommandActionId,
   readPanelKindMenuCapabilities,
 } from "@/components/Panel/genericPanelMenu";
+import {
+  getRegisteredPluginActionsSnapshot,
+  subscribeToRegisteredPluginActions,
+} from "@/services/plugin/registeredPluginActions";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
@@ -121,11 +142,8 @@ const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 // Anything past that is found by searching the picker.
 const MOVE_TO_WORKTREE_SUBMENU_LIMIT = 10;
 
-/** A menu item's shortcut: the action's live keybinding, or nothing. */
-function ContextMenuKeybinding({ actionId }: { actionId: ActionId }) {
-  const combo = useKeybindingDisplay(actionId);
-  return combo ? <ContextMenuShortcut>{combo}</ContextMenuShortcut> : null;
-}
+/** A task turn after the close hook, which is where the menu primitive restores focus. */
+const AFTER_MENU_FOCUS_RESTORE_MS = 0;
 
 /** A pending hand-over consent (#12490): which terminal, to which pane. */
 interface HandOverRequest {
@@ -177,6 +195,17 @@ export function TerminalContextMenu({
     getPanelKindRegistrySnapshot,
     getPanelKindRegistrySnapshot
   );
+  const registeredTourIds = useSyncExternalStore(
+    subscribeToTourRegistry,
+    getRegisteredTourIdsSnapshot,
+    getRegisteredTourIdsSnapshot
+  );
+  // A plugin's own menu items wait on their actions registering.
+  const registeredPluginActions = useSyncExternalStore(
+    subscribeToRegisteredPluginActions,
+    getRegisteredPluginActionsSnapshot,
+    getRegisteredPluginActionsSnapshot
+  );
 
   // Which panel the picker was opened for, not a bare flag: the dock's tab
   // group hands this menu a new terminal when its active tab changes, and the
@@ -227,6 +256,15 @@ export function TerminalContextMenu({
   // opens the dialog — the same handoff as the move picker, so the menu's own
   // focus return can't land after the dialog has taken focus.
   const pendingHandOverRef = useRef<HandOverRequest | null>(null);
+  // "Plugin settings…", "Back up data…" and a plugin's own items are spent the
+  // same way, after the menu has returned focus to the pane, so the settings
+  // home, the save dialog or the plugin's own confirmation records the pane as
+  // where to return it.
+  const pendingMenuDispatchRef = useRef<{
+    actionId: ActionId;
+    args: Record<string, unknown>;
+    source: MenuActionSourceValue;
+  } | null>(null);
   const nextHandOverIdRef = useRef(0);
   const handleRequestHandOver = useCallback(
     (orchestratorPaneId: string) => {
@@ -252,6 +290,7 @@ export function TerminalContextMenu({
       if (open) {
         pendingMovePickerRef.current = null;
         pendingHandOverRef.current = null;
+        pendingMenuDispatchRef.current = null;
         // Only a PTY can be handed over; the other kinds' menus never ask.
         if (terminal !== undefined && panelKindHasPty(terminal.kind ?? "terminal")) {
           refreshOrchestratorCandidates();
@@ -460,7 +499,7 @@ export function TerminalContextMenu({
   const currentLocation: PanelLocation = forceLocation ?? terminal?.location ?? "grid";
 
   const mac = isMac();
-  const modifierKey = mac ? "⌘" : "Ctrl";
+  const clipboardCombos = terminalClipboardCombos(mac);
 
   const handleAction = useCallback(
     (actionId: string) => {
@@ -468,6 +507,16 @@ export function TerminalContextMenu({
 
       if (actionId === "open-link") {
         void terminalInstanceService.openHoveredLink(terminalId);
+        return;
+      }
+
+      if (isPluginMenuCommandId(actionId)) {
+        // The panel the menu was opened on, by id — see `pendingMenuDispatchRef`.
+        pendingMenuDispatchRef.current = {
+          actionId: pluginMenuCommandActionId(actionId),
+          args: { panelId: terminalId },
+          source: sourceRef.current,
+        };
         return;
       }
 
@@ -697,6 +746,50 @@ export function TerminalContextMenu({
             { source: sourceRef.current }
           );
           break;
+        case "tour": {
+          const tour = readPanelKindMenuCapabilities(
+            panelKindRegistry,
+            terminal.kind ?? "terminal",
+            registeredTourIds
+          ).tour;
+          if (!tour) break;
+          void actionService.dispatch(
+            GENERIC_PANEL_TOUR_ACTION_ID,
+            { tourId: tour.id },
+            { source: sourceRef.current }
+          );
+          break;
+        }
+        case "plugin-settings": {
+          const pluginId = readPanelKindMenuCapabilities(
+            panelKindRegistry,
+            terminal.kind ?? "terminal",
+            registeredTourIds
+          ).pluginSettingsId;
+          if (!pluginId) break;
+          // Spent by the close hook once focus is back on the pane — see
+          // `pendingMenuDispatchRef`.
+          pendingMenuDispatchRef.current = {
+            actionId: GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
+            args: { pluginId },
+            source: sourceRef.current,
+          };
+          break;
+        }
+        case "plugin-backup": {
+          const pluginId = readPanelKindMenuCapabilities(
+            panelKindRegistry,
+            terminal.kind ?? "terminal",
+            registeredTourIds
+          ).pluginBackupId;
+          if (!pluginId) break;
+          pendingMenuDispatchRef.current = {
+            actionId: GENERIC_PANEL_PLUGIN_BACKUP_ACTION_ID,
+            args: { pluginId },
+            source: sourceRef.current,
+          };
+          break;
+        }
         case "reload-browser":
           void actionService.dispatch(
             "browser.reload",
@@ -724,7 +817,7 @@ export function TerminalContextMenu({
           break;
       }
     },
-    [terminal, terminalId, terminalPty, terminalBrowser]
+    [terminal, terminalId, terminalPty, terminalBrowser, panelKindRegistry, registeredTourIds]
   );
 
   const handleCloseAutoFocus = useCallback(
@@ -732,6 +825,24 @@ export function TerminalContextMenu({
       if (suppressNextCloseAutoFocusRef.current) {
         suppressNextCloseAutoFocusRef.current = false;
         event.preventDefault();
+      }
+      const pendingDispatch = pendingMenuDispatchRef.current;
+      pendingMenuDispatchRef.current = null;
+      if (pendingDispatch !== null) {
+        // Restoration is left to run, and the action runs after it: whatever it
+        // opens then records the pane, not the unmounting item, as where focus
+        // returns when it closes.
+        setTimeout(() => {
+          // A context menu restores whatever was focused before the right-click,
+          // which can be another pane when the click landed on something that
+          // takes no focus. The action belongs to this panel, so it starts there.
+          const panel = document.querySelector(`[data-panel-id="${CSS.escape(terminalId)}"]`);
+          if (!panel?.contains(document.activeElement)) focusPanelInput(terminalId);
+          void actionService.dispatch(pendingDispatch.actionId, pendingDispatch.args, {
+            source: pendingDispatch.source,
+          });
+        }, AFTER_MENU_FOCUS_RESTORE_MS);
+        return;
       }
       const pendingHandOver = pendingHandOverRef.current;
       pendingHandOverRef.current = null;
@@ -796,7 +907,12 @@ export function TerminalContextMenu({
   const isFileBrowser = isFileBrowserPanel(terminal);
   const isDiff = isDiffPanel(terminal);
   const kind = terminal.kind ?? "terminal";
-  const kindCapabilities = readPanelKindMenuCapabilities(panelKindRegistry, kind);
+  const kindCapabilities = readPanelKindMenuCapabilities(
+    panelKindRegistry,
+    kind,
+    registeredTourIds,
+    registeredPluginActions
+  );
   const hasPty = terminal.kind ? kindCapabilities.hasPty : true;
   // A non-PTY plugin kind matches none of the built-in guards, so without this
   // it falls through to the terminal menu and is offered "Duplicate terminal",
@@ -806,6 +922,35 @@ export function TerminalContextMenu({
   // kinds stay out: they render through TerminalPane and are genuine
   // terminals, so they keep copy/paste, redraw, restart and the rest.
   const hasGenericMenu = hasGenericPanelMenu(kind, hasPty);
+  // The generic list carries the tour as a command of its own; the built-in
+  // menus below draw this beside Rename, so a built-in kind that declares a
+  // tour gets it on right-click with no menu changes.
+  const tourMenuItem = kindCapabilities.tour ? (
+    <ContextMenuItem onSelect={() => handleAction("tour")}>
+      <CirclePlay className={ICON_CLASS} aria-hidden="true" />
+      {kindCapabilities.tour.label}
+    </ContextMenuItem>
+  ) : null;
+  // A PTY-backed plugin kind's plugin settings, beside its tour on the same
+  // terminal menus: the last of the plugin's own entries, with "Back up data…"
+  // just before it as on the generic list.
+  const pluginOwnedMenuItems =
+    kindCapabilities.pluginBackupId || kindCapabilities.pluginSettingsId ? (
+      <>
+        {kindCapabilities.pluginBackupId && (
+          <ContextMenuItem onSelect={() => handleAction("plugin-backup")}>
+            <DatabaseBackup className={ICON_CLASS} aria-hidden="true" />
+            Back up data…
+          </ContextMenuItem>
+        )}
+        {kindCapabilities.pluginSettingsId && (
+          <ContextMenuItem onSelect={() => handleAction("plugin-settings")}>
+            <Settings className={ICON_CLASS} aria-hidden="true" />
+            Plugin settings…
+          </ContextMenuItem>
+        )}
+      </>
+    ) : null;
 
   const submenuWorktrees = worktrees.slice(0, MOVE_TO_WORKTREE_SUBMENU_LIMIT);
   const hasMoreWorktrees = worktrees.length > submenuWorktrees.length;
@@ -880,14 +1025,16 @@ export function TerminalContextMenu({
         {currentLocation === "grid" ? "Move to dock" : "Move to grid"}
       </ContextMenuItem>
       {currentLocation === "grid" && (
-        <ContextMenuItem onSelect={() => handleAction("toggle-maximize")}>
+        <ContextMenuItem
+          onSelect={() => handleAction("toggle-maximize")}
+          keybinding="terminal.maximize"
+        >
           {isMaximized ? (
             <Minimize2 className={ICON_CLASS} aria-hidden="true" />
           ) : (
             <Maximize2 className={ICON_CLASS} aria-hidden="true" />
           )}
           {isMaximized ? "Restore" : "Maximize"}
-          <ContextMenuShortcut>^⇧F</ContextMenuShortcut>
         </ContextMenuItem>
       )}
     </>
@@ -941,7 +1088,7 @@ export function TerminalContextMenu({
           {layoutSection}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
-            <RefreshCw className={ICON_CLASS} aria-hidden="true" />
+            <RotateCw className={ICON_CLASS} aria-hidden="true" />
             Reload page
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("open-external")}>
@@ -961,6 +1108,8 @@ export function TerminalContextMenu({
             <Pencil className={ICON_CLASS} aria-hidden="true" />
             Rename browser
           </ContextMenuItem>
+          {tourMenuItem}
+          {pluginOwnedMenuItems}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
@@ -1004,7 +1153,7 @@ export function TerminalContextMenu({
           {layoutSection}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
-            <RefreshCw className={ICON_CLASS} aria-hidden="true" />
+            <RotateCw className={ICON_CLASS} aria-hidden="true" />
             Reload preview
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("open-external")}>
@@ -1024,6 +1173,8 @@ export function TerminalContextMenu({
             <Pencil className={ICON_CLASS} aria-hidden="true" />
             Rename dev preview
           </ContextMenuItem>
+          {tourMenuItem}
+          {pluginOwnedMenuItems}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
@@ -1034,7 +1185,7 @@ export function TerminalContextMenu({
             Trash dev preview
           </ContextMenuItem>
           <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
-            <OctagonX className={ICON_CLASS} aria-hidden="true" />
+            <CircleStop className={ICON_CLASS} aria-hidden="true" />
             Stop dev server
           </ContextMenuItem>
         </ContextMenuContent>
@@ -1073,6 +1224,8 @@ export function TerminalContextMenu({
             <Pencil className={ICON_CLASS} aria-hidden="true" />
             Rename review
           </ContextMenuItem>
+          {tourMenuItem}
+          {pluginOwnedMenuItems}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
@@ -1122,6 +1275,10 @@ export function TerminalContextMenu({
             isDockable: kindCapabilities.isDockable,
             canMoveToWorktree,
             canReload: canReloadPanelKind(kind),
+            tourLabel: kindCapabilities.tour?.label,
+            hasPluginSettings: kindCapabilities.pluginSettingsId !== null,
+            hasPluginDatabases: kindCapabilities.pluginBackupId !== null,
+            pluginMenuItems: kindCapabilities.pluginMenuItems,
           }).map((group, groupIndex) => (
             <Fragment key={group[0]?.id ?? groupIndex}>
               {groupIndex > 0 && <ContextMenuSeparator />}
@@ -1134,12 +1291,10 @@ export function TerminalContextMenu({
                     disabled={command.disabled}
                     destructive={command.destructive}
                     onSelect={() => handleAction(command.id)}
+                    keybinding={command.shortcutActionId}
                   >
                     <command.icon className={ICON_CLASS} aria-hidden="true" />
                     {command.label}
-                    {command.shortcutActionId && (
-                      <ContextMenuKeybinding actionId={command.shortcutActionId} />
-                    )}
                   </ContextMenuItem>
                 )
               )}
@@ -1183,15 +1338,22 @@ export function TerminalContextMenu({
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
           {hasPty && (
             <>
-              <ContextMenuItem disabled={!hasSelection} onSelect={() => handleAction("copy")}>
+              <ContextMenuItem
+                disabled={!hasSelection}
+                onSelect={() => handleAction("copy")}
+                aria-keyshortcuts={comboToAriaKeyshortcuts(clipboardCombos.copy, mac)}
+              >
                 <Copy className={ICON_CLASS} aria-hidden="true" />
                 Copy
-                <ContextMenuShortcut>{modifierKey}C</ContextMenuShortcut>
+                <ContextMenuShortcut shortcut={clipboardCombos.copy} />
               </ContextMenuItem>
-              <ContextMenuItem onSelect={() => handleAction("paste")}>
+              <ContextMenuItem
+                onSelect={() => handleAction("paste")}
+                aria-keyshortcuts={comboToAriaKeyshortcuts(clipboardCombos.paste, mac)}
+              >
                 <Clipboard className={ICON_CLASS} aria-hidden="true" />
                 Paste
-                <ContextMenuShortcut>{mac ? `${modifierKey}V` : "Ctrl+⇧V"}</ContextMenuShortcut>
+                <ContextMenuShortcut shortcut={clipboardCombos.paste} />
               </ContextMenuItem>
               <ContextMenuItem
                 disabled={!hasSelection}
@@ -1202,10 +1364,10 @@ export function TerminalContextMenu({
                     { source: sourceRef.current }
                   )
                 }
+                keybinding="terminal.sendToAgent"
               >
                 <Send className={ICON_CLASS} aria-hidden="true" />
                 Send to agent
-                <ContextMenuShortcut>{mac ? "⌘⇧E" : "Ctrl+⇧E"}</ContextMenuShortcut>
               </ContextMenuItem>
               {hoveredUrl && (
                 <>
@@ -1289,7 +1451,7 @@ export function TerminalContextMenu({
                 Arm all in this worktree
               </ContextMenuItem>
               {isArmed && fleetSize >= 2 && (
-                <ContextMenuItem destructive onSelect={() => handleAction("fleet-clear")}>
+                <ContextMenuItem onSelect={() => handleAction("fleet-clear")}>
                   <Radio className={ICON_CLASS} aria-hidden="true" />
                   Clear fleet
                 </ContextMenuItem>
@@ -1297,13 +1459,13 @@ export function TerminalContextMenu({
               {isKnownRun && (
                 <ContextMenuSub>
                   <ContextMenuSubTrigger>
-                    <BellOff className={ICON_CLASS} aria-hidden="true" />
+                    <Clock className={ICON_CLASS} aria-hidden="true" />
                     Snooze
                   </ContextMenuSubTrigger>
                   <ContextMenuSubContent>
                     {AGENT_SNOOZE_DURATION_OPTIONS.map((option) => (
                       <ContextMenuItem key={option} onSelect={() => handleSnooze(option)}>
-                        <BellOff className={ICON_CLASS} aria-hidden="true" />
+                        <Clock className={ICON_CLASS} aria-hidden="true" />
                         {AGENT_SNOOZE_LABEL[option]}
                       </ContextMenuItem>
                     ))}
@@ -1387,14 +1549,16 @@ export function TerminalContextMenu({
             </ContextMenuSub>
           )}
           {terminal.detectedAgentId && (
-            <ContextMenuItem onSelect={() => handleAction("toggle-watch")}>
+            <ContextMenuItem
+              onSelect={() => handleAction("toggle-watch")}
+              keybinding="terminal.watch"
+            >
               {isWatched ? (
                 <BellOff className={ICON_CLASS} aria-hidden="true" />
               ) : (
                 <Bell className={ICON_CLASS} aria-hidden="true" />
               )}
               {isWatched ? "Cancel watch" : "Watch terminal"}
-              <ContextMenuShortcut>{mac ? "⌘⇧W" : "Ctrl+⇧W"}</ContextMenuShortcut>
             </ContextMenuItem>
           )}
           {hasPty && (
@@ -1420,6 +1584,8 @@ export function TerminalContextMenu({
             <Info className={ICON_CLASS} aria-hidden="true" />
             View terminal info
           </ContextMenuItem>
+          {tourMenuItem}
+          {pluginOwnedMenuItems}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />

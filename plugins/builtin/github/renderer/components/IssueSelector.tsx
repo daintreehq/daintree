@@ -16,6 +16,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { FIELD_SURFACE } from "@/components/Worktree/views/WorktreeFormLayout";
 import { FORGE_OPTION_ROW, ForgeOptionRowsSkeleton } from "./GitHubDropdownSkeletons";
 import { logError } from "@/utils/logger";
+import { Button } from "@/components/ui/button";
 
 /** Conforms to the host's issue-selector slot contract (forge-normalized shapes). */
 export type IssueSelectorProps = ForgeIssueSelectorProps;
@@ -234,6 +235,9 @@ export function IssueSelector({
           // refetch cannot leave the previous list reading as current.
           <InlineStatusBanner
             severity="error"
+            // A strip across the popover, even when the popover opens from a
+            // dialog body, whose inset context would otherwise make it a box.
+            inset={false}
             icon={XCircle}
             title="Couldn't load issues"
             description="The forge didn't answer."
@@ -263,16 +267,16 @@ export function IssueSelector({
                 scale="popover"
                 title={`No matches for "${trimmedQuery}"`}
                 action={
-                  <button
-                    type="button"
+                  <Button
+                    variant="subtle"
+                    size="sm"
                     onClick={() => {
                       setQuery("");
                       inputRef.current?.focus();
                     }}
-                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
                   >
                     Clear search
-                  </button>
+                  </Button>
                 }
               />
             ) : (

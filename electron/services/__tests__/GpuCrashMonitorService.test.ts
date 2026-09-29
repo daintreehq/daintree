@@ -360,40 +360,14 @@ describe("GpuCrashMonitorService", () => {
       expect(appMock.relaunch).not.toHaveBeenCalled();
     });
 
-    it("logs non-GPU process crashes without triggering GPU relaunch", async () => {
+    it("ignores non-GPU process deaths, which ProcessDeathLogger owns", async () => {
       await loadAndInit();
       emitChildProcessGone("Utility", "crashed", 1, "daintree-pty-host");
       emitChildProcessGone("Utility", "crashed", 1, "daintree-pty-host");
       emitChildProcessGone("Utility", "crashed", 1, "daintree-pty-host");
-      expect(appMock.relaunch).not.toHaveBeenCalled();
-      expect(loggerMethods.warn).toHaveBeenCalledWith(
-        "gpu-non-crash-exit-detected",
-        expect.objectContaining({ name: "daintree-pty-host" })
-      );
-    });
-
-    it("does not log non-GPU clean-exit or killed events", async () => {
-      await loadAndInit();
-      emitChildProcessGone("Utility", "clean-exit", 0, "daintree-pty-host");
-      emitChildProcessGone("Utility", "killed", 137, "daintree-workspace-host");
-      expect(loggerMethods.warn).not.toHaveBeenCalledWith(
-        "gpu-non-crash-exit-detected",
-        expect.anything()
-      );
-    });
-
-    it("logs non-GPU crash with full process details", async () => {
-      await loadAndInit();
       emitChildProcessGone("Utility", "oom", 137, "daintree-workspace-host");
-      expect(loggerMethods.warn).toHaveBeenCalledWith(
-        "gpu-non-crash-exit-detected",
-        expect.objectContaining({
-          type: "Utility",
-          reason: "oom",
-          exitCode: 137,
-          name: "daintree-workspace-host",
-        })
-      );
+      expect(appMock.relaunch).not.toHaveBeenCalled();
+      expect(loggerMethods.warn).not.toHaveBeenCalled();
     });
 
     it("does not relaunch if disable flag already exists (already disabled)", async () => {

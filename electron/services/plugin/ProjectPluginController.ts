@@ -32,8 +32,18 @@ export interface ProjectPluginControllerDeps {
     dirName: string;
     manifest: Readonly<PluginManifest>;
   }) => Promise<boolean>;
-  /** Full unload cascade + contribution-scope clear + authority invalidation. */
-  unloadProjectPlugin: (instanceKey: string) => void;
+  /**
+   * Full unload cascade + contribution-scope clear + authority invalidation.
+   * `reload` suspends the instance's agent credentials instead of revoking
+   * them; {@link settleProjectPluginReload} must follow.
+   */
+  unloadProjectPlugin: (instanceKey: string, options?: { reload: true }) => void;
+  /**
+   * A reload's open pass is over. `kept` says the instance is loaded again
+   * under a still-current entry; any agent credential held across the reload
+   * survives only then, and only if the generation declares what it did.
+   */
+  settleProjectPluginReload: (instanceKey: string, kept: boolean) => void;
   /** Drop every capability grant held under this plugin instance. */
   purgeConsentForInstance: (instanceKey: string) => void;
   /** Manifest ids already claimed by an installed or builtin plugin. */
@@ -145,6 +155,25 @@ export class ProjectPluginController {
     });
     this.chains.set(projectId, next);
     return next;
+  }
+
+  /** Whether anything has ever been queued for `projectId` — an open, above all. */
+  hasQueuedWork(projectId: string): boolean {
+    return this.chains.has(projectId);
+  }
+
+  /**
+   * Resolves once every task queued for `projectId` — including any queued
+   * while waiting — has run. Nothing queued resolves at once.
+   */
+  async whenSettled(projectId: string): Promise<void> {
+    let tail = this.chains.get(projectId);
+    while (tail) {
+      await tail;
+      const next = this.chains.get(projectId);
+      if (next === tail) return;
+      tail = next;
+    }
   }
 
   /**
@@ -474,11 +503,32 @@ export class ProjectPluginController {
       // unload loop below is a no-op because an ungranted project has nothing
       // loaded. A remembered "no" is still refused outright.
       if (!this.isEnabled(entry) && entry.decision !== null) return;
+      const reloading: Array<[manifestId: string, instanceKey: string]> = [];
       for (const manifestId of manifestIds) {
         const instanceKey = entry.loaded.get(manifestId);
-        if (instanceKey) this.unloadOne(entry, manifestId, instanceKey);
+        if (!instanceKey) continue;
+        this.unloadOne(entry, manifestId, instanceKey, true);
+        reloading.push([manifestId, instanceKey]);
       }
-      await this.doOpen(projectId, projectRoot, entry, requestedGeneration);
+      try {
+        await this.doOpen(projectId, projectRoot, entry, requestedGeneration);
+      } finally {
+        // Whatever the open pass did — reloaded, skipped, staged, rejected or
+        // threw — no credential stays held past it. Judged here, after the
+        // pass's own generation checks, so a close or trust change that
+        // overtook the reload never lets a held credential through.
+        const current = this.stillCurrent(projectId, entry, requestedGeneration);
+        for (const [manifestId, instanceKey] of reloading) {
+          try {
+            this.deps.settleProjectPluginReload(
+              instanceKey,
+              current && entry.loaded.get(manifestId) === instanceKey
+            );
+          } catch (err) {
+            logger.error("Settling a project plugin reload threw", err, { instanceKey });
+          }
+        }
+      }
     });
   }
 
@@ -635,6 +685,15 @@ export class ProjectPluginController {
         version: d.manifest.version,
         ...(d.manifest.description !== undefined ? { description: d.manifest.description } : {}),
         capabilities: [...(d.manifest.capabilities ?? [])],
+        ...(d.manifest.contributes.databases?.length
+          ? { databases: d.manifest.contributes.databases.map((db) => ({ ...db })) }
+          : {}),
+        ...(d.manifest.contributes.settings?.length
+          ? { settings: d.manifest.contributes.settings.map((s) => ({ ...s })) }
+          : {}),
+        ...(d.manifest.contributes.views?.some((v) => v.location === "settings")
+          ? { declaresSettingsView: true }
+          : {}),
         dirName: d.dirName,
         state,
         muted,
@@ -929,9 +988,15 @@ export class ProjectPluginController {
     }
   }
 
-  private unloadOne(entry: ProjectEntry, manifestId: string, instanceKey: string): void {
+  private unloadOne(
+    entry: ProjectEntry,
+    manifestId: string,
+    instanceKey: string,
+    reload = false
+  ): void {
     try {
-      this.deps.unloadProjectPlugin(instanceKey);
+      if (reload) this.deps.unloadProjectPlugin(instanceKey, { reload: true });
+      else this.deps.unloadProjectPlugin(instanceKey);
     } catch (err) {
       logger.error("Unloading a project plugin threw", err, { instanceKey });
     }

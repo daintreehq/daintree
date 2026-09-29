@@ -1,8 +1,14 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react";
+import { Callout } from "@/components/ui/Callout";
+import { InlineError } from "@/components/ui/field";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { FolderGit2, Check, AlertCircle, GitBranch } from "lucide-react";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
+import { FolderGit2, GitBranch } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -36,10 +42,17 @@ import {
   resolveEligibleDefaultRecipeId,
   CLONE_LAYOUT_ID,
 } from "./hooks/useRecipePicker";
-import { useWorktreeFormErrors } from "./hooks/useWorktreeFormErrors";
+import { useWorktreeFormErrors, type ErrorField } from "./hooks/useWorktreeFormErrors";
 import { useWorktreeFormValidation } from "./hooks/useWorktreeFormValidation";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { spawnPanelsFromRecipe } from "./panelSpawning";
+import { recipeTerminalsStartAgent, spawnPanelsFromRecipe } from "./panelSpawning";
+import {
+  notifyAgentNotStarted,
+  startFirstAgentWhenReady,
+  type FirstAgentLaunch,
+} from "./worktreeAgentLaunch";
+import { useFirstAgentOptions } from "./hooks/useFirstAgentOptions";
+import { Textarea } from "@/components/ui/textarea";
 
 import {
   PrHeader,
@@ -53,6 +66,7 @@ import {
   WorktreePathPicker,
   EnvironmentRadioGroup,
   RecipePickerPopover,
+  AgentPickerPopover,
   FormGrid,
   FormSection,
   FormRow,
@@ -101,6 +115,8 @@ interface NewWorktreeDialogProps {
   initialPR?: PR | null;
   initialRecipeId?: string | null;
   initialBranchInput?: string | null;
+  initialAgentId?: string | null;
+  initialPrompt?: string | null;
 }
 
 export function NewWorktreeDialog({
@@ -112,17 +128,21 @@ export function NewWorktreeDialog({
   initialPR,
   initialRecipeId,
   initialBranchInput,
+  initialAgentId,
+  initialPrompt,
 }: NewWorktreeDialogProps) {
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [loading, setLoading] = useState(false);
+  // A failed branch list is a load state, not a field the user got wrong: it
+  // holds until the list loads, whatever else is edited.
+  const [branchLoadError, setBranchLoadError] = useState<string | null>(null);
+  const [branchLoadAttempt, setBranchLoadAttempt] = useState(0);
   const [baseBranch, setBaseBranch] = useState("");
   const [prBranchResolved, setPrBranchResolved] = useState<boolean | null>(null);
-  const [isDismissing, setIsDismissing] = useState(false);
   const [branchMode, setBranchMode] = useState<BranchMode>("new");
   const [selectedExistingBranch, setSelectedExistingBranch] = useState<string | null>(null);
   const [recentBranchNames, setRecentBranchNames] = useState<string[]>([]);
   const [worktreeMode, setWorktreeMode] = useState<string>("local");
-  const keepEditingButtonRef = useRef<HTMLButtonElement>(null);
   const isCreatingRef = useRef(false);
   const baseBranchTouchedRef = useRef(false);
 
@@ -136,6 +156,12 @@ export function NewWorktreeDialog({
   );
   const setLastSelectedWorktreeRecipeIdByProject = usePreferencesStore(
     (s) => s.setLastSelectedWorktreeRecipeIdByProject
+  );
+  const lastSelectedWorktreeAgentIdByProject = usePreferencesStore(
+    (s) => s.lastSelectedWorktreeAgentIdByProject
+  );
+  const setLastSelectedWorktreeAgentIdByProject = usePreferencesStore(
+    (s) => s.setLastSelectedWorktreeAgentIdByProject
   );
   // Flattened to `[branch, id, name] x N` so the selector stays shallow-comparable
   // while still carrying the owning worktree's identity. One source for both the
@@ -165,6 +191,14 @@ export function NewWorktreeDialog({
   const currentProject = useProjectStore((s) => s.currentProject);
   const projectId = currentProject?.id ?? "";
   const lastSelectedWorktreeRecipeId = lastSelectedWorktreeRecipeIdByProject[projectId];
+  const lastSelectedWorktreeAgentId = lastSelectedWorktreeAgentIdByProject[projectId];
+  const agentOptions = useFirstAgentOptions();
+  const [firstAgentId, setFirstAgentId] = useState<string | null>(null);
+  const [firstPrompt, setFirstPrompt] = useState("");
+  const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  // A remembered or restored agent that is no longer launchable reads as "No
+  // agent" rather than launching something the picker can't show.
+  const firstAgent = agentOptions.find((a) => a.id === firstAgentId);
   const { entry: forgeEntry } = useResolvedForgeProvider(currentProject?.id ?? null);
   const forgeName = forgeEntry?.contribution.name ?? "the forge";
 
@@ -222,6 +256,25 @@ export function NewWorktreeDialog({
     setBranchInput(initialBranchInput);
     branchInputTouchedRef.current = true;
   }, [isOpen, initialBranchInput, setBranchInput, branchInputTouchedRef]);
+
+  // Seeded once per open. A Retry always carries a prompt (possibly empty), and
+  // its agent — including an explicit "No agent" — wins over the project's
+  // remembered one.
+  const appliedAgentDraftRef = useRef(false);
+  useEffect(() => {
+    if (!isOpen) {
+      appliedAgentDraftRef.current = false;
+      return;
+    }
+    if (appliedAgentDraftRef.current || !projectId) return;
+    appliedAgentDraftRef.current = true;
+    const isRetryDraft = initialPrompt !== null && initialPrompt !== undefined;
+    setFirstAgentId(
+      isRetryDraft ? (initialAgentId ?? null) : (lastSelectedWorktreeAgentId ?? null)
+    );
+    setFirstPrompt(initialPrompt ?? "");
+    setAgentPickerOpen(false);
+  }, [isOpen, projectId, initialAgentId, initialPrompt, lastSelectedWorktreeAgentId]);
 
   const canAssignIssue = Boolean(currentUser && selectedIssue);
 
@@ -383,11 +436,11 @@ export function NewWorktreeDialog({
     const cached = initialPR ? undefined : branchListCache.get(rootPath);
 
     setLoading(!cached);
+    setBranchLoadError(null);
     resetErrors();
     setPrBranchResolved(null);
     setBranches(cached ?? []);
     setBaseBranch("");
-    setIsDismissing(false);
     setBranchMode("new");
     setSelectedExistingBranch(null);
     closeBaseBranchPicker(false);
@@ -492,7 +545,7 @@ export function NewWorktreeDialog({
           logError("Failed to refresh branches", err);
           return;
         }
-        setValidationError(`Failed to load branches: ${err.message}`, null);
+        setBranchLoadError(`Failed to load branches: ${err.message}`);
         setBranches([]);
         setBaseBranch("");
         setFromRemote(false);
@@ -510,6 +563,7 @@ export function NewWorktreeDialog({
     rootPath,
     initialIssue,
     initialPR,
+    branchLoadAttempt,
     setFromRemote,
     setValidationError,
     clearErrors,
@@ -544,8 +598,10 @@ export function NewWorktreeDialog({
     if (errors.touchedFields.recipe) return true;
     if (errors.touchedFields.worktreePath && worktreePath.trim()) return true;
     if (worktreeMode !== "local") return true;
+    if (firstPrompt.trim()) return true;
     return false;
   }, [
+    firstPrompt,
     branchInput,
     worktreePath,
     selectedIssue,
@@ -554,28 +610,60 @@ export function NewWorktreeDialog({
     errors.touchedFields,
   ]);
 
-  const handleBeforeClose = useCallback((): boolean => {
-    if (!formDirty) return true;
-    if (isDismissing) {
-      setIsDismissing(false);
-      return false;
-    }
-    setIsDismissing(true);
-    return false;
-  }, [formDirty, isDismissing]);
+  // The same unsaved-changes gate the recipe editor uses: Escape, the backdrop,
+  // the X and Cancel all ask the nested destructive confirm first.
+  const {
+    onBeforeClose: handleBeforeClose,
+    isConfirmOpen: isDiscardConfirmOpen,
+    closeConfirm: closeDiscardConfirm,
+  } = useUnsavedChanges({ isDirty: formDirty });
 
   const handleRequestClose = useCallback(() => {
     if (handleBeforeClose()) onClose();
   }, [handleBeforeClose, onClose]);
 
+  // Names what the user was setting up, the way the recipe editor names its recipe.
+  const discardTarget = selectedExistingBranch ?? (branchInput.trim() || initialPR?.headRef);
+
+  // A dialog closed from outside while the confirm was up must not reopen onto it.
   useEffect(() => {
-    if (isDismissing) {
-      requestAnimationFrame(() => keepEditingButtonRef.current?.focus());
-    }
-  }, [isDismissing]);
+    if (!isOpen) closeDiscardConfirm();
+  }, [isOpen, closeDiscardConfirm]);
 
   // --- Validation hook ---
   const { validate } = useWorktreeFormValidation();
+
+  // Under whichever picker the list feeds, in either mode. It stands in for the
+  // base field's own "select a base branch" — the list is what failed, not the
+  // pick — and takes that error's id so the field's description still resolves.
+  const branchLoadNotice = branchLoadError ? (
+    <InlineError
+      role="alert"
+      id={errors.errorField === "base-branch" ? "validation-error" : undefined}
+      action={
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={() => setBranchLoadAttempt((n) => n + 1)}
+          className="-my-1 shrink-0"
+        >
+          Retry
+        </Button>
+      }
+    >
+      {branchLoadError}
+    </InlineError>
+  ) : null;
+
+  // Null rather than an empty element: `FormRow` skips its hint row on a falsy
+  // hint. A submit that fails validation says so once, under the field it is
+  // about, which is what the field's `aria-describedby` points at.
+  const fieldError = (field: ErrorField) =>
+    errors.validationError && errors.errorField === field ? (
+      <InlineError id="validation-error" role="alert">
+        {errors.validationError}
+      </InlineError>
+    ) : null;
 
   // --- Create handler ---
   const handleCreate = () => {
@@ -591,8 +679,14 @@ export function NewWorktreeDialog({
     });
 
     if (!result.valid) {
-      setValidationError(result.error!.message, result.error!.field);
+      const { message, field } = result.error!;
+      setValidationError(message, field);
       isCreatingRef.current = false;
+      // The error lands under its field, so the cursor goes there too: a
+      // failed Create from the button or Cmd/Ctrl+Enter otherwise leaves focus
+      // somewhere the message is not. Each error field is named by its
+      // control's id.
+      if (field) document.getElementById(field)?.focus();
       return;
     }
 
@@ -620,6 +714,8 @@ export function NewWorktreeDialog({
     const snapCurrentUser = currentUser;
     const snapCurrentUserAvatar = currentUserAvatar;
     const snapBaseBranch = baseBranch;
+    const snapFirstAgent = firstAgent;
+    const snapFirstPrompt = snapFirstAgent ? firstPrompt : "";
     // Anchor the sidebar placeholder by the path the host will normalize to as
     // the worktree id. Relative paths can't anchor a placeholder because the
     // host resolves them server-side, so the renderer-keyed Map entry would
@@ -629,7 +725,12 @@ export function NewWorktreeDialog({
     const selectionStore = useWorktreeSelectionStore.getState();
 
     if (placeholderPath) {
-      selectionStore.addPendingCreation(placeholderPath, { branch: fullBranchName });
+      selectionStore.addPendingCreation(placeholderPath, {
+        branch: fullBranchName,
+        recipeId: snapRecipeId,
+        agentId: snapFirstAgent?.id ?? null,
+        prompt: snapFirstPrompt,
+      });
     }
 
     onClose();
@@ -786,11 +887,16 @@ export function NewWorktreeDialog({
           }
         }
 
+        // Set when the layout itself starts an agent, so the dialog's agent is
+        // handed back to the user rather than becoming a silent second one.
+        let layoutAgentConflict: "recipe-has-agent" | "layout-has-agent" | null = null;
+
         if (snapRecipeId === CLONE_LAYOUT_ID && sourceWorktreeId) {
           try {
             const terminals = useRecipeStore
               .getState()
               .generateRecipeFromActiveTerminals(sourceWorktreeId);
+            if (recipeTerminalsStartAgent(terminals)) layoutAgentConflict = "layout-has-agent";
             await spawnPanelsFromRecipe({
               terminals,
               worktreeId,
@@ -806,6 +912,13 @@ export function NewWorktreeDialog({
             });
           }
         } else if (snapSelectedRecipe) {
+          // Shadowing can swap in a different recipe at run time, so judge
+          // the one that will actually execute.
+          const executedRecipe =
+            useRecipeStore.getState().getRecipeById(snapSelectedRecipe.id) ?? snapSelectedRecipe;
+          if (recipeTerminalsStartAgent(executedRecipe.terminals)) {
+            layoutAgentConflict = "recipe-has-agent";
+          }
           try {
             const results = await runRecipeWithResults(
               snapSelectedRecipe.id,
@@ -854,6 +967,21 @@ export function NewWorktreeDialog({
               ],
             });
           }
+        }
+
+        if (snapFirstAgent) {
+          const launch: FirstAgentLaunch = {
+            agentId: snapFirstAgent.id,
+            agentName: snapFirstAgent.name,
+            prompt: snapFirstPrompt,
+            worktreeId,
+            cwd: placeholderPath ?? undefined,
+          };
+          if (layoutAgentConflict) notifyAgentNotStarted(launch, layoutAgentConflict);
+          else
+            void startFirstAgentWhenReady(launch).catch((launchErr: unknown) =>
+              logError("Failed to start the new worktree's agent", launchErr)
+            );
         }
 
         onWorktreeCreated?.(worktreeId);
@@ -924,7 +1052,7 @@ export function NewWorktreeDialog({
     } catch (err: unknown) {
       logError("Failed to open directory picker", err);
       const message = formatErrorMessage(err, "Failed to open directory picker");
-      setValidationError(`Failed to open directory picker: ${message}`, null);
+      setValidationError(`Failed to open directory picker: ${message}`, "worktree-path");
     }
   }, [setWorktreePath, pathTouchedRef, markTouched, clearErrors, setValidationError]);
 
@@ -944,6 +1072,14 @@ export function NewWorktreeDialog({
       setLastSelectedWorktreeRecipeIdByProject,
       clearErrors,
     ]
+  );
+
+  const handleFirstAgentSelect = useCallback(
+    (id: string | null) => {
+      setFirstAgentId(id);
+      if (projectId) setLastSelectedWorktreeAgentIdByProject(projectId, id);
+    },
+    [projectId, setLastSelectedWorktreeAgentIdByProject]
   );
 
   const handlePrefixSelectWrap = useCallback(
@@ -983,7 +1119,7 @@ export function NewWorktreeDialog({
   });
 
   useEffect(() => {
-    if (!isOpen || isDismissing) return;
+    if (!isOpen || isDiscardConfirmOpen) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || e.isComposing) return;
       const { handleCreate: create, submitDisabled: blocked } = submitRef.current;
@@ -993,7 +1129,7 @@ export function NewWorktreeDialog({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isOpen, isDismissing]);
+  }, [isOpen, isDiscardConfirmOpen]);
 
   // What the form is actually about to do, said once. Replaces the mono echo
   // line that used to sit under the branch input restating its own value.
@@ -1013,15 +1149,23 @@ export function NewWorktreeDialog({
     // which beats a disabled button that explains nothing. This is what keeps
     // the not-yet-ready state from looking identical to the ready one.
     <span className="truncate">
-      {parsedBranch.fullBranchName
-        ? "Pick a base branch to continue"
-        : "Name the branch to continue"}
+      {branchLoadError && !isExistingMode
+        ? "Branches didn't load, so there's no base to pick"
+        : parsedBranch.fullBranchName
+          ? "Pick a base branch to continue"
+          : "Name the branch to continue"}
     </span>
   );
 
   const showIssueRow = !initialPR && !!forgeEntry?.contribution.slots?.issueSelector;
-  const showRecipeRow = startingLayoutRecipes.length > 0;
-  const hasSetupSection = showIssueRow || hasAnyEnvironments || showRecipeRow;
+  // Without saved recipes the layout silently defaults to a clone of the
+  // current one, which can itself start an agent — so once an agent is picked
+  // the layout choice is shown too.
+  const showRecipeRow = startingLayoutRecipes.length > 0 || firstAgent !== undefined;
+  const showPromptRow = firstAgent !== undefined;
+  const selectedRecipeStartsAgent = selectedRecipe
+    ? recipeTerminalsStartAgent(selectedRecipe.terminals)
+    : false;
 
   // Same flags the real sections are built from, so the skeleton is the shape
   // that is actually about to render rather than a generic three-block guess.
@@ -1033,163 +1177,150 @@ export function NewWorktreeDialog({
       rows: isExistingMode ? ["field"] : ["field", "hint", "field"],
     },
     { title: "Destination", rows: ["field"] },
-    ...(hasSetupSection
-      ? [
-          {
-            title: "Setup",
-            rows: Array<"field">(
-              Number(showIssueRow) + Number(hasAnyEnvironments) + Number(showRecipeRow)
-            ).fill("field"),
-          },
-        ]
-      : []),
+    {
+      title: "Setup",
+      rows: Array<"field">(
+        Number(showIssueRow) +
+          Number(hasAnyEnvironments) +
+          Number(showRecipeRow) +
+          1 +
+          Number(showPromptRow)
+      ).fill("field"),
+    },
   ];
 
   return (
-    <AppDialog
-      isOpen={isOpen}
-      onClose={onClose}
-      onBeforeClose={handleBeforeClose}
-      size="lg"
-      data-testid="new-worktree-dialog"
-    >
-      <AppDialog.Header className="py-3">
-        {/* Neutral, not accent: the header glyph is decoration, and the primary
+    <>
+      <AppDialog
+        isOpen={isOpen}
+        onClose={onClose}
+        onBeforeClose={handleBeforeClose}
+        size="lg"
+        data-testid="new-worktree-dialog"
+      >
+        <AppDialog.Header>
+          {/* Neutral, not accent: the header glyph is decoration, and the primary
             action is this region's one load-bearing signal. */}
-        <AppDialog.Title icon={<FolderGit2 className="w-4 h-4 text-text-secondary" />}>
-          {initialPR ? "Check out PR branch" : "Create worktree"}
-        </AppDialog.Title>
-        <AppDialog.CloseButton />
-      </AppDialog.Header>
+          <AppDialog.Title icon={<FolderGit2 className="w-4 h-4 text-text-secondary" />}>
+            {initialPR ? "Check out PR branch" : "Create worktree"}
+          </AppDialog.Title>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
 
-      <AppDialog.Body className="space-y-5">
-        {initialPR && <PrHeader pr={initialPR} />}
-        {loading ? (
-          <Skeleton label="Loading branches">
-            {/* Built from the same flags as the resolved form and rendered in
+        <AppDialog.Body className="space-y-5">
+          {initialPR && <PrHeader pr={initialPR} />}
+          {loading ? (
+            <Skeleton label="Loading branches">
+              {/* Built from the same flags as the resolved form and rendered in
                 the same FormGrid, so the branch list resolving swaps content in
                 without moving anything. A fixed-shape skeleton would guess the
                 section list wrong whenever Setup is empty or carries extra rows. */}
-            <FormGrid>
-              {skeletonSections.map((section) => (
-                <FormSection key={section.title} title={section.title}>
-                  {section.rows.map((row, index) =>
-                    row === "hint" ? (
-                      // h-4, not h-3: the resolved hint row is as tall as its 16px
-                      // checkbox, and 12px here grew the row by 4px on resolve.
-                      <SkeletonBone key={index} className={cn(HINT_CELL, "h-4 w-44")} />
-                    ) : (
-                      <Fragment key={index}>
-                        <SkeletonBone className="h-3 w-12" />
-                        <SkeletonBone className="h-8 w-full" />
-                      </Fragment>
+              <FormGrid>
+                {skeletonSections.map((section) => (
+                  <FormSection key={section.title} title={section.title}>
+                    {section.rows.map((row, index) =>
+                      row === "hint" ? (
+                        // h-4, not h-3: the resolved hint row is as tall as its 16px
+                        // checkbox, and 12px here grew the row by 4px on resolve.
+                        <SkeletonBone key={index} className={cn(HINT_CELL, "h-4 w-44")} />
+                      ) : (
+                        <Fragment key={index}>
+                          <SkeletonBone className="h-3 w-12" />
+                          <SkeletonBone className="h-8 w-full" />
+                        </Fragment>
+                      )
+                    )}
+                  </FormSection>
+                ))}
+              </FormGrid>
+            </Skeleton>
+          ) : (
+            <>
+              <FormGrid>
+                <FormSection
+                  title="Branch"
+                  action={
+                    !initialPR && (
+                      <BranchModeControl
+                        branchMode={branchMode}
+                        onChange={handleBranchModeChange}
+                      />
                     )
+                  }
+                >
+                  {!isExistingMode && (
+                    <FormRow
+                      label="Base"
+                      htmlFor="base-branch"
+                      hint={
+                        <div className="flex flex-col gap-2">
+                          {branchLoadNotice ?? fieldError("base-branch")}
+                          <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-text-primary">
+                            <Checkbox
+                              id="from-remote"
+                              checked={fromRemote}
+                              onCheckedChange={(checked) => {
+                                baseBranchTouchedRef.current = true;
+                                setFromRemote(checked === true);
+                              }}
+                            />
+                            Create from remote branch
+                          </label>
+                        </div>
+                      }
+                    >
+                      <BaseBranchCombobox
+                        baseBranch={baseBranch}
+                        controller={baseBranchPicker}
+                        errorField={errors.errorField}
+                      />
+                    </FormRow>
+                  )}
+
+                  {isExistingMode ? (
+                    <FormRow label="Branch" htmlFor="existing-branch" hint={branchLoadNotice}>
+                      <ExistingBranchPicker
+                        selectedBranch={selectedExistingBranch}
+                        controller={existingBranchPicker}
+                      />
+                    </FormRow>
+                  ) : (
+                    <FormRow label="Name" htmlFor="new-branch" hint={fieldError("new-branch")}>
+                      <NewBranchInput
+                        value={branchInput}
+                        onChange={handleBranchInputChange}
+                        onBlur={handleBranchInputBlur}
+                        isCheckingBranch={isCheckingBranch}
+                        errorField={errors.errorField}
+                        branchWasAutoResolved={branchWasAutoResolved}
+                        prefixPickerOpen={prefixPickerOpen}
+                        onPrefixPickerOpenChange={setPrefixPickerOpen}
+                        prefixSuggestions={prefixSuggestions}
+                        prefixSelectedIndex={prefixSelectedIndex}
+                        onPrefixKeyDown={handlePrefixKeyDown}
+                        onPrefixSelect={handlePrefixSelectWrap}
+                        onPrefixCursorChange={setPrefixSelectedIndex}
+                        onPrefixInputFocus={handleBranchInputFocus}
+                        prefixListRef={prefixListRef}
+                        inputRef={newBranchInputRef}
+                      />
+                    </FormRow>
                   )}
                 </FormSection>
-              ))}
-            </FormGrid>
-          </Skeleton>
-        ) : (
-          <>
-            <FormGrid>
-              <FormSection
-                title="Branch"
-                action={
-                  !initialPR && (
-                    <BranchModeControl branchMode={branchMode} onChange={handleBranchModeChange} />
-                  )
-                }
-              >
-                {!isExistingMode && (
-                  <FormRow
-                    label="Base"
-                    htmlFor="base-branch"
-                    hint={
-                      <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-text-primary">
-                        <span className="relative inline-flex shrink-0">
-                          <input
-                            id="from-remote"
-                            type="checkbox"
-                            checked={fromRemote}
-                            onChange={(e) => {
-                              baseBranchTouchedRef.current = true;
-                              setFromRemote(e.target.checked);
-                            }}
-                            className={cn(
-                              // A 16px box at the theme radius reads as a radio, not a checkbox.
-                              "h-4 w-4 appearance-none rounded-[4px] border",
-                              "transition-colors duration-150 ease-out",
-                              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                              fromRemote
-                                ? "border-text-primary bg-text-primary"
-                                : "border-border-strong bg-surface-input"
-                            )}
-                          />
-                          {fromRemote && (
-                            <Check
-                              className="pointer-events-none absolute inset-0 m-auto h-3 w-3 text-text-inverse"
-                              strokeWidth={3.5}
-                              aria-hidden="true"
-                            />
-                          )}
-                        </span>
-                        Create from remote branch
-                      </label>
-                    }
-                  >
-                    <BaseBranchCombobox
-                      baseBranch={baseBranch}
-                      controller={baseBranchPicker}
+
+                <FormSection title="Destination">
+                  <FormRow label="Path" htmlFor="worktree-path" hint={fieldError("worktree-path")}>
+                    <WorktreePathPicker
+                      value={worktreePath}
+                      onChange={handleWorktreePathChange}
+                      isGeneratingPath={isGeneratingPath}
                       errorField={errors.errorField}
+                      pathWasAutoResolved={pathWasAutoResolved}
+                      onBrowseClick={handleBrowseClick}
                     />
                   </FormRow>
-                )}
+                </FormSection>
 
-                {isExistingMode ? (
-                  <FormRow label="Branch" htmlFor="existing-branch">
-                    <ExistingBranchPicker
-                      selectedBranch={selectedExistingBranch}
-                      controller={existingBranchPicker}
-                    />
-                  </FormRow>
-                ) : (
-                  <FormRow label="Name" htmlFor="new-branch">
-                    <NewBranchInput
-                      value={branchInput}
-                      onChange={handleBranchInputChange}
-                      onBlur={handleBranchInputBlur}
-                      isCheckingBranch={isCheckingBranch}
-                      errorField={errors.errorField}
-                      branchWasAutoResolved={branchWasAutoResolved}
-                      prefixPickerOpen={prefixPickerOpen}
-                      onPrefixPickerOpenChange={setPrefixPickerOpen}
-                      prefixSuggestions={prefixSuggestions}
-                      prefixSelectedIndex={prefixSelectedIndex}
-                      onPrefixKeyDown={handlePrefixKeyDown}
-                      onPrefixSelect={handlePrefixSelectWrap}
-                      onPrefixCursorChange={setPrefixSelectedIndex}
-                      onPrefixInputFocus={handleBranchInputFocus}
-                      prefixListRef={prefixListRef}
-                      inputRef={newBranchInputRef}
-                    />
-                  </FormRow>
-                )}
-              </FormSection>
-
-              <FormSection title="Destination">
-                <FormRow label="Path" htmlFor="worktree-path">
-                  <WorktreePathPicker
-                    value={worktreePath}
-                    onChange={handleWorktreePathChange}
-                    isGeneratingPath={isGeneratingPath}
-                    errorField={errors.errorField}
-                    pathWasAutoResolved={pathWasAutoResolved}
-                    onBrowseClick={handleBrowseClick}
-                  />
-                </FormRow>
-              </FormSection>
-
-              {hasSetupSection && (
                 <FormSection title="Setup">
                   {showIssueRow && (
                     <FormRow
@@ -1241,64 +1372,78 @@ export function NewWorktreeDialog({
                       />
                     </FormRow>
                   )}
+
+                  <FormRow
+                    label="Agent"
+                    htmlFor="first-agent-selector-trigger"
+                    hint={
+                      firstAgent &&
+                      selectedRecipeStartsAgent && (
+                        <span className="text-xs text-text-secondary">
+                          This recipe already starts an agent, so {firstAgent.name} won't start on
+                          its own
+                        </span>
+                      )
+                    }
+                  >
+                    <AgentPickerPopover
+                      agents={agentOptions}
+                      selectedAgentId={firstAgent?.id ?? null}
+                      open={agentPickerOpen}
+                      onOpenChange={setAgentPickerOpen}
+                      onSelectAgent={handleFirstAgentSelect}
+                      listId="first-agent-selector"
+                    />
+                  </FormRow>
+
+                  {showPromptRow && (
+                    <FormRow label="Prompt" htmlFor="first-agent-prompt">
+                      <Textarea
+                        id="first-agent-prompt"
+                        data-testid="first-agent-prompt"
+                        rows={3}
+                        value={firstPrompt}
+                        onChange={(e) => setFirstPrompt(e.target.value)}
+                        placeholder="First task for the agent (optional)"
+                      />
+                    </FormRow>
+                  )}
                 </FormSection>
+              </FormGrid>
+
+              {initialPR && prBranchResolved === false && (
+                <Callout severity="error" title="Couldn't fetch the pull request's branch">
+                  <p>
+                    <span className="font-mono">{initialPR.headRef ?? "unknown"}</span> didn&apos;t
+                    come down from the remote. Run{" "}
+                    <span className="font-mono">git fetch origin</span>, then reopen this dialog.
+                  </p>
+                </Callout>
               )}
-            </FormGrid>
 
-            {initialPR && prBranchResolved === false && (
-              <div className="flex items-start gap-2 p-3 bg-status-warning/10 border border-status-warning/20 rounded-[var(--radius-md)]">
-                <AlertCircle className="w-4 h-4 text-status-warning mt-0.5 flex-shrink-0" />
-                <p className="text-sm text-status-warning">
-                  Could not fetch branch{" "}
-                  <span className="font-mono">{initialPR.headRef ?? "unknown"}</span> from the
-                  remote. The worktree will be created from the fallback branch instead. You can try
-                  running <span className="font-mono">git fetch origin</span> manually and reopening
-                  this dialog.
-                </p>
-              </div>
-            )}
+              {/* An error about one field sits under that field; this is for the
+                  rest — a branch list or folder picker that failed. */}
+              {errors.validationError && errors.errorField === null && (
+                <Callout severity="error" id="validation-error" role="alert">
+                  <p>{errors.validationError}</p>
+                </Callout>
+              )}
+            </>
+          )}
+        </AppDialog.Body>
 
-            {errors.validationError && (
-              <div
-                id="validation-error"
-                role="alert"
-                className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)]"
-              >
-                <AlertCircle className="w-4 h-4 text-status-error mt-0.5 flex-shrink-0" />
-                <p className="text-sm text-status-error">{errors.validationError}</p>
-              </div>
-            )}
-          </>
-        )}
-      </AppDialog.Body>
-
-      <AppDialog.Footer hint={isDismissing ? undefined : outcomeSummary}>
-        {isDismissing ? (
-          <>
-            <span role="alert" className="flex-1 text-sm text-text-secondary">
-              Discard unsaved changes?
-            </span>
-            <Button
-              ref={keepEditingButtonRef}
-              variant="ghost"
-              onClick={() => setIsDismissing(false)}
-            >
-              Keep editing
-            </Button>
-            <Button variant="destructive" onClick={onClose}>
-              Discard
-            </Button>
-          </>
-        ) : (
+        <AppDialog.Footer hint={outcomeSummary}>
           <div className="flex items-center gap-3 shrink-0">
-            <Button variant="ghost" size="sm" onClick={handleRequestClose}>
+            <Button variant="ghost" onClick={handleRequestClose}>
               Cancel
             </Button>
             <Button
               variant="contrast"
-              size="sm"
-              onClick={handleCreate}
-              disabled={submitDisabled}
+              onClick={() => {
+                if (!submitDisabled) handleCreate();
+              }}
+              aria-disabled={submitDisabled || undefined}
+              className={cn(submitDisabled && ARIA_DISABLED_CLASSES)}
               aria-keyshortcuts="Meta+Enter Control+Enter"
               data-testid="create-worktree-button"
             >
@@ -1311,8 +1456,22 @@ export function NewWorktreeDialog({
               </span>
             </Button>
           </div>
-        )}
-      </AppDialog.Footer>
-    </AppDialog>
+        </AppDialog.Footer>
+      </AppDialog>
+
+      <ConfirmDialog
+        isOpen={isDiscardConfirmOpen}
+        onClose={closeDiscardConfirm}
+        variant="destructive"
+        zIndex="nested"
+        title={discardTarget ? `Discard changes to '${discardTarget}'?` : "Discard changes?"}
+        description="The branch, destination and setup you've chosen aren't kept, and nothing is created."
+        confirmLabel="Discard changes"
+        onConfirm={() => {
+          closeDiscardConfirm();
+          onClose();
+        }}
+      />
+    </>
   );
 }

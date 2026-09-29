@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render as rtlRender, screen, fireEvent, type RenderOptions } from "@testing-library/react";
 import { SettingsInput } from "../SettingsInput";
 import { SettingsSelect } from "../SettingsSelect";
 import { SettingsNumberInput } from "../SettingsNumberInput";
@@ -11,6 +11,13 @@ import { SettingsChoicebox, type ChoiceboxOption } from "../SettingsChoicebox";
 import { SettingsCheckbox } from "../SettingsCheckbox";
 import { SettingsSwitch } from "../SettingsSwitch";
 import { PresetColorPicker } from "../PresetColorPicker";
+import { SettingsGroup } from "../SettingsGroup";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
+  return rtlRender(ui, { wrapper: TooltipProvider, ...options });
+}
 
 // Strip CSS comments without treating a `/*` inside a quoted string as one —
 // index.css opens with `@source not "../.lessons/**/*"`, whose glob contains a
@@ -106,6 +113,22 @@ function reduceMotionKilledClasses(css: string): Set<string> {
   return killed;
 }
 
+// The reset only renders while the value is modified, so it must be visible
+// whenever it renders: no hover/focus-gated reveal, no hidden resting state.
+function expectResetAlwaysVisible(reset: HTMLElement) {
+  const tokens = reset.className.split(/\s+/).filter(Boolean);
+  expect(tokens).not.toContain("invisible");
+  expect(tokens).not.toContain("hidden");
+  expect(tokens).not.toContain("opacity-0");
+  const gated = tokens.filter((t) =>
+    /^(group-hover|group-focus-within|hover|focus-visible|focus-within):(visible|opacity-100|block|inline-flex|flex)$/.test(
+      t
+    )
+  );
+  expect(gated).toEqual([]);
+  expect(reset.closest(".invisible, .hidden, .opacity-0")).toBeNull();
+}
+
 describe("SettingsInput", () => {
   it("renders label associated to input", () => {
     render(<SettingsInput label="Username" />);
@@ -169,14 +192,26 @@ describe("SettingsInput", () => {
     expect(ref).toHaveBeenCalledWith(expect.any(HTMLInputElement));
   });
 
-  it("hangs reset visibility off a group the field root actually owns", () => {
+  it("renders the reset button visible, not hover-gated, and scoped to the field root", () => {
     const { container } = render(<SettingsInput label="Name" isModified onReset={vi.fn()} />);
     const reset = screen.getByLabelText("Reset Name to default");
-    // Drop `group` from the root and the button stays hidden forever, while
-    // every other assertion in this file still passes.
-    expect(reset.className).toContain("invisible");
-    expect(reset.className).toContain("group-hover:visible");
-    expect(reset.closest(".group")).toBe(container.firstElementChild);
+    expectResetAlwaysVisible(reset);
+    // A keyboard reset hands focus back to the control inside this scope.
+    expect(reset.closest("[data-settings-reset-scope]")).toBe(container.firstElementChild);
+  });
+
+  it("renders the reset button visible inside a SettingsGroup, scoped to its row", () => {
+    const { container } = render(
+      <SettingsGroup>
+        <SettingsInput label="Name" isModified onReset={vi.fn()} />
+      </SettingsGroup>
+    );
+    const reset = screen.getByLabelText("Reset Name to default");
+    expectResetAlwaysVisible(reset);
+    const row = container.querySelector("[data-settings-row]");
+    expect(row).not.toBeNull();
+    expect(row!.hasAttribute("data-settings-reset-scope")).toBe(true);
+    expect(reset.closest("[data-settings-reset-scope]")).toBe(row);
   });
 });
 
@@ -318,15 +353,28 @@ describe("SettingsTextarea", () => {
     expect(ref).toHaveBeenCalledWith(expect.any(HTMLTextAreaElement));
   });
 
-  it("shows a reset button that resolves against the field root's group", () => {
+  it("shows a visible reset button scoped to the field root", () => {
     const onReset = vi.fn();
     const { container } = render(<SettingsTextarea label="Bio" isModified onReset={onReset} />);
     const reset = screen.getByLabelText("Reset Bio to default");
-    expect(reset.className).toContain("group-hover:visible");
-    expect(reset.closest(".group")).toBe(container.firstElementChild);
+    expectResetAlwaysVisible(reset);
+    expect(reset.closest("[data-settings-reset-scope]")).toBe(container.firstElementChild);
 
     fireEvent.click(reset);
     expect(onReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a visible reset button inside a SettingsGroup, scoped to its row", () => {
+    const { container } = render(
+      <SettingsGroup>
+        <SettingsTextarea label="Bio" isModified onReset={vi.fn()} />
+      </SettingsGroup>
+    );
+    const reset = screen.getByLabelText("Reset Bio to default");
+    expectResetAlwaysVisible(reset);
+    const row = container.querySelector("[data-settings-row]");
+    expect(row).not.toBeNull();
+    expect(reset.closest("[data-settings-reset-scope]")).toBe(row);
   });
 
   it("hides the reset button when disabled", () => {

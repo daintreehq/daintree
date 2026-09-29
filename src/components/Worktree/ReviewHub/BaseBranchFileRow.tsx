@@ -2,6 +2,7 @@ import type React from "react";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import type { FileDecoration } from "@shared/types/forge";
 import { cn } from "@/lib/utils";
+import { PathTail } from "@/components/ui/PathTail";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { getBaseBranchStatusConfig } from "./reviewHubUtils";
 
@@ -47,8 +48,8 @@ export function BaseBranchFileRow({
           type="button"
           onClick={onClick}
           className={cn(
-            "relative flex min-w-0 flex-1 items-baseline rounded text-left",
-            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+            "relative -mx-1 flex min-w-0 flex-1 items-baseline rounded px-1 text-left",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
           )}
         >
           <span
@@ -63,15 +64,15 @@ export function BaseBranchFileRow({
             {config.label}
           </span>
           {dir && (
-            <span
+            <PathTail
               data-testid="base-branch-file-row-dir"
               className={cn(
-                "shrink truncate font-mono text-2xs transition-colors",
+                "shrink font-mono text-2xs transition-colors",
                 "text-text-secondary group-hover/baserow:text-text-primary"
               )}
             >
-              {dir}/
-            </span>
+              {`${dir}/`}
+            </PathTail>
           )}
           <span
             data-testid="base-branch-file-row-base"
@@ -88,8 +89,8 @@ export function BaseBranchFileRow({
             data-testid="base-branch-file-row-churn"
             className="ml-2 flex items-center gap-1 shrink-0 text-3xs tabular-nums"
           >
-            {insertions > 0 && <span className="text-status-success/80">+{insertions}</span>}
-            {deletions > 0 && <span className="text-status-error/80">-{deletions}</span>}
+            {insertions > 0 && <span className="text-status-success">+{insertions}</span>}
+            {deletions > 0 && <span className="text-status-error">-{deletions}</span>}
           </div>
         )}
         {hasBadge && (
@@ -105,7 +106,7 @@ export function BaseBranchFileRow({
               onBadgeClick
                 ? "hover:bg-status-warning/25 transition-colors cursor-pointer"
                 : "cursor-default",
-              "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-warning"
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
             )}
           >
             {unresolvedDecoration!.badge}

@@ -9,7 +9,11 @@ import {
   UI_TYPING_LOCATOR_DWELL_MS,
   UI_TYPING_LOCATOR_REPORT_DWELL_MS,
 } from "@/lib/animationUtils";
-import { useTypingLocatorStore, type TypingLocatorKind } from "@/store/typingLocatorStore";
+import {
+  isRefusalLocatorKind,
+  useTypingLocatorStore,
+  type TypingLocatorKind,
+} from "@/store/typingLocatorStore";
 
 export function getTypingLocatorDwellMs(kind: TypingLocatorKind): number {
   return kind === "typing" ? UI_TYPING_LOCATOR_DWELL_MS : UI_TYPING_LOCATOR_REPORT_DWELL_MS;
@@ -68,7 +72,8 @@ export function TypingLocator() {
           "text-xs text-text-secondary",
           // `starting:` paints the first frame hidden so the entry actually
           // animates; Tailwind v4 `translate-*` sets `translate`, not `transform`.
-          "motion-safe:transition-[opacity,translate] motion-safe:starting:opacity-0 motion-safe:starting:-translate-y-1",
+          "transition-[opacity,translate] starting:opacity-0 starting:-translate-y-1",
+          "motion-reduce:transition-opacity motion-reduce:translate-none",
           isLeaving ? "opacity-0" : "opacity-100"
         )}
         style={{
@@ -76,7 +81,7 @@ export function TypingLocator() {
           transitionTimingFunction: isLeaving ? UI_EXIT_EASING : UI_ENTER_EASING,
         }}
       >
-        {message.kind === "file-refused" && (
+        {isRefusalLocatorKind(message.kind) && (
           <TriangleAlert className="size-3.5 shrink-0" aria-hidden="true" />
         )}
         <span

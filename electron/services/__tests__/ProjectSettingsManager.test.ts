@@ -214,7 +214,7 @@ describe("ProjectSettingsManager caching", () => {
     expect(loaded.turbopackEnabled).toBeUndefined();
   });
 
-  it.each(["off", "workbench", "action", "system"] as const)(
+  it.each(["off", "core", "full"] as const)(
     "round-trips daintreeMcpTier=%s through save/load",
     async (tier) => {
       await manager.saveProjectSettings(projectId, {
@@ -307,6 +307,25 @@ describe("ProjectSettingsManager caching", () => {
     expect(loaded.daintreeMcpTier).toBeUndefined();
   });
 
+  it.each([
+    ["workbench", "core"],
+    ["action", "core"],
+    ["system", "full"],
+  ] as const)(
+    "reads a daintreeMcpTier=%s written before the core/full split as %s",
+    async (stored, expected) => {
+      const settingsPath = path.join(tempDir, projectId, "settings.json");
+      await fs.writeFile(
+        settingsPath,
+        JSON.stringify({ runCommands: [], daintreeMcpTier: stored }),
+        "utf-8"
+      );
+
+      const loaded = await manager.getProjectSettings(projectId);
+      expect(loaded.daintreeMcpTier).toBe(expected);
+    }
+  );
+
   it("migrates the deprecated exposeDaintreeMcpToAgents flag to daintreeMcpTier on read", async () => {
     const settingsPath = path.join(tempDir, projectId, "settings.json");
     await fs.writeFile(
@@ -317,9 +336,9 @@ describe("ProjectSettingsManager caching", () => {
 
     const loaded = await manager.getProjectSettings(projectId);
     // The codec normalises legacy exposeDaintreeMcpToAgents: true to
-    // daintreeMcpTier: "workbench". The legacy field is still surfaced so
+    // daintreeMcpTier: "core". The legacy field is still surfaced so
     // callers in mixed-version cohorts don't break.
-    expect(loaded.daintreeMcpTier).toBe("workbench");
+    expect(loaded.daintreeMcpTier).toBe("core");
     expect(loaded.exposeDaintreeMcpToAgents).toBe(true);
   });
 
@@ -454,7 +473,7 @@ describe("ProjectSettingsManager caching", () => {
     expect(loaded.activeResourceEnvironment).toBe("default");
   });
 
-  it("migrates legacy exposeDaintreeMcpToAgents true to daintreeMcpTier workbench", async () => {
+  it("migrates legacy exposeDaintreeMcpToAgents true to daintreeMcpTier core", async () => {
     const settingsPath = path.join(tempDir, projectId, "settings.json");
     await fs.writeFile(
       settingsPath,
@@ -463,7 +482,7 @@ describe("ProjectSettingsManager caching", () => {
     );
 
     const loaded = await manager.getProjectSettings(projectId);
-    expect(loaded.daintreeMcpTier).toBe("workbench");
+    expect(loaded.daintreeMcpTier).toBe("core");
   });
 
   it("broadcasts a corruption toast when JSON.parse fails", async () => {

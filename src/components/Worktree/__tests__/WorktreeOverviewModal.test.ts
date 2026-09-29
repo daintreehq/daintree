@@ -288,4 +288,12 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       );
     });
   });
+
+  describe("Shift+click text selection (#12926)", () => {
+    it("cancels Shift+mousedown on the row before its modifier-aware onClick", () => {
+      expect(rowSource).toMatch(
+        /onMouseDown=\{suppressShiftClickTextSelection\}\s*onClick=\{\(e\) => \{\s*if \(e\.metaKey \|\| e\.ctrlKey \|\| e\.shiftKey\)/
+      );
+    });
+  });
 });

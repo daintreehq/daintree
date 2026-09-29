@@ -1,10 +1,10 @@
 import { useCallback, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Check } from "lucide-react";
 import { Sprout } from "@/components/icons";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
+import { Button } from "@/components/ui/button";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useIsDockPopoverChild } from "@/components/ui/DockPopoverChildContext";
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
@@ -320,6 +320,10 @@ function MoveToWorktreePickerBody({
         ref={inputRef}
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
+        // "Clear", not the family default: the no-match state owns "Clear
+        // search", and two buttons with one name are indistinguishable.
+        clearLabel="Clear"
+        onClear={() => onQueryChange("")}
         onKeyDown={handleNavigationKeyDown}
         placeholder="Search worktrees"
         aria-label="Search worktrees"
@@ -360,17 +364,9 @@ function MoveToWorktreePickerBody({
             query={deferredQuery}
             emptyMessage="No worktrees"
             noMatchContent={
-              <button
-                type="button"
-                onClick={clearSearch}
-                className={cn(
-                  "rounded-[var(--radius-sm)] px-2 py-1 text-xs text-text-secondary transition-colors",
-                  "hover:bg-overlay-subtle hover:text-text-primary",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-                )}
-              >
+              <Button variant="subtle" size="sm" onClick={clearSearch}>
                 Clear search
-              </button>
+              </Button>
             }
           />
         )}
@@ -455,12 +451,7 @@ function MoveToWorktreeRow({
         </span>
         {detail && <span className="truncate font-mono text-xs text-text-secondary">{detail}</span>}
       </span>
-      {isCurrent && (
-        <span className="flex shrink-0 items-center gap-1 text-xs text-text-secondary">
-          <Check className="size-3.5" aria-hidden="true" />
-          Current
-        </span>
-      )}
+      {isCurrent && <span className="shrink-0 text-xs text-text-secondary">Current</span>}
     </div>
   );
 }

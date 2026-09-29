@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, type CSSProperties } from "react";
+import React, { use, useState, useEffect, useRef, type CSSProperties } from "react";
+import { InsetSurfaceContext } from "@/components/ui/insetSurface";
 import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button, type ButtonProps } from "@/components/ui/button";
@@ -12,6 +13,11 @@ import { BANNER_TINT_ALPHA, type BannerSeverity } from "@shared/config/windowChr
 type ButtonVariant = "primary" | "accent" | "dismiss" | "danger" | "dangerFilled";
 
 const TINT_PERCENT = `${BANNER_TINT_ALPHA * 100}%`;
+/** The band's edge — the same /20 a `Callout` draws its border at. */
+const BORDER_PERCENT = "20%";
+
+/** Marks a banner root (see the root's `data-inline-status-banner`), so a stack of sibling banners can find each other. */
+const STACK_MEMBER_ATTR = "data-inline-status-banner";
 
 export interface BannerAction {
   id: string;
@@ -98,6 +104,13 @@ interface BaseInlineStatusBannerProps {
    */
   layout?: "stacked" | "strip" | "pane" | "inline";
   /**
+   * A box among inset content rather than a band across a pane's top: full
+   * hairline border and the `--radius-md` corner, the `Callout` recipe. Read
+   * from `InsetSurfaceContext` when omitted, so a dialog body or the settings
+   * column gets it without asking.
+   */
+  inset?: boolean;
+  /**
    * Secondary control rendered after the action buttons and before the
    * dismiss (e.g. a Popover trigger, a ghost link). This is the escape hatch
    * for surfacing a secondary affordance on an error banner without breaking
@@ -112,6 +125,7 @@ interface BaseInlineStatusBannerProps {
    * this forces the multi-line layout even without a `description`.
    */
   descriptionExtras?: React.ReactNode;
+  "data-testid"?: string;
 }
 
 /**
@@ -236,6 +250,37 @@ function ContextLine({ text, truncate }: { text: string; truncate: "end" | "midd
   );
 }
 
+/**
+ * Where focus goes when a focused banner leaves a stack of sibling banners:
+ * the first control in a banner below the one that left (which includes a
+ * banner that replaced it in the same commit), else the last control above
+ * it. Only banners in the same stack count — a terminal or form beside the
+ * stack is not "the next banner", and landing in a terminal would send the
+ * user's next keystrokes to its process. Undefined when no sibling banner
+ * has a control left, so the caller keeps its container fallback.
+ *
+ * The banner above is the anchor, not the one below: a replacement lands
+ * directly after it, while the banner below may no longer be adjacent.
+ */
+function nearestStackSurvivor(
+  candidates: HTMLElement[],
+  stack: Element | null,
+  above: Element | null
+): HTMLElement | undefined {
+  if (!stack?.isConnected) return undefined;
+  const inStack = candidates.filter(
+    (c) => c.closest(`[${STACK_MEMBER_ATTR}]`)?.parentElement === stack
+  );
+  if (!above?.isConnected || above.parentElement !== stack) return inStack[0];
+  return (
+    inStack.find(
+      (c) =>
+        !above.contains(c) &&
+        !!(above.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING)
+    ) ?? inStack[inStack.length - 1]
+  );
+}
+
 export function InlineStatusBanner({
   icon,
   title,
@@ -254,9 +299,11 @@ export function InlineStatusBanner({
   closeTitle,
   closeDisabled,
   layout = "stacked",
+  inset,
   trailingSlot,
   descriptionExtras,
   autoDismissAfter,
+  "data-testid": testId,
 }: InlineStatusBannerProps) {
   // Non-null only in the global banner host, where this banner owns the
   // window's title-bar band: it has to supply the drag region and top-edge
@@ -267,24 +314,17 @@ export function InlineStatusBanner({
   const reportSeverity = useTitleBarSurface();
   const isTitleBarSurface = reportSeverity !== null;
 
-  const prefersReducedMotion =
-    typeof window !== "undefined" &&
-    // `matchMedia` is guarded separately from `window`: the SSR check above only
-    // covers `window` being absent entirely, but a jsdom environment has a
-    // `window` with no `matchMedia` implementation. Calling it there threw and
-    // took the whole banner subtree down with it — which, for a component this
-    // widely mounted, turns one missing test-env stub into an unrelated-looking
-    // render failure somewhere else on the page.
-    ((typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches) ||
-      (typeof document !== "undefined" &&
-        (document.body.getAttribute("data-reduce-animations") === "true" ||
-          document.body.getAttribute("data-performance-mode") === "true")));
+  // Reduced motion keeps the entrance's fade and drops only its slide (the
+  // `motion-reduce:` utilities below), so only performance mode, which
+  // suppresses every transition, skips the entrance outright.
+  const performanceMode =
+    typeof document !== "undefined" &&
+    document.body.getAttribute("data-performance-mode") === "true";
   // The title-bar surface never slides in: main tints the native caption strip
   // the instant the severity is reported, and a banner easing in under an
   // already-tinted strip reads as two surfaces disagreeing. Inline banners
   // keep their entrance.
-  const shouldAnimate = animated && !prefersReducedMotion && !isTitleBarSurface;
+  const shouldAnimate = animated && !performanceMode && !isTitleBarSurface;
 
   const [isVisible, setIsVisible] = useState(!shouldAnimate);
   const rafRef = useRef<number | null>(null);
@@ -355,12 +395,23 @@ export function InlineStatusBanner({
   // chrome behind an open dialog. Captured on focus, since the ref is gone by
   // the time the unmount cleanup runs.
   const focusHomeRef = useRef<HTMLElement | null>(null);
+  // The banner's stack and the banner directly above it in that stack, so a
+  // banner in a stack hands focus to whatever now stands where it did rather
+  // than to the top of its container — the user keeps their place instead of
+  // being thrown back up the stack.
+  const focusStackRef = useRef<{ stack: Element | null; above: Element | null }>({
+    stack: null,
+    above: null,
+  });
   const handleFocusCapture = (e: React.FocusEvent) => {
     const root = rootRef.current;
     if (!root || !(e.target instanceof Node) || !root.contains(e.target)) return;
     focusWithinRef.current = true;
     focusHomeRef.current =
       root.closest<HTMLElement>("[role='dialog'], [role='alertdialog']") ?? root.parentElement;
+    let above = root.previousElementSibling;
+    while (above && !above.hasAttribute(STACK_MEMBER_ATTR)) above = above.previousElementSibling;
+    focusStackRef.current = { stack: root.parentElement, above };
   };
   const handleBlurCapture = (e: React.FocusEvent) => {
     const root = rootRef.current;
@@ -379,10 +430,11 @@ export function InlineStatusBanner({
     () => () => {
       if (!focusWithinRef.current) return;
       const home = focusHomeRef.current;
+      const { stack, above } = focusStackRef.current;
       requestAnimationFrame(() => {
         if (document.activeElement && document.activeElement !== document.body) return;
-        const nearest = home?.isConnected ? getVisibleTabbableElements(home)[0] : undefined;
-        restoreFocusTo(nearest);
+        const candidates = home?.isConnected ? getVisibleTabbableElements(home) : [];
+        restoreFocusTo(nearestStackSurvivor(candidates, stack, above) ?? candidates[0]);
       });
     },
     []
@@ -411,6 +463,17 @@ export function InlineStatusBanner({
   const isPane = layout === "pane";
   const isInline = layout === "inline";
   const wrapsControls = isStrip || isPane;
+  const insetFromSurface = use(InsetSurfaceContext);
+  const isInset = inset ?? insetFromSurface;
+  const isUntinted = isNeutral || (isInline && severity !== "error");
+  // A tinted band draws its edge inline, in its severity's colour; an untinted
+  // one needs a class. Inset, that edge wraps the whole box; at a pane's top it
+  // is the inline layout's bottom rule.
+  const edgeClass = isInset
+    ? cn("rounded-[var(--radius-md)]", isUntinted && "border border-border-default")
+    : isInline
+      ? "border-b border-divider"
+      : undefined;
 
   const handleClose = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -499,14 +562,21 @@ export function InlineStatusBanner({
           <Button
             key={action.id}
             variant={variant}
-            size={action.iconOnly ? (isInline ? "icon-xs" : "icon-sm") : "sm"}
+            // Handle for the forced-colors block in index.css, which restores
+            // the recommended action's heavier border once the UA has
+            // flattened outline and ghost to the same stroke.
+            data-notification-action={
+              action.variant === undefined ||
+              action.variant === "primary" ||
+              action.variant === "dangerFilled"
+                ? "primary"
+                : "secondary"
+            }
+            size={action.iconOnly ? (isInline ? "icon-xs" : "icon-sm") : isInline ? "xs" : "sm"}
             // A raised, shadowed button reads louder than a routine one-line
-            // notice should; the ring alone marks it as a control. `sm` type
-            // on the `xs` height: the `xs` size's 10px label is too small to
-            // be the one thing on the row the user acts on.
+            // notice should; the ring alone marks it as a control.
             className={cn(
               isInline && "shadow-none inset-shadow-none",
-              isInline && !action.iconOnly && "h-6 px-2.5",
               action.disabled && !action.loading && ARIA_DISABLED_INERT_CLASSES
             )}
             // `aria-disabled`, not `disabled`: most of these flip while the
@@ -550,7 +620,7 @@ export function InlineStatusBanner({
         stacked
           ? "flex flex-col gap-2 px-3 py-2 shrink-0"
           : isInline
-            ? "flex items-start px-3 py-2 shrink-0 border-b border-divider"
+            ? "flex items-start px-3 py-2 shrink-0"
             : "flex items-center justify-between gap-3 px-3 py-2 shrink-0",
         // The strip wraps its controls beneath the text once the container is
         // narrower than a two-line sentence plus three actions can share.
@@ -558,10 +628,13 @@ export function InlineStatusBanner({
         // Scoped, not bare: `transition` carries box-shadow, every colour
         // property and filter along with it, and this banner's entry is an
         // opacity-and-slide. 250ms is BANNER_ENTER_DURATION from the motion
-        // scale, which is what generates this utility.
-        shouldAnimate && "transition-[opacity,translate] duration-250",
+        // scale, which is what generates this utility; the curve is the shared
+        // entry easing.
+        shouldAnimate &&
+          "transition-[opacity,translate] duration-250 ease-[var(--ease-spring-critical)] motion-reduce:transition-opacity motion-reduce:translate-none",
         shouldAnimate && (isVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2"),
-        (isNeutral || (isInline && severity !== "error")) && "bg-overlay-subtle",
+        isUntinted && "bg-overlay-subtle",
+        edgeClass,
         // The native caption strip is a fixed 48px tall. A shorter banner would
         // let the tint applied to that strip bleed over the toolbar beneath it,
         // so a title-bar banner always fills the band it is colouring.
@@ -570,15 +643,22 @@ export function InlineStatusBanner({
         className
       )}
       style={{
-        ...(isNeutral || (isInline && severity !== "error")
+        ...(isUntinted
           ? undefined
-          : {
-              backgroundColor: `color-mix(in oklab, var(${colorVar}) ${TINT_PERCENT}, transparent)`,
-              borderBottom: `1px solid color-mix(in oklab, var(${colorVar}) 20%, transparent)`,
-            }),
+          : isInset
+            ? {
+                backgroundColor: `color-mix(in oklab, var(${colorVar}) ${TINT_PERCENT}, transparent)`,
+                border: `1px solid color-mix(in oklab, var(${colorVar}) ${BORDER_PERCENT}, transparent)`,
+              }
+            : {
+                backgroundColor: `color-mix(in oklab, var(${colorVar}) ${TINT_PERCENT}, transparent)`,
+                borderBottom: `1px solid color-mix(in oklab, var(${colorVar}) ${BORDER_PERCENT}, transparent)`,
+              }),
         ...windowControlsInset,
       }}
       role={role}
+      data-testid={testId}
+      data-inline-status-banner=""
       onFocusCapture={handleFocusCapture}
       onBlurCapture={handleBlurCapture}
       aria-live={ariaLive}

@@ -550,3 +550,66 @@ describe("PluginDetailPane blocklist (#10891)", () => {
     expect(screen.queryByText(/Blocked from loading/)).toBeNull();
   });
 });
+
+describe("PluginDetailPane settings deep link", () => {
+  function withSettings(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo {
+    const base = makePlugin(overrides);
+    return {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        contributes: { ...base.manifest.contributes, settings: [{ id: "region" }] },
+      },
+    };
+  }
+
+  function renderWithRequest(
+    plugin: LoadedPluginInfo,
+    settingsRequest: { key?: string; nonce: number } | null,
+    onSettingsRequestHandled = vi.fn()
+  ) {
+    render(
+      <TooltipProvider>
+        <PluginDetailPane
+          plugin={plugin}
+          checkingUpdate={false}
+          upToDate={false}
+          onUninstall={vi.fn()}
+          onCheckForUpdate={vi.fn()}
+          settingsRequest={settingsRequest}
+          onSettingsRequestHandled={onSettingsRequestHandled}
+        />
+      </TooltipProvider>
+    );
+    return onSettingsRequestHandled;
+  }
+
+  it("opens the Settings tab, focuses it, and reports a key-less request handled", () => {
+    const handled = renderWithRequest(withSettings(), { nonce: 4 });
+    const tab = screen.getByRole("tab", { name: "Settings" });
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    // The destination holds focus — not the manager's search box.
+    expect(document.activeElement).toBe(tab);
+    expect(handled).toHaveBeenCalledWith(4);
+  });
+
+  it("offers Settings to a stopped plugin whose only settings are its custom view", () => {
+    const base = makePlugin({ disabled: true });
+    const viewOnly: LoadedPluginInfo = {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        contributes: {
+          ...base.manifest.contributes,
+          views: [{ id: "prefs", componentPath: "dist/prefs.js", location: "settings" }],
+        },
+      },
+    };
+    renderWithRequest(viewOnly, null);
+    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
+      "true"
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(screen.getByText("Available when the plugin is enabled")).toBeTruthy();
+  });
+});

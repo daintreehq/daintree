@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { DaintreeTourHost } from "@/components/Tour/DaintreeTourHost";
+import { TourHost } from "@/components/Tour/TourHost";
 import type { WorktreeState, Project, ProjectCreationIdentity } from "@shared/types";
 import type { ProjectOpenDisposition } from "@shared/types/windowOpen";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
@@ -22,7 +22,7 @@ import { launchPanelKind } from "@/registry/panelKindLaunch";
 import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
-import { ConfirmDialog } from "./components/ui/ConfirmDialog";
+import { StopProjectConfirmDialog } from "./components/Project/StopProjectConfirmDialog";
 import { usePilotStore } from "@/store/pilotStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { Toaster } from "./components/ui/toaster";
@@ -56,6 +56,7 @@ import {
   LazyPluginArchiveInstallConfirmDialog,
   LazyPluginMcpConfirmDialog,
   LazyPluginQuickPickDialog,
+  LazyPluginSendToAgentDialog,
   LazyPluginInputBoxDialog,
   LazyPluginConfirmPromptDialog,
   LazyPluginCapabilityConfirmDialog,
@@ -72,7 +73,6 @@ import {
   LazyRecipeConflictDialog,
   LazyOnboardingFlow,
   LazyGettingStartedChecklist,
-  LazyCelebrationConfetti,
 } from "./lazyPanels";
 
 interface ModalHostLayerProps {
@@ -119,6 +119,8 @@ interface ModalHostLayerProps {
   settingsTab: SettingsTab | undefined;
   settingsSubtab: string | undefined;
   settingsSectionId: string | undefined;
+  /** Bumped by every targeted open, so a repeat of the same target still navigates. */
+  settingsNavNonce: number;
   refreshSettings: () => Promise<void>;
   currentProject: Project | null;
   isShortcutsOpen: boolean;
@@ -214,6 +216,7 @@ export function ModalHostLayer({
   settingsTab,
   settingsSubtab,
   settingsSectionId,
+  settingsNavNonce,
   refreshSettings,
   currentProject,
   isShortcutsOpen,
@@ -342,6 +345,7 @@ export function ModalHostLayer({
               selectNext={sendToAgentPalette.selectNext}
               selectItem={sendToAgentPalette.selectItem}
               confirmSelection={sendToAgentPalette.confirmSelection}
+              setSelectedIndex={sendToAgentPalette.setSelectedIndex}
             />
           </Suspense>
         )}
@@ -390,6 +394,7 @@ export function ModalHostLayer({
               onSelect={worktreePalette.selectWorktree}
               onConfirm={worktreePalette.confirmSelection}
               onClose={worktreePalette.close}
+              onSelectIndex={worktreePalette.setSelectedIndex}
             />
           </Suspense>
         )}
@@ -422,6 +427,7 @@ export function ModalHostLayer({
               onQueryChange={panelPalette.setQuery}
               onSelectPrevious={panelPalette.selectPrevious}
               onSelectNext={panelPalette.selectNext}
+              onHoverIndex={panelPalette.setSelectedIndex}
               onSelect={(kind) => {
                 const result = panelPalette.handleSelect(kind);
                 if (!result) return;
@@ -538,19 +544,11 @@ export function ModalHostLayer({
           </Suspense>
         )}
       </ErrorBoundary>
-      <ConfirmDialog
-        isOpen={projectSwitcherPalette.stopConfirmProjectId != null}
-        onClose={() => {
-          if (projectSwitcherPalette.isStoppingProject) return;
-          projectSwitcherPalette.setStopConfirmProjectId(null);
-        }}
-        title={`Stop project?`}
-        description="This will terminate all running sessions in this project. This can't be undone."
-        confirmLabel="Stop project"
-        cancelLabel="Cancel"
+      <StopProjectConfirmDialog
+        projectId={projectSwitcherPalette.stopConfirmProjectId}
+        isStopping={projectSwitcherPalette.isStoppingProject}
+        onClose={() => projectSwitcherPalette.setStopConfirmProjectId(null)}
         onConfirm={projectSwitcherPalette.confirmStopProject}
-        isConfirmLoading={projectSwitcherPalette.isStoppingProject}
-        variant="destructive"
       />
 
       <ErrorBoundary
@@ -667,6 +665,7 @@ export function ModalHostLayer({
               defaultTab={settingsTab}
               defaultSubtab={settingsSubtab}
               defaultSectionId={settingsSectionId}
+              navNonce={settingsNavNonce}
               onSettingsChange={refreshSettings}
               projectId={currentProject?.id ?? null}
             />
@@ -760,6 +759,13 @@ export function ModalHostLayer({
         <ErrorBoundary variant="component" componentName="PluginQuickPickDialog">
           <Suspense fallback={null}>
             <LazyPluginQuickPickDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+      {isStateLoaded && (
+        <ErrorBoundary variant="component" componentName="PluginSendToAgentDialog">
+          <Suspense fallback={null}>
+            <LazyPluginSendToAgentDialog />
           </Suspense>
         </ErrorBoundary>
       )}
@@ -954,7 +960,7 @@ export function ModalHostLayer({
           </Suspense>
         </ErrorBoundary>
       )}
-      {isStateLoaded && <DaintreeTourHost />}
+      {isStateLoaded && <TourHost />}
       {currentProject !== null && gettingStarted.visible && gettingStarted.checklist && (
         <ErrorBoundary
           variant="component"
@@ -980,17 +986,6 @@ export function ModalHostLayer({
         {isPilotOpen && (
           <Suspense fallback={null}>
             <LazyPilotView />
-          </Suspense>
-        )}
-      </ErrorBoundary>
-      <ErrorBoundary
-        variant="component"
-        componentName="CelebrationConfetti"
-        resetKeys={[Number(gettingStarted.showCelebration)]}
-      >
-        {gettingStarted.showCelebration && (
-          <Suspense fallback={null}>
-            <LazyCelebrationConfetti />
           </Suspense>
         )}
       </ErrorBoundary>

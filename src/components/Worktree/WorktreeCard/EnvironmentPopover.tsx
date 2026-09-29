@@ -4,7 +4,6 @@ import {
   Check,
   Cloud,
   Container,
-  Copy,
   Cpu,
   Database,
   ExternalLink,
@@ -21,9 +20,9 @@ import { Hourglass, TriangleAlert } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { Button } from "../../ui/button";
+import { CopyButton } from "../../ui/CopyButton";
 import { Spinner } from "../../ui/Spinner";
 import { SpinningIcon } from "../../ui/SpinningIcon";
-import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { systemClient } from "@/clients/systemClient";
 import { formatTimeAgo } from "@/utils/timeAgo";
@@ -124,7 +123,6 @@ export function EnvironmentPopover({
   const [now, setNow] = useState(() => Date.now());
   const pendingAnnounceRef = useRef<number | undefined>(undefined);
   const contentRef = useRef<HTMLDivElement>(null);
-  const { copied, copy } = useCopyWithFeedback({ announcement: "Endpoint copied" });
 
   const EnvironmentIcon = (environmentIcon && ENVIRONMENT_ICONS[environmentIcon]) || Server;
   const environmentName = worktreeMode && worktreeMode !== "local" ? worktreeMode : "Local";
@@ -234,7 +232,7 @@ export function EnvironmentPopover({
       <PopoverContent
         side="top"
         align="start"
-        className="w-96 max-w-[calc(100vw-2rem)] p-0 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-text-secondary"
+        className="w-96 max-w-[calc(100vw-2rem)] p-0 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         aria-label={`${environmentName} environment`}
         ref={contentRef}
         onOpenAutoFocus={(event) => {
@@ -328,19 +326,11 @@ export function EnvironmentPopover({
                   >
                     {resourceEndpoint}
                   </span>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label="Copy endpoint"
-                        onClick={() => void copy(resourceEndpoint)}
-                      >
-                        {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="top">Copy endpoint</TooltipContent>
-                  </Tooltip>
+                  <CopyButton
+                    text={resourceEndpoint}
+                    aria-label="Copy endpoint"
+                    announcement="Endpoint copied"
+                  />
                   {isOpenableUrl(resourceEndpoint) && (
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -348,6 +338,7 @@ export function EnvironmentPopover({
                           variant="ghost"
                           size="icon-xs"
                           aria-label="Open endpoint in browser"
+                          className="[&_svg]:size-3.5"
                           onClick={() => void systemClient.openExternal(resourceEndpoint)}
                         >
                           <ExternalLink aria-hidden="true" />

@@ -760,30 +760,15 @@ export async function setupWindowServices(
   // here would hold the worktree load below — and the window's own reveal —
   // behind other projects' renderers.
   if (opts.projectViewManager && opts.backgroundProjectIds?.length) {
-    enqueueBackgroundRestores({
+    const projectViewManager = opts.projectViewManager;
+    queueWindowBackgroundProjects({
       windowId: win.id,
       // Read lazily: the window can close between here and execution, and a
       // captured reference would keep a disposed manager alive.
       getManager: () => opts.projectViewManager,
-      projectIds: [...opts.backgroundProjectIds],
-      resolveWorkspacePath: (projectId) => {
-        const workspacePath =
-          resolveRestoreWorkspace(projectId, {
-            getProjectById: (id) => projectStore.getProjectById(id),
-            getScratchById: (id) => scratchStore.getScratchById(id),
-          }).workspace?.path ?? null;
-        // A row is not a folder: an unmounted drive or a deleted directory
-        // still resolves, and a restore that reaches hydration anyway respawns
-        // its agents under the cwd fallback — the home directory — with this
-        // project's identity. The queue treats null as "gone" and skips it; the
-        // user can still open the project by hand once the folder is back.
-        return workspacePath !== null && fs.existsSync(workspacePath) ? workspacePath : null;
-      },
-      isOwnedElsewhere: (projectId) =>
-        findOtherProjectOwner(windowRegistry, projectId, {
-          windowId: win.id,
-          projectViewManager: opts.projectViewManager,
-        }) !== null,
+      projectViewManager,
+      windowRegistry,
+      projectIds: opts.backgroundProjectIds,
     });
   }
 
@@ -1049,4 +1034,41 @@ export async function setupWindowServices(
   });
 
   return "ok";
+}
+
+/**
+ * Queue a window's background projects (#12320). Shared by window setup and by
+ * a single-crash fleet restore handing the recovery window the projects its
+ * saved record carried (#12801).
+ */
+export function queueWindowBackgroundProjects(opts: {
+  windowId: number;
+  getManager: () => import("./ProjectViewManager.js").ProjectViewManager | undefined;
+  projectViewManager: import("./ProjectViewManager.js").ProjectViewManager;
+  windowRegistry: WindowRegistry | undefined;
+  projectIds: readonly string[];
+}): void {
+  enqueueBackgroundRestores({
+    windowId: opts.windowId,
+    getManager: opts.getManager,
+    projectIds: [...opts.projectIds],
+    resolveWorkspacePath: (projectId) => {
+      const workspacePath =
+        resolveRestoreWorkspace(projectId, {
+          getProjectById: (id) => projectStore.getProjectById(id),
+          getScratchById: (id) => scratchStore.getScratchById(id),
+        }).workspace?.path ?? null;
+      // A row is not a folder: an unmounted drive or a deleted directory
+      // still resolves, and a restore that reaches hydration anyway respawns
+      // its agents under the cwd fallback — the home directory — with this
+      // project's identity. The queue treats null as "gone" and skips it; the
+      // user can still open the project by hand once the folder is back.
+      return workspacePath !== null && fs.existsSync(workspacePath) ? workspacePath : null;
+    },
+    isOwnedElsewhere: (projectId) =>
+      findOtherProjectOwner(opts.windowRegistry, projectId, {
+        windowId: opts.windowId,
+        projectViewManager: opts.projectViewManager,
+      }) !== null,
+  });
 }

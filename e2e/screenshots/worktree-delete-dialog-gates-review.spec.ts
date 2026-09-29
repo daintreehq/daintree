@@ -272,7 +272,7 @@ async function toggle(page: Page, labelText: string): Promise<void> {
   await page
     .locator(`${SEL.worktree.deleteDialog} label`, { hasText: labelText })
     .first()
-    .locator('input[type="checkbox"]')
+    .getByRole("checkbox")
     .click();
   await settle(page, 400);
 }

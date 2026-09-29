@@ -166,7 +166,7 @@ vi.mock("../persistence/auditRingStore.js", () => ({
   },
 }));
 
-const paneTokenTiers = vi.hoisted(() => new Map<string, "workbench" | "action" | "system">());
+const paneTokenTiers = vi.hoisted(() => new Map<string, "core" | "full">());
 
 vi.mock("../McpPaneConfigService.js", () => ({
   mcpPaneConfigService: {
@@ -797,7 +797,10 @@ describe("McpServerService", () => {
     );
   });
 
-  it("returns browser.captureScreenshot bytes as an MCP image content block", async () => {
+  it("keeps browser.captureScreenshot off even the full tool set, so its bytes never leave", async () => {
+    // The screenshot tool used to reach the `action` tier and came back as an
+    // MCP image block. It is on neither in-app tool set now, nor in the
+    // approval ceiling, so even a `full` pane is refused before dispatch.
     const dispatchMock = vi.fn((): ActionDispatchResult => ({
       ok: true,
       result: { pngBase64: "aGVsbG8=", width: 1024, height: 768 },
@@ -815,31 +818,26 @@ describe("McpServerService", () => {
       dispatchAction: dispatchMock,
     });
 
-    // browser.captureScreenshot lives in the `action` tier — connect with a
-    // token that resolves there so the tool is permitted.
-    paneTokenTiers.set("token-action", "action");
+    paneTokenTiers.set("token-full", "full");
     await service.start(window);
     const { client, transport } = await connectClient(service.currentPort!, {
-      Authorization: "Bearer token-action",
+      Authorization: "Bearer token-full",
     });
     transports.push(transport);
+
+    const listed = await client.listTools();
+    expect(listed.tools.map((t) => t.name)).not.toContain("browser.captureScreenshot");
 
     const result = await client.callTool({
       name: "browser.captureScreenshot",
       arguments: {},
     });
-    const content = result.content as Array<Record<string, unknown>>;
+    const content = result.content as Array<{ type: string; text?: string }>;
 
-    expect(result.isError).toBeFalsy();
-    // The base64 PNG is surfaced as a real image block, not text-serialized.
-    expect(content[0]).toMatchObject({
-      type: "image",
-      mimeType: "image/png",
-      data: "aGVsbG8=",
-    });
-    expect(content[1]).toMatchObject({ type: "text" });
-    expect(String(content[1]!.text)).toContain("1024×768");
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(result.isError).toBe(true);
+    expect(content.some((block) => block.type === "image")).toBe(false);
+    expect(content[0]?.text).toContain("TIER_NOT_PERMITTED");
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("threads the external bearer's identity through to the renderer dispatch payload (#9157)", async () => {

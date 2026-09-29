@@ -1,17 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { Callout } from "@/components/ui/Callout";
 import type { ReactNode } from "react";
 import { AlertCircle, AlertTriangle, Check, ChevronRight, Copy, FolderOpen } from "lucide-react";
 import * as semver from "semver";
 import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
 import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import {
+  SETTINGS_CONTROL_WIDTH,
+  SettingsDependents,
+  SettingsGroup,
+  SettingsInlineError,
+  SettingsRow,
+} from "./SettingsGroup";
 import { SettingsChoicebox } from "./SettingsChoicebox";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import { SettingsInput } from "./SettingsInput";
@@ -31,9 +40,16 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
-import type { AgentModelConfig } from "@shared/config/agentRegistry";
+import {
+  getSavedAssistantModelId,
+  resolveAssistantModelId,
+  type AgentModelConfig,
+} from "@shared/config/agentRegistry";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { assistantSkipsDaintreeConfirmations } from "@shared/utils/assistantDaintreeConfirmations";
 import type {
+  HelpAssistantDaintreeConfirmations,
   HelpAssistantIdleHibernateMinutes,
   HelpAssistantSettings,
   HelpAssistantTier,
@@ -55,27 +71,31 @@ const CUSTOM_ARGS_DEBOUNCE_MS = 500;
 type SaveGroup = "agent" | "launch" | "behavior" | "security" | "privacy" | "content";
 
 const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
-  modelId: "agent",
+  modelIds: "agent",
   customArgs: "launch",
   debugLogging: "launch",
   docSearch: "behavior",
   daintreeControl: "behavior",
+  runbookSearch: "behavior",
   idleHibernateMinutes: "launch",
   tier: "security",
   bypassPermissions: "security",
+  daintreeConfirmations: "security",
   auditRetention: "privacy",
   loadGlobalHooksAndServers: "content",
 };
 
 const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
-  "modelId",
+  "modelIds",
   "customArgs",
   "debugLogging",
   "docSearch",
   "daintreeControl",
+  "runbookSearch",
   "idleHibernateMinutes",
   "tier",
   "bypassPermissions",
+  "daintreeConfirmations",
   "auditRetention",
   "loadGlobalHooksAndServers",
 ];
@@ -97,17 +117,65 @@ function copySetting<K extends keyof HelpAssistantSettings>(
   target[key] = source[key];
 }
 
+type ModelIdMap = HelpAssistantSettings["modelIds"];
+
+// A `modelIds` patch names only the agents it changes; `null` removes that
+// agent's entry, mirroring how main merges it.
+function mergeModelIds(current: ModelIdMap, patch: ModelIdMap): ModelIdMap {
+  const next = { ...current };
+  for (const [agentId, modelId] of Object.entries(patch)) {
+    if (modelId === null) delete next[agentId];
+    else next[agentId] = modelId;
+  }
+  return next;
+}
+
+function applySettingsPatch(
+  current: HelpAssistantSettings,
+  patch: Partial<HelpAssistantSettings>
+): HelpAssistantSettings {
+  const next = { ...current, ...patch };
+  if (patch.modelIds) next.modelIds = mergeModelIds(current.modelIds, patch.modelIds);
+  return next;
+}
+
+// Puts the attempted keys back, unless a later change has already moved them.
+// Model entries are restored per agent so a failed save for one agent never
+// touches another agent's choice.
+function revertSettingsPatch(
+  current: HelpAssistantSettings,
+  previous: HelpAssistantSettings,
+  patch: Partial<HelpAssistantSettings>
+): HelpAssistantSettings {
+  const reverted: HelpAssistantSettings = { ...current };
+  for (const key of patchedKeys(patch)) {
+    if (key === "modelIds") continue;
+    if (current[key] === patch[key]) copySetting(reverted, previous, key);
+  }
+  if (patch.modelIds) {
+    const restore: ModelIdMap = {};
+    for (const [agentId, attempted] of Object.entries(patch.modelIds)) {
+      if (getSavedAssistantModelId(current.modelIds, agentId) !== attempted) continue;
+      restore[agentId] = getSavedAssistantModelId(previous.modelIds, agentId);
+    }
+    reverted.modelIds = mergeModelIds(current.modelIds, restore);
+  }
+  return reverted;
+}
+
 const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
-  modelId: "Model",
+  modelIds: "Model",
   customArgs: "Custom CLI args",
   debugLogging: "Debug logging",
   docSearch: "Search documentation",
   daintreeControl: "Daintree control",
+  runbookSearch: "Follow runbooks",
   idleHibernateMinutes: "Hibernate after",
-  tier: "Capability tier",
+  tier: "Tool set",
   bypassPermissions: "Bypass",
   auditRetention: "Audit log retention",
   loadGlobalHooksAndServers: "Load my MCP servers and hooks",
+  daintreeConfirmations: "Daintree confirmations",
 };
 
 interface SaveFailure {
@@ -118,55 +186,49 @@ interface SaveFailure {
 const DEFAULT_SETTINGS: HelpAssistantSettings = {
   docSearch: true,
   daintreeControl: true,
-  tier: "action",
+  runbookSearch: true,
+  tier: "core",
   bypassPermissions: false,
   auditRetention: 7,
-  modelId: "",
+  modelIds: {},
   customArgs: "",
   idleHibernateMinutes: 5,
   debugLogging: false,
   loadGlobalHooksAndServers: false,
+  daintreeConfirmations: "inherit",
 };
 
 // Radix Select rejects an empty-string item value, so the "use the CLI default"
 // choice carries a sentinel in the dropdown and maps back to "" on persist.
 const MODEL_DEFAULT_SENTINEL = "__default__";
 
-// One sentence of consequence beside the select; the rest lives in the tier's
+// One sentence of consequence beside the select; the rest lives in the tool set's
 // disclosure with the action inventory, where it can be read in full.
 const TIER_SUMMARIES: Record<HelpAssistantTier, string> = {
-  workbench: "Reads project state but can't change it",
-  action: "Full in-app orchestration, including closing terminals and deleting worktrees",
-  system: "Adds git, forge and on-disk writes outside the app. Reserve for trusted automation.",
+  core: "Create worktrees, launch and prompt agents, and move, rename or close terminals",
+  full: "Adds recipes, workflows, project checks, forge and git reads, context tools and diagnostics",
 };
 
-// Descriptive exclusive choice: each tier's consequence stays readable in full, so the
-// one that grants destructive and external writes can't hide behind a truncated label.
+// Descriptive exclusive choice: each tool set's consequence stays readable in full, so
+// the larger one can't hide what it adds behind a truncated label.
 const TIER_CHOICES: { value: HelpAssistantTier; label: string; description: string }[] = [
-  { value: "workbench", label: "Workbench", description: TIER_SUMMARIES.workbench },
-  { value: "action", label: "Action (default)", description: TIER_SUMMARIES.action },
-  { value: "system", label: "System", description: TIER_SUMMARIES.system },
+  { value: "core", label: "Core (default)", description: TIER_SUMMARIES.core },
+  { value: "full", label: "Full", description: TIER_SUMMARIES.full },
 ];
 
 const TIER_DETAILS: Record<HelpAssistantTier, string> = {
-  workbench:
-    "The assistant can read project state but can't change it. Best when you're handing off observation tasks.",
-  action:
-    "The assistant can spawn agents, send prompts, read terminal state, close terminals, and delete worktrees in this project or tear down their resources. Deletions normally ask you to confirm each time, unless you have granted the assistant automation for them, and they run whatever teardown commands the project configures. Most assistance tasks need this.",
-  system:
-    "Adds git staging, commits, fetches and pushes; forge issue/PR reads and writes; worktree creation at any path on disk; clipboard and CopyTree-to-disk writes; and arming terminals for automation.",
+  core: "The assistant can create worktrees, launch agents and send them prompts, read and wait on terminals, and move, rename or close them. It can delete a worktree it created, which asks you to confirm unless Daintree confirmations says otherwise. This covers most orchestration and keeps the tool list the model rereads every turn short.",
+  full: "Adds recipes and project checks, starting work on an issue, forge PR, issue and CI reads, git activity, CopyTree context, deleting any worktree and managing its resources, and diagnostics. Deletions and teardowns ask you to confirm unless Daintree confirmations says otherwise. Git and forge writes and file edits aren't available in either tool set.",
 };
 
 const TIER_SHORT_LABEL: Record<HelpAssistantTier, string> = {
-  workbench: "Workbench",
-  action: "Action",
-  system: "System",
+  core: "Core",
+  full: "Full",
 };
 
 const TIER_RANK: Record<HelpAssistantTier, number> = {
-  workbench: 0,
-  action: 1,
-  system: 2,
+  core: 0,
+  full: 1,
 };
 
 // Format a whole-seconds grant countdown as "Xm Ys" / "Xm" / "Ys". Exported
@@ -236,8 +298,22 @@ interface BypassCopy {
 // Scoped to new sessions because both the tier and the bypass preference are
 // provision-time snapshots — a session already running keeps the tier it was
 // minted with, which the live-status card reports.
-const tierBoundsNewSessions = (tier: HelpAssistantTier): string =>
-  `New sessions are limited to the Daintree actions the ${TIER_SHORT_LABEL[tier]} capability tier allows. Actions that need confirmation still open Daintree's own prompt unless an automation grant covers them.`;
+// While the assistant inherits "Skip permission prompts" (#12874) those
+// confirmations are skipped too, so the second sentence says that instead.
+const tierBoundsNewSessions = (tier: HelpAssistantTier, confirmationsSkipped: boolean): string =>
+  `New sessions are limited to the Daintree actions in the ${TIER_SHORT_LABEL[tier]} tool set. ${
+    confirmationsSkipped
+      ? "Daintree's own confirmations are skipped as well, because Daintree confirmations follows Skip permission prompts."
+      : "Actions that need confirmation still open Daintree's own prompt unless an automation grant covers them."
+  }`;
+
+const daintreeConfirmationOptions = (globalSkipPermissions: boolean) => [
+  {
+    value: "inherit",
+    label: `Use Skip permission prompts (currently: ${globalSkipPermissions ? "on" : "off"})`,
+  },
+  { value: "always-ask", label: "Always ask" },
+];
 
 /**
  * Per-agent wording for the one stored `bypassPermissions` preference. The
@@ -273,10 +349,14 @@ const BYPASS_COPY: Record<string, Omit<BypassCopy, "subtitle"> & { effect: strin
  * path appends from (`electron/ipc/handlers/terminal/lifecycle.ts`) — so the
  * subtitle can't drift from what actually reaches the command line.
  */
-function getBypassCopy(agentId: string | null, tier: HelpAssistantTier): BypassCopy | null {
+function getBypassCopy(
+  agentId: string | null,
+  tier: HelpAssistantTier,
+  confirmationsSkipped: boolean
+): BypassCopy | null {
   if (!agentId) return null;
 
-  const safeguard = tierBoundsNewSessions(tier);
+  const safeguard = tierBoundsNewSessions(tier, confirmationsSkipped);
 
   // The assistant has no CLI flag: bypass skips its own confirm sheet via
   // DAINTREE_ASSISTANT_AUTO_APPROVE, which is why it carries no
@@ -398,38 +478,52 @@ export function DaintreeAssistantSettingsTab() {
   // panel still in its empty state. The placeholder makes "no selection" explicit.
   const agentSelectValue = preferredAgentId ?? "";
 
+  const globalSkipPermissions = useAgentSettingsStore(
+    (state) => state.settings?.globalSkipPermissions === true
+  );
+  const confirmationsSkipped = assistantSkipsDaintreeConfirmations(
+    settings.daintreeConfirmations,
+    globalSkipPermissions
+  );
   const bypassCopy = useMemo(
-    () => getBypassCopy(preferredAgentId, settings.tier),
-    [preferredAgentId, settings.tier]
+    () => getBypassCopy(preferredAgentId, settings.tier, confirmationsSkipped),
+    [preferredAgentId, settings.tier, confirmationsSkipped]
   );
 
   // Resolved model catalog for the currently-preferred agent. `null` means "not
   // loaded / unavailable" (we render nothing); an empty array means "agent has
   // no models" (also nothing). The model picker only appears once a non-empty
-  // catalog resolves for the selected agent.
-  const [resolvedModels, setResolvedModels] = useState<AgentModelConfig[] | null>(null);
-  // A failed catalog read is not "this agent has no models": the row stays, with Retry.
-  const [modelCatalogFailed, setModelCatalogFailed] = useState(false);
+  // catalog resolves for the selected agent. A failed read is not "this agent
+  // has no models": the row stays, with Retry. Tagged with the agent it was
+  // read for, so a switch never shows the previous agent's models, saved choice
+  // or failure for a render.
+  const [modelCatalog, setModelCatalog] = useState<{
+    agentId: string;
+    models: AgentModelConfig[];
+    failed: boolean;
+  } | null>(null);
+  const currentCatalog = modelCatalog?.agentId === preferredAgentId ? modelCatalog : null;
+  const resolvedModels = currentCatalog?.models ?? null;
+  const modelCatalogFailed = currentCatalog?.failed ?? false;
   const [modelCatalogAttempt, setModelCatalogAttempt] = useState(0);
 
   useEffect(() => {
     if (!preferredAgentId) {
-      setResolvedModels(null);
+      setModelCatalog(null);
       return;
     }
+    const agentId = preferredAgentId;
     let cancelled = false;
-    setResolvedModels(null);
-    setModelCatalogFailed(false);
+    setModelCatalog(null);
     agentCapabilitiesClient
       .getResolvedModelList(preferredAgentId)
       .then((catalog) => {
         if (cancelled) return;
-        setResolvedModels(catalog?.models ?? []);
+        setModelCatalog({ agentId, models: catalog?.models ?? [], failed: false });
       })
       .catch((err) => {
         if (cancelled) return;
-        setResolvedModels([]);
-        setModelCatalogFailed(true);
+        setModelCatalog({ agentId, models: [], failed: true });
         logError("Failed to load model catalog for assistant tab", err);
       });
     return () => {
@@ -437,21 +531,34 @@ export function DaintreeAssistantSettingsTab() {
     };
   }, [preferredAgentId, modelCatalogAttempt]);
 
+  // Nothing saved means the CLI's own default model, matching what the launch
+  // path resolves.
+  // Only the selected agent's own entry — another agent's model never shows as
+  // selected here.
+  const savedModelId = preferredAgentId
+    ? getSavedAssistantModelId(settings.modelIds, preferredAgentId)
+    : null;
+  const catalogIds = useMemo(() => resolvedModels?.map((m) => m.id), [resolvedModels]);
+  const effectiveModelId = preferredAgentId
+    ? resolveAssistantModelId(preferredAgentId, savedModelId, catalogIds)
+    : (savedModelId ?? "");
+
   const modelOptions = useMemo(() => {
     const models = resolvedModels ?? [];
     const options = [
       { value: MODEL_DEFAULT_SENTINEL, label: "Default (CLI default)" },
       ...models.map((m) => ({ value: m.id, label: m.name })),
     ];
-    // A persisted model that's no longer in the catalog (custom CLI, renamed
-    // model) still needs a matching option or Radix shows a blank trigger.
-    if (settings.modelId && !models.some((m) => m.id === settings.modelId)) {
-      options.push({ value: settings.modelId, label: settings.modelId });
+    // This agent's persisted model that isn't in its catalog (custom CLI,
+    // renamed model), or the recommendation while the catalog read has failed,
+    // still needs a matching option or Radix shows a blank trigger.
+    if (effectiveModelId && !models.some((m) => m.id === effectiveModelId)) {
+      options.push({ value: effectiveModelId, label: effectiveModelId });
     }
     return options;
-  }, [resolvedModels, settings.modelId]);
+  }, [resolvedModels, effectiveModelId]);
 
-  const modelSelectValue = settings.modelId || MODEL_DEFAULT_SENTINEL;
+  const modelSelectValue = effectiveModelId || MODEL_DEFAULT_SENTINEL;
   const showModelPicker =
     Boolean(resolvedModels && resolvedModels.length > 0) ||
     (modelCatalogFailed && Boolean(preferredAgentId));
@@ -749,18 +856,12 @@ export function DaintreeAssistantSettingsTab() {
     async (patch: Partial<HelpAssistantSettings>) => {
       const previous = settings;
       const group = saveGroupOf(patch);
-      setSettings((current) => ({ ...current, ...patch }));
+      setSettings((current) => applySettingsPatch(current, patch));
       try {
         await window.electron.helpAssistant.setSettings(patch);
         setSaveFailure((current) => (current?.group === group ? null : current));
       } catch (err) {
-        setSettings((current) => {
-          const reverted: HelpAssistantSettings = { ...current };
-          for (const key of patchedKeys(patch)) {
-            if (current[key] === patch[key]) copySetting(reverted, previous, key);
-          }
-          return reverted;
-        });
+        setSettings((current) => revertSettingsPatch(current, previous, patch));
         setSaveFailure({ group, patch });
         logError("Failed to save Daintree Assistant settings", err);
       }
@@ -772,7 +873,7 @@ export function DaintreeAssistantSettingsTab() {
     saveFailure?.group === group ? (
       <SettingsLoadErrorBanner
         title="Couldn't save that change"
-        message={`${SETTING_LABEL[patchedKeys(saveFailure.patch)[0] ?? "modelId"]} is back to its previous value.`}
+        message={`${SETTING_LABEL[patchedKeys(saveFailure.patch)[0] ?? "modelIds"]} is back to its previous value.`}
         onRetry={() => void persist(saveFailure.patch)}
       />
     ) : null;
@@ -785,13 +886,22 @@ export function DaintreeAssistantSettingsTab() {
     void persist({ daintreeControl: !settings.daintreeControl });
   };
 
+  const toggleRunbookSearch = () => {
+    void persist({ runbookSearch: !settings.runbookSearch });
+  };
+
   const setTier = (value: string) => {
-    if (value !== "workbench" && value !== "action" && value !== "system") return;
+    if (value !== "core" && value !== "full") return;
     void persist({ tier: value });
   };
 
   const toggleBypassPermissions = () => {
     void persist({ bypassPermissions: !settings.bypassPermissions });
+  };
+
+  const setDaintreeConfirmations = (value: string) => {
+    if (value !== "inherit" && value !== "always-ask") return;
+    void persist({ daintreeConfirmations: value as HelpAssistantDaintreeConfirmations });
   };
 
   const toggleDebugLogging = () => {
@@ -823,15 +933,23 @@ export function DaintreeAssistantSettingsTab() {
     void persist({ idleHibernateMinutes: parsed as HelpAssistantIdleHibernateMinutes });
   };
 
+  // Each agent keeps its own model entry, so switching only changes which one
+  // is read — switching back finds the earlier choice intact.
   const handleAgentChange = (value: string) => {
     setPreferredAgent(value || null);
-    // Model IDs are agent-specific — a Claude model passed to Gemini's --model
-    // would break the launch — so clear any stale selection on agent change.
-    if (settings.modelId) void persist({ modelId: "" });
   };
 
   const handleModelChange = (value: string) => {
-    void persist({ modelId: value === MODEL_DEFAULT_SENTINEL ? "" : value });
+    if (!preferredAgentId) return;
+    const modelId = value === MODEL_DEFAULT_SENTINEL ? "" : value;
+    // Picking the recommended model stores "no choice", so it keeps tracking
+    // the recommendation and doesn't read as modified.
+    const recommended = resolveAssistantModelId(preferredAgentId, null, catalogIds);
+    void persist({
+      modelIds: {
+        [preferredAgentId]: modelId !== "" && modelId === recommended ? null : modelId,
+      },
+    });
   };
 
   const handleCustomArgsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -902,10 +1020,9 @@ export function DaintreeAssistantSettingsTab() {
   const apiKeySuffix =
     mcpStatus?.apiKey && mcpStatus.apiKey.length >= 8 ? mcpStatus.apiKey.slice(-4) : "";
 
-  // Doherty gate for the initial status round-trip: render section chrome
-  // immediately and only show the inline "Loading…" text if it outlasts the
-  // threshold, avoiding a sub-400ms flicker.
-  const showInlineLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
+  // Past the Doherty threshold only, so a fast read never flashes bones — the
+  // bones' own delayed pulse is switched off in performance mode.
+  const showLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
 
   const handleGoToMcpSettings = () => {
     void actionService.dispatch("app.settings.openTab", { tab: "mcp" }, { source: "user" });
@@ -1036,13 +1153,9 @@ export function DaintreeAssistantSettingsTab() {
                   <>
                     Couldn&apos;t load this agent&apos;s models, so only the saved choice is listed
                     ·{" "}
-                    <button
-                      type="button"
-                      onClick={() => setModelCatalogAttempt((n) => n + 1)}
-                      className="text-text-secondary underline underline-offset-2 hover:text-text-primary transition-colors"
-                    >
+                    <Button variant="link" onClick={() => setModelCatalogAttempt((n) => n + 1)}>
                       Retry
-                    </button>
+                    </Button>
                   </>
                 ) : (
                   "A --model flag in Custom CLI args overrides this"
@@ -1053,8 +1166,10 @@ export function DaintreeAssistantSettingsTab() {
               options={modelOptions}
               controlWidth="wide"
               disabled={settingsUnavailable}
-              isModified={settings.modelId !== DEFAULT_SETTINGS.modelId}
-              onReset={() => handleModelChange(MODEL_DEFAULT_SENTINEL)}
+              isModified={savedModelId !== null}
+              onReset={() => {
+                if (preferredAgentId) void persist({ modelIds: { [preferredAgentId]: null } });
+              }}
             />
           )}
         </SettingsGroup>
@@ -1116,18 +1231,32 @@ export function DaintreeAssistantSettingsTab() {
             onReset={() => void persist({ daintreeControl: DEFAULT_SETTINGS.daintreeControl })}
           />
           {!loading && <SettingsDependents>{mcpStatusRow}</SettingsDependents>}
+          <SettingsSwitchCard
+            id="assistant-runbook-search"
+            title="Follow runbooks"
+            subtitle={
+              !loading && !settings.daintreeControl
+                ? "Needs Daintree control. Runbooks are procedures for Daintree actions."
+                : "Before each task, the assistant loads Daintree's step-by-step procedure for it"
+            }
+            isEnabled={settings.runbookSearch}
+            onChange={toggleRunbookSearch}
+            disabled={settingsUnavailable || !settings.daintreeControl}
+            isModified={settings.runbookSearch !== DEFAULT_SETTINGS.runbookSearch}
+            onReset={() => void persist({ runbookSearch: DEFAULT_SETTINGS.runbookSearch })}
+          />
         </SettingsGroup>
       </SettingsSection>
 
       <SettingsSection
         title="Security"
-        description="How much of Daintree the assistant can reach, and whether to bypass the agent's own confirmation gate"
+        description="How much of Daintree the assistant can reach, and which confirmations it skips"
       >
         {saveError("security")}
         <SettingsGroup>
           <SettingsChoicebox
-            label="Capability tier"
-            description="The default for new sessions"
+            label="Tool set"
+            description="The Daintree actions new sessions can call"
             value={settings.tier}
             onChange={setTier}
             options={TIER_CHOICES}
@@ -1165,6 +1294,18 @@ export function DaintreeAssistantSettingsTab() {
             </div>
           )}
 
+          <SettingsSelect
+            id="assistant-daintree-confirmations"
+            label="Daintree confirmations"
+            description="Whether Daintree asks before the assistant runs an action like deleting a worktree. Following Skip permission prompts, those actions run without asking while it's on and ask while it's off."
+            value={settings.daintreeConfirmations}
+            onValueChange={setDaintreeConfirmations}
+            options={daintreeConfirmationOptions(globalSkipPermissions)}
+            disabled={settingsUnavailable}
+            isModified={settings.daintreeConfirmations !== DEFAULT_SETTINGS.daintreeConfirmations}
+            onReset={() => setDaintreeConfirmations(DEFAULT_SETTINGS.daintreeConfirmations)}
+          />
+
           {/* The inventory comes last so opening it never pushes the bypass switch away
               from the tier it works with. */}
           <BlastRadiusPreview
@@ -1182,15 +1323,13 @@ export function DaintreeAssistantSettingsTab() {
         description="Help-session activity is logged locally so you can review what the assistant did"
       >
         {saveError("privacy")}
-        {privacyError && (
-          <InlineError onRetry={privacyError.retry}>{privacyError.message}</InlineError>
-        )}
+        {privacyError && <TabError onRetry={privacyError.retry}>{privacyError.message}</TabError>}
         {(auditReadFailed || auditConfigFailed) && (
-          <InlineError onRetry={() => void refreshAuditRecords()}>
+          <TabError onRetry={() => void refreshAuditRecords()}>
             {auditConfigFailed
               ? "Couldn't read the audit settings, so recording is shown as unknown."
               : "Couldn't read the audit log, so the diagnostics below may be incomplete."}
-          </InlineError>
+          </TabError>
         )}
         <SettingsGroup>
           <SettingsSwitchCard
@@ -1232,14 +1371,15 @@ export function DaintreeAssistantSettingsTab() {
               onClick={() => setAdvancedDiagnosticsOpen((v) => !v)}
               aria-expanded={advancedDiagnosticsOpen}
               className={cn(
-                "w-full flex items-center gap-2 px-4 py-3 text-sm font-medium",
-                "text-text-primary transition-colors"
+                "w-full flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium",
+                "text-text-primary hover:bg-overlay-subtle transition-colors",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
               )}
             >
               <ChevronRight
                 data-animated-chevron
                 className={cn(
-                  "w-3.5 h-3.5 text-text-secondary transition-transform duration-150",
+                  "w-3.5 h-3.5 text-text-secondary transition-transform duration-150 ease-out",
                   advancedDiagnosticsOpen ? "rotate-90" : "rotate-0"
                 )}
                 aria-hidden="true"
@@ -1382,11 +1522,16 @@ export function DaintreeAssistantSettingsTab() {
         description="Share the assistant's local MCP server with other clients, such as Claude Code or Cursor"
       >
         {connectionError && (
-          <InlineError onRetry={() => void handleCopyConfig()}>{connectionError}</InlineError>
+          <TabError onRetry={() => void handleCopyConfig()}>{connectionError}</TabError>
         )}
         {loading ? (
-          showInlineLoading ? (
-            <p className="text-xs text-text-secondary">Loading…</p>
+          showLoading ? (
+            <SettingsGroup>
+              <Skeleton label="Loading external client settings" className="space-y-3 px-4 py-3">
+                <SkeletonBone immediate className="h-5 w-2/3" />
+                <SkeletonBone immediate className="h-5 w-1/2" />
+              </Skeleton>
+            </SettingsGroup>
           ) : null
         ) : mcpState !== "ready" ? (
           <SettingsGroup>
@@ -1450,7 +1595,7 @@ export function DaintreeAssistantSettingsTab() {
 
       <ConfirmDialog
         isOpen={showClearAuditConfirm}
-        onClose={isClearingAudit ? undefined : handleCancelClearAudit}
+        onClose={handleCancelClearAudit}
         title="Clear audit log?"
         description="All recorded tool dispatches will be permanently deleted — including those from external MCP clients."
         confirmLabel={clearAuditError ? "Try again" : "Clear audit log"}
@@ -1460,12 +1605,12 @@ export function DaintreeAssistantSettingsTab() {
         variant="destructive"
         zIndex="nested"
       >
-        {clearAuditError && <InlineError>{clearAuditError}</InlineError>}
+        {clearAuditError && <TabError>{clearAuditError}</TabError>}
       </ConfirmDialog>
 
       <ConfirmDialog
         isOpen={showRotateConfirm}
-        onClose={isRotating ? undefined : handleCancelRotate}
+        onClose={handleCancelRotate}
         title="Rotate API key?"
         description="The current key will be invalidated immediately. External clients using this key will need to update their configuration."
         confirmLabel={rotateError ? "Try again" : "Rotate key"}
@@ -1475,7 +1620,7 @@ export function DaintreeAssistantSettingsTab() {
         variant="destructive"
         zIndex="nested"
       >
-        {rotateError && <InlineError>{rotateError}</InlineError>}
+        {rotateError && <TabError>{rotateError}</TabError>}
       </ConfirmDialog>
     </div>
   );
@@ -1509,17 +1654,21 @@ function StatusLine({
   );
 }
 
-function InlineError({ children, onRetry }: { children: ReactNode; onRetry?: () => void }) {
+/** A failed load or save in this tab, said once when it happens, with its retry beside it. */
+function TabError({ children, onRetry }: { children: ReactNode; onRetry?: () => void }) {
   return (
-    <div role="alert" className="flex items-start gap-1.5 text-xs text-text-primary select-text">
-      <AlertCircle className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
-      <span className="min-w-0 flex-1">{children}</span>
-      {onRetry && (
-        <Button variant="ghost" size="xs" onClick={onRetry} className="-my-1 shrink-0">
-          Retry
-        </Button>
-      )}
-    </div>
+    <SettingsInlineError
+      role="alert"
+      action={
+        onRetry && (
+          <Button variant="ghost" size="xs" onClick={onRetry} className="-my-1 shrink-0">
+            Retry
+          </Button>
+        )
+      }
+    >
+      {children}
+    </SettingsInlineError>
   );
 }
 
@@ -1536,18 +1685,16 @@ function AgentNotice({
   action: ReactNode;
 }) {
   return (
-    <div
+    <Callout
+      severity="warning"
       role="alert"
       data-testid={testId}
-      className="flex items-start gap-3 rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-3 py-2.5"
+      title={title}
+      action={action}
+      className="select-text"
     >
-      <AlertTriangle className="w-4 h-4 text-status-warning shrink-0 mt-0.5" aria-hidden="true" />
-      <div className="min-w-0 flex-1 text-xs select-text">
-        <p className="font-medium text-text-primary">{title}</p>
-        <p className="mt-0.5 text-text-secondary">{body}</p>
-      </div>
-      <div className="shrink-0">{action}</div>
-    </div>
+      <p>{body}</p>
+    </Callout>
   );
 }
 
@@ -1564,11 +1711,11 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
   const newAtTier = HELP_TIER_INCREMENTAL[tier].length;
   const groups = useMemo(() => {
     const cumulative = HELP_TIER_CUMULATIVE[tier];
-    // Pin the load-bearing dangerous actions at the top of whichever tier is
-    // being previewed, so they can't be missed in a long alphabetical list.
-    // Intersected with this tier rather than pinned only on `system` (#12116):
-    // the preview's job is to show what selecting THIS tier grants, so a tool
-    // has to be called out at the tier that first reaches it.
+    // Pin the load-bearing dangerous actions at the top of whichever tool set
+    // is being previewed, so they can't be missed in a long alphabetical list.
+    // Intersected with this set rather than pinned only on the largest (#12116):
+    // the preview's job is to show what selecting THIS set grants, so a tool
+    // has to be called out at the set that first reaches it.
     const pinnedList = HIGH_BLAST_RADIUS_TOOLS.filter((tool) => cumulative.includes(tool));
     if (pinnedList.length === 0) return groupToolsByNamespace(cumulative);
     const pinned = new Set(pinnedList);
@@ -1586,22 +1733,23 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
         onClick={onToggle}
         aria-expanded={isOpen}
         className={cn(
-          "w-full flex items-center justify-between gap-3 px-4 py-2.5 text-xs",
-          "text-text-secondary hover:text-text-primary transition-colors"
+          "w-full flex cursor-pointer items-center justify-between gap-3 px-4 py-2.5 text-xs",
+          "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary transition-colors",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         )}
       >
         <span className="flex items-center gap-2">
           <ChevronRight
             data-animated-chevron
             className={cn(
-              "w-3.5 h-3.5 transition-transform duration-150",
+              "w-3.5 h-3.5 transition-transform duration-150 ease-out",
               isOpen ? "rotate-90" : "rotate-0"
             )}
             aria-hidden="true"
           />
           <span>
-            What this tier allows · {totalCount} actions
-            {tier !== "workbench" && <span> ({newAtTier} new at this tier)</span>}
+            What this tool set allows · {totalCount} actions
+            {tier !== "core" && <span> ({newAtTier} more than core)</span>}
           </span>
         </span>
       </button>
@@ -1759,30 +1907,30 @@ function NativeGrantsSection({
       <div className="flex flex-wrap items-end gap-2 pt-0.5">
         <label className="grid min-w-0 flex-1 basis-56 gap-1 text-xs text-text-secondary">
           Tools to approve
-          <input
+          <Input
             type="text"
             value={toolsInput}
             onChange={(e) => setToolsInput(e.target.value)}
-            placeholder="git.commit terminal.new"
-            className="min-w-0 rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-2 py-1 text-xs font-mono text-text-primary placeholder:text-text-placeholder focus-visible:outline-2 focus-visible:outline-accent-primary"
+            placeholder="worktree.deleteOwned recipe.run"
+            className="min-w-0 font-mono"
           />
         </label>
         <label className="grid gap-1 text-xs text-text-secondary">
           Maximum uses
-          <input
+          <Input
             type="number"
             min={1}
             max={100}
             value={usesInput}
             onChange={(e) => setUsesInput(e.target.value)}
-            className="w-20 rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-2 py-1 text-xs tabular-nums text-text-primary focus-visible:outline-2 focus-visible:outline-accent-primary"
+            className={cn(SETTINGS_CONTROL_WIDTH.number, "tabular-nums")}
           />
         </label>
         <Button variant="outline" size="sm" onClick={approve} disabled={issuing}>
           Approve grant
         </Button>
       </div>
-      {issueError && <InlineError>{issueError}</InlineError>}
+      {issueError && <TabError>{issueError}</TabError>}
     </div>
   );
 }
@@ -1829,13 +1977,14 @@ function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
         description={
           connected ? (
             <StatusLine tone="ok">
-              Running at{" "}
-              <span className="text-text-primary">{TIER_SHORT_LABEL[tier].toLowerCase()}</span>
+              Running the{" "}
+              <span className="text-text-primary">{TIER_SHORT_LABEL[tier].toLowerCase()}</span> tool
+              set
               {tierComparisonCopy}
             </StatusLine>
           ) : (
             <StatusLine tone="idle">
-              None. Open the assistant to start one; its live tier and grants show here.
+              None. Open the assistant to start one; its live tool set and grants show here.
             </StatusLine>
           )
         }

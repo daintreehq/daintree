@@ -11,11 +11,13 @@ import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import type { WorktreeDragData } from "../DragDrop/DndProvider";
 import { useDndPlaceholder, useIsWorktreeSortDragging } from "../DragDrop/dndPlaceholderContext";
 import { getWorktreeSortDragId } from "../DragDrop/SortableWorktreeCard";
-import { Check, GripVertical } from "lucide-react";
+import { GripVertical } from "lucide-react";
+import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { useErrorStore, usePanelStore, type RetryAction } from "../../store";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useRecipeStore } from "../../store/recipeStore";
 import { useWorktreeSelectionStore } from "../../store/worktreeStore";
+import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import {
   useProjectSettingsStore,
   areProjectNotificationsMuted,
@@ -58,7 +60,7 @@ import {
 import { useInputReceiptKey } from "./WorktreeCard/hooks/useInputReceiptKey";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
-import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { copyWorktreeValue } from "./WorktreeCard/copyWorktreeValue";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import {
   CONTEXT_COMPONENTS,
@@ -106,6 +108,8 @@ export interface WorktreeCardProps {
   dragHandleActivatorRef?: (node: HTMLElement | null) => void;
   isDraggingSort?: boolean;
   isDragHandleDisabled?: boolean;
+  /** Why the grip is disabled, shown as its tooltip. */
+  dragDisabledReason?: string | null;
   onMoveUp?: () => void;
   onMoveDown?: () => void;
   canMoveUp?: boolean;
@@ -139,6 +143,7 @@ export function WorktreeCard({
   dragHandleActivatorRef,
   isDraggingSort,
   isDragHandleDisabled = false,
+  dragDisabledReason,
   onMoveUp,
   onMoveDown,
   canMoveUp,
@@ -526,16 +531,14 @@ export function WorktreeCard({
     void copyContextWithFeedback(worktree.id, "context-menu", { modified: true }, "worktree-card");
   };
 
-  const { copy: copyWorktreePath } = useCopyWithFeedback();
   const handleCopyPath = () => {
-    void copyWorktreePath(worktree.path);
+    copyWorktreeValue("Path", worktree.path);
   };
 
-  const { copy: copyBranchName } = useCopyWithFeedback({ announcement: "Branch name copied" });
   const handleCopyBranchName = () => {
     const branch = copyableBranchName(worktree);
     if (!branch) return;
-    void copyBranchName(branch);
+    copyWorktreeValue("Branch name", branch);
   };
 
   const [showIssuePicker, setShowIssuePicker] = useState(false);
@@ -1029,6 +1032,7 @@ export function WorktreeCard({
           role={variant === "grid" ? "group" : undefined}
           aria-current={variant === "grid" && isActive ? "true" : undefined}
           aria-label={`Worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${ariaStatusLabel}`}
+          onMouseDown={isMultiSelectEnabled ? suppressShiftClickTextSelection : undefined}
           onClick={handleCardClick}
           onDoubleClick={handleDoubleClick}
           onPointerEnter={handlePointerEnter}
@@ -1192,27 +1196,19 @@ export function WorktreeCard({
                   : "opacity-0 group-hover/card:opacity-100 focus-within:opacity-100"
               )}
             >
+              {/* The button is the 24px target and carries the checkbox role; the
+                  box inside is the shared checkbox glyph, so a selected card is
+                  ticked exactly like every other checkbox in the app. */}
               <button
                 type="button"
                 role="checkbox"
                 aria-checked={isSelected}
-                aria-label={isSelected ? "Deselect worktree" : "Select worktree"}
+                aria-label="Select worktree"
                 tabIndex={-1}
                 onClick={handleCheckboxClick}
-                className={cn(
-                  "flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)]",
-                  "border transition-colors",
-                  isSelected
-                    ? "border-border-interactive bg-overlay-emphasis text-text-primary"
-                    : // Unchecked, the box is an empty outline on the card's own
-                      // plane. It used to fill with `bg-daintree-bg/80` — the
-                      // app canvas, which on dark themes is several steps below
-                      // the card — so on hover it read as a hole punched in the
-                      // corner rather than as a checkbox waiting to be ticked.
-                      "border-border-default bg-transparent text-transparent hover:bg-overlay-soft hover:border-border-interactive"
-                )}
+                className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] transition-colors hover:bg-overlay-soft"
               >
-                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                <CheckboxGlyph checked={isSelected} />
               </button>
             </div>
           )}
@@ -1231,7 +1227,7 @@ export function WorktreeCard({
                     </div>
                   </TooltipTrigger>
                   <TooltipContent side="left" className="text-xs">
-                    Manual reorder paused while filter is active
+                    {dragDisabledReason ?? "Drag to reorder is off"}
                   </TooltipContent>
                 </Tooltip>
               ) : (
@@ -1243,7 +1239,7 @@ export function WorktreeCard({
                     // tier and the plate the 150ms one, and a Tailwind
                     // `duration-*` utility cannot give two properties two
                     // durations.
-                    "shrink-0 w-4 flex items-center justify-center cursor-grab active:cursor-grabbing touch-none select-none motion-reduce:transition-none",
+                    "shrink-0 w-4 flex items-center justify-center cursor-grab active:cursor-grabbing touch-none select-none",
                     isDraggingSort
                       ? "bg-overlay-emphasis text-text-primary"
                       : // Card hover brightens the glyph only. The backplate

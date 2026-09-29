@@ -269,6 +269,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
 
@@ -523,7 +524,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
 
       await waitFor(() => screen.getByText("a-first.ts"));
 
@@ -550,7 +551,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
 
       await waitFor(() =>
         expect(screen.getAllByTestId("base-branch-file-row-base")).toHaveLength(3)
@@ -573,7 +574,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
 
       await waitFor(() => screen.getByText("button.tsx"));
 
@@ -595,7 +596,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
 
       await waitFor(() =>
         expect(screen.getAllByTestId("base-branch-file-row-base")).toHaveLength(1)
@@ -868,7 +869,7 @@ describe("ReviewHub", () => {
       // "dist/bundle.js" matches the query and exists; it is hidden as
       // generated. Blaming the filter here names the wrong cause and offers a
       // recovery that cannot bring it back.
-      const reveal = await screen.findByText("Show generated files", { selector: "button" });
+      const reveal = await screen.findByRole("button", { name: "Show generated files" });
       expect(reveal).toBeTruthy();
       expect(screen.queryByText("Clear filter")).toBeNull();
 
@@ -991,4 +992,8 @@ describe("ReviewHub", () => {
       });
     });
   });
+});
+
+afterEach(() => {
+  resetStagingStatusCacheForTests();
 });

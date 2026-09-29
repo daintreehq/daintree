@@ -344,14 +344,11 @@ export const theme: BuiltInThemeSource = {
     "settings-dialog-bg": "#0E0C0B",
     "settings-card-bg": "#15120F",
     "settings-list-item-bg": "#15120F",
-    "settings-kbd-bg": "#0A0908",
     "settings-search-bg": "#0A0908",
     "settings-search-muted": "#9E978B",
     "settings-sidebar-bg": "rgba(7,6,5,0.50)",
     // settings-sidebar-bg composited over the dialog shell.
     "settings-sidebar-scroll-fade": "#0A0908",
-    "settings-nav-hover-bg": "rgba(255,255,255,0.035)",
-    "settings-nav-active-bg": "rgba(255,255,255,0.075)",
 
     // Sulfur crust ramp, deep to lit. A data lane, so it sits outside the accent
     // budget — but it deliberately stops short of the beam ivory, which stays

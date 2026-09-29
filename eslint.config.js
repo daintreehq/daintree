@@ -680,12 +680,18 @@ export default tseslint.config(
     rules: { "no-restricted-imports": "off" },
   },
 
-  // Allowlist — framer-motion panel tab list animations.
+  // Allowlist — framer-motion document tab strips (grid, dock, portal,
+  // assistant): the shared sliding underline in ui/document-tab.tsx and the
+  // LayoutGroup each strip scopes it with. `m` and LayoutGroup only; the
+  // animation features still arrive lazily via loadMotionFeatures().
   {
     files: [
       "src/components/Panel/PanelTabList.tsx",
       "src/components/Panel/SortableTabButton.tsx",
       "src/components/Panel/TabButton.tsx",
+      "src/components/ui/document-tab.tsx",
+      "src/components/Portal/PortalToolbar.tsx",
+      "src/components/HelpPanel/HelpSessionTabs.tsx",
     ],
     rules: { "no-restricted-imports": "off" },
   },
@@ -762,6 +768,7 @@ export default tseslint.config(
       "src/components/FileViewer/CodeViewer.tsx",
       "src/components/FileViewer/codeMirrorLanguages.ts",
       "src/components/FileViewer/editorSearchTheme.ts",
+      "src/components/FileViewer/editorSearchPanel.ts",
       "src/components/Demo/DemoCursor.tsx",
     ],
     rules: { "no-restricted-imports": "off" },
@@ -776,6 +783,7 @@ export default tseslint.config(
       "src/components/Worktree/DiffViewer.tsx",
       "src/components/Worktree/diffEditSuppression.ts",
       "src/components/Worktree/diffMovedUtils.ts",
+      "src/components/Worktree/diffNotes.ts",
       "src/components/Worktree/diffRefractor.ts",
       "src/components/Worktree/diffTokenRanges.ts",
       "src/components/Worktree/diffTokenizePipeline.ts",
@@ -811,6 +819,31 @@ export default tseslint.config(
   {
     files: ["src/**/__tests__/**/*.{ts,tsx}", "src/**/*.test.{ts,tsx}"],
     rules: { "no-restricted-imports": "off" },
+  },
+
+  // Built-in tour scenes are written against @daintreehq/tour's public surface
+  // alone: the guarantee that a plugin's tour can do anything Daintree's does.
+  // Flat config is last-write-wins per rule, so this replaces the renderer
+  // block's list for these files; the allowlist is strictly narrower.
+  // sceneIsolation.contract.test.ts also walks type queries and dynamic
+  // imports, which this rule doesn't see. See #12769.
+  {
+    files: ["src/components/Tour/scenes/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex:
+                "^(?!(?:react|lucide-react|@daintreehq/tour(?:/(?:react|kit|mock-app))?)$|\\./(?!\\.))",
+              message:
+                "Tour scenes may import only React, lucide-react and @daintreehq/tour's public entries. Hand host data to the kit through MockKitContext or TourShortcutsContext instead. See #12769.",
+            },
+          ],
+        },
+      ],
+    },
   },
 
   // Block the legacy `typedHandle*` IPC registration helpers from new
@@ -1129,7 +1162,7 @@ export default tseslint.config(
   // opacity-* utilities or grayscale, which composite differently on each theme
   // background. Scoped to icon elements only. See #10458.
   {
-    files: ["src/**/*.{ts,tsx}"],
+    files: ["src/**/*.{ts,tsx}", "packages/tour/src/**/*.{ts,tsx}"],
     plugins: {
       "icon-opacity-dimming": {
         rules: { "no-icon-opacity-dimming": iconOpacityDimming },
@@ -1148,9 +1181,13 @@ export default tseslint.config(
   // renderers are in scope: they paint real product UI out of the same tokens.
   // Test files are excluded — the class strings in
   // src/config/__tests__/*.contract.test.ts are deliberate violations used as
-  // fixtures. See #12029.
+  // fixtures. See #12029. The tour package's mockup kit paints the same UI.
   {
-    files: ["src/**/*.{ts,tsx}", "plugins/builtin/*/renderer/**/*.{ts,tsx}"],
+    files: [
+      "src/**/*.{ts,tsx}",
+      "plugins/builtin/*/renderer/**/*.{ts,tsx}",
+      "packages/tour/src/**/*.{ts,tsx}",
+    ],
     ignores: ["**/__tests__/**", "**/*.{test,spec}.{ts,tsx}"],
     plugins: { "component-contract": componentContract },
     rules: {

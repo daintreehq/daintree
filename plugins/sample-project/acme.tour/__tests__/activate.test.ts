@@ -98,13 +98,6 @@ describe("acme.tour — runtime ids", () => {
       },
     });
   });
-
-  it("refuses to build a panel kind with no owning project", async () => {
-    const { host } = await activated();
-    await expect(handler(host, "open-another")(makeCtx({ projectId: null }))).rejects.toThrow(
-      "open-another needs a project"
-    );
-  });
 });
 
 describe("acme.tour — pushes and badges", () => {
@@ -189,6 +182,16 @@ describe("acme.tour — built-in dispatch and disposal", () => {
       kind: "command",
       danger: "safe",
       requires: [],
+    });
+  });
+
+  it("opens its own panel from the palette command", async () => {
+    const { host } = await activated();
+    const action = host.registeredActions.find((a) => a.descriptor.id === "open-tour");
+    await action?.handler(undefined);
+    expect(host.dispatchedActions).toContainEqual({
+      actionId: "panel.openPluginPanel",
+      args: { kind: `project:${PROJECT_ID}/acme.tour/tour` },
     });
   });
 

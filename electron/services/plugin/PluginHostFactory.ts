@@ -9,6 +9,15 @@ import { fileTreeService } from "../FileTreeService.js";
 import { clipboard, shell } from "electron";
 import { decodeClipboardPng, MAX_CLIPBOARD_IMAGE_BYTES } from "../../utils/clipboardImage.js";
 import { assertExtensionAllowed } from "../../utils/executablePathGuard.js";
+import { pathToFileURL } from "node:url";
+import {
+  MAX_HTML_BYTES,
+  renderHtmlToPdf,
+  reserveConsentWait,
+  reserveRender,
+  validateRenderPdfOptions,
+  type RenderReservation,
+} from "./pluginPdfRenderer.js";
 
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import { resolveContainedPath, PluginPathNotAllowedError } from "./pluginFsContainment.js";
@@ -34,6 +43,9 @@ import {
 import { createListenerFailureState, invokeTrackedListener } from "./pluginCallbackUtils.js";
 import { isChannelSchema } from "./PluginChannelRegistry.js";
 import { abortErrorFor } from "./pluginAbortError.js";
+import { openPluginDatabase, resolvePluginDatabaseLocation } from "./pluginDatabase.js";
+import type { PluginDatabaseApi } from "../../../shared/types/plugin.js";
+import { databaseBackupApprovers, fsWriteApprovers } from "./pluginInternalApprovers.js";
 import { agentMcpEndpointRegistry } from "../pluginAgentMcp/endpointRegistry.js";
 import { validateAgentMcpTools } from "../pluginAgentMcp/validateTools.js";
 import type { AgentMcpToolInvoker } from "../pluginAgentMcp/types.js";
@@ -66,6 +78,13 @@ import {
   type AgentStateChangePayload,
 } from "../../../shared/utils/pluginAgentSnapshot.js";
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
+import type { PluginSendToAgentRequest } from "../../../shared/types/pluginUiPrompt.js";
+import {
+  AGENT_CONTEXT_MAX_TEXT_LENGTH,
+  AGENT_CONTEXT_MAX_TITLE_LENGTH,
+  sanitizeAgentContextSourceLabel,
+  validateAgentContextPayload,
+} from "../../../shared/utils/agentContextDrag.js";
 import type { PluginDiagnosticsLogLine } from "../../../shared/types/ipc/pluginDiagnostics.js";
 import type {
   PluginIpcHandler,
@@ -87,6 +106,8 @@ import type {
   PluginSettingsScope,
   PluginStorageScope,
   PluginAgentSnapshot,
+  PluginSendToAgentRefusalReason,
+  PluginSendToAgentResult,
   PluginPanelLifecycleEvent,
   PluginProcessApi,
   PluginProcessHandle,
@@ -111,6 +132,8 @@ import type {
   PluginHostBinding,
   PluginMcpCaller,
   PluginMcpToolDefinition,
+  PluginDocumentsApi,
+  PluginRenderPdfResult,
 } from "../../../shared/types/plugin.js";
 import type {
   LoadedPlugin,
@@ -134,6 +157,12 @@ const MAX_FILE_DECORATION_PATHS = 1000;
  * omitted disables debouncing entirely (fire on every change).
  */
 const MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS = 50;
+/**
+ * Ceiling for a `host.fs.watch` `debounceMs`. Node clamps any timer delay past
+ * 2^31-1 ms to 1 ms, so an unbounded value would turn "almost never" into
+ * "immediately"; a minute is already far past any useful coalescing window.
+ */
+const MAX_PLUGIN_FS_WATCH_DEBOUNCE_MS = 60_000;
 
 /**
  * The slice of a `WorkspaceClient` worktree event a plugin subscription reads.
@@ -207,6 +236,111 @@ function validateQuickPickItems(
       ...(item.detail !== undefined ? { detail: String(item.detail) } : {}),
     };
   });
+}
+
+/** Longest id `host.sendToAgent` accepts for a terminal or worktree. */
+const SEND_TO_AGENT_MAX_ID_LENGTH = 512;
+
+// A record keyed by the union so a reason added to the type without an entry
+// here fails typecheck rather than being read back as a dismissal.
+const SEND_TO_AGENT_REFUSAL_REASONS = new Set(
+  Object.keys({
+    "unknown-terminal": true,
+    "not-agent": true,
+    exited: true,
+    "input-bar-off": true,
+    "backend-unavailable": true,
+    "input-locked": true,
+    restarting: true,
+    "input-busy": true,
+    "not-in-grid": true,
+    "fleet-armed": true,
+    "project-unavailable": true,
+    "launch-failed": true,
+    "prompt-open": true,
+    busy: true,
+  } satisfies Record<PluginSendToAgentRefusalReason, true>)
+);
+
+function validateOptionalId(pluginId: string, name: string, value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > SEND_TO_AGENT_MAX_ID_LENGTH
+  ) {
+    throw new Error(
+      `Plugin "${pluginId}" sendToAgent: options.${name} must be a non-empty string of at most ${SEND_TO_AGENT_MAX_ID_LENGTH} characters`
+    );
+  }
+  return value;
+}
+
+/**
+ * Check a `host.sendToAgent` call against the drag payload's own limits and
+ * return the normalised text and title. Throws so an authoring mistake fails
+ * loudly, like the other host APIs, rather than reaching the user as a picker
+ * that drafts nothing.
+ */
+function validateSendToAgentCall(
+  pluginId: string,
+  text: unknown,
+  options: unknown
+): Omit<PluginSendToAgentRequest, "sourceLabel"> {
+  if (options !== undefined && (typeof options !== "object" || options === null)) {
+    throw new Error(`Plugin "${pluginId}" sendToAgent: options must be an object`);
+  }
+  const opts = (options ?? {}) as Record<string, unknown>;
+  if (typeof text !== "string" || text.trim().length === 0) {
+    throw new Error(
+      `Plugin "${pluginId}" sendToAgent: text must be a non-empty, non-whitespace string`
+    );
+  }
+  if (opts.title !== undefined && typeof opts.title !== "string") {
+    throw new Error(`Plugin "${pluginId}" sendToAgent: options.title must be a string`);
+  }
+  const payload = validateAgentContextPayload({ v: 1, text, title: opts.title });
+  if (payload === null) {
+    throw new Error(
+      `Plugin "${pluginId}" sendToAgent: text must hold printable content and be at most ${AGENT_CONTEXT_MAX_TEXT_LENGTH} characters, and options.title at most ${AGENT_CONTEXT_MAX_TITLE_LENGTH}`
+    );
+  }
+  const terminalId = validateOptionalId(pluginId, "terminalId", opts.terminalId);
+  const worktreeId = validateOptionalId(pluginId, "worktreeId", opts.worktreeId);
+  return {
+    text: payload.text,
+    ...(payload.title !== undefined ? { title: payload.title } : {}),
+    ...(terminalId !== undefined ? { terminalId } : {}),
+    ...(worktreeId !== undefined ? { worktreeId } : {}),
+  };
+}
+
+/**
+ * The renderer's answer, narrowed to the public result. Anything malformed
+ * reads as a dismissal: the renderer is ours, so this only guards against a
+ * response from a build that disagrees about the shape.
+ */
+function toSendToAgentResult(value: unknown): PluginSendToAgentResult {
+  if (typeof value === "object" && value !== null) {
+    const result = value as Record<string, unknown>;
+    if (result.status === "drafted" && typeof result.terminalId === "string") {
+      return { status: "drafted", terminalId: result.terminalId };
+    }
+    if (
+      result.status === "refused" &&
+      typeof result.reason === "string" &&
+      SEND_TO_AGENT_REFUSAL_REASONS.has(result.reason as PluginSendToAgentRefusalReason)
+    ) {
+      return {
+        status: "refused",
+        reason: result.reason as PluginSendToAgentRefusalReason,
+        ...(typeof result.worktreeId === "string" && result.worktreeId.length > 0
+          ? { worktreeId: result.worktreeId.slice(0, SEND_TO_AGENT_MAX_ID_LENGTH) }
+          : {}),
+      };
+    }
+  }
+  return { status: "cancelled" };
 }
 
 /**
@@ -674,6 +808,83 @@ export function createHost(
       ? { projectRoot: boundScopeRoot, worktreePath: await resolveBoundWorktreeTarget() }
       : { projectRoot: boundScopeRoot };
 
+  const fsApi = buildFsApi(deps, pluginId);
+  // By identity, not id: a host kept by a plugin that has since reloaded
+  // must not reach the new instance's declarations or register handles on it.
+  const requireBoundForDb = (op: string): void => {
+    if (!isBound()) {
+      throw new Error(`PLUGIN_UNLOADED: plugin "${pluginId}" ${op}: plugin is no longer loaded`);
+    }
+  };
+  const prepareDatabaseBackup = async (id: string, destPath: string): Promise<string> => {
+    await resolveDatabase(id, { readonly: true });
+    const approve = fsWriteApprovers.get(fsApi);
+    if (!approve) throw new Error(`Plugin "${pluginId}" db.backup: unavailable`);
+    const approved = await approve(`db.backup:${id}`, destPath);
+    requireBoundForDb("db.backup");
+    return approved;
+  };
+
+  const resolveDatabase = async (id: string, options?: { readonly?: boolean }) => {
+    const readonly = options?.readonly === true;
+    if (typeof id !== "string" || id.length === 0) {
+      throw new Error(`Plugin "${pluginId}" db: id must be a non-empty string`);
+    }
+    requireBoundForDb("db");
+    const declaration = (boundPlugin?.manifest.contributes.databases ?? []).find(
+      (d) => d.id === id
+    );
+    if (!declaration) {
+      throw new Error(
+        `DB_NOT_DECLARED: plugin "${pluginId}" db: "${id}" is not declared in contributes.databases`
+      );
+    }
+    // A project database is a file in the repository: creating its directory,
+    // the file, and every migration are project writes, so they wait for the
+    // same first-use consent `host.fs.writeFile` does. A local database is
+    // plugin-private state, like `host.storage`, and needs none.
+    // A read-only open creates and writes nothing, so it needs no consent.
+    if (declaration.location === "project" && !readonly) {
+      await ensureCapabilityConsent(deps, pluginId, "fs:project-write");
+      requireBoundForDb("db");
+    }
+    const location = await resolvePluginDatabaseLocation({
+      declaration,
+      manifestId,
+      projectRoot: boundProjectRoot,
+      dataDir: deps.pluginDataDir(pluginId),
+      existingOnly: readonly,
+    });
+    requireBoundForDb("db");
+    return location;
+  };
+
+  const dbApi: PluginDatabaseApi = {
+    resolve: (id: string, options?: { readonly?: boolean }) => resolveDatabase(id, options),
+    open: async (id, options) => {
+      const mode = { readonly: options?.readonly === true };
+      const location = await resolveDatabase(id, mode);
+      let untrack: (() => void) | null = null;
+      const database = await openPluginDatabase(location, {
+        ...options,
+        revalidate: () => resolveDatabase(id, mode),
+        prepareBackup: (destPath) => prepareDatabaseBackup(id, destPath),
+        onClosed: () => untrack?.(),
+      });
+      if (!isBound()) {
+        await database.close();
+        throw new Error(
+          `PLUGIN_UNLOADED: plugin "${pluginId}" db.open: plugin is no longer loaded`
+        );
+      }
+      untrack = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
+        void database.close();
+      });
+      return database;
+    },
+  };
+  databaseBackupApprovers.set(dbApi, prepareDatabaseBackup);
+
   // The live disposer per `agentMcp` endpoint, so a replaced roster is released
   // rather than kept reachable from the unload cascade for the host's lifetime.
   const mcpRosterDisposers = new Map<string, () => void>();
@@ -932,6 +1143,69 @@ export function createHost(
         ptyClient.submit(terminalId, text);
       } else {
         ptyClient.stage(terminalId, text);
+      }
+    },
+    // NOT revoke-guarded, like getAgentState: plugins list agents from command
+    // handlers long after activation. The panes are read from the renderer that
+    // owns the project's panel and worktree stores — a bound host asks its own
+    // project's view and nothing else.
+    agents: {
+      list: async () => {
+        if (!isBound()) return [];
+        if (!deps.declaredCapabilities(pluginId).has("agent:read")) {
+          throw new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" agents.list requires "agent:read", which is not declared in manifest.capabilities`
+          );
+        }
+        try {
+          const agents = await deps.dispatcher.sendAgentsListToRenderer(boundProjectId);
+          return isBound() ? agents : [];
+        } catch (err) {
+          if (isProjectViewUnavailable(err)) return [];
+          throw err;
+        }
+      },
+    },
+    sendToAgent: async (text, options, callOptions) => {
+      // Liveness first, for the same reason as sendToActiveAgent: an unloaded
+      // plugin's declared capabilities read as empty, which would mis-report
+      // PERMISSION_REQUIRED into a stray timer.
+      if (!isBound()) return { status: "cancelled" };
+      if (!deps.declaredCapabilities(pluginId).has("agent:input")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" sendToAgent requires "agent:input", which is not declared in manifest.capabilities`
+        );
+      }
+      // Validated before the consent prompt, so a malformed call can't bank a
+      // grant and have a later one draft unprompted.
+      const request = validateSendToAgentCall(pluginId, text, options);
+      await ensureCapabilityConsent(deps, pluginId, "agent:input");
+      if (!isBound()) return { status: "cancelled" };
+      try {
+        // The prompt bridge, not a bespoke channel: without a target this is a
+        // picker the user answers, and it inherits the bridge's project
+        // targeting, unload drain and caller-signal dismissal. With a target it
+        // answers as soon as the renderer has drafted.
+        const value = await deps.promptDispatcher.requestPrompt(
+          pluginId,
+          {
+            kind: "sendToAgent",
+            // The display name comes from the manifest unbounded; it is held to
+            // the same one-line, length-capped shape as a drag's label.
+            request: {
+              ...request,
+              sourceLabel: sanitizeAgentContextSourceLabel(deps.pluginDisplayName(pluginId)),
+            },
+          },
+          boundProjectId,
+          callOptions?.signal
+        );
+        return toSendToAgentResult(value);
+      } catch (err) {
+        if (isProjectViewUnavailable(err)) {
+          return { status: "refused", reason: "project-unavailable" };
+        }
+        throw err;
       }
     },
     onDidChangeActiveWorktree: (callback) => {
@@ -1636,7 +1910,7 @@ export function createHost(
     // post-activation timers and callbacks. Every path argument is realpath-
     // contained to the declared scopes.fs.allowedPaths and capability-gated;
     // this is the runtime enforcement of allowedPaths (formerly advisory).
-    fs: buildFsApi(deps, pluginId),
+    fs: fsApi,
     git: buildGitApi(deps, pluginId),
     // Host-mediated OS clipboard surface backing the clipboard:read /
     // clipboard:write tokens. Runs in the main process (Electron's clipboard
@@ -1649,6 +1923,9 @@ export function createHost(
     // project roots — the gap that pushed plugins into shelling out to
     // /usr/bin/open. NOT revoke-guarded, same as fs/clipboard.
     system: buildSystemApi(deps, pluginId),
+    // HTML-to-PDF export written under host.fs.writeFile's gates. NOT
+    // revoke-guarded, same as fs/system.
+    documents: buildDocumentsApi(deps, pluginId),
     // NOT revoke-guarded: plugins read/write settings throughout their
     // lifetime (IPC handlers, timers), long after activate() resolves. The
     // store is the source of truth, so a late call is harmless.
@@ -1674,19 +1951,26 @@ export function createHost(
           effectiveScope,
           boundScopeRoot
         );
-        // Project scope with no active project: read resolves to undefined
-        // rather than throwing, matching the "unset key" return.
-        if (!filePath) return undefined;
-        return deps.settings
-          .getOrCreateSettingsStore(pluginId, filePath)
-          .get<T>(key, { secret: deps.settings.isSecretKey(pluginId, key) });
+        // Project scope with no active project reads as unset rather than
+        // throwing; unset reads as the declared default, if there is one.
+        const stored = filePath
+          ? await deps.settings
+              .getOrCreateSettingsStore(pluginId, filePath)
+              .get<T>(key, { secret: deps.settings.isSecretKey(pluginId, key) })
+          : undefined;
+        return stored !== undefined
+          ? stored
+          : (deps.settings.getDeclaredDefault(pluginId, key) as T | undefined);
       },
       set: async <T = unknown>(
         key: string,
         value: T,
-        scope: PluginSettingsScope = "user"
+        requestedScope?: PluginSettingsScope
       ): Promise<void> => {
         assertSettingsKey(pluginId, "set", key);
+        // Omitted, the declared scope is the target, as it is for `get`; a
+        // conflicting explicit scope still throws in assertSettingDeclared.
+        const scope = requestedScope ?? deps.settings.getDeclaredScope(pluginId, key) ?? "user";
         if (value === undefined) {
           throw new Error(
             `Plugin "${pluginId}" settings.set: value for "${key}" is undefined — settings cannot store undefined`
@@ -1714,8 +1998,9 @@ export function createHost(
       onDidChange: <T = unknown>(
         key: string,
         callback: (value: T | undefined) => void,
-        scope: PluginSettingsScope = "user"
+        requestedScope?: PluginSettingsScope
       ): Promise<() => void> => {
+        const scope = requestedScope ?? deps.settings.getDeclaredScope(pluginId, key) ?? "user";
         if (revoked) {
           throw new Error(
             `Plugin "${pluginId}" host revoked: settings.onDidChange called after activate() returned or timed out`
@@ -1734,6 +2019,26 @@ export function createHost(
         );
         return Promise.resolve(dispose);
       },
+      // Always this plugin's own settings: the id is the closure's, never the
+      // caller's, and a bound host reaches only its own project's renderer —
+      // the same routing `dispatch` uses, so a project plugin cannot open
+      // another project's settings.
+      open: async (key?: string): Promise<void> => {
+        if (key !== undefined) assertSettingsKey(pluginId, "open", key);
+        if (!deps.plugins.has(pluginId)) {
+          throw new Error(`Plugin "${pluginId}" settings.open: plugin is no longer loaded`);
+        }
+        const result = await deps.dispatcher.sendDispatchToRenderer(
+          "plugin.openSettings",
+          key === undefined ? { pluginId } : { pluginId, key },
+          boundProjectId
+        );
+        if (!result.ok) {
+          throw new Error(`Plugin "${pluginId}" settings.open: ${result.error.message}`);
+        }
+      },
+      missingRequired: (): Promise<string[]> =>
+        deps.settings.missingRequiredForHost(pluginId, boundScopeRoot),
     },
     // Private machine-owned key/value storage (#10556). NOT revoke-guarded
     // (except onDidChange): plugins read/write storage throughout their
@@ -1741,6 +2046,7 @@ export function createHost(
     // asynchronously, so set/delete re-check liveness after the await — a
     // plugin unloaded mid-resolution silently no-ops rather than writing into
     // a torn-down plugin's file (lessons #9322/#9428/#9533).
+    db: dbApi,
     storage: {
       get: async <T = unknown>(
         key: string,
@@ -2103,14 +2409,48 @@ function sha256Hex(bytes: Uint8Array): string {
 }
 
 /**
- * A `host.fs` target refusal (#12323). The code rides on the error object for
- * in-process callers and prefixes the message for callers behind a boundary
- * that keeps only the message.
+ * A `host.fs` target refusal (#12323). The code rides on the error object —
+ * in process and, since the worker port carries it, in a plugin worker — and
+ * also prefixes the message for the renderer bridge, which keeps only that.
  */
 function fsTargetError(code: PluginFsWriteErrorCode, message: string): Error & { code: string } {
   const error = new Error(`${code}: ${message}`) as Error & { code: string };
   error.code = code;
   return error;
+}
+
+/**
+ * Prove an open descriptor is the entry standing at `resolved` — not a symlink
+ * swapped in after containment, and not a different file — and return its
+ * stats. See {@link withVerifiedReadHandle} for why the compare is needed on
+ * top of O_NOFOLLOW.
+ */
+async function assertHandleIsLeaf(
+  pluginId: string,
+  op: string,
+  resolved: string,
+  handle: FileHandle
+): Promise<BigIntStats> {
+  const [opened, entry] = await Promise.all([
+    handle.stat({ bigint: true }),
+    fs.lstat(resolved, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    }),
+  ]);
+  if (entry?.isSymbolicLink()) {
+    throw fsTargetError(
+      "TARGET_IS_SYMLINK",
+      `Plugin "${pluginId}" fs.${op}: refusing to follow a symlink at the target`
+    );
+  }
+  if (entry === null || entry.dev !== opened.dev || entry.ino !== opened.ino) {
+    throw fsTargetError(
+      "TARGET_UNAVAILABLE",
+      `Plugin "${pluginId}" fs.${op}: the target changed while it was being opened`
+    );
+  }
+  return opened;
 }
 
 /**
@@ -2149,30 +2489,170 @@ async function withVerifiedReadHandle<T>(
     throw error;
   }
   try {
-    const [opened, entry] = await Promise.all([
-      handle.stat({ bigint: true }),
-      fs.lstat(resolved, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return null;
-        throw error;
-      }),
-    ]);
-    if (entry?.isSymbolicLink()) {
-      throw fsTargetError(
-        "TARGET_IS_SYMLINK",
-        `Plugin "${pluginId}" fs.${op}: refusing to follow a symlink at the target`
-      );
-    }
-    if (entry === null || entry.dev !== opened.dev || entry.ino !== opened.ino) {
-      throw fsTargetError(
-        "TARGET_UNAVAILABLE",
-        `Plugin "${pluginId}" fs.${op}: the target changed while it was being opened`
-      );
-    }
+    const opened = await assertHandleIsLeaf(pluginId, op, resolved, handle);
     return await read(handle, opened);
   } finally {
     // A read-only descriptor has nothing to flush, so a failed close must not
     // replace the refusal or the bytes this call is returning.
     await handle.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Create `resolved` and every missing ancestor, one component at a time,
+ * reporting each directory to `onCreated` the moment it exists — so a failure
+ * further down the chain never leaves an earlier creation unaudited.
+ * Containment has already proven the deepest existing ancestor is a real
+ * directory inside scope; walking the missing tail with non-recursive `mkdir`
+ * means a component that appears in the meantime is inspected rather than
+ * silently followed — only a real directory is accepted, never a symlink to
+ * one.
+ *
+ * The final realpath compare catches an ancestor swapped for a symlink while
+ * the chain was being built. It cannot un-create what landed elsewhere, but it
+ * refuses to report success for a directory that is not where containment
+ * said it would be. The walk is by pathname, so the window is shrunk, not
+ * closed — the same limit every host.fs write documents.
+ *
+ * `assertLive` runs before each directory is made: every step awaits, and a
+ * plugin unloaded partway must not go on creating the rest of its chain.
+ *
+ * `hostOwned` is for the plugin data dir, a path the host chose rather than a
+ * contained one: it is not realpathed, so its existing ancestors may be links
+ * the user made (a symlinked `~/.daintree`) and there is no realpath to
+ * compare against at the end.
+ */
+async function createDirectoryChain(
+  pluginId: string,
+  op: string,
+  resolved: string,
+  onCreated: (dir: string) => void,
+  assertLive: () => void,
+  hostOwned = false
+): Promise<void> {
+  const lstatOrNull = (target: string) =>
+    (hostOwned ? fs.stat(target) : fs.lstat(target)).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+  const moved = () =>
+    fsTargetError(
+      "TARGET_UNAVAILABLE",
+      `Plugin "${pluginId}" fs.${op}: the target moved while the directory was being created`
+    );
+
+  const missing: string[] = [];
+  let current = resolved;
+  for (;;) {
+    const stat = await lstatOrNull(current);
+    if (stat !== null) {
+      if (stat.isDirectory()) break;
+      if (current === resolved) {
+        throw fsTargetError(
+          "TARGET_EXISTS",
+          `Plugin "${pluginId}" fs.${op}: something other than a directory exists at the target`
+        );
+      }
+      throw moved();
+    }
+    missing.push(current);
+    const parent = path.dirname(current);
+    if (parent === current) throw moved();
+    current = parent;
+  }
+  if (missing.length === 0) return;
+
+  for (const dir of missing.reverse()) {
+    assertLive();
+    try {
+      await fs.mkdir(dir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      // A concurrent creator is fine as long as what it made is a directory.
+      const stat = await lstatOrNull(dir);
+      if (stat === null || !stat.isDirectory()) throw moved();
+      continue;
+    }
+    onCreated(dir);
+  }
+  if (!hostOwned && (await fs.realpath(resolved)) !== resolved) throw moved();
+}
+
+/**
+ * Append `bytes` to the contained leaf through one O_APPEND descriptor,
+ * creating the file when absent. O_NOFOLLOW refuses a leaf swapped for a
+ * symlink on POSIX, and the descriptor is compared with the entry at the path
+ * before anything is written, exactly as reads are.
+ *
+ * A failure after some bytes landed — including a failed close after all of
+ * them were written — carries `bytesWritten` on the error so the caller can
+ * audit the partial append rather than report it as nothing.
+ */
+async function appendToContainedFile(
+  pluginId: string,
+  resolved: string,
+  bytes: Buffer
+): Promise<void> {
+  let handle: FileHandle;
+  try {
+    // O_NONBLOCK (undefined on Windows): the caller already refused a
+    // non-regular leaf, but a FIFO swapped in afterwards would otherwise hold
+    // the open — and this path's write lock — until some reader appeared. On
+    // a regular file the flag changes nothing.
+    handle = await fs.open(
+      resolved,
+      fs.constants.O_WRONLY |
+        fs.constants.O_APPEND |
+        fs.constants.O_CREAT |
+        (fs.constants.O_NOFOLLOW ?? 0) |
+        (fs.constants.O_NONBLOCK ?? 0),
+      0o666
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") {
+      throw fsTargetError(
+        "TARGET_IS_SYMLINK",
+        `Plugin "${pluginId}" fs.appendFile: refusing to write through a symlink`
+      );
+    }
+    throw error;
+  }
+  let written = 0;
+  try {
+    const opened = await assertHandleIsLeaf(pluginId, "appendFile", resolved, handle);
+    if (!opened.isFile()) {
+      throw fsTargetError(
+        "TARGET_UNAVAILABLE",
+        `Plugin "${pluginId}" fs.appendFile: the target is not a regular file`
+      );
+    }
+    // A regular file takes the whole buffer in one write; the loop only
+    // matters for a short write, where each O_APPEND write still lands at
+    // the end but another appender can interleave between the pieces.
+    try {
+      while (written < bytes.byteLength) {
+        const { bytesWritten } = await handle.write(bytes, written, bytes.byteLength - written);
+        written += bytesWritten;
+      }
+    } catch (error) {
+      if (written > 0 && error instanceof Error) {
+        Object.assign(error, { bytesWritten: written });
+      }
+      throw error;
+    }
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+  // Unlike a read, a failed close after a write can mean the bytes did not
+  // land, so it is surfaced — with the count, since they may well have.
+  try {
+    await handle.close();
+  } catch (error) {
+    if (written > 0 && error instanceof Error) {
+      Object.assign(error, { bytesWritten: written });
+    }
+    throw error;
   }
 }
 
@@ -2188,6 +2668,9 @@ async function withVerifiedReadHandle<T>(
  * {@link buildScopedFsApi}. Nothing else about the surface changes: it is the
  * same closures, the same gates, and the same watcher registry.
  */
+/** How often an `allowMissing` watch checks whether its paths exist. */
+const PLUGIN_FS_WATCH_PRESENCE_POLL_MS = 1000;
+
 function buildFsApi(
   deps: PluginHostFactoryDeps,
   pluginId: string,
@@ -2244,8 +2727,137 @@ function buildFsApi(
   };
   const containWithClass = (targetPath: string) =>
     containToDeclaredRoots(deps, pluginId, targetPath, workspaceScope);
+  // Every gate a mutation passes before it may touch the disk: the root-class
+  // capability, containment, and JIT consent — taken exactly once, and always
+  // before anything is created.
+  //
+  // Consent normally fires after validation + containment so a call that would
+  // fail anyway never banks a grant (#10524). The implicit per-plugin data dir
+  // is the exception: resolveContainedPath realpaths every root and skips ones
+  // that don't exist, so a first mutation into a not-yet-created data dir must
+  // create it before containment can succeed — and nothing may be created
+  // before consent. There the lexical match stands in for containment until
+  // the dir exists; realpath containment afterwards stays the authority.
+  //
+  // A data-dir target is identified from the (lexical) request path, not the
+  // realpath-resolved one: on macOS the resolved path picks up the /private
+  // prefix while `dataDir` does not, so comparing against `resolved` would
+  // wrongly miss the match.
+  const gateMutation = async (
+    op: string,
+    targetPath: string,
+    writeCap: BuiltInPluginCapability
+  ): Promise<{ resolved: string; isDataDirTarget: boolean }> => {
+    const dataDir = deps.pluginDataDir(pluginId);
+    const isDataDirTarget =
+      path.isAbsolute(targetPath) && deps.isPathUnder(dataDir, path.normalize(targetPath));
+    if (isDataDirTarget) {
+      requireWriteCapForClass(op, "user-data");
+      await ensureCapabilityConsent(deps, pluginId, writeCap);
+      requireLoaded(op);
+      await createDirectoryChain(
+        pluginId,
+        op,
+        dataDir,
+        (dir) => auditMutation("mkdir", dir),
+        () => requireLoaded(op),
+        true
+      );
+    }
+    const { resolved, rootClass } = await containWithClass(targetPath);
+    requireLoaded(op);
+    requireWriteCapForClass(op, rootClass);
+    if (!isDataDirTarget) {
+      await ensureCapabilityConsent(deps, pluginId, writeCap);
+      requireLoaded(op);
+    }
+    return { resolved, isDataDirTarget };
+  };
+  // A nested target inside the data dir grows its parents implicitly, so a
+  // plugin can lay out its own subtree; everywhere else the parent must exist.
+  const createDataDirParents = async (op: string, resolved: string): Promise<void> => {
+    await createDirectoryChain(
+      pluginId,
+      op,
+      path.dirname(resolved),
+      (dir) => auditMutation("mkdir", dir),
+      () => requireLoaded(op)
+    );
+  };
+  // Containment resolved before the consent prompt and the per-path queue
+  // wait; both can take long enough for the path to change underneath, so a
+  // mutation proves it again inside its critical section. A target that has
+  // since left scope moved while waiting, the same as one that moved within it.
+  const recheckContained = async (op: string, targetPath: string, resolved: string) => {
+    const recheck = await containWithClass(targetPath).catch((error: unknown) => {
+      if (error instanceof PluginPathNotAllowedError) {
+        throw fsTargetError(
+          "TARGET_UNAVAILABLE",
+          `Plugin "${pluginId}" fs.${op}: the target moved while the write was waiting`
+        );
+      }
+      throw error;
+    });
+    if (recheck.resolved !== resolved) {
+      throw fsTargetError(
+        "TARGET_UNAVAILABLE",
+        `Plugin "${pluginId}" fs.${op}: the target moved while the write was waiting`
+      );
+    }
+  };
+  // A symlink leaf is refused: containment realpaths the leaf, so `resolved`
+  // is already the link's destination and a bare lstat there sees a regular
+  // file. Inspect the requested leaf itself. Every ancestor was validated by
+  // containment; only the leaf can be a link the caller did not ask to write
+  // through. Resolves the leaf's stats, or null when nothing stands there.
+  const refuseSymlinkLeaf = async (op: string, targetPath: string) => {
+    const leafStat = await fs
+      .lstat(path.resolve(targetPath))
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+    if (leafStat?.isSymbolicLink()) {
+      throw fsTargetError(
+        "TARGET_IS_SYMLINK",
+        `Plugin "${pluginId}" fs.${op}: refusing to write through a symlink`
+      );
+    }
+    return leafStat;
+  };
+  const auditMutation = (op: string, resolved: string, bytes?: number): void => {
+    deps.safeAppendAudit({
+      pluginId,
+      actionId: `fs.${op}:${resolved}`,
+      recordType: "ipc-invoke",
+      channel: "plugin:fs-write",
+      result: "success",
+      errorMessage: "",
+      argsHash: deps.safeArgsHash([
+        bytes === undefined ? { path: resolved } : { path: resolved, bytes },
+      ]),
+      durationMs: 0,
+    });
+  };
 
-  return {
+  // Approves a file another host component writes (a database backup)
+  // through the same gate as writeFile. Kept off the object plugins receive.
+  const prepareWrite = async (op: string, targetPath: string): Promise<string> => {
+    requireLoaded(op);
+    const writeCap = requireWriteCap(op);
+    if (typeof targetPath !== "string" || targetPath.length === 0) {
+      throw new Error(`Plugin "${pluginId}" ${op}: a destination path is required`);
+    }
+    const { resolved, isDataDirTarget } = await gateMutation(op, targetPath, writeCap);
+    if (isDataDirTarget) await createDataDirParents(op, resolved);
+    await refuseSymlinkLeaf(op, targetPath);
+    // Recorded when approved: the write itself happens in the plugin's own
+    // process, which the audit trail cannot see.
+    auditMutation(`${op}:approved`, resolved);
+    return resolved;
+  };
+
+  const api: BuiltinPluginFsApi = {
     readFile: async (filePath, options) => {
       options?.signal?.throwIfAborted();
       requireLoaded("readFile");
@@ -2283,6 +2895,25 @@ function buildFsApi(
       // backing ArrayBuffer with unrelated reads, so handing the view straight
       // to a plugin would expose whatever else the pool holds.
       return new Uint8Array(buffer);
+    },
+    readFileWithRevision: async (filePath, options) => {
+      options?.signal?.throwIfAborted();
+      requireLoaded("readFileWithRevision");
+      requireAnyReadCap("readFileWithRevision");
+      const { resolved, rootClass } = await containWithClass(filePath);
+      requireLoaded("readFileWithRevision");
+      requireReadCapForClass("readFileWithRevision", rootClass);
+      options?.signal?.throwIfAborted();
+      // Decoded and hashed from one buffer, so the revision always describes
+      // the text returned — two reads could straddle a write.
+      const buffer = await withVerifiedReadHandle(
+        pluginId,
+        "readFileWithRevision",
+        resolved,
+        0,
+        (handle) => handle.readFile({ signal: options?.signal })
+      );
+      return { contents: buffer.toString("utf-8"), revision: sha256Hex(buffer) };
     },
     readFileBounded: async (filePath, options) => {
       options?.signal?.throwIfAborted();
@@ -2351,40 +2982,8 @@ function buildFsApi(
           `Plugin "${pluginId}" fs.writeFile: expectedRevision must be a sha256 hex string or null`
         );
       }
-      // Lazily materialize the implicit per-plugin data dir before containment
-      // when the target (lexically) lands inside it — resolveContainedPath
-      // realpaths every root and skips ones that don't exist, so a first write
-      // into a not-yet-created data dir would otherwise fail containment. The
-      // lexical check only gates the mkdir; realpath containment below stays
-      // the security authority.
-      const dataDir = deps.pluginDataDir(pluginId);
-      // Identify a data-dir write from the (lexical) request path, not the
-      // realpath-resolved one: on macOS the resolved path picks up the
-      // /private prefix while `dataDir` does not, so comparing against
-      // `resolved` would wrongly miss the match. The realpath containment
-      // below remains the security authority either way.
-      const isDataDirWrite =
-        path.isAbsolute(filePath) && deps.isPathUnder(dataDir, path.normalize(filePath));
-      if (isDataDirWrite) {
-        // A data-dir write is always user-data class — gate before the mkdir
-        // so a plugin lacking the cap doesn't materialize the dir as a side
-        // effect (the post-containment check below re-asserts it).
-        requireWriteCapForClass("writeFile", "user-data");
-        await fs.mkdir(dataDir, { recursive: true });
-      }
-      requireLoaded("writeFile");
-      const { resolved, rootClass } = await containWithClass(filePath);
-      requireLoaded("writeFile");
-      requireWriteCapForClass("writeFile", rootClass);
-      // Create intermediate dirs for a nested write inside the data dir so a
-      // plugin can lay out its own subtree without a separate mkdir API.
-      if (isDataDirWrite) {
-        await fs.mkdir(path.dirname(resolved), { recursive: true });
-      }
-      // Consent fires after validation + containment so a call that would fail
-      // anyway never banks a grant (#10524). Re-check liveness after the await.
-      await ensureCapabilityConsent(deps, pluginId, writeCap);
-      requireLoaded("writeFile");
+      const { resolved, isDataDirTarget } = await gateMutation("writeFile", filePath, writeCap);
+      if (isDataDirTarget) await createDataDirParents("writeFile", resolved);
       // One writer per resolved path at a time, so a hash-compare-and-replace
       // cannot interleave with any other host-mediated writer to the same
       // file. Distinct paths never wait on each other.
@@ -2392,42 +2991,8 @@ function buildFsApi(
         // A write queued behind another can outlive its plugin; say so before
         // the recheck below misreports an unloaded plugin's roots as scope.
         requireLoaded("writeFile");
-        // Containment resolved before the consent prompt and the queue wait;
-        // both can take long enough for the path to change underneath, so the
-        // write proves it again inside the critical section. A target that has
-        // since left scope moved while waiting, the same as one that moved
-        // within it.
-        const recheck = await containWithClass(filePath).catch((error: unknown) => {
-          if (error instanceof PluginPathNotAllowedError) {
-            throw fsTargetError(
-              "TARGET_UNAVAILABLE",
-              `Plugin "${pluginId}" fs.writeFile: the target moved while the write was waiting`
-            );
-          }
-          throw error;
-        });
-        if (recheck.resolved !== resolved) {
-          throw fsTargetError(
-            "TARGET_UNAVAILABLE",
-            `Plugin "${pluginId}" fs.writeFile: the target moved while the write was waiting`
-          );
-        }
-        // A symlink leaf is refused: containment realpaths the leaf, so
-        // `resolved` is already the link's destination and a bare lstat there
-        // sees a regular file. Inspect the requested leaf itself.
-        // Every ancestor was validated by containment; only the leaf can be a
-        // link the caller did not ask to write through.
-        const requestedLeaf = path.resolve(filePath);
-        const leafStat = await fs.lstat(requestedLeaf).catch((error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return null;
-          throw error;
-        });
-        if (leafStat?.isSymbolicLink()) {
-          throw fsTargetError(
-            "TARGET_IS_SYMLINK",
-            `Plugin "${pluginId}" fs.writeFile: refusing to write through a symlink`
-          );
-        }
+        await recheckContained("writeFile", filePath, resolved);
+        const leafStat = await refuseSymlinkLeaf("writeFile", filePath);
         const bytes = Buffer.from(contents, "utf-8");
         if (expected === null) {
           // Create-new is an exclusive create at the filesystem, not a check
@@ -2503,17 +3068,74 @@ function buildFsApi(
         return sha256Hex(bytes);
       });
       // Audit every write so host-mediated filesystem mutation is observable.
-      deps.safeAppendAudit({
-        pluginId,
-        actionId: `fs.writeFile:${resolved}`,
-        recordType: "ipc-invoke",
-        channel: "plugin:fs-write",
-        result: "success",
-        errorMessage: "",
-        argsHash: deps.safeArgsHash([{ path: resolved, bytes: Buffer.byteLength(contents) }]),
-        durationMs: 0,
-      });
+      auditMutation("writeFile", resolved, Buffer.byteLength(contents));
       return { revision };
+    },
+    mkdir: async (dirPath) => {
+      requireLoaded("mkdir");
+      const writeCap = requireWriteCap("mkdir");
+      // Containment realpaths the deepest existing ancestor and re-appends the
+      // missing tail, so an existing ancestor that is a symlink out of every
+      // root is refused here, before anything is created.
+      const { resolved } = await gateMutation("mkdir", dirPath, writeCap);
+      // Only what this call made is audited; an existing directory changed
+      // nothing.
+      await runExclusive(resolved, async () => {
+        requireLoaded("mkdir");
+        await recheckContained("mkdir", dirPath, resolved);
+        await createDirectoryChain(
+          pluginId,
+          "mkdir",
+          resolved,
+          (dir) => auditMutation("mkdir", dir),
+          () => requireLoaded("mkdir")
+        );
+      });
+    },
+    appendFile: async (filePath, contents) => {
+      requireLoaded("appendFile");
+      const writeCap = requireWriteCap("appendFile");
+      if (typeof contents !== "string") {
+        throw new Error(`Plugin "${pluginId}" fs.appendFile: contents must be a string`);
+      }
+      const { resolved, isDataDirTarget } = await gateMutation("appendFile", filePath, writeCap);
+      if (isDataDirTarget) await createDataDirParents("appendFile", resolved);
+      const bytes = Buffer.from(contents, "utf-8");
+      // Serialised with writeFile on the same path, so an append can never
+      // land between a checked write's hash compare and its rename.
+      await runExclusive(resolved, async () => {
+        requireLoaded("appendFile");
+        await recheckContained("appendFile", filePath, resolved);
+        const leafStat = await refuseSymlinkLeaf("appendFile", filePath);
+        // A FIFO or device is refused before the open, which on a FIFO with
+        // no reader would otherwise block.
+        if (leafStat !== null && !leafStat.isFile()) {
+          throw fsTargetError(
+            "TARGET_UNAVAILABLE",
+            `Plugin "${pluginId}" fs.appendFile: the target is not a regular file`
+          );
+        }
+        requireLoaded("appendFile");
+        try {
+          await appendToContainedFile(pluginId, resolved, bytes);
+        } catch (error) {
+          const partial = (error as { bytesWritten?: unknown }).bytesWritten;
+          if (typeof partial === "number" && partial > 0) {
+            deps.safeAppendAudit({
+              pluginId,
+              actionId: `fs.appendFile:${resolved}`,
+              recordType: "ipc-invoke",
+              channel: "plugin:fs-write",
+              result: "error",
+              errorMessage: formatErrorMessage(error, "append failed"),
+              argsHash: deps.safeArgsHash([{ path: resolved, bytes: partial }]),
+              durationMs: 0,
+            });
+          }
+          throw error;
+        }
+      });
+      auditMutation("appendFile", resolved, bytes.byteLength);
     },
     readdir: async (dirPath, options) => {
       options?.signal?.throwIfAborted();
@@ -2604,6 +3226,36 @@ function buildFsApi(
       if (typeof callback !== "function") {
         throw new Error(`Plugin "${pluginId}" fs.watch: callback must be a function`);
       }
+      // Validated here, not trusted from the worker port: a malformed option
+      // is an authoring error, never read as "off".
+      const rawRecursive = options?.recursive;
+      if (rawRecursive !== undefined && typeof rawRecursive !== "boolean") {
+        throw new Error(`Plugin "${pluginId}" fs.watch: recursive must be a boolean`);
+      }
+      const recursive = rawRecursive === true;
+      const rawDebounce = options?.debounceMs;
+      if (
+        rawDebounce !== undefined &&
+        (typeof rawDebounce !== "number" || !Number.isFinite(rawDebounce) || rawDebounce < 0)
+      ) {
+        throw new Error(
+          `Plugin "${pluginId}" fs.watch: debounceMs must be a finite, non-negative number`
+        );
+      }
+      // Same floor and off-switch as onDidChangeWorktrees' debounce, plus a
+      // ceiling so a huge value cannot wrap to Node's 1 ms overflow delay.
+      const debounceMs =
+        rawDebounce === undefined || rawDebounce === 0
+          ? 0
+          : Math.min(
+              Math.max(rawDebounce, MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS),
+              MAX_PLUGIN_FS_WATCH_DEBOUNCE_MS
+            );
+      const rawAllowMissing = options?.allowMissing;
+      if (rawAllowMissing !== undefined && typeof rawAllowMissing !== "boolean") {
+        throw new Error(`Plugin "${pluginId}" fs.watch: allowMissing must be a boolean`);
+      }
+      const allowMissing = rawAllowMissing === true;
       const targets = Array.isArray(paths) ? paths : [];
       if (targets.length === 0) {
         throw new Error(`Plugin "${pluginId}" fs.watch: paths must be a non-empty array`);
@@ -2623,9 +3275,39 @@ function buildFsApi(
       // watcher underneath is shared.
       const releases: Array<() => void> = [];
       let disposed = false;
+      let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+      let pendingPath: string | null = null;
+      const deliver = (changed: string): void => {
+        if (disposed || !deps.plugins.has(pluginId)) return;
+        try {
+          callback(changed);
+        } catch (err) {
+          console.error(`[PluginService] plugin "${pluginId}" fs.watch callback threw:`, err);
+        }
+      };
+      // One timer per subscription, shared across every path it watches, so a
+      // burst touching several watched directories still yields one callback.
+      const onChange =
+        debounceMs > 0
+          ? (changed: string): void => {
+              if (disposed) return;
+              pendingPath = changed;
+              if (debounceTimer) clearTimeout(debounceTimer);
+              debounceTimer = setTimeout(() => {
+                debounceTimer = null;
+                const latest = pendingPath;
+                pendingPath = null;
+                if (latest !== null) deliver(latest);
+              }, debounceMs);
+            }
+          : deliver;
       const dispose = (): void => {
         if (disposed) return;
         disposed = true;
+        if (debounceTimer) {
+          clearTimeout(debounceTimer);
+          debounceTimer = null;
+        }
         for (const release of releases) {
           try {
             release();
@@ -2636,18 +3318,102 @@ function buildFsApi(
         deps.pluginFsWatchers.get(pluginId)?.delete(dispose);
       };
 
+      // Node's Linux recursive watcher follows static symlink targets, so its
+      // reports are not proof of containment. The path it reports is always
+      // joined onto the watched root; anything that does not stay lexically
+      // inside that root is dropped rather than handed on.
+      const withinRootOf =
+        (resolved: string) =>
+        (changed: string): void => {
+          const rel = path.relative(resolved, changed);
+          if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return;
+          onChange(changed);
+        };
+
+      // `allowMissing`: each target is attached while it exists, and a timer
+      // notices it appearing, disappearing or being replaced. Containment is
+      // proved again at each attach — the path did not exist when it was first
+      // checked, so whatever was created there could be a link leading out.
+      let presenceTimer: ReturnType<typeof setInterval> | null = null;
+      const presence = allowMissing
+        ? targets.map((requested, index) => ({
+            requested,
+            resolved: resolvedTargets[index]!,
+            release: null as (() => void) | null,
+            identity: null as string | null,
+          }))
+        : [];
+      const refreshPresence = async (announce: boolean): Promise<void> => {
+        for (const target of presence) {
+          if (disposed || !deps.plugins.has(pluginId)) return;
+          const stat = await fs.stat(target.resolved).catch(() => null);
+          const identity = stat ? `${stat.dev}:${stat.ino}` : null;
+          if (identity === target.identity) continue;
+          if (target.release) {
+            target.release();
+            target.release = null;
+          }
+          target.identity = null;
+          if (identity !== null) {
+            const recheck = await containWithClass(target.requested).catch(() => null);
+            if (disposed || !deps.plugins.has(pluginId)) return;
+            if (!recheck || recheck.resolved !== target.resolved) continue;
+            // The root that admits the path can differ once it exists (a data
+            // dir created inside a project root), so its class is gated again.
+            try {
+              requireReadCapForClass("watch", recheck.rootClass);
+            } catch {
+              continue;
+            }
+            try {
+              // The identity makes a replaced directory get its own watcher: a
+              // shared one kept alive by another subscriber is still bound to
+              // the old inode, and rejoining it would silently watch nothing.
+              target.release = watchShared(target.resolved, withinRootOf(target.resolved), {
+                recursive,
+                identity,
+              });
+              target.identity = identity;
+            } catch {
+              // Gone again between the stat and the watch; the next tick retries.
+              continue;
+            }
+          }
+          if (announce) onChange(target.resolved);
+        }
+      };
+      if (allowMissing) {
+        releases.push(() => {
+          if (presenceTimer) clearInterval(presenceTimer);
+          presenceTimer = null;
+          for (const target of presence) target.release?.();
+        });
+      }
+
       try {
-        for (const resolved of resolvedTargets) {
-          releases.push(
-            watchShared(resolved, (changed) => {
-              if (disposed || !deps.plugins.has(pluginId)) return;
-              try {
-                callback(changed);
-              } catch (err) {
-                console.error(`[PluginService] plugin "${pluginId}" fs.watch callback threw:`, err);
-              }
-            })
-          );
+        if (allowMissing) {
+          await refreshPresence(false);
+          // An unload or a cancel during that first check found no disposer to
+          // call — the caller has already given up on the result.
+          options?.signal?.throwIfAborted();
+          requireLoaded("watch");
+          // One check at a time: two overlapping checks could both attach and
+          // leave the first shared watcher unreleased.
+          let refreshing = false;
+          presenceTimer = setInterval(() => {
+            if (refreshing) return;
+            refreshing = true;
+            void refreshPresence(true)
+              .catch(() => undefined)
+              .finally(() => {
+                refreshing = false;
+              });
+          }, PLUGIN_FS_WATCH_PRESENCE_POLL_MS);
+          presenceTimer.unref?.();
+        } else {
+          for (const resolved of resolvedTargets) {
+            releases.push(watchShared(resolved, withinRootOf(resolved), { recursive }));
+          }
         }
       } catch (err) {
         // A later path's watch threw (e.g. ENOENT) after earlier subscriptions
@@ -2673,6 +3439,8 @@ function buildFsApi(
       return dispose;
     },
   };
+  fsWriteApprovers.set(api, prepareWrite);
+  return api;
 }
 
 /**
@@ -3090,6 +3858,268 @@ function buildSystemApi(deps: PluginHostFactoryDeps, pluginId: string): PluginSy
         argsHash: deps.safeArgsHash([{ path: resolved }]),
         durationMs: 0,
       });
+    },
+  };
+}
+
+/**
+ * Host-mediated HTML-to-PDF export (`host.documents`). Electron's `printToPDF`
+ * lives in main, out of reach of plugin code, so without this a plugin that
+ * could render an invoice as HTML had no way to hand the user a PDF.
+ *
+ * The output is written under exactly the gates `host.fs.writeFile` applies —
+ * containment, the per-root-class write capability, JIT consent, a containment
+ * recheck and symlink-leaf refusal inside the per-path critical section, an
+ * atomic replace, and an audit record — so a PDF can land nowhere a text write
+ * could not. An `htmlPath` source is read-contained and read-gated like
+ * `fs.readFile`, and rendered from a bounded snapshot rather than the path.
+ * The render itself lives in `pluginPdfRenderer.ts`.
+ *
+ * The render window is torn down inside every call; a call still queued or
+ * rendering when the plugin unloads is cancelled.
+ */
+function buildDocumentsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginDocumentsApi {
+  const requireLoaded = (): void => {
+    if (!deps.plugins.has(pluginId)) {
+      throw new Error(
+        `PLUGIN_UNLOADED: plugin "${pluginId}" documents.renderPdf: plugin is no longer loaded`
+      );
+    }
+  };
+  const requireCapForClass = (kind: "read" | "write", rootClass: FsRootClass, what: string) => {
+    const needed = `${rootClass === "project" ? "fs:project" : "fs:user-data"}-${kind}` as const;
+    if (!deps.declaredCapabilities(pluginId).has(needed)) {
+      throw new Error(
+        `PERMISSION_REQUIRED: plugin "${pluginId}" documents.renderPdf requires the "${needed}" capability for ${what} under ${rootClass} paths, which is not declared in manifest.capabilities`
+      );
+    }
+  };
+  const moved = () =>
+    fsTargetError(
+      "TARGET_UNAVAILABLE",
+      `Plugin "${pluginId}" documents.renderPdf: the output target moved while the render was running`
+    );
+  // Containment realpaths the leaf, so the requested leaf itself is inspected.
+  const refuseSymlinkLeaf = async (outputPath: string) => {
+    const leafStat = await fs
+      .lstat(path.resolve(outputPath))
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+    if (leafStat?.isSymbolicLink()) {
+      throw fsTargetError(
+        "TARGET_IS_SYMLINK",
+        `Plugin "${pluginId}" documents.renderPdf: refusing to write through a symlink`
+      );
+    }
+    return leafStat;
+  };
+
+  const htmlMoved = () =>
+    fsTargetError(
+      "TARGET_UNAVAILABLE",
+      `Plugin "${pluginId}" documents.renderPdf: htmlPath moved while the render was waiting`
+    );
+  const tooLarge = () =>
+    new Error(
+      `PAYLOAD_TOO_LARGE: plugin "${pluginId}" documents.renderPdf: htmlPath exceeds the ${MAX_HTML_BYTES} byte limit`
+    );
+  // The page is rendered from a snapshot taken here, after the consent prompt,
+  // never from the path: containment is proven again and the bytes come
+  // through the same verified, non-following read `fs.readFile` uses, so a
+  // file swapped for a symlink while the call waited cannot be what renders.
+  const readHtmlSnapshot = async (htmlPath: string, expected: string): Promise<string> => {
+    const recheck = await containToDeclaredRoots(deps, pluginId, htmlPath).catch(
+      (error: unknown) => {
+        if (error instanceof PluginPathNotAllowedError) throw htmlMoved();
+        throw error;
+      }
+    );
+    if (recheck.resolved !== expected) throw htmlMoved();
+    requireLoaded();
+    requireCapForClass("read", recheck.rootClass, "htmlPath");
+    const bytes = await withVerifiedReadHandle(
+      pluginId,
+      "renderPdf",
+      expected,
+      fs.constants.O_NONBLOCK ?? 0,
+      async (handle, opened) => {
+        if (!opened.isFile()) {
+          throw new Error(
+            `INVALID_PATH: plugin "${pluginId}" documents.renderPdf: htmlPath is not a file: ${expected}`
+          );
+        }
+        // limit + 1 so an oversized file is recognised without holding more of it.
+        const buffer = Buffer.allocUnsafe(MAX_HTML_BYTES + 1);
+        let filled = 0;
+        while (filled < buffer.length) {
+          const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, null);
+          if (bytesRead === 0) break;
+          filled += bytesRead;
+        }
+        if (filled > MAX_HTML_BYTES) throw tooLarge();
+        return buffer.subarray(0, filled);
+      }
+    );
+    return bytes.toString("utf-8");
+  };
+
+  return {
+    renderPdf: async (rawOptions): Promise<PluginRenderPdfResult> => {
+      requireLoaded();
+      const caps = deps.declaredCapabilities(pluginId);
+      if (!caps.has("fs:project-write") && !caps.has("fs:user-data-write")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" documents.renderPdf requires "fs:project-write" or "fs:user-data-write", which is not declared in manifest.capabilities`
+        );
+      }
+      // Same single consent unit as `fs.writeFile`, so a plugin already allowed
+      // to write files is not asked again for a PDF.
+      const writeCap: BuiltInPluginCapability = caps.has("fs:project-write")
+        ? "fs:project-write"
+        : "fs:user-data-write";
+      const { source, outputPath, print } = validateRenderPdfOptions(pluginId, rawOptions);
+      // Two phases, each bounded so the HTML every parked call carries stays
+      // bounded too. Until consent is given the call holds only a per-plugin
+      // consent-wait place and no clock runs: the prompt goes at the user's
+      // pace, and an unanswered one must not tie up a render slot. From consent
+      // on it holds a render slot, and the 30 s deadline that starts with the
+      // slot covers reading the input, the queue wait and the render.
+      const consentWait = reserveConsentWait(pluginId);
+      let reservation: RenderReservation | null = null;
+      const within = <T>(step: Promise<T>): Promise<T> => {
+        step.catch(() => undefined);
+        return reservation ? Promise.race([step, reservation.expired]) : step;
+      };
+      const cancel = new AbortController();
+      const untrack = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => cancel.abort());
+      try {
+        // A first export into the plugin's own namespace may find the data dir
+        // missing. It is created only once consent is given, so until then the
+        // output is checked against what exists: its parent must be the data
+        // dir itself, which is host-owned and needs no containment proof.
+        const dataDir = deps.pluginDataDir(pluginId);
+        const normalizedOutput = path.normalize(outputPath);
+        const inDataDir = deps.isPathUnder(dataDir, normalizedOutput);
+        if (inDataDir) requireCapForClass("write", "user-data", "the output");
+        const dataDirMissing =
+          inDataDir && (await fs.stat(dataDir).catch(() => null))?.isDirectory() !== true;
+        if (dataDirMissing && path.dirname(normalizedOutput) !== path.normalize(dataDir)) {
+          throw new Error(
+            `INVALID_PATH: plugin "${pluginId}" documents.renderPdf: the output's parent directory does not exist: ${path.dirname(normalizedOutput)}`
+          );
+        }
+
+        const containOutput = async () => {
+          const contained = await containToDeclaredRoots(deps, pluginId, outputPath);
+          requireLoaded();
+          requireCapForClass("write", contained.rootClass, "the output");
+          const parent = await fs.stat(path.dirname(contained.resolved)).catch(() => null);
+          if (!parent?.isDirectory()) {
+            throw new Error(
+              `INVALID_PATH: plugin "${pluginId}" documents.renderPdf: the output's parent directory does not exist: ${path.dirname(contained.resolved)}`
+            );
+          }
+          return contained;
+        };
+        let output = dataDirMissing ? null : await containOutput();
+
+        let input: { htmlPath: string; resolved: string; root: string } | null = null;
+        if (source.kind === "path") {
+          const contained = await containToDeclaredRoots(deps, pluginId, source.htmlPath);
+          requireLoaded();
+          requireCapForClass("read", contained.rootClass, "htmlPath");
+          const inputStat = await fs.stat(contained.resolved).catch(() => null);
+          if (!inputStat?.isFile()) {
+            throw new Error(
+              `INVALID_PATH: plugin "${pluginId}" documents.renderPdf: htmlPath is not a file: ${contained.resolved}`
+            );
+          }
+          if (inputStat.size > MAX_HTML_BYTES) throw tooLarge();
+          input = { htmlPath: source.htmlPath, resolved: contained.resolved, root: contained.root };
+        }
+
+        // Checked again once the render is done; this early pass only spares a
+        // render whose write is already certain to be refused.
+        if (output) await refuseSymlinkLeaf(outputPath);
+        await ensureCapabilityConsent(deps, pluginId, writeCap);
+        requireLoaded();
+        consentWait.release();
+        reservation = reserveRender(pluginId);
+        if (!output) {
+          await within(fs.mkdir(dataDir, { recursive: true }));
+          output = await within(containOutput());
+        }
+        const contained = output;
+
+        let html: string;
+        let baseUrl: string | null = null;
+        let resourceRoot: string | null = null;
+        if (input) {
+          html = await within(readHtmlSnapshot(input.htmlPath, input.resolved));
+          baseUrl = pathToFileURL(path.dirname(input.resolved) + path.sep).href;
+          resourceRoot = await within(fs.realpath(input.root));
+        } else {
+          html = source.kind === "html" ? source.html : "";
+          // Inline HTML may still reference absolute file: URLs, but only inside
+          // a root the plugin could read for itself.
+          const readCap =
+            contained.rootClass === "project" ? "fs:project-read" : "fs:user-data-read";
+          if (caps.has(readCap)) resourceRoot = await within(fs.realpath(contained.root));
+        }
+        requireLoaded();
+        const pdf = await within(
+          renderHtmlToPdf({
+            html,
+            baseUrl,
+            resourceRoot,
+            print,
+            signal: cancel.signal,
+            timeoutMs: reservation.remainingMs(),
+          })
+        );
+        requireLoaded();
+
+        const revision = await runExclusive(contained.resolved, async () => {
+          requireLoaded();
+          // The consent prompt, the render and the queue wait can each take long
+          // enough for the path to change, so containment is proven again here,
+          // exactly as `fs.writeFile` does.
+          const recheck = await containToDeclaredRoots(deps, pluginId, outputPath).catch(
+            (error: unknown) => {
+              if (error instanceof PluginPathNotAllowedError) throw moved();
+              throw error;
+            }
+          );
+          if (recheck.resolved !== contained.resolved) throw moved();
+          const leafStat = await refuseSymlinkLeaf(outputPath);
+          const mode = leafStat ? leafStat.mode & 0o777 : undefined;
+          requireLoaded();
+          await resilientAtomicWriteFile(
+            contained.resolved,
+            pdf,
+            undefined,
+            mode === undefined ? undefined : { mode }
+          );
+          return sha256Hex(pdf);
+        });
+        deps.safeAppendAudit({
+          pluginId,
+          actionId: `documents.renderPdf:${contained.resolved}`,
+          recordType: "ipc-invoke",
+          channel: "plugin:fs-write",
+          result: "success",
+          errorMessage: "",
+          argsHash: deps.safeArgsHash([{ path: contained.resolved, bytes: pdf.byteLength }]),
+          durationMs: 0,
+        });
+        return { path: contained.resolved, bytes: pdf.byteLength, revision };
+      } finally {
+        consentWait.release();
+        reservation?.release();
+        untrack();
+      }
     },
   };
 }

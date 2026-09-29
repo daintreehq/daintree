@@ -252,12 +252,11 @@ watchdog-disabled    watchdogStatus === "disabled" — deadlock detector gone
 safe-mode            safeMode && !dismissed        — panels held back after a crash loop
 restore-confirmation                               — informational "session recovered"
 missing-prerequisite                               — a fatal tool (Git, Node) isn't installed
-forge-token                                        — expired forge credentials
 cloud-sync                                         — synced-folder warning
 rosetta                                            — x64 build translated on Apple Silicon
 ```
 
-Watchdog ranks below host-crash (a live failure beats a downed monitor) and above safe-mode (the watchdog protects against the _next_ crash; safe-mode is a consequence of the _previous_ one). `missing-prerequisite` (#11763) sits below the recovery block because a downed backend is the more urgent read and the prerequisite banner self-clears on the next window focus, and above `forge-token` on blast radius — an expired token breaks one panel's data, a missing Git breaks every git operation. The full ladder and the notification machinery behind it are in [notification-system.md](./notification-system.md).
+Watchdog ranks below host-crash (a live failure beats a downed monitor) and above safe-mode (the watchdog protects against the _next_ crash; safe-mode is a consequence of the _previous_ one). `missing-prerequisite` (#11763) sits below the recovery block because a downed backend is the more urgent read and the prerequisite banner self-clears on the next window focus. An expired forge token has no slot; it points at the forge pill instead (#12831). The full ladder and the notification machinery behind it are in [notification-system.md](./notification-system.md).
 
 ### The local-error suppression rule
 

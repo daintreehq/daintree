@@ -8,6 +8,7 @@ import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { logWarn } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { resolvePluginAttribution } from "@/hooks/usePluginAttribution";
+import { publishRegisteredPluginActions } from "@/services/plugin/registeredPluginActions";
 
 /**
  * Pull plugin-registered actions on mount and keep the renderer registry in
@@ -61,6 +62,10 @@ export function usePluginActions(): void {
         actionService.register(toSyntheticDefinition(descriptor, inFlightConfirms, () => disposed));
         registered.set(id, descriptor);
       }
+
+      publishRegisteredPluginActions(
+        Array.from(registered, ([id, descriptor]) => [id, descriptor.title ?? ""] as const)
+      );
     };
 
     const electron = typeof window !== "undefined" ? window.electron : undefined;
@@ -98,6 +103,7 @@ export function usePluginActions(): void {
         actionService.unregister(id);
       }
       registered.clear();
+      publishRegisteredPluginActions([]);
     };
   }, []);
 }

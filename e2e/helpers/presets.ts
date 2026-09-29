@@ -86,13 +86,17 @@ export async function navigateToAgentSettings(
         }
 
         try {
-          const currentText = await dropdownTrigger.textContent();
-          if (currentText?.trim() !== displayName) {
-            await dropdownTrigger.click({ force: true, noWaitAfter: true });
+          const currentLabel = await dropdownTrigger.getAttribute("aria-label");
+          if (currentLabel !== `Switch agent, current: ${displayName}`) {
+            await dropdownTrigger.click();
             const listbox = window.locator('[role="listbox"]#agent-selector-list');
             await expect(listbox).toBeVisible({ timeout: 5000 });
-            const option = listbox.locator('[role="option"]', { hasText: displayName });
-            await option.click({ force: true, noWaitAfter: true });
+            const option = listbox.locator(`#agent-selector-item-${agentId}`);
+            await option.click();
+            await expect(dropdownTrigger).toHaveAttribute(
+              "aria-label",
+              `Switch agent, current: ${displayName}`
+            );
             await expect(listbox).not.toBeVisible({ timeout: 5000 });
           }
 
@@ -120,13 +124,17 @@ export async function navigateToAgentSettings(
 
       await expect(dropdownTrigger).toBeVisible({ timeout: 5000 });
 
-      const currentText = await dropdownTrigger.textContent();
-      if (currentText?.trim() !== displayName) {
-        await dropdownTrigger.click({ force: true, noWaitAfter: true });
+      const currentLabel = await dropdownTrigger.getAttribute("aria-label");
+      if (currentLabel !== `Switch agent, current: ${displayName}`) {
+        await dropdownTrigger.click();
         const listbox = window.locator('[role="listbox"]#agent-selector-list');
         await expect(listbox).toBeVisible({ timeout: 5000 });
-        const option = listbox.locator('[role="option"]', { hasText: displayName });
-        await option.click({ force: true, noWaitAfter: true });
+        const option = listbox.locator(`#agent-selector-item-${agentId}`);
+        await option.click();
+        await expect(dropdownTrigger).toHaveAttribute(
+          "aria-label",
+          `Switch agent, current: ${displayName}`
+        );
         await expect(listbox).not.toBeVisible({ timeout: 5000 });
       }
       await expect(presetSection).toBeVisible({ timeout: 5000 });

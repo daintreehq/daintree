@@ -171,8 +171,8 @@ describe("AppLayout assistant push sidebar — issue #6619", () => {
   });
 
   it("publishes --right-obstruction-offset as max(portal, assistant) (issue #6629)", () => {
-    // Portal overlays Assistant when both are open, so the rightmost fixed
-    // obstruction is max(portal, assistant), not their sum. Toaster, popovers,
+    // Portal and Assistant are mutually exclusive; max(portal, assistant)
+    // rather than their sum keeps any overlap from double-counting. Toaster, popovers,
     // ReEntrySummary, GettingStartedChecklist, and the ThemeBrowser overlay
     // all read this var — they're body-portaled fixed elements that would
     // otherwise be hidden behind the wider of the two panels.
@@ -251,11 +251,23 @@ describe("AppLayout drag-resize transition gating — issue #7627", () => {
   });
 
   it("gates both width transitions on the resize state, preserving them otherwise", () => {
-    // The 250ms ease-out-expo transition is kept (it animates collapse/expand
+    // The panel-tier width transition is kept (it animates collapse/expand
     // and double-click reset) but suppressed during active drag-resize so the
     // edge tracks the cursor without the per-mousemove ease.
-    expect(source).toMatch(/!reduceAnimations\s*&&\s*!isSidebarResizing\s*&&/);
-    expect(source).toMatch(/!reduceAnimations\s*&&\s*!isAssistantResizing\s*&&/);
+    expect(source).toMatch(/!isSidebarResizing\s*&&/);
+    expect(source).toMatch(/!isAssistantResizing\s*&&/);
+    // Reduced motion (the OS setting or the in-app one, both through the
+    // `motion-reduce:` variant) never interpolates the width.
+    // Either it drops the width transition outright, or (the closing leg) it
+    // stages it as a 0s snap after the fade.
+    for (const width of source.match(/"transition-\[width\][^"]*"/g) ?? []) {
+      const staged = /motion-reduce:\[transition-property:opacity,width\]/.test(width);
+      if (staged) {
+        expect(width).toMatch(/motion-reduce:\[transition-duration:[^,\]]+,0s\]/);
+      } else {
+        expect(width).toMatch(/motion-reduce:transition-(none|opacity)/);
+      }
+    }
     // The transition string must remain specific to width — never widened to
     // bare `transition` or `transition-all`. Past lesson #4738.
     expect(source).toContain("transition-[width]");
@@ -364,7 +376,7 @@ describe("AppLayout portal viewport coverage — issue #6629", () => {
     // Issue #6629: when the Assistant became a flex sibling of <main> in
     // PR #6620, the Portal (rendered as `absolute right-0` inside <main>)
     // stopped at the Assistant's left edge. Body-portaling with `position:
-    // fixed` lets the Portal escape <main>'s width and overlay the Assistant.
+    // fixed` lets the Portal escape <main>'s width and span the right edge.
     expect(source).toMatch(/\{layout\.portalOpen &&\s*\n\s*createPortal\(/);
     // Issue #11893: the top edge is driven by OVERLAY_TOP_OFFSET (toolbar height
     // plus the measured global-banner height) rather than a static top-12, which
@@ -532,9 +544,7 @@ describe("AppLayout sidebar-width hydration transition gating — issue #10321",
   it("gates the sidebar width transition on the hydration flag alongside the resize guard", () => {
     // The new flag must join the existing gate, not replace it — drag-resize
     // suppression (#7627) and reduced-motion must still hold.
-    expect(source).toMatch(
-      /!reduceAnimations\s*&&\s*!isSidebarResizing\s*&&\s*!isSidebarWidthHydrating\s*&&/
-    );
+    expect(source).toMatch(/!isSidebarResizing\s*&&\s*!isSidebarWidthHydrating\s*&&/);
   });
 
   it("clears the hydration flag in both the restore success and failure paths", () => {

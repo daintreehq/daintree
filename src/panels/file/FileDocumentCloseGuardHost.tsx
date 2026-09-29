@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Button } from "@/components/ui/button";
 import { registerPanelCloseGuard, type PanelCloseVerdict } from "@/services/panelCloseGuard";
 import { getFileDocumentProjection, useFileDocumentStore } from "@/store/fileDocumentStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -153,48 +152,43 @@ export function FileDocumentCloseGuardHost() {
       dismissible={busy === null}
       size="sm"
       zIndex="nested"
+      // Explicit: Discard now leads the footer, and the default "first" pass
+      // would land on it.
+      initialFocus="cancel"
       data-testid="file-pane-close-prompt"
     >
       <AppDialog.Header>
         <AppDialog.Title>{`Save changes to '${fileName}'?`}</AppDialog.Title>
+        <AppDialog.CloseButton />
       </AppDialog.Header>
       <AppDialog.Body>
         <AppDialog.Description>
           Save your edits before leaving this file, or discard them to continue.
         </AppDialog.Description>
       </AppDialog.Body>
-      <AppDialog.Footer>
-        <div className="flex shrink-0 items-center gap-3">
-          <Button
-            variant="ghost"
-            onClick={() => settle(prompt, "cancel")}
-            disabled={busy !== null}
-            className="text-text-secondary hover:text-text-primary"
-            data-confirm-role="cancel"
-          >
-            Cancel
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => void handleDiscard(prompt)}
-            disabled={busy !== null}
-            loading={busy === "discard"}
-            data-testid="file-pane-close-discard"
-          >
-            Discard changes
-          </Button>
-          <Button
-            variant="contrast"
-            onClick={() => void handleSave(prompt)}
-            disabled={busy !== null}
-            loading={busy === "save"}
-            data-confirm-role="confirm"
-            data-testid="file-pane-close-save"
-          >
-            Save
-          </Button>
-        </div>
-      </AppDialog.Footer>
+      {/* Save / Discard / Cancel is a real three-way answer, so Discard is not a
+          second confirm: it is the destructive choice, set apart on the leading
+          edge from the Cancel / Save pair the user reaches for. */}
+      <AppDialog.Footer
+        leadingAction={{
+          label: "Discard changes",
+          onClick: () => void handleDiscard(prompt),
+          disabled: busy !== null,
+          loading: busy === "discard",
+          intent: "destructive",
+        }}
+        secondaryAction={{
+          label: "Cancel",
+          onClick: () => settle(prompt, "cancel"),
+          disabled: busy !== null,
+        }}
+        primaryAction={{
+          label: "Save",
+          onClick: () => void handleSave(prompt),
+          disabled: busy !== null && busy !== "save",
+          loading: busy === "save",
+        }}
+      />
     </AppDialog>
   );
 }

@@ -64,7 +64,6 @@ const registerMocks = vi.hoisted(() => ({
   registerPrivacyHandlers: vi.fn(),
   registerSentryHandlers: vi.fn(),
   registerOnboardingHandlers: vi.fn(),
-  registerMilestonesHandlers: vi.fn(),
   registerShortcutHintsHandlers: vi.fn(),
   registerForgeSettingsHandlers: vi.fn(),
   registerForgeHandlers: vi.fn(),
@@ -228,9 +227,6 @@ vi.mock("../handlers/sentry.js", () => ({
 }));
 vi.mock("../handlers/onboarding.js", () => ({
   registerOnboardingHandlers: registerMocks.registerOnboardingHandlers,
-}));
-vi.mock("../handlers/milestones.js", () => ({
-  registerMilestonesHandlers: registerMocks.registerMilestonesHandlers,
 }));
 vi.mock("../handlers/shortcutHints.js", () => ({
   registerShortcutHintsHandlers: registerMocks.registerShortcutHintsHandlers,

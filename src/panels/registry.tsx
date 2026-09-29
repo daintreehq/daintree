@@ -1,4 +1,5 @@
-import { Suspense, lazy, type ComponentProps, type ComponentType } from "react";
+import { Suspense, type ComponentProps, type ComponentType } from "react";
+import { lazyWithPreload } from "@/lib/lazyWithPreload";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import type {
@@ -73,20 +74,45 @@ export interface PanelKindDefinition extends PanelKindConfig {
   component: ComponentType<any>;
 }
 
-const LazyBrowserPane = lazy(() =>
-  import("@/components/Browser/BrowserPane").then((m) => ({ default: m.BrowserPane }))
+const LazyBrowserPane = lazyWithPreload(
+  () => import("@/components/Browser/BrowserPane"),
+  (m) => m.BrowserPane
 );
-const LazyDevPreviewPane = lazy(() =>
-  import("@/components/DevPreview/DevPreviewPane").then((m) => ({ default: m.DevPreviewPane }))
+const LazyDevPreviewPane = lazyWithPreload(
+  () => import("@/components/DevPreview/DevPreviewPane"),
+  (m) => m.DevPreviewPane
 );
-const LazyReviewPane = lazy(() =>
-  import("./review/ReviewPane").then((m) => ({ default: m.ReviewPane }))
+const LazyReviewPane = lazyWithPreload(
+  () => import("./review/ReviewPane"),
+  (m) => m.ReviewPane
 );
-const LazyFilePane = lazy(() => import("./file/FilePane").then((m) => ({ default: m.FilePane })));
-const LazyDiffPane = lazy(() => import("./diff/DiffPane").then((m) => ({ default: m.DiffPane })));
-const LazyFileBrowserPane = lazy(() =>
-  import("./file-browser/FileBrowserPane").then((m) => ({ default: m.FileBrowserPane }))
+const LazyFilePane = lazyWithPreload(
+  () => import("./file/FilePane"),
+  (m) => m.FilePane
 );
+const LazyDiffPane = lazyWithPreload(
+  () => import("./diff/DiffPane"),
+  (m) => m.DiffPane
+);
+const LazyFileBrowserPane = lazyWithPreload(
+  () => import("./file-browser/FileBrowserPane"),
+  (m) => m.FileBrowserPane
+);
+
+/**
+ * Warm the pane chunks a user reaches for most (file browser, review, diff,
+ * file viewer, browser) so their first open renders in one frame instead of
+ * suspending into the skeleton and React's 300ms reveal throttle.
+ */
+export function preloadCommonPanes(): Promise<unknown> {
+  return Promise.all([
+    LazyFileBrowserPane.preload(),
+    LazyReviewPane.preload(),
+    LazyDiffPane.preload(),
+    LazyFilePane.preload(),
+    LazyBrowserPane.preload(),
+  ]);
+}
 
 // Wrapper providing Suspense fallback for the lazy dynamic import and
 // correct componentName attribution on chunk-load failures. The per-panel

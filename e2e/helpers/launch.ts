@@ -489,7 +489,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
 
       // Use sidebar toggle as ready indicator — it has priority 1 and is
       // always visible regardless of toolbar overflow or window size.
-      const readySelector = options.waitForSelector ?? '[aria-label="Toggle Sidebar"]';
+      const readySelector = options.waitForSelector ?? '[aria-label="Toggle sidebar"]';
       await window.locator(readySelector).waitFor({ state: "visible", timeout: launchTimeout });
 
       if (process.env.BACKGROUND_ENERGY_SPINNER_OVERRIDE === "paused") {
@@ -650,7 +650,7 @@ async function pageLooksLikeProjectView(page: Page): Promise<boolean> {
   if (projectLabel) return true;
   return await page
     .locator(
-      '[aria-label="Toggle Sidebar"], [data-worktree-branch], [data-worktree-is-main="true"], [aria-label="Worktrees"]'
+      '[aria-label="Toggle sidebar"], [data-worktree-branch], [data-worktree-is-main="true"], [aria-label="Worktrees"]'
     )
     .first()
     .isVisible({ timeout: 1_000 })
@@ -766,7 +766,7 @@ export async function refreshActiveWindow(app: ElectronApplication, oldPage?: Pa
   }
 
   await newWindow
-    .locator('[aria-label="Toggle Sidebar"]')
+    .locator('[aria-label="Toggle sidebar"]')
     .waitFor({ state: "visible", timeout: refreshTimeout });
 
   // <Sidebar> mounts only after currentProject hydrates — best-effort gate

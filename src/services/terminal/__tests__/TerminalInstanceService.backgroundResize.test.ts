@@ -7,10 +7,15 @@ import type { ManagedTerminal } from "../types";
 // controller suites use — a statically imported reset helper would operate on a
 // different module instance than the one the service under test binds to.
 // `viewCacheState.test.ts` owns the bridge-latch behaviour itself.
-const viewCacheState = vi.hoisted(() => ({
-  isProjectViewCached: vi.fn(() => false),
-  subscribeProjectViewLifecycle: vi.fn(() => vi.fn()),
-}));
+const viewCacheState = vi.hoisted(() => {
+  const state = {
+    isProjectViewCached: vi.fn(() => false),
+    isProjectViewObservable: vi.fn((): boolean => !state.isProjectViewCached()),
+    subscribeProjectViewLifecycle: vi.fn(() => vi.fn()),
+    subscribeProjectViewObservability: vi.fn(() => vi.fn()),
+  };
+  return state;
+});
 
 vi.mock("@/lib/viewCacheState", () => viewCacheState);
 

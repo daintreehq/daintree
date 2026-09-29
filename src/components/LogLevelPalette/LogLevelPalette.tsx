@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { logsClient } from "@/clients/logsClient";
 import { LOGGER_NAMES } from "@shared/config/loggerNames";
+import { Badge } from "@/components/ui/badge";
 
 interface LogLevelPaletteProps {
   isOpen: boolean;
@@ -23,6 +25,42 @@ const LEVEL_OPTIONS: Array<{ id: OverrideLevel | "clear"; label: string; hint: s
     hint: "Remove this override and fall back to the default",
   },
 ];
+
+/**
+ * One option row, in the shape every palette draws: the id the palette's
+ * `aria-activedescendant` names, the shared highlight, and the pointer moving
+ * the same cursor the arrow keys do.
+ */
+function LogLevelRow({
+  id,
+  isSelected,
+  onHover,
+  onClick,
+  children,
+}: {
+  id: string;
+  isSelected: boolean;
+  onHover: () => void;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      id={`palette-option-${id}`}
+      role="option"
+      aria-selected={isSelected}
+      onPointerDown={(e) => e.preventDefault()}
+      onPointerMove={isSelected ? undefined : onHover}
+      onClick={onClick}
+      className={cn(
+        PALETTE_ROW_CLASS,
+        "w-full flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] text-left cursor-pointer"
+      )}
+    >
+      {children}
+    </div>
+  );
+}
 
 interface LoggerItem {
   id: string;
@@ -121,20 +159,32 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
     [overrides]
   );
 
+  const confirmLogger = useCallback(
+    (selected: LoggerItem | undefined) => {
+      if (!selected) return;
+      setPendingLogger(selected.name);
+      setStep("level");
+      levelPalette.setQuery("");
+      levelPalette.setSelectedIndex(0);
+    },
+    [levelPalette]
+  );
+
   const handleLoggerConfirm = useCallback(() => {
-    const selected = loggerPalette.results[loggerPalette.selectedIndex];
-    if (!selected) return;
-    setPendingLogger(selected.name);
-    setStep("level");
-    levelPalette.setQuery("");
-    levelPalette.setSelectedIndex(0);
-  }, [loggerPalette.results, loggerPalette.selectedIndex, levelPalette]);
+    confirmLogger(loggerPalette.results[loggerPalette.selectedIndex]);
+  }, [confirmLogger, loggerPalette.results, loggerPalette.selectedIndex]);
+
+  const confirmLevel = useCallback(
+    (selected: (typeof LEVEL_OPTIONS)[number] | undefined) => {
+      if (!selected || !pendingLogger) return;
+      void applyLevel(pendingLogger, selected.id).finally(() => onClose());
+    },
+    [pendingLogger, applyLevel, onClose]
+  );
 
   const handleLevelConfirm = useCallback(() => {
-    const selected = levelPalette.results[levelPalette.selectedIndex];
-    if (!selected || !pendingLogger) return;
-    void applyLevel(pendingLogger, selected.id).finally(() => onClose());
-  }, [levelPalette.results, levelPalette.selectedIndex, pendingLogger, applyLevel, onClose]);
+    confirmLevel(levelPalette.results[levelPalette.selectedIndex]);
+  }, [confirmLevel, levelPalette.results, levelPalette.selectedIndex]);
 
   if (step === "logger") {
     return (
@@ -148,31 +198,41 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
         onQueryChange={loggerPalette.setQuery}
         onSelectPrevious={loggerPalette.selectPrevious}
         onSelectNext={loggerPalette.selectNext}
+        onSelectIndex={loggerPalette.setSelectedIndex}
         onConfirm={handleLoggerConfirm}
         onClose={onClose}
         getItemId={(item) => item.id}
+        // Home and End route through the shell's hover callback.
+        onHoverIndex={loggerPalette.setSelectedIndex}
         getActionLabel={getLoggerActionLabel}
         label="Set Log Level"
         ariaLabel="Set log level — choose a module"
         searchPlaceholder="Search modules"
         searchAriaLabel="Search log modules"
         emptyMessage="No modules registered"
-        renderItem={(item, _index, isSelected) => (
-          <div className="flex-1 min-w-0 flex items-center justify-between gap-3">
-            <span className="text-sm text-text-primary font-mono truncate">{item.name}</span>
-            {item.current && (
-              <span
-                className={cn(
-                  "text-3xs uppercase tracking-wider px-1.5 py-0.5 rounded",
-                  isSelected
-                    ? "bg-overlay-medium text-text-secondary"
-                    : "bg-daintree-border/60 text-text-secondary"
-                )}
-              >
-                {item.current}
-              </span>
-            )}
-          </div>
+        renderItem={(item, index, isSelected, onHover) => (
+          <LogLevelRow
+            key={item.id}
+            id={item.id}
+            isSelected={isSelected}
+            onHover={() => onHover(index)}
+            onClick={() => confirmLogger(item)}
+          >
+            <div className="flex-1 min-w-0 flex items-center justify-between gap-3">
+              <span className="text-sm text-text-primary font-mono truncate">{item.name}</span>
+              {item.current && (
+                <Badge
+                  size="xs"
+                  // Log levels keep the log viewer's own uppercase vocabulary. The
+                  // highlighted row's fill would swallow the neutral wash, so the
+                  // badge steps up a tone while its row is under the cursor.
+                  className={cn("uppercase tracking-wider", isSelected && "bg-overlay-medium")}
+                >
+                  {item.current}
+                </Badge>
+              )}
+            </div>
+          </LogLevelRow>
         )}
       />
     );
@@ -189,19 +249,29 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
       onQueryChange={levelPalette.setQuery}
       onSelectPrevious={levelPalette.selectPrevious}
       onSelectNext={levelPalette.selectNext}
+      onSelectIndex={levelPalette.setSelectedIndex}
       onConfirm={handleLevelConfirm}
       onClose={onClose}
       getItemId={(item) => item.id}
+      onHoverIndex={levelPalette.setSelectedIndex}
       getActionLabel={getLevelActionLabel}
       label={`Level for ${pendingLogger ?? ""}`}
       ariaLabel="Set log level — choose a level"
       searchPlaceholder="Search levels"
       emptyMessage="No levels available"
-      renderItem={(item) => (
-        <div className="flex-1 min-w-0">
-          <div className="text-sm text-text-primary">{item.label}</div>
-          <div className="text-2xs text-text-secondary">{item.hint}</div>
-        </div>
+      renderItem={(item, index, isSelected, onHover) => (
+        <LogLevelRow
+          key={item.id}
+          id={item.id}
+          isSelected={isSelected}
+          onHover={() => onHover(index)}
+          onClick={() => confirmLevel(item)}
+        >
+          <div className="flex-1 min-w-0">
+            <div className="text-sm text-text-primary">{item.label}</div>
+            <div className="text-2xs text-text-secondary">{item.hint}</div>
+          </div>
+        </LogLevelRow>
       )}
     />
   );

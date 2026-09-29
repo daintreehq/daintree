@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Callout } from "@/components/ui/Callout";
 import { AlertCircle, AlertTriangle, ArrowUpCircle, RefreshCw, Trash2 } from "lucide-react";
 import {
   getPluginCategoryMeta,
@@ -9,6 +10,7 @@ import { CapabilityRow } from "./capabilityMeta";
 import { PluginMcpServersSection } from "./PluginMcpServersSection";
 import { PluginLogsSection, usePluginLogs } from "./PluginLogsSection";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
+import { pluginHasSettings } from "@/services/plugin/pluginSettingsHome";
 import { Button } from "@/components/ui/button";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
@@ -35,6 +37,9 @@ import {
   type PluginCapability,
   type PluginInstallSource,
 } from "@shared/types/plugin";
+import { PluginDatabasesSection } from "./PluginDatabasesSection";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { Badge } from "@/components/ui/badge";
 
 /** Provenance source → short badge label (built-in / file / URL / catalog). */
 export const SOURCE_BADGE_LABELS: Record<PluginInstallSource, string> = {
@@ -47,9 +52,6 @@ export const SOURCE_BADGE_LABELS: Record<PluginInstallSource, string> = {
 export function pluginLabel(plugin: LoadedPluginInfo): string {
   return plugin.manifest.displayName ?? plugin.manifest.name;
 }
-
-const BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-border-default/50 text-text-secondary uppercase tracking-wide";
 
 /**
  * Declared capabilities in the order {@link BUILT_IN_PLUGIN_CAPABILITIES} defines
@@ -97,12 +99,9 @@ function PluginCapabilityList({
         your machine.
       </p>
       {plugin.pluginDanger === "confirm" && (
-        <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
-          <AlertTriangle className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5" />
-          <p className="text-2xs text-status-warning break-words">
-            Requests sensitive permissions — review before enabling
-          </p>
-        </div>
+        <Callout severity="warning" size="compact">
+          <p>Requests sensitive permissions — review before enabling</p>
+        </Callout>
       )}
       <ul className="space-y-1.5">
         {granted.map((capability) => (
@@ -134,7 +133,7 @@ function PluginCapabilityList({
 function PluginContributedCommands({ commands }: { commands: PluginActionContribution[] }) {
   return (
     <div className="space-y-2">
-      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">Commands</h4>
+      <h4 className={SECTION_LABEL_CLASS}>Commands</h4>
       <ul className="space-y-2">
         {commands.map((command) => (
           <li key={command.id} className="text-xs">
@@ -165,7 +164,7 @@ function PluginContributedCommands({ commands }: { commands: PluginActionContrib
 function PluginContributedPanels({ panels }: { panels: PanelContribution[] }) {
   return (
     <div className="space-y-2">
-      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">Panels</h4>
+      <h4 className={SECTION_LABEL_CLASS}>Panels</h4>
       <ul className="space-y-2">
         {panels.map((panel) => (
           <li key={panel.id} className="text-xs">
@@ -192,7 +191,7 @@ function PluginContributedPanels({ panels }: { panels: PanelContribution[] }) {
 function PluginContributedAgents({ agents }: { agents: PluginAgentContribution[] }) {
   return (
     <div className="space-y-2">
-      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">Agents</h4>
+      <h4 className={SECTION_LABEL_CLASS}>Agents</h4>
       <ul className="space-y-2">
         {agents.map((agent) => (
           <li key={agent.id} className="text-xs">
@@ -219,9 +218,7 @@ function PluginContributedAgents({ agents }: { agents: PluginAgentContribution[]
 function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
   return (
     <div className="space-y-2">
-      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
-        Contributors
-      </h4>
+      <h4 className={SECTION_LABEL_CLASS}>Contributors</h4>
       <ul className="space-y-2">
         {authors.map((author, index) => {
           const { name, url, email, role } = author;
@@ -234,22 +231,22 @@ function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
               {(url || email) && (
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5">
                   {url && (
-                    <button
-                      type="button"
+                    <Button
+                      variant="link"
                       onClick={() => void systemClient.openExternal(url)}
-                      className="text-2xs text-text-secondary hover:text-text-primary hover:underline break-all"
+                      className="whitespace-normal break-all text-left text-2xs"
                     >
                       {url}
-                    </button>
+                    </Button>
                   )}
                   {email && (
-                    <button
-                      type="button"
+                    <Button
+                      variant="link"
                       onClick={() => void systemClient.openExternal(`mailto:${email}`)}
-                      className="text-2xs text-text-secondary hover:text-text-primary hover:underline break-all"
+                      className="whitespace-normal break-all text-left text-2xs"
                     >
                       {email}
-                    </button>
+                    </Button>
                   )}
                 </div>
               )}
@@ -275,6 +272,13 @@ interface PluginDetailPaneProps {
   onRetry?: () => void;
   onUninstall: () => void;
   onCheckForUpdate: () => void;
+  /**
+   * A pending `plugin.openSettings` for this plugin: switches to the Settings
+   * tab and, with a `key`, lands on that setting. `nonce` distinguishes repeats.
+   */
+  settingsRequest?: { key?: string; nonce: number } | null;
+  /** Told once `settingsRequest` has been applied, so its source can drop it. */
+  onSettingsRequestHandled?: (nonce: number) => void;
 }
 
 /**
@@ -305,6 +309,8 @@ export function PluginDetailPane({
   onRetry,
   onUninstall,
   onCheckForUpdate,
+  settingsRequest = null,
+  onSettingsRequestHandled,
 }: PluginDetailPaneProps) {
   const label = pluginLabel(plugin);
   const restartRequired = plugin.pendingRestart === true;
@@ -318,13 +324,16 @@ export function PluginDetailPane({
   const categoryId = resolvePluginCategory(plugin.manifest);
   const categoryLabel = categoryId === "other" ? null : getPluginCategoryMeta(categoryId).label;
   const blocklisted = plugin.blocklisted === true;
-  const hasSettings = (plugin.manifest.contributes.settings?.length ?? 0) > 0;
+  // From the manifest, not the running instance: a stopped plugin's settings
+  // stay reachable, and its custom section says it needs the plugin enabled.
+  const hasSettings = pluginHasSettings(plugin);
   const mcpServers = plugin.manifest.contributes.mcpServers ?? [];
   const hasMcpServers = mcpServers.length > 0;
   const granted = grantedCapabilities(plugin);
   const commands = plugin.manifest.contributes.commands ?? [];
   const panels = plugin.manifest.contributes.panels ?? [];
   const agents = plugin.manifest.contributes.agents ?? [];
+  const databases = plugin.manifest.contributes.databases ?? [];
   const [activeTab, setActiveTab] = useState<PluginDetailTab>("overview");
   // Read here rather than inside the tab body: the Logs tab is earned by
   // content like every other tab past Overview (#11302), and the pane cannot
@@ -386,8 +395,31 @@ export function PluginDetailPane({
     if (currentTab !== activeTab) setActiveTab(currentTab);
   }, [currentTab, activeTab]);
 
+  // A settings deep link opens the Settings tab. With a key, the form lands on
+  // the row once its value has loaded, focuses it and reports back itself;
+  // without one, focus goes to the Settings tab, the heading of what was asked
+  // for — leaving it in the manager's search box would put the keyboard user
+  // back at the top of a list they never asked to browse.
+  const requestNonce = settingsRequest?.nonce;
+  const requestKey = settingsRequest?.key;
+  const paneRef = useRef<HTMLDivElement>(null);
+  const [keylessFocusNonce, setKeylessFocusNonce] = useState<number | null>(null);
+  useEffect(() => {
+    if (requestNonce === undefined || !hasSettings) return;
+    setActiveTab("settings");
+    if (requestKey === undefined) setKeylessFocusNonce(requestNonce);
+  }, [requestNonce, requestKey, hasSettings]);
+  useEffect(() => {
+    if (keylessFocusNonce === null || currentTab !== "settings") return;
+    paneRef.current
+      ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      ?.focus({ preventScroll: true });
+    setKeylessFocusNonce(null);
+    onSettingsRequestHandled?.(keylessFocusNonce);
+  }, [keylessFocusNonce, currentTab, onSettingsRequestHandled]);
+
   return (
-    <div className="text-text-primary">
+    <div className="text-text-primary" ref={paneRef}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3.5 min-w-0">
           <PluginIconTile manifest={plugin.manifest} size="lg" dimmed={plugin.disabled === true} />
@@ -400,30 +432,28 @@ export function PluginDetailPane({
               <span className="text-xs font-normal text-text-secondary">
                 v{plugin.manifest.version}
               </span>
-              {categoryLabel && <span className={BADGE_CLASS}>{categoryLabel}</span>}
-              <span className={BADGE_CLASS}>{sourceLabel}</span>
+              {categoryLabel && <Badge size="xs">{categoryLabel}</Badge>}
+              <Badge size="xs">{sourceLabel}</Badge>
               {plugin.blocklisted === true && (
-                <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
-                  <AlertCircle className="w-3 h-3" aria-hidden="true" />
+                <Badge size="xs" tone="error">
+                  <AlertCircle aria-hidden="true" />
                   Blocked
-                </span>
+                </Badge>
               )}
               {plugin.blocklisted !== true && plugin.disabled === true && (
-                <span className={BADGE_CLASS}>Disabled</span>
+                <Badge size="xs">Disabled</Badge>
               )}
               {plugin.devMode && (
                 // The live generation, not just "Dev": it is the one fact that
                 // says whether the running backend and the mounted view came
                 // out of the same build (#12277).
-                <span className={BADGE_CLASS}>
+                <Badge size="xs">
                   {runtimeStatus?.viewGeneration != null
                     ? `Dev · gen ${runtimeStatus.viewGeneration}`
                     : "Dev"}
-                </span>
+                </Badge>
               )}
-              {restartRequired && (
-                <span className={`${BADGE_CLASS} text-text-secondary`}>Restart required</span>
-              )}
+              {restartRequired && <Badge size="xs">Restart required</Badge>}
             </div>
             {plugin.manifest.tagline && (
               <p className="text-sm text-text-secondary mt-1">{plugin.manifest.tagline}</p>
@@ -431,11 +461,11 @@ export function PluginDetailPane({
             {devStatus?.watcher === "degraded" && (
               // Hot reload being dead looks exactly like "my rebuild changed
               // nothing", so it has to say so somewhere the author will look.
-              <div
-                className="flex items-start gap-1 text-2xs text-status-warning mt-1"
-                role="status"
-              >
-                <AlertTriangle className="w-3 h-3 mt-px shrink-0" aria-hidden="true" />
+              <div className="flex items-start gap-1 text-2xs text-text-primary mt-1" role="status">
+                <AlertTriangle
+                  className="w-3 h-3 mt-px shrink-0 text-status-warning"
+                  aria-hidden="true"
+                />
                 <span>
                   Hot reload stopped watching this plugin. Restart <code>daintree-plugin dev</code>{" "}
                   to resume.
@@ -479,8 +509,11 @@ export function PluginDetailPane({
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  onClick={onCheckForUpdate}
-                  disabled={checkingUpdate}
+                  onClick={() => {
+                    if (!checkingUpdate) onCheckForUpdate();
+                  }}
+                  aria-busy={checkingUpdate || undefined}
+                  aria-disabled={checkingUpdate || undefined}
                   aria-label={`Check ${label} for updates`}
                 >
                   <SpinningIcon icon={RefreshCw} active={checkingUpdate} />
@@ -516,11 +549,10 @@ export function PluginDetailPane({
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  variant="ghost"
+                  variant="ghost-danger"
                   size="icon-sm"
                   onClick={onUninstall}
                   aria-label={`Uninstall ${label}`}
-                  className="text-text-secondary hover:text-status-error"
                 >
                   <Trash2 />
                 </Button>
@@ -537,51 +569,40 @@ export function PluginDetailPane({
           switched to Permissions or Settings. These are the reason the user
           came here; they outrank the tab they happen to be on. */}
       {plugin.blocklisted === true && (
-        <div className="mt-3 flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-          <AlertCircle
-            className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5"
-            aria-hidden="true"
-          />
-          <p className="text-2xs text-status-danger break-words">
+        <Callout severity="error" size="compact" className="mt-3">
+          <p>
             Blocked from loading: {plugin.blocklistReason ?? "flagged by the Daintree blocklist"}
           </p>
-        </div>
+        </Callout>
       )}
 
       {plugin.loadError && (
-        <div
-          className="mt-3 flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20"
+        <Callout
+          severity="error"
+          size="compact"
           role="status"
+          className="mt-3"
+          title="This plugin is switched on but didn't start"
+          action={
+            onRetry &&
+            plugin.disabled !== true && (
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={onRetry}
+                loading={toggling}
+                className="shrink-0 ml-auto"
+              >
+                Retry
+              </Button>
+            )
+          }
         >
-          <AlertCircle
-            className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5"
-            aria-hidden="true"
-          />
-          <div className="min-w-0">
-            <p className="text-2xs font-medium text-status-danger">
-              This plugin is switched on but didn't start
-            </p>
-            <p className="text-2xs text-status-danger break-words mt-0.5 select-text">
-              {plugin.loadError.message}
-            </p>
-            {/* Where to go from the diagnosis. Retry reloads the plugin from
+          <p className="select-text">{plugin.loadError.message}</p>
+          {/* Where to go from the diagnosis. Retry reloads the plugin from
                 disk; an error that comes back unchanged is the plugin's own. */}
-            <p className="text-2xs text-text-secondary mt-1.5">
-              If it fails the same way again, update or reinstall it.
-            </p>
-          </div>
-          {onRetry && plugin.disabled !== true && (
-            <Button
-              variant="outline"
-              size="xs"
-              onClick={onRetry}
-              loading={toggling}
-              className="shrink-0 ml-auto"
-            >
-              Retry
-            </Button>
-          )}
-        </div>
+          <p className="mt-1.5">If it fails the same way again, update or reinstall it.</p>
+        </Callout>
       )}
 
       {updateAvailable && (
@@ -632,9 +653,7 @@ export function PluginDetailPane({
               thing to do with it is paste it somewhere. */}
             {(plugin.originalUrl || plugin.devMode) && (
               <div>
-                <p className="text-3xs font-medium uppercase tracking-wider text-text-secondary">
-                  Source
-                </p>
+                <p className={SECTION_LABEL_CLASS}>Source</p>
                 {/* A dev plugin's origin is the checkout it is running from, and
                   without it an author cannot tell WHICH working copy is loaded
                   — the one fact the Dev badge implies but never states. A
@@ -652,6 +671,10 @@ export function PluginDetailPane({
 
             {agents.length > 0 && <PluginContributedAgents agents={agents} />}
 
+            {databases.length > 0 && (
+              <PluginDatabasesSection databases={databases} origin={plugin.origin} />
+            )}
+
             {plugin.manifest.authors && plugin.manifest.authors.length > 0 && (
               <PluginContributors authors={plugin.manifest.authors} />
             )}
@@ -663,7 +686,18 @@ export function PluginDetailPane({
           plugin before turning it on, or keep editing it while it's off. The tab
           only exists when the plugin declares settings, so there's no empty
           branch to fall back to. */}
-        {currentTab === "settings" && <PluginSettingsForm plugin={plugin} />}
+        {currentTab === "settings" && (
+          <PluginSettingsForm
+            plugin={plugin}
+            viewScope="user"
+            focusRequest={
+              requestNonce !== undefined && requestKey !== undefined
+                ? { key: requestKey, nonce: requestNonce }
+                : null
+            }
+            onFocusHandled={onSettingsRequestHandled}
+          />
+        )}
 
         {currentTab === "capabilities" && (
           <PluginCapabilityList plugin={plugin} granted={granted} />

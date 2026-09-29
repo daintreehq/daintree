@@ -37,12 +37,15 @@ describe("ZoomableImage keyboard", () => {
     const stage = renderImage();
     const image = screen.getByRole("img", { name: "a.png" });
 
+    const fit = screen.getByRole("button", { name: "Fit to screen" });
+    // Unavailable at fit, but kept in the zoom toolbar's arrow-key order.
+    expect(fit.getAttribute("aria-disabled")).toBe("true");
+    expect(fit.hasAttribute("disabled")).toBe(false);
+
     fireEvent.keyDown(stage, { key: "ArrowLeft" });
     const panned = image.style.transform;
     expect(panned).not.toBe("translate(0px, 0px) scale(1)");
-    expect(screen.getByRole("button", { name: "Fit to screen" }).hasAttribute("disabled")).toBe(
-      false
-    );
+    expect(fit.hasAttribute("aria-disabled")).toBe(false);
 
     fireEvent.keyDown(stage, { key: "0" });
     expect(image.style.transform).toBe("translate(0px, 0px) scale(1)");

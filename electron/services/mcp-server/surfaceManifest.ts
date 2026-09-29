@@ -27,12 +27,18 @@ export const MCP_SURFACE_TOOL_ID = "mcp.surface";
  * from v1 is therefore stale by construction, which is precisely what a version
  * bump is for.
  *
+ * v3: `tier` and each tool's `tier` were given new values. The in-app ladder
+ * `workbench`/`action`/`system` became the `core`/`full` tool sets, so a
+ * client that validated or branched on the old names has to learn the new
+ * ones; `external` is unchanged. The hash algorithm is untouched — digests
+ * moved only because the tier names are part of the preimage.
+ *
  * Lives here rather than beside the payload types in `shared/` on purpose: main
  * is the only process that stamps it, and keeping it out of the shared module
  * lets that module stay a type-only import from here, so its `zod` value import
  * never becomes an eager edge on the main-process boot path.
  */
-export const MCP_SURFACE_MANIFEST_VERSION = 2;
+export const MCP_SURFACE_MANIFEST_VERSION = 3;
 
 /**
  * The tier to report for one tool, from the CALLER'S OWN ladder.
@@ -43,20 +49,25 @@ export const MCP_SURFACE_MANIFEST_VERSION = 2;
  * caller cannot climb, and would report nothing at all for a tool that is
  * external-only.
  *
- * In-app sessions get the real minimum. It is degenerate at `workbench` (where
- * everything reachable is workbench-tier by definition) and informative above
- * it, where it says which tools would survive a demotion.
+ * In-app sessions get the real minimum, on the surface their origin is
+ * admitted against. It is degenerate at `core` (where everything reachable is
+ * core by definition) and informative above it, where it says which tools
+ * would survive a demotion.
  *
  * The `?? tier` fallback is unreachable today and safe if it ever is not:
  * reaching here means `shouldExposeTool` already returned true, so the id is in
- * `TIER_ALLOWLISTS[tier]` and `minimumPermittingTier` finds it at or below
- * `tier`. Were exposure ever widened past the static allowlists, `tier` would
- * still be a tier that genuinely permits the tool — an over-approximation of
- * the minimum, never a false claim that it is permitted at all.
+ * the origin's allowlist for `tier` and `minimumPermittingTier` finds it at or
+ * below `tier`. Were exposure ever widened past the static allowlists, `tier`
+ * would still be a tier that genuinely permits the tool — an over-approximation
+ * of the minimum, never a false claim that it is permitted at all.
  */
-function resolveToolTier(entry: ActionManifestEntry, tier: McpTier): McpSurfaceTool["tier"] {
+function resolveToolTier(
+  entry: ActionManifestEntry,
+  tier: McpTier,
+  rendererOwnedOrigin: boolean
+): McpSurfaceTool["tier"] {
   if (tier === "external") return "external";
-  return minimumPermittingTier(entry.id) ?? tier;
+  return minimumPermittingTier(entry.id, rendererOwnedOrigin) ?? tier;
 }
 
 /**
@@ -94,7 +105,7 @@ export function buildSurfaceManifest(
     const annotations = buildAnnotations(entry);
     const tool: McpSurfaceTool = {
       id: entry.id,
-      tier: resolveToolTier(entry, tier),
+      tier: resolveToolTier(entry, tier, session.rendererOwnedOrigin === true),
       kind: entry.kind,
       readOnlyHint: annotations.readOnlyHint ?? false,
       idempotentHint: annotations.idempotentHint ?? false,

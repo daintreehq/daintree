@@ -8,6 +8,10 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
 
 ```jsonc
 {
+  // The generated JSON Schema, for editor completion. Optional; accepted and
+  // never read. Use plugin.project.schema.json for a project plugin.
+  "$schema": "https://raw.githubusercontent.com/daintreehq/daintree/develop/schemas/plugin.schema.json",
+
   // Scoped plugin identifier. Required. Format: "publisher.plugin-name".
   // Must be lowercase, use hyphens (not underscores), and contain exactly one period.
   "name": "acme.linear-planner",
@@ -56,6 +60,13 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "daintree": ">=0.11.0",
   },
 
+  // Short name for the plugin's MCP server, the one server agents in
+  // Daintree's terminals see for its database tools and agentMcp tools:
+  // "planner" → daintree-planner. Optional; without it the name is the last
+  // segment of `name`. 1-16 lowercase letters, digits or hyphens; keep it
+  // specific. See `mcpName` below and ./agent-extensions.md#one-server-per-plugin.
+  "mcpName": "planner",
+
   // Declared capabilities, surfaced in the plugin manager after install.
   // Disclosure-first with host-side policy effects (no Node sandbox).
   // See "Capabilities" below and ./trust-model.md.
@@ -76,28 +87,33 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
   // boot. Contributions are registered eagerly either way.
   "activationEvents": ["onStartupFinished"],
 
-  // The plugin's UI and functional contributions.
+  // The plugin's UI and functional contributions. Every key is optional.
   "contributes": {
-    "agents": [/* requires the agent:register capability */],
-    "panels": [/* ... */],
+    "commands": [/* palette actions */],
+    "panels": [/* panel kinds, each with an optional menu of your own actions */],
+    "views": [/* the component for a panel, or the plugin's settings section */],
+    "settings": [/* values Daintree stores and renders a form for */],
+    "databases": [/* SQLite files opened with host.db */],
     "toolbarButtons": [/* ... */],
-    "menuItems": [/* ... */],
     "keybindings": [/* ... */],
-    "contextMenus": [/* ... */],
-    "commands": [/* ... */],
-    "settings": [/* ... */],
-    "views": [/* ... */],
-    "mcpServers": [/* stdio servers Daintree connects to as a client */],
+    "contextMenus": [/* worktree, terminal and file right-click entries */],
+    "menuItems": [/* application menu entries; not under scope: "project" */],
     "agentMcp": [/* tools Daintree serves to terminal agents; requires mcp:expose */],
+    "mcpServers": [/* stdio servers Daintree connects to as a client */],
     "skills": [/* markdown knowledge served through Daintree's own MCP server */],
     "recipes": [/* named multi-terminal launch layouts */],
+    "tours": [/* welcome tours for the plugin or one of its panels */],
+    "agents": [/* requires the agent:register capability */],
+    "processTools": [/* command → terminal-tab icon detections */],
     "forgeProviders": [/* ... */],
     "fileDecorationProviders": [/* ... */],
-    "processTools": [/* command → terminal-tab icon detections */],
     "surfaces": {/* project-scope only; see "contributes.surfaces" below */},
+    // Built-in plugins only: "fileEditors", "previewTools", "guestAdapters".
   },
 }
 ```
+
+Every field is listed below; [An app-style project plugin](#an-app-style-project-plugin) is a complete manifest that uses the newer ones together.
 
 ## Required fields
 
@@ -120,9 +136,22 @@ Standard semver. `0.1.0`, `1.2.3-beta.1`, etc. Required for update detection.
 
 ## Optional fields
 
+### `$schema`
+
+The URL of the manifest's JSON Schema, so an editor can complete and check `plugin.json` as you type. The host accepts the key — the manifest is otherwise strict — and never fetches or reads it; its own Zod schema is the authority. `npx daintree-plugin new` writes it for you:
+
+- `https://raw.githubusercontent.com/daintreehq/daintree/develop/schemas/plugin.schema.json` for an installed plugin
+- `https://raw.githubusercontent.com/daintreehq/daintree/develop/schemas/plugin.project.schema.json` for a project plugin
+
+Both are generated from the host's schema (`npx daintree-plugin schema [--project]` prints the one your installed SDK was built with) and are structural only: the cross-field rules under [Validation](#validation) are enforced at load, not by the editor.
+
 ### `displayName`
 
 The human-readable name shown in UI listings (plugin palette, installed-plugins list). Falls back to `name` if omitted. Not used for runtime lookups — only display.
+
+### `mcpName`
+
+The short name agents see your plugin's MCP server under, as `daintree-<mcpName>` — for example `"ledger"` gives `daintree-ledger`, and Claude names its tools `mcp__daintree-ledger__<tool>`. Lowercase letters, digits and hyphens, 1–16 characters, starting with a letter or digit. Optional: without it Daintree uses the last segment of `name`. It only matters if the plugin declares [databases](./contribution-points.md#databases--shipped) or an [`agentMcp`](./agent-extensions.md#agent-mcp-endpoints) endpoint, and the resulting key is the same in every project; see [Reaching an agent](./agent-extensions.md#reaching-an-agent) for how a clash with another plugin's name is settled.
 
 ### `description`
 
@@ -189,30 +218,30 @@ The manifest gate enforces it in both directions, against the root the manifest 
 
 This is a guardrail against accidental promotion, not a security control — the trust decision is the project folder, not this field. What it prevents is a plugin loading under assumptions its author never made: a project plugin copied into the user directory would go app-wide with project-shaped expectations about its settings tier and its bound project, and a user plugin dropped into `.daintree/plugins/` would load with none of the project-local guarantees. Neither failure is visible at runtime, so both are refused at the gate.
 
-Declaring `"scope": "project"` also changes what the manifest may contribute. `contributes.surfaces` becomes available, and eight contribution groups become unavailable — `menuItems`, `agents`, `skills`, `recipes`, `fileDecorationProviders`, `processTools`, `mcpServers` and `forgeProviders`, each rejected with an error naming the structural reason it cannot yet be narrowed to one project. `agentMcp` stays available, because its credentials are bound to one project. See [Project-local plugins](./project-local.md) and the per-point status in [Contribution points](./contribution-points.md).
+Declaring `"scope": "project"` also changes what the manifest may contribute. `contributes.surfaces` and `"project"` [databases](./contribution-points.md#databases--shipped) become available, and ten contribution groups become unavailable — `menuItems`, `agents`, `skills`, `recipes`, `fileDecorationProviders`, `fileEditors`, `processTools`, `mcpServers`, `tours` and `forgeProviders`, each rejected with an error naming the structural reason it cannot yet be narrowed to one project. `agentMcp` stays available, because its credentials are bound to one project. See [Project-local plugins](./project-local.md) and the per-point status in [Contribution points](./contribution-points.md).
 
 ### `capabilities`
 
-Array of capability tokens the plugin wants. The model is **disclosure-first with host-side policy effects** — there is no Node sandbox, so a plugin is not blocked from doing anything regardless of what it declares, but declared tokens are not purely advisory. Seven high-risk tokens (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`, `agent:register`, `agent:input`) raise the plugin's actions to a confirm dialog (`effectiveDanger: "confirm"`) via the host's `CONFIRM_TRIGGERING_CAPABILITIES` set — by default every action, though a command can narrow which capabilities that derivation consults with [`requires`](./contribution-points.md#commands--shipped). `socket:connect` is deliberately excluded from that set: the host has no interception point for `node:net`, so elevating on a token it cannot enforce would buy friction without buying safety. `mcp:expose` is not in the set either: it gates `host.mcp.registerTools` and the `agentMcp` contribution, and what it would expose is held behind a separate per-project decision instead. See the [trust model](./trust-model.md) for the full contract.
+Array of capability tokens the plugin wants. The model is **disclosure-first with host-side policy effects** — there is no Node sandbox, so a plugin is not blocked from doing anything regardless of what it declares, but declared tokens are not purely advisory. Seven high-risk tokens (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`, `agent:register`, `agent:input`) raise the plugin's actions to a confirm dialog (`effectiveDanger: "confirm"`) via the host's `CONFIRM_TRIGGERING_CAPABILITIES` set — by default every action, though a command can narrow which capabilities that derivation consults with [`requires`](./contribution-points.md#commands--shipped). `socket:connect` is deliberately excluded from that set: the host has no interception point for `node:net`, so elevating on a token it cannot enforce would buy friction without buying safety. `mcp:expose` is not in the set either: it gates `host.mcp.registerTools` and the `agentMcp` contribution, and what it would expose is held behind a separate per-project agent access setting instead. See the [trust model](./trust-model.md) for the full contract.
 
 | Token | Intent |
 | --- | --- |
 | `fs:project-read` | Read files in the current project worktree |
-| `fs:project-write` | Modify files in the current project worktree |
+| `fs:project-write` | Modify files in the current project worktree. Required by a `"project"` database |
 | `fs:user-data-read` | Read from `~/.daintree/` or elsewhere in the user's home |
 | `fs:user-data-write` | Write to `~/.daintree/` or elsewhere in the user's home |
 | `network:fetch` | Make outbound HTTP requests |
-| `agent:invoke` | Send prompts to AI agents from plugin code |
-| `agent:read` | Observe agent state (lifecycle phase, session cost/tokens on completion) |
+| `agent:invoke` | Drive AI agents from plugin code. Disclosure and confirm elevation only — no host API is gated on it |
+| `agent:read` | Observe agent state (`host.getAgentState`, `host.onDidChangeAgentState`: lifecycle phase, session cost/tokens on completion) and list the project's agent panes (`host.agents.list`) |
 | `agent:register` | Register a launchable agent CLI as a selectable agent |
-| `agent:input` | Send text to the active agent terminal (`host.sendToActiveAgent`; JIT consent on first use) |
+| `agent:input` | Send text to the active agent terminal (`host.sendToActiveAgent`) or append it to a chosen agent's draft (`host.sendToAgent`); JIT consent on first use |
 | `git:read` | Read git state (branches, status, log) |
 | `git:write` | Make git changes (commits, branches) |
 | `clipboard:read` | Read from the system clipboard |
 | `clipboard:write` | Write to the system clipboard (text, and PNG images via `host.clipboard.writeImage`) |
 | `shell:exec` | Spawn subprocesses (managed via `host.process`) |
 | `socket:connect` | Connect to local Unix-domain sockets or Windows named pipes (e.g. the Docker socket) |
-| `mcp:expose` | Serve `contributes.agentMcp` tools to agents in Daintree's terminals (`host.mcp.registerTools`). Required by `agentMcp`; exposes nothing until an endpoint is enabled for a project |
+| `mcp:expose` | Serve `contributes.agentMcp` tools to agents in Daintree's terminals (`host.mcp.registerTools`). Required by `agentMcp`; exposes nothing until the plugin's agent access is turned on for a project |
 
 Declare honestly. The plugin manager's detail pane lists what you've declared (after install, not as a pre-install consent gate) and users judge plugins by what they ask for; the host also derives policy from the high-risk tokens above. A plugin declaring `shell:exec` for no obvious reason looks suspicious. A plugin that silently executes shells without declaring it damages the ecosystem — and for the most part nothing at runtime stops it, which is exactly why honest declaration matters. The clearest runtime-enforced exception is `host.process.spawn` (see [host API](./host-api.md#process--managed-child-processes)): the managed-process surface rejects unless the plugin declared `shell:exec`. `host.mcp.registerTools` is gated on `mcp:expose` the same way. A plugin can still `require("child_process")` directly to bypass that — the gate is on the managed surface, not a Node sandbox — but the managed surface is the supported, supervised path.
 
@@ -234,22 +263,124 @@ Plugins are lazy by default. Omitting `activationEvents` (or passing an empty ar
 
 ### `contributes`
 
-Object containing an array per contribution type — nineteen of them (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes`, and the built-in-only `fileEditors`, `previewTools`, `guestAdapters`) — plus the non-array `surfaces` object. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests.
+Object containing an array per contribution type (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `tours`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes`, and the built-in-only `fileEditors`, `previewTools`, `guestAdapters`) — plus the non-array `surfaces` object. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests.
 
-Validation is structural as well as per-field: duplicate ids within one array are rejected (`duplicate_contribution_id`), and cross-references have to resolve — a `views[].id` must name a declared panel, a forge provider's `settingsScopeRef` / `viewRefs` must name declared settings / views, a `surfaces` slot's `viewId` must name a declared view, and a `${settings:…}` token in an MCP server's `command` / `args` / `env` must name a declared setting.
+Validation is structural as well as per-field: duplicate ids within one array are rejected (`duplicate_contribution_id`), and cross-references have to resolve — a panel view's `id` must name a declared panel (a settings view must not), a panel `menu` entry, toolbar button, menu item, keybinding or context menu naming an action in your own namespace must match a declared command when you declare any, a tour's `panelKind` must name a declared panel, a forge provider's `settingsScopeRef` / `viewRefs` must name declared settings / views, a `surfaces` slot's `viewId` must name a declared panel view, and a `${settings:…}` token in an MCP server's `command` / `args` / `env` must name a declared setting. Capability rules are checked too: `agents` needs `agent:register`, `agentMcp` needs `mcp:expose`, and a `"project"` database needs `scope: "project"` and `fs:project-write`.
 
-A few notes on individual points; the [Contribution points reference](./contribution-points.md) has the full shape and per-point status for all twenty, and marks the three only a built-in plugin may declare.
+A few notes on individual points; the [Contribution points reference](./contribution-points.md) has the full shape and per-point status for every one, and marks the three only a built-in plugin may declare.
 
-- `views` — `location: "panel"` is wired today (the renderer host mounts the contributed component in a grid panel). `location: "sidebar"` is rejected at manifest validation — the sidebar host does not exist yet, so accepting it would validate a view the runtime cannot render.
+- `views` — a `location: "panel"` view is the component for the panel with the same `id`, wherever that panel sits. A `location: "settings"` view is the plugin's one custom settings section, mounted below its generated settings fields; it names no panel. `location: "sidebar"` is rejected at manifest validation — the sidebar host does not exist yet, so accepting it would validate a view the runtime cannot render. See [Views](./contribution-points.md#views--shipped).
 - `mcpServers` — the declared `command` is lazily spawned as a real subprocess the first time its tools are enumerated, and is supervised (killed on Daintree exit; on crash it transitions to `crashed` and tool calls reject until an explicit manual restart — there is no automatic retry or backoff). Treat a contributed MCP server as trust-gated, not inert. Daintree is the server's client: its tools reach Daintree's own UI and the in-app Assistant, not agents running in terminals.
-- `agentMcp` — the inbound direction: an MCP tools endpoint Daintree hosts for agents in its terminals, with the tools registered from `activate()` through `host.mcp.registerTools`. Requires the `mcp:expose` capability; one endpoint per plugin; allowed under `scope: "project"`. See [Agent MCP endpoints](./contribution-points.md#agent-mcp-endpoints--shipped).
-- `settings` — beyond `string` / `number` / `boolean` / `enum` / `json` / `secret`, the field `type` accepts `path` / `directory` / `file`, which render a read-only path input plus a native folder/file chooser (`file` narrows the chooser by an `extensions` array; `mustExist` advisory-flags a stored path that no longer resolves). A `secret`-typed setting is encrypted at rest through the OS keychain when one is available, transparently to the plugin. Full field reference in the [Contribution points → Settings schema](./contribution-points.md#settings-schema--shipped).
+- `panels` — a panel's optional `menu` offers up to five of the plugin's own actions in that panel's ⋯ and right-click menus, each `{ actionId, label? }` and dispatched with `{ panelId }`; a built-in or another plugin's action is refused, and so are menu entries on a `hasPty: true` panel. The host adds its own entries for the plugin below them. See [Panel menu](./contribution-points.md#panel-menu).
+- `databases` — SQLite files the plugin opens with `host.db`. A `"project"` database (the default) lives in the repository, at `path` relative to the project root or `.daintree/data/<manifestId>/<id>.db`, and needs `scope: "project"` plus `fs:project-write`; a `"local"` one lives in the plugin's own data directory and needs no capability. Declaring one also puts the host's read-only `database_schema` and `database_query` on the plugin's MCP server for agents, and gives every panel of the plugin a **Back up data…** menu entry. See [Databases](./contribution-points.md#databases--shipped).
+- `tours` — welcome tours that play in Daintree's tour dialog, offered from Help and the palette, or from one panel's menus when `panelKind` names it. Installed plugins only. See [Tours](./contribution-points.md#tours--shipped-installed-plugins).
+- `agentMcp` — the inbound direction: an MCP tools endpoint Daintree hosts for agents in its terminals, with the tools registered from `activate()` through `host.mcp.registerTools`. Requires the `mcp:expose` capability; one endpoint per plugin, served on the plugin's one MCP server beside the host's database tools; allowed under `scope: "project"`. See [Agent MCP endpoints](./contribution-points.md#agent-mcp-endpoints--shipped).
+- `settings` — each entry is a value Daintree stores and renders a form field for. `type` is `string` (default), `number`, `boolean`, `enum`, `json`, `secret`, `path`, `directory` or `file`; `scope` is `user` (default, app-wide), `project` (committed under the project's `.daintree/plugin-settings/`) or `local` (per project, this machine only). `required: true` puts a "needs setup" strip on the plugin's panels until the value is stored; `editor: "view"` hands the field to the plugin's settings view instead of the generated form. A `secret` is encrypted at rest through the OS keychain, never written into the repository even in `project` scope, and may not declare a `default`. Declaring any setting, or a settings view, gives every panel of the plugin a **Plugin settings…** menu entry. Full field reference in [Contribution points → Settings schema](./contribution-points.md#settings-schema--shipped).
 - `skills` and `recipes` — declarative content, requiring no capability. Skills are markdown served to agents through Daintree's own MCP server; recipes are named multi-terminal launch layouts, registered app-wide and immutable to the user. See [Skills](./contribution-points.md#skills--shipped) and [Recipes](./contribution-points.md#recipes--shipped).
 - `agents` — registers a launchable agent CLI as a selectable agent. Requires the `agent:register` capability; the schema rejects the contribution without it. An optional `detection` block wires it into the same agent-state UI built-in agents use.
 - `forgeProviders` and `fileDecorationProviders` — the manifest entry is read eagerly so the host's routing tables are populated before any plugin code runs; the implementation binds lazily in `activate()`. Forge providers are **built-in plugins only** — their host methods are synchronous and cannot cross the plugin worker's message port.
 - `surfaces` — **project-scope only.** An object, not an array: fixed slots a project-local plugin claims to replace one of the host's own surfaces for its own project. `emptyCanvas` (`{ "viewId": "..." }`) is the only slot accepted today; `viewId` must name a declared `contributes.views` entry, and at most one plugin may claim a slot per project. A manifest without `"scope": "project"` that declares any surface is rejected. See [Project-local plugins → Surfaces](./project-local.md#surfaces).
 
 > `views` and `mcpServers` were named `experimental_views` and `experimental_mcpServers` until #10466. The old keys are still accepted as deprecated aliases — a manifest using them parses and runs identically, but logs a one-time deprecation warning naming the stable replacement. Rename to `views` / `mcpServers`; the aliases may be removed in a future major.
+
+## An app-style project plugin
+
+A project plugin that is really an application — here a household budget committed to the project's own repository at `.daintree/plugins/acme.budget/` — typically combines a database, settings, a panel with its own menu, and a command to open it:
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/daintreehq/daintree/develop/schemas/plugin.project.schema.json",
+  "name": "acme.budget",
+  "version": "0.1.0",
+  "displayName": "Budget",
+  "description": "Household budget: transactions, categories and budgets.",
+  "scope": "project",
+  "main": "dist/index.mjs",
+  "engines": { "daintree": ">=0.39.0" },
+  "capabilities": ["fs:project-write", "agent:input"],
+  "contributes": {
+    "databases": [
+      {
+        "id": "ledger",
+        "description": "Transactions, categories and budgets.",
+        "path": "data/budget.db"
+      }
+    ],
+    "settings": [
+      {
+        "id": "currency",
+        "type": "enum",
+        "options": ["EUR", "GBP", "USD"],
+        "default": "EUR",
+        "scope": "project",
+        "label": "Currency",
+        "description": "Currency amounts are recorded and shown in.",
+        "required": true
+      },
+      {
+        "id": "bankToken",
+        "type": "secret",
+        "scope": "local",
+        "label": "Bank API token",
+        "description": "Read-only token used to import transactions.",
+        "required": true,
+        "editor": "view"
+      }
+    ],
+    "commands": [
+      {
+        "id": "open",
+        "title": "Open budget",
+        "description": "Open the budget panel.",
+        "category": "Budget",
+        "kind": "command",
+        "danger": "safe",
+        "requires": []
+      },
+      {
+        "id": "send-uncategorised",
+        "title": "Send uncategorised transactions to an agent",
+        "description": "Draft the uncategorised transactions into an agent's input for review.",
+        "category": "Budget",
+        "kind": "command",
+        "danger": "safe",
+        "requires": ["agent:input"]
+      }
+    ],
+    "panels": [
+      {
+        "id": "main",
+        "name": "Budget",
+        "iconId": "wallet",
+        "color": "var(--theme-category-green)",
+        "stateVersion": 1,
+        "menu": [
+          { "actionId": "acme.budget.send-uncategorised", "label": "Send uncategorised to agent…" }
+        ]
+      }
+    ],
+    "views": [
+      { "id": "main", "componentPath": "dist/panel.js", "location": "panel" },
+      { "id": "connection", "componentPath": "dist/settings.js", "location": "settings" }
+    ],
+    "toolbarButtons": [
+      { "id": "open-budget", "label": "Budget", "iconId": "wallet", "actionId": "acme.budget.open" }
+    ]
+  }
+}
+```
+
+What each part buys:
+
+- **`scope: "project"`** makes it a project plugin, loaded only while this project is open. It is what allows a `"project"` database, and why `$schema` names the project variant.
+- **`databases`** declares `data/budget.db`, a file in the repository. Once the plugin's agent access is on, agents in the project's terminals read it through the host's `database_query` on the plugin's MCP server; any agent can also open it with `sqlite3`. Writes with rules belong in an `agentMcp` endpoint ([Building apps → Choosing a store](./building-apps.md#choosing-a-store)). A project database needs `fs:project-write`; the worker opens it with `host.db.open("ledger", { migrations })`. Every panel of the plugin gets **Back up data…**.
+- **`settings`** declares a committed `currency` shared by everyone who clones the project, and a `bankToken` secret each collaborator enters on their own machine. Both are `required`, so the panel shows a "Budget needs setup" strip until they are stored; `editor: "view"` leaves the token to the plugin's own settings view rather than a generated field. Every panel gets **Plugin settings…**.
+- **`views`** pairs `dist/panel.js` with the `main` panel, and declares `dist/settings.js` as the custom settings section, which mounts in Project settings → Plugins.
+- **`panels[].menu`** puts **Send uncategorised to agent…** on the panel's ⋯ and right-click menus, dispatched with `{ panelId }`.
+- **`commands`** puts both actions in the palette. `agent:input` and `fs:project-write` are high-risk, so without `requires` every action would ask for confirmation; `"requires": []` keeps **Open budget** one click, while `send-uncategorised` names the capability it actually uses and asks first. Both handlers need the host, so the worker (`main`) registers them with `host.registerAction` in `activate()`, passing the same descriptor, `requires` included — the imperative registration replaces the manifest one. The send handler calls `host.sendToAgent`, which drafts into an agent the user picks and never submits.
+- **`toolbarButtons`** puts a **Budget** button in the plugin tray that runs `acme.budget.open`.
+
+[Building apps](./building-apps.md) walks through writing the worker and views behind a manifest like this.
 
 ## Validation
 

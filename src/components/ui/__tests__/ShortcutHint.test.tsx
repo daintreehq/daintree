@@ -356,3 +356,47 @@ describe("ShortcutHint placement", () => {
     }
   });
 });
+
+describe("ShortcutHint card parity with the tooltip", () => {
+  afterEach(() => {
+    cleanup();
+    shortcutHintStore.setState({ activeHint: null });
+  });
+
+  it("draws its keys exactly like a tooltip's label + shortcut row", async () => {
+    const { createTooltipContent } = await import("@/lib/tooltipShortcut");
+    getTitleMock.mockReturnValue("Toggle sidebar");
+    render(<ShortcutHint />);
+    activate("Cmd+Shift+B");
+    const hintKeys = Array.from(card()!.querySelectorAll("kbd")).map((k) => k.className);
+    cleanup();
+
+    const { container } = render(createTooltipContent("Toggle sidebar", "Cmd+Shift+B"));
+    const tooltipKeys = Array.from(container.querySelectorAll("kbd")).map((k) => k.className);
+
+    // Same keys, same chip, same colour — a hint must not read as a second,
+    // louder kind of tooltip.
+    expect(hintKeys.length).toBeGreaterThan(0);
+    expect(hintKeys).toEqual(tooltipKeys);
+  });
+
+  it("puts the same space between label and keys, and around them, as a tooltip", async () => {
+    const { SHORTCUT_ROW_GAP, createTooltipContent } = await import("@/lib/tooltipShortcut");
+    const { TOOLTIP_CARD_PADDING } = await import("../tooltip");
+    getTitleMock.mockReturnValue("Toggle sidebar");
+    render(<ShortcutHint />);
+    activate("Cmd+B");
+    const hintClasses = card()!.className.split(/\s+/);
+    cleanup();
+
+    const { container } = render(createTooltipContent("Toggle sidebar", "Cmd+B"));
+    const rowClasses = (container.firstElementChild as HTMLElement).className.split(/\s+/);
+    const gap = rowClasses.filter((c) => /^gap-/.test(c));
+    expect(gap).toEqual([SHORTCUT_ROW_GAP]);
+    expect(hintClasses.filter((c) => /^gap-/.test(c))).toEqual(gap);
+    for (const c of TOOLTIP_CARD_PADDING.split(" ")) expect(hintClasses).toContain(c);
+    expect(hintClasses.filter((c) => /^p[xy]?-/.test(c)).sort()).toEqual(
+      TOOLTIP_CARD_PADDING.split(" ").sort()
+    );
+  });
+});

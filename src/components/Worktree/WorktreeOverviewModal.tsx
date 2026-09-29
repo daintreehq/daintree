@@ -28,7 +28,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { actionService } from "@/services/ActionService";
-import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { describeActiveFacets } from "@/lib/worktreeFilterOptions";
 import {
   matchesFilters,
@@ -87,7 +87,7 @@ export function WorktreeOverviewModal({
   onSelectWorktree,
 }: WorktreeOverviewModalProps) {
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const overviewShortcut = useKeybindingDisplay("worktree.overview");
+  const overviewShortcut = useEffectiveCombo("worktree.overview");
 
   const {
     liveQuery,
@@ -801,17 +801,9 @@ export function WorktreeOverviewModal({
                   <span className="text-text-primary font-medium tabular-nums">
                     {selectedIds.size} selected
                   </span>
-                  <button
-                    type="button"
-                    onClick={clearSelection}
-                    className={cn(
-                      "rounded-[var(--radius-sm)] px-1.5 py-0.5 text-xs text-text-secondary",
-                      "hover:bg-overlay-soft hover:text-text-primary transition-colors",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-                    )}
-                  >
+                  <Button variant="ghost" size="sm" onClick={clearSelection}>
                     Clear
-                  </button>
+                  </Button>
                 </div>
                 <div className="flex items-center gap-2">
                   <Button

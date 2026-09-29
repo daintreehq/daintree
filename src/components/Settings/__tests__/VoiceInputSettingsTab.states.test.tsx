@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   VoiceInputSettingsTab,
@@ -253,13 +253,36 @@ describe("VoiceInputSettingsTab provider switch", () => {
   });
 });
 
+/** Remove the stored key the way a user does: the row's button, then the confirm. */
+async function removeKey(): Promise<void> {
+  fireEvent.click(await screen.findByRole("button", { name: "Remove key" }));
+  const confirm = await screen.findByRole("alertdialog");
+  fireEvent.click(within(confirm).getByRole("button", { name: "Remove key" }));
+}
+
 describe("VoiceInputSettingsTab key removal", () => {
+  it("asks before removing the key, like every other stored credential", async () => {
+    const key = "sk-proj-abcdefghijklmnop6789";
+    const setSettings = vi.fn().mockResolvedValue(undefined);
+    install({ openaiApiKey: key }, { setSettings });
+    render(<VoiceInputSettingsTab />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Remove key" }));
+    const confirm = await screen.findByRole("alertdialog");
+    expect(confirm.textContent).toContain("Remove the OpenAI API key?");
+    expect(setSettings).not.toHaveBeenCalled();
+
+    fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(setSettings).not.toHaveBeenCalled();
+  });
+
   it("says so when removing a key fails, and keeps showing it as saved", async () => {
     const key = "sk-proj-abcdefghijklmnop6789";
     install({ openaiApiKey: key }, { setSettings: vi.fn().mockRejectedValue(new Error("EROFS")) });
     const { container } = render(<VoiceInputSettingsTab />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Remove key" }));
+    await removeKey();
 
     await waitFor(() => expect(container.textContent).toContain("Couldn't remove the key"));
     expect(container.textContent).toContain(maskApiKey(key));
@@ -276,7 +299,7 @@ describe("VoiceInputSettingsTab key state honesty", () => {
     install({ openaiApiKey: key }, { setSettings: vi.fn().mockReturnValue(pending) });
     const { container } = render(<VoiceInputSettingsTab />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Remove key" }));
+    await removeKey();
     await new Promise((r) => setTimeout(r, 20));
     expect(container.textContent).toContain(maskApiKey(key));
     expect(container.textContent).not.toContain("Not set");
@@ -294,7 +317,7 @@ describe("VoiceInputSettingsTab key operations", () => {
     install({ openaiApiKey: key }, { setSettings: vi.fn().mockReturnValue(pending) });
     const { container } = render(<VoiceInputSettingsTab />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Remove key" }));
+    await removeKey();
 
     const input = container.querySelector<HTMLInputElement>("#voice-stt-openai-key input");
     await waitFor(() => expect(input?.disabled).toBe(true));

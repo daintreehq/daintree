@@ -139,11 +139,7 @@ export function SafeModeBanner() {
           Show details
         </Button>
       </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        sideOffset={8}
-        className="p-3 text-xs max-w-sm space-y-2 text-text-primary"
-      >
+      <PopoverContent align="end" className="p-3 text-xs max-w-sm space-y-2 text-text-primary">
         {crashMetaText && <p className="font-medium">{crashMetaText}</p>}
         {hasQuarantineList ? (
           <>
@@ -183,10 +179,10 @@ export function SafeModeBanner() {
         actions={[
           {
             id: "restart",
-            label: isRestarting ? "Restarting…" : "Restart normally",
+            label: "Restart normally",
             variant: "primary",
             onClick: () => setIsConfirmOpen(true),
-            disabled: isRestarting,
+            loading: isRestarting,
           },
         ]}
         onClose={dismiss}
@@ -194,7 +190,7 @@ export function SafeModeBanner() {
       />
       <ConfirmDialog
         isOpen={isConfirmOpen}
-        onClose={isRestarting ? undefined : () => setIsConfirmOpen(false)}
+        onClose={() => setIsConfirmOpen(false)}
         title="Restart Daintree normally?"
         description="All running terminals and agent sessions will be killed. Scrollback and in-flight agent work will be lost."
         confirmLabel="Restart normally"
@@ -202,15 +198,15 @@ export function SafeModeBanner() {
         onConfirm={handleRestart}
         isConfirmLoading={isRestarting}
       >
-        <button
-          type="button"
+        <Button
+          variant="link"
           onClick={() => {
             void actionService.dispatch("logs.openFile", undefined, { source: "user" });
           }}
-          className="text-xs text-text-secondary hover:text-text-primary transition-colors underline decoration-daintree-text/30 underline-offset-2"
+          className="text-xs"
         >
           View logs
-        </button>
+        </Button>
       </ConfirmDialog>
     </>
   );

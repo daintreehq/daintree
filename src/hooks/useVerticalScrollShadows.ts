@@ -38,9 +38,15 @@ export function useVerticalScrollShadows(
     }
   }, [scrollRef]);
 
+  // Pending is its own flag rather than "has a frame id": a frame callback that
+  // runs before requestAnimationFrame returns would otherwise leave its stale id
+  // behind and block every later update.
+  const framePendingRef = useRef(false);
   const throttledUpdate = useCallback(() => {
-    if (rafRef.current !== null) return;
+    if (framePendingRef.current) return;
+    framePendingRef.current = true;
     rafRef.current = requestAnimationFrame(() => {
+      framePendingRef.current = false;
       rafRef.current = null;
       updateScrollState();
     });
@@ -50,7 +56,11 @@ export function useVerticalScrollShadows(
     const el = scrollRef.current;
     if (!el) return;
 
-    updateScrollState();
+    // Scheduled, not read here: a synchronous scrollHeight read in the mount
+    // effect forced a layout of a surface still settling in its opening
+    // commit (the launcher's popover paid ~10ms for it before first paint).
+    // The shadows are not needed for that first frame.
+    throttledUpdate();
 
     const resizeObserver = new ResizeObserver(throttledUpdate);
     resizeObserver.observe(el);
@@ -67,6 +77,7 @@ export function useVerticalScrollShadows(
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
+      framePendingRef.current = false;
       resizeObserver.disconnect();
       el.removeEventListener("scroll", throttledUpdate);
     };

@@ -18,7 +18,7 @@
  *   DAINTREE_SHOT_THEMES   comma-separated theme sweep (default: daintree,bondi,namib)
  *
  * Output, per theme:
- *   sheet-<theme>.png              all ten slots stacked, one canonical state each
+ *   sheet-<theme>.png              all nine slots stacked, one canonical state each
  *   <fixture>-<theme>.png          each state, rendered through GlobalBannerCoordinator
  * Plus, in the first theme only:
  *   sheet-<theme>-windows.png      the sheet with the Windows caption inset
@@ -63,21 +63,18 @@ const FIXTURES = [
   { name: "missing-prerequisite-outdated", settleMs: 0 },
   { name: "missing-prerequisite-installing", settleMs: 0 },
   { name: "missing-prerequisite-failed", settleMs: 0 },
-  { name: "forge-token", settleMs: 0 },
-  { name: "forge-token-single", settleMs: 0 },
   { name: "plugin-document", settleMs: 0 },
   { name: "cloud-sync", settleMs: 0 },
   { name: "rosetta", settleMs: 0 },
 ] as const;
 
-const SHEET_ROWS = 10;
+const SHEET_ROWS = 9;
 
 /** Width pressure is where a long title and a wide action collide. */
 const NARROW_FIXTURES = [
   "host-crash",
   "restore-confirmation-suspects",
   "missing-prerequisite-installing",
-  "forge-token",
   "rosetta",
 ] as const;
 

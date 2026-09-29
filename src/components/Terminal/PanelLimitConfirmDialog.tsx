@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { actionService } from "@/services/ActionService";
 import { usePanelLimitStore, type PanelLimitConfirmRequest } from "@/store/panelLimitStore";
@@ -114,13 +115,9 @@ export function PanelLimitConfirmDialog() {
             for status text, and this link is a second way to answer. */}
         <p className="text-xs text-text-secondary">
           To be asked less often,{" "}
-          <button
-            type="button"
-            onClick={changeLimits}
-            className="rounded-sm underline underline-offset-2 transition-colors hover:text-text-primary outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
-          >
+          <Button variant="link" onClick={changeLimits}>
             cancel and change your panel limits
-          </button>
+          </Button>
           .
         </p>
       </ConfirmDialog>

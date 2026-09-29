@@ -1,16 +1,21 @@
 import { useMemo, useState } from "react";
 import {
   AlertTriangle,
-  Check,
   ChevronRight,
   CircleDot,
+  ExternalLink,
+  FolderOpen,
+  Folders,
   GitBranch,
+  GitCommitHorizontal,
+  GitPullRequest,
   SquareTerminal,
   Sprout,
 } from "lucide-react";
 import type { AgentState, WorktreeState } from "@/types";
 import type { PtyPanelData } from "@shared/types/panel";
 import { cn } from "@/lib/utils";
+import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { getWorktreeBranchLabel, getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
@@ -19,6 +24,8 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { fileManagerRevealLabel } from "@/lib/platform";
+import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import {
   ContextMenu,
   ContextMenuActionItem,
@@ -47,6 +54,7 @@ import {
 } from "./terminalStateConfig";
 import { ActivityLight } from "./ActivityLight";
 import { CollapsedSessionIndicators } from "./WorktreeCard/CollapsedSessionIndicators";
+import { Badge } from "@/components/ui/badge";
 
 /**
  * Column tracks shared by the header and every row, so each section sits on
@@ -340,6 +348,8 @@ export function WorktreeOverviewRow({
 
   const sessionLines = marks.map((m) => ({
     id: m.terminal.id,
+    kind: m.terminal.kind,
+    chrome: m.chrome,
     name: `${m.chrome.label}${m.state ? `, ${STATE_LABELS[m.state]}` : ""}`,
     detail: leadLine(m)?.text,
   }));
@@ -360,6 +370,7 @@ export function WorktreeOverviewRow({
             data-worktree-overview-cell={worktree.id}
             data-overview-cursor={isCursor ? "true" : undefined}
             aria-current={isCurrent ? "true" : undefined}
+            onMouseDown={suppressShiftClickTextSelection}
             onClick={(e) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey) {
                 onToggleSelect(worktree.id, e);
@@ -421,19 +432,19 @@ export function WorktreeOverviewRow({
                       onToggleSelect(worktree.id, e);
                     }}
                     className={cn(
-                      "absolute inset-0 items-center justify-center rounded-[var(--radius-xs)] border",
+                      // The shared checkbox glyph in the icon's slot, with a 24px
+                      // pointer target around it (WCAG 2.5.8).
+                      "absolute inset-0 items-center justify-center cursor-pointer",
+                      "before:absolute before:-inset-1 before:content-['']",
                       isSelecting || isSelected || !TypeIcon
                         ? "flex"
                         : cn(
                             "hidden group-hover/row:flex",
                             isCursor && "group-focus/overview-grid:flex"
-                          ),
-                      isSelected
-                        ? "border-border-interactive bg-overlay-emphasis text-text-primary"
-                        : "border-border-default text-transparent hover:border-border-interactive"
+                          )
                     )}
                   >
-                    <Check className="h-3 w-3" strokeWidth={3} />
+                    <CheckboxGlyph checked={isSelected} />
                   </span>
                 </span>
                 <TruncatedTooltip content={isBranchTitled ? branchLabel : title}>
@@ -447,11 +458,7 @@ export function WorktreeOverviewRow({
                     {title}
                   </span>
                 </TruncatedTooltip>
-                {isCurrent && (
-                  <span className="shrink-0 rounded-[var(--radius-xs)] border border-border-default px-1 text-3xs leading-4 text-text-secondary">
-                    Current
-                  </span>
-                )}
+                {isCurrent && <Badge size="xs">Current</Badge>}
                 {exception && (
                   <span className="flex shrink-0 items-center gap-1 text-2xs font-medium text-status-error">
                     <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
@@ -540,8 +547,9 @@ export function WorktreeOverviewRow({
                     >
                       <span className="flex items-center gap-1.5 text-2xs text-text-secondary">
                         <ChevronRight
+                          data-animated-chevron
                           className={cn(
-                            "h-3 w-3 shrink-0 transition-transform duration-150",
+                            "h-3 w-3 shrink-0 transition-transform duration-150 ease-out",
                             sessionsExpanded && "rotate-90"
                           )}
                           aria-hidden="true"
@@ -649,6 +657,14 @@ export function WorktreeOverviewRow({
                   key={line.id}
                   onSelect={() => void openSession(line.id, onBeforeMenuAction)}
                 >
+                  {/* Marked, so the icon gutter rule sees this slot as taken. */}
+                  <span
+                    data-menu-icon
+                    aria-hidden="true"
+                    className="mr-2 mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center self-start"
+                  >
+                    <TerminalIcon kind={line.kind} chrome={line.chrome} className="h-3.5 w-3.5" />
+                  </span>
                   <span className="flex min-w-0 flex-col">
                     <span className="whitespace-normal break-words">{line.name}</span>
                     {line.detail && line.detail !== line.name && (
@@ -667,6 +683,7 @@ export function WorktreeOverviewRow({
             args={menuArgs}
             onSelect={onBeforeMenuAction}
           >
+            <ExternalLink data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Open in editor
           </ContextMenuActionItem>
           <ContextMenuActionItem
@@ -674,13 +691,15 @@ export function WorktreeOverviewRow({
             args={menuArgs}
             onSelect={onBeforeMenuAction}
           >
-            Reveal in Finder
+            <FolderOpen data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            {fileManagerRevealLabel()}
           </ContextMenuActionItem>
           <ContextMenuActionItem
             actionId="worktree.openReviewHub"
             args={menuArgs}
             onSelect={onBeforeMenuAction}
           >
+            <GitCommitHorizontal data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Open review hub
           </ContextMenuActionItem>
           {(showPr || worktree.issueNumber) && <ContextMenuSeparator />}
@@ -690,6 +709,7 @@ export function WorktreeOverviewRow({
               args={menuArgs}
               onSelect={onBeforeMenuAction}
             >
+              <GitPullRequest data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
               Open pull request
             </ContextMenuActionItem>
           )}
@@ -699,6 +719,7 @@ export function WorktreeOverviewRow({
               args={menuArgs}
               onSelect={onBeforeMenuAction}
             >
+              <CircleDot data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
               Open issue
             </ContextMenuActionItem>
           )}
@@ -710,6 +731,7 @@ export function WorktreeOverviewRow({
               void copyContextWithFeedback(worktree.id, "context-menu", undefined, "worktree-card")
             }
           >
+            <Folders data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Copy context
           </ContextMenuItem>
         </ContextMenuContent>

@@ -1004,7 +1004,7 @@ export function registerWorktreeContextActions(
       id: "worktree.reviewReadiness",
       title: "Review readiness",
       description:
-        "Judge whether a worktree is ready to commit, push and merge, and list what is blocking it. This is a read-only summary: it reads git state and performs no git or forge mutation. Signals that depend on forge data report as unknown rather than as passing when that data has not arrived, so an unknown is genuinely unknown and should not be read as a green light.",
+        "Judge whether a worktree is ready to commit, push and merge, listing what blocks it. Read-only. Signals needing forge data that has not arrived report unknown, not passing; never read unknown as green.",
       category: "worktree",
       kind: "query",
       danger: "safe",

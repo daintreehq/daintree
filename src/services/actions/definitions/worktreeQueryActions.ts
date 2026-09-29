@@ -86,7 +86,7 @@ export function registerWorktreeQueryActions(
     id: "worktree.list",
     title: "List worktrees",
     description:
-      "List every worktree in the active project with its branch, status and any linked issue or pull request. Use this to discover worktree ids; ask for the current worktree instead when all you need is the one in use. It never fails — an empty list means the project has no worktrees.",
+      "List every worktree in the active project with its branch, status and linked issue or pull request, to discover worktree ids. Never fails; empty means the project has none.",
     category: "worktree",
     kind: "query",
     danger: "safe",
@@ -122,7 +122,7 @@ export function registerWorktreeQueryActions(
     id: "worktree.getCurrent",
     title: "Get current worktree",
     description:
-      "Get the worktree currently in use, which is what most work should be scoped to. Use the full worktree listing only when you genuinely need the others. An empty result means no worktree is active, or the active one can no longer be found — either way, handle it before acting.",
+      "Get the worktree in use, which most work should be scoped to. An empty result means none is active or it can no longer be found; handle that before acting.",
     category: "worktree",
     kind: "query",
     danger: "safe",
@@ -313,7 +313,7 @@ export function registerWorktreeQueryActions(
       id: "worktree.waitUntilReady",
       title: "Wait until worktree ready",
       description:
-        "Wait for a worktree's post-create setup — config copy, submodules, then the setup script and any resource provisioning — to finish, and report where it got to. Setup can outlive the call that created the worktree, so work started before it completes may run against an unpopulated tree. Pass a zero timeout to read the state without blocking. Running out of time is not a failure: call again.",
+        "Wait for a worktree's post-create setup (config copy, submodules, setup script, provisioning) and report where it got. Setup can outlive creation, so work started earlier may see an unpopulated tree. A zero timeout reads without blocking; running out of time is not a failure.",
       category: "worktree",
       kind: "query",
       danger: "safe",
@@ -329,7 +329,7 @@ export function registerWorktreeQueryActions(
           .max(MAX_WAIT_UNTIL_READY_TIMEOUT_MS)
           .optional()
           .describe(
-            `Milliseconds to wait; 0 reads the state now. Default and maximum ${MAX_WAIT_UNTIL_READY_TIMEOUT_MS}. Setup often runs longer, so call again rather than expect one call to cover it.`
+            `Ms to wait; 0 reads now. Default and max ${MAX_WAIT_UNTIL_READY_TIMEOUT_MS}. Setup often runs longer: call again.`
           ),
       }).optional(),
       resultSchema: z.object({
@@ -338,9 +338,7 @@ export function registerWorktreeQueryActions(
         stage: z
           .enum(["copy-config", "submodules", "setup-script"])
           .nullable()
-          .describe(
-            "Which stage is running, or which one failed. Null before setup starts, and once it is ready or unknown."
-          ),
+          .describe("Stage running or failed; null before setup starts and once ready or unknown."),
         error: z
           .string()
           .nullable()
@@ -348,7 +346,7 @@ export function registerWorktreeQueryActions(
         timedOut: z
           .boolean()
           .describe(
-            "True when the wait ended because it ran out of time rather than because setup settled. The reported state is still live — call again to keep waiting."
+            "The wait ran out before setup settled. The state is live; call again to keep waiting."
           ),
       }),
       mcpOutputSchema: true,
@@ -405,7 +403,7 @@ export function registerWorktreeQueryActions(
       id: "worktree.waitForPullRequest",
       title: "Wait for worktree pull request",
       description:
-        "Wait until any given worktree has a detected pull request. Detection is a cached background poll: a PR seen, not a PR opened, and not proof its agent finished. Returns at once if one is already detected. A timeout is not a failure: call again without the worktrees that matched.",
+        "Wait until any given worktree has a detected pull request. Detection is a cached background poll: a PR seen, not opened, and not proof its agent finished. Returns at once if already detected. A timeout is not a failure; call again without the matched worktrees.",
       category: "worktree",
       kind: "query",
       danger: "safe",

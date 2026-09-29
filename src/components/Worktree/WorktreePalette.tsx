@@ -5,16 +5,26 @@ import { KbdChord } from "@/components/ui/Kbd";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { HighlightedText, substringMatchIndices } from "@/components/ui/HighlightedText";
 import type { WorktreeState } from "@/types";
 
 interface WorktreeListItemProps {
   worktree: WorktreeState;
+  query: string;
   isActive: boolean;
   isSelected: boolean;
   onClick: () => void;
+  onHover: () => void;
 }
 
-function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeListItemProps) {
+function WorktreeListItem({
+  worktree,
+  query,
+  isActive,
+  isSelected,
+  onClick,
+  onHover,
+}: WorktreeListItemProps) {
   const { ref, isTruncated } = useTruncationDetection();
 
   return (
@@ -24,30 +34,41 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
         tabIndex={-1}
         onPointerDown={(e) => e.preventDefault()}
         id={`worktree-option-${worktree.id}`}
+        onPointerMove={onHover}
         onClick={onClick}
         className={cn(
           // Was a hand-rolled copy of the shared row and drifted out of step
           // with it; takes the selected treatment from the family now.
           PALETTE_ROW_CLASS,
           "group w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex flex-col gap-0.5",
-          "bg-surface-canvas hover:bg-surface"
+          "bg-surface-canvas"
         )}
+        // The cursor is aria-selected; the worktree you are in is aria-current
+        // and says "Current" in words. A check is the mark for a chosen value,
+        // and switching worktrees is navigation, not a value pick.
         aria-selected={isSelected}
+        aria-current={isActive ? "true" : undefined}
         role="option"
       >
         <div className="flex items-center justify-between gap-2 text-sm">
           {/* Both sides truncate: branch names have no length worth trusting,
               so no tier is wide enough to make this unnecessary. */}
-          <span className="font-medium text-text-primary truncate">{worktree.name}</span>
+          <span className="font-medium text-text-primary truncate">
+            <HighlightedText
+              text={worktree.name}
+              indices={substringMatchIndices(worktree.name, query)}
+            />
+          </span>
           <div className="flex items-center gap-2 min-w-0 text-xs text-text-secondary">
             {worktree.branch && (
-              <span className="font-mono text-text-secondary truncate">{worktree.branch}</span>
-            )}
-            {isActive && (
-              <span className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-[var(--color-state-active)]/15 text-[var(--color-state-active)] text-2xs font-semibold">
-                Active
+              <span className="font-mono text-text-secondary truncate">
+                <HighlightedText
+                  text={worktree.branch}
+                  indices={substringMatchIndices(worktree.branch, query)}
+                />
               </span>
             )}
+            {isActive && <span className="shrink-0">Current</span>}
           </div>
         </div>
         <div
@@ -77,6 +98,8 @@ export interface WorktreePaletteProps {
   onSelect: (worktree: WorktreeState) => void;
   onConfirm: () => void;
   onClose: () => void;
+  /** Moves the cursor Enter acts on; the pointer and Home/End drive it. */
+  onSelectIndex: (index: number) => void;
 }
 
 export function WorktreePalette({
@@ -93,6 +116,7 @@ export function WorktreePalette({
   onSelect,
   onConfirm,
   onClose,
+  onSelectIndex,
 }: WorktreePaletteProps) {
   const createWorktreeShortcut = useEffectiveCombo("worktree.createDialog.open");
   const worktreePaletteShortcut = useEffectiveCombo("worktree.openPalette");
@@ -107,18 +131,22 @@ export function WorktreePalette({
       onQueryChange={onQueryChange}
       onSelectPrevious={onSelectPrevious}
       onSelectNext={onSelectNext}
+      onSelectIndex={onSelectIndex}
       onConfirm={onConfirm}
       onClose={onClose}
       getItemId={(worktree) => worktree.id}
+      onHoverIndex={onSelectIndex}
       getActionLabel={getWorktreeActionLabel}
       isFiltering={isStale}
-      renderItem={(worktree, _index, isSelected) => (
+      renderItem={(worktree, index, isSelected, onHoverIndex) => (
         <WorktreeListItem
           key={worktree.id}
           worktree={worktree}
+          query={query}
           isActive={worktree.id === activeWorktreeId}
           isSelected={isSelected}
           onClick={() => onSelect(worktree)}
+          onHover={() => onHoverIndex(index)}
         />
       )}
       label="Worktree switcher"

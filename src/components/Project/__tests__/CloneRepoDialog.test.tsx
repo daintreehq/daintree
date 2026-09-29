@@ -249,7 +249,7 @@ describe("CloneRepoDialog", () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
     const cloneBtn = screen.getByRole("button", { name: "Clone" }) as HTMLButtonElement;
-    expect(cloneBtn.disabled).toBe(true);
+    expect(cloneBtn.getAttribute("aria-disabled")).toBe("true");
   });
 
   it("auto-derives folder name from URL", () => {
@@ -488,7 +488,7 @@ describe("CloneRepoDialog", () => {
 
     fireEvent.change(urlInput, { target: { value: "" } });
     const retry = screen.getByRole<HTMLButtonElement>("button", { name: "Retry" });
-    expect(retry.disabled).toBe(true);
+    expect(retry.getAttribute("aria-disabled")).toBe("true");
     // The guard lives in the clone path itself, not only on the button.
     await act(async () => {
       fireEvent.click(retry);
@@ -528,9 +528,12 @@ describe("CloneRepoDialog", () => {
     expect(urlInput.getAttribute("aria-invalid")).toBe("true");
     const describedBy = urlInput.getAttribute("aria-describedby");
     expect(describedBy).toBeTruthy();
+    // Under the field it is about, like the name's error; the footer only says
+    // what is still in the way.
     const description = document.getElementById(describedBy!);
-    expect(description).not.toBeNull();
-    expect(hint.contains(description)).toBe(true);
+    expect(description?.textContent).toBe("Check the repository URL");
+    expect(hint.contains(description)).toBe(false);
+    expect(description?.getAttribute("role")).toBeNull();
   });
 
   it.each([
@@ -546,8 +549,15 @@ describe("CloneRepoDialog", () => {
     fireEvent.change(screen.getByLabelText(/^url$/i), { target: { value } });
     fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: "repo" } });
 
-    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Clone" }).disabled).toBe(true);
-    expect(screen.getByTestId("footer-hint").textContent).toBe(guidance);
+    expect(screen.getByRole("button", { name: "Clone" }).getAttribute("aria-disabled")).toBe(
+      "true"
+    );
+    const urlInput = screen.getByLabelText(/^url$/i);
+    const describedBy = urlInput.getAttribute("aria-describedby");
+    expect(document.getElementById(describedBy!)?.textContent).toBe(guidance);
+    expect(screen.getByTestId("footer-hint").textContent).toBe(
+      "Fix the repository URL to continue"
+    );
   });
 
   it.each(["https://github.com/team/repo.git", "git@github.com:team/repo.git", "team/repo"])(
@@ -559,9 +569,9 @@ describe("CloneRepoDialog", () => {
       });
       fireEvent.change(screen.getByLabelText(/^url$/i), { target: { value } });
       await waitFor(() =>
-        expect(screen.getByRole<HTMLButtonElement>("button", { name: "Clone" }).disabled).toBe(
-          false
-        )
+        expect(
+          screen.getByRole("button", { name: "Clone" }).getAttribute("aria-disabled")
+        ).toBeNull()
       );
     }
   );
@@ -857,7 +867,7 @@ describe("CloneRepoDialog", () => {
     // Shorthand has no well-defined host with two providers — the URL stays
     // unexpanded and fails validation, so Clone is disabled.
     const cloneBtn = screen.getByRole("button", { name: "Clone" }) as HTMLButtonElement;
-    expect(cloneBtn.disabled).toBe(true);
+    expect(cloneBtn.getAttribute("aria-disabled")).toBe("true");
     expect(cloneRepoMock).not.toHaveBeenCalled();
   });
 
@@ -1011,7 +1021,7 @@ describe("CloneRepoDialog", () => {
     // No internal encoding may reach the user, in any surface.
     expect(document.body.textContent).not.toContain("[AppError");
     // A stop leaves the form editable so Clone can simply be pressed again.
-    expect(screen.getByRole("button", { name: "Clone" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("button", { name: "Clone" }).getAttribute("aria-disabled")).toBeNull();
     // And the live phase is gone. A leftover stage would keep the running mode
     // on screen, so the dialog would still look like it were cloning.
     expect(screen.queryByRole("progressbar")).toBeNull();

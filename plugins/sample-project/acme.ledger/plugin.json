@@ -3,14 +3,21 @@
   "version": "0.1.0",
   "scope": "project",
   "displayName": "Household Ledger",
-  "description": "A sample agent MCP endpoint: a small tool roster that lets agents in this project read and append to a SQLite ledger the project owns.",
+  "mcpName": "ledger",
+  "description": "A sample data plugin: a SQLite ledger the project owns, and a small tool roster that lets agents in this project read and append to it.",
   "authors": [{ "name": "Daintree", "role": "Maintainer" }],
   "main": "dist/index.mjs",
   "engines": {
-    "daintree": ">=0.36.1"
+    "daintree": ">=0.39.0"
   },
   "capabilities": ["mcp:expose", "fs:project-write"],
   "contributes": {
+    "databases": [
+      {
+        "id": "ledger",
+        "description": "Household transactions, amounts in integer cents. Write through the Household ledger tools, or with sqlite3 under the rules in .daintree/plugins/acme.ledger/AGENTS.md."
+      }
+    ],
     "agentMcp": [
       {
         "id": "data",

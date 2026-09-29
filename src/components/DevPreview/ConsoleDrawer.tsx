@@ -1,5 +1,13 @@
-import { Suspense, useState, useCallback, useEffect, useRef } from "react";
-import { ChevronUp, MoreHorizontal, RotateCw, CircleStop } from "lucide-react";
+import { Suspense, useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import {
+  ChevronUp,
+  MoreHorizontal,
+  RotateCw,
+  CircleStop,
+  Download,
+  Eraser,
+  RotateCcw,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -18,6 +26,12 @@ import { useConsoleCaptureStore, ZERO_COUNTS } from "@/store/consoleCaptureStore
 import { usePanelStore } from "@/store/panelStore";
 import { ConsolePanel } from "./ConsolePanel";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { TabErrorCount, UnderlineTabs } from "@/components/ui/UnderlineTabs";
+import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
 
 export type ConsoleDrawerTab = "output" | "console" | "diagnostics";
 
@@ -92,51 +106,6 @@ const STATUS_LABEL: Record<
 
 const DRAWER_HEIGHT = 300;
 
-interface DrawerTabButtonProps {
-  tab: ConsoleDrawerTab;
-  label: string;
-  isActive: boolean;
-  controlsId: string;
-  onSelect: () => void;
-  badge?: number;
-}
-
-function DrawerTabButton({
-  tab,
-  label,
-  isActive,
-  controlsId,
-  onSelect,
-  badge,
-}: DrawerTabButtonProps) {
-  return (
-    <button
-      type="button"
-      id={`${controlsId}-tab`}
-      data-tab={tab}
-      onClick={onSelect}
-      tabIndex={isActive ? 0 : -1}
-      role="tab"
-      aria-selected={isActive}
-      aria-controls={controlsId}
-      className={cn(
-        "relative px-3 py-1.5 text-xs font-medium rounded transition-colors",
-        "hover:text-text-primary hover:bg-overlay-soft",
-        "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-info",
-        isActive ? "text-text-primary" : "text-text-secondary"
-      )}
-    >
-      {label}
-      {badge !== undefined && badge > 0 && (
-        <span className="ml-1.5 px-1.5 py-0.5 text-xs tabular-nums bg-status-error/15 text-status-error rounded-full">
-          {badge}
-        </span>
-      )}
-      {isActive && <div className="absolute bottom-0 left-0 right-0 h-px bg-daintree-text/70" />}
-    </button>
-  );
-}
-
 export function ConsoleDrawer({
   terminalId,
   paneId,
@@ -162,7 +131,8 @@ export function ConsoleDrawer({
   const [uncontrolledTab, setUncontrolledTab] = useState<ConsoleDrawerTab>("output");
   const activeTab = controlledActiveTab ?? uncontrolledTab;
 
-  const tablistRef = useRef<HTMLDivElement>(null);
+  const regionRef = useRef<HTMLDivElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
 
   const errorCount = useConsoleCaptureStore(
     (state) => (state.counters.get(paneId) ?? ZERO_COUNTS).errorCount
@@ -176,6 +146,14 @@ export function ConsoleDrawer({
     onOpenChange?.(nextIsOpen);
   }, [isOpen, controlledIsOpen, onOpenChange]);
 
+  // Closing makes the region inert, and focus inside an inert subtree falls to
+  // <body>. Hand it to the toggle before paint, whoever closed the drawer.
+  useLayoutEffect(() => {
+    if (!isOpen && regionRef.current?.contains(document.activeElement)) {
+      toggleRef.current?.focus();
+    }
+  }, [isOpen]);
+
   const selectTab = useCallback(
     (tab: ConsoleDrawerTab) => {
       if (controlledActiveTab === undefined) {
@@ -184,44 +162,6 @@ export function ConsoleDrawer({
       onTabChange?.(tab);
     },
     [controlledActiveTab, onTabChange]
-  );
-
-  const handleTablistKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => {
-      const container = tablistRef.current;
-      if (!container) return;
-
-      const tabButtons = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
-      const active = document.activeElement;
-      const focusedIndex = active instanceof HTMLButtonElement ? tabButtons.indexOf(active) : -1;
-      if (focusedIndex === -1) return;
-
-      let nextIndex: number;
-      switch (e.key) {
-        case "ArrowRight":
-          nextIndex = (focusedIndex + 1) % tabButtons.length;
-          break;
-        case "ArrowLeft":
-          nextIndex = (focusedIndex - 1 + tabButtons.length) % tabButtons.length;
-          break;
-        case "Home":
-          nextIndex = 0;
-          break;
-        case "End":
-          nextIndex = tabButtons.length - 1;
-          break;
-        default:
-          return;
-      }
-
-      e.preventDefault();
-      const nextTab = tabButtons[nextIndex];
-      if (!nextTab) return;
-      nextTab.focus();
-      const tabId = nextTab.dataset.tab;
-      if (tabId === "output" || tabId === "console" || tabId === "diagnostics") selectTab(tabId);
-    },
-    [selectTab]
   );
 
   const isOutputVisible = isPanelVisible && isOpen && activeTab === "output";
@@ -253,7 +193,7 @@ export function ConsoleDrawer({
   const stopDisabled = isRestarting || status === "stopping";
   const statusClass = cn(
     "inline-flex min-h-8 items-center px-3 text-3xs font-semibold uppercase tracking-wide",
-    (hasRestartControls || stopVisible) && "border-r border-overlay/70",
+    (hasRestartControls || stopVisible) && "border-r border-overlay",
     statusLabel.textClass
   );
 
@@ -261,20 +201,30 @@ export function ConsoleDrawer({
   const outputPanelId = `dev-preview-output-panel-${terminalId}`;
   const consolePanelId = `dev-preview-console-panel-${terminalId}`;
   const diagnosticsPanelId = `dev-preview-diagnostics-panel-${terminalId}`;
+  const panelIds: Record<ConsoleDrawerTab, string> = {
+    output: outputPanelId,
+    console: consolePanelId,
+    diagnostics: diagnosticsPanelId,
+  };
 
   return (
     <div className="flex flex-col border-t border-overlay bg-surface">
       <div className="flex items-stretch bg-overlay-soft">
         <button
+          ref={toggleRef}
           type="button"
           onClick={toggleDrawer}
-          className="flex min-h-8 min-w-0 flex-1 items-center gap-2 border-r border-overlay/70 px-3 py-1.5 text-xs font-semibold text-text-primary transition-colors hover:bg-overlay-medium focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-info"
+          className="flex min-h-8 min-w-0 flex-1 items-center gap-2 border-r border-overlay px-3 py-1.5 text-xs font-semibold text-text-primary transition-colors duration-150 ease-out hover:bg-overlay-hover focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           aria-expanded={isOpen}
           aria-controls={drawerRegionId}
           aria-label="Toggle output drawer"
         >
           <ChevronUp
-            className={cn("h-4 w-4 shrink-0 transition-transform", isOpen && "rotate-180")}
+            data-animated-chevron
+            className={cn(
+              "h-4 w-4 shrink-0 transition-transform duration-150 ease-out",
+              isOpen && "rotate-180"
+            )}
             aria-hidden="true"
           />
           <span className="truncate">Output drawer</span>
@@ -290,138 +240,139 @@ export function ConsoleDrawer({
           {statusLabel.label}
         </div>
 
-        {stopVisible && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <button
-                  type="button"
-                  onClick={onStop}
-                  disabled={stopDisabled}
-                  className={cn(
-                    "p-1.5 rounded hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors",
-                    status === "stopping" && "animate-pulse-immediate"
-                  )}
-                  aria-label="Stop dev server"
-                  aria-busy={status === "stopping"}
-                >
-                  <CircleStop className="h-3.5 w-3.5" />
-                </button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Stop dev server</TooltipContent>
-          </Tooltip>
-        )}
-
-        {hasRestartControls && (
-          <>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <button
-                    type="button"
-                    onClick={onRestartDevServer}
-                    disabled={restartDisabled}
-                    className={cn(
-                      "p-1.5 rounded-r-none hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors",
-                      isRestarting && "animate-spin"
-                    )}
-                    aria-label={restartTooltip}
-                    aria-busy={isRestarting}
-                  >
-                    <RotateCw className="h-3.5 w-3.5" />
-                  </button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{restartTooltip}</TooltipContent>
-            </Tooltip>
-            <DropdownMenu>
+        {(stopVisible || hasRestartControls) && (
+          <div className="flex items-center gap-0.5 px-1">
+            {stopVisible && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <DropdownMenuTrigger asChild>
+                  <span className="inline-flex">
+                    <button
+                      type="button"
+                      onClick={onStop}
+                      disabled={stopDisabled}
+                      className={cn(
+                        PANE_TOOLBAR_ICON_BUTTON_CLASS,
+                        status === "stopping" && "animate-pulse-immediate"
+                      )}
+                      aria-label="Stop dev server"
+                      aria-busy={status === "stopping"}
+                    >
+                      <CircleStop className={PANE_TOOLBAR_ICON_CLASS} />
+                    </button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Stop dev server</TooltipContent>
+              </Tooltip>
+            )}
+
+            {hasRestartControls && (
+              <>
+                <Tooltip>
+                  <TooltipTrigger asChild>
                     <span className="inline-flex">
                       <button
                         type="button"
-                        disabled={chevronDisabled}
-                        className={cn(
-                          "p-1 rounded-l-none hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
-                        )}
-                        aria-label="More restart options"
-                        aria-disabled={chevronDisabled || undefined}
-                        onClick={(e) => {
-                          if (chevronDisabled) e.preventDefault();
-                        }}
+                        onClick={onRestartDevServer}
+                        disabled={restartDisabled}
+                        className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
+                        aria-label={restartTooltip}
+                        aria-busy={isRestarting}
                       >
-                        <MoreHorizontal className="h-3.5 w-3.5" />
+                        <SpinningIcon
+                          icon={RotateCw}
+                          active={isRestarting}
+                          className={PANE_TOOLBAR_ICON_CLASS}
+                        />
                       </button>
                     </span>
-                  </DropdownMenuTrigger>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">More restart options</TooltipContent>
-              </Tooltip>
-              <DropdownMenuContent
-                align="end"
-                sideOffset={4}
-                className="min-w-[14rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
-              >
-                <DropdownMenuItem onSelect={onReloadPreview}>Reload preview</DropdownMenuItem>
-                <DropdownMenuItem onSelect={onRestartDevServer}>
-                  Restart dev server
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  disabled={isRestarting || status === "installing"}
-                  onSelect={onRequestRestartAndClearCache}
-                >
-                  Restart and clear cache
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={isRestarting || status === "installing"}
-                  onSelect={onRequestReinstallAndRestart}
-                >
-                  Reinstall dependencies
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{restartTooltip}</TooltipContent>
+                </Tooltip>
+                <DropdownMenu>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      {/* The span carries the tooltip, so it still answers hover
+                          while the button is disabled; the menu trigger sits on
+                          the button itself, where focus and aria-expanded are. */}
+                      <span className="inline-flex">
+                        <DropdownMenuTrigger asChild disabled={chevronDisabled}>
+                          <button
+                            type="button"
+                            className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
+                            aria-label="More restart options"
+                          >
+                            <MoreHorizontal className={PANE_TOOLBAR_ICON_CLASS} />
+                          </button>
+                        </DropdownMenuTrigger>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">More restart options</TooltipContent>
+                  </Tooltip>
+                  <DropdownMenuContent
+                    align="end"
+                    sideOffset={4}
+                    className="min-w-[14rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
+                  >
+                    <DropdownMenuItem onSelect={onReloadPreview}>
+                      <RotateCw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                      Reload preview
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={onRestartDevServer}>
+                      <RotateCcw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                      Restart dev server
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      disabled={isRestarting || status === "installing"}
+                      onSelect={onRequestRestartAndClearCache}
+                    >
+                      <Eraser data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                      Restart and clear cache
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={isRestarting || status === "installing"}
+                      onSelect={onRequestReinstallAndRestart}
+                    >
+                      <Download data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                      Reinstall dependencies
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
+            )}
+          </div>
         )}
       </div>
 
       <div
+        ref={regionRef}
         id={drawerRegionId}
-        className="overflow-hidden transition-[height]"
+        className="console-drawer-region overflow-hidden"
         style={{ height: isOpen ? DRAWER_HEIGHT : 0 }}
+        data-state={isOpen ? "open" : "closed"}
         aria-hidden={!isOpen}
+        // Collapsed to zero height is not enough on its own: the tabs and the
+        // console toolbar would still be tab stops nobody can see.
+        inert={!isOpen}
       >
         <div className="flex h-full flex-col bg-surface-canvas">
-          <div
-            ref={tablistRef}
-            role="tablist"
-            aria-label="Dev preview console tabs"
-            onKeyDown={handleTablistKeyDown}
-            className="flex shrink-0 items-center gap-1 border-b border-overlay/70 bg-overlay-soft px-2"
-          >
-            <DrawerTabButton
-              tab="output"
-              label="Output"
-              isActive={activeTab === "output"}
-              controlsId={outputPanelId}
-              onSelect={() => selectTab("output")}
-            />
-            <DrawerTabButton
-              tab="console"
-              label="Console"
-              isActive={activeTab === "console"}
-              controlsId={consolePanelId}
-              onSelect={() => selectTab("console")}
-              badge={errorCount}
-            />
-            <DrawerTabButton
-              tab="diagnostics"
-              label="Diagnostics"
-              isActive={activeTab === "diagnostics"}
-              controlsId={diagnosticsPanelId}
-              onSelect={() => selectTab("diagnostics")}
+          <div className="flex h-8 shrink-0 items-stretch border-b border-overlay bg-surface px-2">
+            <UnderlineTabs
+              tabs={[
+                { id: "output", label: "Output" },
+                {
+                  id: "console",
+                  label: "Console",
+                  trailing: errorCount > 0 ? <TabErrorCount count={errorCount} /> : undefined,
+                },
+                { id: "diagnostics", label: "Diagnostics" },
+              ]}
+              activeId={activeTab}
+              onChange={selectTab}
+              aria-label="Dev preview console tabs"
+              tabId={(id) => `${panelIds[id]}-tab`}
+              panelId={(id) => panelIds[id]}
+              density="strip"
             />
           </div>
 
@@ -448,26 +399,30 @@ export function ConsoleDrawer({
                 />
               </Suspense>
             </div>
-            {activeTab === "console" && (
-              <div
-                id={consolePanelId}
-                role="tabpanel"
-                aria-labelledby={`${consolePanelId}-tab`}
-                className="absolute inset-0"
-              >
+            {/* The panels stay in the tree so every tab's aria-controls resolves;
+                only their content mounts on demand. */}
+            <div
+              id={consolePanelId}
+              role="tabpanel"
+              aria-labelledby={`${consolePanelId}-tab`}
+              hidden={activeTab !== "console"}
+              className="absolute inset-0"
+            >
+              {activeTab === "console" && (
                 <ConsolePanel paneId={paneId} webContentsId={webContentsId} />
-              </div>
-            )}
-            {activeTab === "diagnostics" && (
-              <div
-                id={diagnosticsPanelId}
-                role="tabpanel"
-                aria-labelledby={`${diagnosticsPanelId}-tab`}
-                className="absolute inset-0"
-              >
+              )}
+            </div>
+            <div
+              id={diagnosticsPanelId}
+              role="tabpanel"
+              aria-labelledby={`${diagnosticsPanelId}-tab`}
+              hidden={activeTab !== "diagnostics"}
+              className="absolute inset-0"
+            >
+              {activeTab === "diagnostics" && (
                 <DiagnosticsPanel paneId={paneId} projectId={projectId} status={status} />
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       </div>

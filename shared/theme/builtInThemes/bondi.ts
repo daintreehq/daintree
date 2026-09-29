@@ -9,33 +9,28 @@ export const theme: BuiltInThemeSource = {
   heroImage: "/themes/bondi.webp",
   palette: {
     type: "light",
-    // One cream family, hue 81. The lightness of every tier is deliberately
-    // unchanged from the theme this replaces — only hue and chroma move
-    // (94 -> 81, grid C 0.019 -> 0.027), so the app gets warmer without getting
-    // darker. Body text gains on canvas (+0.085) and panel (+0.048); the worst
-    // case anywhere is the sidebar at -0.002, which is nothing.
-    // Chroma is also carried further up the ladder than before (panel 0.0090 vs
-    // 0.0067) so the warmth survives into the content tiers instead of fading to
-    // neutral white; `elevated` stays pure white because the top tier's job is
-    // maximum lift for popovers.
+    // One cream family, hue 81, lit like the theme this replaced: only hue and
+    // chroma moved, so the app got warmer without getting darker. Chroma is
+    // carried up the ladder (panel C 0.009) so the warmth survives into the
+    // tiers you read on; `elevated` stays pure white because the top tier's job
+    // is maximum lift for popovers. canvas -> panel is held just above the
+    // ramp audit's 0.02 JND (0.023).
     //
-    // The grid -> sidebar step is 2.7x the others. That is intentional and
-    // inherited: the grid is the gutter the panels sit in and wants to be
-    // clearly below them. Evening the ramp out costs perceived lightness on the
-    // three tiers you actually read on, which is a bad trade.
+    // `grid` is the deep sand the ramp is audited from and the boot splash
+    // paints. The panel gutter itself is `panel-grid-bg` below, a lighter sand.
     // Water is a highlight only (accent, links, focus, heat ramp, terminal),
     // never a field surface: a blue plane at this lightness reads as nursery,
     // not ocean.
     surfaces: {
       grid: "#E1D7C5",
       sidebar: "#F2E9DA",
-      canvas: "#F7F1E7",
+      canvas: "#F6F0E6",
       panel: "#FBF8F2",
       elevated: "#FFFFFF",
     },
     text: {
       // Cool ink against warm paper — the counterpoint that stops cream from
-      // going sepia. muted bottoms out at 4.81:1 on the grid, 5.89:1 on canvas.
+      // going sepia. muted bottoms out at 4.81:1 on the grid, 6.06:1 on canvas.
       primary: "#1C2028",
       secondary: "#454D56",
       muted: "#555B62",
@@ -56,20 +51,28 @@ export const theme: BuiltInThemeSource = {
     // svalbard's PRIMARY unreported; this clears it at 0.133 and also clears
     // status.info (0.125) and status.success (0.100).
     accentSecondary: "#0C5D55",
-    // Status colors render as text — every one clears 3:1 on all five surfaces.
+    // Status colours are text as often as they are marks: `+123` counts, the
+    // amber `M` in the file tree, error rows. Each is the lightest value of its
+    // hue that clears AA on the sidebar (the darkest surface they print on),
+    // on a 15% self-tint over the panel and on a 10% self-tint over white —
+    // the chip and highlighted-menu-row compositions. Danger already did.
     status: {
-      success: "#1C7B54",
-      warning: "#9D6309",
+      success: "#017249",
+      warning: "#865C00",
       danger: "#A83C34",
-      info: "#1E6FA0",
+      info: "#11699B",
     },
     activity: {
-      active: "#1C7B54",
+      active: "#017249",
       idle: "#5F6A76",
-      working: "#1C7B54",
-      // Deeper than status.warning: on a light field loudness is depth, so
-      // waiting has to out-weigh a warning rather than tie with it.
-      waiting: "#8F6100",
+      working: "#017249",
+      // The waiting ring is a 1.5px stroke, and at that size luminance contrast
+      // carries it, not chroma — so it sits below every status colour (7.1:1 on
+      // white vs warning's 5.9) while keeping enough chroma to stay amber. It
+      // parts from warning by lightness and hue together (H 64 vs warning's 78,
+      // ΔE 0.046); pushing it further toward orange made it read as rust, a few
+      // ΔE from danger.
+      waiting: "#834B00",
     },
     // Warm ink: a cool overlay tint reads as grime on the cream field.
     overlayTint: "#322E26",
@@ -80,11 +83,14 @@ export const theme: BuiltInThemeSource = {
       // terminal audit excludes it by design.
       background: "#16242B",
       foreground: "#C8D0D9",
-      // 3.47:1 on the terminal background.
       muted: "#6B7783",
       cursor: "#F5B814",
-      selection: "#123941",
-      red: "#E05C5C",
+      // A fill, not a glyph: 1.42:1 on the background, the cohort's visible band
+      // (daintree 1.41). The previous #123941 was 1.28:1 and read as a slightly
+      // different dark rather than a selection. Foreground over it is 7.2:1.
+      selection: "#18404E",
+      // 4.6:1 — the old #E05C5C was the one base ANSI slot under AA.
+      red: "#E36262",
       green: "#2EBD88",
       yellow: "#F5B814",
       blue: "#37A6D9",
@@ -158,29 +164,49 @@ export const theme: BuiltInThemeSource = {
     "border-divider": "rgba(42,35,26,0.12)",
     "border-subtle": "rgba(42,35,26,0.13)",
     "border-strong": "rgba(42,35,26,0.22)",
-    "focus-ring": "rgba(0,78,107,0.38)",
-    // The engine derives this as status-info mixed 90% toward black, landing at
-    // #19608B — DeltaE 0.073 from the accent, on persistent dots and rails in
-    // Settings where accent markers also live. Mixing toward white instead
-    // keeps the conventional "modified" blue and clears the accent at 0.160.
+    // The edge of every text field is a UI-component boundary (WCAG 1.4.11) and
+    // owes 3:1 on its own; the inherited border-strong was 1.56:1, so fields
+    // dissolved into the panel. The quietest warm value that clears 3:1 against
+    // both the field fill and every surface a field sits on (3.06:1 on the
+    // sidebar, 3.57:1 on surface-input). Solid, because an alpha edge
+    // composites to a different ratio on each surface.
+    "border-input": "#8C8479",
+    // 3.0:1 or better on every surface; at 0.38 it composited to 2.0:1.
+    "focus-ring": "rgba(0,78,107,0.65)",
+    // The engine derives this as status-info mixed 90% toward black, which
+    // lands a few ΔE from the accent on persistent dots. Mixing toward white
+    // keeps the conventional "modified" blue and clears the accent.
     // Must stay in color-mix() form; a plain hex fails builtInThemes.test.ts.
-    "state-modified": "color-mix(in oklab, #1E6FA0 92%, #FFFFFF)",
+    "state-modified": "color-mix(in oklab, #11699B 92%, #FFFFFF)",
     "grain-opacity": "0.03",
     "overlay-hover": "rgba(50,46,38,0.08)",
     // Derived 3% is sub-threshold over near-white surfaces.
     "overlay-soft": "rgba(50,46,38,0.055)",
-    // Opaque elevate-to-select for menu/palette rows on white popovers.
-    "overlay-raised": "#F6F0E7",
-    // Deliberate hue choices, kept from the previous palette. Note this is no
-    // longer an AA repair: the current engine defaults (#7544CC / #5C6571)
-    // score 6.08:1 and 5.91:1 on white.
-    "pr-merged": "#7644CC",
+    // The keyboard-current row in palettes and menus (overlay-highlight derives
+    // from this). Those rows sit on white popovers, where there is nothing
+    // lighter to elevate to, so the row steps DOWN into sand. #F6F0E7 was
+    // 1.13:1 against the white and easy to lose mid-list; this is 1.24:1, the
+    // weight light IDE quick-pick rows carry.
+    "overlay-raised": "#EEE6D8",
+    // Forge chips and glyphs in resting chrome. The engine defaults are
+    // GitHub's brand hexes (#176E31, #CF222E, #7544CC): a fourth green and a
+    // neon red louder than status.danger. Re-cut into this palette — seagrass,
+    // brick, plum — and held in a 5.0-6.4:1 band on the panel, below
+    // text-secondary (8.1:1), so a PR chip never out-shouts the row it sits in.
+    "pr-open": "#2B6B50",
+    "pr-merged": "#6A4C94",
+    "pr-closed": "#9B4239",
     "pr-draft": "#646B73",
     "scrollbar-thumb": "#857F77",
     "scrollbar-thumb-hover": "color-mix(in oklab, #857F77 85%, #1C2028)",
-    "scrim-soft": "rgba(50,46,38,0.16)",
-    "scrim-medium": "rgba(50,46,38,0.28)",
-    "scrim-strong": "rgba(50,46,38,0.46)",
+    // Shaded sand, not grey. The previous ink (#322E26 at 28/46%) composited
+    // to #BDB7AC and #9A958A behind dialogs and the review hub: a low-chroma
+    // grey-brown that made the whole app look dirty the moment a modal opened.
+    // A warmer ink at lighter alphas keeps the separation (the blur and the
+    // dialog shadow do most of it on light) and keeps the field reading as sand.
+    "scrim-soft": "rgba(59,48,32,0.12)",
+    "scrim-medium": "rgba(59,48,32,0.20)",
+    "scrim-strong": "rgba(59,48,32,0.34)",
     "scrim-blur": "16px",
     // Never set before, so `dock-shadow` (which extracts shadow-color channels)
     // was casting pure black while every authored shadow here uses warm ink.
@@ -206,8 +232,23 @@ export const theme: BuiltInThemeSource = {
     // recessed derivation).
     "surface-input": "#FDFBF7",
     "surface-toolbar": "#F3ECE0",
-    // Dim tier floor: ≥ 3:1 on the terminal background.
-    "terminal-bright-black": "#66727F",
+    // ANSI 90 is the dim slot for hints, timestamps and secondary CLI output —
+    // read as body text, so it owes AA: 4.6:1 on the terminal background, still
+    // well under the foreground's 10.2:1. It was 3.24:1.
+    "terminal-bright-black": "#808C98",
+    // Warm ink for the 134 `bg-tint/N` washes (hovers, badges, the active
+    // document tab, toast edges). The engine's pure black greys them out on
+    // cream; this is the same ink as borderInkOverride.
+    tint: "#2A231A",
+    // Diff washes are opaque on purpose. The engine's 10% line wash with a 20%
+    // word wash stacked on it composited to #BAD0BE / #E1BEB5: khaki and dusty
+    // pink, with every syntax role down to 3.3:1 on exactly the characters a
+    // review is about. These are clean seagrass and coral, and the worst
+    // syntax role (comment) holds 4.59:1 even on the word highlight.
+    "diff-insert-background": "#E0F7E9",
+    "diff-insert-edit-background": "#CCF3DD",
+    "diff-delete-background": "#FFEBE9",
+    "diff-delete-edit-background": "#FFE2DF",
     "terminal-white": "#C8D0D9",
     "text-link": "#105269",
     // Placeholders render on more than the input surface — real consumers also
@@ -228,20 +269,22 @@ export const theme: BuiltInThemeSource = {
     // threw a broad dark band up the shell, heavier than anything else in the
     // chrome; -1px/5px keeps the contact edge and drops the halo.
     "dock-shadow": "0 -1px 5px rgb(from var(--theme-shadow-color) r g b / 0.25)",
-    // Panel title bars sit clearly between the grid gutter and the panel body
-    // (dL 0.042 above the gutter, 0.055 below it). They previously landed at the
-    // same lightness as the gutter, so an unfocused pane's cap dissolved into
-    // the grid behind it and the panel lost its top edge. The focused pane's cap
-    // goes all the way to white.
+    // An unfocused pane's cap is a sand band a step below the gutter, so the
+    // pane border draws its top edge; the focused pane's cap goes all the way to
+    // white, which is the strongest focus cue the grid has.
     "panel-header-bg": "#EDE5D8",
     "panel-header-focus-bg": "#FFFFFF",
     // Warm ink only, never accent — the white-card-plus-rail selection stays
     // the region's one accent signal. Selected and focused share this border.
     "panel-focus-border": "rgba(43,38,31,0.50)",
     "panel-focus-shadow": "0 1px 2px rgba(43,38,31,0.12)",
-    // The audited flat grid hex stays the final layer; surfaces.grid is
-    // untouched so the ramp audit is unaffected.
-    "panel-grid-bg": "linear-gradient(180deg, #E3D9C7 0%, #DFD4C1 100%), #E1D7C5",
+    // Flat, not a gradient: `#panel-grid` paints this as background-COLOR, where
+    // a gradient is invalid and the gutter silently fell through to the canvas.
+    // The sidebar's sand, not surfaces.grid: the same element is the empty
+    // workbench, and at #E1D7C5 the first screen of every session became a
+    // khaki field. At sidebar sand the shell reads as one material and panes
+    // (1.14:1, plus their border and ambient shadow) sit on it as paper.
+    "panel-grid-bg": "#F2E9DA",
     // White-gloss lift for emoji tiles (the dark wash renders murky on light).
     "project-tile-wash":
       "linear-gradient(to bottom, rgba(255,255,255,0.40), rgba(255,255,255,0.10))",
@@ -251,7 +294,7 @@ export const theme: BuiltInThemeSource = {
     "pulse-card-header-bg": "#FCF9F5",
     "pulse-card-shadow": "0 1px 2px rgba(43,38,31,0.10), 0 4px 10px rgba(43,38,31,0.08)",
     "pulse-control-hover-bg": "rgba(50,46,38,0.05)",
-    "pulse-empty-bg": "#F7F1E7",
+    "pulse-empty-bg": "#F6F0E6",
     // Bathymetric ramp: dry sand → shallows → ocean → the accent itself. The
     // light end stays warm on purpose; a pale blue first step reads as nursery
     // against cream, which is the one thing this palette must not do.
@@ -259,17 +302,21 @@ export const theme: BuiltInThemeSource = {
     "pulse-heat-2": "#AFC3C4",
     "pulse-heat-3": "#55879E",
     "pulse-heat-4": "#004E6B",
-    "pulse-range-bg": "#F7F1E7",
+    "pulse-range-bg": "#F6F0E6",
     "pulse-ring-offset": "#FFFFFF",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #E1D7C5 25%, #F6F1E8 50%, #E1D7C5 75%)",
     "dialog-header-bg": "#FCF9F5",
     "review-commit-input-bg": "#FDFBF7",
-    "settings-kbd-bg": "#F7F2EA",
-    "settings-kbd-border": "#CFC7B8",
-    // Nav selection elevates to white + the 2px accent marker.
+    // The open page is the highlight fill and nothing else (settings.css) — no
+    // accent rail; the focus ring is this region's one accent. So the fill has
+    // to carry it: white with a hairline and a contact shadow, the same card
+    // idiom as the sidebar. Hover steps DOWN into a sand wash rather than
+    // toward white, so it can never be mistaken for the open page (it used to
+    // be 1.06:1 from it).
     "settings-nav-active-bg": "#FFFFFF",
-    "settings-nav-active-shadow": "none",
-    "settings-nav-hover-bg": "rgba(58,48,30,0.05)",
+    "settings-nav-active-shadow":
+      "inset 0 0 0 1px rgba(42,35,26,0.09), 0 1px 2px rgba(43,38,31,0.08)",
+    "settings-nav-hover-bg": "rgba(58,48,30,0.045)",
     // Scope pill elevates to white on the tinted settings sidebar.
     "settings-scope-bg": "#FFFFFF",
     "settings-sidebar-bg": "rgba(242,233,218,0.60)",

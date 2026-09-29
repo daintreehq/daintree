@@ -1,47 +1,44 @@
-import { cn } from "@/lib/utils";
-import type { AgentState } from "@/types";
 import {
-  APP_LAYOUT,
-  DOCK_WAITING_POINT,
-  GRID_RECT,
-  MockApp,
-  MockGrid,
-  MockWaitingPill,
-  MockWorktreeCard,
-} from "../mockup/MockApp";
-import {
+  cn,
+  type CursorStep,
   MockCursor,
+  MockLegend,
   MockLines,
-  MockPane,
-  MockStateGlyph,
+  MockMenu,
+  MockSpotlight,
   MockTyping,
   reveal,
   useMockCursor,
-  type CursorStep,
+} from "@daintreehq/tour/kit";
+import {
+  APP_LAYOUT,
+  GRID_RECT,
   type MockAgentId,
-} from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
-import { MockLegend, MockMenu, MockSpotlight } from "./sceneParts";
+  MockApp,
+  MockGrid,
+  MockPane,
+  MockStateGlyph,
+  MockWaitingPill,
+  MockWorktreeCard,
+  type MockStateId,
+} from "@daintreehq/tour/mock-app";
+import { useCue } from "@daintreehq/tour/react";
 
 // Claude holds the check: Antigravity never reports finishing (its config has
 // no completion patterns), so it can only ever show working or waiting.
 const AGENTS: readonly MockAgentId[] = ["antigravity", "codex", "claude"];
-const GAP = 6;
-const PANE_WIDTH = (GRID_RECT.width - GAP * 2) / 3;
 
 const QUESTION = "Search product names only, or descriptions too?";
-const CODEX_INPUT = {
-  x: GRID_RECT.x + PANE_WIDTH + GAP + PANE_WIDTH / 2,
-  y: GRID_RECT.y + GRID_RECT.height - 11,
-};
+const CODEX_INPUT = { anchor: "codex-input", dy: 6 };
 
 // The pill opens the "Waiting for input" list above it; picking a row jumps there.
 const POPOVER = { width: 190, x: GRID_RECT.x + GRID_RECT.width - 190, y: 250 };
-const WAITING_ROW = { x: POPOVER.x + 70, y: POPOVER.y + 42 };
+const WAITING_ROW = { anchor: "menu-0", dx: -25, dy: -18 };
+const WAITING_PILL = { anchor: "dock-waiting", dx: 8 };
 
-const CURSOR: readonly CursorStep[] = [
-  { cue: "jump", at: DOCK_WAITING_POINT },
-  { cue: "jump", offset: 0.6, at: DOCK_WAITING_POINT, click: true },
+export const CURSOR: readonly CursorStep[] = [
+  { cue: "jump", at: WAITING_PILL },
+  { cue: "jump", offset: 0.6, at: WAITING_PILL, click: true },
   { cue: "pick", at: WAITING_ROW },
   { cue: "pick", offset: 0.5, at: WAITING_ROW, click: true },
   { cue: "answer", at: CODEX_INPUT },
@@ -61,12 +58,12 @@ export function StateScene() {
   const answered = useCue("answer", 2.2);
   const cursor = useMockCursor({ x: 470, y: 250 }, CURSOR);
 
-  const states: (AgentState | null)[] = [
+  const states: (MockStateId | null)[] = [
     working ? "working" : null,
     answered ? "working" : waiting ? "waiting" : working ? "working" : null,
     done ? "completed" : working ? "working" : null,
   ];
-  const live = states.filter((s): s is AgentState => s !== null);
+  const live = states.filter((s): s is MockStateId => s !== null);
 
   return (
     <MockApp

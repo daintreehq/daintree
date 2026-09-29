@@ -3,7 +3,8 @@ import { createRef } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { Checkbox, checkboxVariants } from "../checkbox";
+import { Checkbox, CheckboxGlyph, checkboxVariants } from "../checkbox";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../tooltip";
 import { Field, FieldError, FieldLabel } from "../field";
 import {
   expectNarrowTransition,
@@ -13,6 +14,44 @@ import {
 } from "./variantAssertions";
 
 describe("Checkbox behaviour", () => {
+  it("keeps its own checked state when a tooltip trigger wraps it", () => {
+    render(
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Checkbox aria-label="Viewed" checked />
+          </TooltipTrigger>
+          <TooltipContent>Viewed</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+    const box = screen.getByRole("checkbox");
+    expect(box.getAttribute("aria-checked")).toBe("true");
+    expect(box.getAttribute("data-state")).toBe("checked");
+  });
+
+  it("draws the glyph with the control's own variants and states", () => {
+    const { container } = render(
+      <>
+        <CheckboxGlyph checked />
+        <CheckboxGlyph checked="indeterminate" size="sm" />
+        <CheckboxGlyph checked={false} />
+      </>
+    );
+    const glyphs = Array.from(container.querySelectorAll("[data-slot='checkbox-glyph']"));
+    expect(glyphs.map((g) => g.getAttribute("data-state"))).toEqual([
+      "checked",
+      "indeterminate",
+      "unchecked",
+    ]);
+    for (const glyph of glyphs) {
+      expect(glyph.getAttribute("aria-hidden")).toBe("true");
+      expect(glyph.getAttribute("role")).toBeNull();
+    }
+    expect(glyphs[1]!.className).toContain(checkboxVariants({ size: "sm" }).split(" ")[0]!);
+    expect(glyphs[2]!.querySelector("svg")).toBeNull();
+  });
+
   it("reports the next state on each toggle", () => {
     const onCheckedChange = vi.fn();
     const { rerender } = render(

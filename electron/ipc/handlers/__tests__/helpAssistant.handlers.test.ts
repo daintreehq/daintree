@@ -79,20 +79,22 @@ describe("registerHelpAssistantHandlers", () => {
     expect(result).toEqual({
       docSearch: true,
       daintreeControl: true,
-      tier: "action",
+      runbookSearch: true,
+      tier: "core",
       bypassPermissions: false,
       auditRetention: 7,
-      modelId: "",
+      modelIds: {},
       customArgs: "",
       idleHibernateMinutes: 5,
       debugLogging: false,
       loadGlobalHooksAndServers: false,
+      daintreeConfirmations: "inherit",
     });
   });
 
   it("merges stored values over defaults so legacy partial state still loads", async () => {
     storeMock.get.mockReturnValue({
-      tier: "system",
+      tier: "full",
       bypassPermissions: true,
       auditRetention: 30,
     });
@@ -103,18 +105,20 @@ describe("registerHelpAssistantHandlers", () => {
     expect(result).toEqual({
       docSearch: true,
       daintreeControl: true,
-      tier: "system",
+      runbookSearch: true,
+      tier: "full",
       bypassPermissions: true,
       auditRetention: 30,
-      modelId: "",
+      modelIds: {},
       customArgs: "",
       idleHibernateMinutes: 5,
       debugLogging: false,
       loadGlobalHooksAndServers: false,
+      daintreeConfirmations: "inherit",
     });
   });
 
-  it("migrates legacy skipPermissions=true to tier='system' + bypassPermissions=true", async () => {
+  it("migrates legacy skipPermissions=true to tier='full' + bypassPermissions=true", async () => {
     storeMock.get.mockReturnValue({
       skipPermissions: true,
     } as unknown as Partial<HelpAssistantSettings>);
@@ -122,10 +126,10 @@ describe("registerHelpAssistantHandlers", () => {
     const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
 
     const result = await handler(null);
-    expect(result).toMatchObject({ tier: "system", bypassPermissions: true });
+    expect(result).toMatchObject({ tier: "full", bypassPermissions: true });
   });
 
-  it("migrates legacy skipPermissions=false to tier='action' + bypassPermissions=false", async () => {
+  it("migrates legacy skipPermissions=false to tier='core' + bypassPermissions=false", async () => {
     storeMock.get.mockReturnValue({
       skipPermissions: false,
     } as unknown as Partial<HelpAssistantSettings>);
@@ -133,20 +137,50 @@ describe("registerHelpAssistantHandlers", () => {
     const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
 
     const result = await handler(null);
-    expect(result).toMatchObject({ tier: "action", bypassPermissions: false });
+    expect(result).toMatchObject({ tier: "core", bypassPermissions: false });
   });
 
   it("prefers new fields over legacy skipPermissions when both are present", async () => {
     storeMock.get.mockReturnValue({
       skipPermissions: true,
-      tier: "action",
+      tier: "core",
       bypassPermissions: false,
     } as unknown as Partial<HelpAssistantSettings>);
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
 
     const result = await handler(null);
-    expect(result).toMatchObject({ tier: "action", bypassPermissions: false });
+    expect(result).toMatchObject({ tier: "core", bypassPermissions: false });
+  });
+
+  it.each([
+    ["workbench", "core"],
+    ["action", "core"],
+    ["system", "full"],
+  ] as const)(
+    "reads a tier stored before the core/full split (%s) as %s",
+    async (stored, expected) => {
+      storeMock.get.mockReturnValue({ tier: stored } as unknown as Partial<HelpAssistantSettings>);
+      registerHelpAssistantHandlers();
+      const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+      const result = await handler(null);
+      expect(result).toMatchObject({ tier: expected });
+    }
+  );
+
+  it("prefers a pre-split stored tier over legacy skipPermissions", async () => {
+    // A stored ladder name is still a tier the user chose; skipPermissions is
+    // only the fallback when no tier was ever written.
+    storeMock.get.mockReturnValue({
+      skipPermissions: true,
+      tier: "action",
+    } as unknown as Partial<HelpAssistantSettings>);
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    const result = await handler(null);
+    expect(result).toMatchObject({ tier: "core" });
   });
 
   it("rejects an invalid stored tier and falls back to default", async () => {
@@ -158,7 +192,7 @@ describe("registerHelpAssistantHandlers", () => {
     const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
 
     const result = await handler(null);
-    expect(result).toMatchObject({ tier: "action", bypassPermissions: false });
+    expect(result).toMatchObject({ tier: "core", bypassPermissions: false });
   });
 
   it("persists each touched key under helpAssistant.<field>", async () => {
@@ -196,6 +230,31 @@ describe("registerHelpAssistantHandlers", () => {
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
+  it("persists daintreeConfirmations and rejects values outside the union (#12874)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { daintreeConfirmations: "always-ask" });
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.daintreeConfirmations", "always-ask");
+
+    storeMock.set.mockClear();
+    await handler(null, { daintreeConfirmations: "never-ask" as unknown as "inherit" });
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("reads a stored daintreeConfirmations, and anything unrecognised as inherit (#12874)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    storeMock.get.mockReturnValue({ daintreeConfirmations: "always-ask" });
+    expect(await handler(null)).toMatchObject({ daintreeConfirmations: "always-ask" });
+
+    storeMock.get.mockReturnValue({
+      daintreeConfirmations: "skip" as unknown as "inherit",
+    });
+    expect(await handler(null)).toMatchObject({ daintreeConfirmations: "inherit" });
+  });
+
   it("returns a stored debugLogging=true over the default", async () => {
     storeMock.get.mockReturnValue({ debugLogging: true });
     registerHelpAssistantHandlers();
@@ -209,13 +268,12 @@ describe("registerHelpAssistantHandlers", () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
 
-    await handler(null, { tier: "system" });
-    await handler(null, { tier: "workbench" });
-    await handler(null, { tier: "action" });
+    await handler(null, { tier: "full" });
+    await handler(null, { tier: "core" });
 
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.tier", "system");
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.tier", "workbench");
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.tier", "action");
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.tier", "full");
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.tier", "core");
+    expect(storeMock.set).toHaveBeenCalledTimes(2);
   });
 
   it("rejects tier values outside the valid HelpAssistantTier union", async () => {
@@ -225,6 +283,10 @@ describe("registerHelpAssistantHandlers", () => {
     await handler(null, { tier: "external" });
     await handler(null, { tier: "off" });
     await handler(null, { tier: 0 });
+    // Pre-split names are normalized on read but never accepted as a write.
+    await handler(null, { tier: "workbench" });
+    await handler(null, { tier: "action" });
+    await handler(null, { tier: "system" });
 
     expect(storeMock.set).not.toHaveBeenCalled();
   });
@@ -320,9 +382,26 @@ describe("registerHelpAssistantHandlers", () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
 
-    await handler(null, { docSearch: "yes", daintreeControl: 1, bypassPermissions: 0 });
+    await handler(null, {
+      docSearch: "yes",
+      daintreeControl: 1,
+      runbookSearch: "on",
+      bypassPermissions: 0,
+    } as unknown as Partial<HelpAssistantSettings>);
 
     expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("persists runbookSearch and reads a stored false back", async () => {
+    registerHelpAssistantHandlers();
+    const set = ipcMainMock._handlers.get(SET_CHANNEL)!;
+    await set(null, { runbookSearch: false });
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.runbookSearch", false);
+
+    storeMock.get.mockReturnValue({ runbookSearch: false });
+    const get = ipcMainMock._handlers.get(GET_CHANNEL)!;
+    const result = (await get(null)) as HelpAssistantSettings;
+    expect(result.runbookSearch).toBe(false);
   });
 
   it("does not persist unknown fields the renderer wasn't supposed to send", async () => {
@@ -343,7 +422,8 @@ describe("registerHelpAssistantHandlers", () => {
     storeMock.get.mockReturnValue({
       docSearch: "not-a-boolean" as unknown as boolean,
       daintreeControl: 42 as unknown as boolean,
-      tier: null as unknown as "action",
+      runbookSearch: "no" as unknown as boolean,
+      tier: null as unknown as "core",
       bypassPermissions: "yes" as unknown as boolean,
       auditRetention: 365 as unknown as 7,
     });
@@ -354,14 +434,16 @@ describe("registerHelpAssistantHandlers", () => {
     expect(result).toEqual({
       docSearch: true,
       daintreeControl: true,
-      tier: "action",
+      runbookSearch: true,
+      tier: "core",
       bypassPermissions: false,
       auditRetention: 7,
-      modelId: "",
+      modelIds: {},
       customArgs: "",
       idleHibernateMinutes: 5,
       debugLogging: false,
       loadGlobalHooksAndServers: false,
+      daintreeConfirmations: "inherit",
     });
   });
 
@@ -556,123 +638,216 @@ describe("registerHelpAssistantHandlers", () => {
     expect(result).toMatchObject({ customArgs: "--model sonnet" });
   });
 
-  it("persists a valid modelId", async () => {
+  function setModelIds(patch: unknown) {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+    return handler(null, { modelIds: patch });
+  }
 
-    await handler(null, { modelId: "claude-sonnet-4-6" });
+  it("persists a model for one agent as a whole-map write under a fixed path", async () => {
+    await setModelIds({ claude: "claude-sonnet-4-6" });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith(
-      "helpAssistant.modelId",
-      "claude-sonnet-4-6"
-    );
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
+      claude: "claude-sonnet-4-6",
+    });
   });
 
-  it("persists an empty modelId so the user can clear back to the CLI default", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+  it("merges a patch into the stored map without touching other agents", async () => {
+    storeMock.get.mockReturnValue({ modelIds: { claude: "opus", gemini: "" } });
 
-    await handler(null, { modelId: "" });
+    await setModelIds({ codex: "gpt-6-astra" });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelId", "");
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
+      claude: "opus",
+      gemini: "",
+      codex: "gpt-6-astra",
+    });
   });
 
-  it("trims surrounding whitespace from modelId", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+  it("composes successive patches for different agents against what was stored", async () => {
+    let stored: Partial<HelpAssistantSettings> | undefined = { modelIds: { claude: "opus" } };
+    storeMock.get.mockImplementation(() => stored);
+    storeMock.set.mockImplementation((key: string, value: unknown) => {
+      if (key === "helpAssistant.modelIds") {
+        stored = { ...stored, modelIds: value as Record<string, string> };
+      }
+    });
 
-    await handler(null, { modelId: "  gpt-5.5  " });
+    await setModelIds({ codex: "gpt-6-sol" });
+    await setModelIds({ gemini: "" });
+    await setModelIds({ claude: null });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelId", "gpt-5.5");
+    expect(stored?.modelIds).toEqual({ codex: "gpt-6-sol", gemini: "" });
   });
 
-  it("rejects a modelId with internal whitespace (not a single token)", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
-    await handler(null, { modelId: "claude sonnet" });
-
-    expect(storeMock.set).not.toHaveBeenCalled();
-  });
-
-  it("rejects a modelId with an internal tab rather than collapsing it", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
-    // A tab is a control char; stripping-before-checking would silently coerce
-    // this to "claudesonnet". It must be rejected as a non-single-token value.
-    await handler(null, { modelId: "claude\tsonnet" });
-
-    expect(storeMock.set).not.toHaveBeenCalled();
-  });
-
-  it("accepts a modelId exactly at the 200-char cap unchanged", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
-    const exact = "m".repeat(200);
-    await handler(null, { modelId: exact });
-
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelId", exact);
-  });
-
-  it("rejects a modelId that would inject a bare flag (leading dash)", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
-    await handler(null, { modelId: "--dangerously-skip-permissions" });
-
-    expect(storeMock.set).not.toHaveBeenCalled();
-  });
-
-  it("rejects a modelId containing shell metacharacters", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
-    await handler(null, { modelId: "sonnet;rm -rf /" });
-    await handler(null, { modelId: "$(whoami)" });
-
-    expect(storeMock.set).not.toHaveBeenCalled();
-  });
-
-  it("rejects a modelId that is not a string", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
-    await handler(null, { modelId: 42 as unknown as string });
-
-    expect(storeMock.set).not.toHaveBeenCalled();
-  });
-
-  it("caps modelId length at 200 characters", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
-    await handler(null, { modelId: "m".repeat(250) });
-
-    const call = storeMock.set.mock.calls[0];
-    expect(call?.[0]).toBe("helpAssistant.modelId");
-    expect((call?.[1] as string).length).toBe(200);
-  });
-
-  it("loads a valid stored modelId from the store", async () => {
-    storeMock.get.mockReturnValue({ modelId: "claude-opus-4-8" });
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
-
-    const result = await handler(null);
-    expect(result).toMatchObject({ modelId: "claude-opus-4-8" });
-  });
-
-  it("sanitizes a corrupted stored modelId back to the empty-string default", async () => {
+  it("reads own keys that shadow Object.prototype names literally", async () => {
     storeMock.get.mockReturnValue({
-      modelId: "sonnet;rm -rf /" as unknown as string,
+      modelIds: JSON.parse('{"toString": "custom-model", "__proto__": "opus"}'),
     });
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
 
+    const result = (await handler(null)) as HelpAssistantSettings;
+    expect(Object.keys(result.modelIds)).toEqual(["toString"]);
+    expect(result.modelIds.toString).toBe("custom-model");
+  });
+
+  it("persists an empty model so the agent launches with the CLI default", async () => {
+    await setModelIds({ claude: "" });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
+      claude: "",
+    });
+  });
+
+  it("removes only that agent's entry for a null so its recommended model applies again", async () => {
+    storeMock.get.mockReturnValue({ modelIds: { claude: "opus", codex: "gpt-6-sol" } });
+
+    await setModelIds({ claude: null });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
+      codex: "gpt-6-sol",
+    });
+  });
+
+  it("writes nothing when the patch changes nothing", async () => {
+    storeMock.get.mockReturnValue({ modelIds: { claude: "opus" } });
+
+    await setModelIds({ claude: "opus" });
+    await setModelIds({ codex: null });
+    await setModelIds({});
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("keeps a dotted agent ID as a literal key", async () => {
+    await setModelIds({ "my.agent": "custom-model" });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
+      "my.agent": "custom-model",
+    });
+  });
+
+  it("trims surrounding whitespace from a model", async () => {
+    await setModelIds({ codex: "  gpt-5.5  " });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
+      codex: "gpt-5.5",
+    });
+  });
+
+  it("rejects a model with internal whitespace (not a single token)", async () => {
+    await setModelIds({ claude: "claude sonnet" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("rejects a model with an internal tab rather than collapsing it", async () => {
+    // A tab is a control char; stripping-before-checking would silently coerce
+    // this to "claudesonnet". It must be rejected as a non-single-token value.
+    await setModelIds({ claude: "claude\tsonnet" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("accepts a model exactly at the 200-char cap unchanged", async () => {
+    const exact = "m".repeat(200);
+    await setModelIds({ claude: exact });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
+      claude: exact,
+    });
+  });
+
+  it("rejects a model that would inject a bare flag (leading dash)", async () => {
+    await setModelIds({ claude: "--dangerously-skip-permissions" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("rejects a model containing shell metacharacters", async () => {
+    await setModelIds({ claude: "sonnet;rm -rf /" });
+    await setModelIds({ claude: "$(whoami)" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("rejects a model that is not a string", async () => {
+    await setModelIds({ claude: 42 });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsafe agent keys and non-map patches", async () => {
+    await setModelIds({ "bad key": "opus", __proto__: "opus", "a/b": "opus" });
+    await setModelIds(JSON.parse('{"__proto__": "opus"}'));
+    await setModelIds(["opus"]);
+    await setModelIds("opus");
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("applies the valid entries of a patch and skips the invalid ones", async () => {
+    storeMock.get.mockReturnValue({ modelIds: { claude: "opus" } });
+
+    await setModelIds({ claude: "$(whoami)", codex: "gpt-6-sol" });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
+      claude: "opus",
+      codex: "gpt-6-sol",
+    });
+  });
+
+  it("caps a model at 200 characters", async () => {
+    await setModelIds({ claude: "m".repeat(250) });
+
+    const call = storeMock.set.mock.calls[0];
+    expect(call?.[0]).toBe("helpAssistant.modelIds");
+    expect((call?.[1] as Record<string, string>).claude.length).toBe(200);
+  });
+
+  it("ignores the legacy scalar modelId in a patch", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: "opus" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("loads a stored per-agent map", async () => {
+    storeMock.get.mockReturnValue({ modelIds: { claude: "claude-opus-4-8", codex: "" } });
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
     const result = await handler(null);
-    expect(result).toMatchObject({ modelId: "" });
+    expect(result).toMatchObject({ modelIds: { claude: "claude-opus-4-8", codex: "" } });
+  });
+
+  it("drops corrupted entries and unsafe keys from a stored map", async () => {
+    storeMock.get.mockReturnValue({
+      modelIds: {
+        claude: "sonnet;rm -rf /",
+        codex: "gpt-6-sol",
+        gemini: null,
+        "bad key": "opus",
+      } as unknown as Record<string, string>,
+    });
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    const result = (await handler(null)) as HelpAssistantSettings;
+    expect(result.modelIds).toEqual({ codex: "gpt-6-sol" });
+  });
+
+  it("never exposes a leftover legacy scalar modelId", async () => {
+    storeMock.get.mockReturnValue({ modelId: "opus" } as unknown as HelpAssistantSettings);
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    const result = (await handler(null)) as Record<string, unknown>;
+    expect(result.modelIds).toEqual({});
+    expect(result).not.toHaveProperty("modelId");
   });
 });
 
@@ -686,7 +861,7 @@ describe("registerHelpAssistantHandlers — getLiveSessionStatus (#10032)", () =
 
   it("returns a connected snapshot shaped from the service result", async () => {
     mcpServiceMock.getHelpSessionLiveStatus.mockReturnValue({
-      tier: "system",
+      tier: "full",
       activeGrants: [{ toolId: "terminal.kill", expiresAt: 1000, ttlMs: 500 }],
     });
     registerHelpAssistantHandlers();
@@ -696,7 +871,7 @@ describe("registerHelpAssistantHandlers — getLiveSessionStatus (#10032)", () =
 
     expect(result).toEqual({
       connected: true,
-      tier: "system",
+      tier: "full",
       activeGrants: [{ toolId: "terminal.kill", expiresAt: 1000, ttlMs: 500 }],
     });
     // The public help id and the caller's webContentsId are threaded through.
@@ -710,7 +885,7 @@ describe("registerHelpAssistantHandlers — getLiveSessionStatus (#10032)", () =
 
     const result = await handler(CTX, { sessionId: "help-1" });
 
-    expect(result).toEqual({ connected: false, tier: "workbench", activeGrants: [] });
+    expect(result).toEqual({ connected: false, tier: "core", activeGrants: [] });
   });
 
   it("narrows an unexpected external tier down to a safe HelpAssistantTier", async () => {
@@ -725,7 +900,7 @@ describe("registerHelpAssistantHandlers — getLiveSessionStatus (#10032)", () =
 
     const result = await handler(CTX, { sessionId: "help-1" });
 
-    expect(result).toMatchObject({ connected: true, tier: "workbench" });
+    expect(result).toMatchObject({ connected: true, tier: "core" });
   });
 
   it("rejects a payload with a missing/empty sessionId before reaching the service", async () => {

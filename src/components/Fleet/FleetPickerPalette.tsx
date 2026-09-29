@@ -1,25 +1,27 @@
-import { useCallback, useEffect, useId, useMemo, useState, type ReactElement } from "react";
-import { m } from "framer-motion";
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
 import { Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { FleetPickerContent, FleetPickerFooterHint } from "@/components/Fleet/FleetPickerContent";
 import { useFleetPicker } from "@/hooks/useFleetPicker";
-import { useUiMotionTransition } from "@/hooks/useShouldSkipMotion";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
-import { handleSegmentedRadioKeyDown } from "./segmentedRadioKeys";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
 import { SavedFleetQuickRecall } from "./SavedFleetQuickRecall";
 import { SavedFleetsDialog } from "./SavedFleetsDialog";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 
 type CommitMode = "replace" | "append";
 
-const COMMIT_MODES: { mode: CommitMode; label: string }[] = [
-  { mode: "replace", label: "Replace" },
-  { mode: "append", label: "Append" },
+const COMMIT_MODES: SegmentedRadioOption<CommitMode>[] = [
+  { value: "replace", label: "Replace" },
+  { value: "append", label: "Append" },
 ];
-const COMMIT_MODE_VALUES: readonly CommitMode[] = ["replace", "append"];
 
 export interface FleetPickerPaletteProps {
   isOpen: boolean;
@@ -48,11 +50,6 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   const armedIds = useFleetArmingStore((s) => s.armedIds);
   const [commitMode, setCommitMode] = useState<CommitMode>("replace");
   const [manageOpen, setManageOpen] = useState(false);
-  const thumbLayoutId = `${useId()}-segmented-thumb`;
-  const uiMotionTransition = useUiMotionTransition();
-  // Closing resets the mode to Replace while the palette is still fading out, which
-  // would otherwise slide the thumb back across a disappearing dialog.
-  const thumbTransition = isOpen ? uiMotionTransition : { ...uiMotionTransition, duration: 0 };
 
   useEffect(() => {
     if (!isOpen) setCommitMode("replace");
@@ -151,17 +148,6 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
     });
   }, [agentVisibleIds, picker]);
 
-  // Bulk-selection helpers live in the list's search section, not the commit
-  // footer — they act on the list, and the footer is reserved for commit
-  // controls (mode toggle + Cancel + Arm). Passed to `FleetPickerContent` as a
-  // slot so the layer-agnostic component stays unaware of palette concerns.
-  const helperClass = cn(
-    "rounded-sm px-2.5 py-1 text-xs leading-[inherit] text-text-secondary",
-    "hover:bg-tint/[0.08] hover:text-text-primary transition-colors duration-150",
-    "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
-    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-  );
-
   // Confirmed, not raw selected: an id that drifted out of eligibility while
   // the picker was open is not going to be armed, and counting it produced
   // "3 of 2 selected" against a button that armed two. The drift notice in the
@@ -169,6 +155,10 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   const selectedCount = picker.confirmedIds.length;
   const hiddenSelected = picker.hiddenSelectedCount;
 
+  // Bulk-selection helpers live in the list's search section, not the commit
+  // footer — they act on the list, and the footer is reserved for commit
+  // controls (mode toggle + Cancel + Arm). Passed to `FleetPickerContent` as a
+  // slot so the layer-agnostic component stays unaware of palette concerns.
   const selectionHelpers = (
     <>
       <SavedFleetQuickRecall
@@ -185,33 +175,36 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
       />
       <div className="flex items-center justify-between gap-2 pt-2">
         <div role="group" aria-label="Selection helpers" className="flex items-center gap-1.5">
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={handleSelectAllVisible}
             disabled={!canSelect}
             data-testid="fleet-picker-cold-start-select-all"
-            className={helperClass}
+            className="text-xs"
           >
             {selectLabel}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={handleSelectAgents}
             disabled={agentVisibleIds.length === 0}
             data-testid="fleet-picker-cold-start-select-agents"
-            className={helperClass}
+            className="text-xs"
           >
             Select agents
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={handleClearSelection}
             disabled={!canClear}
             data-testid="fleet-picker-cold-start-clear-selection"
-            className={helperClass}
+            className="text-xs"
           >
             Clear
-          </button>
+          </Button>
         </div>
         {/*
         The running total, where the convention puts it. Until now the ONLY
@@ -278,71 +271,26 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
               </div>
 
               <div className="flex flex-nowrap items-center justify-between gap-2 border-t border-border-default px-3 py-2">
-                <div
-                  // A visible track. Without one the inactive half is bare dim
-                  // text beside a filled chip, so the pair reads as "a button and
-                  // some grey words" rather than a two-position switch.
-                  className="relative isolate flex rounded-sm border border-border-default bg-tint/[0.04] p-0.5 text-2xs"
-                  role="radiogroup"
+                {/* The shared segmented control. Its thumb only slides on the
+                    user's own pick, so the reset to Replace on close snaps
+                    rather than sliding across a dialog that is fading out, and
+                    the arrow keys it handles stop there instead of also moving
+                    the palette's row selection. */}
+                <SegmentedRadioGroup<CommitMode>
                   aria-label="Commit mode"
-                  data-testid="fleet-picker-cold-start-commit-mode"
-                  // Arrow keys move within the group; stopping them here keeps the
-                  // palette's row navigation from also acting on the same press.
-                  onKeyDown={(e) =>
-                    handleSegmentedRadioKeyDown(e, COMMIT_MODE_VALUES, commitMode, setCommitMode)
-                  }
-                >
-                  {COMMIT_MODES.map(({ mode, label }) => {
-                    const isActive = commitMode === mode;
-
-                    return (
-                      <button
-                        key={mode}
-                        type="button"
-                        role="radio"
-                        aria-checked={isActive}
-                        tabIndex={isActive ? 0 : -1}
-                        data-value={mode}
-                        onClick={() => setCommitMode(mode)}
-                        data-testid={`fleet-picker-cold-start-commit-mode-${mode}`}
-                        className={cn(
-                          "relative rounded-xs px-2 py-1 transition-colors duration-150",
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
-                          isActive
-                            ? "text-text-primary"
-                            : "text-text-secondary hover:bg-tint/[0.04]"
-                        )}
-                      >
-                        {isActive && (
-                          <m.div
-                            data-slot="segmented-thumb"
-                            layout
-                            layoutId={thumbLayoutId}
-                            layoutCrossfade={false}
-                            transition={thumbTransition}
-                            className="absolute inset-0 z-0 rounded-xs bg-tint/[0.10] pointer-events-none"
-                            aria-hidden="true"
-                          />
-                        )}
-                        <span className="relative z-10">{label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+                  density="compact"
+                  testId="fleet-picker-cold-start-commit-mode"
+                  options={COMMIT_MODES}
+                  value={commitMode}
+                  onChange={setCommitMode}
+                />
                 <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={onClose}
-                    className={cn(
-                      "rounded-sm px-2.5 py-1 text-xs leading-[inherit] text-text-secondary",
-                      "hover:bg-tint/[0.08] hover:text-text-primary transition-colors duration-150",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                    )}
-                  >
+                  <Button variant="ghost" size="xs" onClick={onClose} className="text-xs">
                     Cancel
-                  </button>
-                  <button
-                    type="button"
+                  </Button>
+                  <Button
+                    variant="contrast"
+                    size="xs"
                     onClick={picker.handleConfirm}
                     // In Append mode the live count is what would actually be
                     // added; without this the button stayed enabled on a selection
@@ -352,24 +300,19 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                       commitMode === "append" ? appendCount === 0 : picker.confirmedIds.length === 0
                     }
                     data-testid="fleet-picker-cold-start-confirm"
-                    className={cn(
-                      // Neutral high-contrast, the house primary treatment
-                      // (`AppDialog.Footer` hard-codes `variant="contrast"`). The
-                      // amber category fill this used to carry was the only
-                      // category-coloured confirm in ~111 dialogs. Fleet keeps its
-                      // amber identity where it belongs — the arming ribbon, the
-                      // drafting pill, the pane header — and this surface is left
-                      // with exactly one gold, the Waiting badge.
-                      "rounded-sm bg-text-primary px-2.5 py-1 text-xs leading-[inherit] text-text-inverse ring-1 ring-tint/15",
-                      "transition-[background-color,opacity] duration-150 hover:bg-[color-mix(in_oklab,var(--color-text-primary)_90%,var(--color-text-inverse))]",
-                      // The label changes width with the count, and it sits at the
-                      // end of the row, so every change dragged Cancel sideways
-                      // with it. A floor wide enough for the longest common label
-                      // pins the pair in place.
-                      "min-w-[7.5rem] text-center tabular-nums",
-                      "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                    )}
+                    // Neutral high-contrast, the house primary treatment
+                    // (`AppDialog.Footer` uses `variant="contrast"` too). The amber
+                    // category fill this used to carry was the only
+                    // category-coloured confirm in ~111 dialogs. Fleet keeps its
+                    // amber identity where it belongs — the arming ribbon, the
+                    // drafting pill, the pane header — and this surface is left
+                    // with exactly one gold, the Waiting badge.
+                    //
+                    // The label changes width with the count, and it sits at the
+                    // end of the row, so every change dragged Cancel sideways with
+                    // it. A floor wide enough for the longest common label pins
+                    // the pair in place.
+                    className="min-w-[7.5rem] text-xs tabular-nums"
                   >
                     {commitMode === "append"
                       ? appendCount === 0
@@ -378,7 +321,7 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                       : picker.confirmedIds.length === 0
                         ? "Arm selected"
                         : `Arm ${picker.confirmedIds.length} selected`}
-                  </button>
+                  </Button>
                 </div>
               </div>
             </>
@@ -386,16 +329,13 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
             // Another picker (likely the ribbon `+ Add panes…`) holds the
             // single-active session. Surface a soft empty state and let the
             // user dismiss via Cancel/Esc.
-            <div
-              className="flex flex-col items-center justify-center gap-1 px-6 py-12 text-center"
-              data-testid="fleet-picker-cold-start-blocked"
-            >
-              <div className="text-sm leading-[inherit] font-medium text-text-primary">
-                Another fleet picker is open
-              </div>
-              <div className="text-xs leading-[inherit] text-text-secondary">
-                Close it and try again.
-              </div>
+            <div data-testid="fleet-picker-cold-start-blocked">
+              <EmptyState
+                variant="zero-data"
+                scale="popover"
+                title="Close the other fleet picker to arm from here"
+                className="min-h-[120px]"
+              />
             </div>
           )}
         </div>

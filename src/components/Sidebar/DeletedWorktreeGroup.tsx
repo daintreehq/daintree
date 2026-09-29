@@ -1,19 +1,26 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronRight, FolderX, GripVertical, Trash2 } from "lucide-react";
+import {
+  ChevronRight,
+  FolderX,
+  GripVertical,
+  PanelBottom,
+  PanelTopClose,
+  Trash2,
+} from "lucide-react";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import {
   getDeletedWorktreeTerminalIds,
   useWorktreeSelectionStore,
   type DeletedWorktree,
 } from "@/store/worktreeStore";
-import { usePreferencesStore } from "@/store/preferencesStore";
 import {
   useTerminalPendingDestructiveActionStore,
   type DestructivePreviewGroup,
 } from "@/store/terminalPendingDestructiveActionStore";
-import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { DeletedWorktreeCard } from "./DeletedWorktreeCard";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -23,8 +30,16 @@ import {
 } from "@/components/DragDrop/SortableWorktreeTerminal";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
+import {
+  STATE_LABELS,
+  getEffectiveStateColor,
+  getEffectiveStateIcon,
+} from "@/components/Worktree/terminalStateConfig";
 import { buildDestructivePreview } from "@/utils/destructiveSessionConfirm";
 import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
+import { useDeletedWorktreeCountdown } from "./useDeletedWorktreeCountdown";
+import { Badge } from "@/components/ui/badge";
 
 interface GroupMember {
   worktree: DeletedWorktree;
@@ -50,10 +65,12 @@ interface DeletedWorktreeGroupProps {
  * worktree, each with its own countdown and trash button; grouped-by-type mode
  * piled all of them at the end.
  *
- * Collapsed, the group is one row plus a rail of every surviving terminal.
+ * Collapsed, the group is one row plus a rail of every surviving terminal,
+ * filed under the worktree it came from with that worktree's own countdown.
  * The rail is not decoration: dragging a terminal onto a live worktree is the
- * only way to rescue an agent session, and a summary that unmounted its
- * terminals would take that away exactly when the rows are hardest to read.
+ * direct way to rescue an agent session (the pane's "Move to worktree" is the
+ * other), and a summary that unmounted its terminals would take that away
+ * exactly when the rows are hardest to read.
  * Each chip is a real `SortableWorktreeTerminal`, so it emits the same
  * `origin: "accordion"` drag data a card's terminal row does and `DndProvider`
  * needs no knowledge of this component at all.
@@ -84,30 +101,33 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
 
   const terminalCount = members.reduce((n, m) => n + m.panels.length, 0);
 
+  // A glanceable "next close" for the whole group. Only running members count:
+  // a held member's deadline is re-pinned by the sweep on every pass, so it is
+  // not a deadline at all, and letting it win made this readout jitter between
+  // two values. Each member's own timer — held ones included — is in the rail.
   const cleanupSeconds = usePreferencesStore((s) => s.deletedWorktreeCleanupSeconds);
-  const [nowTick, setNowTick] = useState(() => Date.now());
-  // The group speaks for whichever member expires first — the deadlines stay
-  // per-row and the cards still show their own once expanded.
-  const soonestExpiresAt = useMemo(() => {
+  const nextExpiresAt = useMemo(() => {
     let soonest: number | null = null;
-    for (const { worktree } of members) {
-      if (worktree.expiresAt === null) continue;
+    for (const { worktree, panels } of members) {
+      if (panels.length === 0 || worktree.expiresAt === null || worktree.holdReason !== null) {
+        continue;
+      }
       if (soonest === null || worktree.expiresAt < soonest) soonest = worktree.expiresAt;
     }
     return soonest;
   }, [members]);
-  const hasCountdown = soonestExpiresAt !== null && cleanupSeconds > 0 && !isExpanded;
-  useVisibilityAwareInterval(() => setNowTick(Date.now()), 1000, hasCountdown);
-  // The interval is off while expanded, so `nowTick` is stale on the way back:
-  // collapsing after a minute would flash the full TTL until the first tick.
+  const hasNextClose = nextExpiresAt !== null && cleanupSeconds > 0;
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useVisibilityAwareInterval(() => setNowTick(Date.now()), 1000, hasNextClose);
+  // The interval sleeps while every member is held; resync on the way back so
+  // the readout does not open on a stale second.
   useEffect(() => {
-    if (hasCountdown) setNowTick(Date.now());
-  }, [hasCountdown]);
-  const cleanupMs = cleanupSeconds * 1000;
-  const rawRemainingMs = soonestExpiresAt !== null ? Math.max(0, soonestExpiresAt - nowTick) : 0;
-  const remainingSeconds = Math.ceil(
-    (cleanupMs > 0 ? Math.min(rawRemainingMs, cleanupMs) : rawRemainingMs) / 1000
-  );
+    if (hasNextClose) setNowTick(Date.now());
+  }, [hasNextClose]);
+  const nextCloseSeconds =
+    nextExpiresAt === null
+      ? 0
+      : Math.ceil(Math.min(Math.max(0, nextExpiresAt - nowTick), cleanupSeconds * 1000) / 1000);
 
   const handleClearAll = useCallback(() => {
     const preview: DestructivePreviewGroup[] = members
@@ -154,59 +174,67 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
 
   return (
     <div className="border-b border-border-default" data-testid="deleted-worktree-group">
-      <div className="flex items-center gap-2 pl-1 pr-4 py-3">
+      {/* Columns match a live card's header: the chevron takes the drag-grip
+          gutter, FolderX sits on the branch-icon column (16px) and the label
+          on the branch-name column (36px). */}
+      <div className="flex items-center gap-2 pl-0.5 pr-4 py-2.5">
         <button
           type="button"
           onClick={toggleExpanded}
           aria-expanded={isExpanded}
-          className="flex min-w-0 flex-1 items-center gap-1.5 rounded text-left outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+          className="group/summary flex min-w-0 flex-1 items-center gap-0.5 rounded-[var(--radius-md)] text-left outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         >
           <ChevronRight
             data-animated-chevron
             className={cn(
-              "w-3.5 h-3.5 shrink-0 text-text-muted transition-transform duration-150 ease-out",
+              "w-3 h-3 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
               isExpanded && "rotate-90"
             )}
             aria-hidden="true"
           />
-          <FolderX
-            className="w-3.5 h-3.5 shrink-0 text-text-muted"
-            strokeWidth={2.5}
-            aria-hidden="true"
-          />
-          <span className="truncate text-2xs font-medium text-text-muted">
-            {members.length} {worktreeNoun}
-            <span aria-hidden="true"> · </span>
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <FolderX
+              className="w-3.5 h-3.5 shrink-0 text-text-secondary"
+              strokeWidth={2.5}
+              aria-hidden="true"
+            />
+            {/* At a narrow sidebar the count gives way before the noun does:
+                "3 deleted wo…" names nothing. */}
+            <span className="shrink-0 text-xs font-medium text-text-secondary transition-colors duration-150 group-hover/summary:text-text-primary">
+              {members.length} {worktreeNoun}
+            </span>
             <span className="sr-only">, </span>
-            {terminalCount} {terminalNoun}
+            <span className="min-w-0 truncate text-2xs tabular-nums text-text-secondary">
+              {terminalCount} {terminalNoun}
+            </span>
           </span>
         </button>
-        <div className="flex shrink-0 items-center gap-2">
-          {hasCountdown && (
-            <span
-              role="timer"
-              aria-label={`Next cleanup in ${remainingSeconds} seconds`}
-              className="font-mono text-2xs tabular-nums text-text-muted"
-              title={`Next cleanup in ${remainingSeconds}s`}
-              data-testid="deleted-worktree-group-countdown"
+        {/* Outside the disclosure button, so a value that changes every second
+            never becomes part of that button's name. */}
+        {hasNextClose && (
+          <span
+            role="timer"
+            aria-label={`Next cleanup in ${nextCloseSeconds} seconds`}
+            title={`Next cleanup in ${nextCloseSeconds}s`}
+            className="shrink-0 font-mono text-2xs tabular-nums text-text-secondary"
+            data-testid="deleted-worktree-group-countdown"
+          >
+            {nextCloseSeconds}s
+          </span>
+        )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={handleClearAll}
+              className="sidebar-action-button shrink-0 rounded-[var(--radius-md)] p-1.5 -my-1.5 text-text-secondary transition-colors hover:text-status-error focus-visible:text-status-error focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+              aria-label={clearLabel}
             >
-              {remainingSeconds}s
-            </span>
-          )}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={handleClearAll}
-                className="sidebar-action-button shrink-0 rounded p-1.5 -my-1.5 text-status-error/70 transition-colors hover:text-status-error focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                aria-label={clearLabel}
-              >
-                <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top">{clearLabel}</TooltipContent>
-          </Tooltip>
-        </div>
+              <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top">{clearLabel}</TooltipContent>
+        </Tooltip>
       </div>
 
       {isExpanded ? (
@@ -214,33 +242,103 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
           <DeletedWorktreeCard key={worktree.id} worktree={worktree} showDismissAction={false} />
         ))
       ) : (
-        <div className="pb-2 pl-6 pr-4">
-          <SortableContext
-            id="deleted-worktree-group-rail"
-            items={members.flatMap((m) => m.terminals.map((t) => getAccordionDragId(t.id)))}
-            strategy={verticalListSortingStrategy}
-          >
-            <div role="list" aria-label="Terminals to rescue" className="flex flex-col gap-0.5">
-              {members.map(({ worktree, terminals }) =>
-                terminals.map((terminal, index) => (
-                  <SortableWorktreeTerminal
-                    key={terminal.id}
-                    terminal={terminal}
-                    worktreeId={worktree.id}
-                    sourceIndex={index}
-                  >
-                    <DeletedWorktreeTerminalChip
-                      terminal={terminal}
-                      worktreeTitle={worktree.title}
-                      onSelect={handleTerminalSelect}
-                    />
-                  </SortableWorktreeTerminal>
-                ))
-              )}
-            </div>
-          </SortableContext>
-        </div>
+        <SortableContext
+          id="deleted-worktree-group-rail"
+          items={members.flatMap((m) => m.terminals.map((t) => getAccordionDragId(t.id)))}
+          strategy={verticalListSortingStrategy}
+        >
+          <div className="flex flex-col gap-2 pb-3 pl-7.5 pr-4">
+            {members.map(({ worktree, terminals }) =>
+              terminals.length === 0 ? null : (
+                <DeletedWorktreeRailMember
+                  key={worktree.id}
+                  worktree={worktree}
+                  terminals={terminals}
+                  onSelect={handleTerminalSelect}
+                />
+              )
+            )}
+          </div>
+        </SortableContext>
       )}
+    </div>
+  );
+}
+
+interface DeletedWorktreeRailMemberProps {
+  worktree: DeletedWorktree;
+  terminals: PtyPanelData[];
+  onSelect: (terminal: PtyPanelData) => void;
+}
+
+/**
+ * One member's terminals in the collapsed rail, under the worktree they came
+ * from. Several agents often share a title ("Claude"), so without the name a
+ * chip cannot say which session it is; and the countdown lives here rather
+ * than on the summary row because members expire — and hold — independently.
+ */
+function DeletedWorktreeRailMember({
+  worktree,
+  terminals,
+  onSelect,
+}: DeletedWorktreeRailMemberProps) {
+  const { hasCountdown, hold, remainingSeconds } = useDeletedWorktreeCountdown(worktree);
+  const listLabel = `Terminals from deleted worktree ${worktree.title}`;
+
+  return (
+    <div data-deleted-worktree-member={worktree.id}>
+      <div className="flex min-h-5 items-center gap-2 pl-1.5">
+        <span
+          className="min-w-0 flex-1 truncate font-mono text-2xs text-text-secondary"
+          title={worktree.title}
+        >
+          {worktree.title}
+        </span>
+        {hold !== undefined && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge
+                size="xs"
+                data-testid="deleted-worktree-member-hold"
+                data-hold-reason={worktree.holdReason}
+              >
+                {hold.label}
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent side="top">{hold.tooltip}</TooltipContent>
+          </Tooltip>
+        )}
+        {hasCountdown && (
+          <span
+            role="timer"
+            aria-label={
+              hold !== undefined
+                ? `${hold.tooltip}, holding at ${remainingSeconds} seconds`
+                : `Closes automatically in ${remainingSeconds} seconds`
+            }
+            className="shrink-0 font-mono text-2xs tabular-nums text-text-secondary"
+            data-testid="deleted-worktree-member-countdown"
+          >
+            {remainingSeconds}s
+          </span>
+        )}
+      </div>
+      <div role="list" aria-label={listLabel} className="flex flex-col">
+        {terminals.map((terminal, index) => (
+          <SortableWorktreeTerminal
+            key={terminal.id}
+            terminal={terminal}
+            worktreeId={worktree.id}
+            sourceIndex={index}
+          >
+            <DeletedWorktreeTerminalChip
+              terminal={terminal}
+              worktreeTitle={worktree.title}
+              onSelect={onSelect}
+            />
+          </SortableWorktreeTerminal>
+        ))}
+      </div>
     </div>
   );
 }
@@ -252,9 +350,10 @@ interface DeletedWorktreeTerminalChipProps {
 }
 
 /**
- * One rescuable terminal in the collapsed rail. Deliberately thinner than
- * `WorktreeTerminalSection`'s row — no fleet arming, no marquee selection, no
- * state badges — because the rail exists to keep the drag source reachable and
+ * One rescuable terminal in the collapsed rail. Built from the live
+ * `WorktreeTerminalSection` row's parts — the same grip, glyph, type and
+ * trailing state mark — but deliberately thinner: no fleet arming, no marquee
+ * selection, because the rail exists to keep the drag source reachable and
  * legible, not to reproduce a live worktree's accordion.
  */
 function DeletedWorktreeTerminalChip({
@@ -264,30 +363,57 @@ function DeletedWorktreeTerminalChip({
 }: DeletedWorktreeTerminalChipProps) {
   const dragHandle = useDragHandle();
   const chrome = deriveTerminalChrome(terminal);
+  const agentState = getTerminalAgentDisplayState(chrome, terminal.agentState);
+  const StateIcon = agentState ? getEffectiveStateIcon(agentState) : null;
   const label = `${terminal.title} in deleted worktree ${worktreeTitle}`;
+  const placementLabel = terminal.location === "dock" ? "Docked" : "On grid";
+  const description = agentState
+    ? `${STATE_LABELS[agentState]}, ${placementLabel.toLowerCase()}`
+    : placementLabel;
 
   // No `role="listitem"` here — `SortableWorktreeTerminal` already provides one
   // around this chip, and nesting a second announces every entry twice.
   return (
-    <div className="group/chip flex items-center gap-1">
+    <div className="group/chip flex items-center rounded-[var(--radius-lg)] transition-colors duration-150 hover:bg-overlay-subtle">
       <button
         ref={dragHandle?.setActivatorNodeRef}
         type="button"
         data-drag-handle
-        className="cursor-grab rounded text-text-primary/25 transition-colors group-hover/chip:text-text-primary/40 hover:text-text-secondary focus-visible:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary active:cursor-grabbing"
+        className="flex h-6 w-6 shrink-0 items-center justify-center cursor-grab rounded-[var(--radius-md)] text-text-secondary hover:text-text-primary focus-visible:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px] active:cursor-grabbing"
         aria-label={`Drag to rescue ${label}`}
         {...(dragHandle?.listeners as React.HTMLAttributes<HTMLElement> | undefined)}
       >
-        <GripVertical className="w-3.5 h-3.5" aria-hidden="true" />
+        <GripVertical className="w-3 h-3" aria-hidden="true" />
       </button>
       <button
         type="button"
         onClick={() => onSelect(terminal)}
-        className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary"
+        className="flex min-h-6 min-w-0 flex-1 items-center gap-2 self-stretch rounded-[var(--radius-md)] pr-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         aria-label={label}
+        aria-description={description}
       >
         <TerminalIcon chrome={chrome} className="w-3 h-3 shrink-0" />
-        <span className="truncate text-2xs text-text-muted">{terminal.title}</span>
+        <span className="min-w-0 flex-1 truncate text-xs font-medium text-text-secondary transition-colors duration-150 group-hover/chip:text-text-primary">
+          {terminal.title}
+        </span>
+        <span className="flex shrink-0 items-center gap-1.5" aria-hidden="true">
+          {StateIcon && agentState && (
+            <StateIcon
+              className={cn(
+                "w-3 h-3",
+                getEffectiveStateColor(agentState),
+                agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
+              )}
+            />
+          )}
+          <span className="text-text-secondary">
+            {terminal.location === "dock" ? (
+              <PanelBottom className="w-3 h-3" />
+            ) : (
+              <PanelTopClose className="w-3 h-3" />
+            )}
+          </span>
+        </span>
       </button>
     </div>
   );

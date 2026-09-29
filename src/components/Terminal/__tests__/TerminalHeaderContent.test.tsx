@@ -58,8 +58,8 @@ vi.mock("../TerminalResourceSparkline", () => ({
 }));
 
 // The real chip only renders once a provider reports children over IPC.
-vi.mock("../TerminalWatchChip", () => ({
-  TerminalWatchChip: () => null,
+vi.mock("../TerminalNotifyChip", () => ({
+  TerminalNotifyChip: () => null,
 }));
 
 let mockSubagentChipVisible = false;
@@ -121,6 +121,29 @@ describe("TerminalHeaderContent — settled-agent trace", () => {
 
     const badge = screen.getByRole("status");
     expect(badge.textContent).toContain("[exit 0]");
+  });
+
+  it("keeps the error ink for a non-zero exit only", () => {
+    mockTerminal = { id: "t1" };
+
+    const { rerender } = render(<TerminalHeaderContent id="t1" isExited={true} exitCode={2} />);
+    expect(screen.getByRole("status").className).toContain("text-status-error");
+
+    rerender(<TerminalHeaderContent id="t1" isExited={true} exitCode={0} />);
+    expect(screen.getByRole("status").className).not.toContain("text-status-error");
+
+    rerender(<TerminalHeaderContent id="t1" isExited={true} exitCode={null} />);
+    expect(screen.getByRole("status").className).not.toContain("text-status-error");
+  });
+
+  it("reads [exited] rather than a dangling 'exit' when there is no code", () => {
+    mockTerminal = { id: "t1" };
+
+    render(<TerminalHeaderContent id="t1" isExited={true} exitCode={null} />);
+
+    const badge = screen.getByRole("status");
+    expect(badge.textContent).toBe("[exited]");
+    expect(badge.getAttribute("aria-live")).toBe("off");
   });
 
   it("renders the cost readout for a settled agent with a session cost", () => {

@@ -44,10 +44,10 @@ export function WatchdogDisabledBanner() {
       actions={[
         {
           id: "restart",
-          label: isRestarting ? "Restarting…" : "Restart watchdog",
+          label: "Restart watchdog",
           variant: "primary",
           onClick: handleRestart,
-          disabled: isRestarting,
+          loading: isRestarting,
         },
       ]}
     />

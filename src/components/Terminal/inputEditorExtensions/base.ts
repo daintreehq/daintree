@@ -219,6 +219,7 @@ const CHIP_CLASSES = [
 ];
 
 const CHIP_ANIMATION = `chip-enter ${UI_PALETTE_ENTER_DURATION}ms ${EASE_OUT_EXPO} both`;
+const CHIP_REDUCED_ANIMATION = `chip-fade ${UI_PALETTE_ENTER_DURATION}ms ${EASE_OUT_EXPO} both`;
 
 // Lives outside the swappable buildInputBarTheme compartment so terminal
 // color-scheme changes don't re-inject @keyframes and re-trigger the entrance
@@ -229,13 +230,21 @@ export const chipEntranceTheme: Extension = EditorView.baseTheme({
     to: { opacity: "1", transform: "translateY(0)" },
   },
   ...Object.fromEntries(CHIP_CLASSES.map((cls) => [cls, { animation: CHIP_ANIMATION }])),
-  // Honor the OS-level prefers-reduced-motion and the Daintree-level
-  // "Reduce UI animations" toggle (body[data-reduce-animations]). WCAG 2.3.3.
+  "@keyframes chip-fade": {
+    from: { opacity: "0" },
+    to: { opacity: "1" },
+  },
+  // The OS-level prefers-reduced-motion and the Daintree-level "Reduce UI
+  // animations" toggle (body[data-reduce-animations]) keep the fade and drop
+  // the 2px rise. WCAG 2.3.3.
   "@media (prefers-reduced-motion: reduce)": Object.fromEntries(
-    CHIP_CLASSES.map((cls) => [cls, { animation: "none" }])
+    CHIP_CLASSES.map((cls) => [cls, { animation: CHIP_REDUCED_ANIMATION }])
   ),
   ...Object.fromEntries(
-    CHIP_CLASSES.map((cls) => [`body[data-reduce-animations="true"] ${cls}`, { animation: "none" }])
+    CHIP_CLASSES.map((cls) => [
+      `body[data-reduce-animations="true"] ${cls}`,
+      { animation: CHIP_REDUCED_ANIMATION },
+    ])
   ),
 });
 
@@ -552,6 +561,32 @@ export function createContentAttributes(): Extension {
   });
 }
 
+export interface ComboboxAttributes {
+  listboxId: string;
+  expanded: boolean;
+  activeOptionId: string | null;
+}
+
+/**
+ * The editor as the autocomplete menu's combobox: DOM focus never leaves it, so
+ * this is how assistive tech learns there is a list and which row the arrows
+ * are on. `null` before the composer has a menu to point at.
+ */
+export function createComboboxAttributes(attrs: ComboboxAttributes | null): Extension {
+  if (!attrs) return [];
+  const base: Record<string, string> = {
+    role: "combobox",
+    "aria-autocomplete": "list",
+    "aria-haspopup": "listbox",
+    "aria-expanded": String(attrs.expanded),
+  };
+  if (attrs.expanded) base["aria-controls"] = attrs.listboxId;
+  if (attrs.expanded && attrs.activeOptionId) {
+    base["aria-activedescendant"] = attrs.activeOptionId;
+  }
+  return EditorView.contentAttributes.of(base);
+}
+
 export function createPlainPasteKeymap(): Extension {
   return Prec.highest(
     keymap.of([
@@ -577,6 +612,34 @@ export function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * The one change that turns `current` into `next`, leaving their common start
+ * and end untouched. A draft written from outside — a plugin handoff appended
+ * below the user's text, a voice insert — arrives as a whole new string; as a
+ * whole-document replacement it would drop every chip field entry it overlaps,
+ * image attachments included, even though that text did not change.
+ */
+export function minimalDocChange(
+  current: string,
+  next: string
+): { from: number; to: number; insert: string } | null {
+  if (current === next) return null;
+  const shorter = Math.min(current.length, next.length);
+  let start = 0;
+  while (start < shorter && current.charCodeAt(start) === next.charCodeAt(start)) start++;
+  let endCurrent = current.length;
+  let endNext = next.length;
+  while (
+    endCurrent > start &&
+    endNext > start &&
+    current.charCodeAt(endCurrent - 1) === next.charCodeAt(endNext - 1)
+  ) {
+    endCurrent--;
+    endNext--;
+  }
+  return { from: start, to: endCurrent, insert: next.slice(start, endNext) };
 }
 
 export function removeChipRange(view: EditorView, from: number, to: number): void {

@@ -11,9 +11,9 @@ describe("SidebarContent shortcut labels — issue #5843", () => {
     source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
   });
 
-  describe("useKeybindingDisplay hooks", () => {
+  describe("live binding hooks", () => {
     it("uses dynamic hook for worktree.overview", () => {
-      expect(source).toContain('useKeybindingDisplay("worktree.overview")');
+      expect(source).toContain('useEffectiveCombo("worktree.overview")');
     });
 
     it("does NOT consume fleet.armFocused for the Zap button (binding mismatch)", () => {
@@ -22,7 +22,7 @@ describe("SidebarContent shortcut labels — issue #5843", () => {
       // pane* action (Cmd+J), not "open the picker". After Phase 3 the Zap
       // button opens FleetPickerPalette and the tooltip advertises no
       // shortcut. Enforce that the stale hook call doesn't creep back.
-      expect(source).not.toContain('useKeybindingDisplay("fleet.armFocused")');
+      expect(source).not.toMatch(/use(KeybindingDisplay|EffectiveCombo)\("fleet\.armFocused"\)/);
     });
 
     it("uses dynamic hook for worktree.refresh", () => {
@@ -30,7 +30,7 @@ describe("SidebarContent shortcut labels — issue #5843", () => {
     });
 
     it("uses dynamic hook for worktree.createDialog.open", () => {
-      expect(source).toContain('useKeybindingDisplay("worktree.createDialog.open")');
+      expect(source).toContain('useEffectiveCombo("worktree.createDialog.open")');
     });
   });
 
@@ -59,46 +59,60 @@ describe("SidebarContent shortcut labels — issue #5843", () => {
     });
   });
 
-  describe("button title usage", () => {
-    it("uses formatButtonTitle for Open worktrees overview title", () => {
-      expect(source).toContain('formatButtonTitle("Open worktrees overview", overviewShortcut)');
-    });
-
-    it("uses a plain title for Select terminals to arm (no shortcut binding)", () => {
-      // The Zap button opens the FleetPickerPalette, which has no keybinding —
-      // so the title must NOT advertise a shortcut. Earlier this rendered
-      // `armFocusedShortcut` (Cmd+J), which is the *toggle armed pane* binding,
-      // not "open the picker", and so misled users.
-      expect(source).toContain('title="Select terminals to arm"');
-      expect(source).not.toMatch(/formatButtonTitle\("Select terminals to arm",/);
-    });
-
-    it("renders the Refresh sidebar label through the app Tooltip, not a native title", () => {
-      // The refresh control uses the shared Tooltip so the label is styled and
-      // appears without the native title's delay (#11633). The shortcut still
-      // has to reach the user, so it rides createTooltipContent's chord pill
-      // rather than a string suffix.
-      // One contiguous Tooltip block that contains the refresh handler, with no
-      // nested <Tooltip> opening in between — so the content below is proven to
-      // belong to THIS button rather than matching a sibling control elsewhere
-      // in the header (several still carry native titles of their own).
-      const refreshTooltip = source.match(
-        /<Tooltip>(?:(?!<Tooltip>)[\s\S])*?onClick=\{handleRefreshAll\}[\s\S]*?<\/Tooltip>/
+  describe("header tooltips", () => {
+    /**
+     * The contiguous `<Tooltip>` block around the control carrying `marker`,
+     * with no nested `<Tooltip>` opening in between — so what the block says is
+     * proven to belong to THIS button rather than to a sibling in the header.
+     */
+    function tooltipFor(marker: string): string {
+      const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const block = source.match(
+        new RegExp(`<Tooltip>(?:(?!<Tooltip>)[\\s\\S])*?${escaped}[\\s\\S]*?</Tooltip>`)
       );
-      expect(refreshTooltip).not.toBeNull();
-      const block = refreshTooltip![0];
+      expect(block, `no Tooltip wraps the control carrying ${marker}`).not.toBeNull();
+      return block![0];
+    }
 
-      // A leftover native title would double up with the tooltip.
-      expect(block.match(/<button[^>]*>/)![0]).not.toMatch(/\btitle=/);
-      // The shortcut still has to reach the user — it rides createTooltipContent's
-      // chord pill instead of formatButtonTitle's string suffix.
+    function buttonTag(block: string): string {
+      return block.match(/<(?:button|Button)\b[\s\S]*?>/)![0];
+    }
+
+    it("labels every header action through the app Tooltip, never a native title", () => {
+      // A native title shows late, unstyled and never on keyboard focus, and
+      // beside a Tooltip it doubles up (#11633). The four header actions all
+      // take the shared Tooltip.
+      for (const marker of [
+        "onClick={onOpenOverview}",
+        "onClick={openFleetPicker}",
+        "onClick={handleRefreshAll}",
+        'aria-label="Create new worktree"',
+      ]) {
+        expect(buttonTag(tooltipFor(marker))).not.toMatch(/\btitle=/);
+      }
+    });
+
+    it("carries each action's live shortcut as a chord pill, not a string suffix", () => {
+      expect(tooltipFor("onClick={onOpenOverview}")).toMatch(
+        /createTooltipContent\("Open worktrees overview", overviewShortcut\)/
+      );
+      expect(tooltipFor("onClick={handleRefreshAll}")).toMatch(
+        /createTooltipContent\("Refresh sidebar", refreshShortcut\)/
+      );
+      expect(tooltipFor('aria-label="Create new worktree"')).toMatch(
+        /createTooltipContent\("Create new worktree", createWorktreeShortcut\)/
+      );
+    });
+
+    it("advertises no shortcut for Select terminals to arm (no binding opens the picker)", () => {
+      // The Zap button opens the FleetPickerPalette, which has no keybinding.
+      // Earlier it rendered `armFocusedShortcut` (Cmd+J), which is the *toggle
+      // armed pane* binding, not "open the picker", and so misled users.
+      const block = tooltipFor("onClick={openFleetPicker}");
       expect(block).toMatch(
-        /<TooltipContent side="bottom">\s*\{createTooltipContent\("Refresh sidebar", refreshShortcut\)\}/
+        /<TooltipContent side="bottom">Select terminals to arm<\/TooltipContent>/
       );
-    });
-
-    it("uses formatButtonTitle for Create new worktree title", () => {
-      expect(source).toContain('formatButtonTitle("Create new worktree", createWorktreeShortcut)');
+      expect(block).not.toMatch(/createTooltipContent/);
     });
   });
 });

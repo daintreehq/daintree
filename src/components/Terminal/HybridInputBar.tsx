@@ -4,9 +4,11 @@ import {
   useEffect,
   useImperativeHandle,
   useMemo,
+  useId,
   useRef,
   useState,
 } from "react";
+import { Spinner } from "@/components/ui/Spinner";
 import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
@@ -19,7 +21,7 @@ import { useSlashCommandAutocomplete } from "@/hooks/useSlashCommandAutocomplete
 import { useSlashCommandList } from "@/hooks/useSlashCommandList";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
-import { AutocompleteMenu, type AutocompleteItem } from "./AutocompleteMenu";
+import { AutocompleteMenu, getComboboxState, type AutocompleteItem } from "./AutocompleteMenu";
 import {
   getDaintreeAtClaim,
   fileSearchQuery,
@@ -36,7 +38,7 @@ import { tryFleetBroadcastFromEditor } from "@/components/Fleet/fleetEnterBroadc
 
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
-import { Archive, Loader2 } from "lucide-react";
+import { Archive } from "lucide-react";
 import { Paperclip } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
@@ -62,7 +64,7 @@ import { useDragDrop } from "./hooks/useDragDrop";
 import { useAttachFiles } from "./hooks/useAttachFiles";
 import { useVoiceDecorations } from "./hooks/useVoiceDecorations";
 import { useContextDetection } from "./hooks/useContextDetection";
-import { useTokenResolution } from "./hooks/useTokenResolution";
+import { draftUnchangedSince, useTokenResolution } from "./hooks/useTokenResolution";
 import { useEditorKeymap } from "./hooks/useEditorKeymap";
 import { useCompartmentDriver } from "./hooks/useCompartmentDriver";
 import { usePasteExtensions } from "./hooks/usePasteExtensions";
@@ -73,11 +75,17 @@ import { useAutocompleteApply } from "./hooks/useAutocompleteApply";
 import { useFleetMirror } from "./hooks/useFleetMirror";
 import { useEditorDomHandlers } from "./hooks/useEditorDomHandlers";
 import { useEditorFactory } from "./hooks/useEditorFactory";
+import {
+  createComboboxAttributes,
+  minimalDocChange,
+  readImageChipPaths,
+} from "./inputEditorExtensions";
 import { useHostReparent } from "./hooks/useHostReparent";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
 import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
 import { composeDraftWithInstruction } from "@/services/terminal/worktreeMoveInstruction";
+import { isScratchpadElement } from "@/lib/terminalScratchpad";
 
 export interface HybridInputBarHandle {
   focus: () => void;
@@ -106,7 +114,13 @@ export interface HybridInputBarHandle {
 
 export interface HybridInputBarProps {
   terminalId: string;
-  onSend: (payload: { data: string; trackerData: string; text: string }) => void;
+  onSend: (payload: {
+    data: string;
+    trackerData: string;
+    text: string;
+    /** The draft's image chips, in order, each also present in `text` (#12792). */
+    imagePaths?: string[];
+  }) => void;
   onSendKey?: (key: string) => void;
   onActivate?: () => void;
   cwd: string;
@@ -254,6 +268,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const pickerRef = useRef<HTMLButtonElement | null>(null);
     const trailingGroupRef = useRef<HTMLDivElement | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
+    const listboxId = useId();
     const rootRef = useRef<HTMLDivElement | null>(null);
     const lastEmittedValueRef = useRef<string>(value);
     const focusGenerationRef = useRef(0);
@@ -330,7 +345,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       handleDrop,
       resetDragState,
       isDragOverFiles,
-    } = useDragDrop(editorViewRef, cwd, onActivate);
+    } = useDragDrop(editorViewRef, cwd, onActivate, terminalId);
 
     // The dialog unmounts its body once its exit animation ends, and can close
     // under a hovering file — a slow submission collapses it mid-drag. Chromium
@@ -567,18 +582,26 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       agentId,
     });
 
+    // The outside-write revision the effect below last brought into the editor.
+    // While the store's count is ahead of it, a write sits in the draft store
+    // that the editor does not show yet.
+    const appliedExternalDraftRevisionRef = useRef(externalDraftRevision);
+
     useEffect(() => {
+      appliedExternalDraftRevisionRef.current = externalDraftRevision;
       if (externalDraftRevision === 0) return;
       const draft = useTerminalInputStore.getState().getDraftInput(terminalId, currentProject?.id);
       const view = editorViewRef.current;
       if (!view) return;
-      const current = view.state.doc.toString();
-      if (draft !== current) {
+      // Only the span that differs is replaced, so an append leaves the
+      // image and file chips already in the draft attached.
+      const change = minimalDocChange(view.state.doc.toString(), draft);
+      if (change !== null) {
         setValue(draft);
         lastEmittedValueRef.current = draft;
         isApplyingExternalValueRef.current = true;
         view.dispatch({
-          changes: { from: 0, to: current.length, insert: draft },
+          changes: change,
           selection: { anchor: draft.length },
           scrollIntoView: true,
         });
@@ -586,6 +609,22 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [externalDraftRevision, terminalId, currentProject?.id]);
 
     useVoiceDecorations({ terminalId, editorViewRef });
+
+    /**
+     * The `isDraftUnchanged` for a send of the editor's text as it reads now:
+     * the send clears only that text, never what landed in the draft since or
+     * was still on its way to the editor when it began.
+     */
+    const guardSentDraft = useCallback(
+      (projectIdAtSend: string | undefined) =>
+        draftUnchangedSince(
+          () => editorViewRef.current?.state.doc.toString() ?? latestRef.current?.value,
+          () => useTerminalInputStore.getState().getDraftInput(terminalId, projectIdAtSend),
+          useTerminalInputStore.getState().externalDraftRevision !==
+            appliedExternalDraftRevisionRef.current
+        ),
+      [editorViewRef, terminalId]
+    );
 
     const resetEditorDoc = () => {
       applyEditorValue("", {
@@ -610,7 +649,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (intercepted) return;
       }
 
-      sendText(text);
+      sendText(text, {
+        imagePaths: readImageChipPaths(view),
+        // A `@diff` fetch is awaited, and a handoff or the user's own typing can
+        // land in the draft meanwhile; only the text that went out is cleared.
+        isDraftUnchanged: guardSentDraft(latest?.projectId),
+      });
     };
 
     const { startVoiceWaitSubmit, cancelVoiceWaitSubmit } = useVoiceWaitSubmit({
@@ -631,6 +675,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (focusGenerationRef.current !== gen) return;
         if (editorViewRef.current !== view) return;
         if (usePanelStore.getState().preferredTerminalFocusTarget !== "hybridInput") return;
+        if (isScratchpadElement(document.activeElement, terminalId)) return;
         view.focus();
       });
     };
@@ -645,6 +690,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       claimMountFocusRef.current = () => {
         if (!isFocusedTerminal) return;
         if (usePanelStore.getState().preferredTerminalFocusTarget !== "hybridInput") return;
+        // A bar that mounts late must not take the caret from the Scratchpad (#12835).
+        if (isScratchpadElement(document.activeElement, terminalId)) return;
         focusEditor();
       };
     });
@@ -733,25 +780,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // either. Say no and let the caller keep its banner up.
           if (!view || !latest || latest.disabled) return false;
           const snapshot = view.state.doc.toString();
-          const readStoredDraft = () =>
-            useTerminalInputStore.getState().getDraftInput(terminalId, latest.projectId);
-          const storedAtSend = readStoredDraft();
           return sendText(snapshot, {
             compose: (draft) => composeDraftWithInstruction(draft, instruction),
             submit,
             // What was sent is a snapshot; what the user has by the time the
             // submit lands may not be. Only the snapshot is ours to clear.
-            // The store is checked as well as the document because voice,
-            // prompt history, file references and type-anywhere all write the
-            // draft store first and reach CodeMirror an effect later — during
-            // that window the document alone still looks untouched.
-            isDraftUnchanged: () =>
-              editorViewRef.current?.state.doc.toString() === snapshot &&
-              readStoredDraft() === storedAtSend,
+            isDraftUnchanged: guardSentDraft(latest.projectId),
           });
         },
       }),
-      [focusEditor, sendText]
+      [focusEditor, guardSentDraft, sendText]
     );
 
     // Claim the type-anywhere routing target (#11134) whenever the user really
@@ -891,6 +929,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isAutocompleteOpen,
     });
 
+    const { expanded: isListboxExpanded, activeOptionId } = getComboboxState({
+      isOpen: isAutocompleteOpen,
+      items: autocompleteItems,
+      selectedIndex,
+      staleKeys: staleItemKeys,
+      listboxId,
+    });
+    useEffect(() => {
+      editorViewRef.current?.dispatch({
+        effects: compartments.comboboxCompartmentRef.current.reconfigure(
+          createComboboxAttributes({ listboxId, expanded: isListboxExpanded, activeOptionId })
+        ),
+      });
+    }, [compartments.comboboxCompartmentRef, listboxId, isListboxExpanded, activeOptionId]);
+
     // Sync external value changes to editor doc
     useEffect(() => {
       const view = editorViewRef.current;
@@ -979,7 +1032,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 "hover:border-[var(--ib-border-hover)] hover:bg-[var(--ib-hover-bg)]",
                 "focus-within:border-[var(--ib-border-focus)] focus-within:ring-1 focus-within:ring-[var(--ib-focus-ring)] focus-within:bg-[var(--ib-focus-bg)]",
               ],
-              disabled && "opacity-60"
+              // The one dim for an unavailable composer. Its controls take
+              // `disabled` and add no opacity of their own: a second dim inside
+              // this one compounds (60% × 50% left the paperclip at 30% beside a
+              // picker at 60%), so the row stops reading as one family.
+              disabled && "opacity-50"
             )}
             data-voice-active={isVoiceActiveForPanel ? "true" : undefined}
             data-fleet-armed={isFleetPrimary ? "true" : undefined}
@@ -999,7 +1056,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               isLoading={isLoading}
               staleKeys={staleItemKeys}
               onSelect={handleAutocompleteSelect}
+              onHoverIndex={setSelectedIndex}
               style={{ left: `${menuLeftPx}px` }}
+              listboxId={listboxId}
               title={
                 triggerChar === "/"
                   ? "Commands"
@@ -1012,11 +1071,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                         : atClaim === "diff"
                           ? "Diffs"
                           : "Files"
-              }
-              keyHint={
-                autocompleteItems[selectedIndex]?.enterAction === "execute"
-                  ? "↵ run · ⇥ complete"
-                  : "↵ insert"
               }
               ariaLabel={
                 triggerChar === "/"
@@ -1046,9 +1100,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               <div
                 role="status"
                 aria-live="polite"
-                className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-daintree-bg/80 pointer-events-none"
+                className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-surface-canvas/80 pointer-events-none"
               >
-                <Loader2 className="h-4 w-4 animate-spin text-accent-primary" />
+                <Spinner className="text-text-secondary" />
                 <span className="text-xs text-text-secondary">Finishing dictation…</span>
               </div>
             )}
@@ -1066,8 +1120,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   // Colour comes from the shell's own palette, like every
                   // control in it — see `composerControlStyles.ts`.
                   className={cn(
-                    "flex h-6 w-6 shrink-0 items-center justify-center select-none rounded-[var(--radius-sm)] font-mono text-xs font-semibold leading-5 transition-colors cursor-pointer",
+                    "flex h-6 w-6 shrink-0 items-center justify-center select-none rounded-full font-mono text-xs font-semibold leading-5 transition-colors cursor-pointer",
                     COMPOSER_CONTROL_TEXT_CLASS,
+                    COMPOSER_CONTROL_HOVER_BG_CLASS,
                     COMPOSER_CONTROL_FOCUS_CLASS
                   )}
                   aria-label="Open command picker"
@@ -1154,15 +1209,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                         "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
                         COMPOSER_CONTROL_TEXT_CLASS,
                         COMPOSER_CONTROL_HOVER_BG_CLASS,
-                        COMPOSER_CONTROL_FOCUS_CLASS,
-                        "disabled:pointer-events-none disabled:opacity-40"
+                        COMPOSER_CONTROL_FOCUS_CLASS
                       )}
                       aria-label="Attach files"
                     >
                       <Paperclip className="h-3.5 w-3.5" />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">Attach files</TooltipContent>
+                  <TooltipContent side="top">Attach files</TooltipContent>
                 </Tooltip>
                 {hasStash && (
                   <Tooltip>
@@ -1170,6 +1224,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                       <button
                         type="button"
                         onClick={handlePopStash}
+                        disabled={disabled}
                         // 24px to clear the WCAG 2.5.8 floor. The spacing
                         // exception cannot rescue a smaller one here — its circle
                         // overlaps the attach and mic targets either side.
@@ -1184,7 +1239,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                         <Archive className="h-3.5 w-3.5" />
                       </button>
                     </TooltipTrigger>
-                    <TooltipContent side="bottom">
+                    <TooltipContent side="top">
                       {createTooltipContent("Restore stashed input", popStashShortcut)}
                     </TooltipContent>
                   </Tooltip>

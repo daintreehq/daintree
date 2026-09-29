@@ -1,5 +1,6 @@
 import { useState, useCallback, useSyncExternalStore } from "react";
-import { RotateCcw, X, Layers, ChevronDown, ChevronRight, Unlink } from "lucide-react";
+import { RotateCcw, X, Layers, ChevronRight, Unlink } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
@@ -123,18 +124,21 @@ export function TrashGroupItem({
       <div className="flex items-start gap-2 px-2.5 py-1.5 group">
         <Button
           variant="ghost"
-          size="icon-sm"
-          className="shrink-0 mt-0.5 h-4 w-4 p-0 hover:bg-transparent"
+          size="icon-xs"
+          className="shrink-0 -m-1 -mt-0.5 hover:bg-transparent"
           onClick={() => setIsExpanded(!isExpanded)}
           aria-label={isExpanded ? "Collapse group" : "Expand group"}
           aria-expanded={isExpanded}
           aria-controls={`trash-group-${groupRestoreId}`}
         >
-          {isExpanded ? (
-            <ChevronDown className="w-3 h-3 text-text-secondary" />
-          ) : (
-            <ChevronRight className="w-3 h-3 text-text-secondary" />
-          )}
+          <ChevronRight
+            data-animated-chevron
+            className={cn(
+              "w-3 h-3 text-text-secondary transition-transform duration-150 ease-out",
+              isExpanded && "rotate-90"
+            )}
+            aria-hidden="true"
+          />
         </Button>
 
         <div className="shrink-0 mt-0.5 opacity-60 group-hover:opacity-100 transition-opacity">
@@ -259,8 +263,8 @@ export function TrashGroupItem({
                         <span className="inline-flex">
                           <Button
                             variant="ghost"
-                            size="icon-sm"
-                            className="h-4 w-4"
+                            size="icon-xs"
+                            className="-my-1"
                             onClick={() => {
                               if (isOrphan && activeWorktreeId) {
                                 restoreTerminal(terminal.id, activeWorktreeId);
@@ -271,7 +275,7 @@ export function TrashGroupItem({
                             disabled={!canRestore}
                             aria-label={`Restore ${terminalName} only`}
                           >
-                            <RotateCcw className="w-2.5 h-2.5" aria-hidden="true" />
+                            <RotateCcw aria-hidden="true" />
                           </Button>
                         </span>
                       </TooltipTrigger>
@@ -281,8 +285,8 @@ export function TrashGroupItem({
                       <TooltipTrigger asChild>
                         <Button
                           variant="ghost-danger"
-                          size="icon-sm"
-                          className="h-4 w-4"
+                          size="icon-xs"
+                          className="-my-1"
                           onClick={() =>
                             onRequestRemove({
                               ids: [terminal.id],
@@ -292,7 +296,7 @@ export function TrashGroupItem({
                           }
                           aria-label={`Remove ${terminalName} permanently`}
                         >
-                          <X className="w-2.5 h-2.5" aria-hidden="true" />
+                          <X aria-hidden="true" />
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side="bottom">{`Remove ${terminalName} permanently`}</TooltipContent>

@@ -91,10 +91,9 @@ export interface McpTargetPolicy {
    * Whether a dispatch right now would block on a human confirmation dialog.
    * Live, unlike {@link danger}: a native automation grant pre-authorizes the
    * dispatch, so a `confirm` target can report `false` here until that grant is
-   * spent or expires. An agent pane at the `system` tier, or holding a
-   * session approval for the tool, reports `false` for the same reason
-   * (#12692); a target it would have to ask for reports `true`, whatever its
-   * declared danger.
+   * spent or expires. An agent pane holding a session approval for the tool
+   * reports `false` for the same reason (#12692); a target it would have to
+   * ask for reports `true`, whatever its declared danger.
    */
   requiresConfirmation: boolean;
   /**
@@ -102,7 +101,10 @@ export interface McpTargetPolicy {
    * targets accepting a `recipeId`: an agent-sourced call carrying one spawns
    * the recipe's terminals, so the host elevates it per-dispatch (#11860). Also
    * true for `terminal.new` while it accepts `command` or `cwd`, whose launch
-   * arguments start a shell the same way (#12216). A client reading only
+   * arguments start a shell the same way (#12216), and for the assistant's
+   * `terminal.close` and `terminal.closeMany`, which ask before closing a panel
+   * the session did not create or whose agent is mid-task (#12881). A client
+   * reading only
    * {@link danger} would call such a target expecting no dialog and get
    * `CONFIRMATION_REQUIRED` instead.
    */
@@ -133,7 +135,7 @@ export interface McpTargetPolicy {
   preferredTool: string | null;
 }
 
-const TIER_VALUES = ["workbench", "action", "system", "external"] as const;
+const TIER_VALUES = ["core", "full", "external"] as const;
 
 /**
  * The policy half of the `actions.getSchema` result.

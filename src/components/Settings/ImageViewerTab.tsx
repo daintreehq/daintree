@@ -1,11 +1,16 @@
 import { useState, useEffect, useRef, useId } from "react";
+import { InlineError } from "@/components/ui/field";
 import { RadioChoiceGroup, RadioChoiceRow, CHOICE_LABEL_INSET } from "@/components/ui/RadioChoice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsActions, SettingsGroup } from "@/components/Settings/SettingsGroup";
+import {
+  SettingsActions,
+  SettingsGroup,
+  SettingsInlineError,
+} from "@/components/Settings/SettingsGroup";
 import { useProjectStore, patchCachedProjectSettings } from "@/store";
 import { projectClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -217,9 +222,9 @@ export function ImageViewerTab() {
                   className="font-mono"
                 />
                 {commandError && (
-                  <p id={`${commandFieldId}-error`} className="text-xs text-status-error">
+                  <SettingsInlineError id={`${commandFieldId}-error`}>
                     {commandError}
-                  </p>
+                  </SettingsInlineError>
                 )}
                 <p
                   id={`${commandFieldId}-help`}
@@ -235,9 +240,9 @@ export function ImageViewerTab() {
         <SettingsActions
           status={
             loadError ? (
-              <span className="text-status-error">{loadError}</span>
+              <InlineError>{loadError}</InlineError>
             ) : saveError ? (
-              <span className="text-status-error">{saveError}</span>
+              <InlineError>{saveError}</InlineError>
             ) : !persisted ? (
               isLoading ? null : (
                 "Not saved yet — images open with the OS default"
@@ -259,9 +264,10 @@ export function ImageViewerTab() {
             variant="contrast"
             size="sm"
             onClick={handleSave}
-            disabled={isSaving || isLoading || Boolean(loadError) || !isDirty}
+            loading={isSaving}
+            disabled={isLoading || Boolean(loadError) || !isDirty}
           >
-            {isSaving ? "Saving…" : "Save"}
+            Save
           </Button>
         </SettingsActions>
       </SettingsGroup>

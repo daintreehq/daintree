@@ -4,6 +4,9 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { AddPresetDialog } from "../AddPresetDialog";
 import type { AgentPreset } from "@/config/agents";
 
+// Driven as a value and a change event, not as a Radix popup.
+vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
+
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
   logWarn: vi.fn(),
@@ -226,6 +229,18 @@ describe("AddPresetDialog — what gets created matches what was chosen", () => 
     const payload = onCreate.mock.calls[0]![0];
     expect(payload.name).toBe(target.textContent);
     expect(Object.keys(payload.env ?? {}).length).toBeGreaterThan(0);
+  });
+
+  it("creates from a template with no env as an empty env, not undefined", () => {
+    const { onCreate } = renderDialog();
+
+    fireEvent.click(screen.getByRole("radio", { name: "From template" }));
+    const select = screen.getByTestId("template-select") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "anthropic-native" } });
+    fireEvent.click(screen.getByRole("button", { name: /create preset/i }));
+
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    expect(onCreate.mock.calls[0]![0].env).toEqual({});
   });
 
   it("starts on the blank option every time it opens", () => {

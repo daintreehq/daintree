@@ -16,6 +16,7 @@ const contributionsMock = vi.hoisted(() => ({
   contextMenuItems: [] as Array<{ pluginId: string; item: { label: string } }>,
   agents: {} as Record<string, unknown>,
   recipes: [] as unknown[],
+  tours: [] as Array<{ id: string; pluginId: string }>,
 }));
 
 vi.mock("../../../ipc/utils.js", () => ({
@@ -44,6 +45,10 @@ vi.mock("../../../../shared/config/pluginAgentRegistry.js", () => ({
 }));
 vi.mock("../PluginRecipeRegistry.js", () => ({
   getPluginRecipes: () => contributionsMock.recipes,
+}));
+vi.mock("../PluginTourRegistry.js", () => ({
+  getPluginTours: () => contributionsMock.tours,
+  notifyPluginToursVisibilityChanged: () => {},
 }));
 
 // The visibility overlay reads electron-store; keep it in memory so the filter
@@ -139,6 +144,7 @@ beforeEach(() => {
   contributionsMock.contextMenuItems = [{ pluginId: GLOBAL_PLUGIN, item: { label: "Global" } }];
   contributionsMock.agents = { "acme.agent": { id: "acme.agent" } };
   contributionsMock.recipes = [{ id: "acme.recipe" }];
+  contributionsMock.tours = [{ id: "acme.global.welcome", pluginId: GLOBAL_PLUGIN }];
 });
 
 describe("contribution scope registry", () => {
@@ -398,12 +404,12 @@ describe("project-scoped mutation broadcasts", () => {
 });
 
 describe("pushSnapshotTo", () => {
-  it("replays the seven channels in order with unfiltered payloads when nothing is scoped", async () => {
+  it("replays the eight channels in order with unfiltered payloads when nothing is scoped", async () => {
     const wc = fakeWebContents(11);
     const b = makeBroadcaster();
     await b.pushSnapshotTo(wc as unknown as Electron.WebContents);
 
-    expect(wc.send).toHaveBeenCalledTimes(7);
+    expect(wc.send).toHaveBeenCalledTimes(8);
     expect(wc.send.mock.calls.map((c) => (c[1] as { name: string }).name)).toEqual([
       "plugin:actions-changed",
       "plugin:panel-kinds-changed",
@@ -412,6 +418,7 @@ describe("pushSnapshotTo", () => {
       "plugin:context-menu-items-changed",
       "plugin:agents-changed",
       "plugin:recipes-changed",
+      "plugin:tours-changed",
     ]);
     expect(wc.send.mock.calls.map((c) => (c[1] as { payload: unknown }).payload)).toEqual([
       { actions },
@@ -421,6 +428,7 @@ describe("pushSnapshotTo", () => {
       { items: contributionsMock.contextMenuItems, complete: false },
       { agents: contributionsMock.agents, complete: false },
       { recipes: contributionsMock.recipes, complete: false },
+      { tours: contributionsMock.tours },
     ]);
   });
 
@@ -556,7 +564,7 @@ describe("pushSnapshotTo", () => {
     });
     const b = makeBroadcaster();
     await b.pushSnapshotTo(wc as unknown as Electron.WebContents);
-    expect(wc.send).toHaveBeenCalledTimes(7);
+    expect(wc.send).toHaveBeenCalledTimes(8);
   });
 
   it("skips a destroyed webContents and a disposed service", async () => {
@@ -681,5 +689,35 @@ describe("per-project visibility of installed plugins", () => {
     });
     expect(byName.get("plugin:actions-changed")).toEqual({ actions: [] });
     expect(byName.get("plugin:panel-kinds-changed")).toEqual({ kinds: [] });
+    // A hidden plugin's tours leave the project's Help and palette too.
+    expect(byName.get("plugin:tours-changed")).toEqual({ tours: [] });
+  });
+
+  it("scopes tours like every other plugin-owned contribution (#12773)", async () => {
+    setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, false);
+    const viewA = fakeWebContents(31);
+    const viewB = fakeWebContents(32);
+    registryMock.getRegisteredProjectViews.mockReturnValue([
+      { webContents: viewA, projectId: VIS_PROJECT_A },
+      { webContents: viewB, projectId: VIS_PROJECT_B },
+    ]);
+
+    const b = makeBroadcaster();
+    b.scheduleToursBroadcast();
+    b.scheduleToursBroadcast();
+    await flush();
+
+    const sent = ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map((call) => [
+      call[0],
+      call[2] as { name: string; payload: unknown },
+    ]);
+    // Coalesced: one snapshot per project for the two calls in the tick.
+    expect(sent).toEqual([
+      [VIS_PROJECT_A, { name: "plugin:tours-changed", payload: { tours: [] } }],
+      [
+        VIS_PROJECT_B,
+        { name: "plugin:tours-changed", payload: { tours: contributionsMock.tours } },
+      ],
+    ]);
   });
 });

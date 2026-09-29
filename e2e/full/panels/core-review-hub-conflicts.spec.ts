@@ -48,12 +48,26 @@ async function openConflictReviewHub(ctx: AppContext) {
     await reviewTrigger.click();
   }
   await expect(reviewItem).toBeVisible({ timeout: T_MEDIUM });
-  await reviewItem.click();
+  // Radix can remount the hovered submenu during the pointer-stability check.
+  // Keyboard activation uses the same menu action without depending on its geometry.
+  await reviewItem.press("Enter");
 
   const hub = window.locator(SEL.reviewHub.container);
   await expect(hub).toBeVisible({ timeout: T_MEDIUM });
   await expect(hub.locator(SEL.reviewHub.conflictPanel)).toBeVisible({ timeout: T_LONG });
   return hub;
+}
+
+async function openTheirsAction(ctx: AppContext, source: "incoming changes" | "incoming commit") {
+  const { window } = ctx;
+  await window
+    .locator(SEL.reviewHub.container)
+    .locator(SEL.reviewHub.conflictMoreActions("conflict.txt"))
+    .click();
+  return window.getByRole("menuitem", {
+    name: `Use ${source} for conflict.txt (theirs)`,
+    exact: true,
+  });
 }
 
 test.describe("Core: Review Hub Conflict Resolution", () => {
@@ -75,9 +89,11 @@ test.describe("Core: Review Hub Conflict Resolution", () => {
 
     test("conflict panel lists the conflicted file", async () => {
       const hub = await openConflictReviewHub(ctx);
-      await expect(hub.locator(SEL.reviewHub.conflictTakeTheirs("conflict.txt"))).toBeVisible({
+      await expect(hub.locator(SEL.reviewHub.conflictMoreActions("conflict.txt"))).toBeVisible({
         timeout: T_MEDIUM,
       });
+      await expect(await openTheirsAction(ctx, "incoming changes")).toBeVisible();
+      await ctx.window.keyboard.press("Escape");
       // Continue is gated until every conflict is resolved.
       await expect(hub.locator(SEL.reviewHub.conflictContinue)).toBeDisabled({ timeout: T_SHORT });
     });
@@ -86,13 +102,15 @@ test.describe("Core: Review Hub Conflict Resolution", () => {
       const { window } = ctx;
       const hub = window.locator(SEL.reviewHub.container);
 
-      await hub.locator(SEL.reviewHub.conflictTakeTheirs("conflict.txt")).click();
-      const checkoutDialog = window.getByRole("alertdialog").filter({ hasText: "Take theirs" });
+      await (await openTheirsAction(ctx, "incoming changes")).click();
+      const checkoutDialog = window
+        .getByRole("alertdialog")
+        .filter({ hasText: "Use incoming changes" });
       await expect(checkoutDialog).toBeVisible({ timeout: T_MEDIUM });
       await window.locator(SEL.confirmDialog.confirm).click();
 
       // The conflicted row leaves the worklist and Continue unlocks.
-      await expect(hub.locator(SEL.reviewHub.conflictTakeTheirs("conflict.txt"))).toBeHidden({
+      await expect(hub.locator(SEL.reviewHub.conflictMoreActions("conflict.txt"))).toBeHidden({
         timeout: T_MEDIUM,
       });
       await expect(hub.locator(SEL.reviewHub.conflictContinue)).toBeEnabled({ timeout: T_MEDIUM });
@@ -173,10 +191,10 @@ test.describe("Core: Review Hub Conflict Resolution", () => {
       const { window } = ctx;
       const hub = window.locator(SEL.reviewHub.container);
 
-      await hub.locator(SEL.reviewHub.conflictTakeTheirs("conflict.txt")).click();
-      await expect(window.getByRole("alertdialog").filter({ hasText: "Take theirs" })).toBeVisible({
-        timeout: T_MEDIUM,
-      });
+      await (await openTheirsAction(ctx, "incoming commit")).click();
+      await expect(
+        window.getByRole("alertdialog").filter({ hasText: "Use incoming commit" })
+      ).toBeVisible({ timeout: T_MEDIUM });
       await window.locator(SEL.confirmDialog.confirm).click();
 
       await expect(hub.locator(SEL.reviewHub.conflictContinue)).toBeEnabled({ timeout: T_MEDIUM });

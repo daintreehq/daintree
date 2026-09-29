@@ -28,10 +28,12 @@ import {
   countNonDefaultView,
   isDensity,
   matchesFilter,
+  REVIEW_HUB_COUNT_CHIP,
   resolveBulkScope,
   sumChurn,
   truncateFilterQuery,
 } from "./reviewHubUtils";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 interface FileSectionProps {
   /** Drives every staged/unstaged copy, testid, and toggle-verb choice below. */
@@ -349,11 +351,11 @@ export function FileSection({
           while a long changeset scrolls. */}
       <div className={cn("@container/file-section", REVIEW_HUB_STICKY_BAND)}>
         <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle gap-2">
-          <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary shrink-0 flex items-center">
+          <span className={cn(SECTION_LABEL_CLASS, "shrink-0 flex items-center")}>
             {title}
             <span
               data-testid={countTestId}
-              className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal inline-flex items-center gap-1"
+              className={cn(REVIEW_HUB_COUNT_CHIP, "inline-flex items-center gap-1")}
             >
               <span>
                 {totalCount} file{totalCount !== 1 ? "s" : ""}
@@ -363,10 +365,8 @@ export function FileSection({
                   <span aria-hidden="true" className="text-daintree-text/30">
                     ·
                   </span>
-                  {churn.ins > 0 && (
-                    <span className="text-status-success/80">{`+${churn.ins}`}</span>
-                  )}
-                  {churn.del > 0 && <span className="text-status-error/80">{`-${churn.del}`}</span>}
+                  {churn.ins > 0 && <span className="text-status-success">{`+${churn.ins}`}</span>}
+                  {churn.del > 0 && <span className="text-status-error">{`-${churn.del}`}</span>}
                 </span>
               )}
             </span>
@@ -379,7 +379,7 @@ export function FileSection({
                 role="status"
                 data-testid={`${section}-section-shown-chip`}
                 aria-label={`${shownCount} of ${totalCount} files shown`}
-                className="ml-1 tabular-nums rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal text-text-secondary bg-overlay-medium"
+                className={REVIEW_HUB_COUNT_CHIP}
               >
                 {shownCount} shown
               </span>
@@ -387,18 +387,15 @@ export function FileSection({
           </span>
           <div className="flex items-center gap-1.5 min-w-0">
             <SearchField
-              size="compact"
-              // h-5 keeps the section header at its own height; the compact
-              // 28px would push the header taller than its label row.
-              fieldClassName={cn(
-                "h-5 gap-1 px-1.5 text-2xs [&_.search-field-icon]:size-3",
-                filterDropClass
-              )}
+              size="dense"
+              fieldClassName={filterDropClass}
               inputRef={inputRef}
               aria-label={filterLabel}
               placeholder="Filter…"
-              defaultValue={view.filterQuery}
+              value={view.filterQuery}
               onChange={(e) => setFilterQuery(e.target.value)}
+              onClear={clearFilter}
+              clearLabel="Clear filter"
               className="w-[104px] grow-0 basis-auto"
             />
             <DropdownMenu>
@@ -408,8 +405,11 @@ export function FileSection({
                   className={cn(
                     // Fixed width, not min-width: the count appears and
                     // disappears as settings change, and an intrinsically-sized
-                    // trigger drags the filter field with it every time.
-                    "toolbar-icon-button inline-flex w-8 shrink-0 items-center justify-center gap-1 rounded-lg p-1",
+                    // trigger drags the filter field with it every time. `p-1`
+                    // rather than the pane toolbar's `p-1.5`: this header's
+                    // filter is 20px tall, and the glyph shares the fixed width
+                    // with the count.
+                    "toolbar-icon-button inline-flex w-8 shrink-0 items-center justify-center gap-1 rounded-[var(--radius-md)] p-1 text-text-secondary aria-expanded:text-text-primary",
                     nonDefaultViewCount > 0 && "text-text-primary"
                   )}
                   data-testid={`${section}-section-view-trigger`}
@@ -501,7 +501,7 @@ export function FileSection({
             {shownCount > 0 && (
               <Button
                 variant="ghost"
-                size="sm"
+                size="xs"
                 onClick={onBulkAction}
                 // min-w holds the trailing rail still. The label legitimately
                 // changes width as its scope changes, and without a floor every
@@ -512,10 +512,10 @@ export function FileSection({
                 // justify-start so the glyph keeps the same x in both stacked
                 // sections; the ghost button has no chrome at rest, so the
                 // reserved trailing space is invisible.
-                className="h-5 px-1.5 text-3xs shrink-0 min-w-[9rem] justify-start"
+                className="shrink-0 min-w-[9rem] justify-start"
                 data-testid={bulkActionTestId}
               >
-                <BulkActionIcon className="w-3 h-3 mr-1" />
+                <BulkActionIcon aria-hidden="true" />
                 {bulkLabel}
               </Button>
             )}
@@ -580,13 +580,13 @@ export function FileSection({
             hiddenGeneratedMatches !== 1 ? "s" : ""
           } hidden`}
           action={
-            <button
-              type="button"
+            <Button
+              variant="subtle"
+              size="sm"
               onClick={() => setView((prev) => ({ ...prev, showGenerated: true }))}
-              className="text-xs text-text-secondary hover:text-text-primary transition-colors underline underline-offset-2"
             >
               Show generated files
-            </button>
+            </Button>
           }
         />
       ) : view.filterQuery ? (
@@ -595,13 +595,9 @@ export function FileSection({
           scale="sidebar"
           title={`No ${emptyFilteredNoun} matching "${truncateFilterQuery(view.filterQuery)}"`}
           action={
-            <button
-              type="button"
-              onClick={clearFilter}
-              className="text-xs text-text-secondary hover:text-text-primary transition-colors underline underline-offset-2"
-            >
+            <Button variant="subtle" size="sm" onClick={clearFilter}>
               Clear filter
-            </button>
+            </Button>
           }
         />
       ) : !view.showGenerated && allFiles.some((f) => isGeneratedFile(f.path)) ? (
@@ -610,13 +606,13 @@ export function FileSection({
           scale="sidebar"
           title={emptyGeneratedTitle}
           action={
-            <button
-              type="button"
+            <Button
+              variant="subtle"
+              size="sm"
               onClick={() => setView((prev) => ({ ...prev, showGenerated: true }))}
-              className="text-xs text-text-secondary hover:text-text-primary transition-colors underline underline-offset-2"
             >
               Show generated files
-            </button>
+            </Button>
           }
         />
       ) : (

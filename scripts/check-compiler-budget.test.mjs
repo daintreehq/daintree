@@ -157,6 +157,13 @@ describe("scan surface", () => {
     expect(isInScanSurface("plugins/builtin/github/renderer/components/Foo.tsx")).toBe(true);
   });
 
+  // The renderer aliases the tour package to its source, so the compiler sees it.
+  it("admits the tour package source but not its tests", () => {
+    expect(isInScanSurface("packages/tour/src/react.ts")).toBe(true);
+    expect(isInScanSurface("packages/tour/src/__tests__/TourPlayer.test.ts")).toBe(false);
+    expect(isInScanSurface("packages/plugin-sdk/src/react.ts")).toBe(false);
+  });
+
   it("excludes tests, declarations and non-renderer code", () => {
     for (const file of [
       "src/components/Foo.test.tsx",

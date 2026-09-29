@@ -1,7 +1,9 @@
 import { enableCompileCache } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { installBootstrapErrorGuard } from "./utils/bootstrapErrorGuard.js";
+import { installPluginSdkResolution } from "./services/plugin/pluginSdkResolution.js";
 
 const userData = process.env.DAINTREE_USER_DATA;
 if (userData) {
@@ -28,6 +30,15 @@ const removeBootstrapGuard = installBootstrapErrorGuard({
     port?.postMessage({ type: "error", error });
   },
 });
+
+// Before any plugin code is imported, so a zero-build plugin's bare
+// `@daintreehq/plugin-sdk/data` import finds the copy built beside this file.
+// A failure here only costs that fallback, never the worker.
+try {
+  installPluginSdkResolution(path.join(path.dirname(fileURLToPath(import.meta.url)), "plugin-sdk"));
+} catch (error) {
+  console.error("[PluginDevWorkerBootstrap] SDK resolution fallback unavailable:", error);
+}
 
 await import("./plugin-dev-worker.js");
 

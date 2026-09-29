@@ -1,16 +1,30 @@
 // @vitest-environment jsdom
 import { render, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. The trigger renders its child
+// as-is; the content is dropped so tooltip text can't collide with queries.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
 
 import { HelpIntroBanner } from "../HelpIntroBanner";
 
 describe("HelpIntroBanner", () => {
-  it("renders the Shift+Enter tip and a Dismiss button", () => {
-    const { getByText, getByLabelText } = render(<HelpIntroBanner onDismiss={vi.fn()} />);
+  it("renders the Shift+Enter tip as keys and a Dismiss button", () => {
+    const { container, getByText, getByLabelText } = render(
+      <HelpIntroBanner onDismiss={vi.fn()} />
+    );
 
-    expect(getByText(/Shift\+Enter/)).toBeTruthy();
+    // One chip per key, like every other shortcut in the app.
+    const keys = Array.from(container.querySelectorAll("kbd")).map((k) => k.textContent);
+    expect(keys).toEqual(["Shift", "Enter"]);
     expect(getByText(/add a newline without/i)).toBeTruthy();
     expect(getByLabelText("Dismiss")).toBeTruthy();
   });

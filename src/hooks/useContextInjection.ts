@@ -278,7 +278,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         globalInjectionState.lastProgress = {
           stage: "Waiting",
           progress: 0,
-          message: "Waiting for agent to become idle...",
+          message: "Waiting for agent to become idle…",
         };
         localProgressRef.current = globalInjectionState.lastProgress;
         globalInjectionState.notify();
@@ -355,7 +355,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
       globalInjectionState.lastProgress = {
         stage: "Starting",
         progress: 0,
-        message: "Initializing...",
+        message: "Initializing…",
       };
       globalInjectionState.isPendingInjection = false;
       globalInjectionState.notify();
@@ -412,12 +412,6 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           pathInfo,
         });
 
-        try {
-          localStorage.setItem("daintree:context-injected-once", "true");
-        } catch {
-          // silently fail
-        }
-        window.dispatchEvent(new CustomEvent("daintree:context-injected"));
         window.electron?.notification?.playUiEvent?.("context-injected").catch(() => {});
 
         // Lands beside the sound, not instead of it: the pane's inline progress

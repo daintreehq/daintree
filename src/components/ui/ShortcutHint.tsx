@@ -5,12 +5,18 @@ import type { ActionId } from "@shared/types/actions";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { describeChord } from "@/lib/kbdShortcut";
-import { UI_PALETTE_EXIT_DURATION } from "@/lib/animationUtils";
+import {
+  UI_ENTER_EASING,
+  UI_EXIT_EASING,
+  UI_PALETTE_ENTER_DURATION,
+  UI_PALETTE_EXIT_DURATION,
+} from "@/lib/animationUtils";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
-import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { shortcutHintStore, type ShortcutHintRect } from "@/store/shortcutHintStore";
 import { actionService } from "@/services/ActionService";
 import { KbdChord } from "./Kbd";
+import { TOOLTIP_CARD_PADDING } from "./tooltip";
+import { SHORTCUT_ROW_GAP } from "@/lib/tooltipShortcut";
 
 const AUTO_DISMISS_MS = 2500;
 const OFFSET_X = 12;
@@ -53,7 +59,6 @@ export function ShortcutHint() {
     width: window.innerWidth,
     height: window.innerHeight,
   }));
-  const skipMotion = useShouldSkipMotion();
   // Keep the last visible hint in state so we can keep rendering it while
   // the exit animation plays (after activeHint has cleared).
   const [lastHint, setLastHint] = useState(activeHint);
@@ -187,20 +192,28 @@ export function ShortcutHint() {
           data-shortcut-hint-surface
           className={cn(
             "fixed z-[var(--z-toast)] pointer-events-none",
-            "flex items-center gap-3 whitespace-nowrap px-2.5 py-1.5",
+            // A hint is a label + keys card like a tooltip, so it is drawn as one.
+            "flex items-center whitespace-nowrap",
+            SHORTCUT_ROW_GAP,
+            TOOLTIP_CARD_PADDING,
             "max-w-[calc(100vw-16px)]",
             "rounded-[var(--radius-md)] surface-overlay shadow-overlay",
             "text-xs text-text-primary",
-            !skipMotion && "transition-[opacity,translate]",
-            !skipMotion && (isVisible ? "duration-150 ease-out" : "duration-100 ease-out"),
-            isVisible ? "opacity-100" : "opacity-0",
-            !skipMotion && !isVisible && "translate-y-1"
+            // The tooltip tier and easing pair. Reduced motion keeps the fade
+            // and drops the 4px drift.
+            "transition-[opacity,translate] motion-reduce:transition-opacity motion-reduce:translate-none",
+            isVisible ? "opacity-100" : "opacity-0 translate-y-1"
           )}
-          style={{ left, top }}
+          style={{
+            left,
+            top,
+            transitionDuration: `${isVisible ? UI_PALETTE_ENTER_DURATION : UI_PALETTE_EXIT_DURATION}ms`,
+            transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+          }}
           aria-hidden="true"
         >
           {title && <span className="min-w-0 truncate">{title}</span>}
-          <KbdChord shortcut={hint.combo} foreground="primary" className="shrink-0" />
+          <KbdChord shortcut={hint.combo} className="shrink-0" />
         </div>,
         document.body
       )}

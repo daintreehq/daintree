@@ -6,6 +6,8 @@ import { useProjectStore } from "@/store/projectStore";
 import { worktreeClient } from "@/clients";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isClientBrokerError } from "@/utils/clientBrokerError";
+import { logWarn } from "@/utils/logger";
 
 /**
  * A load failure worth retrying: one main or the port watchdog reported, or an
@@ -31,6 +33,32 @@ function hasServiceError(): boolean {
   return error !== undefined && error !== null;
 }
 
+// Module state is per project view: each view runs its own renderer context.
+let pendingPortRefresh: (() => void) | null = null;
+
+/**
+ * Re-issue a refresh the port wasn't there to take. Re-attaching only re-reads
+ * cached snapshots, so without this a refresh asked for while the port was
+ * missing would never run. Repeated misses coalesce into one pending refresh.
+ */
+function refreshWhenPortReady(): void {
+  if (pendingPortRefresh !== null) return;
+  let fired = false;
+  const unsubscribe = window.electron.worktreePort.onReady(() => {
+    if (fired) return;
+    fired = true;
+    pendingPortRefresh = null;
+    // Deferred: preload is iterating its ready callbacks when this runs, and
+    // removing one mid-loop would skip the next listener. It also covers
+    // onReady calling back synchronously, before `unsubscribe` is assigned.
+    queueMicrotask(() => unsubscribe());
+    window.electron.worktreePort.request("refresh").catch((error: unknown) => {
+      logWarn("Deferred worktree refresh failed", { error });
+    });
+  });
+  if (!fired) pendingPortRefresh = unsubscribe;
+}
+
 export function registerWorktreeServiceActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -47,31 +75,56 @@ export function registerWorktreeServiceActions(
     keywords: ["sync", "reload", "update", "sidebar"],
     run: async () => {
       window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
-      const [refreshResult] = await Promise.allSettled([
-        window.electron.worktreePort.request("refresh"),
-        worktreeClient.refreshPullRequests(),
-      ]);
-      // Two failure modes the user can't otherwise see, both surfaced (the old
-      // allSettled swallowed them, which is why a wedged host looked like a dead
-      // Refresh button): a rejection means the host isn't responding at all
-      // (transport timeout / exit); an ok:false result means the host's own
-      // refresh watchdog tripped. The Refresh button is itself the retry
-      // surface, so no action button.
-      const fallback = "The worktree host isn't responding. Try again in a moment.";
-      let failureMessage: string | null = null;
-      if (refreshResult.status === "rejected") {
-        failureMessage = formatErrorMessage(refreshResult.reason, fallback);
-      } else if (refreshResult.value.ok === false) {
-        failureMessage = refreshResult.value.error ?? fallback;
-      }
-      if (failureMessage !== null) {
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "error",
-          title: "Refresh failed",
-          message: failureMessage,
-          duration: 5000,
-        });
+      // The settled event pairs with the one above so the sidebar can show a
+      // refresh started from the palette, a shortcut or a context menu, not
+      // only one started from its own button.
+      try {
+        const [refreshResult] = await Promise.allSettled([
+          window.electron.worktreePort.request("refresh"),
+          worktreeClient.refreshPullRequests(),
+        ]);
+        // Two failure modes the user can't otherwise see, both surfaced (the old
+        // allSettled swallowed them, which is why a wedged host looked like a dead
+        // Refresh button): a rejection means the host isn't responding at all
+        // (transport timeout / exit); an ok:false result means the host's own
+        // refresh watchdog tripped. The Refresh button is itself the retry
+        // surface, so no action button.
+        const fallback = "The worktree host isn't responding. Try again in a moment.";
+        let failureMessage: string | null = null;
+        if (refreshResult.status === "rejected") {
+          const reason: unknown = refreshResult.reason;
+          // Decoding also strips the `[BrokerError|<code>]` transport prefix from
+          // the message, so it never reaches the toast. A port that isn't attached
+          // yet (or is mid-replacement, or the app is quitting) isn't a failure the
+          // user can act on — a dead host has its own reconnect and restart
+          // surfaces. Toasting it made a successful forge token save read as an
+          // error (#12759).
+          if (
+            isClientBrokerError(reason) &&
+            (reason.code === "HOST_EXITED" || reason.code === "APP_SHUTDOWN")
+          ) {
+            logWarn("Worktree refresh deferred: port unavailable", {
+              code: reason.code,
+              reason: reason.message,
+            });
+            if (reason.code === "HOST_EXITED") refreshWhenPortReady();
+            return;
+          }
+          failureMessage = formatErrorMessage(reason, fallback);
+        } else if (refreshResult.value.ok === false) {
+          failureMessage = refreshResult.value.error ?? fallback;
+        }
+        if (failureMessage !== null) {
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+          notify({
+            type: "error",
+            title: "Refresh failed",
+            message: failureMessage,
+            duration: 5000,
+          });
+        }
+      } finally {
+        window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar-settled"));
       }
     },
   }));
@@ -169,17 +222,13 @@ export function registerWorktreeServiceActions(
       id: "worktree.setActive",
       title: "Set active worktree",
       description:
-        "Switch which worktree is the active one, changing the default target for everything scoped to 'the current worktree' and moving what the user sees. Call this deliberately — subsequent actions that omit a worktree will follow it, so switching mid-task can silently retarget later work.",
+        "Switch the active worktree, moving what the user sees and the default target of every later call that omits a worktree. Switching mid-task can silently retarget later work.",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        worktreeId: z
-          .string()
-          .describe(
-            "Identifies the worktree to make active, using an id from the worktree-listing capability. Everything later scoped to the current worktree follows this."
-          ),
+        worktreeId: z.string().describe("Worktree id from the worktree listing."),
       }),
       run: async ({ worktreeId }) => {
         await worktreeClient.setActive(worktreeId);

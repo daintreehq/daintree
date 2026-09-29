@@ -174,12 +174,10 @@ export const theme: BuiltInThemeSource = {
     "pulse-skeleton-gradient": "linear-gradient(90deg, #E8D5B9 25%, #F6F0E5 50%, #E8D5B9 75%)",
     "dialog-header-bg": "#FBF9F4",
     "review-commit-input-bg": "#FDFBF7",
-    "settings-kbd-bg": "#F4F0E7",
-    "settings-kbd-border": "#D4CBBD",
     // Nav selection elevates to white + the 2px accent marker.
     "settings-nav-active-bg": "#FFFFFF",
     "settings-nav-active-shadow": "none",
-    "settings-nav-hover-bg": "rgba(60,48,30,0.05)",
+    "settings-nav-hover-bg": "rgba(255,255,255,0.55)",
     // Scope pill elevates to white on the tinted settings sidebar.
     "settings-scope-bg": "#FFFFFF",
     "settings-sidebar-bg": "rgba(241,233,217,0.60)",

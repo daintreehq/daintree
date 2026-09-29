@@ -866,3 +866,42 @@ describe("terminalClient resize normalization (#11641)", () => {
     expect({ cols: ipcCall?.[1], rows: ipcCall?.[2] }).toEqual(portDims);
   });
 });
+
+describe("terminalClient.submitWithImages (#12792)", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    const windowMock = {
+      top: null as unknown,
+      electron: { terminal: mockElectronTerminal },
+      location: { origin: "http://localhost", protocol: "http:" },
+      postMessage: vi.fn(),
+      addEventListener: vi.fn(),
+    };
+    windowMock.top = windowMock;
+    typedGlobal.window = windowMock;
+    vi.clearAllMocks();
+    terminalClient = (await import("../terminalClient")).terminalClient;
+  });
+
+  afterEach(() => {
+    delete typedGlobal.window;
+  });
+
+  it("passes attachable image paths as the trailing argument", async () => {
+    await terminalClient.submitWithImages("t1", "see /a/shot.png", ["/a/shot.png"]);
+
+    expect(mockElectronTerminal.submit).toHaveBeenCalledWith(
+      "t1",
+      "see /a/shot.png",
+      undefined,
+      undefined,
+      ["/a/shot.png"]
+    );
+  });
+
+  it("drops paths main would refuse, keeping the draft as a plain submit", async () => {
+    await terminalClient.submitWithImages("t1", "see \\\\srv\\s\\a.png", ["\\\\srv\\s\\a.png"]);
+
+    expect(mockElectronTerminal.submit).toHaveBeenCalledWith("t1", "see \\\\srv\\s\\a.png");
+  });
+});

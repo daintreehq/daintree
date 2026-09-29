@@ -15,6 +15,7 @@ import { detectUnresolvedVariables, splitByRecipeVariables } from "@/utils/recip
 import { RECIPE_VARIABLE_TOKEN } from "@/components/TerminalRecipe/recipeVariableTokens";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import type { FleetTargetPreview } from "./fleetExecution";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 export function FleetDraftingPill(): ReactElement | null {
   const armOrder = useFleetArmingStore((s) => s.armOrder);
@@ -107,8 +108,9 @@ export function FleetDraftingPill(): ReactElement | null {
             )}
             {hasVariables && (
               <ChevronDown
+                data-animated-chevron
                 className={cn(
-                  "h-3 w-3 shrink-0 transition-transform duration-150",
+                  "h-3 w-3 shrink-0 transition-transform duration-150 ease-out",
                   open && "rotate-180"
                 )}
                 aria-hidden="true"
@@ -132,9 +134,7 @@ export function FleetDraftingPill(): ReactElement | null {
           data-testid="fleet-resolution-popover"
           className="flex max-h-[400px] w-[400px] flex-col overflow-hidden p-1"
         >
-          <div className="shrink-0 px-2 py-1 text-3xs font-medium uppercase tracking-wide text-text-secondary">
-            Fleet broadcast preview
-          </div>
+          <div className={cn(LIST_LABEL_CLASS, "shrink-0 px-2 py-1")}>Fleet broadcast preview</div>
           {previews.length === 0 ? (
             <EmptyState
               variant="zero-data"
@@ -237,7 +237,13 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
       data-skipped={isSkipped ? "true" : undefined}
       className={cn("rounded-[var(--radius-md)] px-2 py-1.5", excluded && "opacity-50")}
     >
-      <div className="flex items-center gap-2 text-2xs font-medium text-text-secondary">
+      {/* A label, so the title toggles its box like every other checkbox label. */}
+      <label
+        className={cn(
+          "flex items-center gap-2 text-2xs font-medium text-text-secondary",
+          !excluded && "cursor-pointer"
+        )}
+      >
         {/* An ineligible row keeps a disabled box so the column stays aligned
             and the row reads as "cannot include" rather than "no control". */}
         <Checkbox
@@ -266,7 +272,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
             Edited
           </span>
         )}
-      </div>
+      </label>
       <div
         className={cn(
           "mt-0.5 text-2xs leading-relaxed text-text-secondary wrap-anywhere",
@@ -285,12 +291,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
       </div>
       {!excluded && (
         <div className="mt-1 border-t border-border-subtle pt-1">
-          <div
-            className={cn(
-              "mb-0.5 text-2xs uppercase tracking-wide text-text-secondary",
-              isSkipped && "opacity-50"
-            )}
-          >
+          <div className={cn(LIST_LABEL_CLASS, "mb-0.5", isSkipped && "opacity-50")}>
             {isOverridden ? "Edited" : "Resolved"}
           </div>
           <Textarea

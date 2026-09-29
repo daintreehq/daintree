@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { InlineError } from "@/components/ui/field";
 import type {
   ForgeProviderEntry,
   ForgeProviderResolutionVia,
@@ -415,7 +417,12 @@ function ProjectRoutingPanel({
   }
 
   if (loading) {
-    return shell(<SettingsEmptyRow>Loading remotes…</SettingsEmptyRow>);
+    return shell(
+      <Skeleton label="Loading remotes" className="space-y-3 px-4 py-3">
+        <SkeletonBone immediate className="h-5 w-2/3" />
+        <SkeletonBone immediate className="h-5 w-1/2" />
+      </Skeleton>
+    );
   }
 
   if (error) {
@@ -427,7 +434,7 @@ function ProjectRoutingPanel({
           </Button>
         }
       >
-        <span className="text-status-error">{error}</span>
+        <InlineError as="span">{error}</InlineError>
       </SettingsEmptyRow>
     );
   }
@@ -493,7 +500,11 @@ function RoutingResult({
   noProviders: boolean;
 }) {
   if (failed) {
-    return <span className="text-xs text-status-error">Couldn&apos;t resolve</span>;
+    return (
+      <InlineError as="span" className="justify-end">
+        Couldn&apos;t resolve
+      </InlineError>
+    );
   }
   if (resolved.entry === null || resolved.resolvedVia === null) {
     return (

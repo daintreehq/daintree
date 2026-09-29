@@ -3,7 +3,10 @@ import { Check, X } from "lucide-react";
 import { HexColorInput, HexColorPicker } from "react-colorful";
 import { contrastRatio } from "@shared/theme";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { inputVariants } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 
 /**
  * Preset color picker — inline HSV picker with a curated palette.
@@ -97,23 +100,26 @@ export function PresetColorPicker({
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="shrink-0 rounded-full ring-1 ring-transparent hover:ring-border-strong focus-visible:ring-accent-primary focus-visible:outline-hidden transition-shadow"
-          aria-label={ariaLabel}
-          title={ariaLabel}
-          data-testid="preset-color-picker-trigger"
-        >
-          <span
-            className="block w-4 h-4 rounded-full border border-border-default/60"
-            style={{ backgroundColor: effectiveColor }}
-          />
-        </button>
-      </PopoverTrigger>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="shrink-0 rounded-full ring-1 ring-transparent hover:ring-border-strong transition-shadow focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              aria-label={ariaLabel}
+              data-testid="preset-color-picker-trigger"
+            >
+              <span
+                className="block w-4 h-4 rounded-full border border-border-default/60"
+                style={{ backgroundColor: effectiveColor }}
+              />
+            </button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{ariaLabel}</TooltipContent>
+      </Tooltip>
       <PopoverContent
         align="start"
-        sideOffset={6}
         className="w-56 p-3 space-y-3"
         data-testid="preset-color-picker-popover"
       >
@@ -131,7 +137,7 @@ export function PresetColorPicker({
                 key={c}
                 type="button"
                 className={cn(
-                  "w-5 h-5 rounded-full border border-border-default/60 relative focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
+                  "w-5 h-5 rounded-full border border-border-default/60 relative focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                   "hover:scale-110 transition-transform"
                 )}
                 style={{ backgroundColor: c }}
@@ -165,29 +171,31 @@ export function PresetColorPicker({
             color={draftColor}
             onChange={setDraftColor}
             prefixed
-            className="w-20 rounded-[var(--radius-sm)] border border-border-default/60 bg-surface-canvas px-1.5 py-0.5 text-2xs font-mono uppercase text-text-primary focus:outline-hidden focus:border-accent-primary"
+            className={cn(inputVariants({ density: "compact" }), "w-20 font-mono uppercase")}
             aria-label="Hex color"
             data-testid="preset-color-hex-input"
           />
           <div className="flex-1" />
-          <button
-            type="button"
-            className="flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary transition-colors"
+          <Button
+            variant="ghost"
+            size="xs"
+            className="px-1.5 text-2xs"
             onClick={handleClear}
             data-testid="preset-color-clear"
           >
-            <X size={11} />
+            <X aria-hidden="true" />
             Clear
-          </button>
-          <button
-            type="button"
-            className="text-2xs font-medium text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            className="px-1.5 text-2xs"
             onClick={handleDone}
             disabled={!isValidHex(draftColor)}
             data-testid="preset-color-done"
           >
             Done
-          </button>
+          </Button>
         </div>
       </PopoverContent>
     </Popover>

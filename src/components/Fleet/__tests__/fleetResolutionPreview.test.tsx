@@ -351,6 +351,16 @@ describe("FleetDraftingPill — per-target edit and skip (#8691)", () => {
     expect(useFleetTargetOverridesStore.getState().skippedIds.has("t-2")).toBe(true);
   });
 
+  it("toggles a skip exactly once when the row's title is clicked", () => {
+    render(<FleetDraftingPill />);
+    const include = screen.getAllByTestId("fleet-resolution-row-include")[1]!;
+    const title = include.closest("label")?.querySelector("span.truncate");
+    expect(title).toBeTruthy();
+    fireEvent.click(title!);
+    expect(useFleetTargetOverridesStore.getState().skippedIds.has("t-2")).toBe(true);
+    expect(include.getAttribute("aria-checked")).toBe("false");
+  });
+
   it("prevents Enter inside an override textarea from bubbling", () => {
     render(<FleetDraftingPill />);
     const textarea = screen.getAllByTestId(

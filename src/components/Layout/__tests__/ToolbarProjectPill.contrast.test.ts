@@ -131,4 +131,25 @@ describe("toolbar project pill — branch chip contrast", () => {
       declaration('.toolbar-project-pill[aria-expanded="true"] .toolbar-project-chip', "--_fg")
     );
   });
+
+  it("lifts the switcher chevron with the chip in every lifted state", () => {
+    // The chevron sits beside the chip on the same overlay; if only the chip
+    // brightens, the pill answers the pointer with half of its trailing edge.
+    for (const state of [":hover", ":active", '[aria-expanded="true"]', '[data-state="open"]']) {
+      expect(declaration(`.toolbar-project-pill${state} .toolbar-project-meta`, "--_fg")).toBe(
+        declaration(`.toolbar-project-pill${state} .toolbar-project-chip`, "--_fg")
+      );
+    }
+    expect(declaration(".toolbar-project-meta", "color")).toBe("var(--_fg)");
+  });
+});
+
+describe("toolbar project pill — press snap", () => {
+  it("snaps to the toolbar controls' pressed scale without easing it", () => {
+    // The pill is a raw button, so it cannot inherit the Button cva's
+    // `active:scale-[0.98]`; it has to state the press itself.
+    expect(declaration(".toolbar-project-pill:active", "transform")).toMatch(/^scale\(0\.98\)$/);
+    // An eased transform would stretch the snap into a 150ms shrink.
+    expect(declaration(".toolbar-project-pill", "transition")).not.toMatch(/transform|\ball\b/);
+  });
 });

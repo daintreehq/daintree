@@ -8,8 +8,9 @@ import {
   PROBE_SSE_REQUEST_TIMEOUT_MS,
   probeMcpServer,
   probeMcpSseServer,
+  READINESS_PROBE_TOOL,
 } from "../readinessProbe.js";
-import { ACTIONS_LIST_TOOL } from "../shared.js";
+import { CORE_TIER_TOOLS } from "../../../../shared/config/helpAssistantTierAllowlists.js";
 
 interface CapturedRequest {
   method: string;
@@ -314,8 +315,8 @@ describe("probeMcpSseServer", () => {
               result: {
                 tools: [
                   {
-                    name: ACTIONS_LIST_TOOL,
-                    description: "List available Daintree actions",
+                    name: READINESS_PROBE_TOOL,
+                    description: "Read the current Daintree context",
                     inputSchema: { type: "object", properties: {} },
                   },
                 ],
@@ -402,7 +403,7 @@ describe("probeMcpSseServer", () => {
 
     await expect(
       probeMcpSseServer(fake.port, "help-token", { hardTimeoutMs: 500, baseDelayMs: 10 })
-    ).rejects.toThrow(/actions\.list/);
+    ).rejects.toThrow(/actions\.getContext/);
   });
 
   it("rejects when the SSE stream never returns tools/list response", async () => {
@@ -457,5 +458,14 @@ describe("probe constants", () => {
     expect(PROBE_BASE_DELAY_MS).toBeGreaterThan(0);
     expect(PROBE_SSE_REQUEST_TIMEOUT_MS).toBeGreaterThanOrEqual(5000);
     expect(PROBE_SSE_HARD_TIMEOUT_MS).toBeGreaterThan(PROBE_SSE_REQUEST_TIMEOUT_MS);
+  });
+});
+
+describe("READINESS_PROBE_TOOL", () => {
+  // A help session at the default `core` tool set lists far less than `full`.
+  // Probing for a tool only `full` carries failed every default-tier Claude
+  // launch before the renderer was ever asked for anything.
+  it("is a tool the smallest in-app tool set lists", () => {
+    expect(CORE_TIER_TOOLS as readonly string[]).toContain(READINESS_PROBE_TOOL);
   });
 });

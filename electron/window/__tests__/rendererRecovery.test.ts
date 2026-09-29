@@ -12,7 +12,7 @@ vi.mock("electron", () => ({
 
 vi.mock("../../services/CrashRecoveryService.js", () => ({
   getCrashRecoveryService: vi.fn(() => ({
-    recordCrash: vi.fn(),
+    recordRendererGone: vi.fn(),
   })),
 }));
 
@@ -96,7 +96,7 @@ function setupCrashRecovery(
   } = options;
   const rendererCrashTimestamps: number[] = [];
   const oomRecreationTimestamps: number[] = [];
-  const recordCrash = vi.fn();
+  const recordRendererGone = vi.fn();
 
   const getRecoveryUrl = (reason: string, exitCode: number): string => {
     const params = new URLSearchParams({ reason, exitCode: String(exitCode) });
@@ -110,7 +110,7 @@ function setupCrashRecovery(
     const details = args[0] as { reason: string; exitCode: number };
     if (details.reason === "clean-exit") return;
     if (details.reason !== "memory-eviction") {
-      recordCrash(details);
+      recordRendererGone(details);
     }
 
     if (win.isDestroyed()) return;
@@ -186,7 +186,7 @@ function setupCrashRecovery(
     }
   });
 
-  return { rendererCrashTimestamps, oomRecreationTimestamps, recordCrash };
+  return { rendererCrashTimestamps, oomRecreationTimestamps, recordRendererGone };
 }
 
 function setupUnresponsiveHandling(win: ReturnType<typeof createMockWindow>) {
@@ -244,11 +244,11 @@ describe("renderer crash recovery", () => {
 
   it("ignores clean-exit", () => {
     const win = createMockWindow();
-    const { recordCrash } = setupCrashRecovery(win);
+    const { recordRendererGone } = setupCrashRecovery(win);
 
     win._emitWc("render-process-gone", { reason: "clean-exit", exitCode: 0 });
 
-    expect(recordCrash).not.toHaveBeenCalled();
+    expect(recordRendererGone).not.toHaveBeenCalled();
     expect(win.webContents.reload).not.toHaveBeenCalled();
     expect(win.webContents.loadURL).not.toHaveBeenCalled();
   });
@@ -689,9 +689,9 @@ describe("renderer crash recovery", () => {
     expect(onRecreateWindow).not.toHaveBeenCalled();
   });
 
-  it('"memory-eviction" does not call recordCrash (#9572)', () => {
+  it('"memory-eviction" does not call recordRendererGone (#9572)', () => {
     const win = createMockWindow();
-    const { recordCrash: mockRecordCrash } = setupCrashRecovery(win);
+    const { recordRendererGone: mockRecordCrash } = setupCrashRecovery(win);
 
     win._emitWc("render-process-gone", { reason: "memory-eviction", exitCode: 0 });
 

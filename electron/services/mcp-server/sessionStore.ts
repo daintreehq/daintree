@@ -39,7 +39,7 @@ export interface SessionStoreOptions {
   dropBearerState?: (sessionId: string) => void;
   /**
    * Fired when a session's renderer-approved tier elevation expires and the
-   * session is silently decayed back to the `workbench` baseline (#8462).
+   * session is silently decayed back to its pre-elevation baseline (#8462).
    * `httpLifecycle` wires this to `server.sendToolListChanged()` on the
    * decayed session so the model's tool manifest reflects the narrowed
    * surface immediately. Optional so bare test fixtures construct without
@@ -158,7 +158,7 @@ export class SessionStore {
   // HTTP). A renderer-approved "Always allow" elevation is bounded to
   // MCP_TIER_ELEVATION_TTL_MS; on expiry the session silently decays to the
   // baseline captured before the first elevation in the chain — not to a
-  // hardcoded `workbench` (#8462). `tierElevationStartedAt` drives the same
+  // hardcoded `core` (#8462). `tierElevationStartedAt` drives the same
   // awake-time correction as the idle reaper; `tierElevationToken` records
   // the tier captured when the timer was armed so a fresh re-elevation
   // between arm and fire is never wiped (#2243 stale-token guard). Stored
@@ -168,12 +168,11 @@ export class SessionStore {
   private readonly tierElevationStartedAt = new Map<string, number>();
   private readonly tierElevationToken = new Map<string, McpTier>();
   // The session's token-resolved baseline tier captured at the first
-  // elevation in a chain. Decay reverts here, NOT to a hardcoded
-  // `workbench` — a help-session bearer can hold a configured baseline of
-  // `action`/`system` (`HelpAssistantTier`), and dropping it to `workbench`
-  // would strip tools the user legitimately had from handshake. Preserved
-  // across chained re-elevations (workbench→action→system still decays all
-  // the way to workbench).
+  // elevation in a chain. Decay reverts here, NOT to a hardcoded `core` — a
+  // help-session bearer can hold a configured baseline of `full`
+  // (`HelpAssistantTier`), and dropping it to `core` would strip tools the
+  // user legitimately had from handshake. Preserved across chained
+  // re-elevations, so a chain still decays all the way to where it started.
   private readonly tierElevationBaseline = new Map<string, McpTier>();
 
   private readonly cleanupResourceSubscriptionsFn: (sessionId: string) => void;
@@ -596,10 +595,10 @@ export class SessionStore {
    * Arm (or refresh) the decay timer for a renderer-approved tier
    * elevation. `baselineTier` is the session's pre-elevation tier (the
    * token-resolved handshake tier) — decay reverts here, not to a hardcoded
-   * `workbench`. Idempotent: clearing first makes a repeat "Always allow"
-   * reset the window from now. A baseline captured by an earlier elevation
-   * in the same chain is preserved (workbench→action→system still decays
-   * all the way to workbench). When the requested tier equals the effective
+   * `core`. Idempotent: clearing first makes a repeat "Always allow" reset
+   * the window from now. A baseline captured by an earlier elevation in the
+   * same chain is preserved, so a chain still decays all the way to where it
+   * started. When the requested tier equals the effective
    * baseline the session isn't actually elevated, so any pending timer is
    * just cleared. Call this from `setSessionTier` after the promote-only
    * guard accepts the change.
@@ -648,7 +647,7 @@ export class SessionStore {
 
   private decayTier(sessionId: string): void {
     const token = this.tierElevationToken.get(sessionId);
-    const baseline = this.tierElevationBaseline.get(sessionId) ?? "workbench";
+    const baseline = this.tierElevationBaseline.get(sessionId) ?? "core";
     const current = this.sessionTierMap.get(sessionId);
     this.clearElevationTimer(sessionId);
     // Guard #1: session gone — nothing to decay, nobody to notify.
@@ -689,28 +688,27 @@ export class SessionStore {
    * The tier a *live* session is authorized at, or `null` when no live
    * transport owns `sessionId` (#11799).
    *
-   * The liveness check comes first on purpose. `workbench` is not a floor:
+   * The liveness check comes first on purpose. `core` is not a floor:
    * `TIER_ALLOWLISTS` gives `external` its own allowlist rather than a subset
-   * of `workbench`, so the two are peers. Returning the `workbench` default for
-   * a session that no longer exists therefore *widens* a revoked external
-   * bearer onto 46 tools its own allowlist withholds — `file.read`,
-   * `files.search`, `copyTree.generate` and `git.getFileDiff` among them —
-   * instead of refusing it. Revocation tears down `sessions`/`httpSessions`
-   * before it deletes the tier row, so transport membership is the signal that
-   * outlives nothing.
+   * of `core`, so the two are peers. Returning the `core` default for a
+   * session that no longer exists would therefore *widen* a revoked external
+   * bearer onto tools its own allowlist withholds — `terminal.moveToWorktree`
+   * and `worktree.waitUntilReady` among them — instead of refusing it.
+   * Revocation tears down `sessions`/`httpSessions` before it deletes the tier
+   * row, so transport membership is the signal that outlives nothing.
    *
    * `null` rather than a throw or a sentinel tier: there is no tier value that
    * means "deny everything", and the nullable return makes the compiler
    * enumerate every authorization site, so no caller can quietly inherit the
    * old fail-open default. Callers fail closed — see `SESSION_GONE`.
    *
-   * The `workbench` fallback survives only for a session that *is* live but has
+   * The `core` fallback survives only for a session that *is* live but has
    * no tier row, which handshake ordering makes unreachable in production
    * (every connect path stamps the tier before registering the transport).
    */
   getTier(sessionId: string): McpTier | null {
     if (!this.sessions.has(sessionId) && !this.httpSessions.has(sessionId)) return null;
-    return this.sessionTierMap.get(sessionId) ?? "workbench";
+    return this.sessionTierMap.get(sessionId) ?? "core";
   }
 
   /**

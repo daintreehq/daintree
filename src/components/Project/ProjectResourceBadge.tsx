@@ -1,8 +1,10 @@
 import { useEffect, useState, useCallback, useRef, useMemo, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, Coffee, TriangleAlert } from "lucide-react";
+import { ChevronRight, Coffee, TriangleAlert } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { projectClient, systemClient } from "@/clients";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SidebarFooterGlyph } from "@/components/Layout/SidebarFooterGlyph";
 import { logError } from "@/utils/logger";
@@ -237,23 +239,27 @@ function ProjectBreakdown({
         ))}
       </div>
       {folded && (
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="xs"
           onClick={() => setShowAll((prev) => !prev)}
           aria-expanded={showAll}
           aria-controls="resource-project-rows"
-          className="-mx-1 flex min-h-6 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-2xs text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors"
+          className="-mx-1 px-1 min-h-6 h-auto text-2xs justify-start"
         >
-          {showAll ? (
-            <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
-          ) : (
-            <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
-          )}
+          <ChevronRight
+            data-animated-chevron
+            className={cn(
+              "h-3 w-3 shrink-0 transition-transform duration-150 ease-out",
+              showAll && "rotate-90"
+            )}
+            aria-hidden="true"
+          />
           {/* Stable, as toggle labels are: the chevron and aria-expanded carry
               the state. No count, because the list can hold an unassigned-
               terminals row that the footer's "N projects active" never counts. */}
           Show all
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -331,20 +337,24 @@ function DiagnosticsSection({
 
   return (
     <div className="space-y-2">
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="xs"
         onClick={() => setExpanded((prev) => !prev)}
         aria-expanded={expanded}
         aria-controls="resource-diagnostics"
-        className="-mx-1 flex min-h-6 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-2xs font-medium text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors"
+        className="-mx-1 px-1 min-h-6 h-auto text-2xs justify-start"
       >
-        {expanded ? (
-          <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
-        ) : (
-          <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
-        )}
+        <ChevronRight
+          data-animated-chevron
+          className={cn(
+            "h-3 w-3 shrink-0 transition-transform duration-150 ease-out",
+            expanded && "rotate-90"
+          )}
+          aria-hidden="true"
+        />
         Diagnostics
-      </button>
+      </Button>
       {expanded && (
         <div id="resource-diagnostics" className="space-y-3">
           <div className="space-y-1">
@@ -777,9 +787,10 @@ export function ProjectResourceBadge({
       <div data-sidebar-status-bar="" className="flex items-center shrink-0 w-full min-h-7">
         <PopoverTrigger asChild>
           <button
+            type="button"
             data-status-readout=""
             aria-label={`${announcement} — open resource usage`}
-            className="px-4 py-1.5 flex items-center flex-1 min-w-0 self-stretch hover:bg-overlay-soft transition-colors cursor-pointer"
+            className="px-4 py-1.5 flex items-center flex-1 min-w-0 self-stretch hover:bg-overlay-subtle transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
             <div className="flex items-center gap-2 min-w-0">
               {/* Decorative: the working/idle state it encodes is carried in
@@ -846,8 +857,6 @@ export function ProjectResourceBadge({
       <PopoverContent
         side="top"
         align="start"
-        sideOffset={8}
-        collisionPadding={8}
         aria-labelledby="resource-usage-title"
         // Focus the popover itself, not its first control. Radix's default
         // landed on the keep-awake row and painted a ring on a settings link
@@ -924,7 +933,7 @@ export function ProjectResourceBadge({
             aria-label={`${
               holdingWakeLock ? "Keeping this machine awake" : "Not keeping this machine awake"
             } — keep-awake settings`}
-            className="-mx-1 flex min-h-6 w-[calc(100%+0.5rem)] items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-2xs text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors"
+            className="-mx-1 flex min-h-6 w-[calc(100%+0.5rem)] cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-2xs text-text-secondary hover:bg-overlay-subtle hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
             <Coffee className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             <span className="min-w-0 flex-1 truncate">

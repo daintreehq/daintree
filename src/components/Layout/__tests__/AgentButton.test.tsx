@@ -136,7 +136,7 @@ vi.mock("@/config/agents", () => ({
   getAgentConfig: (id: string) => ({
     id,
     name: id.charAt(0).toUpperCase() + id.slice(1),
-    icon: () => null,
+    icon: () => <span data-testid="agent-icon" />,
     externalLinks: mockExternalLinks,
   }),
   getMergedPresets: (agentId: string) => mockMergedPresetsFn(agentId),
@@ -210,17 +210,20 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     children,
     onSelect,
     onClick,
+    onKeyDown,
     className,
   }: {
     children: React.ReactNode;
     onSelect?: (e: Event) => void;
     onClick?: (e: React.MouseEvent) => void;
+    onKeyDown?: (e: React.KeyboardEvent) => void;
     className?: string;
   }) => (
     <div
       role="menuitem"
       data-testid="preset-item"
       className={className}
+      onKeyDown={onKeyDown}
       onClick={(e) => {
         onSelect?.(e as unknown as Event);
         onClick?.(e);
@@ -351,10 +354,15 @@ vi.mock("@/components/ui/context-menu", () => ({
 }));
 
 vi.mock("lucide-react", () => ({
-  ChevronDown: () => <span data-testid="chevron-icon" />,
+  Settings2: () => <span data-testid="settings-icon" />,
+  ChevronDown: (props: Record<string, unknown>) => <span data-testid="chevron-icon" {...props} />,
   ExternalLink: () => <span data-testid="external-link-icon" />,
   PanelBottom: () => <span data-testid="panel-bottom-icon" />,
   Unplug: () => <span data-testid="unplug-icon" />,
+  Bookmark: () => <span data-testid="bookmark-icon" />,
+  FolderGit2: () => <span data-testid="folder-git-icon" />,
+  PanelTop: () => <span data-testid="panel-top-icon" />,
+  Plug: () => <span data-testid="plug-icon" />,
   // Check / Circle render the preset-row gutter affordance (issue #10720):
   // Check marks the active default, Circle is the hover hint on other rows.
   // Queryable spans let the gutter-indicator tests assert which row is armed.
@@ -850,6 +858,99 @@ describe("AgentButton preset UX", () => {
       expect(updateWorktreePresetMock).not.toHaveBeenCalled();
       expect(dispatchMock).not.toHaveBeenCalled();
     });
+
+    // Keyboard twin of the gutter, mirroring the plugin tray's P-to-pin: D on a
+    // row sets the default without launching; Enter/Space keep launching.
+    function pressD(row: HTMLElement, init: Partial<KeyboardEventInit> = {}) {
+      return fireEvent.keyDown(row, { key: "d", ...init });
+    }
+
+    it("D on a preset row persists the worktree default without launching or closing", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [
+        { id: "user-alpha", name: "Alpha" },
+        { id: "user-beta", name: "Beta" },
+      ];
+
+      const { getAllByTestId } = render(<AgentButton type="claude" availability="ready" />);
+      act(() => dropdownOnOpenChange!(true));
+      // fireEvent returns false when the handler preventDefaults, which is what
+      // keeps Radix's typeahead from also acting on the key.
+      expect(pressD(rowByText(getAllByTestId, "Beta"), { key: "D" })).toBe(false);
+
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", "user-beta");
+      expect(dispatchMock).not.toHaveBeenCalled();
+      expect(dropdownOpenState).toBe(true);
+    });
+
+    it("D on Agent default clears both scopes, same as its gutter", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({
+        claude: { presetId: "user-alpha", worktreePresets: { "wt-A": "user-alpha" } },
+      });
+      mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
+
+      const { getAllByTestId } = render(<AgentButton type="claude" availability="ready" />);
+      pressD(rowByText(getAllByTestId, "Agent default"));
+
+      expect(updateAgentMock).toHaveBeenCalledWith("claude", { presetId: undefined });
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", undefined);
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("leaves other keys and modified D presses to their own handlers", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
+
+      const { getAllByTestId } = render(<AgentButton type="claude" availability="ready" />);
+      const row = rowByText(getAllByTestId, "Alpha");
+      for (const init of [
+        { key: "Enter" },
+        { key: " " },
+        { key: "f" },
+        { key: "d", metaKey: true },
+        { key: "d", ctrlKey: true },
+        { key: "d", altKey: true },
+      ]) {
+        expect(fireEvent.keyDown(row, init), JSON.stringify(init)).toBe(true);
+      }
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+      expect(updateAgentMock).not.toHaveBeenCalled();
+    });
+
+    it("announces the default on exactly the checked row and the D hint on every other", () => {
+      const hintsFor = (settings: Record<string, unknown>) => {
+        mockActiveWorktreeId = "wt-A";
+        mockSettings = settingsWith({ claude: settings });
+        mockMergedPresetsFn = () => [
+          { id: "user-alpha", name: "Alpha" },
+          { id: "user-beta", name: "Beta" },
+        ];
+        const { getAllByTestId, unmount } = render(
+          <AgentButton type="claude" availability="ready" />
+        );
+        const rows = (getAllByTestId("preset-item") as HTMLElement[]).filter((r) =>
+          r.querySelector('[data-zone="gutter"]')
+        );
+        const result = rows.map((r) => ({
+          checked: !!r.querySelector('[data-zone="gutter"] [data-testid="check-icon"]'),
+          hint: r.querySelector(":scope > .sr-only")?.textContent ?? null,
+        }));
+        unmount();
+        return result;
+      };
+
+      for (const settings of [{}, { worktreePresets: { "wt-A": "user-beta" } }]) {
+        const rows = hintsFor(settings);
+        expect(rows).toHaveLength(3);
+        const announcedDefault = rows.filter((r) => /current default/i.test(r.hint ?? ""));
+        expect(announcedDefault).toHaveLength(1);
+        expect(announcedDefault[0]!.checked).toBe(true);
+        for (const r of rows.filter((r) => !r.checked)) expect(r.hint).toMatch(/press d/i);
+      }
+    });
   });
 
   describe("tooltip surfaces active preset", () => {
@@ -1339,6 +1440,29 @@ describe("AgentButton preset UX", () => {
     });
   });
 
+  describe("disclosure chevron", () => {
+    // The trigger's data-state belongs to the wrapping TooltipTrigger, so the
+    // turn has to key off aria-expanded on the chevron's own button, and it has
+    // to carry the marker the global reduced-motion rule targets.
+    it("turns only on its own trigger's aria-expanded and is reachable by reduced motion", () => {
+      mockMergedPresetsFn = () => [{ id: "only", name: "Only" }];
+      const { getByTestId } = render(<AgentButton type="claude" availability="ready" />);
+      const chevron = getByTestId("chevron-icon");
+      expect(chevron.hasAttribute("data-animated-chevron")).toBe(true);
+      expect(chevron.getAttribute("aria-hidden")).toBe("true");
+
+      const tokens = (chevron.getAttribute("class") ?? "").split(/\s+/);
+      const turns = tokens.filter((t) => /(^|:)rotate-/.test(t));
+      expect(turns.length).toBeGreaterThan(0);
+      const trigger = chevron.closest("button")!;
+      for (const turn of turns) {
+        const group = /^group-aria-expanded\/([\w-]+):rotate-/.exec(turn);
+        expect(group, turn).not.toBeNull();
+        expect(trigger.classList.contains(`group/${group![1]}`), turn).toBe(true);
+      }
+    });
+  });
+
   describe("split-button structure", () => {
     // The split draws as one control at rest; its partition and shared wash
     // only appear on a split the chevron can actually open (toolbar.css gates
@@ -1445,7 +1569,7 @@ describe("AgentButton preset UX", () => {
 
   describe("manage presets dropdown footer", () => {
     it("dropdown footer dispatches deep-link to the preset editor with source 'user'", () => {
-      // The chevron dropdown carries a footer "Manage Presets..." item that
+      // The chevron dropdown carries a footer "Manage presets…" item that
       // mirrors the right-click menu's agent-named entry but uses the
       // shorter label since the agent identity is implicit (the user just
       // clicked this agent's chevron). Source is "user" because it's a
@@ -1457,7 +1581,7 @@ describe("AgentButton preset UX", () => {
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
       const items = getAllByTestId("preset-item") as HTMLElement[];
-      const manage = items.find((el) => el.textContent === "Manage Presets...")!;
+      const manage = items.find((el) => el.textContent === "Manage presets…")!;
       fireEvent.click(manage);
 
       expect(dispatchMock).toHaveBeenCalledWith(
@@ -1476,7 +1600,7 @@ describe("AgentButton preset UX", () => {
       const { getByText } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      fireEvent.click(getByText("Manage Claude Presets..."));
+      fireEvent.click(getByText("Manage Claude presets…"));
 
       expect(dispatchMock).toHaveBeenCalledWith(
         "app.settings.openTab",
@@ -1492,7 +1616,7 @@ describe("AgentButton preset UX", () => {
       const { getByText } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      fireEvent.click(getByText("Manage Claude Presets..."));
+      fireEvent.click(getByText("Manage Claude presets…"));
 
       expect(dispatchMock).toHaveBeenCalledWith(
         "app.settings.openTab",
@@ -1567,7 +1691,7 @@ describe("AgentButton preset UX", () => {
       ]);
     });
 
-    it("hides the Launch in Worktree submenu when no worktrees exist", () => {
+    it("hides the Launch in worktree submenu when no worktrees exist", () => {
       mockSettings = settingsWith({ claude: {} });
       mockMergedPresetsFn = () => [];
       mockWorktrees = [];
@@ -1575,7 +1699,7 @@ describe("AgentButton preset UX", () => {
       const { queryByText } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      expect(queryByText("Launch in Worktree")).toBeNull();
+      expect(queryByText("Launch in worktree")).toBeNull();
     });
   });
 
@@ -1949,5 +2073,47 @@ describe("AgentButton external links — issue #10350", () => {
     );
     expect(findLinkItem()).toBeUndefined();
     expect(screen.queryByTestId("external-link-icon")).toBeNull();
+  });
+});
+
+// Every mocked glyph above renders a `*-icon` test id, so "leads with an icon"
+// is readable without knowing which icon a row carries — the rule, not the pick.
+function rowsMissingLeadingIcon(content: HTMLElement): string[] {
+  return Array.from(content.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+    .filter((row) => !row.firstElementChild?.getAttribute("data-testid")?.endsWith("-icon"))
+    .map((row) => row.textContent ?? "");
+}
+
+describe("AgentButton context menu — every actionable row leads with an icon", () => {
+  beforeEach(() => {
+    mockSettings = settingsWith({ claude: {} });
+    mockActiveWorktreeId = null;
+    mockCcrPresetsByAgent = {};
+    mockProjectPresetsByAgent = {};
+    mockCliDetails = {};
+    mockPanelsById = {};
+    mockPanelIds = [];
+    mockPanelIdsByWorktreeId = {};
+    mockWorktrees = [
+      { id: "wt-1", name: "Main", isMainWorktree: true },
+      { id: "wt-2", name: "feat/x", branch: "feat/x" },
+    ];
+    mockExternalLinks = [{ label: "View usage", url: "https://example.com/usage" }];
+  });
+
+  it("without presets", () => {
+    mockMergedPresetsFn = () => [];
+    render(<AgentButton type="claude" availability="ready" />);
+    const content = screen.getByTestId("context-menu-content");
+    expect(content.querySelectorAll('[role="menuitem"]').length).toBeGreaterThan(5);
+    expect(rowsMissingLeadingIcon(content)).toEqual([]);
+  });
+
+  it("with presets", () => {
+    mockMergedPresetsFn = () => [{ id: "p1", name: "Fast" }];
+    render(<AgentButton type="claude" availability="ready" />);
+    const content = screen.getByTestId("context-menu-content");
+    expect(content.querySelectorAll('[role="menuitem"]').length).toBeGreaterThan(5);
+    expect(rowsMissingLeadingIcon(content)).toEqual([]);
   });
 });

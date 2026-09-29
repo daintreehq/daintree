@@ -16,6 +16,7 @@ import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { useRunHistoryStore } from "@/store/runHistoryStore";
 import type { RunHistoryRecord } from "@shared/types";
+import { Badge } from "@/components/ui/badge";
 
 const COPY_FEEDBACK_MS = 2000;
 
@@ -29,10 +30,10 @@ function plural(count: number, one: string, many: string = `${one}s`): string {
  */
 function CountPill({ label, failed = false }: { label: string; failed?: boolean }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-[var(--radius-sm)] bg-overlay-subtle px-1.5 py-0.5 text-2xs font-medium text-text-secondary">
+    <Badge size="xs">
       {failed && <SeverityMark severity="error" label="Failed" className="h-3 w-3" decorative />}
       {label}
-    </span>
+    </Badge>
   );
 }
 
@@ -268,7 +269,7 @@ export function RunHistorySettingsTab() {
         isOpen={showClearConfirm}
         variant="destructive"
         onConfirm={() => void confirmClear()}
-        onClose={isClearing ? undefined : () => setShowClearConfirm(false)}
+        onClose={() => setShowClearConfirm(false)}
         isConfirmLoading={isClearing}
         title="Clear run history?"
         description={`This permanently deletes ${plural(records.length, "recorded run")} on this machine. New runs will still be recorded.`}

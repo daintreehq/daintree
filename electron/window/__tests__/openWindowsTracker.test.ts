@@ -20,6 +20,7 @@ vi.mock("../../lifecycle/shutdownCoordinator.js", () => ({
 import {
   buildOpenWindowRecords,
   clearPendingBackgroundRestores,
+  enableOpenWindowsSaves,
   freezeAndSnapshotOpenWindows,
   initOpenWindowsTracker,
   resetOpenWindowsTrackerForTests,
@@ -275,6 +276,24 @@ describe("recovery launches", () => {
 
   it("still writes nothing after a window closes", () => {
     saveOpenWindowsNow(1);
+    expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+  });
+
+  it("writes again once a single-crash fleet restore lifts the hold (#12801)", () => {
+    suppressOpenWindowsSaves();
+    enableOpenWindowsSaves();
+    // Still suppressed: lifting read-only must not release the fan-out hold.
+    saveOpenWindowsNow();
+    expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+
+    resumeOpenWindowsSaves(true);
+    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(1);
+  });
+
+  it("cannot undo the shutdown freeze", () => {
+    freezeAndSnapshotOpenWindows();
+    enableOpenWindowsSaves();
+    saveOpenWindowsNow();
     expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
   });
 });

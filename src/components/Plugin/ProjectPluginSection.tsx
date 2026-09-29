@@ -1,23 +1,25 @@
 import { AlertCircle, Package, RefreshCw } from "lucide-react";
+import { InlineError } from "@/components/ui/field";
+import { Callout } from "@/components/ui/Callout";
 import { Button } from "@/components/ui/button";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import { PluginLogsSection, usePluginLogs } from "@/components/Plugin/PluginLogsSection";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { PluginGlyphTile } from "@/components/Plugin/pluginIcons";
+import { PluginDatabasesSection } from "@/components/Plugin/PluginDatabasesSection";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   type ProjectPluginInfo,
   type ProjectPluginState,
 } from "@shared/types/plugin";
+import { LIST_LABEL_CLASS, SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { Badge, CountBadge } from "@/components/ui/badge";
 
-/** Same badge vocabulary as the installed rows — origin is a badge, not a colour. */
-const BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-border-default/50 text-text-secondary uppercase tracking-wide";
-
-const SECTION_HEADER_CLASS =
-  "px-3 text-3xs font-medium uppercase tracking-wider text-text-secondary select-none";
+const SECTION_HEADER_CLASS = cn(LIST_LABEL_CLASS, "px-3");
 
 const STATE_BADGE: Record<Exclude<ProjectPluginState, "active">, string> = {
   staged: "Staged",
@@ -56,6 +58,7 @@ function ProjectPluginRow({
 }) {
   const running = plugin.state === "active";
   const failed = plugin.loadError !== undefined;
+  const { ref: nameRef, isTruncated: isNameTruncated } = useTruncationDetection();
 
   return (
     <li
@@ -66,46 +69,52 @@ function ProjectPluginRow({
         !selected && "hover:bg-overlay-subtle"
       )}
     >
-      <button
-        type="button"
-        aria-current={selected ? "true" : undefined}
-        onClick={onSelect}
-        title={plugin.version ? `${plugin.displayName} v${plugin.version}` : plugin.displayName}
-        className="row-select-target flex items-center gap-2.5 min-w-0 flex-1 py-2 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary forced-colors:border-none"
+      <TruncatedTooltip
+        content={plugin.version ? `${plugin.displayName} v${plugin.version}` : plugin.displayName}
+        isTruncated={isNameTruncated}
       >
-        {/* The same tile and the same two lines as an installed row, so the
-            project section reads as part of one list rather than a second
-            layout grafted on top of it. */}
-        <PluginGlyphTile icon={Package} size="sm" dimmed={!running || failed} />
-        <span className="min-w-0 flex-1">
-          <span
-            className={cn("block text-sm font-medium truncate", !running && "text-text-secondary")}
-          >
-            {plugin.displayName}
+        <button
+          type="button"
+          aria-current={selected ? "true" : undefined}
+          onClick={onSelect}
+          className="row-select-target flex items-center gap-2.5 min-w-0 flex-1 py-2 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary forced-colors:border-none"
+        >
+          {/* The same tile and the same two lines as an installed row, so the
+              project section reads as part of one list rather than a second
+              layout grafted on top of it. */}
+          <PluginGlyphTile icon={Package} size="sm" dimmed={!running || failed} />
+          <span className="min-w-0 flex-1">
+            <span
+              ref={nameRef}
+              className={cn(
+                "block text-sm font-medium truncate",
+                !running && "text-text-secondary"
+              )}
+            >
+              {plugin.displayName}
+            </span>
+            <span className="mt-0.5 flex items-center gap-1.5 min-w-0 h-[1.125rem]">
+              {failed || plugin.collidesWithGlobal ? (
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 min-w-0 flex-1 text-2xs font-medium",
+                    failed ? "text-status-danger" : "text-status-warning"
+                  )}
+                >
+                  <AlertCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{failed ? "Error" : "Id clash"}</span>
+                </span>
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary font-mono">
+                  {plugin.id}
+                </span>
+              )}
+              {plugin.state !== "active" && <Badge size="xs">{STATE_BADGE[plugin.state]}</Badge>}
+              <Badge size="xs">Project</Badge>
+            </span>
           </span>
-          <span className="mt-0.5 flex items-center gap-1.5 min-w-0 h-[1.125rem]">
-            {failed || plugin.collidesWithGlobal ? (
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1 min-w-0 flex-1 text-2xs font-medium",
-                  failed ? "text-status-danger" : "text-status-warning"
-                )}
-              >
-                <AlertCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
-                <span className="truncate">{failed ? "Error" : "Id clash"}</span>
-              </span>
-            ) : (
-              <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary font-mono">
-                {plugin.id}
-              </span>
-            )}
-            {plugin.state !== "active" && (
-              <span className={cn(BADGE_CLASS, "shrink-0")}>{STATE_BADGE[plugin.state]}</span>
-            )}
-            <span className={cn(BADGE_CLASS, "shrink-0")}>Project</span>
-          </span>
-        </span>
-      </button>
+        </button>
+      </TruncatedTooltip>
 
       {plugin.state === "staged" && (
         <span className="shrink-0 pr-2.5">
@@ -149,9 +158,12 @@ export function ProjectPluginSection({
           drops under Chromium 146 + VoiceOver (LESSON #9006). */}
       <h3 id="plugin-category-this-project" className={SECTION_HEADER_CLASS}>
         This project{" "}
-        <span className="ml-1.5 normal-case tracking-normal text-text-secondary">
+        <CountBadge
+          className="ml-1.5"
+          label={`${plugins.length} ${plugins.length === 1 ? "plugin" : "plugins"}`}
+        >
           {plugins.length}
-        </span>
+        </CountBadge>
       </h3>
       <ul role="list" className="space-y-1">
         {plugins.map((plugin) => (
@@ -212,15 +224,13 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
             {plugin.version && (
               <span className="text-xs font-normal text-text-secondary">v{plugin.version}</span>
             )}
-            <span className={BADGE_CLASS}>Project</span>
-            {plugin.state !== "active" && (
-              <span className={BADGE_CLASS}>{STATE_BADGE[plugin.state]}</span>
-            )}
+            <Badge size="xs">Project</Badge>
+            {plugin.state !== "active" && <Badge size="xs">{STATE_BADGE[plugin.state]}</Badge>}
             {plugin.loadError && (
-              <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
-                <AlertCircle className="w-3 h-3" aria-hidden="true" />
+              <Badge size="xs" tone="error">
+                <AlertCircle aria-hidden="true" />
                 Error
-              </span>
+              </Badge>
             )}
           </div>
           {plugin.description && (
@@ -230,7 +240,7 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
       </div>
 
       <div className="space-y-2">
-        <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">Source</h4>
+        <h4 className={SECTION_LABEL_CLASS}>Source</h4>
         <p className="font-mono text-2xs text-text-secondary break-all">
           .daintree/plugins/{plugin.dirName}
         </p>
@@ -241,10 +251,9 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
       </div>
 
       {plugin.state === "invalid" && plugin.error && (
-        <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-          <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-          <p className="text-2xs text-status-danger break-words">{plugin.error}</p>
-        </div>
+        <Callout severity="error" size="compact">
+          <p>{plugin.error}</p>
+        </Callout>
       )}
 
       {/* The plugin loaded; running it is what went wrong. Same treatment as an
@@ -254,27 +263,23 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
           a phase the channel doesn't record. The stack stays out of the manager;
           the panel's own error boundary is where a developer reads it. */}
       {plugin.loadError && (
-        <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-          <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-          <p className="text-2xs text-status-danger break-words">{plugin.loadError.message}</p>
-        </div>
+        <Callout severity="error" size="compact">
+          <p>{plugin.loadError.message}</p>
+        </Callout>
       )}
 
       {plugin.collidesWithGlobal && (
-        <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
-          <AlertCircle className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5" />
-          <p className="text-2xs text-status-warning break-words">
+        <Callout severity="warning" size="compact">
+          <p>
             An installed plugin already uses this id. Both load — this one under the project — so
             check which one a command or panel came from.
           </p>
-        </div>
+        </Callout>
       )}
 
       {granted.length > 0 && (
         <div className="space-y-2">
-          <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
-            Declared capabilities
-          </h4>
+          <h4 className={SECTION_LABEL_CLASS}>Declared capabilities</h4>
           <p className="text-2xs text-text-secondary leading-relaxed">
             What the plugin says it uses. Daintree doesn&apos;t sandbox project plugins, so this is
             a description of intent, not a limit on it — the only control is turning the
@@ -288,9 +293,13 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
         </div>
       )}
 
+      {plugin.databases && plugin.databases.length > 0 && (
+        <PluginDatabasesSection databases={plugin.databases} origin="project" />
+      )}
+
       {logs.lines && logs.lines.length > 0 && (
         <div className="space-y-2">
-          <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">Logs</h4>
+          <h4 className={SECTION_LABEL_CLASS}>Logs</h4>
           <PluginLogsSection {...logs} />
         </div>
       )}
@@ -327,9 +336,7 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
           // plugin's name, so "Enable for this project" read as enabling this
           // plugin — the scope lived only in the small print below the buttons.
           <div className="space-y-2 pt-2">
-            <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
-              All plugins in this project
-            </h4>
+            <h4 className={SECTION_LABEL_CLASS}>All plugins in this project</h4>
             {enabled ? (
               <>
                 <p className="text-2xs text-text-secondary leading-relaxed">
@@ -373,7 +380,7 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
             )}
           </div>
         )}
-        {error && <p className="text-2xs text-status-danger leading-tight">{error}</p>}
+        {error && <InlineError className="text-2xs">{error}</InlineError>}
       </div>
     </div>
   );

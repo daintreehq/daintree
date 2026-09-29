@@ -15,6 +15,8 @@ const serviceMock = vi.hoisted(() => ({
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
 vi.mock("../../../services/codex/CodexSubagentService.js", () => serviceMock);
+const quotaMock = vi.hoisted(() => ({ readCodexQuota: vi.fn(), refreshCodexQuota: vi.fn() }));
+vi.mock("../../../services/codex/CodexQuotaService.js", () => quotaMock);
 
 import { registerCodexHandlers } from "../codex.js";
 import { CHANNELS } from "../../channels.js";
@@ -134,6 +136,24 @@ describe("codex IPC handlers", () => {
       await expect(getHandler(findSessionsChannel)(fakeEvent(), { cwd: "/repo" })).rejects.toThrow(
         "app-server down"
       );
+    });
+  });
+
+  describe("readQuota", () => {
+    it("returns the service's result unchanged (#12797)", async () => {
+      const result = { status: "unavailable", reason: "read-failed", fetchedAt: 1 };
+      quotaMock.readCodexQuota.mockResolvedValue(result);
+
+      expect(await getHandler(CHANNELS.CODEX_READ_QUOTA)(fakeEvent())).toBe(result);
+      expect(quotaMock.readCodexQuota).toHaveBeenCalledTimes(1);
+    });
+
+    it("routes an explicit refresh past the cache", async () => {
+      const result = { status: "unavailable", reason: "timeout", fetchedAt: 2 };
+      quotaMock.refreshCodexQuota.mockResolvedValue(result);
+
+      expect(await getHandler(CHANNELS.CODEX_REFRESH_QUOTA)(fakeEvent())).toBe(result);
+      expect(quotaMock.readCodexQuota).not.toHaveBeenCalled();
     });
   });
 

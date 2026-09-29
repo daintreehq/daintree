@@ -291,13 +291,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * `getSubmissions` or `terminal.getStatus`. Untokened submits are not
      * tracked and retain nothing. `handbackCode` is the code minted for a
      * submission that asked for a handback (#12488), whose instruction is
-     * already in `text`.
+     * already in `text`. `imagePaths` are the composer's image chips, in
+     * order, each also present in `text` (#12792).
      */
     submit(
       id: string,
       text: string,
       submissionToken?: string,
-      handbackCode?: string
+      handbackCode?: string,
+      imagePaths?: string[]
     ): Promise<void>;
     /**
      * Resolve one submission token across several terminals (#12337). Answers
@@ -339,9 +341,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       visualBuffers: SharedArrayBuffer[];
       signalBuffer: SharedArrayBuffer | null;
     }>;
-    getAnalysisBuffer(): Promise<SharedArrayBuffer | null>;
     getInfo(id: string): Promise<TerminalInfoPayload>;
-    onData(id: string, callback: (data: string | Uint8Array) => void): () => void;
+    onData(
+      id: string,
+      callback: (data: string | Uint8Array, streamEnd?: number) => void
+    ): () => void;
     onExit(callback: (id: string, exitCode: number) => void): () => void;
     onAgentStateChanged(callback: (data: AgentStateChangePayload) => void): () => void;
     onAgentDetected(callback: (data: AgentDetectedPayload) => void): () => void;
@@ -367,9 +371,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Submit-lane status for one terminal (#11875). Fires only for submits that
      *  cross the slow/stalled threshold or fail. */
     onSubmitStatus(callback: (data: TerminalSubmitStatusPayload) => void): () => void;
-    /** A pane's terminal watches changed (#12491). Callers filter by `terminalId`. */
-    onWatchState(
-      callback: (data: import("../terminalWatch.js").PaneWatchState) => void
+    /** A pane's pending terminal notices changed. Callers filter by `terminalId`. */
+    onNotifyState(
+      callback: (data: import("../terminalNotify.js").PaneNotifyState) => void
     ): () => void;
     onReliabilityMetric(callback: (data: TerminalReliabilityMetricPayload) => void): () => void;
     /**
@@ -1108,15 +1112,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onImported(callback: () => void): () => void;
   };
   // create / show / hide / resize / navigate / goBack / goForward / reload /
-  // closeTab / showNewTabMenu come from GeneratedElectronAPI; the rest are
+  // closeTab come from GeneratedElectronAPI; the rest are
   // renderer-only subscriptions.
   portal: GeneratedElectronAPI["portal"] & {
     onNavEvent(callback: (data: import("../portal.js").PortalNavEvent) => void): () => void;
     onFocus(callback: () => void): () => void;
     onBlur(callback: () => void): () => void;
-    onNewTabMenuAction(
-      callback: (action: import("../portal.js").PortalNewTabMenuAction) => void
-    ): () => void;
     onTabEvicted(callback: (data: { tabId: string }) => void): () => void;
     onTabsEvicted(callback: (payload: { tabIds: string[] }) => void): () => void;
   };
@@ -1588,7 +1589,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   onboarding: GeneratedElectronAPI["onboarding"] & {
     onChecklistPush(callback: (state: ChecklistState) => void): () => void;
   };
-  // milestones is generated — see GeneratedElectronAPI.
   // shortcutHints is generated — see GeneratedElectronAPI.
   // previewCredentialImport / commitCredentialImport are generated.
   forge: GeneratedElectronAPI["forge"] & {
@@ -1752,8 +1752,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * `valid` is `true`.
      */
     setCredential(providerId: string, credentials: Record<string, string>): Promise<AuthValidation>;
-    /** Report whether credentials are stored for the given forge provider id. */
-    getCredentialStatus(providerId: string): Promise<{ hasCredential: boolean }>;
+    /**
+     * Report whether credentials are stored for the given forge provider id.
+     * `fingerprint` is a one-way identity of the stored record, present only
+     * when one is stored; it changes whenever the credential is replaced.
+     */
+    getCredentialStatus(
+      providerId: string
+    ): Promise<{ hasCredential: boolean; fingerprint?: string }>;
     /** Clear stored credentials for the given forge provider id. */
     clearCredential(providerId: string): Promise<void>;
     /**
@@ -2012,7 +2018,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         sessionId: string;
         toolId: string;
         tier: string;
-        targetTier: "workbench" | "action" | "system" | null;
+        targetTier: HelpAssistantTier | null;
       }) => void
     ): () => void;
     /**
@@ -2118,6 +2124,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * dispatching it (#12692): an agent pane calling above its tier.
          */
         approvalOnly?: boolean;
+        /**
+         * Why an `approvalOnly` request asks (#12881). Absent reads as
+         * `above-tier`.
+         */
+        approvalReason?: import("./mcpServer.js").McpApprovalReason;
+        /**
+         * What pre-authorized a `confirmed` dispatch, set only by main. Only
+         * `skip-preference` also waives the typed-name gate on a force delete
+         * (#12874); anything else keeps it.
+         */
+        authorization?: import("./mcpServer.js").McpDispatchAuthorization;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */
@@ -2167,6 +2184,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     sendActionsGetResponse(payload: {
       requestId: string;
       entry: import("../actions.js").PluginActionManifestEntry | null;
+    }): void;
+    /**
+     * Listen for agent-pane listing requests from the main process (a plugin
+     * calling `host.agents.list()`). Reply with {@link sendAgentsListResponse},
+     * correlated by `requestId`.
+     */
+    onAgentsListRequest(callback: (payload: { requestId: string }) => void): () => void;
+    /** Send this view's agent panes back to the main process. */
+    sendAgentsListResponse(payload: {
+      requestId: string;
+      agents: import("../plugin.js").PluginAgentPane[];
     }): void;
     /**
      * Listen for imperative plugin UI-prompt requests from the main process (a
@@ -2243,6 +2271,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onProvenanceChanged(callback: (payload: Record<string, never>) => void): () => void;
     /**
+     * Subscribe to "a plugin's stored settings changed", from the settings form
+     * or the plugin's own `host.settings.set`. Carries only the plugin instance
+     * key; re-read what depends on it. Returns a cleanup.
+     */
+    onSettingsChanged(callback: (payload: { pluginId: string }) => void): () => void;
+    /**
      * Subscribe to phase/entry progress for installs started with a `jobId`
      * (#11302). Only the window that started the install receives its events;
      * filter by `jobId` anyway, since one window can start several in sequence.
@@ -2315,6 +2349,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         recipes: import("../project.js").TerminalRecipe[];
         complete: boolean;
       }) => void
+    ): () => void;
+    /** Subscribe to plugin tour registry changes (#12773). Returns a cleanup. */
+    onToursChanged(
+      callback: (payload: { tours: import("../plugin.js").PluginTourDescriptor[] }) => void
     ): () => void;
     /** Subscribe to plugin toolbar button registry changes. Returns a cleanup. */
     onToolbarButtonsChanged(
@@ -2524,14 +2562,28 @@ export type HelpAssistantAuditRetention = 7 | 30 | 0;
 
 export type HelpAssistantIdleHibernateMinutes = 0 | 5 | 15 | 30 | 60 | 120;
 
+/**
+ * Whether the assistant's confirm-gated Daintree actions ask first (#12874).
+ * `inherit` follows the global "Skip permission prompts" setting; `always-ask`
+ * keeps Daintree's dialog regardless. There is deliberately no value that
+ * skips while the global setting is off.
+ */
+export type HelpAssistantDaintreeConfirmations = "inherit" | "always-ask";
+
 export interface HelpAssistantSettings {
   /** Allow the help assistant to search Daintree documentation. Defaults to true. */
   docSearch: boolean;
   /** Allow the help assistant to call Daintree control tools via the local MCP. Defaults to true. */
   daintreeControl: boolean;
   /**
-   * MCP capability tier the help assistant runs at — controls which Daintree
-   * actions the assistant can call. Defaults to `"action"`.
+   * Wire the runbook-search MCP server and require the assistant to load the
+   * runbook for a task before acting. Only takes effect while `daintreeControl`
+   * is on. Defaults to true.
+   */
+  runbookSearch: boolean;
+  /**
+   * MCP tool set the help assistant runs with — controls which Daintree
+   * actions the assistant can call. Defaults to `"core"`.
    */
   tier: HelpAssistantTier;
   /**
@@ -2550,13 +2602,17 @@ export interface HelpAssistantSettings {
   /** How long to retain help-session audit logs. 7 = 7 days, 30 = 30 days, 0 = off. Defaults to 7. */
   auditRetention: HelpAssistantAuditRetention;
   /**
-   * Model the assistant launches with, injected as `--model <id>` ahead of
-   * {@link customArgs} so a `--model` in custom args still wins as the advanced
-   * override. Empty string means "use the CLI's default model" (no flag).
-   * Model IDs are agent-specific, so this is reset whenever the agent changes.
-   * Defaults to "".
+   * Model the assistant launches each agent with, keyed by agent ID and
+   * injected as `--model <id>` ahead of {@link customArgs} so a `--model` in
+   * custom args still wins as the advanced override. Model IDs are
+   * agent-specific, so an agent only ever reads its own entry. An absent entry
+   * means the agent's recommended assistant model
+   * (`AgentConfig.assistantDefaultModel`); an empty string means "use the
+   * CLI's default model" (no flag). Settings reads never contain `null`; in a
+   * `setSettings` patch, `null` removes that agent's entry and agents the
+   * patch doesn't name are left as they are. Defaults to `{}`.
    */
-  modelId: string;
+  modelIds: Record<string, string | null>;
   /** Whitespace-separated CLI flags appended at assistant launch (advanced override). Defaults to "". */
   customArgs: string;
   /**
@@ -2583,6 +2639,12 @@ export interface HelpAssistantSettings {
    * Defaults to false.
    */
   loadGlobalHooksAndServers: boolean;
+  /**
+   * Whether help sessions' `danger: "confirm"` Daintree actions skip the host
+   * confirmation while the global "Skip permission prompts" is on. Read per
+   * dispatch, not snapshotted at launch. Defaults to `"inherit"`.
+   */
+  daintreeConfirmations: HelpAssistantDaintreeConfirmations;
 }
 
 /**

@@ -271,6 +271,7 @@ import { useUIStore } from "@/store/uiStore";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
 
@@ -556,8 +557,8 @@ describe("ReviewHub", () => {
           initialCommitMessage="fix(scope): from AI note"
         />
       );
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      await waitFor(() => screen.getByLabelText("Commit message"));
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
       expect(textarea.value).toBe("fix(scope): from AI note");
     });
 
@@ -570,8 +571,8 @@ describe("ReviewHub", () => {
           initialCommitMessage="from AI"
         />
       );
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      await waitFor(() => screen.getByLabelText("Commit message"));
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
       fireEvent.change(textarea, { target: { value: "human override" } });
       rerender(
         <ReviewHubContent
@@ -611,7 +612,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
 
       await waitFor(() =>
         expect(screen.getByRole("status", { name: /loading changes vs main/i })).toBeTruthy()
@@ -630,7 +631,7 @@ describe("ReviewHub", () => {
       );
       await waitFor(() => screen.getByText("index.ts"));
 
-      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
       await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalledTimes(1));
 
       // Close mid-load, then reopen.
@@ -640,7 +641,7 @@ describe("ReviewHub", () => {
 
       // Switching to base-branch again must trigger a fresh fetch, proving
       // baseBranchLoading was cleared on close (no stuck skeleton).
-      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
       await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalledTimes(2));
     });
   });
@@ -725,10 +726,14 @@ describe("ReviewHub", () => {
       await renderHub();
       act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
 
-      expect(screen.getByLabelText("Mark src/index.ts as viewed")).toBeTruthy();
+      expect(
+        screen.getByLabelText("Mark src/index.ts as viewed").getAttribute("aria-checked")
+      ).toBe("false");
       act(() => void fireEvent.keyDown(document, { key: "v" }));
       await waitFor(() =>
-        expect(screen.getByLabelText("Mark src/index.ts as not viewed")).toBeTruthy()
+        expect(
+          screen.getByLabelText("Mark src/index.ts as viewed").getAttribute("aria-checked")
+        ).toBe("true")
       );
     });
 
@@ -1061,4 +1066,8 @@ describe("ReviewHub", () => {
       expect(screen.queryByText(COMPLETION_HEADLINE)).toBeNull();
     });
   });
+});
+
+afterEach(() => {
+  resetStagingStatusCacheForTests();
 });

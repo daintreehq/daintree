@@ -39,7 +39,10 @@ async function getDiagnosticsCollector(): Promise<typeof DiagnosticsCollectorMod
   return cachedDiagnosticsCollector;
 }
 import { getLogFilePath, getLogDirectory } from "../../utils/logger.js";
+import { readOldestRetainedLogMs } from "../../utils/logRetention.js";
+import { getVersionFirstRunBoundary } from "../../services/versionFirstRun.js";
 import { safeStringify } from "../../utils/safeStringify.js";
+import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import {
   filterSections,
   filterLogEntriesByTime,
@@ -61,6 +64,97 @@ const EVENT_LOOP_HISTOGRAM_IDLE_MS = 60_000;
 // because `process.uptime()` pauses during OS sleep while `Date.now()` does
 // not. Backs the "Since application launch" time-window option.
 const APP_LAUNCH_TIMESTAMP = Date.now();
+
+const MAX_BUNDLED_CRASH_RECORDS = 20;
+const CRASH_RECORD_FILE = /^(crash|renderer-gone)-[\w-]+\.json$/;
+// The default shard writes `pty-host.log`; other shards `pty-host-<suffix>.log`.
+const PTY_HOST_LOG_FILE = /^pty-host(-[\w-]+)?\.log$/;
+
+async function listDir(dir: string): Promise<string[]> {
+  try {
+    return await fs.readdir(dir);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Crash and renderer-gone records from `userData/crashes`, newest first.
+ * Recency comes from each record's own `timestamp`, never mtime, which
+ * copy-fallback paths can rewrite. Breadcrumb args are dropped because
+ * action args can carry user-entered text; known secret shapes are scrubbed
+ * before the user's own replacements run.
+ */
+async function collectCrashRecordEntries(
+  crashesDir: string,
+  timeWindowStartMs: number | null,
+  replacements: ReplacementRule[]
+): Promise<Array<{ name: string; content: string }>> {
+  const records: Array<{ name: string; timestamp: number; content: string }> = [];
+  for (const file of await listDir(crashesDir)) {
+    if (!CRASH_RECORD_FILE.test(file)) continue;
+    let record: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(await fs.readFile(path.join(crashesDir, file), "utf-8"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      record = parsed as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const timestamp = typeof record.timestamp === "number" ? record.timestamp : null;
+    // An undated record can't be placed inside a chosen window.
+    if (timeWindowStartMs !== null && (timestamp === null || timestamp < timeWindowStartMs)) {
+      continue;
+    }
+    if (Array.isArray(record.recentActions)) {
+      record.recentActions = record.recentActions
+        .filter((crumb: unknown) => !!crumb && typeof crumb === "object")
+        .map((crumb: unknown) => {
+          const { args: _args, ...rest } = crumb as Record<string, unknown>;
+          return rest;
+        });
+    } else {
+      delete record.recentActions;
+    }
+    records.push({
+      name: `crashes/${file}`,
+      timestamp: timestamp ?? 0,
+      content: applyReplacements(scrubSecrets(JSON.stringify(record, null, 2)), replacements),
+    });
+  }
+  records.sort((a, b) => b.timestamp - a.timestamp);
+  return records
+    .slice(0, MAX_BUNDLED_CRASH_RECORDS)
+    .map(({ name, content }) => ({ name, content }));
+}
+
+/** PTY host emergency logs: process start lines and fatal errors, no terminal output. */
+async function collectPtyHostLogEntries(
+  logDir: string,
+  timeWindowStartMs: number | null,
+  replacements: ReplacementRule[]
+): Promise<Array<{ name: string; content: string }>> {
+  const entries: Array<{ name: string; content: string }> = [];
+  for (const file of (await listDir(logDir)).sort()) {
+    if (!PTY_HOST_LOG_FILE.test(file)) continue;
+    const filePath = path.join(logDir, file);
+    if (timeWindowStartMs !== null) {
+      try {
+        const stat = await fs.stat(filePath);
+        if (stat.mtimeMs < timeWindowStartMs) continue;
+      } catch {
+        // stat failed — include rather than silently drop relevant lines.
+      }
+    }
+    try {
+      const raw = await fs.readFile(filePath, "utf-8");
+      entries.push({ name: file, content: applyReplacements(scrubSecrets(raw), replacements) });
+    } catch {
+      // Unreadable log — the rest of the bundle is still useful.
+    }
+  }
+  return entries;
+}
 
 async function writeBundleZip(
   zipPath: string,
@@ -103,6 +197,19 @@ async function writeBundleZip(
         name: `daintree.log.${i}`,
         content: applyReplacements(raw, replacements),
       });
+    }
+
+    logEntries.push(...(await collectPtyHostLogEntries(logDir, timeWindowStartMs, replacements)));
+    let crashesDir: string | null = null;
+    try {
+      crashesDir = path.join(app.getPath("userData"), "crashes");
+    } catch {
+      // No userData path — ship the bundle without crash records.
+    }
+    if (crashesDir) {
+      logEntries.push(
+        ...(await collectCrashRecordEntries(crashesDir, timeWindowStartMs, replacements))
+      );
     }
   }
 
@@ -474,7 +581,14 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     const { collectDiagnosticsWithKeys } = await getDiagnosticsCollector();
     const { payload, sectionKeys } = await collectDiagnosticsWithKeys(deps);
     const previewJson = safeStringify(payload, 2);
-    return { payload, sectionKeys, previewJson, appLaunchTimestamp: APP_LAUNCH_TIMESTAMP };
+    return {
+      payload,
+      sectionKeys,
+      previewJson,
+      appLaunchTimestamp: APP_LAUNCH_TIMESTAMP,
+      versionFirstRun: getVersionFirstRunBoundary(),
+      oldestRetainedLogMs: await readOldestRetainedLogMs(getLogDirectory(), getLogFilePath()),
+    };
   };
   handlers.push(
     typedHandle(CHANNELS.SYSTEM_COLLECT_DIAGNOSTICS_FOR_REVIEW, handleCollectDiagnosticsForReview)

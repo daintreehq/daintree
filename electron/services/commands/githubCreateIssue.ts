@@ -61,32 +61,30 @@ export const githubCreateIssueCommand: DaintreeCommand<CreateIssueArgs, CreateIs
     steps: [
       {
         id: "issue-details",
-        title: "Create GitHub Issue",
-        description:
-          "Create a well-structured issue that provides enough context for developers or AI agents to implement autonomously",
+        title: "Create a GitHub issue",
+        description: "Give it a title, an explanation, or both",
+        submitLabel: "Create issue",
         fields: [
           {
             name: "title",
-            label: "Issue Title",
+            label: "Title",
             type: "text",
-            placeholder: "Optional - agent can generate from your explanation",
-            helpText: "Leave empty to let the agent generate a title from your explanation",
+            placeholder: "Add dark mode toggle to settings",
+            helpText: "Leave blank to use the first line of the explanation.",
           },
           {
             name: "body",
             label: "Explanation",
             type: "textarea",
-            placeholder: "Explain what you want to create an issue about...",
-            helpText:
-              "Describe the issue in natural language. The agent will interpret and format appropriately.",
+            placeholder: "What should change, and why",
+            helpText: "Becomes the issue body. Leave blank to use the title.",
           },
           {
             name: "labels",
             label: "Labels",
             type: "text",
             placeholder: "enhancement, ui",
-            helpText:
-              "Common labels: bug, enhancement, documentation, refactor, testing, ui, api, performance",
+            helpText: "Separate labels with commas.",
           },
         ],
       },
@@ -128,7 +126,7 @@ export const githubCreateIssueCommand: DaintreeCommand<CreateIssueArgs, CreateIs
         success: false,
         error: {
           code: "NO_INPUT",
-          message: "Please provide a title or explanation for the issue",
+          message: "Add a title or an explanation.",
         },
       };
     }
@@ -183,7 +181,8 @@ export const githubCreateIssueCommand: DaintreeCommand<CreateIssueArgs, CreateIs
 
       return {
         success: true,
-        message: `Issue #${issue.number} created successfully`,
+        message: `Issue #${issue.number} created`,
+        detail: issue.title,
         data: {
           url: issue.url,
           number: issue.number,

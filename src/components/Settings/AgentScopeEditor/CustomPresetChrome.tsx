@@ -1,10 +1,12 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { Pencil, TriangleAlert } from "lucide-react";
+import { Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PresetColorPicker } from "../PresetColorPicker";
 import { SETTINGS_CONTROL_WIDTH, SettingsRow } from "../SettingsGroup";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import type { AgentPreset } from "@/config/agents";
 
 interface CustomPresetChromeProps {
@@ -47,6 +49,8 @@ export function CustomPresetChrome({
   useEffect(() => {
     if (!isEditing && restoreFocusRef.current) {
       restoreFocusRef.current = false;
+      // Returning focus is not asking for the button's tooltip.
+      armTooltipFocusSuppression();
       renameButtonRef.current?.focus();
     }
   }, [isEditing]);
@@ -64,8 +68,11 @@ export function CustomPresetChrome({
               ariaLabel="Preset color"
             />
             {isEditing ? (
-              <input
-                className="flex-1 text-sm font-medium bg-surface-canvas border border-border-strong rounded-[var(--radius-sm)] px-2 py-0.5 focus:outline-hidden focus-visible:border-accent-primary"
+              <Input
+                density="compact"
+                // The title's own weight and size, so the row reads as the same
+                // name in edit mode; compact keeps the label row from jumping.
+                className="w-auto min-w-0 flex-1 text-sm font-medium"
                 value={editName}
                 onChange={(e) => onEditNameChange(e.target.value)}
                 onBlur={() => void onCommitEdit()}
@@ -90,17 +97,22 @@ export function CustomPresetChrome({
                 placeholder="Preset name"
               />
             ) : (
-              <button
-                ref={renameButtonRef}
-                type="button"
-                className="flex items-center gap-1.5 text-sm font-medium text-text-primary hover:underline underline-offset-2 text-left"
-                onClick={() => onStartEdit(selectedPreset)}
-                aria-label={`Edit ${selectedPreset.name}`}
-                title="Rename"
-              >
-                <span>{selectedPreset.name}</span>
-                <Pencil size={12} className="text-text-secondary" aria-hidden="true" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    ref={renameButtonRef}
+                    variant="ghost"
+                    size="sm"
+                    className="-mx-2 h-auto px-2 py-0.5 text-sm text-text-primary justify-start"
+                    onClick={() => onStartEdit(selectedPreset)}
+                    aria-label={`Edit ${selectedPreset.name}`}
+                  >
+                    <span>{selectedPreset.name}</span>
+                    <Pencil className="text-text-secondary" aria-hidden="true" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Rename</TooltipContent>
+              </Tooltip>
             )}
           </span>
         }
@@ -108,18 +120,10 @@ export function CustomPresetChrome({
         description="The colour marks this preset on its launch button and panel tab"
         error={
           isEditing && renameError ? (
-            // Local neutral text with a glyph: the row's own error colour is
-            // status-coloured body text, which fails contrast on most themes.
-            <span
-              id={errorId}
-              role="alert"
-              className="flex items-start gap-1.5 text-text-secondary"
-            >
-              <TriangleAlert
-                className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
-                aria-hidden="true"
-              />
-              <span>{renameError}</span>
+            // The row supplies the glyph and the neutral words; this id is what the
+            // rename field's described-by points at.
+            <span id={errorId} role="alert">
+              {renameError}
             </span>
           ) : undefined
         }

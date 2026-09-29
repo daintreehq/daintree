@@ -1,5 +1,6 @@
-import { Pencil, X, XCircle } from "lucide-react";
+import { Pencil, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 
 export interface FileEditorHintBarProps {
@@ -95,24 +96,17 @@ export function FileEditorHintBar({
       <Button
         variant="subtle"
         size="xs"
-        // `xs` ships `text-3xs`, which is a chip size. This row is `text-xs`
-        // and the action reads as part of it.
-        className="text-xs"
         onClick={onAction}
         loading={pending}
         data-testid="file-editor-hint-action"
       >
         {actionLabel}
       </Button>
-      <Button
-        variant="ghost"
-        size="icon-xs"
+      <DismissButton
         onClick={onDismiss}
         aria-label="Dismiss editing tip"
         data-testid="file-editor-hint-dismiss"
-      >
-        <X aria-hidden="true" />
-      </Button>
+      />
     </div>
   );
 }

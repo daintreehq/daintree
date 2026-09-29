@@ -1,5 +1,5 @@
 // eager-import-allow: reads boot config via store.get synchronously while wiring global services
-import { app, dialog, ipcMain } from "electron";
+import { app, dialog, ipcMain, powerMonitor } from "electron";
 import {
   LATEST_SCHEMA_VERSION,
   MigrationRunner,
@@ -36,7 +36,10 @@ import {
   startAppMetricsMonitor,
   hasSustainedRendererSaturation,
 } from "../services/ProcessMemoryMonitor.js";
-import { createDefaultSystemMemoryPressureMonitor } from "../services/SystemMemoryPressureMonitor.js";
+import {
+  createDefaultSystemMemoryPressureMonitor,
+  readDarwinKernelPressureLevel,
+} from "../services/SystemMemoryPressureMonitor.js";
 import { publishSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
@@ -77,7 +80,7 @@ import {
 } from "../ipc/handlers/projectCrud/index.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
 import { isSmokeTest } from "../setup/environment.js";
-import { setPluginDirResolver } from "../setup/protocols.js";
+import { setPluginDirResolver, setPluginTourAudioResolver } from "../setup/protocols.js";
 import { isE2EFaultMode, isE2EMode } from "../setup/runtimeFlags.js";
 import { activateOpenFileInstaller } from "../setup/openFileInstall.js";
 import { projectStore } from "../services/ProjectStore.js";
@@ -106,6 +109,7 @@ import {
   setAgentNotificationServiceRef,
   setWindowsStoreNotifierServiceRef,
   setGlobalServicesInitialized,
+  getCliAvailabilityServiceRef,
 } from "./serviceRefs.js";
 
 /**
@@ -568,7 +572,18 @@ export async function initGlobalServices(
     name: "event-loop-lag-monitor",
     run: () => {
       if (!getStopEventLoopLagMonitor()) {
-        setStopEventLoopLagMonitor(startEventLoopLagMonitor());
+        setStopEventLoopLagMonitor(
+          startEventLoopLagMonitor(undefined, undefined, {
+            onSuspend: (callback) => {
+              powerMonitor.on("suspend", callback);
+              return () => powerMonitor.off("suspend", callback);
+            },
+            onResume: (callback) => {
+              powerMonitor.on("resume", callback);
+              return () => powerMonitor.off("resume", callback);
+            },
+          })
+        );
       }
       if (process.env.DAINTREE_PERF_CAPTURE === "1" && !getStopProcessMemoryMonitor()) {
         setStopProcessMemoryMonitor(startProcessMemoryMonitor());
@@ -680,6 +695,18 @@ export async function initGlobalServices(
                 void systemMemoryPressure.sample();
               }
             : undefined,
+          // Off under E2E for the same reason as the health monitor: the
+          // runner's own pressure must not reclaim inside an unrelated spec.
+          readKernelPressureLevel:
+            process.platform === "darwin" && !isE2EMode ? readDarwinKernelPressureLevel : undefined,
+          // Every view, cached ones included: a hidden renderer is exactly the
+          // one that can give memory back without anyone seeing a difference.
+          releaseRendererMemory: () => {
+            broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+              name: "window:reclaim-memory",
+              payload: { reason: "system-memory-pressure" },
+            });
+          },
           sampleRendererElu: () => {
             if (!windowRegistry) return;
             const requestId = `elu-${Date.now().toString(36)}`;
@@ -1086,6 +1113,9 @@ export async function initGlobalServices(
       // dynamic import is permanent for that specifier — the module map has no
       // eviction, so "Try again" re-imported the same poisoned URL forever.
       setPluginDirResolver((authority) => pluginService.getPluginRootByAuthority(authority));
+      setPluginTourAudioResolver((authority, tourId, chapterId) =>
+        pluginService.getPluginTourRemoteAudio(authority, tourId, chapterId)
+      );
       try {
         await pluginService.initialize();
       } catch (err) {
@@ -1171,7 +1201,16 @@ export async function initGlobalServices(
     helpSessionService.setProjectMetadataReader(async (projectId, projectPath) => {
       const { readHelpSessionProjectFacts } =
         await import("../services/helpSessionProjectMetadataReader.js");
-      return readHelpSessionProjectFacts(projectId, projectPath);
+      return readHelpSessionProjectFacts(
+        projectId,
+        projectPath,
+        () => getCliAvailabilityServiceRef()?.getAvailability() ?? null
+      );
+    });
+    helpSessionService.setKnownProjectRootsReader(async (projectPath) => {
+      const { readHelpSessionKnownRoots } =
+        await import("../services/helpSessionProjectMetadataReader.js");
+      return readHelpSessionKnownRoots(projectPath);
     });
 
     // Arm the periodic orphan-bearer sweep (#10698): a defense-in-depth bound

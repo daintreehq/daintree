@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { useState } from "react";
 import { act, render, fireEvent, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { BrowserToolbar } from "../BrowserToolbar";
 import { normalizeBrowserUrl } from "../browserUtils";
+import { getFrecencySuggestions } from "@/store/urlHistoryStore";
 import type { ViewportPresetId } from "@shared/types/panel";
 import {
   VIEWPORT_PRESET_LIST,
@@ -952,7 +953,11 @@ describe("BrowserToolbar viewport presets", () => {
     it("renders a DPR radiogroup with one radio per ratio", () => {
       renderWithDpr();
       const radios = dprRadios();
-      expect(radios.map((r) => r.getAttribute("data-dpr"))).toEqual(["1", "2", "3"]);
+      expect(radios.map((r) => r.getAttribute("aria-label"))).toEqual([
+        "Device pixel ratio 1x",
+        "Device pixel ratio 2x",
+        "Device pixel ratio 3x",
+      ]);
     });
 
     it("ArrowRight moves focus to the next ratio and selection follows focus", () => {
@@ -1255,5 +1260,264 @@ describe("BrowserToolbar device picker keyboard", () => {
         target.getAttribute("data-viewport-preset-id")
       )
     );
+  });
+});
+
+describe("BrowserToolbar back/forward history menu", () => {
+  beforeAll(async () => {
+    const { primeRadix } = await import("@/components/ui/radix-loader");
+    await primeRadix();
+  });
+
+  const navSnapshot = {
+    entries: [
+      { index: 0, url: "http://localhost:5173/", title: "Home" },
+      { index: 1, url: "http://localhost:5173/dashboard", title: "Dashboard" },
+      { index: 2, url: "http://localhost:5173/pricing", title: "Pricing" },
+    ],
+    activeIndex: 2,
+    canGoBack: true,
+    canGoForward: false,
+  };
+
+  it("opens as a menu from a right-click and jumps to the chosen entry", async () => {
+    const onGoToHistoryIndex = vi.fn();
+    const onBack = vi.fn();
+    const { getByTestId, findByRole } = renderToolbar({
+      canGoBack: true,
+      onBack,
+      onGoToHistoryIndex,
+      navSnapshot,
+    });
+    fireEvent.contextMenu(getByTestId("browser-back"));
+
+    const menu = await findByRole("menu", { name: "Back history" });
+    const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+    expect(items.map((item) => item.firstElementChild?.textContent)).toEqual(["Dashboard", "Home"]);
+    fireEvent.click(items[1]!);
+    expect(onGoToHistoryIndex).toHaveBeenCalledWith(0);
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
+  it("leaves the native menu alone when there is no history in that direction", () => {
+    const { getByTestId, queryByRole } = renderToolbar({ canGoForward: false, navSnapshot });
+    const event = fireEvent.contextMenu(getByTestId("browser-forward"));
+    expect(event).toBe(true);
+    expect(queryByRole("menu")).toBeNull();
+  });
+});
+
+describe("BrowserToolbar history menu from the keyboard", () => {
+  beforeAll(async () => {
+    const { primeRadix } = await import("@/components/ui/radix-loader");
+    await primeRadix();
+  });
+
+  it("opens on ArrowDown with the most recent entry focused, while Enter still navigates", async () => {
+    const onBack = vi.fn();
+    const { getByTestId, findByRole } = renderToolbar({
+      canGoBack: true,
+      onBack,
+      navSnapshot: {
+        entries: [
+          { index: 0, url: "http://localhost:5173/", title: "Home" },
+          { index: 1, url: "http://localhost:5173/pricing", title: "Pricing" },
+        ],
+        activeIndex: 1,
+        canGoBack: true,
+        canGoForward: false,
+      },
+    });
+    const back = getByTestId("browser-back");
+    fireEvent.click(back, { detail: 0 });
+    expect(onBack).toHaveBeenCalledOnce();
+
+    fireEvent.keyDown(back, { key: "ArrowDown" });
+    const menu = await findByRole("menu");
+    await waitFor(() =>
+      expect(document.activeElement).toBe(menu.querySelector('[role="menuitem"]'))
+    );
+  });
+});
+
+describe("BrowserToolbar Escape in the address bar", () => {
+  const ADDRESS = "http://localhost:5173/";
+
+  // The real ranking hands back a fresh list on every keystroke.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getFrecencySuggestions).mockImplementation((entries) => [...entries]);
+  });
+  afterEach(() => {
+    vi.mocked(getFrecencySuggestions).mockImplementation((entries) => entries);
+  });
+
+  function renderInPanel(overrides = {}, onPanelKeyDown = vi.fn()) {
+    const utils = render(
+      <div data-panel-id="panel-1" tabIndex={-1} onKeyDown={onPanelKeyDown}>
+        <BrowserToolbar {...defaultProps} {...overrides} />
+      </div>
+    );
+    const input = addressInput(utils.getByTestId("browser-address-bar"));
+    const panel = utils.container.querySelector<HTMLElement>("[data-panel-id]")!;
+    act(() => input.focus());
+    return { ...utils, input, panel, onPanelKeyDown };
+  }
+
+  function addressInput(element: HTMLElement): HTMLInputElement {
+    if (!(element instanceof HTMLInputElement)) throw new Error("address bar is not an input");
+    return element;
+  }
+
+  function escape(input: HTMLElement, init: KeyboardEventInit = {}) {
+    act(() => {
+      fireEvent.keyDown(input, { key: "Escape", ...init });
+    });
+  }
+
+  function expectWholeValueSelected(input: HTMLInputElement) {
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+  }
+
+  it("closes the suggestions first, then puts the address back selected without leaving the field", () => {
+    const onFocusPage = vi.fn(() => true);
+    const { input } = renderInPanel({ onFocusPage });
+    fireEvent.change(input, { target: { value: "localhost:30" } });
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+
+    escape(input);
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+    expect(input.value).toBe("localhost:30");
+
+    escape(input);
+    expect(input.value).toBe(ADDRESS);
+    expectWholeValueSelected(input);
+    expect(document.activeElement).toBe(input);
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+    expect(onFocusPage).not.toHaveBeenCalled();
+  });
+
+  it("hands focus to the page on the Escape after the revert", () => {
+    const page = document.createElement("button");
+    document.body.appendChild(page);
+    const onFocusPage = vi.fn(() => {
+      page.focus();
+      return true;
+    });
+    const { input, getByTestId } = renderInPanel({ onFocusPage });
+    fireEvent.change(input, { target: { value: "localhost:30" } });
+    escape(input);
+    escape(input);
+
+    escape(input);
+    expect(onFocusPage).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(page);
+    expect(input.value).toBe("localhost:5173");
+    expect(getByTestId("browser-address-display")).toBeTruthy();
+    page.remove();
+  });
+
+  it("gives focus to the panel, not the document, when there is no page to take it", () => {
+    const { input, panel } = renderInPanel({ onFocusPage: () => false });
+    escape(input);
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+    escape(input);
+    expect(document.activeElement).toBe(panel);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("keeps the field focused when there is neither a page nor a panel", () => {
+    const { getByTestId } = renderToolbar();
+    const input = addressInput(getByTestId("browser-address-bar"));
+    act(() => input.focus());
+    escape(input);
+    escape(input);
+    expect(document.activeElement).toBe(input);
+    expectWholeValueSelected(input);
+  });
+
+  it("keeps the dismissing and reverting Escapes inside the field and lets the leaving one through", () => {
+    const { input, onPanelKeyDown } = renderInPanel({ onFocusPage: () => true });
+    fireEvent.change(input, { target: { value: "localhost:30" } });
+    escape(input);
+    escape(input);
+    expect(onPanelKeyDown).not.toHaveBeenCalled();
+
+    escape(input);
+    expect(onPanelKeyDown).toHaveBeenCalledOnce();
+  });
+
+  it("treats the resting form of the address as an edit while editing", () => {
+    const onFocusPage = vi.fn(() => true);
+    const { input } = renderInPanel({ onFocusPage });
+    escape(input);
+    fireEvent.change(input, { target: { value: "localhost:5173" } });
+    escape(input);
+    escape(input);
+    expect(input.value).toBe(ADDRESS);
+    expect(document.activeElement).toBe(input);
+    expect(onFocusPage).not.toHaveBeenCalled();
+  });
+
+  it("lets go straight away after a commit leaves the field focused", () => {
+    const onFocusPage = vi.fn(() => true);
+    const { input } = renderInPanel({ onFocusPage });
+    fireEvent.change(input, { target: { value: "localhost:3000" } });
+    fireEvent.submit(input.closest("form")!);
+    escape(input);
+    expect(onFocusPage).toHaveBeenCalledOnce();
+  });
+
+  it("clears an address error with the reverting Escape", () => {
+    const { input } = renderInPanel({
+      validateUrl: () => ({ error: "Only localhost URLs are allowed" }),
+    });
+    fireEvent.change(input, { target: { value: "example.com" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+
+    escape(input);
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    expect(input.value).toBe(ADDRESS);
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("leaves an IME composition's Escape to the composition", () => {
+    const onFocusPage = vi.fn(() => true);
+    const { input } = renderInPanel({ onFocusPage });
+    fireEvent.change(input, { target: { value: "localhost:30" } });
+    escape(input);
+
+    fireEvent.change(input, { target: { value: "localhost:3" } });
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+
+    escape(input, { isComposing: true });
+    escape(input, { keyCode: 229 });
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+    expect(input.value).toBe("localhost:3");
+    expect(document.activeElement).toBe(input);
+    expect(onFocusPage).not.toHaveBeenCalled();
+  });
+
+  it("typing after the revert brings the suggestions back", () => {
+    const { input } = renderInPanel();
+    fireEvent.change(input, { target: { value: "localhost:30" } });
+    escape(input);
+    escape(input);
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.change(input, { target: { value: "localhost:3" } });
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("Enter after the revert reloads the current address", () => {
+    const { input } = renderInPanel();
+    fireEvent.change(input, { target: { value: "localhost:30" } });
+    escape(input);
+    escape(input);
+    fireEvent.submit(input.closest("form")!);
+    expect(defaultProps.onReload).toHaveBeenCalled();
+    expect(defaultProps.onNavigate).not.toHaveBeenCalled();
   });
 });

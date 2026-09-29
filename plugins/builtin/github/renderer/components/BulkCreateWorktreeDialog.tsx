@@ -12,6 +12,7 @@ import { Check, AlertTriangle, UserPlus, RotateCcw } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { FolderGit2 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { cn } from "@/lib/utils";
 import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
@@ -1153,7 +1154,7 @@ export function BulkCreateWorktreeDialog({
               ? "Creation complete"
               : `Create ${creatableCount} worktree${creatableCount !== 1 ? "s" : ""}`}
         </AppDialog.Title>
-        {!isExecuting && <AppDialog.CloseButton />}
+        <AppDialog.CloseButton />
       </AppDialog.Header>
 
       <AppDialog.Body>
@@ -1334,9 +1335,16 @@ export function BulkCreateWorktreeDialog({
 
             {/* Progress bar + summary */}
             <div className="space-y-2">
-              <div className="h-2 rounded-full bg-overlay-soft overflow-hidden">
+              <div
+                role="progressbar"
+                aria-label="Creating worktrees"
+                aria-valuemin={0}
+                aria-valuemax={progress.items.size}
+                aria-valuenow={processedCount}
+                className="h-2 rounded-full bg-overlay-soft overflow-hidden"
+              >
                 <div
-                  className="h-full rounded-full bg-status-info transition-[width] duration-300"
+                  className="h-full rounded-full bg-text-secondary transition-[width] duration-300"
                   style={{
                     width: `${progress.items.size > 0 ? (processedCount / progress.items.size) * 100 : 0}%`,
                   }}
@@ -1387,10 +1395,13 @@ export function BulkCreateWorktreeDialog({
                 Cancel
               </Button>
               <Button
+                aria-disabled={isExecuting || creatableCount === 0 || undefined}
                 variant="contrast"
-                onClick={handleCreate}
-                disabled={isExecuting || creatableCount === 0}
-                className="min-w-[100px]"
+                onClick={isExecuting || creatableCount === 0 ? undefined : handleCreate}
+                className={cn(
+                  "min-w-[100px]",
+                  (isExecuting || creatableCount === 0) && ARIA_DISABLED_CLASSES
+                )}
                 data-testid="bulk-create-confirm-button"
               >
                 <Check />

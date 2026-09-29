@@ -32,7 +32,7 @@ import {
 // the short version is that no real action's `run()` is ever entered, because
 // `run()` bodies need a renderer.
 
-const MCP_TIERS = ["workbench", "action", "system", "external"] as const;
+const MCP_TIERS = ["core", "full", "external"] as const;
 
 /**
  * How many real actions of each rejection shape to include in the dispatch
@@ -551,12 +551,12 @@ export const actionDispatchScenarios: PerfScenario[] = [
           inputSchemaCount: manifest.filter((entry) => entry.inputSchema).length,
           outputSchemaCount: manifest.filter((entry) => entry.outputSchema).length,
           declaredArgNameCount: advertisedArgNames,
-          workbenchToolCount: toolCountByTier.workbench ?? 0,
+          coreToolCount: toolCountByTier.core ?? 0,
           externalToolCount: toolCountByTier.external ?? 0,
-          systemToolCount: toolCountByTier.system ?? 0,
-          workbenchToolPayloadBytes: payloadBytesByTier.workbench ?? 0,
+          fullToolCount: toolCountByTier.full ?? 0,
+          coreToolPayloadBytes: payloadBytesByTier.core ?? 0,
           externalToolPayloadBytes: payloadBytesByTier.external ?? 0,
-          systemToolPayloadBytes: payloadBytesByTier.system ?? 0,
+          fullToolPayloadBytes: payloadBytesByTier.full ?? 0,
           coldManifestMs,
           warmManifestMs,
           projectionMs,

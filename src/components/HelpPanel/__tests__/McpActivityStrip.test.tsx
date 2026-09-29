@@ -59,7 +59,7 @@ function makeRecord(overrides: Partial<McpAuditRecord> = {}): McpAuditRecord {
     // transport id and deliberately never matches the help session.
     sessionId: overrides.sessionId ?? "mcp-transport-1",
     helpSessionId: overrides.helpSessionId ?? "session-a",
-    tier: overrides.tier ?? "workbench",
+    tier: overrides.tier ?? "core",
     argsSummary: overrides.argsSummary ?? "{}",
     result: overrides.result ?? "success",
     durationMs: overrides.durationMs ?? 10,
@@ -413,17 +413,35 @@ describe("McpActivityStrip", () => {
     expect(scrollers.length).toBe(1);
   });
 
-  it("tells a blocked call what tier would have let it through", async () => {
+  it("tells a blocked call what tool set would have let it through", async () => {
     getAuditRecords.mockResolvedValue([
-      makeRecord({ id: "1", toolId: "hinted", result: "unauthorized", tierHint: "action" }),
+      makeRecord({ id: "1", toolId: "hinted", result: "unauthorized", tierHint: "full" }),
       makeRecord({ id: "2", toolId: "nowhere", result: "unauthorized", tierHint: null }),
     ]);
     render(<McpActivityStrip sessionId="session-a" activity={null} />);
     fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
     fireEvent.click(await screen.findByRole("button", { name: /hinted/ }));
     fireEvent.click(screen.getByRole("button", { name: /nowhere/ }));
-    expect(screen.getByText(/raise capability tier to action to allow/i)).toBeTruthy();
+    expect(screen.getByText("Needs the Full tool set")).toBeTruthy();
     expect(screen.getByText(/not permitted at any tier/i)).toBeTruthy();
+  });
+
+  // Records written before the core/full split carry the old ladder names. The
+  // popover shows what was recorded, as history, rather than guessing it onto
+  // the new pair or naming a tool set that does not exist.
+  it("shows a pre-split tier hint as a former tier", async () => {
+    // Widened after construction because the current type no longer admits
+    // the value a record on disk can still hold.
+    const legacy = Object.assign(
+      makeRecord({ id: "1", toolId: "legacy", result: "unauthorized" }),
+      { tierHint: "action" }
+    );
+    getAuditRecords.mockResolvedValue([legacy]);
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /legacy/ }));
+    expect(screen.getByText("Needed the former action tier")).toBeTruthy();
+    expect(screen.queryByText(/action tool set/)).toBeNull();
   });
 
   it("offers a retry after a failed read, and it reads again", async () => {

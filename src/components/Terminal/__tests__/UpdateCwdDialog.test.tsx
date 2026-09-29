@@ -101,6 +101,26 @@ describe("UpdateCwdDialog", () => {
     await act(async () => restart.resolve());
   });
 
+  it("locks the dialog while the restart runs, keeping the X in place", async () => {
+    const restart = deferred<void>();
+    restartTerminal.mockReturnValue(restart.promise);
+    const { onClose } = renderDialog();
+
+    submit("/repos/other");
+    await waitFor(() => expect(restartTerminal).toHaveBeenCalled());
+
+    const close = screen.getByRole("button", { name: "Close dialog" });
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(close.hasAttribute("disabled")).toBe(true);
+    expect(cancel.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(close);
+    fireEvent.click(cancel);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+
+    await act(async () => restart.resolve());
+  });
+
   it("never touches the terminal when the dialog closes while the check is in flight", async () => {
     const check = deferred<boolean>();
     checkDirectory.mockImplementation((path) =>

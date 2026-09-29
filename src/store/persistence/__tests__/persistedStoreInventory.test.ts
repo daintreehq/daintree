@@ -26,6 +26,8 @@ const EXPECTED_STORE_IDS = [
   "urlHistoryStore",
   "terminalSearchHistoryStore",
   "notificationHistoryStore",
+  "diffNotesStore",
+  "forgeTokenCalloutStore",
 ] as const;
 
 const EXPECTED_STORAGE_KEYS: Record<(typeof EXPECTED_STORE_IDS)[number], string> = {
@@ -42,6 +44,8 @@ const EXPECTED_STORAGE_KEYS: Record<(typeof EXPECTED_STORE_IDS)[number], string>
   urlHistoryStore: "daintree-url-history",
   terminalSearchHistoryStore: "daintree-terminal-search-history",
   notificationHistoryStore: "daintree-notification-history",
+  diffNotesStore: "daintree-diff-notes",
+  forgeTokenCalloutStore: "daintree-forge-token-callout",
 };
 
 beforeAll(async () => {
@@ -61,6 +65,8 @@ beforeAll(async () => {
     import("../../urlHistoryStore"),
     import("../../terminalSearchHistoryStore"),
     import("../../slices/notificationHistorySlice"),
+    import("../../diffNotesStore"),
+    import("../../forgeTokenCalloutStore"),
   ]);
 });
 

@@ -130,6 +130,7 @@ vi.mock("@/components/ui/ConfirmDialog", async () => {
       onConfirm,
       onClose,
       isConfirmLoading,
+      isBusy,
       variant,
       typedNameTarget,
       restoreFocusTo,
@@ -143,6 +144,7 @@ vi.mock("@/components/ui/ConfirmDialog", async () => {
       onConfirm: () => void;
       onClose?: () => void;
       isConfirmLoading?: boolean;
+      isBusy?: boolean;
       variant: string;
       typedNameTarget?: string;
       confirmDisabled?: boolean;
@@ -162,9 +164,10 @@ vi.mock("@/components/ui/ConfirmDialog", async () => {
           data-testid="confirm-dialog"
           data-variant={variant}
           data-loading={String(Boolean(isConfirmLoading))}
-          data-dismissable={String(Boolean(onClose))}
+          // The real dialog locks dismissal while loading or busy; the X stays.
+          data-dismissable={String(Boolean(onClose) && !isConfirmLoading && !isBusy)}
           data-typed-name-target={typedNameTarget ?? ""}
-          data-confirm-disabled={String(Boolean(confirmDisabled))}
+          data-confirm-disabled={String(Boolean(confirmDisabled || isBusy))}
           data-restore-focus={restoreTarget}
         >
           <h2 data-testid="confirm-title">{title}</h2>

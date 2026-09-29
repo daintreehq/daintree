@@ -143,7 +143,7 @@ describe("globalErrorHandlers", () => {
       const error = new Error("test crash");
       uncaughtHandler(error);
 
-      expect(crashRecoveryMock.recordCrash).toHaveBeenCalledWith(error);
+      expect(crashRecoveryMock.recordCrash).toHaveBeenCalledWith(error, "uncaught-exception");
     });
 
     it("persists error to pendingErrors store with full payload", () => {

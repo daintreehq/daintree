@@ -245,7 +245,7 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
 
     // Clean up the panel we just opened.
     const panel = window.locator(SEL.panel.gridPanel).last();
-    await panel.locator(SEL.panel.close).first().click({ force: true });
+    await panel.locator(SEL.panel.close).first().click();
     await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(before);
   });
 

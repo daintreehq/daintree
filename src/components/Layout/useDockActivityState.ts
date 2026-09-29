@@ -74,6 +74,11 @@ export function getGroupActivityScopeKey(
   return plainIds.sort().join("|");
 }
 
+/** How long the finished cue stays up — zero in performance mode, where it never shows. */
+export function getDockFinishedCueDwellMs(): number {
+  return getPerformanceModeFloor(UI_TRANSIENT_HINT_DWELL_MS);
+}
+
 /**
  * Renderer-local transient "finished" cue. There is no backend timestamp for
  * when `activityStatus` last changed (updateActivity just overwrites the
@@ -141,7 +146,7 @@ export function useTransientDockFinishedCue(
         if (generationRef.current === generation) {
           setFinished({ shown: false, scope: scopeKey });
         }
-      }, getPerformanceModeFloor(UI_TRANSIENT_HINT_DWELL_MS));
+      }, getDockFinishedCueDwellMs());
       return;
     }
 

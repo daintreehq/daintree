@@ -1,14 +1,18 @@
 import type React from "react";
+import { prefetchStagingStatus } from "@/components/Worktree/ReviewHub/stagingStatusCache";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import type { WorktreeState } from "@/types";
 import type { RetryAction } from "@/store";
 import type { ErrorRecord } from "@/store/errorStore";
-import { useAnimate, useReducedMotion } from "framer-motion";
+import { useAnimate } from "framer-motion";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { DURATION_200 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { WorktreeDetails } from "../WorktreeDetails";
 import { WorktreeActivityChip } from "./WorktreeActivityChip";
+import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
+import { Callout } from "@/components/ui/Callout";
 import { useForgeAuthorAvatar } from "@/hooks/useForgeAuthorAvatar";
 import {
   Activity,
@@ -16,11 +20,11 @@ import {
   ChevronDown,
   ChevronRight,
   GitCommitHorizontal,
+  Pause,
   Plug,
   Play,
   RotateCcw,
   ShieldAlert,
-  Square,
   Trash2,
 } from "lucide-react";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
@@ -140,7 +144,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
 
   const changedFileCount = worktree.worktreeChanges?.changedFileCount ?? 0;
   const [countScope, animate] = useAnimate<HTMLSpanElement>();
-  const prefersReducedMotion = useReducedMotion();
+  const prefersReducedMotion = useShouldSkipMotion();
   const didMountRef = useRef(false);
   const prevCountRef = useRef(changedFileCount);
   const lastBumpTimeRef = useRef(0);
@@ -272,7 +276,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                 // to stay attached to the body it just revealed. A divider
                 // there cuts the two apart and they read as separate
                 // components.
-                "transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
+                "cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
                 density.row,
                 "gap-1.5"
               )}
@@ -366,7 +370,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   id={`${detailsId}-button`}
                   aria-label="Show details"
                   className={cn(
-                    "absolute inset-0 rounded-[var(--radius-lg)]",
+                    "absolute inset-0 cursor-pointer rounded-[var(--radius-lg)]",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
                   )}
                 />
@@ -466,7 +470,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       )}
                       {showResourcePause && onResourcePause && (
                         <ContextMenuItem onClick={onResourcePause}>
-                          <Square className="w-3.5 h-3.5 mr-2" />
+                          <Pause className="w-3.5 h-3.5 mr-2" />
                           Pause resource
                         </ContextMenuItem>
                       )}
@@ -487,10 +491,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       {onResourceTeardown && (
                         <>
                           <ContextMenuSeparator />
-                          <ContextMenuItem
-                            onClick={onResourceTeardown}
-                            className="text-status-error"
-                          >
+                          <ContextMenuItem destructive onClick={onResourceTeardown}>
                             <Trash2 className="w-3.5 h-3.5 mr-2" />
                             Tear down resource
                           </ContextMenuItem>
@@ -506,16 +507,18 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       {showResourceResume && onResourceResume && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <button
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 onResourceResume();
                               }}
-                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-text-secondary hover:text-text-primary hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              className="shrink-0"
                               aria-label="Resume resource"
                             >
-                              <Play className="w-3 h-3" />
-                            </button>
+                              <Play />
+                            </Button>
                           </TooltipTrigger>
                           <TooltipContent side="bottom">Resume resource</TooltipContent>
                         </Tooltip>
@@ -523,16 +526,18 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       {showResourcePause && onResourcePause && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <button
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 onResourcePause();
                               }}
-                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-status-error hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              className="shrink-0"
                               aria-label="Pause resource"
                             >
-                              <Square className="w-3 h-3" />
-                            </button>
+                              <Pause />
+                            </Button>
                           </TooltipTrigger>
                           <TooltipContent side="bottom">Pause resource</TooltipContent>
                         </Tooltip>
@@ -540,16 +545,18 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       {showResourceConnect && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <button
+                            <Button
+                              variant="ghost-info"
+                              size="icon-xs"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 onResourceConnect!();
                               }}
-                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-status-info hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              className="shrink-0"
                               aria-label="Connect to resource"
                             >
-                              <Plug className="w-3 h-3" />
-                            </button>
+                              <Plug />
+                            </Button>
                           </TooltipTrigger>
                           <TooltipContent side="bottom">Connect to resource</TooltipContent>
                         </Tooltip>
@@ -573,6 +580,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   <TooltipTrigger asChild>
                     <button
                       onClick={onOpenReviewHub}
+                      onPointerEnter={() => void prefetchStagingStatus(worktree.path)}
                       className={cn(
                         "shrink-0 transition-colors",
                         "text-[var(--color-state-active)] hover:bg-[var(--color-state-active)]/10",
@@ -613,25 +621,20 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   <span className="text-xs text-text-muted truncate">
                     Setup didn't finish. Re-run when you're ready.
                   </span>
-                  <button
-                    type="button"
+                  <Button
+                    variant="outline"
+                    size="xs"
                     onClick={handleRetrySetup}
-                    disabled={isRetryingSetup}
-                    className={cn(
-                      "shrink-0 inline-flex items-center gap-1 rounded-[var(--radius-md)] px-2 py-1 text-xs font-medium transition-colors",
-                      "text-status-error hover:bg-status-error/10",
-                      "disabled:opacity-50 disabled:cursor-not-allowed",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
-                    )}
-                    aria-label="Retry setup"
+                    loading={isRetryingSetup}
+                    className="shrink-0 shadow-none inset-shadow-none"
                   >
-                    <RotateCcw className="w-3 h-3" aria-hidden="true" />
-                    {isRetryingSetup ? "Retrying…" : "Retry setup"}
-                  </button>
+                    <RotateCcw aria-hidden="true" />
+                    Retry setup
+                  </Button>
                 </div>
                 {hasLifecycleDetails && (
                   <details className="text-xs">
-                    <summary className="flex items-center gap-1 text-text-muted cursor-pointer select-none">
+                    <summary className="flex items-center gap-1 rounded-[var(--radius-xs)] text-text-secondary cursor-pointer select-none transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary">
                       <ChevronDown className="w-3 h-3" aria-hidden="true" />
                       Show details
                     </summary>
@@ -668,28 +671,22 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   : "Repository commands need your approval to run"
                 : "Setup was skipped, and its commands are approved now"}
             </span>
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="xs"
               onClick={commandsNeedApproval ? handleReviewCommands : handleRetrySetup}
-              disabled={!commandsNeedApproval && (isRetryingSetup || lifecycleState === "running")}
-              className={cn(
-                "shrink-0 inline-flex items-center gap-1 rounded-[var(--radius-md)] px-2 py-1 text-xs font-medium transition-colors",
-                "text-status-warning hover:bg-status-warning/10",
-                "disabled:opacity-50 disabled:cursor-not-allowed",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
-              )}
+              loading={!commandsNeedApproval && isRetryingSetup}
+              disabled={!commandsNeedApproval && lifecycleState === "running"}
+              className="shrink-0 shadow-none inset-shadow-none"
             >
               {commandsNeedApproval ? (
-                <ShieldAlert className="w-3 h-3" aria-hidden="true" />
+                // The row's own signal: an approval is waiting on the user.
+                <ShieldAlert className="text-status-warning" aria-hidden="true" />
               ) : (
-                <RotateCcw className="w-3 h-3" aria-hidden="true" />
+                <RotateCcw aria-hidden="true" />
               )}
-              {commandsNeedApproval
-                ? "Review commands"
-                : isRetryingSetup
-                  ? "Starting…"
-                  : "Run setup"}
-            </button>
+              {commandsNeedApproval ? "Review commands" : "Run setup"}
+            </Button>
           </div>
         )}
       </div>
@@ -743,11 +740,13 @@ export function WorktreeDeleteErrorBanner({
   // under the button that was pressed.
   const focusHandoffRef = useCardFocusHandoff<HTMLDivElement>();
   return (
-    <div
+    <Callout
+      severity="error"
       ref={focusHandoffRef}
       role="alert"
       aria-live="assertive"
       data-testid="worktree-delete-error-banner"
+      title="Couldn't delete worktree"
       // `relative z-10` is load-bearing, not decoration. Both banners mount as
       // bare siblings of the card's `relative z-10` content column, inside a
       // `relative isolate` root that also carries the sidebar's full-card select
@@ -755,12 +754,10 @@ export function WorktreeDeleteErrorBanner({
       // step than a positioned `z-0` sibling regardless of DOM order, so without
       // this the overlay covered the banner and swallowed every click on Retry
       // and Dismiss (#12087). Joins the tier the content column already uses.
-      className="relative z-10 mt-2 flex items-start gap-2 rounded-[var(--radius-lg)] border border-status-error/20 bg-status-error/10 p-3 text-xs"
+      className="relative z-10 mt-2"
     >
-      <AlertTriangle className="w-4 h-4 shrink-0 text-status-error" aria-hidden="true" />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="flex flex-col gap-0.5">
-          <span className="font-medium text-status-error">Couldn't delete worktree</span>
           {/* Git stderr is multi-line and the lines after the first are the
               ones that say how to recover, so the breaks have to survive. The
               height cap keeps an unbounded message from pushing Retry and
@@ -774,28 +771,29 @@ export function WorktreeDeleteErrorBanner({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {onRetry && (
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="xs"
               onClick={handleRetryClick}
               data-testid="worktree-delete-retry"
-              className="rounded-[var(--radius-md)] border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              className="shadow-none inset-shadow-none"
             >
               Retry
-            </button>
+            </Button>
           )}
           {onDismiss && (
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={handleDismissClick}
               data-testid="worktree-delete-dismiss"
-              className="rounded-[var(--radius-md)] px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               Dismiss
-            </button>
+            </Button>
           )}
         </div>
       </div>
-    </div>
+    </Callout>
   );
 }
 
@@ -818,7 +816,7 @@ export function WorktreeIssueErrorBanner({
   onRetry,
   onDismiss,
 }: WorktreeIssueErrorBannerProps) {
-  const title = mutationType === "attach-issue" ? "Couldn't attach issue" : "Couldn't detach issue";
+  const title = mutationType === "attach-issue" ? "Couldn't attach issue" : "Couldn't unlink issue";
   // The card root selects the worktree on any click that reaches it, and
   // `handleCardClick` has no interactive-target guard — the card's convention
   // (documented on its `handleDoubleClick`, #10319) is that interactive
@@ -837,11 +835,13 @@ export function WorktreeIssueErrorBanner({
   // from under the button that was pressed.
   const focusHandoffRef = useCardFocusHandoff<HTMLDivElement>();
   return (
-    <div
+    <Callout
+      severity="error"
       ref={focusHandoffRef}
       role="alert"
       aria-live="assertive"
       data-testid="worktree-issue-error-banner"
+      title={title}
       // `relative z-10` is load-bearing, not decoration. Both banners mount as
       // bare siblings of the card's `relative z-10` content column, inside a
       // `relative isolate` root that also carries the sidebar's full-card select
@@ -849,37 +849,36 @@ export function WorktreeIssueErrorBanner({
       // step than a positioned `z-0` sibling regardless of DOM order, so without
       // this the overlay covered the banner and swallowed every click on Retry
       // and Dismiss (#12087). Joins the tier the content column already uses.
-      className="relative z-10 mt-2 flex items-start gap-2 rounded-[var(--radius-lg)] border border-status-error/20 bg-status-error/10 p-3 text-xs"
+      className="relative z-10 mt-2"
     >
-      <AlertTriangle className="w-4 h-4 shrink-0 text-status-error" aria-hidden="true" />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="flex flex-col gap-0.5">
-          <span className="font-medium text-status-error">{title}</span>
           <span className="break-words text-text-secondary">{message}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {onRetry && (
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="xs"
               onClick={handleRetryClick}
               data-testid="worktree-issue-retry"
-              className="rounded-[var(--radius-md)] border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              className="shadow-none inset-shadow-none"
             >
               Retry
-            </button>
+            </Button>
           )}
           {onDismiss && (
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={handleDismissClick}
               data-testid="worktree-issue-dismiss"
-              className="rounded-[var(--radius-md)] px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               Dismiss
-            </button>
+            </Button>
           )}
         </div>
       </div>
-    </div>
+    </Callout>
   );
 }

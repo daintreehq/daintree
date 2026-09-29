@@ -1,6 +1,5 @@
 import { useEffect } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useRecipeConflictStore } from "@/store/recipeConflictStore";
 
@@ -19,11 +18,12 @@ import { useRecipeConflictStore } from "@/store/recipeConflictStore";
  *
  * - "Reload from disk" — discard the in-flight edit, refresh state to match disk.
  * - "Overwrite" — re-apply the edit with `force: true`, replacing disk content.
- * - Dismiss (close button / Esc) — leave the rolled-back state; user can retry later.
+ * - Cancel (footer, close button / Esc) — leave the rolled-back state; user can retry later.
  *
  * Tier D1 per CLAUDE.md: local irreversible, no typed-name gate. The destructive
- * intent sits on Overwrite (in-memory edit beats disk); Reload is the safer
- * default and gets primary placement.
+ * intent sits on Overwrite (in-memory edit beats disk), which takes the footer's
+ * leading edge, apart from the Cancel / Reload pair; Reload is the safer default
+ * and gets primary placement.
  */
 function RecipeConflictDialogInner() {
   const pendingConflict = useRecipeConflictStore((s) => s.pendingConflict);
@@ -50,9 +50,11 @@ function RecipeConflictDialogInner() {
     <AppDialog
       isOpen={true}
       onClose={() => resolveConflict("cancel")}
-      size="sm"
-      // Overwrite comes first in the footer; arriving there would put the
-      // destructive write one reflexive Enter away.
+      // md, not sm: three footer answers plus the forward-compat label don't
+      // fit the small card without pushing the primary into its edge.
+      size="md"
+      // Focus lands on Reload, never on the destructive Overwrite, so a
+      // reflexive Enter takes the safe answer.
       initialFocus="confirm"
     >
       <AppDialog.Header>
@@ -74,25 +76,15 @@ function RecipeConflictDialogInner() {
           </pre>
         )}
       </AppDialog.Body>
-      <AppDialog.Footer>
-        <div className="flex items-center gap-3">
-          <Button
-            variant="destructive"
-            onClick={() => resolveConflict("overwrite")}
-            data-testid="recipe-conflict-overwrite"
-          >
-            {isForwardCompat ? "Overwrite and discard" : "Overwrite recipe"}
-          </Button>
-          <Button
-            variant="contrast"
-            onClick={() => resolveConflict("reload")}
-            data-testid="recipe-conflict-reload"
-            data-confirm-role="confirm"
-          >
-            Reload from disk
-          </Button>
-        </div>
-      </AppDialog.Footer>
+      <AppDialog.Footer
+        leadingAction={{
+          label: isForwardCompat ? "Overwrite and discard" : "Overwrite recipe",
+          onClick: () => resolveConflict("overwrite"),
+          intent: "destructive",
+        }}
+        secondaryAction={{ label: "Cancel", onClick: () => resolveConflict("cancel") }}
+        primaryAction={{ label: "Reload from disk", onClick: () => resolveConflict("reload") }}
+      />
     </AppDialog>
   );
 }

@@ -135,8 +135,9 @@ export function getDaintreeAppProdCSP(options?: DaintreeCspOptions): string {
     // range-serving scheme rather than a blob of the whole file (#12242).
     // FILE_SCHEMES stays here for media loaded by tag from that scheme; the
     // viewer's size probe and WebAudio read it via fetch(), which connect-src
-    // governs. blob: stays for renderer-minted object URLs.
-    `media-src 'self' ${MEDIA_SCHEME} ${FILE_SCHEMES} ${DAINTREE_CDN} blob:`,
+    // governs. blob: stays for renderer-minted object URLs. plugin: carries
+    // plugin tour narration, bundled or proxied from a declared host (#12773).
+    `media-src 'self' ${MEDIA_SCHEME} ${FILE_SCHEMES} ${DAINTREE_CDN} ${PLUGIN_SCHEME} blob:`,
     "worker-src 'self' blob:",
     `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${PDF_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
     "object-src 'none'",
@@ -171,7 +172,7 @@ export function getDaintreeAppDevCSP(): string {
     `img-src 'self' ${origins} ${GITHUB_AVATARS} ${GRAVATAR} ${DAINTREE_DOCS} ${FILE_SCHEMES} data: blob:`,
     `font-src 'self' ${origins} data:`,
     // Mirrors the production policy — see getDaintreeAppProdCSP.
-    `media-src 'self' ${MEDIA_SCHEME} ${FILE_SCHEMES} ${DAINTREE_CDN} blob:`,
+    `media-src 'self' ${MEDIA_SCHEME} ${FILE_SCHEMES} ${DAINTREE_CDN} ${PLUGIN_SCHEME} blob:`,
     "worker-src 'self' blob:",
     `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${PDF_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
     "object-src 'none'",

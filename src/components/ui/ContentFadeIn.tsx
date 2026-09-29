@@ -12,10 +12,7 @@ export function ContentFadeIn({ children, className, ...rest }: ContentFadeInPro
   return (
     <div
       {...rest}
-      className={cn(
-        "content-fade-in motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150",
-        className
-      )}
+      className={cn("animate-in fade-in [--tw-animation-duration:var(--duration-150)]", className)}
     >
       {children}
     </div>

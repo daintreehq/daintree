@@ -75,6 +75,19 @@ export function supportsBracketedPaste(terminal: TerminalInfo): boolean {
   return config?.capabilities?.supportsBracketedPaste ?? true;
 }
 
+/**
+ * Whether the live agent takes an image as a lone bracketed-pasted path
+ * (#12792). Needs bracketed paste as well: the protocol is nothing else.
+ */
+export function supportsImagePathInput(terminal: TerminalInfo): boolean {
+  const agentId = getEffectiveAgentId(terminal);
+  if (!agentId) return false;
+  const capabilities = getEffectiveAgentConfig(agentId)?.capabilities;
+  return (
+    capabilities?.imageInput === "bracketed-path" && capabilities.supportsBracketedPaste !== false
+  );
+}
+
 export function getSoftNewlineSequence(terminal: TerminalInfo): string {
   const agentId = getEffectiveAgentId(terminal);
   return getSoftNewlineSequenceShared(agentId);

@@ -88,7 +88,7 @@ function buildFixtures(now: number): Record<Ring, Record<string, unknown>[]> {
     startedAt: now - agoMs - durationMs,
     toolId,
     sessionId: extra.helpSessionId ? `mcp-${extra.helpSessionId as string}` : "mcp-ext-01",
-    tier: extra.helpSessionId ? "workbench" : "external",
+    tier: extra.helpSessionId ? "core" : "external",
     argsSummary: "{}",
     result,
     durationMs,
@@ -108,7 +108,7 @@ function buildFixtures(now: number): Record<Ring, Record<string, unknown>[]> {
       argsSummary: '{"terminalId":"<id>","keys":"<redacted:24 chars>"}',
       helpSessionId: helpA,
       turnId: "turn-1",
-      tierHint: "action",
+      tierHint: "full",
     }),
     audit("a04", 2 * HOUR, "git.getDiff", "error", 2410, {
       argsSummary:
@@ -162,8 +162,8 @@ function buildFixtures(now: number): Record<Ring, Record<string, unknown>[]> {
       sessionId: `mcp-${helpA}`,
       toolId: "terminal.sendKeys",
       ttlMs: 10 * MIN,
-      tier: "action",
-      previousTier: "workbench",
+      tier: "full",
+      previousTier: "core",
     },
     {
       type: "grant.revoked",

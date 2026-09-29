@@ -70,6 +70,9 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   // in IpcEventMap.
   "plugin:actions-list-response",
   "plugin:actions-get-response",
+  // fire-and-forget — renderer→main reply carrying the project's agent panes
+  // (`host.agents.list()`). Paired with `plugin:agents-list-request` in IpcEventMap.
+  "plugin:agents-list-response",
   // fire-and-forget — renderer→main `ipcRenderer.send` reply carrying the user's
   // answer to an imperative plugin UI prompt (#10522). Paired with the
   // `plugin:ui-prompt-request` event declared in IpcEventMap.

@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, type RenderOptions } from "@testing-library/react";
 import { VoiceInputButton } from "../VoiceInputButton";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
+  return rtlRender(ui, { wrapper: TooltipProvider, ...options });
+}
 
 function createVoiceInputApi() {
   return {
@@ -73,7 +79,7 @@ describe("VoiceInputButton", () => {
     expect(container.innerHTML).not.toBe("");
   });
 
-  it("renders a resume affordance when this panel is paused", () => {
+  it("renders a resume affordance when this panel is paused", async () => {
     useVoiceRecordingStore.setState({
       isConfigured: true,
       status: "paused",
@@ -84,8 +90,9 @@ describe("VoiceInputButton", () => {
     );
     const button = getByRole("button");
     expect(button.getAttribute("aria-label")).toBe("Resume voice recording");
-    expect(button.getAttribute("title")).toContain("Paused");
     expect(button.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.focus(button);
+    expect((await screen.findByRole("tooltip")).textContent).toContain("Paused");
   });
 
   it("clicking while paused calls togglePause instead of toggle", () => {

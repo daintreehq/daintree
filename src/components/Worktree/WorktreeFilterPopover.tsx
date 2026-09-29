@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useId, useMemo, useState, useRef } from "react";
-import { Filter, ChevronDown } from "lucide-react";
+import { Filter, ChevronRight } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { SearchField } from "@/components/ui/SearchField";
+import { SearchField, clearSearchBeforeDismiss } from "@/components/ui/SearchField";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { FilterChip } from "@/components/ui/FilterChip";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import type { ChipCounts } from "@/lib/worktreeFilters";
@@ -19,6 +20,7 @@ import {
   STATUS_OPTIONS,
   TYPE_OPTIONS,
 } from "@/lib/worktreeFilterOptions";
+import { CountBadge } from "@/components/ui/badge";
 
 interface FilterSectionProps {
   title: string;
@@ -97,9 +99,10 @@ function FilterSection({
             <span className="flex min-w-0 flex-1 items-center gap-1.5">
               <span className="shrink-0">{title}</span>
               {hasActive && (
-                <span className="rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none tabular-nums text-text-secondary">
-                  {activeCount}
-                </span>
+                <>
+                  <CountBadge aria-hidden="true">{activeCount}</CountBadge>
+                  <span className="sr-only">, {activeCount} active</span>
+                </>
               )}
               {!isOpen && summary && (
                 <span
@@ -115,18 +118,19 @@ function FilterSection({
                 Clear
               </span>
             )}
-            <ChevronDown
+            <ChevronRight
               data-animated-chevron
               className={cn(
-                "w-3.5 h-3.5 shrink-0 transition-transform",
-                isOpen ? "transform rotate-180" : ""
+                "w-3.5 h-3.5 shrink-0 transition-transform duration-150 ease-out",
+                isOpen && "rotate-90"
               )}
+              aria-hidden="true"
             />
           </button>
         </TruncatedTooltip>
         {showClear && (
-          <button
-            type="button"
+          <Button
+            variant="link"
             onClick={(e) => {
               e.stopPropagation();
               // The Clear button hides itself once activeCount hits 0, so move
@@ -140,10 +144,10 @@ function FilterSection({
             // Underlined rather than a bare colour step: at rest this sat at
             // the same tone as the heading beside it, so nothing marked it as
             // a control rather than a second label.
-            className="absolute inset-y-0 right-8.5 my-auto flex h-6 items-center rounded-[var(--radius-sm)] px-1 text-2xs text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+            className="absolute inset-y-0 right-8.5 my-auto h-6 px-1 text-2xs focus-visible:-outline-offset-2"
           >
             Clear
-          </button>
+          </Button>
         )}
       </div>
       {/* Animated reveal so the body honors what the rotating chevron
@@ -174,59 +178,6 @@ function FilterSection({
         </div>
       </div>
     </div>
-  );
-}
-
-interface FilterChipProps {
-  label: string;
-  isActive: boolean;
-  onClick: () => void;
-  count?: number;
-}
-
-/**
- * Three tiers, and they have to be told apart at a glance while the pointer is
- * somewhere in the grid:
- *
- *   unavailable — matches nothing right now. Shows its `(0)` and dims, so the
- *     values that would narrow the list are the ones that stand out.
- *   available   — a subtle fill gives the pill a body; the border alone is far
- *     below a perceptible step on every dark theme.
- *   selected    — the app's filter-chip treatment: the strong fill, `font-medium`,
- *     and the shared `data-filter-chip` hook that gives it a heavier border under
- *     `forced-colors: active` and an inset outline under `prefers-contrast: more`.
- *
- * `font-medium` is the part that carries selection, and it is not decoration:
- * hovering an available chip already raises its fill and takes its text to
- * `text-text-primary`, so fill and tone alone left hover and selected rendering
- * identically — you could not see what was selected while the pointer was in the
- * grid. Weight is the one axis hover does not touch.
- *
- * Zero-count chips stay clickable rather than `disabled`. Their `(0)` is what
- * answers "will this do anything", and disabling would take them out of the tab
- * order — so a keyboard user would silently skip values that reappear the moment
- * another facet changes. Matches `LogFilters`, which keeps zero-count rows enabled.
- */
-function FilterChip({ label, isActive, onClick, count }: FilterChipProps) {
-  const isUnavailable = count === 0 && !isActive;
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={isActive}
-      data-filter-chip="true"
-      className={cn(
-        "inline-flex items-center rounded-full border px-2 py-0.5 text-2xs transition-colors",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary",
-        isActive
-          ? "border-text-secondary bg-filter-selected-bg-strong font-medium text-text-primary"
-          : isUnavailable
-            ? "border-border-default bg-transparent text-text-secondary hover:text-text-primary"
-            : "border-text-secondary bg-overlay-soft text-text-secondary hover:bg-overlay-medium hover:text-text-primary"
-      )}
-    >
-      {count === undefined ? label : `${label} (${count})`}
-    </button>
   );
 }
 
@@ -313,25 +264,26 @@ function ChipGrid<T extends string>({
       {visible.map((option) => (
         <FilterChip
           key={option.value}
-          label={option.label}
-          isActive={isActive(option.value)}
+          selected={isActive(option.value)}
           onClick={() => onToggle(option.value)}
           count={counts?.[option.value]}
-        />
+        >
+          {option.label}
+        </FilterChip>
       ))}
       {hiddenCount > 0 && (
-        <button
-          type="button"
+        <Button
+          variant="link"
           onClick={() => setShowAll((v) => !v)}
           aria-expanded={showAll}
-          className="inline-flex items-center self-center rounded-[var(--radius-sm)] py-0.5 text-2xs text-text-secondary underline decoration-border-strong underline-offset-2 transition-colors hover:text-text-primary hover:decoration-current focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
+          className="self-center py-0.5 text-2xs"
         >
           {showAll
             ? "Show fewer"
             : hiddenAllDead
               ? `${hiddenCount} with no matches`
               : `${hiddenCount} more`}
-        </button>
+        </Button>
       )}
     </>
   );
@@ -495,6 +447,15 @@ export function WorktreeFilterPopover({
     };
   }, []);
 
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const clearQuery = useCallback(() => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+    setLocalQuery("");
+    setQuery("");
+  }, [setQuery]);
+
   const handleClearAll = useCallback(() => {
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
@@ -602,25 +563,20 @@ export function WorktreeFilterPopover({
       <PopoverContent
         ref={contentRef}
         align="start"
-        sideOffset={8}
         className="flex w-72 max-h-[70vh] flex-col p-0"
         data-testid="worktree-filter-popover"
+        onEscapeKeyDown={(e) => clearSearchBeforeDismiss(e, searchInputRef.current, clearQuery)}
       >
         {/* Search */}
         {!hideSearchInput && (
           <div className="shrink-0 border-b border-border-default p-3">
             <SearchField
               size="compact"
+              inputRef={searchInputRef}
               value={localQuery}
               onChange={(e) => handleQueryChange(e.target.value)}
-              onClear={() => {
-                if (debounceRef.current) {
-                  clearTimeout(debounceRef.current);
-                }
-                setLocalQuery("");
-                setQuery("");
-              }}
-              placeholder="Search worktrees..."
+              onClear={clearQuery}
+              placeholder="Search worktrees…"
               aria-label="Search worktrees"
             />
           </div>

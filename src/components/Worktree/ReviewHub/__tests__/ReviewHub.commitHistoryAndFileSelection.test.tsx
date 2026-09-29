@@ -270,6 +270,7 @@ import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useDiffViewedStore } from "@/store/diffViewedStore";
+import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
 
@@ -516,9 +517,9 @@ describe("ReviewHub", () => {
   describe("commit message subject counter", () => {
     it("shows subject line length counter", async () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…");
+      const textarea = screen.getByLabelText("Commit message");
       fireEvent.change(textarea, {
         target: { value: "fix: resolve bug" },
       });
@@ -528,9 +529,9 @@ describe("ReviewHub", () => {
 
     it("counter reflects subject length past the 72-char limit", async () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…");
+      const textarea = screen.getByLabelText("Commit message");
       const longSubject = "x".repeat(85);
       fireEvent.change(textarea, { target: { value: longSubject } });
 
@@ -574,10 +575,9 @@ describe("ReviewHub", () => {
       });
 
       renderOpen();
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const getTextarea = () =>
-        screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const getTextarea = () => screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
       // Position cursor at 0 (empty textarea)
       focusTextareaAt(getTextarea(), 0);
@@ -637,10 +637,9 @@ describe("ReviewHub", () => {
       });
 
       renderOpen();
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const getTextarea = () =>
-        screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const getTextarea = () => screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
       focusTextareaAt(getTextarea(), 0);
       fireEvent.keyDown(getTextarea(), { key: "ArrowUp" });
@@ -672,9 +671,9 @@ describe("ReviewHub", () => {
       });
 
       renderOpen();
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
       // Type a draft first
       fireEvent.change(textarea, { target: { value: "my draft message" } });
@@ -693,9 +692,9 @@ describe("ReviewHub", () => {
 
     it("does not intercept ArrowUp when caret is not at position 0", async () => {
       renderOpen();
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
       fireEvent.change(textarea, { target: { value: "some text" } });
       // Caret in middle of text
@@ -728,9 +727,9 @@ describe("ReviewHub", () => {
       });
 
       renderOpen();
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
       focusTextareaAt(textarea, 0);
       fireEvent.keyDown(textarea, { key: "ArrowUp" });
@@ -753,9 +752,9 @@ describe("ReviewHub", () => {
       listCommitsMock.mockResolvedValue({ items: [], hasMore: false, total: 0 });
 
       renderOpen();
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
       focusTextareaAt(textarea, 0);
       fireEvent.keyDown(textarea, { key: "ArrowUp" });
@@ -768,9 +767,9 @@ describe("ReviewHub", () => {
 
     it("ArrowDown does nothing when not in history mode", async () => {
       renderOpen();
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
       fireEvent.change(textarea, { target: { value: "no history here" } });
       focusTextareaAt(textarea, 0);
@@ -782,9 +781,9 @@ describe("ReviewHub", () => {
 
     it("does not intercept ArrowUp with modifier keys", async () => {
       renderOpen();
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
 
       focusTextareaAt(textarea, 0);
 
@@ -803,7 +802,7 @@ describe("ReviewHub", () => {
       // One per file (1 staged + 1 unstaged from makeStatus).
       expect(viewedCheckboxes).toHaveLength(2);
       for (const cb of viewedCheckboxes) {
-        expect((cb as HTMLInputElement).checked).toBe(false);
+        expect(cb.getAttribute("aria-checked")).toBe("false");
       }
     });
 
@@ -814,16 +813,16 @@ describe("ReviewHub", () => {
 
       const indexCheckbox = screen.getByRole("checkbox", {
         name: "Mark src/index.ts as viewed",
-      }) as HTMLInputElement;
-      expect(indexCheckbox.checked).toBe(false);
+      });
+      expect(indexCheckbox.getAttribute("aria-checked")).toBe("false");
 
       fireEvent.click(indexCheckbox);
 
-      // After being checked, the aria-label flips so we now look for the inverse.
+      // The accessible name is constant; the checked state carries the toggle.
       const stillThere = screen.getByRole("checkbox", {
-        name: "Mark src/index.ts as not viewed",
-      }) as HTMLInputElement;
-      expect(stillThere.checked).toBe(true);
+        name: "Mark src/index.ts as viewed",
+      });
+      expect(stillThere.getAttribute("aria-checked")).toBe("true");
     });
 
     it("does not open the diff panel when the Viewed checkbox is clicked", async () => {
@@ -858,7 +857,7 @@ describe("ReviewHub", () => {
 
       const checkboxes = screen.getAllByRole("checkbox", {
         name: "Mark src/dual.ts as viewed",
-      }) as HTMLInputElement[];
+      });
       // One in the staged section, one in the unstaged section.
       expect(checkboxes).toHaveLength(2);
       const firstCheckbox = checkboxes[0]!;
@@ -867,9 +866,12 @@ describe("ReviewHub", () => {
 
       // Only the clicked row flips to "viewed"; the sibling row stays unchecked.
       const checkedAfter = screen.getAllByRole("checkbox", {
-        name: /Mark src\/dual\.ts as (not viewed|viewed)/,
-      }) as HTMLInputElement[];
-      const viewedCount = checkedAfter.filter((cb) => cb.checked).length;
+        name: "Mark src/dual.ts as viewed",
+      });
+      expect(checkedAfter).toHaveLength(2);
+      const viewedCount = checkedAfter.filter(
+        (cb) => cb.getAttribute("aria-checked") === "true"
+      ).length;
       expect(viewedCount).toBe(1);
     });
 
@@ -891,9 +893,9 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByText("index.ts"));
 
       const reopened = screen.getByRole("checkbox", {
-        name: "Mark src/index.ts as not viewed",
-      }) as HTMLInputElement;
-      expect(reopened.checked).toBe(true);
+        name: "Mark src/index.ts as viewed",
+      });
+      expect(reopened.getAttribute("aria-checked")).toBe("true");
     });
   });
 
@@ -975,6 +977,8 @@ describe("ReviewHub", () => {
       const z = screen.getByTestId("file-stage-row-src/z.ts");
 
       fireEvent.click(x, { metaKey: true });
+      // Shift+mousedown is cancelled so the page selection doesn't stretch (#12926).
+      expect(fireEvent.mouseDown(z, { shiftKey: true, button: 0 })).toBe(false);
       fireEvent.click(z, { shiftKey: true });
 
       await waitFor(() => {
@@ -1341,4 +1345,8 @@ describe("ReviewHub", () => {
       expect(dialogStore.get()).toBe(HUB_PANEL_ID);
     });
   });
+});
+
+afterEach(() => {
+  resetStagingStatusCacheForTests();
 });

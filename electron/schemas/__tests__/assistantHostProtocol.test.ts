@@ -139,7 +139,7 @@ describe("AssistantHostSessionDescriptorSchema", () => {
     windowId: 3,
     projectId: "proj-1",
     cwd: "/tmp/worktree",
-    tier: "workbench",
+    tier: "core",
     protocolVersion: ASSISTANT_HOST_PROTOCOL_VERSION,
   };
 

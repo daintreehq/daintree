@@ -54,7 +54,7 @@ Checkboxes only for "which of these" lists and explicit-save forms; every instan
 
 ## Accent
 
-The subtab underline and the sidebar's active marker are this dialog's accents. Nothing on a page body is accent at rest — not enabled switches, not selected options, not icons. A primary Save is the neutral high-contrast button.
+The subtab underline is this dialog's accent. The sidebar marks the page being shown with the highlight fill alone, like every list-detail list — no edge marker. Nothing on a page body is accent at rest — not enabled switches, not selected options, not icons. A primary Save is the neutral high-contrast button.
 
 ## Verify
 

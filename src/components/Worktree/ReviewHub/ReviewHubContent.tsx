@@ -1,4 +1,9 @@
 import {
+  beginStagingStatusRead,
+  getCachedStagingStatus,
+  rememberStagingStatus,
+} from "./stagingStatusCache";
+import {
   useCallback,
   useDeferredValue,
   useEffect,
@@ -16,6 +21,10 @@ import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
 import { isClientAppError } from "@/utils/clientAppError";
 import { cn } from "@/lib/utils";
 import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
+import {
   EMPTY_MOUNTED_RANGE,
   rangeCovers,
   sameRange,
@@ -24,16 +33,7 @@ import {
 } from "@/lib/fileListWindowing";
 import type { VirtuosoHandle } from "react-virtuoso";
 
-import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import {
-  X,
-  RefreshCw,
-  CircleCheck,
-  ArrowUpFromLine,
-  ChevronRight,
-  AlertTriangle,
-  GitBranch,
-} from "lucide-react";
+import { RefreshCw, CircleCheck, ArrowUpFromLine, ChevronRight, AlertTriangle } from "lucide-react";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
@@ -46,7 +46,7 @@ import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
-import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { basename, join } from "@shared/utils/path";
 import {
@@ -83,6 +83,7 @@ import {
 // think-time; useKeepMounted gates the first mount so nothing is fetched (or
 // rendered) until a diff is actually opened.
 import { Button } from "@/components/ui/button";
+import { SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
 import { debounce } from "@/utils/debounce";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useFileDecorations } from "@/hooks/useFileDecorations";
@@ -103,6 +104,7 @@ import {
   type SectionViewState,
   DEFAULT_SECTION_STATE,
   matchesFilter,
+  REVIEW_HUB_COUNT_CHIP,
   REVIEW_HUB_STICKY_BAND,
   readGitErrorFields,
   resolveBulkScope,
@@ -110,6 +112,9 @@ import {
   sumChurn,
 } from "./reviewHubUtils";
 import { isGeneratedFile } from "../generatedFileClassifier";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { BranchBadge } from "@/components/ui/BranchBadge";
+import { Badge } from "@/components/ui/badge";
 
 /**
  * Floor for the dialog-hosted body, so the pane stops resizing itself around
@@ -192,6 +197,12 @@ export function ReviewHubContent({
 }: ReviewHubContentProps) {
   const isDialog = location === "dialog";
   const [status, setStatus] = useState<StagingStatus | null>(null);
+  // True once this open's own `getStagingStatus` has landed — false while the
+  // status on screen is the cached snapshot seeded at open. Auto-stage, commit
+  // and push wait for it; they act on the real index and branch, which the
+  // snapshot may no longer describe. Staging a clicked row does not: it is an
+  // explicit, reversible action on the path the user chose.
+  const [statusIsFresh, setStatusIsFresh] = useState(false);
   const [loading, setLoading] = useState(false);
   const [isBackgroundRefreshing, setIsBackgroundRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -212,6 +223,12 @@ export function ReviewHubContent({
   const showPushBanner = pushError !== null && !pushBannerDismissed;
   const [pushProgress, setPushProgress] = useState<Map<string, PushProgressEvent>>(new Map());
   const [pushTargetBranch, setPushTargetBranch] = useState<string | null>(null);
+  // A commit that empties the tree would otherwise unmount the composer before
+  // its push starts, taking the push target and progress with it.
+  const [isCommitPushInFlight, setIsCommitPushInFlight] = useState(false);
+  // Spoken once when a push lands. The composer that showed its progress may
+  // already be gone (a clean tree unmounts it), so the result lives here.
+  const [pushAnnouncement, setPushAnnouncement] = useState("");
   const [isPushing, setIsPushing] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
   const [selectedFile, setSelectedFile] = useState<{
@@ -867,11 +884,14 @@ export function ReviewHubContent({
   const refresh = useCallback(async () => {
     if (!worktreePath) return;
     const requestId = ++refreshIdRef.current;
+    const readSeq = beginStagingStatusRead();
     setLoading(true);
     setLoadError(null);
     try {
       const result = await window.electron.git.getStagingStatus(worktreePath);
+      rememberStagingStatus(worktreePath, result, readSeq);
       if (refreshIdRef.current === requestId) {
+        setStatusIsFresh(true);
         setStatus(result);
       }
     } catch (err) {
@@ -911,10 +931,13 @@ export function ReviewHubContent({
   const backgroundRefresh = useCallback(async () => {
     if (!worktreePath) return;
     const requestId = ++bgRefreshIdRef.current;
+    const readSeq = beginStagingStatusRead();
     setIsBackgroundRefreshing(true);
     try {
       const result = await window.electron.git.getStagingStatus(worktreePath);
+      rememberStagingStatus(worktreePath, result, readSeq);
       if (bgRefreshIdRef.current === requestId) {
+        setStatusIsFresh(true);
         setStatus(result);
         setLoadError(null);
       }
@@ -973,8 +996,13 @@ export function ReviewHubContent({
     if (isOpen) {
       // This branch also re-runs when worktreePath changes while open (via
       // `refresh`'s identity): drop the previous worktree's staging status so
-      // the file list and readiness rail never mix two worktrees' state.
-      setStatus(null);
+      // the file list and readiness rail never mix two worktrees' state. The
+      // cache is keyed by worktree, so what it seeds is this worktree's.
+      setStatusIsFresh(false);
+      // A background read still in flight belongs to the previous worktree (or
+      // the previous opening); landing it would mark this one fresh.
+      bgRefreshIdRef.current++;
+      setStatus(worktreePath ? getCachedStagingStatus(worktreePath) : null);
       setActionError(null);
       setPushError(null);
       const seed = readInitialCommitMessage();
@@ -1021,11 +1049,11 @@ export function ReviewHubContent({
       setStagedView(DEFAULT_SECTION_STATE);
       setChangesView(DEFAULT_SECTION_STATE);
     }
-  }, [isOpen, refresh, writeCursorKey]);
+  }, [isOpen, refresh, writeCursorKey, worktreePath]);
 
   useEffect(() => {
     if (!isOpen || !autoStageOnOpen) return;
-    if (!status) return;
+    if (!status || !statusIsFresh) return;
     if (hasAutoStagedRef.current) return;
     if (status.staged.length > 0) {
       // Already staged from a prior session — skip and mark as handled.
@@ -1054,7 +1082,7 @@ export function ReviewHubContent({
         });
       }
     })();
-  }, [isOpen, autoStageOnOpen, status, refresh, worktreePath]);
+  }, [isOpen, autoStageOnOpen, status, statusIsFresh, refresh, worktreePath]);
 
   useEffect(() => {
     if (diffMode === "base-branch" && status?.currentBranch === mainBranch) {
@@ -1280,10 +1308,13 @@ export function ReviewHubContent({
     setPushError(null);
     setPushProgress(new Map());
     setPushTargetBranch(null);
+    setPushAnnouncement("");
+    let announcedTarget: string | null = null;
 
     const cleanup = window.electron.git.onPushProgress((event) => {
       if (event.cwd !== worktreePath) return;
       if (event.stage === "target") {
+        announcedTarget = event.targetBranch ?? null;
         setPushTargetBranch(event.targetBranch ?? null);
         return;
       }
@@ -1303,6 +1334,7 @@ export function ReviewHubContent({
     try {
       await window.electron.git.push(worktreePath);
       setPushError(null);
+      setPushAnnouncement(announcedTarget ? `Pushed to ${announcedTarget}` : "Push complete");
     } catch (err) {
       // GitOperationError carries `gitReason` (auth-failed, push-rejected-*, etc.).
       // AppError carries `code` from a different union (RATE_LIMITED, etc.) — fall
@@ -1342,19 +1374,24 @@ export function ReviewHubContent({
       setActionError(null);
       setPushError(null);
       debouncedBgRefreshRef.current?.cancel();
+      setIsCommitPushInFlight(true);
       try {
-        await window.electron.git.commit(worktreePath, message);
-      } catch (err) {
-        setActionError({
-          title: "Couldn't commit changes",
-          detail: formatErrorMessage(err, "Failed to commit changes"),
-        });
-        throw err;
+        try {
+          await window.electron.git.commit(worktreePath, message);
+        } catch (err) {
+          setActionError({
+            title: "Couldn't commit changes",
+            detail: formatErrorMessage(err, "Failed to commit changes"),
+          });
+          throw err;
+        }
+        // Same review reset as handleCommit — the changeset starts over.
+        useDiffViewedStore.getState().clearWorktree(worktreePath);
+        await refresh();
+        await runPush();
+      } finally {
+        setIsCommitPushInFlight(false);
       }
-      // Same review reset as handleCommit — the changeset starts over.
-      useDiffViewedStore.getState().clearWorktree(worktreePath);
-      await refresh();
-      await runPush();
     },
     [worktreePath, refresh, runPush]
   );
@@ -1673,6 +1710,10 @@ export function ReviewHubContent({
       return;
     }
     if (document.activeElement?.closest('[role="menu"]')) return;
+    // A radiogroup (the diff mode switch) answers its own arrow keys, the way it
+    // does everywhere else; this capture listener would otherwise take Up/Down
+    // before the group ever sees them.
+    if (target?.closest('[role="radiogroup"]')) return;
     // A diff overlay owns the keyboard while open; don't move the list beneath it.
     if (selectedFile || selectedBaseBranchFile) return;
     // The file list is collapsed — no rows are visible, so don't let keys mutate
@@ -1847,22 +1888,12 @@ export function ReviewHubContent({
                 Review & commit
               </h2>
             )}
-            {status?.currentBranch && (
-              <TruncatedTooltip content={status.currentBranch}>
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs text-text-secondary font-mono truncate max-w-[200px]">
-                  <GitBranch className="w-3 h-3 shrink-0" />
-                  <span className="truncate">{status.currentBranch}</span>
-                </span>
-              </TruncatedTooltip>
-            )}
+            {status?.currentBranch && <BranchBadge branch={status.currentBranch} />}
             {status?.currentBranch && isProtectedBranch(status.currentBranch.toLowerCase()) && (
-              <span
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-status-warning/10 border border-status-warning/30 text-2xs text-status-warning shrink-0"
-                data-testid="review-hub-protected-branch-chip"
-              >
-                <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />
+              <Badge size="sm" tone="warning" data-testid="review-hub-protected-branch-chip">
+                <AlertTriangle aria-hidden="true" />
                 <span>Protected</span>
-              </span>
+              </Badge>
             )}
             <PrStatusChip
               hasRemote={status?.hasRemote}
@@ -1872,16 +1903,11 @@ export function ReviewHubContent({
             />
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {/* Diff mode toggle. Uses the shared SegmentedToggle rather than a
-                local pair of buttons: this was the only segmented control in the
-                app still drawing its selection as a filled block, while the diff,
-                file and file-browser surfaces all use the primitive's thumb. It
-                also drops a bare `rounded` and a restated focus ring — the global
-                `*:focus-visible` rule owns that, and a box-shadow ring vanishes
-                under forced-colors. */}
-            <SegmentedToggle
+            {/* Diff mode switch: the shared segmented control, so it looks,
+                answers the keyboard and slides like every other mode switch. */}
+            <SegmentedRadioGroup
               density="compact"
-              ariaLabel="Diff mode"
+              aria-label="Diff mode"
               testId="review-hub-diff-mode"
               value={diffMode}
               onChange={handleDiffModeChange}
@@ -1897,37 +1923,30 @@ export function ReviewHubContent({
 
             {diffMode === "working-tree" && (
               <button
-                onClick={() => void refresh()}
-                disabled={loading}
-                className={cn(
-                  "p-1.5 rounded transition-colors",
-                  "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06]",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
-                )}
+                onClick={() => {
+                  if (!loading) void refresh();
+                }}
+                // Not `disabled`: pressing it would drop keyboard focus to the page.
+                aria-disabled={loading || undefined}
+                aria-busy={loading || isBackgroundRefreshing || undefined}
+                className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
                 aria-label="Refresh"
               >
                 <SpinningIcon
                   icon={RefreshCw}
                   active={loading || isBackgroundRefreshing}
-                  className="w-3.5 h-3.5"
+                  className={PANE_TOOLBAR_ICON_CLASS}
                 />
               </button>
             )}
             {/* Same reason as the title: AppDialog.Header supplies the close
                 control at this location. */}
             {!isDialog && (
-              <button
+              <SurfaceHeaderCloseButton
                 onClick={onClose}
-                className={cn(
-                  "p-1.5 rounded transition-colors",
-                  "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06]",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
-                )}
                 aria-label="Close"
                 data-testid="review-hub-close"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              />
             )}
           </div>
         </div>
@@ -1967,6 +1986,9 @@ export function ReviewHubContent({
             }}
           />
         )}
+        <span role="status" className="sr-only" data-testid="review-hub-push-announcement">
+          {pushAnnouncement}
+        </span>
         {pushError && showPushBanner && (
           <PushErrorBanner
             pushError={pushError}
@@ -2093,18 +2115,21 @@ export function ReviewHubContent({
                 <div>
                   <div className={REVIEW_HUB_STICKY_BAND}>
                     <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle border-b border-divider">
-                      <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
-                        Changed vs {mainBranch}
-                        <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
+                      <span className={SECTION_LABEL_CLASS}>
+                        Changed vs{" "}
+                        <span className="font-mono font-medium normal-case tracking-normal">
+                          {mainBranch}
+                        </span>
+                        <span className={REVIEW_HUB_COUNT_CHIP}>
                           {sortedBaseBranchFiles.length} file
                           {sortedBaseBranchFiles.length !== 1 ? "s" : ""}
                           {(baseBranchChurn.ins > 0 || baseBranchChurn.del > 0) && (
                             <>
                               {" "}
-                              <span className="text-status-success/80">
+                              <span className="text-status-success">
                                 +{baseBranchChurn.ins}
                               </span>{" "}
-                              <span className="text-status-error/80">-{baseBranchChurn.del}</span>
+                              <span className="text-status-error">-{baseBranchChurn.del}</span>
                             </>
                           )}
                         </span>
@@ -2210,7 +2235,9 @@ export function ReviewHubContent({
                         title={
                           pushError
                             ? `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} not pushed`
-                            : `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} ready to push`
+                            : isPushing
+                              ? `Pushing ${aheadCount} commit${aheadCount !== 1 ? "s" : ""}`
+                              : `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} ready to push`
                         }
                         // "Ready to push" is a readiness claim, so it must not
                         // survive a rejection: after a push fails, `pushReady`
@@ -2226,13 +2253,13 @@ export function ReviewHubContent({
                         action={
                           readinessSummary.pushReady ? (
                             <Button
-                              variant="subtle"
+                              variant="contrast"
                               size="sm"
                               onClick={() => void handlePushClean()}
-                              disabled={isPushing}
+                              loading={isPushing}
                               data-testid="review-hub-clean-push"
                             >
-                              {isPushing ? "Pushing…" : "Push"}
+                              Push
                             </Button>
                           ) : undefined
                         }
@@ -2268,12 +2295,13 @@ export function ReviewHubContent({
                         data-testid="review-hub-file-list-toggle"
                         className={cn(
                           "inline-flex items-center gap-1 text-2xs font-medium text-text-secondary hover:text-text-primary transition-colors",
-                          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary rounded"
+                          "rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                         )}
                       >
                         <ChevronRight
+                          data-animated-chevron
                           className={cn(
-                            "w-3 h-3 transition-transform duration-150",
+                            "w-3 h-3 transition-transform duration-150 ease-out",
                             fileListExpanded && "rotate-90"
                           )}
                           aria-hidden="true"
@@ -2306,10 +2334,13 @@ export function ReviewHubContent({
                             tabIndex={-1}
                             /* Focusable because `handleFocusBlocker` sends focus
                              here from the readiness rail's "conflicts" CTA, so
-                             it keeps its own ring. The banner inside carries the
-                             shared failure grammar; this wrapper only owns
+                             it keeps its own ring — on `focus:`, since a
+                             scripted focus after a pointer click never matches
+                             `:focus-visible`, and inset so the unpadded
+                             scrollport cannot clip it. The banner inside carries
+                             the shared failure grammar; this wrapper only owns
                              focus. */
-                            className="outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
+                            className="rounded-[var(--radius-md)] focus:outline focus:outline-2 focus:outline-accent-primary focus:-outline-offset-2"
                           >
                             <InlineStatusBanner
                               severity="warning"
@@ -2408,8 +2439,12 @@ export function ReviewHubContent({
             scroll Skeleton above owns the role="status" announcement. */}
         {diffMode === "working-tree" && showWorkingTreeSkeleton && (
           <div className="border-t border-divider p-3 space-y-2" aria-hidden="true">
+            <div className="flex items-center justify-between">
+              <SkeletonBone immediate className="h-3 w-24" />
+              <SkeletonBone immediate className="h-2.5 w-8" />
+            </div>
             <SkeletonBone immediate className="h-14 w-full" />
-            <SkeletonBone immediate className="h-2.5 w-8 ml-auto" />
+            <SkeletonBone immediate className="h-3 w-48" />
             <div className="flex items-center gap-2">
               <SkeletonBone immediate className="h-7 flex-1" />
               <SkeletonBone immediate className="h-7 w-7 shrink-0" />
@@ -2420,7 +2455,7 @@ export function ReviewHubContent({
         {/* Commit panel — only in working-tree mode, and never during a conflict op */}
         {diffMode === "working-tree" &&
           status &&
-          totalChanges > 0 &&
+          (totalChanges > 0 || isCommitPushInFlight) &&
           !loadError &&
           !isOperationState && (
             <CommitPanel
@@ -2441,6 +2476,7 @@ export function ReviewHubContent({
               pushTargetBranch={pushTargetBranch}
               skipPushConfirm={skipPushConfirm}
               onSetSkipPushConfirm={(value) => setSkipPushConfirmForWorktree(worktreePath, value)}
+              isVerifying={!statusIsFresh}
             />
           )}
       </div>

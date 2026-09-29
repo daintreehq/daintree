@@ -113,6 +113,7 @@ export interface HydrationOptions {
     sessionLostOnRestore?: SessionLostReason;
     conversationCwd?: string;
     restoreRecovery?: PanelRestoreRecovery;
+    scratchpad?: import("@shared/types/panel").TerminalScratchpad;
     env?: Record<string, string>;
     extensionState?: Record<string, unknown>;
     pluginId?: string;

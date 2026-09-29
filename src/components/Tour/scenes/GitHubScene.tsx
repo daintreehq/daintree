@@ -5,33 +5,40 @@ import {
   ExternalLink,
   GitPullRequest,
   MoreHorizontal,
+  FolderGit2,
 } from "lucide-react";
-import { FolderGit2 } from "@/components/icons";
-import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
-import type { CIStatus } from "@shared/types/forge";
-import { cn } from "@/lib/utils";
-import { ANCHOR, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import {
+  cn,
+  type CursorStep,
   MockCursor,
   MockLines,
-  MockPane,
+  MockMenu,
+  MockSearchField,
+  MockSpotlight,
   reveal,
   useMockCursor,
-  type CursorStep,
-} from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
-import { MockEmptyGrid, MockMenu, MockSearchField, MockSpotlight } from "./sceneParts";
+} from "@daintreehq/tour/kit";
+import {
+  ANCHOR,
+  MockApp,
+  MockCIGlyph,
+  MockEmptyGrid,
+  MockGrid,
+  MockPane,
+  MockWorktreeCard,
+} from "@daintreehq/tour/mock-app";
+import { useCue } from "@daintreehq/tour/react";
 
 const ISSUES = ANCHOR["forge-issues"];
 const LIST = { x: 290, y: ISSUES.y + 14, width: 216 };
 // Clicking an issue opens it on the forge; a worktree comes from the row's
-// actions menu. #51 is the second row; its menu button is measured from the render.
+// actions menu. #51 is the second row; the menu opens under its button.
 const ISSUE_MENU = { x: 487, y: 91 };
 const ROW_MENU = { x: ISSUE_MENU.x - 132, y: ISSUE_MENU.y + 10, width: 140 };
-const CREATE_ITEM = { x: ROW_MENU.x + 50, y: ROW_MENU.y + 17 };
+const CREATE_ITEM = { anchor: "issue-actions-0", dx: -20 };
 
 const DIALOG = { x: 230, y: 90, width: 250 };
-const CREATE_BUTTON = { x: 417, y: 189 };
+const CREATE_BUTTON = { anchor: "github-create" };
 const BRANCH = "feature/issue-51-dark-mode-for-settings";
 
 const ISSUES_LIST = [
@@ -41,47 +48,16 @@ const ISSUES_LIST = [
   ["#45 Add order history", "5d"],
 ] as const;
 
-const CURSOR: readonly CursorStep[] = [
-  { cue: "list", at: ISSUES },
-  { cue: "list", offset: 0.5, at: ISSUES, click: true },
-  { cue: "pick", at: ISSUE_MENU },
-  { cue: "pick", offset: 0.5, at: ISSUE_MENU, click: true },
+export const CURSOR: readonly CursorStep[] = [
+  { cue: "list", at: { anchor: "forge-issues" } },
+  { cue: "list", offset: 0.5, at: { anchor: "forge-issues" }, click: true },
+  { cue: "pick", at: { anchor: "issue-51-menu" } },
+  { cue: "pick", offset: 0.5, at: { anchor: "issue-51-menu" }, click: true },
   { cue: "choose", at: CREATE_ITEM },
   { cue: "choose", offset: 0.5, at: CREATE_ITEM, click: true },
   { cue: "create", at: CREATE_BUTTON },
   { cue: "create", offset: 0.6, at: CREATE_BUTTON, click: true },
 ];
-
-/**
- * The pull request's checks as the real card draws them — the app's own
- * pending dot, then its passing check — just larger, so the change reads.
- */
-const CI_PENDING: CIStatus = {
-  state: "pending",
-  total: 3,
-  passed: 1,
-  failed: 0,
-  pending: 2,
-  rawData: null,
-};
-const CI_PASSED: CIStatus = {
-  state: "success",
-  total: 3,
-  passed: 3,
-  failed: 0,
-  pending: 0,
-  rawData: null,
-};
-
-function CIGlyph({ passed }: { passed: boolean }) {
-  const visual = getCIStatusVisual(passed ? CI_PASSED : CI_PENDING);
-  if (!visual) return null;
-  return visual.kind === "icon" ? (
-    <visual.Icon className={cn("size-3.5!", visual.colorClass)} aria-hidden="true" />
-  ) : (
-    <span className={cn("size-2.5 rounded-full", visual.colorClass)} aria-hidden="true" />
-  );
-}
 
 export function GitHubScene() {
   const pill = useCue("pill");
@@ -119,7 +95,8 @@ export function GitHubScene() {
               <CornerDownRight aria-hidden="true" />
               <GitPullRequest aria-hidden="true" />
               #57
-              <CIGlyph passed={checksPassed} />
+              {/* The app's own pending dot, then its passing check, just larger so the change reads. */}
+              <MockCIGlyph status={checksPassed ? "success" : "pending"} />
             </span>
           </MockWorktreeCard>
         </>

@@ -165,12 +165,16 @@ export function subscribeProjectViewObservability(
     listener(next);
   };
   const offLifecycle = subscribeProjectViewLifecycle(check);
-  if (typeof document !== "undefined") {
+  // `TerminalInstanceService` subscribes at module scope, so suites that stub a
+  // bare `document` object reach this too.
+  const canListen =
+    typeof document !== "undefined" && typeof document.addEventListener === "function";
+  if (canListen) {
     document.addEventListener("visibilitychange", check);
   }
   return () => {
     offLifecycle();
-    if (typeof document !== "undefined") {
+    if (canListen) {
       document.removeEventListener("visibilitychange", check);
     }
   };

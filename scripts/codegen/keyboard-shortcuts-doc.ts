@@ -1,7 +1,7 @@
 // Generates docs/keyboard-shortcuts.md from shared/config/defaultKeybindings.ts.
 // Run: npm run codegen:keybindings   Verify (CI): npm run check:keybindings
-// Platform-parameterized on purpose: the generator emits both the macOS and
-// Windows/Linux variants regardless of the host OS it runs on.
+// Platform-parameterized on purpose: the generator emits the macOS, Windows,
+// and Linux variants regardless of the host OS it runs on.
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -51,6 +51,11 @@ function generate(): string {
   const core = buildDefaultKeybindings(false);
   const windows = buildDefaultKeybindings(true);
   const windowsOnly = windows.filter((b) => !core.includes(b));
+  const linux = buildDefaultKeybindings(false, true);
+  const linuxReplacement = (binding: KeybindingConfig): KeybindingConfig | undefined =>
+    linux.includes(binding)
+      ? undefined
+      : linux.find((b) => b.actionId === binding.actionId && b.scope === binding.scope);
 
   const byCategory = new Map<string, KeybindingConfig[]>();
   const add = (binding: KeybindingConfig) => {
@@ -105,7 +110,13 @@ function generate(): string {
       const isWindowsOnly = windowsOnly.includes(binding);
       const label = escapeCell(binding.description ?? binding.actionId);
       const mac = isWindowsOnly ? "—" : codeSpan(escapeCell(displayMac(binding.combo)));
-      const win = `${codeSpan(escapeCell(displayWin(binding.combo)))}${isWindowsOnly ? " (Windows only)" : ""}`;
+      const replacement = linuxReplacement(binding);
+      const winCode = codeSpan(escapeCell(displayWin(binding.combo)));
+      const win = isWindowsOnly
+        ? `${winCode} (Windows only)`
+        : replacement
+          ? `${winCode} (Windows), ${codeSpan(escapeCell(displayWin(replacement.combo)))} (Linux)`
+          : winCode;
       lines.push(`| ${label} | ${mac} | ${win} |`);
     }
     lines.push("");

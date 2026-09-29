@@ -44,6 +44,7 @@ import {
   resolveE2EPreloadArgs,
   INITIAL_COLOR_SCHEME_ARG,
 } from "./skeletonCss.js";
+import { noteTerminationIntent } from "../services/processTerminationIntent.js";
 
 const SURFACE_LOAD_TIMEOUT_MS = 10_000;
 
@@ -380,6 +381,7 @@ export class SurfaceViewManager {
       console.warn(
         `[SurfaceViewManager] Surface ${surfaceId} unresponsive; forcing renderer crash`
       );
+      noteTerminationIntent({ webContentsId: liveWc.id }, "unresponsive surface");
       liveWc.forcefullyCrashRenderer();
     };
 

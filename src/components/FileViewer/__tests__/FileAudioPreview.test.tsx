@@ -167,7 +167,9 @@ describe("FileAudioPreview", () => {
     // grabbed the replacement, silently leaving the abandoned element loading.
     expect(first.hasAttribute("src")).toBe(false);
     expect(load).toHaveBeenCalledTimes(1);
-    expect(container.querySelector("audio")!.getAttribute("src")).toBe(`${MEDIA_URL}&v=2`);
+    await waitFor(() =>
+      expect(container.querySelector("audio")?.getAttribute("src")).toBe(`${MEDIA_URL}&v=2`)
+    );
   });
 
   it("releases the audio element on unmount", async () => {

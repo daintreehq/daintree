@@ -2,14 +2,21 @@ import { useCallback, useState, useEffect, useId, useRef } from "react";
 import type { ReactNode } from "react";
 import { Eye, EyeOff, Plus, X, Check, AlertCircle, ExternalLink, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import { SettingsTextarea } from "./SettingsTextarea";
 import { SettingsInput } from "./SettingsInput";
-import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import {
+  SettingsDependents,
+  SettingsGroup,
+  SettingsRow,
+  SettingsRowActions,
+} from "./SettingsGroup";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvents";
@@ -573,13 +580,9 @@ export function VoiceInputSettingsTab() {
                     ? "Detecting devices…"
                     : "The microphone dictation records from"}
                   {" · "}
-                  <button
-                    type="button"
-                    onClick={refreshDevices}
-                    className="text-text-secondary underline underline-offset-2 hover:text-text-primary transition-colors"
-                  >
+                  <Button variant="link" onClick={refreshDevices}>
                     Refresh list
-                  </button>
+                  </Button>
                 </>
               }
               error={devicesError ?? undefined}
@@ -827,10 +830,15 @@ function ApiKeyRow({
     }
   };
 
+  // Confirmed like every other stored credential (forge tokens, plugin secrets):
+  // the key isn't recoverable from Daintree once its copy is gone.
+  const [isRemoveConfirmOpen, setIsRemoveConfirmOpen] = useState(false);
+
   const handleRemove = async () => {
     if (busy) return;
     setStatus({ kind: "removing" });
     setStatus((await onSave("")) ? { kind: "removed" } : { kind: "remove-failed" });
+    setIsRemoveConfirmOpen(false);
   };
 
   const statusLine =
@@ -871,111 +879,121 @@ function ApiKeyRow({
     ) : null;
 
   return (
-    <SettingsRow
-      id={id}
-      label={label}
-      description={description}
-      layout="stacked"
-      accessory={
-        value ? (
-          <span
-            id={savedId}
-            className="rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-1.5 py-0.5 font-mono text-2xs text-text-secondary"
-          >
-            Saved · {maskApiKey(value)}
-          </span>
-        ) : (
-          <span id={savedId} className="text-xs text-text-secondary">
-            Not set
-          </span>
-        )
-      }
-      control={({ labelId, descriptionId, disabled }) => (
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative min-w-0 flex-1 basis-64">
-              <input
-                type={showKey ? "text" : "password"}
-                value={keyInput}
-                aria-labelledby={labelId}
-                aria-describedby={[savedId, descriptionId, statusId].filter(Boolean).join(" ")}
-                aria-invalid={status.kind === "invalid" ? true : undefined}
-                onChange={(e) => {
-                  setKeyInput(e.target.value);
-                  if (status.kind !== "idle" && !busy) {
-                    setStatus({ kind: "idle" });
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void handleSave();
-                  }
-                }}
-                placeholder={value ? "Paste a new key to replace the saved one" : placeholder}
-                className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-9 font-mono text-sm text-text-primary placeholder:font-sans placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
-                autoComplete="new-password"
-                spellCheck={false}
-                disabled={disabled || busy}
-              />
-              <button
-                type="button"
-                onClick={() => setShowKey((v) => !v)}
-                className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-text-secondary hover:text-text-primary transition-colors"
-                aria-label={showKey ? "Hide API key" : "Show API key"}
-              >
-                {showKey ? (
-                  <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
-                ) : (
-                  <Eye className="h-3.5 w-3.5" aria-hidden="true" />
-                )}
-              </button>
-            </div>
-            <Button
-              onClick={() => void handleSave()}
-              disabled={disabled || busy || !keyInput.trim()}
-              loading={testing}
-              size="sm"
-              variant="contrast"
+    <>
+      <ConfirmDialog
+        isOpen={isRemoveConfirmOpen}
+        variant="destructive"
+        onConfirm={() => void handleRemove()}
+        onClose={() => setIsRemoveConfirmOpen(false)}
+        isConfirmLoading={removing}
+        title={`Remove the ${label}?`}
+        description="Daintree's copy is deleted. Dictation through this provider stops until you add a key again."
+        confirmLabel="Remove key"
+        zIndex="nested"
+      />
+      <SettingsRow
+        id={id}
+        label={label}
+        description={description}
+        layout="stacked"
+        accessory={
+          value ? (
+            <span
+              id={savedId}
+              className="rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-1.5 py-0.5 font-mono text-2xs text-text-secondary"
             >
-              {onValidate ? "Check and save" : "Save"}
-            </Button>
-            {value ? (
+              Saved · {maskApiKey(value)}
+            </span>
+          ) : (
+            <span id={savedId} className="text-xs text-text-secondary">
+              Not set
+            </span>
+          )
+        }
+        control={({ labelId, descriptionId, disabled }) => (
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative min-w-0 flex-1 basis-64">
+                <Input
+                  type={showKey ? "text" : "password"}
+                  value={keyInput}
+                  aria-labelledby={labelId}
+                  aria-describedby={[savedId, descriptionId, statusId].filter(Boolean).join(" ")}
+                  aria-invalid={status.kind === "invalid" ? true : undefined}
+                  onChange={(e) => {
+                    setKeyInput(e.target.value);
+                    if (status.kind !== "idle" && !busy) {
+                      setStatus({ kind: "idle" });
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void handleSave();
+                    }
+                  }}
+                  placeholder={value ? "Paste a new key to replace the saved one" : placeholder}
+                  className="pr-9 font-mono placeholder:font-sans"
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  disabled={disabled || busy}
+                />
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => setShowKey((v) => !v)}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 [&_svg]:size-3.5"
+                  aria-label={showKey ? "Hide API key" : "Show API key"}
+                >
+                  {showKey ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                </Button>
+              </div>
               <Button
-                onClick={() => void handleRemove()}
-                variant="ghost-danger"
+                onClick={() => void handleSave()}
+                disabled={disabled || busy || !keyInput.trim()}
+                loading={testing}
                 size="sm"
-                disabled={disabled || testing}
-                loading={removing}
+                variant="contrast"
               >
-                Remove key
+                {onValidate ? "Check and save" : "Save"}
               </Button>
-            ) : (
-              <Button
-                onClick={() => window.electron?.system?.openExternal(helpUrl)}
-                variant="ghost"
-                size="sm"
-              >
-                Get a key
-                <ExternalLink aria-hidden="true" />
-              </Button>
-            )}
-          </div>
+              {value ? (
+                <Button
+                  onClick={() => setIsRemoveConfirmOpen(true)}
+                  variant="ghost-danger"
+                  size="sm"
+                  disabled={disabled || testing}
+                  loading={removing}
+                >
+                  Remove key
+                </Button>
+              ) : (
+                <Button
+                  onClick={() => window.electron?.system?.openExternal(helpUrl)}
+                  variant="ghost"
+                  size="sm"
+                >
+                  Get a key
+                  <ExternalLink aria-hidden="true" />
+                </Button>
+              )}
+            </div>
 
-          <p
-            id={statusId}
-            role="status"
-            aria-live="polite"
-            className={cn(
-              "flex items-start gap-1.5 text-xs text-text-primary",
-              !statusLine && "sr-only"
-            )}
-          >
-            {statusLine}
-          </p>
-        </div>
-      )}
-    />
+            <p
+              id={statusId}
+              role="status"
+              aria-live="polite"
+              className={cn(
+                "flex items-start gap-1.5 text-xs text-text-primary",
+                !statusLine && "sr-only"
+              )}
+            >
+              {statusLine}
+            </p>
+          </div>
+        )}
+      />
+    </>
   );
 }
 
@@ -1082,7 +1100,7 @@ function MicPermissionRow({
       }
       control={
         denied ? (
-          <div className="flex flex-wrap items-center gap-2">{statusDisplay.actions}</div>
+          <SettingsRowActions>{statusDisplay.actions}</SettingsRowActions>
         ) : (
           statusDisplay.actions
         )
@@ -1179,7 +1197,7 @@ function DictionaryGroup({
         control={({ labelId, descriptionId }) => (
           <div className="space-y-2">
             <div className="flex gap-2">
-              <input
+              <Input
                 ref={inputRef}
                 type="text"
                 value={newWord}
@@ -1193,7 +1211,7 @@ function DictionaryGroup({
                   }
                 }}
                 placeholder="Add a term…"
-                className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
+                className="w-auto min-w-0 flex-1"
               />
               <Button onClick={onAdd} disabled={!newWord.trim()} size="sm" variant="outline">
                 <Plus aria-hidden="true" />
@@ -1274,7 +1292,7 @@ function CorePromptRow() {
             <ChevronRight
               data-animated-chevron
               aria-hidden="true"
-              className={cn("transition-transform duration-150", expanded && "rotate-90")}
+              className={cn("transition-transform duration-150 ease-out", expanded && "rotate-90")}
             />
             {expanded ? "Hide core prompt" : "Inspect core prompt"}
           </Button>

@@ -10,6 +10,8 @@ import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getGenericPanelMenuGroups, type GenericPanelMenuInput } from "../genericPanelMenu";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
+import { registerTour } from "@/components/Tour/tourRegistry";
+import { publishRegisteredPluginActions } from "@/services/plugin/registeredPluginActions";
 import type { PanelKind } from "@/types";
 import {
   __resetPanelCloseGuardsForTests,
@@ -174,11 +176,13 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     children,
     onSelect,
     destructive,
+    keybinding,
     ...rest
   }: {
     children: React.ReactNode;
     onSelect?: (e: Event) => void;
     destructive?: boolean;
+    keybinding?: string;
     [key: string]: unknown;
   }) => (
     <button
@@ -187,6 +191,11 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       onClick={() => onSelect?.(new Event("select"))}
     >
       {children}
+      {/* The real primitive draws the action's live binding; the mock draws
+          the combo the hook mock resolves for it. */}
+      {keybinding && mockKeybindingDisplays[keybinding] && (
+        <kbd>{mockKeybindingDisplays[keybinding]}</kbd>
+      )}
     </button>
   ),
   DropdownMenuSeparator: () => <hr />,
@@ -496,6 +505,83 @@ describe("PanelHeader", () => {
     const findMenuButton = (menu: HTMLElement, label: string) =>
       Array.from(menu.querySelectorAll("button")).find((btn) => btn.textContent?.trim() === label);
 
+    describe("scratchpad (#12835)", () => {
+      const showScratchpad = vi.fn();
+      const collapseScratchpad = vi.fn();
+
+      function storeTerminal(scratchpad?: unknown, kind = "terminal") {
+        mockHasPty = kind === "terminal";
+        mockStoreState = {
+          ...mockStoreState,
+          showScratchpad,
+          collapseScratchpad,
+          panelsById: { "test-panel": { id: "test-panel", kind, cwd: "/p", scratchpad } },
+        };
+      }
+
+      it("offers Show scratchpad on a terminal without one, and opens it", () => {
+        storeTerminal();
+        render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+
+        findMenuButton(screen.getByTestId("overflow-menu"), "Show scratchpad")!.click();
+
+        expect(showScratchpad).toHaveBeenCalledWith("test-panel");
+        expect(screen.queryByTestId("panel-toggle-scratchpad")).toBeNull();
+      });
+
+      it("offers nothing while an empty scratchpad is open", () => {
+        storeTerminal({ content: "", collapsed: false });
+        render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+
+        expect(
+          findMenuButton(screen.getByTestId("overflow-menu"), "Show scratchpad")
+        ).toBeUndefined();
+        expect(screen.queryByTestId("panel-toggle-scratchpad")).toBeNull();
+      });
+
+      it("treats whitespace-only notes as empty", () => {
+        storeTerminal({ content: "  \n\t ", collapsed: false });
+        render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+
+        expect(screen.queryByTestId("panel-toggle-scratchpad")).toBeNull();
+      });
+
+      it("keeps a show toggle in the header while collapsed", () => {
+        storeTerminal({ content: "notes", collapsed: true });
+        render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+
+        const toggle = screen.getByTestId("panel-toggle-scratchpad");
+        expect(toggle.getAttribute("aria-label")).toBe("Show scratchpad");
+        fireEvent.pointerDown(toggle);
+        toggle.click();
+
+        expect(showScratchpad).toHaveBeenCalledWith("test-panel");
+        expect(collapseScratchpad).not.toHaveBeenCalled();
+      });
+
+      it("keeps a hide toggle in the header while open with notes", () => {
+        storeTerminal({ content: "notes", collapsed: false });
+        render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+
+        const toggle = screen.getByTestId("panel-toggle-scratchpad");
+        expect(toggle.getAttribute("aria-label")).toBe("Hide scratchpad");
+        toggle.click();
+
+        expect(collapseScratchpad).toHaveBeenCalledWith("test-panel");
+        expect(showScratchpad).not.toHaveBeenCalled();
+        expect(
+          findMenuButton(screen.getByTestId("overflow-menu"), "Show scratchpad")
+        ).toBeUndefined();
+      });
+
+      it("offers no scratchpad on a panel that is not a terminal", () => {
+        storeTerminal(undefined, "browser");
+        render(<PanelHeader {...makeProps({ kind: "browser" })} />);
+
+        expect(screen.queryByText("Show scratchpad")).toBeNull();
+      });
+    });
+
     it("always renders the overflow button (Rename/Duplicate/Trash always available)", () => {
       render(<PanelHeader {...makeProps()} />);
       expect(screen.getByLabelText("More panel actions")).toBeDefined();
@@ -568,12 +654,12 @@ describe("PanelHeader", () => {
       expect(findMenuButton(menu, "Cancel watch")).toBeUndefined();
     });
 
-    it("renders Trash with destructive styling", () => {
+    it("keeps Trash neutral: it is restorable from the dock's trash, not destructive", () => {
       render(<PanelHeader {...makeProps()} />);
       const menu = screen.getByTestId("overflow-menu");
       const trashButton = findMenuButton(menu, "Trash");
       expect(trashButton).toBeDefined();
-      expect(trashButton?.getAttribute("data-destructive")).toBe("true");
+      expect(trashButton?.getAttribute("data-destructive")).not.toBe("true");
     });
 
     it("dispatches terminal.rename when clicking Rename", () => {
@@ -951,11 +1037,22 @@ describe("PanelHeader", () => {
 
     function registerPluginKind(
       id: string,
-      options: { hasPty?: boolean; dockable?: boolean } = {}
+      options: {
+        hasPty?: boolean;
+        dockable?: boolean;
+        name?: string;
+        tourId?: string;
+        hasPluginSettings?: boolean;
+        hasPluginDatabases?: boolean;
+        pluginMenu?: Array<{ actionId: string; label?: string }>;
+      } = {}
     ) {
       registerPanelKind({
+        ...(options.hasPluginSettings ? { hasPluginSettings: true } : {}),
+        ...(options.hasPluginDatabases ? { hasPluginDatabases: true } : {}),
+        ...(options.pluginMenu ? { pluginMenu: options.pluginMenu } : {}),
         id,
-        name: id,
+        name: options.name ?? id,
         iconId: "terminal",
         color: "#abcdef",
         hasPty: options.hasPty ?? false,
@@ -963,6 +1060,7 @@ describe("PanelHeader", () => {
         canConvert: false,
         extensionId: "acme",
         ...(options.dockable !== undefined ? { dockable: options.dockable } : {}),
+        ...(options.tourId !== undefined ? { tourId: options.tourId } : {}),
       });
     }
 
@@ -973,12 +1071,24 @@ describe("PanelHeader", () => {
       };
     }
 
+    const tourCleanups: Array<() => void> = [];
+    function registerPlayableTour(id: string) {
+      tourCleanups.push(
+        registerTour({
+          summary: { id, title: "Acme Tour", minutes: 1, chapterTitles: ["One"] },
+          load: () => Promise.reject(new Error("not under test")),
+        })
+      );
+    }
+
     afterEach(() => {
       // Unmounted first: dropping a kind while a header still listens would
       // notify it outside act().
       cleanup();
+      for (const cleanupTour of tourCleanups.splice(0)) cleanupTour();
       unregisterPanelKind(PLUGIN_KIND);
       unregisterPanelKind(PTY_PLUGIN_KIND);
+      publishRegisteredPluginActions([]);
       __resetPanelCloseGuardsForTests();
     });
 
@@ -1110,7 +1220,7 @@ describe("PanelHeader", () => {
 
     it("shows the maximize keybinding on the maximize row alone", () => {
       registerPluginKind(PLUGIN_KIND);
-      mockKeybindingDisplays = { "terminal.maximize": "⌃⇧F" };
+      mockKeybindingDisplays = { "terminal.maximize": "Ctrl+Shift+F" };
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
       const hints = Array.from(
@@ -1125,7 +1235,7 @@ describe("PanelHeader", () => {
       })
         .flat()
         .find((command) => command.shortcutActionId === "terminal.maximize")!;
-      expect(hints).toEqual([[maximize.label, "⌃⇧F"]]);
+      expect(hints).toEqual([[maximize.label, "Ctrl+Shift+F"]]);
     });
 
     it.each([
@@ -1186,6 +1296,138 @@ describe("PanelHeader", () => {
       );
     });
 
+    it("offers a kind's declared tour in the shared list and plays it by id (#12774)", () => {
+      registerPluginKind(PLUGIN_KIND, { name: "Dashboard", tourId: "acme.dashboard-intro" });
+      registerPlayableTour("acme.dashboard-intro");
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+
+      expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard Welcome Tour" }));
+      findMenuButton("Dashboard Welcome Tour")!.click();
+
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "help.tour.show",
+        { tourId: "acme.dashboard-intro" },
+        { source: "menu" }
+      );
+    });
+
+    it("opens the plugin's settings from its entry once the menu has handed focus back", async () => {
+      registerPluginKind(PLUGIN_KIND, { name: "Dashboard" });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+      const settingsLabel = () =>
+        getGenericPanelMenuGroups({
+          location: "grid",
+          isMaximized: false,
+          isDockable: true,
+          canMoveToWorktree: false,
+          canReload: true,
+          hasPluginSettings: true,
+        })
+          .flat()
+          .find((command) => command.id === "plugin-settings")!.label;
+      // Only for a kind whose plugin has settings.
+      expect(findMenuButton(settingsLabel())).toBeUndefined();
+      cleanup();
+
+      act(() => registerPluginKind(PLUGIN_KIND, { name: "Dashboard", hasPluginSettings: true }));
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+      expect(menuRows()).toEqual(sharedRows({ hasPluginSettings: true }));
+
+      fireEvent.click(findMenuButton(settingsLabel())!);
+      // Not from the item: the menu is still returning focus to its trigger.
+      expect(mockDispatch).not.toHaveBeenCalled();
+      const closeEvent = new Event("closeAutoFocus", { cancelable: true });
+      act(() => mockMenuCloseAutoFocus?.(closeEvent));
+      // The primitive's own restore runs — pointer or keyboard alike — and the
+      // settings home opens after it.
+      expect(closeEvent.defaultPrevented).toBe(false);
+      expect(mockDispatch).not.toHaveBeenCalled();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "plugin.openSettings",
+        { pluginId: "acme" },
+        { source: "menu" }
+      );
+    });
+
+    it("offers Back up data… and the plugin's own items, each dispatched once focus is back", async () => {
+      registerPluginKind(PLUGIN_KIND, {
+        hasPluginDatabases: true,
+        pluginMenu: [{ actionId: "acme.refresh" }, { actionId: "acme.export", label: "Export" }],
+      });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+      // No action registered yet, so no item would dispatch anything.
+      expect(menuRows()).toEqual(sharedRows({ hasPluginDatabases: true }));
+
+      act(() => publishRegisteredPluginActions([["acme.refresh", "Refresh data"]]));
+      expect(menuRows()).toEqual(
+        sharedRows({
+          hasPluginDatabases: true,
+          pluginMenuItems: [{ actionId: "acme.refresh", label: "Refresh data" }],
+        })
+      );
+
+      const pick = async (label: string) => {
+        fireEvent.click(findMenuButton(label)!);
+        expect(mockDispatch).not.toHaveBeenCalled();
+        act(() => mockMenuCloseAutoFocus?.(new Event("closeAutoFocus", { cancelable: true })));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      };
+
+      await pick("Refresh data");
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "acme.refresh",
+        { panelId: "test-panel" },
+        { source: "menu" }
+      );
+
+      mockDispatch.mockClear();
+      await pick("Back up data…");
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "plugin.backupDatabases",
+        { pluginId: "acme" },
+        { source: "menu" }
+      );
+    });
+
+    it("drops a picked settings entry when the menu reopens before closing", async () => {
+      registerPluginKind(PLUGIN_KIND, { hasPluginSettings: true });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+      fireEvent.click(findMenuButton("Plugin settings…")!);
+      act(() => mockMenuOpenChange?.(true));
+      act(() => mockMenuCloseAutoFocus?.(new Event("closeAutoFocus", { cancelable: true })));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(mockDispatch).not.toHaveBeenCalled();
+    });
+
+    it("offers a declared tour only once it is registered (#12774)", () => {
+      registerPluginKind(PLUGIN_KIND, { name: "Dashboard", tourId: "acme.dashboard-intro" });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+
+      expect(menuRows()).toEqual(sharedRows());
+      act(() => registerPlayableTour("acme.dashboard-intro"));
+      expect(menuRows()).toEqual(sharedRows({ tourLabel: "Dashboard Welcome Tour" }));
+    });
+
+    it("offers no tour for a kind that declares none", () => {
+      registerPluginKind(PLUGIN_KIND, { name: "Dashboard" });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+
+      const rows = Array.from(screen.getByTestId("overflow-menu").querySelectorAll("button"));
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.some((row) => rowLabel(row).endsWith("Welcome Tour"))).toBe(false);
+    });
+
     it.each(["file", "file-browser", "diff"])("offers no Reload panel on %s panels", (kind) => {
       render(<PanelHeader {...makeProps({ kind })} />);
 
@@ -1241,6 +1483,26 @@ describe("PanelHeader", () => {
       expect(findMenuButton("Lock input")).toBeDefined();
       expect(findMenuButton("Rename panel")).toBeUndefined();
       expect(findMenuButton("Duplicate")).toBeUndefined();
+    });
+
+    it("offers a PTY-backed plugin kind's tour on the terminal menu (#12774)", () => {
+      registerPluginKind(PTY_PLUGIN_KIND, {
+        hasPty: true,
+        name: "Shell",
+        tourId: "acme.shell-intro",
+      });
+      registerPlayableTour("acme.shell-intro");
+      mockHasPty = true;
+      storePanelKind(PTY_PLUGIN_KIND);
+      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+
+      findMenuButton("Shell Welcome Tour")!.click();
+
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "help.tour.show",
+        { tourId: "acme.shell-intro" },
+        { source: "menu" }
+      );
     });
 
     it("switches to the terminal menu when the plugin registers its kind after mount", () => {
@@ -1441,6 +1703,20 @@ describe("PanelHeader", () => {
         const header = container.firstElementChild as HTMLElement;
         fireEvent.mouseDown(header, { detail: 1 });
         fireEvent.mouseDown(header, { detail: 2 });
+        expect(dragMouseDown).toHaveBeenCalledTimes(2);
+      } finally {
+        mockDragHandle = null;
+      }
+    });
+
+    it("cancels Shift+mousedown so fleet shift-clicks don't extend the page selection (#12926)", () => {
+      const dragMouseDown = vi.fn();
+      mockDragHandle = { listeners: { onMouseDown: dragMouseDown } };
+      try {
+        const { container } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
+        const header = container.firstElementChild as HTMLElement;
+        expect(fireEvent.mouseDown(header, { shiftKey: true, button: 0 })).toBe(false);
+        expect(fireEvent.mouseDown(header, { button: 0 })).toBe(true);
         expect(dragMouseDown).toHaveBeenCalledTimes(2);
       } finally {
         mockDragHandle = null;
@@ -2201,7 +2477,39 @@ describe("PanelHeader", () => {
       ).toBeGreaterThanOrEqual(2);
     });
 
-    it("moves focus onto a parked tab only once its activation has painted it", async () => {
+    it("closes the focused tab on Delete or Backspace, and only from a tab", () => {
+      const onTabClose = vi.fn();
+      const onTabClick = vi.fn();
+      const tabsProp = [
+        {
+          id: "test-panel",
+          title: "Tab 1",
+          kind: "terminal" as const,
+          chrome: deriveTerminalChrome(),
+          isActive: true,
+        },
+        {
+          id: "t2",
+          title: "Tab 2",
+          kind: "terminal" as const,
+          chrome: deriveTerminalChrome(),
+          isActive: false,
+        },
+      ];
+      render(<PanelHeader {...makeProps({ tabs: tabsProp, onTabClose, onTabClick })} />);
+      const [, second] = screen.getAllByRole("tab", { hidden: true });
+      second!.focus();
+      fireEvent.keyDown(second!, { key: "Delete" });
+      expect(onTabClose).toHaveBeenCalledWith("t2");
+      fireEvent.keyDown(second!, { key: "Backspace" });
+      expect(onTabClose).toHaveBeenCalledTimes(2);
+      // A key reaching the strip from anything but a tab closes nothing.
+      fireEvent.keyDown(screen.getByRole("tablist"), { key: "Delete" });
+      expect(onTabClose).toHaveBeenCalledTimes(2);
+      expect(onTabClick).not.toHaveBeenCalled();
+    });
+
+    it("paints a parked tab for keyboard focus without selecting it", async () => {
       // jsdom has no frame loop; a frame is a macrotask here.
       const raf = vi
         .spyOn(globalThis, "requestAnimationFrame")
@@ -2229,11 +2537,12 @@ describe("PanelHeader", () => {
       }
       render(<Host />);
       const tabs = () => screen.getAllByRole("tab", { hidden: true });
-      // Parked before activation: hidden from paint, so not focusable.
+      // Parked: hidden from paint, so not focusable.
       expect(tabs()[1]?.getAttribute("data-tab-parked")).toBe("true");
-      fireEvent.keyDown(screen.getByRole("tablist"), { key: "ArrowRight" });
-      // Activation repaints it first…
-      expect(tabs()[1]?.getAttribute("aria-selected")).toBe("true");
+      tabs()[0]!.focus();
+      fireEvent.keyDown(tabs()[0]!, { key: "ArrowRight" });
+      // Manual activation: the arrow repaints the tab for focus but selects nothing…
+      expect(tabs()[1]?.getAttribute("aria-selected")).toBe("false");
       expect(tabs()[1]?.getAttribute("data-tab-parked")).toBeNull();
       // …then the deferred focus lands on it.
       await new Promise((r) => setTimeout(r, 5));

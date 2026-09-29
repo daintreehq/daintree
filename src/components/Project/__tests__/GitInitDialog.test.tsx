@@ -159,7 +159,7 @@ describe("GitInitDialog", () => {
     expect(initGitGuidedMock).not.toHaveBeenCalled();
 
     const button = startButton();
-    expect(button.disabled).toBe(false);
+    expect(button.getAttribute("aria-disabled")).toBeNull();
 
     fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "feat: init" },
@@ -229,10 +229,26 @@ describe("GitInitDialog", () => {
     });
 
     const button = startButton();
-    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
 
     fireEvent.click(button);
     expect(initGitGuidedMock).not.toHaveBeenCalled();
+  });
+
+  it("submits on Enter in its fields, behind the same guards as the button", async () => {
+    renderDialog();
+    const message = screen.getByLabelText(/^message$/i);
+
+    fireEvent.change(message, { target: { value: "   " } });
+    fireEvent.keyDown(message, { key: "Enter" });
+    expect(initGitGuidedMock).not.toHaveBeenCalled();
+
+    fireEvent.change(message, { target: { value: "feat: init" } });
+    fireEvent.keyDown(message, { key: "Enter", isComposing: true });
+    expect(initGitGuidedMock).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(message, { key: "Enter" });
+    await waitFor(() => expect(initGitGuidedMock).toHaveBeenCalledTimes(1));
   });
 
   it("resets the commit message and template to the defaults when reopened", () => {
@@ -702,7 +718,7 @@ describe("GitInitDialog", () => {
       fireEvent.change(nameInput(), { target: { value: "   " } });
 
       const start = startButton();
-      expect(start.disabled).toBe(true);
+      expect(start.getAttribute("aria-disabled")).toBe("true");
     });
 
     it("says why the button went dead instead of only painting the field red", () => {
@@ -986,10 +1002,11 @@ describe("GitInitDialog", () => {
 
       await waitFor(() => expect(screen.getByTestId("git-init-success")).toBeTruthy());
       // Escape, the backdrop and the header X all route to the same handler,
-      // and in this mode that handler OPENS the project. So the dialog must not
-      // offer them: the mode has one action and it is labelled.
+      // and in this mode that handler OPENS the project. So the dialog is not
+      // dismissible: the mode has one action and it is labelled. The X stays in
+      // the header and disables itself from `dismissible`, as on every locked
+      // dialog (pinned in AppDialog's own suite).
       expect(screen.getByTestId("app-dialog").getAttribute("data-dismissible")).toBe("false");
-      expect(screen.queryByRole("button", { name: /^close$/i })).toBeNull();
       expect(onCancel).not.toHaveBeenCalled();
     });
 
@@ -1004,7 +1021,7 @@ describe("GitInitDialog", () => {
       for (const input of inputs) {
         const original = input.value;
         fireEvent.change(input, { target: { value: "   " } });
-        expect(start.disabled).toBe(true);
+        expect(start.getAttribute("aria-disabled")).toBe("true");
         // Emptying it must produce an explanation, and that explanation must be
         // wired to the field it is about — not merely painted on the border.
         const describedBy = input.getAttribute("aria-describedby");

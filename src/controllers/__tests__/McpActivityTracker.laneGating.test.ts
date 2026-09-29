@@ -92,16 +92,16 @@ describe("McpActivityTracker — lane gating (#12108)", () => {
   });
 
   it("ignores every push aimed at a sibling lane's session", () => {
-    mcp.handlers.tier!({ sessionId: "session-other", toolId: "git.push", tier: "action" });
+    mcp.handlers.tier!({ sessionId: "session-other", toolId: "project.runCheck", tier: "core" });
     mcp.handlers.revoked!({ sessionId: "session-other", denialKind: "tier" });
     mcp.handlers.grant!({
       type: "grant.issued",
       sessionId: "session-other",
-      toolId: "git.push",
+      toolId: "project.runCheck",
       ttlMs: 1000,
       expiresAt: Date.now() + 1000,
     });
-    mcp.handlers.started!({ sessionId: "session-other", toolId: "git.push", turnId: "t1" });
+    mcp.handlers.started!({ sessionId: "session-other", toolId: "project.runCheck", turnId: "t1" });
     mcp.handlers.outcome!({ helpSessionId: "session-other", outcome: "agent-stuck" });
 
     expect(patch).not.toHaveBeenCalled();
@@ -150,7 +150,11 @@ describe("McpActivityTracker — lane gating (#12108)", () => {
     new McpActivityTracker(unboundHost).start();
 
     unbound.handlers.revoked!({ sessionId: "session-mine", denialKind: "tier" });
-    unbound.handlers.started!({ sessionId: "session-mine", toolId: "git.push", turnId: "t1" });
+    unbound.handlers.started!({
+      sessionId: "session-mine",
+      toolId: "project.runCheck",
+      turnId: "t1",
+    });
 
     expect(patch).not.toHaveBeenCalled();
   });

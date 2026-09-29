@@ -542,6 +542,31 @@ describe("WorkspaceHostProcess", () => {
     host.dispose();
   });
 
+  it("relays worktree-prune-retained as host-event (#12790)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const onHostEvent = vi.fn();
+    host.on("host-event", onHostEvent);
+
+    const event = {
+      type: "worktree-prune-retained",
+      adminDir: "/tmp/project/.git/worktrees/wt",
+      worktreePath: "/tmp/wt",
+      message: "kept",
+    };
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", event);
+
+    expect(onHostEvent).toHaveBeenCalledWith(event);
+
+    host.dispose();
+  });
+
   it("routes lifecycle-setup-error as host-event with details (#10778)", async () => {
     const { WorkspaceHostProcess } = await loadModule();
     const host = new WorkspaceHostProcess("/tmp/project", {
@@ -1689,6 +1714,73 @@ describe("WorkspaceHostProcess crash window", () => {
     expect(crashSpy).toHaveBeenCalledWith(137);
 
     host.dispose();
+  });
+
+  describe("unexpected exit log", () => {
+    const exitWarn = () =>
+      loggerCalls.find((c) => c.message.includes("] Host process ") && c.level === "warn");
+
+    async function readyHost() {
+      const { WorkspaceHostProcess } = await loadModule();
+      const host = new WorkspaceHostProcess("/tmp/project", {
+        maxRestartAttempts: 3,
+        healthCheckIntervalMs: 30000,
+      } as any);
+      host.waitForReady().catch(() => {});
+      const child = mockChildren[0] as MockUtilityChild;
+      child.emit("message", { type: "ready" });
+      return { host, child };
+    }
+
+    it("describes an external SIGTERM that arrives after a clean-looking exit code", async () => {
+      const { host, child } = await readyHost();
+
+      child.emit("exit", 0);
+      // Nothing logs until the authoritative reason has had its tick.
+      expect(exitWarn()).toBeUndefined();
+      appMock.emit(
+        "child-process-gone",
+        {} as Electron.Event,
+        {
+          type: "Utility",
+          name: serviceNameFor("/tmp/project"),
+          reason: "killed",
+          exitCode: 15,
+        } as Electron.Details
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      const log = exitWarn();
+      expect(log?.message).toContain(process.platform === "win32" ? "exit code 15" : "SIGTERM");
+      expect(log?.message).toContain("from outside the process");
+      expect(log?.context).toMatchObject({ reason: "killed", exitCode: 15 });
+      expect(loggerCalls.some((c) => c.message.includes("Restarting in"))).toBe(true);
+
+      host.dispose();
+    });
+
+    it("falls back to the exit code when no reason arrives", async () => {
+      const { host, child } = await readyHost();
+
+      child.emit("exit", 3);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(exitWarn()?.message).toContain("exited with code 3 (no reason reported)");
+      expect(exitWarn()?.context).toMatchObject({ reason: null, exitCode: 3 });
+
+      host.dispose();
+    });
+
+    it("still records the exit when a dispose lands during the defer", async () => {
+      const { host, child } = await readyHost();
+
+      child.emit("exit", 1);
+      host.dispose();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(exitWarn()?.message).toContain("exited with code 1");
+      expect(exitWarn()?.context).toMatchObject({ disposedDuringDefer: true });
+    });
   });
 
   it("child-process-gone with non-matching serviceName is ignored", async () => {

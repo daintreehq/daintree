@@ -1,6 +1,5 @@
-import { useRef } from "react";
+import { useRef, type KeyboardEvent } from "react";
 import { cn } from "@/lib/utils";
-import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import type { QuickStateFilter } from "@/lib/worktreeFilters";
 import { CheckCircle2 } from "lucide-react";
 import { HollowCircle, SpinnerCircle } from "@/components/icons";
@@ -70,106 +69,145 @@ export function QuickStateFilterBar({
   showLabels = false,
 }: QuickStateFilterBarProps) {
   const workingActive = counts !== undefined && counts.working > 0;
-  // This row already claimed `role="toolbar"` without implementing any of it,
-  // which is worse than no role at all: it promises a screen-reader user one
-  // tab stop with arrow navigation and delivered five separate tab stops and
-  // dead arrow keys. The shared hook supplies the behaviour the role advertises.
-  const toolbarRef = useRef<HTMLDivElement>(null);
-  const handleToolbarKeyDown = useToolbarRoving(toolbarRef);
+  const refs = useRef(new Map<QuickStateFilter, HTMLButtonElement | null>());
+
+  // One choice of four with All as the null option — a radiogroup, keyed the
+  // same way as Pilot's twin (`PilotFilterBar`): the checked segment is the one
+  // tab stop, arrows and Home/End move it, and selection follows focus because
+  // the filter is instant and reversible.
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const index = FILTER_OPTIONS.findIndex((option) => option.value === value);
+    const from = index === -1 ? 0 : index;
+    let next: QuickStateFilter | undefined;
+    switch (event.key) {
+      case "ArrowRight":
+      case "ArrowDown":
+        next = FILTER_OPTIONS[(from + 1) % FILTER_OPTIONS.length]?.value;
+        break;
+      case "ArrowLeft":
+      case "ArrowUp":
+        next = FILTER_OPTIONS[(from - 1 + FILTER_OPTIONS.length) % FILTER_OPTIONS.length]?.value;
+        break;
+      case "Home":
+        next = FILTER_OPTIONS[0]?.value;
+        break;
+      case "End":
+        next = FILTER_OPTIONS[FILTER_OPTIONS.length - 1]?.value;
+        break;
+      default:
+        return;
+    }
+    if (next === undefined) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onChange(next);
+    refs.current.get(next)?.focus();
+  };
+
   return (
-    <div
-      ref={toolbarRef}
-      onKeyDown={handleToolbarKeyDown}
-      className={cn("flex border-b border-border-default", className)}
-      role="toolbar"
-      aria-label="Quick state filter"
-    >
-      {FILTER_OPTIONS.map((option, idx) => {
-        const isActive = option.value === value;
-        const rawCount = counts ? counts[option.value] : undefined;
-        const hasCount = rawCount !== undefined;
-        // An empty bucket keeps its icon and "0" digit but mutes the icon so
-        // the zero registers at a glance; no counts at all means no fade.
-        const shouldFadeIcon = hasCount && rawCount === 0;
-        const visual = option.value === "all" ? null : FILTER_VISUALS[option.value];
-        const isSpinningWorking = option.value === "working" && workingActive;
-        const Icon = isSpinningWorking ? SpinnerCircle : visual?.Icon;
-        // The status icon + count carry the meaning now that the text label is
-        // gone; the name lives in the accessible name and the hover tooltip.
-        const noun = rawCount === 1 ? "worktree" : "worktrees";
-        const accessibleName = hasCount ? `${option.label}, ${rawCount} ${noun}` : option.label;
-        return (
-          <Tooltip key={option.value}>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                data-quick-state-segment
-                aria-pressed={isActive}
-                aria-label={accessibleName}
-                onClick={() => onChange(isActive ? "all" : option.value)}
-                className={cn(
-                  "inline-flex items-center justify-center gap-1 min-w-0 px-2 py-1.5 transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-                  // "All" is the only labelled segment, so it gets a little
-                  // more room — but only a little. At double width it left the
-                  // three counts that answer the bar's real question pinched
-                  // against their dividers at the 200px sidebar floor.
-                  option.value === "all" ? "flex-[1.25]" : "flex-1",
-                  idx > 0 && "border-l border-border-default",
-                  isActive
-                    ? // Fallback keeps themes without the var byte-identical.
-                      "bg-[var(--worktree-quick-state-active-bg,var(--color-overlay-subtle))] shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
-                    : "hover:bg-tint/[0.04]"
-                )}
-              >
-                {Icon && visual ? (
-                  <Icon
-                    className={cn(
-                      "w-3 h-3 shrink-0 transition-[color,opacity]",
-                      visual.color,
-                      shouldFadeIcon && EMPTY_BUCKET_GLYPH_CLASS,
-                      isSpinningWorking && "animate-spin-slow motion-reduce:animate-none"
-                    )}
-                  />
-                ) : (
-                  <span
-                    aria-hidden="true"
-                    className={cn(
-                      "text-xs",
-                      isActive ? "font-medium text-text-primary" : "text-text-secondary"
-                    )}
-                  >
-                    All
-                  </span>
-                )}
-                {showLabels && option.value !== "all" && (
-                  <span
-                    aria-hidden="true"
-                    className={cn(
-                      "truncate text-xs",
-                      isActive ? "font-medium text-text-primary" : "text-text-secondary"
-                    )}
-                  >
-                    {option.label}
-                  </span>
-                )}
-                {hasCount && (
-                  <span
-                    aria-hidden="true"
-                    className={cn(
-                      "text-xs tabular-nums",
-                      isActive ? "text-text-primary" : "text-text-secondary"
-                    )}
-                  >
-                    {rawCount}
-                  </span>
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{option.label}</TooltipContent>
-          </Tooltip>
-        );
-      })}
+    <div className={cn("flex border-b border-border-default", className)}>
+      <div
+        onKeyDown={handleKeyDown}
+        className="flex min-w-0 flex-1"
+        role="radiogroup"
+        aria-label="Quick state filter"
+      >
+        {FILTER_OPTIONS.map((option, idx) => {
+          const isActive = option.value === value;
+          const rawCount = counts ? counts[option.value] : undefined;
+          const hasCount = rawCount !== undefined;
+          // An empty bucket keeps its icon and "0" digit but mutes the icon so
+          // the zero registers at a glance; no counts at all means no fade.
+          const shouldFadeIcon = hasCount && rawCount === 0;
+          const visual = option.value === "all" ? null : FILTER_VISUALS[option.value];
+          const isSpinningWorking = option.value === "working" && workingActive;
+          const Icon = isSpinningWorking ? SpinnerCircle : visual?.Icon;
+          // The status icon + count carry the meaning now that the text label is
+          // gone; the name lives in the accessible name and the hover tooltip.
+          const noun = rawCount === 1 ? "worktree" : "worktrees";
+          const accessibleName = hasCount ? `${option.label}, ${rawCount} ${noun}` : option.label;
+          return (
+            <Tooltip key={option.value}>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  role="radio"
+                  data-quick-state-segment
+                  aria-checked={isActive}
+                  aria-label={accessibleName}
+                  // Roving tabindex: the checked segment is the bar's one tab stop.
+                  tabIndex={isActive ? 0 : -1}
+                  ref={(el) => {
+                    refs.current.set(option.value, el);
+                  }}
+                  // A second click on the active segment clears back to All — the
+                  // sidebar's long-standing shortcut out of a filter, kept as is.
+                  onClick={() => onChange(isActive ? "all" : option.value)}
+                  className={cn(
+                    "inline-flex items-center justify-center gap-1 min-w-0 px-2 py-1.5 transition-colors",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
+                    // "All" is the only labelled segment, so it gets a little
+                    // more room — but only a little. At double width it left the
+                    // three counts that answer the bar's real question pinched
+                    // against their dividers at the 200px sidebar floor.
+                    option.value === "all" ? "flex-[1.25]" : "flex-1",
+                    idx > 0 && "border-l border-border-default",
+                    isActive
+                      ? // Fallback keeps themes without the var byte-identical.
+                        "bg-[var(--worktree-quick-state-active-bg,var(--color-overlay-subtle))] shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
+                      : "hover:bg-tint/[0.04]"
+                  )}
+                >
+                  {Icon && visual ? (
+                    <Icon
+                      className={cn(
+                        "w-3 h-3 shrink-0 transition-[color,opacity]",
+                        visual.color,
+                        shouldFadeIcon && EMPTY_BUCKET_GLYPH_CLASS,
+                        isSpinningWorking && "animate-spin-slow motion-reduce:animate-none"
+                      )}
+                    />
+                  ) : (
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "text-xs",
+                        isActive ? "font-medium text-text-primary" : "text-text-secondary"
+                      )}
+                    >
+                      All
+                    </span>
+                  )}
+                  {showLabels && option.value !== "all" && (
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "truncate text-xs",
+                        isActive ? "font-medium text-text-primary" : "text-text-secondary"
+                      )}
+                    >
+                      {option.label}
+                    </span>
+                  )}
+                  {hasCount && (
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "text-xs tabular-nums",
+                        isActive ? "text-text-primary" : "text-text-secondary"
+                      )}
+                    >
+                      {rawCount}
+                    </span>
+                  )}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{option.label}</TooltipContent>
+            </Tooltip>
+          );
+        })}
+      </div>
       {trailing && <div className="flex shrink-0 border-l border-border-default">{trailing}</div>}
     </div>
   );

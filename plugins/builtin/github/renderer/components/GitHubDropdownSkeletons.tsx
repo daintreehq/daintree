@@ -2,6 +2,7 @@ import { Search, ExternalLink, Plus, ArrowUpDown, RefreshCw } from "lucide-react
 import { ListChecks } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useSkeletonGate } from "@/hooks/useDeferredLoading";
+import { FORGE_DROPDOWN_PANEL_SIZE } from "@/components/Layout/forgeStatsDropdownContract";
 
 /**
  * The virtualized row height, in px, and the only definition of it. This used
@@ -11,7 +12,8 @@ import { useSkeletonGate } from "@/hooks/useDeferredLoading";
  * now sets its own height from this constant, so the two cannot drift.
  */
 export const RESOURCE_ITEM_HEIGHT_PX = 64;
-export const COMMIT_ITEM_HEIGHT_PX = 64;
+/** A collapsed commit row in the host's list (`LocalCommitsDropdown`), which this stands in for. */
+export const COMMIT_ITEM_HEIGHT_PX = 58;
 export const MAX_SKELETON_ITEMS = 6;
 
 /**
@@ -135,7 +137,7 @@ export function GitHubResourceListSkeleton({
 
   return (
     <div
-      className="relative w-[450px] flex flex-col h-[500px]"
+      className={cn("relative flex flex-col", FORGE_DROPDOWN_PANEL_SIZE)}
       role="status"
       aria-live="polite"
       aria-label="Loading GitHub results"
@@ -145,17 +147,12 @@ export function GitHubResourceListSkeleton({
       {/* Header — matches GitHubResourceList */}
       <div className="p-3 border-b border-[var(--border-divider)] space-y-2 shrink-0">
         <div className="flex items-center gap-2">
-          <div
-            className={cn(
-              "flex items-center gap-1.5 px-2.5 h-8 rounded-[var(--radius-md)] flex-1 min-w-0",
-              "bg-overlay-soft border border-[var(--border-overlay)]"
-            )}
-          >
-            <Search
-              className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none"
-              aria-hidden="true"
-            />
-            <span className="flex-1 min-w-0 text-sm text-text-secondary select-none">
+          {/* The shared field's own classes, not a copy of its look: the live
+              header renders SearchField, so drawing the same CSS here keeps the
+              swap from loading to loaded seamless. */}
+          <div className="search-field h-8 text-sm flex-1 cursor-default" data-size="compact">
+            <Search className="search-field-icon" aria-hidden="true" />
+            <span className="flex-1 min-w-0 truncate text-text-secondary select-none">
               Search {type === "issue" ? "issues" : "pull requests"}…
             </span>
           </div>
@@ -172,16 +169,23 @@ export function GitHubResourceListSkeleton({
           </div>
         </div>
 
+        {/* Drawn as the shared segmented control at rest (inset track, bordered
+            neutral thumb), so the filter does not change shape when the list loads. */}
         <div
-          className="flex p-0.5 bg-overlay-soft border border-[var(--border-divider)] rounded-[var(--radius-md)]"
+          className="flex w-full p-0.5 bg-surface-inset rounded-[var(--radius-md)]"
           aria-hidden="true"
         >
           {stateTabs.map((tab) => (
             <div
               key={tab.id}
               className={cn(
-                "flex-1 px-3 py-1 text-xs font-medium rounded text-center",
-                tab.id === "open" ? "bg-overlay-medium text-text-primary" : "text-text-secondary"
+                // The boundary is an inset shadow, not a border: the live thumb's
+                // border sits on an absolutely positioned layer, so a border here
+                // would make the skeleton 2px taller than what replaces it.
+                "flex-1 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-sm)] text-center",
+                tab.id === "open"
+                  ? "bg-overlay-medium text-text-primary shadow-[inset_0_0_0_1px_var(--color-text-secondary)]"
+                  : "text-text-secondary"
               )}
             >
               {tab.label}
@@ -202,7 +206,7 @@ export function GitHubResourceListSkeleton({
       </div>
 
       {/* Footer — matches GitHubResourceList */}
-      <div className="px-2 py-1.5 border-t border-[var(--border-divider)] flex items-center justify-between shrink-0">
+      <div className="px-2 h-10 border-t border-[var(--border-divider)] flex items-center justify-between shrink-0">
         <div className="flex items-center gap-1.5 px-3 h-7 text-xs text-text-secondary">
           <ExternalLink className="h-3.5 w-3.5" />
           View on GitHub
@@ -317,10 +321,26 @@ export function CommitListSkeleton({ count, immediate }: SkeletonProps) {
   const showImmediate = useSkeletonGate(Boolean(immediate));
   const pulseClass = showImmediate ? "animate-pulse-immediate" : "animate-pulse-delayed";
 
+  // The whole panel, not just rows: the list's code loads behind this on a
+  // first open, and a bare stack of rows made the panel change height and move
+  // its rows the moment the real header and footer arrived.
   return (
-    <div role="status" aria-live="polite" aria-label="Loading commits">
+    <div
+      className={cn("relative flex flex-col", FORGE_DROPDOWN_PANEL_SIZE)}
+      role="status"
+      aria-live="polite"
+      aria-label="Loading commits"
+    >
       <span className="sr-only">Loading commits</span>
-      <div aria-hidden="true" className="divide-y divide-[var(--border-divider)]">
+      <div className="p-3 border-b border-[var(--border-divider)] shrink-0" aria-hidden="true">
+        <div className="search-field h-8 text-sm cursor-default" data-size="compact">
+          <Search className="search-field-icon" aria-hidden="true" />
+          <span className="flex-1 min-w-0 truncate text-text-secondary select-none">
+            Search commits…
+          </span>
+        </div>
+      </div>
+      <div aria-hidden="true" className="flex-1 min-h-0 overflow-hidden">
         {Array.from({ length: renderCount }).map((_, i) => (
           <div
             key={i}
@@ -357,6 +377,15 @@ export function CommitListSkeleton({ count, immediate }: SkeletonProps) {
             </div>
           </div>
         ))}
+      </div>
+      <div
+        aria-hidden="true"
+        className="px-3 h-10 border-t border-[var(--border-divider)] flex items-center justify-end shrink-0"
+      >
+        <div className="flex items-center gap-1.5 px-3 h-7 text-xs text-text-secondary">
+          <ExternalLink className="h-3.5 w-3.5" />
+          View on GitHub
+        </div>
       </div>
     </div>
   );

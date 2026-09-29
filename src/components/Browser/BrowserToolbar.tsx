@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo, useId, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import {
   ArrowLeft,
   ArrowRight,
@@ -6,10 +7,12 @@ import {
   ExternalLink,
   Copy,
   Check,
+  Link,
   Globe,
   Lock,
   ZoomIn,
   ZoomOut,
+  Scan,
   Camera,
   SquareTerminal,
   Code,
@@ -18,7 +21,13 @@ import {
   Ellipsis,
   X,
 } from "lucide-react";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { cn } from "@/lib/utils";
+import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+  PANE_TOOLBAR_TEXT_BUTTON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
 import { normalizeBrowserUrl, getDisplayUrl } from "./browserUtils";
 import type { NormalizeResult } from "./browserUtils";
 import { actionService } from "@/services/ActionService";
@@ -42,7 +51,35 @@ import type {
   BrowserNavigationHistorySnapshot,
 } from "@shared/types/browser";
 import { logError } from "@/utils/logger";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
+import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import {
+  getUiTransitionDuration,
+  UI_ENTER_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_DURATION,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
+
+/**
+ * The URL suggestions and the error callout drop from the address field the way
+ * a toolbar dropdown does: 4px down and up from 97% while fading, on the entry
+ * tier, from `@starting-style` in the first painted frame. The suggestions also
+ * reverse on the exit tier (`data-visible="false"`); the error callout leaves at
+ * once, because the corrected address it answered is already in the field.
+ * Reduced motion keeps the fade.
+ */
+const ANCHORED_MOTION_CLASS =
+  "origin-top transition-[opacity,translate,scale] starting:opacity-0 starting:-translate-y-1 starting:scale-[0.97] data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0 data-[visible=false]:-translate-y-1 data-[visible=false]:scale-[0.97] motion-reduce:transition-opacity motion-reduce:translate-none motion-reduce:scale-none data-[visible=false]:motion-reduce:translate-none data-[visible=false]:motion-reduce:scale-none";
+const ANCHORED_ENTER_STYLE = {
+  transitionDuration: `${UI_ENTER_DURATION}ms`,
+  transitionTimingFunction: UI_ENTER_EASING,
+};
+const ANCHORED_EXIT_STYLE = {
+  transitionDuration: `${UI_EXIT_DURATION}ms`,
+  transitionTimingFunction: UI_EXIT_EASING,
+};
 
 const LONG_PRESS_MS = 400;
 const COMPACT_ROW_WIDTH = 640;
@@ -93,6 +130,11 @@ interface BrowserToolbarProps {
   onForward: () => void;
   onGoToHistoryIndex?: (index: number) => void;
   onReload: () => void;
+  /**
+   * Moves keyboard focus into the page. Returns false when there is no page able
+   * to take it, and the address bar hands focus to its panel instead.
+   */
+  onFocusPage?: () => boolean;
   /** Cancels an in-flight load; while loading, Reload becomes Stop. */
   onStop?: () => void;
   onHardReload?: () => void;
@@ -137,6 +179,7 @@ export function BrowserToolbar({
   onForward,
   onGoToHistoryIndex,
   onReload,
+  onFocusPage,
   onStop,
   onHardReload,
   onOpenExternal,
@@ -161,13 +204,19 @@ export function BrowserToolbar({
   const screenshotCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  // Set by the Escape that puts the address back, so the restored address does not
+  // reopen the suggestions it just dismissed. Typing or refocusing clears it.
+  const suggestionsDismissedRef = useRef(false);
   const [historyAnnouncement, setHistoryAnnouncement] = useState("");
 
   // Long-press state for back/forward history dropdown
   const [longPressDir, setLongPressDir] = useState<"back" | "forward" | null>(null);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressTargetRef = useRef<"back" | "forward" | null>(null);
-  const longPressDropdownRef = useRef<HTMLDivElement>(null);
+  const navButtonRefs = useRef<Record<"back" | "forward", HTMLButtonElement | null>>({
+    back: null,
+    forward: null,
+  });
 
   const clearLongPress = useCallback(() => {
     if (longPressTimerRef.current) {
@@ -204,17 +253,6 @@ export function BrowserToolbar({
     },
     [longPressDir, clearLongPress, onBack, onForward]
   );
-
-  // Close dropdown on click outside
-  useEffect(() => {
-    if (!longPressDir) return;
-    const handleClick = (e: MouseEvent) => {
-      if (longPressDropdownRef.current?.contains(e.target as Node)) return;
-      setLongPressDir(null);
-    };
-    document.addEventListener("mousedown", handleClick, true);
-    return () => document.removeEventListener("mousedown", handleClick, true);
-  }, [longPressDir]);
 
   // Every timer this component schedules has to die with it: a feedback reset
   // that outlives the mount sets state on a gone tree, and under vitest it can
@@ -295,6 +333,19 @@ export function BrowserToolbar({
       return [entry];
     });
   }, [isEditing, projectId, projectEntries, inputValue, toAddress]);
+
+  // The list fades out on the exit tier after it closes, showing the rows it
+  // last had. Retiring, it is inert and hidden from assistive tech, so its rows
+  // take no pointer and no longer read as options.
+  const listOpen = isDropdownOpen && suggestions.length > 0;
+  const [shownSuggestions, setShownSuggestions] = useState(suggestions);
+  if (listOpen && suggestions !== shownSuggestions) setShownSuggestions(suggestions);
+  const { isVisible: listVisible, shouldRender: listRendered } = useAnimatedPresence({
+    isOpen: listOpen,
+    animationDuration: getUiTransitionDuration("exit"),
+    syncEnter: true,
+  });
+  const listRows = listOpen ? suggestions : shownSuggestions;
   const addressOf = useCallback(
     (target: string) => getDisplayUrl(toAddress ? toAddress(target) : target),
     [toAddress]
@@ -302,7 +353,7 @@ export function BrowserToolbar({
 
   useEffect(() => {
     setHighlightedIndex(-1);
-    setIsDropdownOpen(isEditing && suggestions.length > 0);
+    setIsDropdownOpen(isEditing && suggestions.length > 0 && !suggestionsDismissedRef.current);
   }, [suggestions, isEditing]);
 
   useEffect(() => {
@@ -341,6 +392,7 @@ export function BrowserToolbar({
   );
 
   const handleFocus = useCallback(() => {
+    suggestionsDismissedRef.current = false;
     setIsEditing(true);
     setInputValue(address);
     if (selectOnFocusTimerRef.current) clearTimeout(selectOnFocusTimerRef.current);
@@ -361,6 +413,8 @@ export function BrowserToolbar({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Keys that belong to an IME composition are the composition's to handle.
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       if (isDropdownOpen && suggestions.length > 0) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
@@ -383,6 +437,7 @@ export function BrowserToolbar({
         }
         if (e.key === "Escape") {
           e.preventDefault();
+          e.stopPropagation();
           setIsDropdownOpen(false);
           setHighlightedIndex(-1);
           return;
@@ -405,15 +460,41 @@ export function BrowserToolbar({
         }
       }
       if (e.key === "Escape") {
-        setIsEditing(false);
-        setError(null);
-        inputRef.current?.blur();
+        // Chrome's two steps: an edited field first gets the current address back,
+        // selected, without losing focus; only an unchanged field lets go. Editing
+        // shows the full address, a commit leaves the resting one.
+        const isEdited = inputValue !== (isEditing ? address : getDisplayUrl(address));
+        if (isEdited || error) {
+          e.preventDefault();
+          e.stopPropagation();
+          suggestionsDismissedRef.current = true;
+          setError(null);
+          setIsEditing(true);
+          flushSync(() => setInputValue(address));
+          inputRef.current?.select();
+          return;
+        }
+        // Leaving the field runs handleBlur, which restores the resting address. This
+        // Escape still bubbles, so a hosting dialog keeps its Escape exit.
+        if (onFocusPage?.()) return;
+        // With no page to take focus, the panel keeps it rather than the document.
+        const panel = inputRef.current?.closest<HTMLElement>("[data-panel-id]");
+        if (panel) {
+          panel.focus();
+        } else {
+          inputRef.current?.select();
+        }
       }
     },
     [
       isDropdownOpen,
       suggestions,
       highlightedIndex,
+      inputValue,
+      isEditing,
+      address,
+      error,
+      onFocusPage,
       onNavigate,
       projectId,
       announceHistoryChange,
@@ -511,9 +592,8 @@ export function BrowserToolbar({
     }
   }, [url]);
 
-  const buttonClass =
-    "toolbar-icon-button shrink-0 p-1.5 rounded-[var(--radius-md)] disabled:opacity-30 disabled:cursor-not-allowed";
-  const actionClass = cn(buttonClass, "text-text-secondary aria-pressed:text-text-primary");
+  // The pane-toolbar icon button, shared with the portal and the file viewers.
+  const buttonClass = PANE_TOOLBAR_ICON_BUTTON_CLASS;
 
   // The stored preference survives the dev server stopping, but with no terminal
   // behind it there is no drawer to show, so the toggle must not read as pressed.
@@ -541,11 +621,11 @@ export function BrowserToolbar({
       type="button"
       onClick={onToggleConsole}
       disabled={!canToggleConsole}
-      className={cn(actionClass, "disabled:pointer-events-none")}
+      className={buttonClass}
       aria-label="Toggle console"
       aria-pressed={isConsoleShown}
     >
-      <SquareTerminal className="w-4 h-4" />
+      <SquareTerminal className={PANE_TOOLBAR_ICON_CLASS} />
     </button>
   );
   const openExternalButton = (
@@ -553,37 +633,62 @@ export function BrowserToolbar({
       type="button"
       onClick={onOpenExternal}
       disabled={!canOpenExternal}
-      className={cn(actionClass, "disabled:pointer-events-none")}
+      className={buttonClass}
       aria-label="Open in browser"
     >
-      <ExternalLink className="w-4 h-4" />
+      <ExternalLink className={PANE_TOOLBAR_ICON_CLASS} />
     </button>
   );
 
+  // Chrome's history list: long-press or right-click the button, or ArrowDown
+  // from the keyboard (Shift+F10 and the context-menu key reach it too).
+  // Enter and Space stay navigation, so the button is not a menu button.
   const historyMenu = (dir: "back" | "forward") => {
     const entries = dir === "back" ? recentBackEntries : recentForwardEntries;
-    if (longPressDir !== dir || entries.length === 0) return null;
+    if (entries.length === 0) return null;
     return (
-      <div
-        ref={longPressDropdownRef}
-        className="absolute left-0 top-full mt-1 z-50 min-w-[220px] rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden"
+      <DropdownMenu
+        open={longPressDir === dir}
+        onOpenChange={(open) => {
+          if (!open) setLongPressDir(null);
+        }}
       >
-        {entries.map((entry) => (
-          <button
-            key={entry.index}
-            type="button"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              setLongPressDir(null);
-              onGoToHistoryIndex?.(entry.index);
-            }}
-            className="w-full text-left px-2.5 py-1.5 hover:bg-overlay-medium transition-colors flex flex-col gap-0.5"
-          >
-            <span className="text-xs text-text-primary truncate">{entry.title || entry.url}</span>
-            <span className="text-2xs text-text-secondary truncate">{entry.url}</span>
-          </button>
-        ))}
-      </div>
+        {/* The button itself keeps plain click and Enter as navigation, so the
+            menu hangs off an inert stand-in over it instead of taking it over. */}
+        <DropdownMenuTrigger asChild>
+          <span aria-hidden="true" tabIndex={-1} className="pointer-events-none absolute inset-0" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="start"
+          className="min-w-[220px] max-w-[28rem]"
+          aria-label={dir === "back" ? "Back history" : "Forward history"}
+          // Radix labels the menu by its trigger, which here is the inert
+          // stand-in with no name of its own.
+          aria-labelledby={undefined}
+          onCloseAutoFocus={(e) => {
+            e.preventDefault();
+            // Jumping to the oldest or newest entry disables this direction's
+            // button, so focus falls back to the other one.
+            const other = dir === "back" ? "forward" : "back";
+            const target = [navButtonRefs.current[dir], navButtonRefs.current[other]].find(
+              (button) => button && !button.disabled
+            );
+            armTooltipFocusSuppression();
+            target?.focus({ preventScroll: true });
+          }}
+        >
+          {entries.map((entry) => (
+            <DropdownMenuItem
+              key={entry.index}
+              className="flex-col items-start gap-0.5"
+              onSelect={() => onGoToHistoryIndex?.(entry.index)}
+            >
+              <span className="w-full truncate">{entry.title || entry.url}</span>
+              <span className="w-full truncate text-2xs text-text-secondary">{entry.url}</span>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     );
   };
 
@@ -597,7 +702,24 @@ export function BrowserToolbar({
             <span className="inline-flex">
               <button
                 type="button"
+                ref={(el) => {
+                  navButtonRefs.current[dir] = el;
+                }}
                 onPointerDown={(e) => handlePointerDown(dir, e)}
+                onKeyDown={(e) => {
+                  if (e.key !== "ArrowDown") return;
+                  const entries = dir === "back" ? recentBackEntries : recentForwardEntries;
+                  if (entries.length === 0) return;
+                  e.preventDefault();
+                  setLongPressDir(dir);
+                }}
+                onContextMenu={(e) => {
+                  const entries = dir === "back" ? recentBackEntries : recentForwardEntries;
+                  if (entries.length === 0) return;
+                  e.preventDefault();
+                  clearLongPress();
+                  setLongPressDir(dir);
+                }}
                 onPointerUp={(e) => handlePointerUp(dir, e)}
                 onPointerLeave={clearLongPress}
                 onPointerCancel={clearLongPress}
@@ -609,14 +731,14 @@ export function BrowserToolbar({
                   else onForward();
                 }}
                 disabled={!enabled}
-                className={cn(buttonClass, "disabled:pointer-events-none")}
+                className={buttonClass}
                 aria-label={tooltip}
                 data-testid={dir === "back" ? "browser-back" : "browser-forward"}
               >
                 {dir === "back" ? (
-                  <ArrowLeft className="w-4 h-4" />
+                  <ArrowLeft className={PANE_TOOLBAR_ICON_CLASS} />
                 ) : (
-                  <ArrowRight className="w-4 h-4" />
+                  <ArrowRight className={PANE_TOOLBAR_ICON_CLASS} />
                 )}
               </button>
             </span>
@@ -634,10 +756,10 @@ export function BrowserToolbar({
         type="button"
         onClick={() => handleZoomStep("out")}
         disabled={!canZoomOut}
-        className={cn(buttonClass, "p-1")}
+        className={buttonClass}
         aria-label="Zoom out"
       >
-        <ZoomOut className="w-4 h-4" />
+        <ZoomOut className={PANE_TOOLBAR_ICON_CLASS} />
       </button>
       <span className="min-w-12 px-1 text-center text-xs font-medium tabular-nums text-text-primary">
         {currentZoomLabel}
@@ -646,16 +768,16 @@ export function BrowserToolbar({
         type="button"
         onClick={() => handleZoomStep("in")}
         disabled={!canZoomIn}
-        className={cn(buttonClass, "p-1")}
+        className={buttonClass}
         aria-label="Zoom in"
       >
-        <ZoomIn className="w-4 h-4" />
+        <ZoomIn className={PANE_TOOLBAR_ICON_CLASS} />
       </button>
       <button
         type="button"
         onClick={handleZoomReset}
         disabled={!isNonDefaultZoom}
-        className="toolbar-icon-button ml-1 px-2 py-1 rounded-[var(--radius-md)] text-xs font-medium text-text-primary disabled:opacity-40"
+        className={cn(PANE_TOOLBAR_TEXT_BUTTON_CLASS, "ml-1")}
         aria-label="Reset zoom"
       >
         Reset
@@ -695,7 +817,11 @@ export function BrowserToolbar({
                 aria-label={showStop ? "Stop loading" : "Reload"}
                 data-testid="browser-reload"
               >
-                {showStop ? <X className="w-4 h-4" /> : <RotateCw className="w-4 h-4" />}
+                {showStop ? (
+                  <X className={PANE_TOOLBAR_ICON_CLASS} />
+                ) : (
+                  <RotateCw className={PANE_TOOLBAR_ICON_CLASS} />
+                )}
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
@@ -746,6 +872,7 @@ export function BrowserToolbar({
                   // A commit leaves the field focused but out of editing, so typing
                   // again has to bring editing back or it lands under the overlay.
                   setIsEditing(true);
+                  suggestionsDismissedRef.current = false;
                   setInputValue(e.target.value);
                   setError(null);
                 }}
@@ -857,11 +984,11 @@ export function BrowserToolbar({
                         type="button"
                         onClick={handleCopy}
                         disabled={!address}
-                        className="toolbar-icon-button flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary disabled:opacity-30 disabled:pointer-events-none"
+                        className="toolbar-icon-button flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary"
                         aria-label="Copy URL"
                       >
                         {copied ? (
-                          <Check className="w-3.5 h-3.5 text-status-success" />
+                          <Check className="w-3.5 h-3.5" />
                         ) : (
                           <Copy className="w-3.5 h-3.5" />
                         )}
@@ -876,21 +1003,32 @@ export function BrowserToolbar({
               <div
                 id={errorId}
                 role="alert"
-                className="absolute left-0 mt-1 max-w-full text-xs text-status-error surface-overlay shadow-overlay border border-status-error rounded-[var(--radius-md)] px-2 py-1 z-10"
+                className={cn(
+                  "absolute left-0 mt-1 max-w-full text-xs text-status-error surface-overlay shadow-overlay border border-status-error rounded-[var(--radius-md)] px-2 py-1 z-10",
+                  ANCHORED_MOTION_CLASS
+                )}
+                style={ANCHORED_ENTER_STYLE}
               >
                 {error}
               </div>
             )}
           </form>
 
-          {isDropdownOpen && suggestions.length > 0 && (
+          {listRendered && (
             <div
-              ref={dropdownRef}
-              id={listboxId}
-              role="listbox"
-              className="absolute left-0 right-0 top-full mt-1 z-50 rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden"
+              ref={listOpen ? dropdownRef : undefined}
+              id={listOpen ? listboxId : undefined}
+              role={listOpen ? "listbox" : undefined}
+              inert={!listOpen || undefined}
+              aria-hidden={listOpen ? undefined : true}
+              data-visible={listVisible}
+              className={cn(
+                "absolute left-0 right-0 top-full mt-1 z-50 rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden p-1",
+                ANCHORED_MOTION_CLASS
+              )}
+              style={listVisible ? ANCHORED_ENTER_STYLE : ANCHORED_EXIT_STYLE}
             >
-              {suggestions.map((entry, index) => {
+              {listRows.map((entry, index) => {
                 const entryAddress = addressOf(entry.url);
                 return (
                   <div
@@ -898,7 +1036,11 @@ export function BrowserToolbar({
                     id={`${listboxId}-option-${index}`}
                     role="option"
                     aria-selected={index === highlightedIndex}
-                    onMouseEnter={() => setHighlightedIndex(index)}
+                    // `pointermove`, not `mouseenter`: rows scrolling under a
+                    // resting pointer must not steal the cursor from the keys.
+                    onPointerMove={
+                      index === highlightedIndex ? undefined : () => setHighlightedIndex(index)
+                    }
                     onMouseDown={(e) => {
                       e.preventDefault();
                       setIsEditing(false);
@@ -907,8 +1049,8 @@ export function BrowserToolbar({
                       onNavigate(entry.url);
                     }}
                     className={cn(
-                      "group/row w-full text-left px-2.5 py-1.5 flex items-center gap-2 cursor-pointer",
-                      index === highlightedIndex ? "bg-overlay-medium" : "hover:bg-overlay-soft"
+                      PALETTE_ROW_CLASS,
+                      "group/row w-full text-left rounded-[var(--radius-sm)] px-2.5 py-1.5 flex items-center gap-2 cursor-pointer"
                     )}
                   >
                     {entry.favicon ? (
@@ -984,11 +1126,11 @@ export function BrowserToolbar({
                       onViewportPresetChange(lastViewportPresetRef.current);
                     }
                   }}
-                  className={actionClass}
+                  className={buttonClass}
                   aria-label="Device mode"
                   aria-pressed={!!viewportPreset}
                 >
-                  <Smartphone className="w-4 h-4" />
+                  <Smartphone className={PANE_TOOLBAR_ICON_CLASS} />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
@@ -1021,16 +1163,13 @@ export function BrowserToolbar({
                   type="button"
                   onClick={handleCaptureScreenshot}
                   disabled={!isWebviewReady}
-                  className={cn(
-                    actionClass,
-                    "disabled:hover:bg-transparent disabled:hover:shadow-none"
-                  )}
+                  className={buttonClass}
                   aria-label="Copy screenshot to clipboard"
                 >
                   {screenshotCopied ? (
-                    <Check className="w-4 h-4 text-status-success" />
+                    <Check className={PANE_TOOLBAR_ICON_CLASS} />
                   ) : (
-                    <Camera className="w-4 h-4" />
+                    <Camera className={PANE_TOOLBAR_ICON_CLASS} />
                   )}
                 </button>
               </TooltipTrigger>
@@ -1057,14 +1196,14 @@ export function BrowserToolbar({
                     <button
                       ref={moreButtonRef}
                       type="button"
-                      className={actionClass}
+                      className={buttonClass}
                       aria-label="More page actions"
                       data-testid="browser-more-actions"
                     >
                       {copied && isCompact ? (
-                        <Check className="w-4 h-4 text-status-success" />
+                        <Check className={PANE_TOOLBAR_ICON_CLASS} />
                       ) : (
-                        <Ellipsis className="w-4 h-4" />
+                        <Ellipsis className={PANE_TOOLBAR_ICON_CLASS} />
                       )}
                     </button>
                   </DropdownMenuTrigger>
@@ -1075,7 +1214,7 @@ export function BrowserToolbar({
                 {isCompact && (
                   <>
                     <DropdownMenuItem disabled={!address} onSelect={() => void handleCopy()}>
-                      <Copy className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      <Link data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Copy URL
                     </DropdownMenuItem>
                     {consoleInMenu && (
@@ -1105,7 +1244,7 @@ export function BrowserToolbar({
                         handleZoomStep("in");
                       }}
                     >
-                      <ZoomIn className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      <ZoomIn data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Zoom in
                     </DropdownMenuItem>
                     <DropdownMenuItem
@@ -1115,11 +1254,11 @@ export function BrowserToolbar({
                         handleZoomStep("out");
                       }}
                     >
-                      <ZoomOut className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      <ZoomOut data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Zoom out
                     </DropdownMenuItem>
                     <DropdownMenuItem disabled={!isNonDefaultZoom} onSelect={handleZoomReset}>
-                      <span className="w-3.5 mr-2" aria-hidden="true" />
+                      <Scan data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Actual size
                     </DropdownMenuItem>
                   </>
@@ -1129,7 +1268,7 @@ export function BrowserToolbar({
                 )}
                 {onToggleDevTools && (
                   <DropdownMenuItem disabled={!isWebviewReady} onSelect={onToggleDevTools}>
-                    <Code className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                    <Code data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                     Toggle DevTools
                   </DropdownMenuItem>
                 )}
@@ -1138,7 +1277,7 @@ export function BrowserToolbar({
                     onSelect={onPromoteToPortal}
                     data-testid="browser-promote-portal"
                   >
-                    <PanelRight className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                    <PanelRight data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                     Open in Portal
                   </DropdownMenuItem>
                 )}

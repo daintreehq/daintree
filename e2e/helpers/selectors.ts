@@ -1,13 +1,13 @@
 export const SEL = {
   toolbar: {
-    toggleSidebar: '[aria-label="Toggle Sidebar"]',
+    toggleSidebar: '[aria-label="Toggle sidebar"]',
     openTerminal: '[aria-label="Open terminal"]',
     openSettings: '[aria-label="Open settings"]',
     openBrowser: '[aria-label="Open browser"]',
     openDevPreview: '[aria-label="Open dev preview"]',
     copyContext: '[aria-label="Copy context"]',
     projectSwitcherTrigger: '[data-testid="project-switcher-trigger"]',
-    portalToggle: '[aria-label*="web chat"]',
+    portalToggle: '[aria-label="Web chat"]',
   },
   portal: {
     region: 'aside[aria-label="Portal"]',
@@ -212,8 +212,11 @@ export const SEL = {
     // renders only in the grid presentation.
     close:
       '[data-testid="panel-dialog"]:has([data-testid="review-hub-content"]) [aria-label="Close dialog"]',
-    commitMessageInput: 'textarea[placeholder="Commit message…"]',
-    commitButton: (count: number) => `button:has-text("Commit (${count})")`,
+    commitMessageInput: '[data-testid="review-hub-commit-message"]',
+    // The staged count lives in the composer's status line, not the label; the
+    // primary carries it as data so a count assertion still pins the state.
+    commitButton: (count: number) =>
+      `[data-testid="review-hub-commit-primary"][data-staged-count="${count}"]:has-text("Commit")`,
     cleanState: 'text="Working tree clean"',
     stageButton: (path: string) => `[aria-label="Stage ${path}"]`,
     unstageButton: (path: string) => `[aria-label="Unstage ${path}"]`,
@@ -222,7 +225,8 @@ export const SEL = {
     fileListToggle: '[data-testid="review-hub-file-list-toggle"]',
     noStagedFiles: 'text="Nothing staged"',
     noUnstagedChanges: 'text="All changes staged"',
-    commitAndPushButton: (count: number) => `button:has-text("Commit & Push (${count})")`,
+    commitAndPushButton: (count: number) =>
+      `[data-testid="review-hub-commit-primary"][data-staged-count="${count}"]:has-text("Commit & push")`,
     fileDiffButton: (path: string) => `[aria-label="View diff: ${path}"]`,
     // CommitPanel push confirm dialog (rendered in a portal, locate on `window`).
     pushConfirmMessage: '[data-testid="commit-panel-push-confirm-message"]',
@@ -249,8 +253,7 @@ export const SEL = {
     conflictRebaseProgress: '[data-testid="conflict-rebase-progress"]',
     conflictRebaseSequence: '[data-testid="conflict-rebase-sequence"]',
     conflictResolvedToggle: '[data-testid="conflict-resolved-toggle"]',
-    conflictTakeOurs: (path: string) => `[aria-label="Take ours for ${path}"]`,
-    conflictTakeTheirs: (path: string) => `[aria-label="Take theirs for ${path}"]`,
+    conflictMoreActions: (path: string) => `[aria-label="More actions for ${path}"]`,
     conflictMarkResolved: (path: string) => `[aria-label="Mark ${path} as resolved"]`,
   },
   confirmDialog: {
@@ -325,9 +328,9 @@ export const SEL = {
     terminalTitle: (i: number) => `#terminal-title-${i}`,
     terminalCommand: (i: number) => `#terminal-command-${i}`,
     terminalExitBehavior: (i: number) => `#terminal-exit-behavior-${i}`,
-    addTerminalButton: 'button:has-text("+ Add terminal")',
-    createButton: 'button:has-text("Create Recipe")',
-    updateButton: 'button:has-text("Update Recipe")',
+    addTerminalButton: 'button:has-text("Add terminal")',
+    createButton: 'button:has-text("Create recipe")',
+    updateButton: 'button:has-text("Update recipe")',
     cancelButton: 'button:has-text("Cancel")',
   },
   diagnostics: {
@@ -408,7 +411,7 @@ export const SEL = {
     // a submenu (#11691) — the parent row announces itself with aria-expanded.
     trayLaunchPresetParent: '[role="option"][data-row-kind="item"][aria-expanded]',
     trayLaunchPresetItem: '[role="option"][data-row-kind="preset"]',
-    contextPresetSubmenu: '[role="menu"]:text("Launch with Preset")',
+    contextPresetSubmenu: '[role="menu"]:text("Launch with preset")',
     defaultOption: '[data-testid="preset-option-default"]',
     customPresetOption: '[data-testid="preset-selector-listbox"] [role="option"]',
   },
@@ -434,7 +437,7 @@ export const SEL = {
     listPrs: "#github-pr-list",
     loadMore: (type: "issue" | "pr") => `#github-${type}-load-more`,
     item: (number: number) => `[data-testid="github-item-${number}"]`,
-    selectionActions: '[role="dialog"][aria-label="Selection actions"]',
+    selectionActions: '[role="menu"]',
     noTokenEmptyState: 'text="GitHub not connected"',
     rateLimitedEmptyState: 'text="GitHub requests are paused"',
     // Bulk selection action bar + dialog
@@ -442,8 +445,8 @@ export const SEL = {
     bulkCreateButton: '[data-testid="bulk-action-create-worktrees-button"]',
     bulkClearButton: '[aria-label="Clear selection"]',
     bulkCreateDialog: '[data-testid="bulk-create-worktree-dialog"]',
-    // Token-health banner (GlobalBannerCoordinator slot forge-token)
-    tokenExpiredBanner: 'text="GitHub token expired"',
+    // Token callout under the forge pill (#12831)
+    tokenCallout: '[data-testid="forge-token-callout"]',
   },
   plugin: {
     manager: '[data-testid="plugin-manager-view"]',
@@ -495,7 +498,7 @@ export const SEL = {
     moreFilters: 'button[aria-label^="More filters"]',
     // Lives in the "Filters" popover, which portals outside the events panel —
     // locate it from the window, not the panel, after opening moreFilters.
-    traceInput: 'input[placeholder="Filter by trace ID..."]',
+    traceInput: 'input[placeholder="Filter by trace ID…"]',
     clearSearch: '[aria-label="Clear search"]',
     clearTraceId: '[aria-label="Clear trace ID filter"]',
   },
@@ -520,7 +523,7 @@ export const SEL = {
     dialog: '[role="dialog"][aria-label="Theme palette"]',
     searchInput: '[aria-label="Search themes"]',
     list: "#theme-palette-list",
-    options: '#theme-palette-list [role="option"]',
+    options: '#theme-palette-list [role="option"]:not([aria-disabled="true"])',
   },
   logLevelPalette: {
     // Two-step picker. Both steps reuse SearchablePalette's default listId.
@@ -564,8 +567,8 @@ export const SEL = {
     importDialog: '[role="dialog"]:has-text("Import recipe")',
     importTextarea: '[data-testid="recipe-import-textarea"]',
     // Scope this with the importDialog locator in specs — the import dialog's
-    // footer has only "Cancel" and "Import", so a bare text match is unambiguous.
-    importConfirmButton: 'button:has-text("Import")',
+    // footer has only "Cancel" and "Import recipe".
+    importConfirmButton: 'button[data-confirm-role="confirm"]:has-text("Import recipe")',
     overriddenBadge: 'text="Overridden by team recipe"',
     moreButton: (name: string) => `[aria-label="More actions for recipe ${name}"]`,
     copyJsonItem: '[role="menuitem"]:has-text("Copy as JSON")',
@@ -573,8 +576,9 @@ export const SEL = {
   },
   recipeConflict: {
     dialog: '[role="dialog"]:has-text("changed on disk")',
-    reloadButton: '[data-testid="recipe-conflict-reload"]',
-    overwriteButton: '[data-testid="recipe-conflict-overwrite"]',
+    reloadButton:
+      '[role="dialog"] button[data-confirm-role="confirm"]:has-text("Reload from disk")',
+    overwriteButton: '[role="dialog"] button[data-confirm-role="leading"]:has-text("Overwrite")',
   },
   recipeRunner: {
     emptyState: '[data-testid="recipe-runner-empty"]',

@@ -46,6 +46,83 @@ const CONTRACT_SOURCES = {
   twAnimateCss: "node_modules/tw-animate-css/dist/tw-animate.css",
 };
 
+/**
+ * Stylesheets exposed beside the contract that are NOT part of it. Tailwind's
+ * preflight is host chrome and never reaches a plugin compile; it is here for
+ * `daintree-plugin tour preview`, which stands in for the host document and so
+ * needs the host's base layer too.
+ */
+const STANDALONE_SOURCES = {
+  tailwindPreflightCss: "node_modules/tailwindcss/preflight.css",
+};
+
+/** The host stylesheet whose root-level variables the standalone preview needs. */
+const HOST_STYLESHEET = "src/index.css";
+
+/**
+ * The custom properties the host stylesheet declares on `:root`, `.light` and
+ * `.dark`, as those three rules and nothing else. The design contract's tokens
+ * read some of them (`--theme-surface-dialog`, the shadcn aliases), so a page
+ * without the host's stylesheet needs them to draw those tokens at all.
+ */
+export function hostRootVariablesCss(css) {
+  const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const blocks = new Map([
+    [":root", []],
+    [".light", []],
+    [".dark", []],
+  ]);
+  const opener = /^(:root|\.light|\.dark)\s*\{/gm;
+  for (let match = opener.exec(source); match; match = opener.exec(source)) {
+    let depth = 1;
+    let index = opener.lastIndex;
+    while (index < source.length && depth > 0) {
+      if (source[index] === "{") depth++;
+      else if (source[index] === "}") depth--;
+      index++;
+    }
+    const body = source.slice(opener.lastIndex, index - 1);
+    // Only top-level declarations of this rule, not ones nested in a child block.
+    let flat = "";
+    let nested = 0;
+    for (const char of body) {
+      if (char === "{") nested++;
+      else if (char === "}") nested--;
+      else if (nested === 0) flat += char;
+    }
+    for (const decl of flat.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+      blocks.get(match[1]).push(`  ${decl[1]}: ${decl[2].trim().replace(/\s+/g, " ")};`);
+    }
+    opener.lastIndex = index;
+  }
+  return [...blocks]
+    .filter(([, decls]) => decls.length > 0)
+    .map(([selector, decls]) => `${selector} {\n${decls.join("\n")}\n}`)
+    .join("\n");
+}
+
+/** The virtual module's source: one string export per stylesheet. */
+function renderModule(onFile) {
+  const exports = [];
+  for (const [name, relative] of Object.entries({ ...CONTRACT_SOURCES, ...STANDALONE_SOURCES })) {
+    const absolute = path.join(REPO_ROOT, relative);
+    if (!existsSync(absolute)) {
+      throw new Error(
+        `[daintree-plugin-style-contract] missing ${relative}. The plugin Tailwind ` +
+          `compiler inlines this file, so the renderer cannot be built without it.`
+      );
+    }
+    onFile?.(absolute);
+    exports.push(`export const ${name} = ${JSON.stringify(readFileSync(absolute, "utf-8"))};`);
+  }
+  const host = path.join(REPO_ROOT, HOST_STYLESHEET);
+  onFile?.(host);
+  exports.push(
+    `export const hostRootVariablesCss = ${JSON.stringify(hostRootVariablesCss(readFileSync(host, "utf-8")))};`
+  );
+  return exports.join("\n");
+}
+
 /** Absolute paths of every stylesheet in the contract. */
 export function pluginStyleContractSources() {
   return Object.values(CONTRACT_SOURCES).map((relative) => path.join(REPO_ROOT, relative));
@@ -71,22 +148,36 @@ export function pluginStyleContract() {
 
     load(id) {
       if (id !== RESOLVED_ID) return null;
+      // Editing the design contract has to rebuild the compiler's input in
+      // dev, not just the host stylesheet.
+      return renderModule((absolute) => this.addWatchFile?.(absolute));
+    },
+  };
+}
 
-      const exports = [];
-      for (const [name, relative] of Object.entries(CONTRACT_SOURCES)) {
-        const absolute = path.join(REPO_ROOT, relative);
-        if (!existsSync(absolute)) {
-          throw new Error(
-            `[daintree-plugin-style-contract] missing ${relative}. The plugin Tailwind ` +
-              `compiler inlines this file, so the renderer cannot be built without it.`
-          );
-        }
-        // Editing the design contract has to rebuild the compiler's input in
-        // dev, not just the host stylesheet.
-        this.addWatchFile?.(absolute);
-        exports.push(`export const ${name} = ${JSON.stringify(readFileSync(absolute, "utf-8"))};`);
-      }
-      return exports.join("\n");
+/**
+ * The same module for an esbuild build (tsup), so the `daintree-plugin` CLI
+ * bundles byte-identical stylesheets to the ones the renderer compiles with.
+ *
+ * @returns {import("esbuild").Plugin}
+ */
+export function pluginStyleContractEsbuild() {
+  const filter = new RegExp(`^${PLUGIN_STYLE_CONTRACT_MODULE_ID.replace(/[.:-]/g, "\\$&")}$`);
+  return {
+    name: "daintree-plugin-style-contract",
+    setup(build) {
+      build.onResolve({ filter }, () => ({
+        path: PLUGIN_STYLE_CONTRACT_MODULE_ID,
+        namespace: "daintree-style-contract",
+      }));
+      build.onLoad({ filter: /.*/, namespace: "daintree-style-contract" }, () => {
+        const watchFiles = [];
+        return {
+          contents: renderModule((absolute) => watchFiles.push(absolute)),
+          loader: "js",
+          watchFiles,
+        };
+      });
     },
   };
 }

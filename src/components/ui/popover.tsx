@@ -2,7 +2,7 @@ import * as React from "react";
 import type * as PopoverPrimitiveType from "@radix-ui/react-popover";
 import { Slot } from "@radix-ui/react-slot";
 import { cn } from "@/lib/utils";
-import { OVERLAY_MOTION_CLASS } from "./overlayMotion";
+import { OVERLAY_DROP_MOTION_CLASS, OVERLAY_MOTION_CLASS } from "./overlayMotion";
 import { BrandSurfaceReset } from "@/components/icons/BrandSurface";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import {
@@ -128,7 +128,10 @@ const PopoverTrigger = React.forwardRef<
 
     React.useLayoutEffect(() => {
       const node = triggerNodeRef.current;
-      if (node && node.getAttribute("data-state") !== "open") {
+      // `aria-expanded`, not `data-state`: a Tooltip sharing this trigger writes its
+      // own `data-state` over the popover's, which read as closed while the popover
+      // was open and stripped the attribute that names it.
+      if (node && node.getAttribute("aria-expanded") !== "true") {
         node.removeAttribute("aria-controls");
       }
     });
@@ -222,7 +225,14 @@ const PopoverAnchor = React.forwardRef<
 });
 PopoverAnchor.displayName = "PopoverAnchor";
 
-type PopoverContentProps = React.ComponentPropsWithoutRef<typeof PopoverPrimitiveType.Content>;
+type PopoverContentProps = React.ComponentPropsWithoutRef<typeof PopoverPrimitiveType.Content> & {
+  /**
+   * `drop` for a list that hangs off a trigger about as wide as itself: it
+   * unrolls downward instead of zooming from the anchor's corner, which on a
+   * wide panel reads as sideways growth. See `overlayMotion.ts`.
+   */
+  motion?: "overlay" | "drop";
+};
 
 const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitiveType.Content>,
@@ -233,6 +243,7 @@ const PopoverContent = React.forwardRef<
       className,
       align = "center",
       sideOffset = 4,
+      collisionPadding = 8,
       collisionBoundary,
       style,
       onPointerDown,
@@ -241,6 +252,7 @@ const PopoverContent = React.forwardRef<
       onKeyDown,
       onClick,
       onCloseAutoFocus,
+      motion = "overlay",
       ...props
     },
     ref
@@ -312,13 +324,14 @@ const PopoverContent = React.forwardRef<
             ref={ref}
             align={align}
             sideOffset={sideOffset}
+            collisionPadding={collisionPadding}
             collisionBoundary={collisionBoundary ?? boundary ?? undefined}
             style={{ transformOrigin: "var(--radix-popover-content-transform-origin)", ...style }}
             className={cn(
               // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
               "app-no-drag",
               "z-[var(--z-popover)] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-text-primary",
-              OVERLAY_MOTION_CLASS,
+              motion === "drop" ? OVERLAY_DROP_MOTION_CLASS : OVERLAY_MOTION_CLASS,
               className
             )}
             {...props}

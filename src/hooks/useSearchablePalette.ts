@@ -28,14 +28,23 @@ export interface UseSearchablePaletteOptions<T> {
   /** Extract a unique ID from an item for the matchesById map. Defaults to `(item as any).id`. */
   getItemId?: (item: T) => string;
   /**
-   * Lag filtering behind the input via `useDeferredValue`. Default true, which
-   * keeps keystrokes responsive on large lists at the cost of `results` briefly
-   * trailing `query`. Small embedded launchers whose confirm key can be pressed
+   * Lag filtering behind the input via `useDeferredValue`. Default `"auto"`:
+   * deferred only for lists large enough that the pass could hold up typing
+   * (see AUTO_DEFER_MIN_ITEMS); `true` always defers, at the cost of `results`
+   * trailing `query` by a frame. Small embedded launchers whose confirm key can be pressed
    * in the same tick as the last keystroke pass false: with deferral on, that
    * Enter reads the *previous* query's ranking and launches the wrong item.
    */
-  deferFiltering?: boolean;
+  deferFiltering?: boolean | "auto";
 }
+
+/**
+ * Below this many items a Fuse/filterFn pass costs a millisecond or two, so
+ * deferring it only spends a frame: the keystroke paints first and the list
+ * catches up on the next one. `"auto"` filters synchronously up to here and
+ * defers above it, where the pass is heavy enough to hold up typing.
+ */
+const AUTO_DEFER_MIN_ITEMS = 300;
 
 export interface UseSearchablePaletteReturn<T> {
   isOpen: boolean;
@@ -78,7 +87,7 @@ export function useSearchablePalette<T>(
     paletteId,
     includeMatches = false,
     getItemId = defaultGetItemId,
-    deferFiltering = true,
+    deferFiltering = "auto",
   } = options;
 
   const storeIsOpen = usePaletteStore(
@@ -93,7 +102,9 @@ export function useSearchablePalette<T>(
   // input events; the input itself binds to the urgent `query` state.
   // Called unconditionally (hook order) even when deferral is opted out of.
   const deferredValue = useDeferredValue(query);
-  const deferredQuery = deferFiltering ? deferredValue : query;
+  const shouldDefer =
+    deferFiltering === "auto" ? items.length > AUTO_DEFER_MIN_ITEMS : deferFiltering;
+  const deferredQuery = shouldDefer ? deferredValue : query;
   const isStale = query !== deferredQuery;
   const [selectedIndex, setSelectedIndex] = useState(0);
 

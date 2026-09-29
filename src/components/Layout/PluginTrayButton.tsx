@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Pin, Settings2 } from "lucide-react";
+import { Pin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -11,22 +11,25 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import {
+  TOOLBAR_CUSTOMIZE_ICON,
   TOOLBAR_CUSTOMIZE_LABEL,
   TOOLBAR_PIN_LABEL,
   TOOLBAR_UNPIN_LABEL,
 } from "./toolbarMenuStrings";
 import { Package } from "@/components/icons";
-import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
+import {
+  DEFAULT_PLUGIN_BUTTON_ICON,
+  resolvePluginIcon,
+} from "@/components/icons/pluginIconRegistry";
 import { actionService } from "@/services/ActionService";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useAriaKeyshortcuts, useShortcutHintHover } from "@/hooks";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import type { PluginToolbarButtonId } from "@shared/types/toolbar";
 import { cn } from "@/lib/utils";
@@ -94,7 +97,7 @@ export function PluginToolbarButton({
   const hover = useShortcutHintHover(config.actionId);
   const ariaShortcut = useAriaKeyshortcuts(config.actionId);
   const setPluginButtonPromoted = useToolbarPreferencesStore((s) => s.setPluginButtonPromoted);
-  const Icon = resolvePluginIcon(config.iconId);
+  const Icon = resolvePluginIcon(config.iconId, DEFAULT_PLUGIN_BUTTON_ICON);
 
   return (
     <ContextMenu>
@@ -153,8 +156,7 @@ function PluginTrayRow({
   onSelect: (config: ToolbarButtonConfig) => void;
   onTogglePin: (config: ToolbarButtonConfig) => void;
 }) {
-  const displayCombo = useKeybindingDisplay(config.actionId);
-  const Icon = resolvePluginIcon(config.iconId);
+  const Icon = resolvePluginIcon(config.iconId, DEFAULT_PLUGIN_BUTTON_ICON);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "p" || e.key === "P") {
@@ -168,16 +170,15 @@ function PluginTrayRow({
     <DropdownMenuItem
       onSelect={() => onSelect(config)}
       onKeyDown={handleKeyDown}
-      className="group h-7"
+      className="group"
       data-testid={`plugin-tray-row-${config.id}`}
+      keybinding={config.actionId}
     >
-      <span className="mr-2 inline-flex h-4 w-4 items-center justify-center">
-        <Icon className="h-3.5 w-3.5 text-text-secondary" />
+      <Icon data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+
+      <span className="min-w-0 flex-1 truncate" title={config.label}>
+        {config.label}
       </span>
-
-      <span className="flex-1">{config.label}</span>
-
-      {displayCombo && <DropdownMenuShortcut>{displayCombo}</DropdownMenuShortcut>}
 
       <span className="sr-only">Press P to {promoted ? "unpin from" : "pin to"} toolbar</span>
 
@@ -194,7 +195,7 @@ function PluginTrayRow({
           onTogglePin(config);
         }}
         className={cn(
-          "ml-1 inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 transition-opacity hover:bg-overlay-emphasis hover:text-text-primary",
+          "-my-0.5 ml-1 inline-flex h-5 w-5 items-center justify-center rounded-sm text-text-secondary transition-opacity hover:bg-overlay-hover hover:text-text-primary",
           promoted ? "opacity-100" : "opacity-0 group-data-[highlighted]:opacity-100"
         )}
       >
@@ -202,7 +203,7 @@ function PluginTrayRow({
           className={cn(
             "h-3 w-3",
             promoted &&
-              "fill-current text-daintree-text/40 group-data-[highlighted]:text-text-primary"
+              "fill-current text-text-secondary group-data-[highlighted]:text-text-primary"
           )}
           strokeWidth={promoted ? 2 : 1.75}
         />
@@ -330,7 +331,7 @@ export function PluginTrayButton({
       <DropdownMenuContent
         align="end"
         sideOffset={4}
-        className="min-w-[16rem]"
+        className="min-w-[16rem] max-w-[22rem]"
         onPointerDownOutside={() => {
           wasPointerCloseRef.current = true;
         }}
@@ -363,16 +364,12 @@ export function PluginTrayButton({
         ))}
 
         <DropdownMenuSeparator />
-        <DropdownMenuActionItem actionId="app.pluginManager" className="h-7">
-          <Package className="mr-2 h-3.5 w-3.5 text-text-secondary" />
+        <DropdownMenuActionItem actionId="app.pluginManager">
+          <Package data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Manage plugins
         </DropdownMenuActionItem>
-        <DropdownMenuActionItem
-          actionId="app.settings.openTab"
-          args={{ tab: "toolbar" }}
-          className="h-7"
-        >
-          <Settings2 className="mr-2 h-3.5 w-3.5 text-text-secondary" />
+        <DropdownMenuActionItem actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
+          <TOOLBAR_CUSTOMIZE_ICON data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           {TOOLBAR_CUSTOMIZE_LABEL}
         </DropdownMenuActionItem>
       </DropdownMenuContent>

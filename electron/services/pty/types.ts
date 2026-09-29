@@ -136,6 +136,11 @@ export interface TerminalPublicState {
    * a completion verdict — see `TerminalHandback`.
    */
   lastHandback?: TerminalHandback;
+  /**
+   * `lastHandback` was observed from output before any state change carried
+   * it, so the next settle publishes it to the renderer.
+   */
+  lastHandbackUnpublished?: boolean;
   /** Worktree the terminal was spawned in; used when persisting agent session history */
   worktreeId?: string;
   /** Last non-useless title observed from xterm OSC updates (renderer-synced) */
@@ -267,7 +272,17 @@ export interface PtyManagerEvents {
    * brokered the connection, so they name the actual recipient even when the
    * window's holder has changed since the chunk was sent.
    */
-  data: (id: string, data: string | Uint8Array, routing?: PtyDataRouting) => void;
+  /**
+   * `streamEnd` is the chunk's end offset in the terminal's renderer-bound
+   * stream (TerminalProcessCallbacks.emitData), carried to the renderer so a
+   * live snapshot restore can fence off chunks it already contains (#12791).
+   */
+  data: (
+    id: string,
+    data: string | Uint8Array,
+    routing?: PtyDataRouting,
+    streamEnd?: number
+  ) => void;
   /** A window's renderer MessagePort connection was torn down in the host (#12557). */
   "port-disconnected": (windowId: number, reason: string, holderWebContentsId?: number) => void;
   exit: (id: string, exitCode: number, signal?: number, launchGeneration?: number) => void;

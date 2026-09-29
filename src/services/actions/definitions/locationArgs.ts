@@ -41,8 +41,7 @@ import { paginationShape, foldPagination, type PaginationOptions } from "./schem
 /** Legacy spellings that a tool may keep accepting for `worktreePath`. */
 export type LegacyWorktreePathAlias = "cwd" | "rootPath" | "path";
 
-const legacyAliasDescription = (canonical: string): string =>
-  `Legacy alias for \`${canonical}\`; prefer \`${canonical}\`.`;
+const legacyAliasDescription = (canonical: string): string => `Legacy alias for \`${canonical}\`.`;
 
 /**
  * Every selector is `.min(1)`. An empty string must be a validation error, not
@@ -67,7 +66,7 @@ const selectorField = (description: string) => z.string().min(1).optional().desc
  * so a literal `worktree.list` here refers to a name the model never sees.
  */
 const worktreeIdField = selectorField(
-  "The worktree to act on, by id from the worktree-listing capability. Omit this and the path to target the active worktree, which fails when none is active."
+  "Worktree id from the worktree listing. Omit it and the path for the active worktree; fails when none is active."
 );
 
 /**
@@ -82,7 +81,7 @@ const worktreeIdRequiredField = selectorField(
 );
 
 const worktreePathField = selectorField(
-  "The worktree to act on, by absolute root path, as an alternative to its id. The id wins when both are given; the path is never swapped for the active one."
+  "Absolute worktree root, instead of the id. The id wins if both; the path is never swapped for the active one."
 );
 
 // The trailing qualifier is load-bearing, not hedging: `resolveProjectLocation`
@@ -90,11 +89,11 @@ const worktreePathField = selectorField(
 // falls back to the context project when the index is unavailable. Dropping it
 // would make this text claim a guarantee the resolver does not give.
 const projectIdField = selectorField(
-  "The project to act on, by id from the project-listing capability. Omit this and the path for the active project; an unknown id is rejected rather than retargeted, as long as the open-project set is known."
+  "Project id from the project listing. Omit it and the path for the active project; an unknown id is rejected, not retargeted, once open projects are known."
 );
 
 const projectPathField = selectorField(
-  "Identifies the project to act on by absolute root path, as an alternative to its id. The id wins when both are given."
+  "Absolute project root, instead of the id. The id wins if both."
 );
 
 /**

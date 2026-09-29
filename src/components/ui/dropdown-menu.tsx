@@ -1,6 +1,6 @@
 import * as React from "react";
 import type * as DropdownMenuPrimitiveType from "@radix-ui/react-dropdown-menu";
-import { Slot } from "@radix-ui/react-slot";
+import { Slot, Slottable } from "@radix-ui/react-slot";
 import { Check, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { OVERLAY_MOTION_CLASS } from "./overlayMotion";
@@ -17,8 +17,10 @@ import {
   useOverlayTriggerRef,
 } from "./overlay-focus-restore";
 import { actionService } from "@/services/ActionService";
-import { useAriaKeyshortcuts } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks";
+import { KbdChord } from "./Kbd";
 import type { ActionId, ActionDispatchOptions } from "@shared/types/actions";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 const DropdownMenuIntentContext = React.createContext<((next: boolean) => void) | null>(null);
 
@@ -244,14 +246,13 @@ type DropdownMenuSubTriggerProps = React.ComponentPropsWithoutRef<
 /* Highlighted-row focus ring, shared by every item-shaped primitive below.
  *
  * `data-[highlighted]` is Radix's own highlight and fires for pointer and keyboard
- * alike, so it stays the fill. It cannot be the WCAG 1.4.11 indicator on its own:
- * `overlay-raised` clears about 1.1:1 against the surface these menus float on
- * (`shared/theme/contrast.ts`), which is why the palette row grew a separate rail
- * rather than a heavier fill. Keyboard focus gets the indicator instead.
+ * alike, so it is the fill — `overlay-highlight`, the same step every palette row
+ * uses. These rows also hold real DOM focus, so keyboard focus gets a ring on top,
+ * as every focused control in the app does.
  *
  * `selection-outline` rather than the accent the generic inset-ring recipe names:
  * `getPaletteSelectionWarnings` holds that token to 3:1 against all three colours an
- * inset ring on one of these rows can touch — the raised fill, the `status-danger`
+ * inset ring on one of these rows can touch — the highlight fill, the `status-danger`
  * wash a destructive row swaps in for it, and the `.surface-overlay` behind both.
  * Accent is only scored against the display surfaces, so it has no guarantee against
  * any of them.
@@ -272,7 +273,7 @@ const DropdownMenuSubTrigger = React.forwardRef<
     <SubTrigger
       ref={ref}
       className={cn(
-        "flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[state=open]:bg-overlay-raised",
+        "flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors duration-150 ease-out data-[highlighted]:bg-overlay-highlight focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[state=open]:bg-overlay-highlight",
         inset && "pl-8",
         className
       )}
@@ -302,25 +303,30 @@ const DropdownMenuSubContent = React.forwardRef<
   const SubContent = radix.DropdownMenuPrimitive.SubContent;
   return (
     <Portal>
-      <SubContent
-        ref={shadowRef}
-        sideOffset={sideOffset}
-        collisionPadding={collisionPadding}
-        style={{ transformOrigin: "var(--radix-dropdown-menu-content-transform-origin)", ...style }}
-        className={cn(
-          // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
-          "app-no-drag",
-          "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
-          OVERLAY_MOTION_CLASS,
-          className
-        )}
-        {...props}
-        data-dock-popover-child={isDockPopoverChild ? "" : undefined}
-      >
-        {topShadow}
-        {children}
-        {bottomShadow}
-      </SubContent>
+      <BrandSurfaceReset>
+        <SubContent
+          ref={shadowRef}
+          sideOffset={sideOffset}
+          collisionPadding={collisionPadding}
+          style={{
+            transformOrigin: "var(--radix-dropdown-menu-content-transform-origin)",
+            ...style,
+          }}
+          className={cn(
+            // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
+            "app-no-drag",
+            "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
+            OVERLAY_MOTION_CLASS,
+            className
+          )}
+          {...props}
+          data-dock-popover-child={isDockPopoverChild ? "" : undefined}
+        >
+          {topShadow}
+          {children}
+          {bottomShadow}
+        </SubContent>
+      </BrandSurfaceReset>
     </Portal>
   );
 });
@@ -338,6 +344,7 @@ const DropdownMenuContent = React.forwardRef<
     {
       className,
       sideOffset = 4,
+      collisionPadding = 8,
       children,
       style,
       onPointerDown,
@@ -401,6 +408,7 @@ const DropdownMenuContent = React.forwardRef<
           <Content
             ref={shadowRef}
             sideOffset={sideOffset}
+            collisionPadding={collisionPadding}
             style={{
               transformOrigin: "var(--radix-dropdown-menu-content-transform-origin)",
               ...style,
@@ -432,20 +440,47 @@ const DropdownMenuContent = React.forwardRef<
 );
 DropdownMenuContent.displayName = "DropdownMenuContent";
 
+interface DropdownMenuShortcutProps {
+  /** The canonical combo (`"Cmd+Shift+P"`), never a pre-formatted display string. */
+  shortcut: string | null | undefined;
+  className?: string;
+}
+
+/* The trailing key column, drawn by `KbdChord` like every other shortcut in the
+ * app, bare because every row of a menu can carry one. `aria-hidden`: the glyph
+ * run is not part of the item's name (WCAG 2.5.3) — the item carries the keys
+ * as `aria-keyshortcuts` instead. */
+const DropdownMenuShortcut = ({ shortcut, className }: DropdownMenuShortcutProps) => {
+  if (!shortcut || !shortcut.trim()) return null;
+  return (
+    <span aria-hidden="true" className={cn("ml-auto shrink-0 pl-4", className)}>
+      <KbdChord shortcut={shortcut} density="bare" />
+    </span>
+  );
+};
+DropdownMenuShortcut.displayName = "DropdownMenuShortcut";
+
 type DropdownMenuItemProps = React.ComponentPropsWithoutRef<
   typeof DropdownMenuPrimitiveType.Item
 > & {
   inset?: boolean;
   destructive?: boolean;
+  /**
+   * The action whose live binding this row shows. Draws it in the trailing key
+   * column and sets `aria-keyshortcuts` from the same combo, so the visible
+   * keys and the announced ones cannot drift apart. Draws nothing when the
+   * action is unbound.
+   */
+  keybinding?: string;
 };
 
 /* Leading icons: mark the icon `data-menu-icon` and the text-only items in the
  * same menu pick up a matching gutter from the `[role="menu"]:has(...)` rule in
  * index.css — and lose it again when the icon-bearing items are filtered out.
  * `inset` is the static alternative for a menu whose shape never changes. */
-const DropdownMenuItem = React.forwardRef<
+const DropdownMenuItemBase = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitiveType.Item>,
-  DropdownMenuItemProps
+  Omit<DropdownMenuItemProps, "keybinding">
 >(({ className, inset, destructive, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
   if (!radix) return null;
@@ -454,7 +489,7 @@ const DropdownMenuItem = React.forwardRef<
     <Item
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors duration-150 ease-out data-[highlighted]:bg-overlay-highlight focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         inset && "pl-8",
         destructive &&
           "text-status-danger data-[highlighted]:text-status-danger data-[highlighted]:bg-status-danger/10",
@@ -465,6 +500,37 @@ const DropdownMenuItem = React.forwardRef<
     />
   );
 });
+DropdownMenuItemBase.displayName = "DropdownMenuItemBase";
+
+/* A row that shows an action's binding. Its own component so only rows that
+ * carry one subscribe to keybinding changes. */
+const DropdownMenuKeyboundItem = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitiveType.Item>,
+  Omit<DropdownMenuItemProps, "keybinding"> & { keybinding: string }
+>(({ keybinding, children, ...props }, ref) => {
+  const combo = useEffectiveCombo(keybinding);
+  const ariaKeyshortcuts = useAriaKeyshortcuts(keybinding);
+  return (
+    <DropdownMenuItemBase ref={ref} aria-keyshortcuts={ariaKeyshortcuts} {...props}>
+      {/* Slottable: with `asChild` the child stays the slotted element and the
+          key column is appended inside it, not beside it. */}
+      <Slottable>{children}</Slottable>
+      <DropdownMenuShortcut shortcut={combo} />
+    </DropdownMenuItemBase>
+  );
+});
+DropdownMenuKeyboundItem.displayName = "DropdownMenuKeyboundItem";
+
+const DropdownMenuItem = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitiveType.Item>,
+  DropdownMenuItemProps
+>(({ keybinding, ...props }, ref) =>
+  keybinding ? (
+    <DropdownMenuKeyboundItem ref={ref} keybinding={keybinding} {...props} />
+  ) : (
+    <DropdownMenuItemBase ref={ref} {...props} />
+  )
+);
 DropdownMenuItem.displayName = "DropdownMenuItem";
 
 type DropdownMenuActionItemProps = DropdownMenuItemProps & {
@@ -537,26 +603,12 @@ const DropdownMenuLabel = React.forwardRef<
   return (
     <Label
       ref={ref}
-      className={cn(
-        "px-2.5 py-1.5 text-2xs font-bold tracking-wider uppercase text-text-secondary",
-        inset && "pl-8",
-        className
-      )}
+      className={cn(LIST_LABEL_CLASS, "px-2.5 py-1.5", inset && "pl-8", className)}
       {...props}
     />
   );
 });
 DropdownMenuLabel.displayName = "DropdownMenuLabel";
-
-const DropdownMenuShortcut = ({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) => {
-  return (
-    <span
-      className={cn("ml-auto pl-2 text-2xs font-mono text-text-secondary", className)}
-      {...props}
-    />
-  );
-};
-DropdownMenuShortcut.displayName = "DropdownMenuShortcut";
 
 /* Trailing muted slot for item METADATA — a count, a state, a reason an item is
  * disabled. Deliberately not `DropdownMenuShortcut`: a count is not a keybinding,
@@ -602,7 +654,7 @@ const DropdownMenuRadioItem = React.forwardRef<
     <RadioItem
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors duration-150 ease-out data-[highlighted]:bg-overlay-highlight focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}
       {...props}
@@ -635,7 +687,7 @@ const DropdownMenuCheckboxItem = React.forwardRef<
     <CheckboxItem
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors duration-150 ease-out data-[highlighted]:bg-overlay-highlight focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}
       checked={checked}

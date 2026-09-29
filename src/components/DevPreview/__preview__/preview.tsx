@@ -1,5 +1,5 @@
 import "./installShims";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ChevronDown } from "lucide-react";
 import { resolveAppTheme } from "@shared/theme/themes";
@@ -12,6 +12,7 @@ import { usePluginContextMenuItemsStore } from "@/store/pluginContextMenuItemsSt
 import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { BrowserToolbar } from "@/components/Browser/BrowserToolbar";
+import { focusWebviewPage } from "@/components/Browser/browserUtils";
 import { SiteBuilderButton } from "../../../../plugins/builtin/sveltekit-builder/renderer/SiteBuilderButton";
 import { normalizeDevPreviewUrl, toDevServerAddress } from "../urlSync";
 import {
@@ -105,15 +106,17 @@ function DevScriptSwitcherStandIn() {
   );
 }
 
-function StandInPage() {
+function StandInPage({ ref }: { ref: React.Ref<HTMLDivElement> }) {
   const block = (width: string, height: number, color: string) => (
     <div style={{ width, height, background: color, borderRadius: "var(--radius-sm)" }} />
   );
   return (
     <div
+      ref={ref}
+      data-testid="stand-in-page"
+      tabIndex={-1}
       className="flex-1 min-h-0 flex flex-col gap-4"
       style={{ background: "#ffffff", padding: 24 }}
-      aria-hidden="true"
     >
       <div className="flex items-center justify-between">
         {block("112px", 20, "#1f2937")}
@@ -138,6 +141,7 @@ function Pane() {
   const [dpr, setDpr] = useState<1 | 2 | 3>(fixture.viewportDpr ?? 1);
   const [rotated, setRotated] = useState(fixture.viewportRotated ?? false);
   const [fit, setFit] = useState(fixture.viewportFit ?? false);
+  const pageRef = useRef<HTMLDivElement>(null);
   const url = `${PROXY_ORIGIN}${fixture.route}`;
 
   return (
@@ -183,6 +187,7 @@ function Pane() {
             validateUrl={(raw) => normalizeDevPreviewUrl(raw, PROXY_ORIGIN)}
             toAddress={(target) => toDevServerAddress(target, PROXY_ORIGIN, DEV_SERVER_URL)}
             onReload={noop}
+            onFocusPage={() => focusWebviewPage(pageRef.current)}
             onStop={noop}
             onHardReload={noop}
             onOpenExternal={noop}
@@ -208,7 +213,7 @@ function Pane() {
               />
             }
           />
-          <StandInPage />
+          <StandInPage ref={pageRef} />
         </div>
       </ContentPanel>
     </div>

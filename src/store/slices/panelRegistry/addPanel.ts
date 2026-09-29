@@ -179,6 +179,20 @@ function isHeldForRecovery(panel: CarrierPanel | undefined): boolean {
   );
 }
 
+/**
+ * A call landing on a live record — a reconnect, a double hydration, a held pane
+ * being launched — carries restore-time or snapshot notes that can be older than
+ * what the user has typed since (#12835). The live record's notes win; the
+ * incoming ones only fill a record that has none.
+ */
+function carryLiveScratchpad(
+  incoming: CarrierPanel,
+  existing: PtyPanelData | undefined
+): CarrierPanel {
+  if (!existing?.scratchpad || !isPtyPanel(incoming)) return incoming;
+  return { ...incoming, scratchpad: existing.scratchpad };
+}
+
 const TERMINAL_STARTUP_ATTACH_TIMEOUT_MS = 2500;
 
 // Chrome allowance for the overlay (help panel) grid estimate: horizontal =
@@ -748,6 +762,7 @@ export const createAddPanelActions = (
       // `hasPty: false` is what keeps fleet broadcast, interrupt and the other
       // live-process consumers off a pane that has nothing to write to.
       ...(isRecoveryHold && { restoreRecovery: options.restoreRecovery, hasPty: false }),
+      ...(options.scratchpad && { scratchpad: options.scratchpad }),
       extensionState: options.extensionState,
       extensionStateVersion: ptyExtensionStateVersion,
       pluginId: ptyPluginId,
@@ -823,8 +838,9 @@ export const createAddPanelActions = (
                 // preserve the existing entry if a partial reconnect omits it.
               }
             : ptyTerminal;
+        const carried = carryLiveScratchpad(preservedTerminal, existingPty);
         return {
-          panelsById: { ...state.panelsById, [id]: preservedTerminal },
+          panelsById: { ...state.panelsById, [id]: carried },
           panelIdsByWorktreeId: existing
             ? // Defensive: PTY reconnect payloads should preserve worktreeId, but
               // sync the index if a fresh hydration arrives with a different one.
@@ -892,7 +908,10 @@ export const createAddPanelActions = (
                 // preserve the existing entry if a partial reconnect omits it.
               }
             : ptyTerminal;
-          const newById = { ...state.panelsById, [id]: preservedTerminal };
+          const newById = {
+            ...state.panelsById,
+            [id]: carryLiveScratchpad(preservedTerminal, existingPty2),
+          };
           const newIndex = transferBetweenWorktreeIndex(
             state.panelIdsByWorktreeId,
             existing.worktreeId,

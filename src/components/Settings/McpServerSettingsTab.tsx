@@ -1,8 +1,12 @@
 import { useState, useEffect, useRef } from "react";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useDeferredLoading } from "@/hooks";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { Eye, EyeOff, ChevronRight } from "lucide-react";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
@@ -10,14 +14,13 @@ import {
   SETTINGS_CONTROL_WIDTH,
   SettingsGroup,
   SettingsRow,
+  SettingsRowActions,
 } from "@/components/Settings/SettingsGroup";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { McpAuditLogViewer } from "@/components/Settings/McpAuditLogViewer";
 import { ErrorRetryRow, InlineErrorRow } from "@/components/Settings/auditLogParts";
 import { TurnOutcomeDiagnostics } from "@/components/Settings/TurnOutcomeDiagnostics";
-import { useDeferredLoading } from "@/hooks";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
@@ -72,9 +75,9 @@ export function McpServerSettingsTab() {
   const [runtimeSnapshot, setRuntimeSnapshot] =
     useState<McpRuntimeSnapshot>(INITIAL_RUNTIME_SNAPSHOT);
   const [loading, setLoading] = useState(true);
-  // Gate the "Loading…" copy past the Doherty threshold so fast IPC resolutions
-  // don't flash a loading state for sub-400ms work.
-  const showInlineLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
+  // Past the Doherty threshold only, so a fast read never flashes bones — the
+  // bones' own delayed pulse is switched off in performance mode.
+  const showLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
   // One state, not two booleans: the plain and scoped copies share a single
   // reset timer, so independent flags let the second copy cancel the first's
   // reset and strand its "Copied!" indefinitely.
@@ -98,10 +101,6 @@ export function McpServerSettingsTab() {
   const [turnRecords, setTurnRecords] = useState<AssistantTurnRecord[]>([]);
   const [auditStats, setAuditStats] = useState<McpAuditStats | null>(null);
   const [auditEnabled, setAuditEnabled] = useState(true);
-  const [paneWakeEnabled, setPaneWakeEnabled] = useState(false);
-  // Until main has answered, "off" would be a guess rather than the setting.
-  const [paneWakeLoaded, setPaneWakeLoaded] = useState(false);
-  const [paneWakeLoadFailed, setPaneWakeLoadFailed] = useState(false);
   const [auditMaxRecords, setAuditMaxRecords] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS);
   const [maxRecordsInput, setMaxRecordsInput] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS.toString());
   const [auditLoading, setAuditLoading] = useState(true);
@@ -117,7 +116,6 @@ export function McpServerSettingsTab() {
   const [clearError, setClearError] = useState<string | null>(null);
   const [bearersFailed, setBearersFailed] = useState(false);
   const [auditToggleError, setAuditToggleError] = useState<string | null>(null);
-  const [paneWakeError, setPaneWakeError] = useState<string | null>(null);
   const [configCopyError, setConfigCopyError] = useState<string | null>(null);
   const [keyCopyError, setKeyCopyError] = useState<string | null>(null);
   // Set by a deliberate clear, so the empty log says so instead of reading as
@@ -500,36 +498,6 @@ export function McpServerSettingsTab() {
     }
   };
 
-  // Loaded apart from the status batch so a failure here costs only this
-  // toggle, which stays at its safe default of off.
-  useEffect(() => {
-    let cancelled = false;
-    window.electron.mcpServer
-      .getPaneWakeEnabled()
-      .then((enabled) => {
-        if (cancelled) return;
-        setPaneWakeEnabled(enabled);
-        setPaneWakeLoaded(true);
-      })
-      .catch((err) => {
-        if (!cancelled) setPaneWakeLoadFailed(true);
-        logError("Failed to load MCP pane wake setting", err);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handlePaneWakeToggle = async () => {
-    try {
-      setPaneWakeError(null);
-      setPaneWakeEnabled(await window.electron.mcpServer.setPaneWakeEnabled(!paneWakeEnabled));
-    } catch (err) {
-      setPaneWakeError(formatErrorMessage(err, "Failed to update pane wakes"));
-      logError("Failed to toggle MCP pane wakes", err);
-    }
-  };
-
   const handleAuditEnabledToggle = async () => {
     try {
       setAuditToggleError(null);
@@ -660,8 +628,10 @@ export function McpServerSettingsTab() {
   const maxRecordsUnchanged = maxRecordsInput === auditMaxRecords.toString();
 
   const statusRow = !status.enabled ? null : loading ? (
-    showInlineLoading ? (
-      <SettingsRow label={<span className="text-text-secondary">Loading…</span>} />
+    showLoading ? (
+      <Skeleton label="Loading server status" className="px-4 py-3">
+        <SkeletonBone immediate className="h-5 w-1/2" />
+      </Skeleton>
     ) : null
   ) : runtimeSnapshot.state === "starting" ? (
     <SettingsRow
@@ -731,13 +701,13 @@ export function McpServerSettingsTab() {
               type="button"
               onClick={() => setBearersExpanded((v) => !v)}
               aria-expanded={bearersExpanded}
-              className="flex w-full items-center gap-2 px-4 py-3 text-sm font-medium text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              className="flex w-full cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium text-text-primary hover:bg-overlay-subtle transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             >
               <ChevronRight
                 data-animated-chevron
                 aria-hidden="true"
                 className={cn(
-                  "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150",
+                  "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
                   bearersExpanded && "rotate-90"
                 )}
               />
@@ -763,9 +733,10 @@ export function McpServerSettingsTab() {
                       variant="outline"
                       size="sm"
                       onClick={() => void handleDisconnectBearer(bearer.tokenHash)}
+                      loading={disconnectingHash === bearer.tokenHash}
                       disabled={disconnectingHash !== null}
                     >
-                      {disconnectingHash === bearer.tokenHash ? "Disconnecting…" : "Disconnect"}
+                      Disconnect
                     </Button>
                   </li>
                 ))}
@@ -780,13 +751,13 @@ export function McpServerSettingsTab() {
               type="button"
               onClick={() => setHelpBearersExpanded((v) => !v)}
               aria-expanded={helpBearersExpanded}
-              className="flex w-full items-center gap-2 px-4 py-3 text-sm font-medium text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              className="flex w-full cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium text-text-primary hover:bg-overlay-subtle transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             >
               <ChevronRight
                 data-animated-chevron
                 aria-hidden="true"
                 className={cn(
-                  "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150",
+                  "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
                   helpBearersExpanded && "rotate-90"
                 )}
               />
@@ -817,23 +788,6 @@ export function McpServerSettingsTab() {
             )}
           </div>
         )}
-
-        {status.enabled && (
-          <SettingsSwitchCard
-            id="mcp-server-pane-wakes"
-            title="Wake agents from terminal watches"
-            subtitle={
-              paneWakeLoadFailed
-                ? "Couldn't read this setting. Reopen settings to try again."
-                : "An agent supervising other terminals can ask to hear when they change instead of polling. Daintree types one line into that agent's prompt once it's idle — never into an approval, a question, or an error, and never over your typing. A pane that may be woken shows a radar chip; use it to stop the watches."
-            }
-            isEnabled={paneWakeEnabled}
-            onChange={handlePaneWakeToggle}
-            ariaLabel="Wake agents from terminal watches"
-            disabled={!paneWakeLoaded}
-          />
-        )}
-        {status.enabled && paneWakeError && <InlineErrorRow>{paneWakeError}</InlineErrorRow>}
       </SettingsGroup>
 
       <p className="sr-only" role="status">
@@ -909,7 +863,7 @@ export function McpServerSettingsTab() {
                     }
                     layout="stacked"
                     control={
-                      <div className="flex flex-wrap items-center gap-2">
+                      <SettingsRowActions>
                         <Button variant="outline" size="sm" onClick={handleCopyConfig}>
                           {copiedTarget === "plain" ? "Copied!" : "Copy MCP config"}
                         </Button>
@@ -918,7 +872,7 @@ export function McpServerSettingsTab() {
                             {copiedTarget === "scoped" ? "Copied!" : "Copy config for this project"}
                           </Button>
                         ) : null}
-                      </div>
+                      </SettingsRowActions>
                     }
                   />
                 </>
@@ -951,7 +905,7 @@ export function McpServerSettingsTab() {
                 }
                 control={({ disabled, descriptionId }) => (
                   <>
-                    <input
+                    <Input
                       type="text"
                       inputMode="numeric"
                       pattern="[0-9]*"
@@ -969,10 +923,7 @@ export function McpServerSettingsTab() {
                       aria-label="MCP server port"
                       aria-describedby={descriptionId}
                       aria-invalid={portError ? true : undefined}
-                      className={cn(
-                        SETTINGS_CONTROL_WIDTH.number,
-                        "h-7 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 text-sm text-text-primary placeholder:text-text-placeholder font-mono tabular-nums focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                      )}
+                      className={cn(SETTINGS_CONTROL_WIDTH.number, "font-mono tabular-nums")}
                     />
                     <Button
                       variant="outline"
@@ -1007,18 +958,15 @@ export function McpServerSettingsTab() {
                         <span className="flex-1 truncate">
                           {showApiKey ? status.apiKey : MASKED_KEY}
                         </span>
-                        <button
-                          type="button"
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
                           onClick={() => setShowApiKey((v) => !v)}
-                          className="shrink-0 text-text-secondary hover:text-text-primary transition-colors"
+                          className="shrink-0 -mr-1 [&_svg]:size-3.5"
                           aria-label={showApiKey ? "Hide API key" : "Show API key"}
                         >
-                          {showApiKey ? (
-                            <EyeOff className="h-3.5 w-3.5" />
-                          ) : (
-                            <Eye className="h-3.5 w-3.5" />
-                          )}
-                        </button>
+                          {showApiKey ? <EyeOff /> : <Eye />}
+                        </Button>
                       </div>
                       <Button
                         variant="outline"
@@ -1083,7 +1031,7 @@ export function McpServerSettingsTab() {
               error={maxRecordsError}
               control={({ labelId, descriptionId }) => (
                 <>
-                  <input
+                  <Input
                     id="mcp-audit-max-records"
                     type="text"
                     inputMode="numeric"
@@ -1101,10 +1049,7 @@ export function McpServerSettingsTab() {
                     aria-labelledby={labelId}
                     aria-describedby={descriptionId}
                     aria-invalid={maxRecordsError ? true : undefined}
-                    className={cn(
-                      SETTINGS_CONTROL_WIDTH.number,
-                      "h-7 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 text-sm text-text-primary placeholder:text-text-placeholder font-mono tabular-nums focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                    )}
+                    className={cn(SETTINGS_CONTROL_WIDTH.number, "font-mono tabular-nums")}
                   />
                   <Button
                     variant="outline"
@@ -1170,7 +1115,7 @@ export function McpServerSettingsTab() {
 
       <ConfirmDialog
         isOpen={showDisableConfirm}
-        onClose={isDisabling ? undefined : handleCancelDisable}
+        onClose={handleCancelDisable}
         title="Stop MCP server?"
         description={
           disableClients.length === 1
@@ -1204,7 +1149,7 @@ export function McpServerSettingsTab() {
 
       <ConfirmDialog
         isOpen={showRotateConfirm}
-        onClose={isRotating ? undefined : handleCancelRotate}
+        onClose={handleCancelRotate}
         title="Rotate API key?"
         description="The current key will be invalidated immediately. External clients using this key will need to update their configuration."
         confirmLabel="Rotate key"
@@ -1218,7 +1163,7 @@ export function McpServerSettingsTab() {
 
       <ConfirmDialog
         isOpen={showClearConfirm}
-        onClose={isClearing ? undefined : handleCancelClear}
+        onClose={handleCancelClear}
         title="Clear audit log?"
         description={`This permanently deletes ${auditRecords.length === 1 ? "1 audit record" : `${auditRecords.length} audit records`} on this machine. Turn outcomes aren't affected.${auditEnabled ? " New tool calls will still be recorded." : ""}`}
         confirmLabel="Clear audit log"

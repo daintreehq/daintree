@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { McpAuditLogViewer } from "../McpAuditLogViewer";
 import type { AssistantTurnRecord, McpLogRecord } from "@shared/types";
 
+// Driven as a value and a change event, not as a Radix popup.
+vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
+
 function dispatch(id: string, toolId: string, result = "success"): McpLogRecord {
   return {
     id,
@@ -32,6 +35,14 @@ function renderViewer(records: McpLogRecord[], turnRecords?: AssistantTurnRecord
 }
 
 describe("McpAuditLogViewer", () => {
+  it("marks a call that ran under the skip preference, and only that one (#12874)", () => {
+    renderViewer([
+      { ...dispatch("1", "worktree.delete"), authorization: "skip-preference" } as McpLogRecord,
+      { ...dispatch("2", "worktree.list"), authorization: "native-grant" } as McpLogRecord,
+    ]);
+    expect(screen.getAllByText("Confirmation skipped — Skip permission prompts")).toHaveLength(1);
+  });
+
   it("offers a way out of a filter that matches nothing", () => {
     renderViewer([dispatch("1", "worktree.list")]);
     fireEvent.change(screen.getByLabelText("Filter audit by tool name"), {
@@ -99,6 +110,22 @@ describe("McpAuditLogViewer", () => {
     expect(screen.queryByText("worktree.list")).toBeNull();
     expect(screen.getByText("git.getDiff")).toBeTruthy();
     expect(screen.getByText("project.getSettings")).toBeTruthy();
+  });
+
+  // Records written before the core/full split carry the old ladder names;
+  // they read as history rather than naming a tool set that does not exist.
+  it("names the tool set a denied call needs, and a pre-split hint as a former tier", () => {
+    renderViewer([
+      { ...dispatch("4", "project.runCheck", "unauthorized"), tierHint: "full" } as McpLogRecord,
+      // Widened: the current type no longer admits the value an old record holds.
+      {
+        ...dispatch("5", "git.push", "unauthorized"),
+        tierHint: "system",
+      } as unknown as McpLogRecord,
+    ]);
+    expect(screen.getByText("Needs the Full tool set")).toBeTruthy();
+    expect(screen.getByText("Needed the former system tier")).toBeTruthy();
+    expect(screen.queryByText(/system tool set/)).toBeNull();
   });
 
   it("names an unsuccessful outcome in words beside the tool", () => {

@@ -10,6 +10,7 @@ import {
   CommandContributionSchema,
   ContextMenuContributionSchema,
   CredentialFieldSchema,
+  DatabaseContributionSchema,
   FileDecorationContributionSchema,
   FileEditorContributionSchema,
   ForgeProviderContributionSchema,
@@ -18,6 +19,7 @@ import {
   McpServerContributionSchema,
   MenuItemContributionSchema,
   PanelContributionObjectSchema,
+  PanelMenuItemSchema,
   PreviewToolContributionSchema,
   GuestAdapterContributionSchema,
   ProcessToolContributionSchema,
@@ -28,6 +30,9 @@ import {
   SurfaceContributionsSchema,
   SurfaceViewSlotSchema,
   ToolbarButtonContributionSchema,
+  TourCaptionSchema,
+  TourChapterSchema,
+  TourContributionSchema,
   ViewContributionSchema,
 } from "../plugin.js";
 
@@ -89,6 +94,8 @@ const MCP_SUPERVISOR = "electron/services/PluginMcpSupervisor.ts";
 const PLUGIN_SCHEMA = "electron/schemas/plugin.ts";
 const SKILL_REGISTRY = "electron/services/plugin/PluginSkillRegistry.ts";
 const RECIPE_REGISTRY = "electron/services/plugin/PluginRecipeRegistry.ts";
+const TOUR_REGISTRY = "electron/services/plugin/PluginTourRegistry.ts";
+const PLUGIN_TOURS = "src/components/Tour/pluginTours.tsx";
 const RECIPE_SANITIZER = "shared/utils/recipeSanitizer.ts";
 const ARCHIVE_INSTALL_INTENT = "electron/setup/archiveInstallIntent.ts";
 const PROCESS_TOOL_REGISTRY = "shared/config/pluginProcessToolRegistry.ts";
@@ -97,6 +104,11 @@ const AGENT_MCP_DECLARED = "electron/services/pluginAgentMcp/declaredEndpoints.t
 const DEV_PREVIEW_TOOL_REGISTRY = "src/registry/devPreviewToolRegistry.ts";
 const BUILTIN_GUEST_ADAPTERS = "electron/services/sitePreview/builtinGuestAdapters.ts";
 const GUEST_ADAPTER_ASSETS = "electron/services/sitePreview/guestAdapterAssets.ts";
+const PLUGIN_DATABASE = "electron/services/plugin/pluginDatabase.ts";
+const PLUGIN_DATABASE_HANDLE = "shared/utils/pluginDatabaseHandle.ts";
+const PLUGIN_HOST_FACTORY = "electron/services/plugin/PluginHostFactory.ts";
+const PLUGIN_DATABASES_SECTION = "src/components/Plugin/PluginDatabasesSection.tsx";
+const GENERIC_PANEL_MENU = "src/components/Panel/genericPanelMenu.ts";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -124,12 +136,17 @@ const SWEPT_SCHEMAS = {
   settings: SettingDefinitionObjectSchema,
   recipes: RecipeContributionSchema,
   agentMcp: AgentMcpContributionSchema,
+  tours: TourContributionSchema,
+  databases: DatabaseContributionSchema,
   surfaces: SurfaceContributionsSchema,
+  "panels.menu": PanelMenuItemSchema,
   "agents.detection": AgentDetectionConfigSchema,
   "surfaces.emptyCanvas": SurfaceViewSlotSchema,
   "recipes.terminals": RecipeContributionTerminalSchema,
   "forgeProviders.credentialFields": CredentialFieldSchema,
   "forgeProviders.slots": ForgeProviderContributionSchema.shape.slots,
+  "tours.chapters": TourChapterSchema,
+  "tours.chapters.captions": TourCaptionSchema,
 } as const;
 
 type SweptGroup = keyof typeof SWEPT_SCHEMAS;
@@ -159,6 +176,8 @@ const TOP_LEVEL_GROUPS = [
   "settings",
   "recipes",
   "agentMcp",
+  "tours",
+  "databases",
   "surfaces",
 ] as const;
 
@@ -205,7 +224,9 @@ type FieldConsumerCoverage = {
   settings: Record<keyof z.infer<typeof SettingDefinitionObjectSchema>, ConsumerDescriptor>;
   recipes: Record<keyof z.infer<typeof RecipeContributionSchema>, ConsumerDescriptor>;
   agentMcp: Record<keyof z.infer<typeof AgentMcpContributionSchema>, ConsumerDescriptor>;
+  databases: Record<keyof z.infer<typeof DatabaseContributionSchema>, ConsumerDescriptor>;
   surfaces: Record<keyof z.infer<typeof SurfaceContributionsSchema>, ConsumerDescriptor>;
+  "panels.menu": Record<keyof z.infer<typeof PanelMenuItemSchema>, ConsumerDescriptor>;
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
   "surfaces.emptyCanvas": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
   "recipes.terminals": Record<
@@ -217,6 +238,9 @@ type FieldConsumerCoverage = {
     ConsumerDescriptor
   >;
   "forgeProviders.slots": Record<keyof ForgeSlots, ConsumerDescriptor>;
+  tours: Record<keyof z.infer<typeof TourContributionSchema>, ConsumerDescriptor>;
+  "tours.chapters": Record<keyof z.infer<typeof TourChapterSchema>, ConsumerDescriptor>;
+  "tours.chapters.captions": Record<keyof z.infer<typeof TourCaptionSchema>, ConsumerDescriptor>;
 };
 
 const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
@@ -270,6 +294,35 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop) → registerPanelKind" }],
       note: "Registered as the panel kind's extensionState schema version; stamped onto the panel record at the write gate (setPanelExtensionState) and enforced on restore by decodePanelExtensionState, which refuses a bag written above it (#12280).",
+    },
+    menu: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop → PanelKindConfig.pluginMenu)" },
+        { file: GENERIC_PANEL_MENU, symbol: "readPanelKindMenuCapabilities (pluginMenuItems)" },
+      ],
+      note: "Registered on the panel kind and drawn by both panel menus, above the plugin's own entries, once each action is registered.",
+    },
+  },
+  "panels.menu": {
+    actionId: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (panel_menu_action_not_own)" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (qualifyActionId → pluginMenu)" },
+        { file: GENERIC_PANEL_MENU, symbol: "pluginMenuCommandActionId" },
+      ],
+      note: "Checked to be the plugin's own action, qualified to the instance namespace, then dispatched with { panelId } from the panel menus.",
+    },
+    label: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: GENERIC_PANEL_MENU,
+          symbol: "readPanelKindMenuCapabilities (label ?? action title)",
+        },
+      ],
+      note: "The menu row's text; the action's registered title when absent.",
     },
   },
   toolbarButtons: {
@@ -484,8 +537,11 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     },
     location: {
       mode: "cross-reference",
-      consumers: [{ file: PLUGIN_SCHEMA, symbol: "ViewContributionSchema (literal 'panel')" }],
-      note: "Literal gate tying the view to the panel host; a sidebar host is rejected at parse.",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "ViewContributionSchema (enum 'panel' | 'settings')" },
+        { file: PLUGIN_SERVICE, symbol: "settingsViewPath (location 'settings')" },
+      ],
+      note: "'panel' ties the view to the panel host; 'settings' is the plugin's one custom settings section, mounted in its settings home and never matched to a panel. A sidebar host is rejected at parse.",
     },
     iconId: {
       mode: "verbatim",
@@ -809,27 +865,70 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Normalized into type: 'secret' by the schema; also read directly by the form.",
     },
+    required: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/plugin/PluginSettingsManager.ts",
+          symbol: "missingRequired (host.settings.missingRequired, setup strip)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (hasRequiredSettings kind flag)" },
+      ],
+      note: "An unset required setting shows the panel's needs-setup strip and is listed by host.settings.missingRequired.",
+    },
+    editor: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SETTINGS_FORM, symbol: "PluginSettingsForm (fields)" }],
+      note: 'editor: "view" leaves the field to the plugin\'s own settings view, when it declares one.',
+    },
   },
   agentMcp: {
     id: {
       mode: "verbatim",
-      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpEndpoints" }],
-      note: "Keys per-project enablement, the grant, and the endpoint's route path.",
+      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpPlugins" }],
+      note: "Names the plugin's own roster within its one MCP server, and in its grant's scope.",
     },
     name: {
       mode: "verbatim",
-      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpEndpoints" }],
-      note: "Shown in the per-project enablement UI.",
+      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpPlugins" }],
+      note: "Shown in the plugin's agent access row.",
     },
     description: {
       mode: "verbatim",
-      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpEndpoints" }],
-      note: "Shown beneath the endpoint name in the per-project enablement UI.",
+      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpPlugins" }],
+      note: "Shown beneath the tools' name in the plugin's agent access row.",
     },
     mode: {
       mode: "intentional-metadata",
       consumers: [{ file: PLUGIN_SCHEMA, symbol: "AgentMcpContributionSchema (literal 'tools')" }],
       note: "Only 'tools' is accepted; kept explicit so a later endpoint mode is additive.",
+    },
+  },
+  databases: {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_HOST_FACTORY, symbol: "createHost resolveDatabase" }],
+      note: "What host.db.open names; also the default file name under .daintree/data/<manifestId>/.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_DATABASES_SECTION, symbol: "PluginDatabasesSection" }],
+      note: "Shown beside the database in the plugin manager's disclosure.",
+    },
+    location: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_DATABASE, symbol: "resolvePluginDatabaseLocation" }],
+      note: "Chooses the project root or the plugin's data dir as the containment root.",
+    },
+    path: {
+      mode: "derived-input",
+      consumers: [{ file: PLUGIN_DATABASE, symbol: "resolvePluginDatabaseLocation" }],
+      note: "Resolved against the bound project root and realpath-contained to it.",
+    },
+    journalMode: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_DATABASE_HANDLE, symbol: "openPluginDatabase connect" }],
+      note: "Re-applied as PRAGMA journal_mode on every open.",
     },
   },
   recipes: {
@@ -1087,6 +1186,149 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: PLUGIN_SERVICE, symbol: "loadPlugin (toRuntimePanelKindId → claimProjectSurface)" },
       ],
       note: "Cross-checked against declared contributes.views, then resolved to the runtime panel-kind id the surface mounts.",
+    },
+  },
+  tours: {
+    id: {
+      mode: "derived-input",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (reportDuplicateIds tours)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (makePluginTourId → PanelKindConfig.tourId)" },
+        { file: TOUR_REGISTRY, symbol: "registerPluginTours (makePluginTourId)" },
+      ],
+      note: "Unique within contributes.tours. Qualified as `{pluginId}.{id}`, the id progress, Help, the palette and a panel kind's menus (#12774) key on; also names the remote-audio route.",
+    },
+    title: {
+      mode: "verbatim",
+      consumers: [
+        { file: TOUR_REGISTRY, symbol: "registerPluginTours" },
+        { file: "electron/menu.ts", symbol: "createApplicationMenu (pluginTourItems)" },
+      ],
+      note: "Shown in the dialog header and listed as `<plugin>: <title>` in Help and the palette.",
+    },
+    componentPath: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "TourContributionSchema (isSafePluginAssetPath)" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (registerPluginTours, buildPluginViewUrl)" },
+        { file: PLUGIN_TOURS, symbol: "createPluginTourRegistration (load)" },
+      ],
+      note: "Resolved to a generation-stamped plugin:// URL and imported only when the tour opens.",
+    },
+    panelKind: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (tour_panel_kind_unknown)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (tourIdByPanelId → PanelKindConfig.tourId)" },
+        {
+          file: "src/hooks/usePluginTours.ts",
+          symbol: "mirror (panel tours stay off the palette)",
+        },
+      ],
+      note: "Must name one of this manifest's own contributes.panels ids. Stamps the tour onto that panel kind so its menus offer it as a Welcome Tour once registered (#12774), and keeps it out of Help and the palette; the first tour naming a kind wins.",
+    },
+    audioHosts: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "TourContributionSchema superRefine (tour_audio_host_undeclared)",
+        },
+        { file: "electron/setup/protocols.ts", symbol: "proxyPluginTourAudio (isAllowedHost)" },
+      ],
+      note: "Every remote chapter audioUrl hostname must appear here, and every fetch hop must stay on it.",
+    },
+    chapters: {
+      mode: "derived-input",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "TourContributionSchema superRefine (tour_chapter_duplicate_id)",
+        },
+        { file: TOUR_REGISTRY, symbol: "registerPluginTours" },
+      ],
+      note: "Played in manifest order; each needs a scene in the module.",
+    },
+  },
+  "tours.chapters": {
+    id: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "TourContributionSchema superRefine (tour_chapter_duplicate_id)",
+        },
+        { file: PLUGIN_TOURS, symbol: "readPluginTourModule (scenes by chapter id)" },
+      ],
+      note: "Keys the module's scene and optional title.",
+    },
+    duration: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (resolveTimings)" }],
+      note: "Chapter timing handed to the player; also sums to the summary's minutes.",
+    },
+    cues: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (resolveTimings)" }],
+      note: "Named cues scenes read through useCue.",
+    },
+    captions: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (resolveTimings)" }],
+      note: "Shown under the stage, and all a chapter has when its audio can't play.",
+    },
+    audioUrl: {
+      mode: "derived-input",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "TourContributionSchema superRefine (tour_audio_host_undeclared)",
+        },
+        { file: TOUR_REGISTRY, symbol: "registerPluginTours (bundled or audio route)" },
+      ],
+      note: "A bundled path resolves from the plugin root; a remote URL stays in main behind the plugin:// audio route.",
+    },
+    narrationHash: {
+      mode: "intentional-metadata",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "TourChapterSchema (TOUR_NARRATION_HASH_PATTERN)" },
+      ],
+      note: "Authoring metadata for `daintree-plugin tour voice`; playback has no narration to check it against.",
+    },
+  },
+  "tours.chapters.captions": {
+    start: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "TourChapterSchema superRefine (tour_caption_out_of_range)",
+        },
+        { file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (resolveTimings)" },
+      ],
+      note: "Caption timing handed to the player.",
+    },
+    end: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "TourChapterSchema superRefine (tour_caption_out_of_range)",
+        },
+        { file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (resolveTimings)" },
+      ],
+      note: "Caption timing handed to the player.",
+    },
+    text: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (resolveTimings)" }],
+      note: "The caption line shown under the stage.",
     },
   },
 } satisfies FieldConsumerCoverage;

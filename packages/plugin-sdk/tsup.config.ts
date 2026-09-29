@@ -17,9 +17,9 @@ const shared = {
   external: ["zod", "react"],
 } satisfies Options;
 
-// One JS build for all four entries, but the `testing` declarations come from
-// a second, dts-only pass. When `testing` shares a dts bundle with `index`,
-// tsup's dts bundler hoists their common `shared/types/plugin` declarations
+// One JS build for all five entries, but the `testing` and `data` declarations
+// each come from their own dts-only pass. When either shares a dts bundle with
+// `index` (`data` does through `editFile`'s `PluginFsApi`), tsup's dts bundler hoists their common `shared/types/plugin` declarations
 // into a chunk file and `dist/index.d.ts` collapses to a handful of re-export
 // lines — which empties the committed API snapshot (`api-report/index.d.ts`)
 // and blinds `check:api-surface`. Splitting only the declarations keeps every
@@ -29,8 +29,8 @@ const shared = {
 //
 // A function rather than an array so a `--no-dts` run (the React-externals test
 // builds the JS this way) gets ONE config: tsup applies that CLI override to
-// every config in an array, which would turn the dts-only pass into a second
-// JS build of `testing` racing the first over `dist/` and the metafile.
+// every config in an array, which would turn the dts-only passes into second
+// JS builds racing the first over `dist/` and the metafile.
 export default defineConfig((override) => {
   const js = {
     ...shared,
@@ -38,6 +38,7 @@ export default defineConfig((override) => {
       index: "src/index.ts",
       react: "src/react.ts",
       files: "src/files.ts",
+      data: "src/data.ts",
       testing: "src/testing.ts",
     },
     dts: {
@@ -54,6 +55,11 @@ export default defineConfig((override) => {
       // `registerHandler` surfaces `PluginChannelSchema`, so `zod` stays external
       // here for the same reason as below.
       entry: { testing: "src/testing.ts" },
+      dts: { ...shared.dts, only: true },
+    },
+    {
+      ...shared,
+      entry: { data: "src/data.ts" },
       dts: { ...shared.dts, only: true },
     },
   ];
@@ -94,3 +100,9 @@ export default defineConfig((override) => {
 // bare `react` to the host's single copy via the import map, so a bundled
 // copy means two Reacts and `Invalid hook call` (#11296). This is the same
 // contract `@daintreehq/plugin-vite` enforces on the consumer side.
+//
+// `yaml`, the `data` entry's parser, is a plain `dependency`, so tsup
+// externalizes it like the peers and an installed SDK brings it along. The
+// copy the app serves to zero-build plugin workers has no `node_modules`
+// beside it, so `scripts/build-main.mjs` builds that one from source with
+// `yaml` bundled in.

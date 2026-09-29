@@ -2,10 +2,17 @@ import { create } from "zustand";
 
 /**
  * What the pill is reporting. `typing` is the type-anywhere locate/rescue;
- * the two `file-*` kinds are the file-reference receipts. The kind decides how
+ * the two `file-*` kinds are the file-reference receipts and the two `draft-*`
+ * kinds the receipts for work handed to an agent's draft. The kind decides how
  * long the pill dwells and whether it carries the refusal glyph.
  */
-export type TypingLocatorKind = "typing" | "file-added" | "file-refused";
+export type TypingLocatorKind =
+  "typing" | "file-added" | "file-refused" | "draft-added" | "draft-refused";
+
+/** Whether the pill reports something that did not happen. */
+export function isRefusalLocatorKind(kind: TypingLocatorKind): boolean {
+  return kind === "file-refused" || kind === "draft-refused";
+}
 
 export interface TypingLocatorMessage {
   kind: TypingLocatorKind;

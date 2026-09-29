@@ -7,6 +7,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
+import { isPointerClaimed } from "@/lib/pointerClaim";
 import {
   RefreshCw,
   AlertCircle,
@@ -35,6 +36,8 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { classifyGitError, getGitRecoveryHint } from "@shared/utils/gitOperationErrors";
 import { logError } from "@/utils/logger";
 import type { GitCommit, GitPushCommitPreview } from "@shared/types/git";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { FORGE_DROPDOWN_PANEL_SIZE } from "./forgeStatsDropdownContract";
 
 // The commits pill's list (issue #10414). Commit history is local git data, not
 // forge data, so the host renders it when no forge provider supplies a stats
@@ -45,7 +48,7 @@ import type { GitCommit, GitPushCommitPreview } from "@shared/types/git";
 //
 // Chrome follows the forge issue/PR dropdowns: a fixed
 // 450×500 panel, the search shell as the region's one accent, a grid popup so
-// rows may carry a control, and a neutral cursor ladder with a leading rail.
+// rows may carry a control, and the shared highlight fill on the cursor row.
 
 interface LocalCommitsDropdownProps {
   cwd: string;
@@ -58,6 +61,64 @@ interface LocalCommitsDropdownProps {
 }
 
 const PAGE_SIZE = 30;
+
+const HASH_QUERY_RE = /^[0-9a-f]{4,40}$/i;
+
+// Last unsearched first page per `cwd branch` scope. The commits pill unmounts
+// its content on close, so without this every open waited on a fresh git read
+// before showing a row; with it the reopen paints the last page at once and
+// the open-time fetch revalidates it in place.
+const firstPageCache = new Map<string, GitCommit[]>();
+const FIRST_PAGE_CACHE_LIMIT = 16;
+
+/** Test seam: the cache is module state and would otherwise leak across cases. */
+export function resetCommitsFirstPageCacheForTests(): void {
+  firstPageCache.clear();
+}
+
+function rememberFirstPage(scopeKey: string, items: GitCommit[]): void {
+  firstPageCache.delete(scopeKey);
+  firstPageCache.set(scopeKey, items);
+  if (firstPageCache.size > FIRST_PAGE_CACHE_LIMIT) {
+    const oldest = firstPageCache.keys().next().value;
+    if (oldest !== undefined) firstPageCache.delete(oldest);
+  }
+}
+
+function commitMatchesQuery(commit: GitCommit, lowerQuery: string): boolean {
+  if (HASH_QUERY_RE.test(lowerQuery) && commit.hash.toLowerCase().startsWith(lowerQuery)) {
+    return true;
+  }
+  return (
+    commit.message.toLowerCase().includes(lowerQuery) ||
+    (commit.body?.toLowerCase().includes(lowerQuery) ?? false)
+  );
+}
+
+/**
+ * Rows to show while a typed query waits out the debounce. The server search
+ * (`git log --grep -i`, plus a hash-prefix lookup) is the answer; this answers
+ * the keystroke in the meantime from commits already loaded — the unsearched
+ * first page and the current results — so the list narrows as the user types
+ * instead of sitting still for the debounce and the git round trip. It never
+ * invents an empty state: with no local match the current rows stay until the
+ * server says otherwise.
+ */
+function previewCommits(query: string, current: GitCommit[], unfiltered: GitCommit[]): GitCommit[] {
+  if (!query) return unfiltered.length > 0 ? unfiltered : current;
+  const lowerQuery = query.toLowerCase();
+  const seen = new Set<string>();
+  const matches: GitCommit[] = [];
+  for (const commit of [...unfiltered, ...current]) {
+    if (seen.has(commit.hash)) continue;
+    seen.add(commit.hash);
+    if (commitMatchesQuery(commit, lowerQuery)) matches.push(commit);
+  }
+  if (matches.length > 0) return matches;
+  // An empty `current` can be an older query's answer landing mid-typing; the
+  // unsearched page says less that is wrong about the query being typed.
+  return current.length > 0 ? current : unfiltered;
+}
 const COPY_FEEDBACK_MS = 2000;
 // The push range read is capped in main; the rows it names are the only ones
 // this list marks. A row outside it is never called "pushed".
@@ -92,7 +153,11 @@ type PushStatus =
  */
 function describeReadError(error: unknown, fallback: string): string {
   const reason = classifyGitError(error);
-  if (reason === "not-a-repository") return "This folder isn't a Git repository";
+  // Name the fix, so the Retry beside it is the step after it rather than a
+  // button that can only fail the same way again.
+  if (reason === "not-a-repository") {
+    return "This folder isn't a Git repository. Run git init here, then retry.";
+  }
   const hint = reason === "unknown" ? undefined : getGitRecoveryHint(reason);
   if (hint) return hint;
   const cleaned = formatErrorMessage(error, fallback)
@@ -195,7 +260,7 @@ export function reflowCommitBody(body: string): string {
 
 function LocalCommitsSkeleton({ count }: { count: number | null | undefined }) {
   return (
-    <div aria-hidden="true" className="divide-y divide-[var(--border-divider)]">
+    <div aria-hidden="true">
       {Array.from({ length: skeletonRowCount(count) }).map((_, i) => (
         <div
           key={i}
@@ -226,6 +291,8 @@ interface LocalCommitRowProps {
   isCopied: boolean;
   onToggle: (hash: string) => void;
   onCopy: (commit: GitCommit) => void;
+  /** Moves the list's cursor here on real pointer movement — one cursor for pointer and keys. */
+  onPointerActivate: () => void;
 }
 
 function LocalCommitRow({
@@ -237,6 +304,7 @@ function LocalCommitRow({
   isCopied,
   onToggle,
   onCopy,
+  onPointerActivate,
 }: LocalCommitRowProps) {
   const trimmedBody = reflowCommitBody(commit.body?.trim() ?? "");
   const hasBody = trimmedBody.length > 0;
@@ -273,23 +341,19 @@ function LocalCommitRow({
         // under the cursor is never the one being washed out.
         "scroll-my-8",
         hasBody ? "cursor-pointer" : "cursor-default",
-        // The forge rows' neutral ladder: hover is the lightest fill, the
-        // keyboard cursor adds a heavier fill plus the leading rail, which is
-        // what carries 1.4.11 — the fill alone cannot on these surfaces.
-        "hover:bg-overlay-subtle",
-        isActive && "bg-overlay-soft hover:bg-overlay-soft",
-        "before:absolute before:inset-y-1.5 before:-start-px before:w-[3px] before:rounded-full",
-        "before:bg-selection-outline before:opacity-0 before:transition-opacity before:duration-150",
-        "before:content-[''] before:pointer-events-none",
-        isActive && "before:opacity-100"
+        // The app's highlighted-row fill on the one row the pointer or the
+        // arrow keys last put the cursor on — never a second, hover-only row.
+        isActive && "bg-overlay-highlight"
       )}
+      onPointerMove={isActive ? undefined : onPointerActivate}
     >
       <div role="gridcell" className="flex items-start gap-2 px-3 py-2.5">
         {hasBody ? (
           <ChevronRight
             aria-hidden="true"
+            data-animated-chevron
             className={cn(
-              "shrink-0 mt-0.5 size-4 text-text-secondary transition-transform duration-150 ease-out motion-reduce:transition-none",
+              "shrink-0 mt-0.5 size-4 text-text-secondary transition-transform duration-150 ease-out",
               isExpanded && "rotate-90"
             )}
           />
@@ -355,14 +419,14 @@ function LocalCommitRow({
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={handleCopyHash}
                   className={cn(
-                    "ml-auto shrink-0 flex items-center gap-1 px-1 font-mono text-xs text-text-secondary hover:text-text-primary transition-colors duration-150 ease-out focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded-[var(--radius-sm)]",
+                    // 24px tall to the pointer without growing the metadata line.
+                    "relative after:absolute after:-inset-y-1 after:inset-x-0 after:content-['']",
+                    "ml-auto shrink-0 flex items-center gap-1 px-1 font-mono text-xs text-text-secondary hover:text-text-primary transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded-[var(--radius-sm)]",
                     isCopied && "text-text-primary"
                   )}
                   aria-label={`Copy hash ${commit.shortHash}`}
                 >
-                  {isCopied ? (
-                    <Check aria-hidden="true" className="size-3 text-status-success" />
-                  ) : null}
+                  {isCopied ? <Check aria-hidden="true" className="size-3" /> : null}
                   <span>{commit.shortHash}</span>
                 </button>
               </TooltipTrigger>
@@ -373,8 +437,9 @@ function LocalCommitRow({
           {hasBody && (
             <div
               aria-hidden={!isExpanded}
+              data-animated-reveal
               className={cn(
-                "grid transition-[grid-template-rows] duration-150 ease-out motion-reduce:transition-none",
+                "grid transition-[grid-template-rows] duration-150 ease-out",
                 isExpanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
               )}
             >
@@ -466,7 +531,18 @@ export function LocalCommitsDropdown({
   footerAction,
 }: LocalCommitsDropdownProps) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [data, setData] = useState<GitCommit[]>([]);
+  const [fetched, setFetched] = useState<GitCommit[]>(
+    () => firstPageCache.get(`${cwd} ${branch ?? ""}`) ?? []
+  );
+  // The last unsearched first page, kept so a search preview and a cleared
+  // query can answer from it without waiting on git.
+  const [unfiltered, setUnfiltered] = useState<GitCommit[]>(
+    () => firstPageCache.get(`${cwd} ${branch ?? ""}`) ?? []
+  );
+  // True while the rows on screen are only the cache seed — no read has
+  // confirmed them since this mount. A failed read drops a seed rather than
+  // leave stale rows standing in for the error.
+  const rowsAreSeedRef = useRef(firstPageCache.has(`${cwd} ${branch ?? ""}`));
   const [skip, setSkip] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -489,6 +565,13 @@ export function LocalCommitsDropdown({
   const loadingMoreRef = useRef(false);
 
   const debouncedSearch = useDebounce(searchQuery, 300);
+  // The query `fetched` answers. The preview holds until rows for the typed
+  // query have actually arrived — not merely until the debounce fires, which
+  // would put the previous query's rows back on screen for the git round trip.
+  const [fetchedQuery, setFetchedQuery] = useState("");
+  const pendingQuery = searchQuery.trim();
+  const isSearchPending = pendingQuery !== fetchedQuery;
+  const data = isSearchPending ? previewCommits(pendingQuery, fetched, unfiltered) : fetched;
   const showLoadingMore = useDeferredLoading(loadingMore, UI_DOHERTY_THRESHOLD);
   // A search or retry keeps the previous rows on screen while it runs, so the
   // wait needs its own mark once it outlasts the Doherty gate.
@@ -571,7 +654,11 @@ export function LocalCommitsDropdown({
 
   useEffect(() => {
     if (activeDescendantId) {
-      document.getElementById(activeDescendantId)?.scrollIntoView({ block: "nearest" });
+      const row = document.getElementById(activeDescendantId);
+      // A row under the pointer was just claimed by it; revealing it would
+      // scroll a half-visible row out from under the pointer.
+      if (isPointerClaimed(row)) return;
+      row?.scrollIntoView({ block: "nearest" });
     }
   }, [activeDescendantId]);
 
@@ -605,9 +692,15 @@ export function LocalCommitsDropdown({
         if (gen !== fetchGenRef.current) return;
 
         if (append) {
-          setData((prev) => [...prev, ...result.items]);
+          setFetched((prev) => [...prev, ...result.items]);
         } else {
-          setData(result.items);
+          setFetched(result.items);
+          setFetchedQuery(debouncedSearch.trim());
+          rowsAreSeedRef.current = false;
+          if (!debouncedSearch && currentSkip === 0) {
+            setUnfiltered(result.items);
+            rememberFirstPage(`${cwd} ${branch ?? ""}`, result.items);
+          }
         }
         setSkip(currentSkip + result.items.length);
         setHasMore(result.hasMore);
@@ -617,6 +710,13 @@ export function LocalCommitsDropdown({
         if (append) {
           setLoadMoreError(message);
         } else {
+          if (rowsAreSeedRef.current) {
+            rowsAreSeedRef.current = false;
+            setFetched([]);
+            setUnfiltered([]);
+          }
+          // The failure answers this query: stop previewing so the error shows.
+          setFetchedQuery(debouncedSearch.trim());
           setError(message);
         }
       } finally {
@@ -672,7 +772,9 @@ export function LocalCommitsDropdown({
     if (!open) return;
 
     if (lastScopeRef.current !== null && lastScopeRef.current !== scopeKey) {
-      setData([]);
+      setFetched([]);
+      setUnfiltered([]);
+      setFetchedQuery("");
     }
     lastScopeRef.current = scopeKey;
 
@@ -726,6 +828,10 @@ export function LocalCommitsDropdown({
 
   const handleInputKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
+      // An IME owns the keys while it composes: the Enter that commits a
+      // candidate must not also expand or copy a row. The keyCode check covers
+      // WebKit's first keydown, before `isComposing` is set.
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
@@ -788,6 +894,9 @@ export function LocalCommitsDropdown({
           break;
         }
         case "Escape":
+          // A query is SearchField's to clear; only an empty field closes the
+          // dropdown.
+          if (searchQuery) break;
           e.preventDefault();
           e.stopPropagation();
           onClose?.();
@@ -807,6 +916,7 @@ export function LocalCommitsDropdown({
       onClose,
       toggleCommitExpanded,
       copyHash,
+      searchQuery,
     ]
   );
 
@@ -846,18 +956,20 @@ export function LocalCommitsDropdown({
   const loadMoreRowIndex = data.length + 1;
 
   return (
-    <div className="relative w-[450px] flex flex-col h-[500px]">
+    <div className={cn("relative flex flex-col", FORGE_DROPDOWN_PANEL_SIZE)}>
       <div className="p-3 border-b border-[var(--border-divider)] shrink-0">
         <SearchField
           size="compact"
-          // Keeps the dropdown header's 32px, text-sm field rather than the
-          // rail's 28px.
+          // The dropdown header's 32px, text-sm field, the same as the issue
+          // and pull request lists beside it.
           fieldClassName="h-8 text-sm"
           icon={
             showRefreshing ? (
-              <RefreshCw
-                className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none animate-spin"
-                aria-hidden="true"
+              <SpinningIcon
+                icon={RefreshCw}
+                active
+                className="w-3.5 h-3.5 text-text-secondary pointer-events-none"
+                aria-hidden
               />
             ) : undefined
           }
@@ -946,16 +1058,18 @@ export function LocalCommitsDropdown({
                 className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-text-secondary bg-overlay-soft shrink-0"
               >
                 <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                <span className="text-xs truncate">
+                {/* Wraps rather than clipping the cause, like the forge lists'
+                    saved-results banners. */}
+                <p className="min-w-0 flex-1 text-xs">
                   Couldn&apos;t refresh commits &middot; {error}
-                </span>
+                </p>
                 <Button
-                  variant="ghost"
-                  size="sm"
+                  variant="outline"
+                  size="xs"
                   onClick={handleRetry}
-                  className="ml-auto h-6 text-xs shrink-0"
+                  className="ml-auto shrink-0"
                 >
-                  <RefreshCw className="h-3 w-3" />
+                  <RefreshCw aria-hidden="true" />
                   Retry
                 </Button>
               </div>
@@ -965,7 +1079,7 @@ export function LocalCommitsDropdown({
               {bottomShadow}
               <div ref={scrollShadowRef} className="h-full overflow-y-auto overscroll-contain">
                 <div>
-                  <div className="divide-y divide-[var(--border-divider)]">
+                  <div>
                     {data.map((commit, index) => (
                       <LocalCommitRow
                         key={commit.hash}
@@ -977,6 +1091,7 @@ export function LocalCommitsDropdown({
                         isCopied={copiedHash === commit.hash}
                         onToggle={toggleCommitExpanded}
                         onCopy={copyHash}
+                        onPointerActivate={() => setCursorIndex(index)}
                       />
                     ))}
                   </div>
@@ -988,14 +1103,15 @@ export function LocalCommitsDropdown({
                       aria-rowindex={loadMoreRowIndex}
                       data-active={isLoadMoreActive ? "true" : undefined}
                       className={cn(
-                        "forge-row relative scroll-my-8 border-t border-[var(--border-divider)] p-2",
-                        // The same rail as a commit row: the fill alone can't
-                        // carry 3:1, and this is where the cursor lands last.
-                        "before:absolute before:inset-y-1.5 before:-start-px before:w-[3px] before:rounded-full",
-                        "before:bg-selection-outline before:opacity-0 before:transition-opacity before:duration-150",
-                        "before:content-[''] before:pointer-events-none",
-                        isLoadMoreActive && "before:opacity-100"
+                        "forge-row relative scroll-my-8 p-2",
+                        "transition-colors duration-150 ease-out",
+                        // The same highlight as a commit row: this is where the
+                        // cursor lands last.
+                        isLoadMoreActive && "bg-overlay-highlight"
                       )}
+                      onPointerMove={
+                        isLoadMoreActive ? undefined : () => setCursorIndex(data.length)
+                      }
                     >
                       <div role="gridcell">
                         {loadMoreError ? (
@@ -1009,16 +1125,19 @@ export function LocalCommitsDropdown({
                               Couldn&apos;t load more commits &middot; {loadMoreError}
                             </p>
                             <Button
-                              variant="ghost"
-                              size="sm"
+                              variant="outline"
+                              size="xs"
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={handleLoadMore}
                               className={cn(
-                                "h-6 text-xs shrink-0",
-                                isLoadMoreActive && "bg-overlay-soft text-text-primary"
+                                "shrink-0",
+                                // The row carries the highlight fill; the button
+                                // only steps its text up rather than painting a
+                                // second fill on top.
+                                isLoadMoreActive && "text-text-primary"
                               )}
                             >
-                              <RefreshCw className="h-3 w-3" />
+                              <RefreshCw aria-hidden="true" />
                               Retry
                             </Button>
                           </div>
@@ -1031,14 +1150,15 @@ export function LocalCommitsDropdown({
                             disabled={loadingMore}
                             className={cn(
                               "w-full",
-                              // Neutral, like the row cursor — the search field
-                              // keeps the region's one accent.
-                              isLoadMoreActive && "bg-overlay-soft text-text-primary"
+                              // The row carries the highlight fill; the button
+                              // only steps its text up rather than painting a
+                              // second fill on top.
+                              isLoadMoreActive && "text-text-primary"
                             )}
                           >
                             {showLoadingMore ? (
                               <>
-                                <RefreshCw className="animate-spin" />
+                                <SpinningIcon icon={RefreshCw} active aria-hidden />
                                 {isSlowLoadingMore ? "Still working…" : "Loading…"}
                               </>
                             ) : (
@@ -1083,7 +1203,7 @@ export function LocalCommitsDropdown({
         copyFailed ||
         activeCommit ||
         footerAction) && (
-        <div className="px-3 h-9 border-t border-[var(--border-divider)] flex items-center gap-3 shrink-0 text-xs text-text-secondary">
+        <div className="px-3 h-10 border-t border-[var(--border-divider)] flex items-center gap-3 shrink-0 text-xs text-text-secondary">
           <div className="flex-1 min-w-0 flex items-center gap-2">
             {pushLine ? (
               <PushSummary line={pushLine} />
@@ -1094,11 +1214,11 @@ export function LocalCommitsDropdown({
             ) : null}
             {showPushSummary && pushStatus.kind === "failed" && (
               <Button
-                variant="ghost"
-                size="sm"
+                variant="outline"
+                size="xs"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={handleRetryPush}
-                className="h-6 text-xs shrink-0"
+                className="shrink-0"
               >
                 Retry
               </Button>
@@ -1114,7 +1234,9 @@ export function LocalCommitsDropdown({
               className="shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap"
               aria-hidden="true"
             >
-              <KbdChord shortcut="Shift+Enter" />
+              {/* The key that copies this row's hash: Shift+Enter where Enter
+                  opens a message, plain Enter where there is none to open. */}
+              <KbdChord shortcut={activeCommit.body?.trim() ? "Shift+Enter" : "Enter"} />
               Copy hash
             </span>
           ) : null}

@@ -323,8 +323,8 @@ async function captureAll(page: Page, state: "empty" | "populated"): Promise<voi
       }
       if (populated && tab === "project:general") {
         // The tier is a project setting the saveSettings seam does not carry, so
-        // choose it the way a user does to get the System warning on screen.
-        await panel(page, tab).getByRole("radio", { name: "System" }).check({ force: true });
+        // choose it the way a user does to get the non-default choice on screen.
+        await panel(page, tab).getByRole("radio", { name: "Full" }).check({ force: true });
         await settle(page, 300);
       }
       await capturePage(page, state, tab, required[tab]);
@@ -347,7 +347,7 @@ async function seedPopulated(page: Page): Promise<void> {
     devServerCommand: "npm run dev -- --port 5173",
     devServerLoadTimeout: 45,
     turbopackEnabled: true,
-    daintreeMcpTier: "system",
+    daintreeMcpTier: "full",
     excludedPaths: ["node_modules/**", "dist/**", "coverage/**"],
     copyTreeSettings: {
       maxContextSize: 52428800,
@@ -512,7 +512,7 @@ async function captureValidation(page: Page): Promise<void> {
     await p.getByRole("button", { name: "Import recipe" }).click();
     const importDialog = page.locator('[role="dialog"]:has-text("Paste the JSON")').last();
     await importDialog.locator("textarea").fill('{"name": "Broken", "terminals": [');
-    await importDialog.getByRole("button", { name: "Import", exact: true }).click();
+    await importDialog.getByRole("button", { name: "Import recipe", exact: true }).click();
     await captureOverlay(
       page,
       "validation",

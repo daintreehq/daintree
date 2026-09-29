@@ -7,6 +7,10 @@ import {
   SettingsRow,
 } from "@/components/Settings/SettingsGroup";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { landOnSettingsElement } from "@/components/Settings/settingsLanding";
+import { PluginSettingsView } from "@/components/Plugin/PluginSettingsView";
+import { pluginDeclaresSettingsView, settingsForHome } from "@/services/plugin/pluginSettingsHome";
+import { actionService } from "@/services/ActionService";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -29,6 +33,7 @@ import type {
   PluginPickPathRequest,
   PluginSecretStorageTier,
   PluginSettingsScope,
+  PluginSettingsViewContext,
   SettingDefinition,
   SettingFieldType,
 } from "@shared/types/plugin";
@@ -73,6 +78,29 @@ function effectiveType(def: SettingDefinition): SettingFieldType {
 function fieldLabel(def: SettingDefinition): string {
   return def.label ?? def.id;
 }
+
+/**
+ * A required text or number field with nothing stored starts empty. A default
+ * never satisfies a required setting, so showing it as the field's value made
+ * an unconfigured field look configured; the row's "Use …" action names it.
+ */
+function startsEmptyWhenUnset(def: SettingDefinition, type: SettingFieldType): boolean {
+  return def.required === true && (type === "string" || type === "number");
+}
+
+/** The draft a field starts from, or returns to on reset, when nothing is stored. */
+function unsetDraft(def: SettingDefinition, type: SettingFieldType): string {
+  return startsEmptyWhenUnset(def, type) ? "" : toDraft(def.default, type);
+}
+
+/**
+ * A write that failed, kept so the row can offer it again: the value it tried to
+ * store and what the field does once it lands, or a reset back to the default.
+ */
+type FailedWrite = { kind: "write"; value: unknown; onSaved?: () => void } | { kind: "reset" };
+
+/** Longest default a plain string field shows on the rail rather than full width. */
+const INLINE_STRING_MAX = 24;
 
 /** Stringify a stored/default value for a text, number, or JSON input. */
 function toDraft(value: unknown, type: SettingFieldType): string {
@@ -213,6 +241,9 @@ function SettingField({
   const [overridden, setOverridden] = useState(false);
   const tierId = useId();
   const [error, setError] = useState<string | null>(null);
+  // Set only when `error` is a failed write; a draft rejected before any write
+  // (not a number, not JSON) is fixed by editing, so it offers no Retry.
+  const [failedWrite, setFailedWrite] = useState<FailedWrite | null>(null);
   const [saving, setSaving] = useState(false);
   // Secret-specific state.
   const [hasStored, setHasStored] = useState(secretIsSet);
@@ -225,8 +256,10 @@ function SettingField({
   // — so the tier disclosure clears its "still plaintext" nudge without a form
   // reload.
   const [migratedToKeychain, setMigratedToKeychain] = useState(false);
-  // Path-specific: tracks a `mustExist` path that no longer resolves on disk.
-  const [pathMissing, setPathMissing] = useState(false);
+  // Path-specific: whether a `mustExist` path still resolves on disk — "unknown"
+  // when the check itself failed, which is not the same as the path being there.
+  const [pathCheck, setPathCheck] = useState<"ok" | "missing" | "unknown">("ok");
+  const [pathCheckAttempt, setPathCheckAttempt] = useState(0);
   // Enum-specific: the Select's open state, held here so an open list can sit
   // on the escape stack. This form also renders inside the plugin manager,
   // which is a non-modal view: there the global keybinding layer takes Escape
@@ -254,52 +287,58 @@ function SettingField({
       setBoolValue(initial === true);
       return;
     }
-    const initial = toDraft(storedValue ?? def.default, type);
+    const initial = storedValue === undefined ? unsetDraft(def, type) : toDraft(storedValue, type);
     setDraft(initial);
     setCommitted(initial);
     setError(null);
-  }, [loaded, storedValue, secretIsSet, isSecret, type, def.default]);
+    setFailedWrite(null);
+  }, [loaded, storedValue, secretIsSet, isSecret, type, def]);
 
   // Existence feedback for `mustExist` path fields: probe whenever the committed
   // path changes (it may have been moved/deleted since it was picked). A blank
   // path is treated as present (no override → nothing to flag).
   useEffect(() => {
     if (!isPath || def.mustExist !== true) {
-      setPathMissing(false);
+      setPathCheck("ok");
       return;
     }
     const target = committed;
     if (target === "") {
-      setPathMissing(false);
+      setPathCheck("ok");
       return;
     }
     let cancelled = false;
     window.electron.plugin
       .pathExists(pluginId, target)
       .then((exists) => {
-        if (!cancelled) setPathMissing(!exists);
+        if (!cancelled) setPathCheck(exists ? "ok" : "missing");
       })
-      .catch(() => {
-        if (!cancelled) setPathMissing(false);
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setPathCheck("unknown");
+        logError(`Failed to check plugin setting path ${pluginId}.${def.id}`, err);
       });
     return () => {
       cancelled = true;
     };
-  }, [isPath, def.mustExist, committed, pluginId]);
+  }, [isPath, def.mustExist, def.id, committed, pluginId, pathCheckAttempt]);
 
   // Returns whether the write succeeded so callers can advance their committed
   // state; never throws (the error is surfaced inline) so blur handlers can fire
   // it without an unhandled rejection.
   const writeValue = useCallback(
-    async (value: unknown): Promise<boolean> => {
+    async (value: unknown, onSaved?: () => void): Promise<boolean> => {
       setSaving(true);
       try {
         await window.electron.plugin.setSettingValue(pluginId, def.id, value, scope, projectId);
         setError(null);
+        setFailedWrite(null);
         setOverridden(true);
+        onSaved?.();
         return true;
       } catch (err) {
         setError(formatErrorMessage(err, "Couldn't save setting"));
+        setFailedWrite({ kind: "write", value, onSaved });
         logError(`Failed to save plugin setting ${pluginId}.${def.id}`, err);
         return false;
       } finally {
@@ -314,6 +353,7 @@ function SettingField({
     try {
       await window.electron.plugin.deleteSettingValue(pluginId, def.id, scope, projectId);
       setError(null);
+      setFailedWrite(null);
       setOverridden(false);
       if (isSecret) {
         setHasStored(false);
@@ -323,17 +363,18 @@ function SettingField({
       } else if (type === "boolean") {
         setBoolValue(def.default === true);
       } else {
-        const reset = toDraft(def.default, type);
+        const reset = unsetDraft(def, type);
         setDraft(reset);
         setCommitted(reset);
       }
     } catch (err) {
       setError(formatErrorMessage(err, "Couldn't reset setting"));
+      setFailedWrite({ kind: "reset" });
       logError(`Failed to reset plugin setting ${pluginId}.${def.id}`, err);
     } finally {
       setSaving(false);
     }
-  }, [pluginId, def.id, def.default, scope, projectId, isSecret, type]);
+  }, [pluginId, def, scope, projectId, isSecret, type]);
 
   // The row greys out only while there is nothing to edit yet; a write in flight
   // disables just the control, so the label doesn't flicker on every save.
@@ -348,13 +389,19 @@ function SettingField({
   useEffect(() => {
     if (enumOpen && !enumListOpen) setEnumOpen(false);
   }, [enumOpen, enumListOpen]);
-  const fieldId = `plugin-setting-${pluginId}-${def.id}`;
+  const fieldId = pluginSettingFieldId(pluginId, def.id);
 
   // Optimistic, but a failed write puts the switch back: a control that still shows
   // the value it couldn't save reads as applied.
+  /** A problem with the draft or a local step, not a write: nothing to retry. */
+  const showError = (message: string | null) => {
+    setError(message);
+    setFailedWrite(null);
+  };
+
   const toggleBool = (next: boolean) => {
     setBoolValue(next);
-    void writeValue(next).then((ok) => {
+    void writeValue(next, () => setBoolValue(next)).then((ok) => {
       if (!ok) setBoolValue(!next);
     });
   };
@@ -362,14 +409,26 @@ function SettingField({
   const chooseEnum = (next: string) => {
     const previous = committed;
     setDraft(next);
-    void writeValue(next).then((ok) => {
-      if (ok) setCommitted(next);
-      else setDraft(previous);
+    void writeValue(next, () => {
+      setDraft(next);
+      setCommitted(next);
+    }).then((ok) => {
+      if (!ok) setDraft(previous);
     });
   };
 
   const commitText = async () => {
-    if (draft === committed) return;
+    // Back to what is saved: nothing to write, and whatever the last draft was
+    // rejected for no longer applies.
+    if (draft === committed) {
+      showError(null);
+      return;
+    }
+    const attempted = draft;
+    const landed = () => {
+      setDraft(attempted);
+      setCommitted(attempted);
+    };
     if (type === "number") {
       const trimmed = draft.trim();
       if (trimmed === "") {
@@ -379,18 +438,18 @@ function SettingField({
       }
       const num = Number(trimmed);
       if (!Number.isFinite(num)) {
-        setError("Enter a valid number");
+        showError("Enter a valid number");
         return;
       }
       if (def.min !== undefined && num < def.min) {
-        setError(`Must be at least ${def.min}`);
+        showError(`Must be at least ${def.min}`);
         return;
       }
       if (def.max !== undefined && num > def.max) {
-        setError(`Must be at most ${def.max}`);
+        showError(`Must be at most ${def.max}`);
         return;
       }
-      if (await writeValue(num)) setCommitted(draft);
+      await writeValue(num, landed);
       return;
     }
     if (type === "json") {
@@ -403,14 +462,14 @@ function SettingField({
       try {
         parsed = JSON.parse(trimmed);
       } catch {
-        setError("Enter valid JSON");
+        showError("Enter valid JSON");
         return;
       }
-      if (await writeValue(parsed)) setCommitted(draft);
+      await writeValue(parsed, landed);
       return;
     }
     // string
-    if (await writeValue(draft)) setCommitted(draft);
+    await writeValue(draft, landed);
   };
 
   const handleReveal = async () => {
@@ -424,9 +483,9 @@ function SettingField({
       setDraft(value ?? "");
       setSecretEdited(false);
       setRevealed(true);
-      setError(null);
+      showError(null);
     } catch (err) {
-      setError(formatErrorMessage(err, "Couldn't reveal secret"));
+      showError(formatErrorMessage(err, "Couldn't reveal secret"));
       logError(`Failed to reveal plugin secret ${pluginId}.${def.id}`, err);
     }
   };
@@ -441,13 +500,13 @@ function SettingField({
     // Persist first; only re-mask (and drop the value from the DOM) once the
     // write succeeds, so a failed save leaves the typed value recoverable next
     // to the inline error instead of silently discarding it.
-    if (await writeValue(value)) {
+    await writeValue(value, () => {
       setSecretEdited(false);
       setHasStored(true);
       setRevealed(false);
       setDraft("");
       setMigratedToKeychain(true);
-    }
+    });
   };
 
   const handleBrowse = async () => {
@@ -462,22 +521,104 @@ function SettingField({
     try {
       const picked = await window.electron.plugin.pickPath(pluginId, request);
       if (picked === null) return; // Picker dismissed — leave the current value.
+      const previous = committed;
       setDraft(picked);
-      if (await writeValue(picked)) setCommitted(picked);
+      // A path that didn't save goes back to the saved one: the field showing the
+      // new pick beside the error would read as applied.
+      const saved = await writeValue(picked, () => {
+        setDraft(picked);
+        setCommitted(picked);
+      });
+      if (!saved) setDraft(previous);
     } catch (err) {
-      setError(formatErrorMessage(err, "Couldn't open the file picker"));
+      showError(formatErrorMessage(err, "Couldn't open the file picker"));
       logError(`Failed to pick path for plugin setting ${pluginId}.${def.id}`, err);
     }
   };
 
   const label = fieldLabel(def);
-  const scopeBadge = <Badge size="xs">{SCOPE_BADGE_LABEL[scope]}</Badge>;
+  // "Required" rides beside the scope badge rather than in the label: the plugin
+  // can't work without it, which is what the panel's setup strip sent the user
+  // here to fix.
+  // A required field shows its default but has nothing stored, and a default
+  // never satisfies it — so accepting the default has to be an action of its
+  // own. Without one, the displayed default can't be saved: committing an
+  // unchanged draft is (rightly) a no-op for every other field. Never a secret:
+  // the manifest schema refuses a secret default outright.
+  const canAcceptDefault =
+    def.required === true &&
+    def.default !== undefined &&
+    !isSecret &&
+    !overridden &&
+    loaded &&
+    scopeReady &&
+    !failed;
+  const acceptDefault = async () => {
+    await writeValue(def.default, () => {
+      if (type === "boolean") {
+        setBoolValue(def.default === true);
+      } else {
+        const accepted = toDraft(def.default, type);
+        setDraft(accepted);
+        setCommitted(accepted);
+      }
+    });
+  };
+  const retryWrite = () => {
+    if (failedWrite === null) return;
+    if (failedWrite.kind === "reset") void handleReset();
+    else void writeValue(failedWrite.value, failedWrite.onSaved);
+  };
+  const scopeBadge = (
+    <>
+      <Badge size="xs">{SCOPE_BADGE_LABEL[scope]}</Badge>
+      {def.required === true && <Badge size="xs">Required</Badge>}
+    </>
+  );
   const isModified = (isSecret ? hasStored : overridden) && loaded && scopeReady;
+  const pathNoun = type === "file" ? "file" : "folder";
   const shownError =
     error ??
-    (pathMissing
-      ? `This ${type === "file" ? "file" : "folder"} no longer exists — pick a new one`
-      : null);
+    (pathCheck === "missing"
+      ? `This ${pathNoun} no longer exists — pick a new one`
+      : pathCheck === "unknown"
+        ? `Couldn't check that this ${pathNoun} still exists`
+        : null);
+  // Required and nothing stored: say so on the row, with accepting the default
+  // as the action beside it when there is one.
+  const requiredUnset =
+    def.required === true &&
+    loaded &&
+    scopeReady &&
+    !failed &&
+    (isSecret ? !hasStored : !overridden);
+  const defaultText = def.default === undefined ? "" : toDraft(def.default, type);
+  const requiredNote = requiredUnset ? (
+    <span className="flex flex-col items-start gap-2">
+      <span>
+        {canAcceptDefault ? "Not set yet — enter a value or use the default" : "Not set yet"}
+      </span>
+      {canAcceptDefault && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={saving}
+          onClick={() => void acceptDefault()}
+        >
+          {defaultText.length > 0 &&
+          defaultText.length <= INLINE_STRING_MAX &&
+          !defaultText.includes("\n")
+            ? `Use \u201c${defaultText}\u201d`
+            : "Use default"}
+        </Button>
+      )}
+    </span>
+  ) : null;
+  // A required value that isn't set is as invalid as a rejected one, and says so
+  // the same way. A path that couldn't be checked isn't known to be wrong.
+  const invalid =
+    (shownError !== null && !(error === null && pathCheck === "unknown")) || requiredUnset;
   const rowProps = {
     id: fieldId,
     label,
@@ -497,8 +638,35 @@ function SettingField({
       : failed
         ? "Saved value couldn't be read"
         : undefined,
-    // A failed write is announced where it happened; a missing path is a standing state.
-    error: error ? <span role="alert">{error}</span> : (shownError ?? undefined),
+    // A failed write is announced where it happened; a missing path, found by a
+    // probe after the form settles, is a standing state announced politely.
+    // Recovery sits under the words, so the glyph stays on the first line.
+    error: error ? (
+      <span role="alert" className="flex flex-col items-start gap-2">
+        <span className="min-w-0 break-words">{error}</span>
+        {failedWrite !== null && (
+          <Button type="button" variant="outline" size="sm" disabled={saving} onClick={retryWrite}>
+            Retry
+          </Button>
+        )}
+      </span>
+    ) : shownError ? (
+      <span role="status" className="flex flex-col items-start gap-2">
+        <span>{shownError}</span>
+        {pathCheck === "unknown" && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setPathCheckAttempt((n) => n + 1)}
+          >
+            Retry
+          </Button>
+        )}
+      </span>
+    ) : (
+      (requiredNote ?? undefined)
+    ),
   };
 
   if (type === "boolean") {
@@ -512,6 +680,7 @@ function SettingField({
             disabled={disabled || saving}
             aria-labelledby={labelId}
             aria-describedby={descriptionId}
+            aria-invalid={invalid}
             onCheckedChange={toggleBool}
           />
         )}
@@ -530,6 +699,7 @@ function SettingField({
             <SegmentedRadioGroup
               aria-label={label}
               aria-describedby={descriptionId}
+              aria-invalid={invalid}
               options={options.map((opt) => ({ value: opt, label: opt }))}
               value={draft}
               onChange={chooseEnum}
@@ -553,7 +723,7 @@ function SettingField({
             <SelectTrigger
               aria-labelledby={labelId}
               aria-describedby={descriptionId}
-              aria-invalid={shownError ? true : undefined}
+              aria-invalid={invalid || undefined}
               className={SETTINGS_CONTROL_WIDTH[wide ? "wide" : "select"]}
             >
               {/* An unset enum shows the placeholder rather than silently adopting the first option. */}
@@ -583,10 +753,11 @@ function SettingField({
             type="text"
             inputMode="decimal"
             value={draft}
+            aria-required={def.required === true || undefined}
             disabled={disabled || saving}
             aria-labelledby={labelId}
             aria-describedby={descriptionId}
-            aria-invalid={shownError ? true : undefined}
+            invalid={invalid}
             className={SETTINGS_CONTROL_WIDTH.number}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={() => void commitText()}
@@ -608,7 +779,7 @@ function SettingField({
             disabled={disabled || saving}
             aria-labelledby={labelId}
             aria-describedby={descriptionId}
-            aria-invalid={shownError ? true : undefined}
+            invalid={invalid}
             rows={4}
             spellCheck={false}
             onChange={(e) => setDraft(e.target.value)}
@@ -633,9 +804,10 @@ function SettingField({
               disabled={disabled || saving}
               aria-labelledby={labelId}
               aria-describedby={descriptionId}
-              aria-invalid={shownError ? true : undefined}
+              invalid={invalid}
               placeholder={type === "file" ? "No file selected" : "No folder selected"}
-              className="min-w-0 flex-1 font-mono text-xs"
+              // The value is a path, so mono; the placeholder is a sentence, so not.
+              className="min-w-0 flex-1 font-mono text-xs placeholder:font-sans"
             />
             <Button
               type="button"
@@ -664,7 +836,7 @@ function SettingField({
           void handleReset();
         }}
         onClose={() => setConfirmingSecretClear(false)}
-        title={`Clear ${label}?`}
+        title={`Clear '${label}'?`}
         description="The saved value is deleted. The plugin can't use it until you enter it again."
         confirmLabel={`Clear ${label}`}
         zIndex="nested"
@@ -675,7 +847,11 @@ function SettingField({
         ? "Secure storage unavailable — secrets can't be saved on this device"
         : hasStored && secretIsPlaintext && !migratedToKeychain
           ? "Stored as plaintext — re-save to move it into the OS keychain"
-          : "Stored in OS keychain";
+          : // Nothing stored yet is not "stored": say where a new value goes,
+            // without implying it saves as it is typed.
+            hasStored
+            ? "Stored in OS keychain"
+            : "New secrets are stored in the OS keychain";
     return (
       <>
         <SettingsRow
@@ -693,7 +869,7 @@ function SettingField({
                     [descriptionId, scopeReady ? tierId : null].filter(Boolean).join(" ") ||
                     undefined
                   }
-                  aria-invalid={shownError ? true : undefined}
+                  invalid={invalid}
                   placeholder={hasStored ? "••••••••" : "Not set"}
                   autoComplete="off"
                   className="min-w-0 flex-1"
@@ -740,11 +916,16 @@ function SettingField({
     );
   }
 
-  // string
+  // string — a short declared default says the value is a word or two, which
+  // sits on the rail; anything else could be a URL or a command, so full width.
+  const inlineString =
+    typeof def.default === "string" &&
+    def.default.length > 0 &&
+    def.default.length <= INLINE_STRING_MAX;
   return (
     <SettingsRow
       {...rowProps}
-      layout="stacked"
+      layout={inlineString ? "inline" : "stacked"}
       control={({ labelId, descriptionId, disabled }) => (
         <Input
           type="text"
@@ -752,7 +933,9 @@ function SettingField({
           disabled={disabled || saving}
           aria-labelledby={labelId}
           aria-describedby={descriptionId}
-          aria-invalid={shownError ? true : undefined}
+          aria-required={def.required === true || undefined}
+          invalid={invalid}
+          className={inlineString ? SETTINGS_CONTROL_WIDTH.wide : undefined}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={() => void commitText()}
         />
@@ -761,8 +944,39 @@ function SettingField({
   );
 }
 
+/** A deep link's "land on this setting" request; `nonce` makes a repeat land again. */
+export interface PluginSettingsFocusRequest {
+  key: string;
+  nonce: number;
+}
+
 interface PluginSettingsFormProps {
   plugin: LoadedPluginInfo;
+  /**
+   * Which home this form is in, handed to the plugin's custom settings view.
+   * `"user"` in the plugin manager, `"project"` in Project settings → Plugins.
+   */
+  viewScope?: PluginSettingsViewContext["scope"];
+  /** Scroll to, focus and briefly highlight this setting once its value has loaded. */
+  focusRequest?: PluginSettingsFocusRequest | null;
+  /** Told once `focusRequest` has been handled, landed or not. */
+  onFocusHandled?: (nonce: number) => void;
+  /**
+   * Whether the plugin is running as far as this home knows. A project plugin
+   * that was muted or stopped keeps its fields but unmounts its custom section,
+   * even before the plugin list catches up.
+   */
+  viewRunning?: boolean;
+}
+
+/** The DOM id of a generated field's row — what a settings deep link lands on. */
+export function pluginSettingFieldId(pluginId: string, settingId: string): string {
+  return `plugin-setting-${pluginId}-${settingId}`;
+}
+
+/** The plugin's own settings section, where a deep link to a key it edits lands. */
+export function pluginSettingsViewId(pluginId: string): string {
+  return `plugin-settings-view-${pluginId}`;
 }
 
 /**
@@ -771,13 +985,27 @@ interface PluginSettingsFormProps {
  * loaded manifest; stored values hydrate asynchronously per scope. User-scoped
  * values load once; project-scoped values reload whenever the active project
  * changes (the fields are remounted so their drafts re-initialize).
+ *
+ * Below the fields, the plugin's own `location: "settings"` view when it
+ * declares one — the host owns the surface, the view renders its rows.
  */
-export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
+export function PluginSettingsForm({
+  plugin,
+  viewScope = "user",
+  focusRequest = null,
+  onFocusHandled,
+  viewRunning = true,
+}: PluginSettingsFormProps) {
   // The registry key, not the manifest name: they are the same for an installed
   // plugin, but a project plugin is addressed by its instance key everywhere on
   // the settings bridge — which is also what pins its files to its own project.
   const pluginId = plugin.instanceId;
-  const settings = plugin.manifest.contributes.settings ?? [];
+  // Only this home's fields. Each scope has one home, so an installed plugin's
+  // `user` fields render in the plugin manager and its `project` / `local`
+  // fields in Project settings — never both, with a pointer row to the other.
+  const home = viewScope === "user" ? "manager" : "project";
+  const settings = settingsForHome(plugin, home);
+  const elsewhere = settingsForHome(plugin, home === "manager" ? "project" : "manager");
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
 
   const [reloadKey, setReloadKey] = useState(0);
@@ -791,6 +1019,10 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
     local: localScope,
   };
 
+  // A reload can bring new declarations for the same plugin — a branch switch
+  // adding a field whose value is already stored. Stored values are re-read
+  // for the new load, and editing waits until they are in.
+  const declarationsKey = `${plugin.loadedAt}:${settings.map((s) => s.id).join(",")}`;
   const hasUserScope = settings.some((s) => settingScope(s) === "user");
   const hasProjectScope = settings.some((s) => settingScope(s) === "project");
   const hasLocalScope = settings.some((s) => settingScope(s) === "local");
@@ -799,26 +1031,73 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
   useEffect(() => {
     if (!hasUserScope) return;
     return loadScopeValues(pluginId, "user", null, setUserScope);
-  }, [pluginId, hasUserScope, reloadKey]);
+  }, [pluginId, hasUserScope, reloadKey, declarationsKey]);
 
   // Project-scoped values: reload on project switch (#9301 re-render requirement).
   useEffect(() => {
     if (!hasProjectScope) return;
     return loadScopeValues(pluginId, "project", projectId, setProjectScope);
-  }, [pluginId, hasProjectScope, projectId, reloadKey]);
+  }, [pluginId, hasProjectScope, projectId, reloadKey, declarationsKey]);
 
   // Local scope resolves from the same project id as `project`, so it reloads on
   // exactly the same switches — the file it reaches just isn't in the repo.
   useEffect(() => {
     if (!hasLocalScope) return;
     return loadScopeValues(pluginId, "local", projectId, setLocalScope);
-  }, [pluginId, hasLocalScope, projectId, reloadKey]);
+  }, [pluginId, hasLocalScope, projectId, reloadKey, declarationsKey]);
 
-  if (settings.length === 0) return null;
+  // A deep link lands once the target's scope has resolved: before that the row
+  // is disabled, and focus would skip its control for whatever comes next. It
+  // also waits for the row to be on screen — the settings dialog can still be
+  // switching to this tab — trying a few frames before giving up quietly.
+  const focusNonce = focusRequest?.nonce;
+  const focusKey = focusRequest?.key;
+  const focusDef = settings.find((def) => def.id === focusKey);
+  // A key the plugin's own section edits has no row; the link lands on that section.
+  const focusInView = focusDef?.editor === "view" && pluginDeclaresSettingsView(plugin);
+  const focusScope = focusDef ? byScope[settingScope(focusDef)] : null;
+  const focusReady = focusScope === null || focusScope.values !== null || !!focusScope.failed;
+  useEffect(() => {
+    if (focusNonce === undefined || focusKey === undefined || !focusReady) return;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = () => {
+      const row = document.getElementById(
+        focusInView ? pluginSettingsViewId(pluginId) : pluginSettingFieldId(pluginId, focusKey)
+      );
+      if (row && isOnScreen(row)) {
+        landOnSettingsElement(row);
+      } else if (row && attempts++ < LANDING_ATTEMPTS) {
+        timer = setTimeout(attempt, LANDING_RETRY_MS);
+        return;
+      }
+      onFocusHandled?.(focusNonce);
+    };
+    attempt();
+    return () => {
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [focusNonce, focusKey, focusReady, focusInView, pluginId, onFocusHandled]);
+
+  const hasView = pluginDeclaresSettingsView(plugin);
+  if (settings.length === 0 && elsewhere.length === 0 && !hasView) return null;
+  // A value the plugin's own section edits is shown there, not twice.
+  const fields = hasView ? settings.filter((def) => def.editor !== "view") : settings;
 
   const anyFailed = userScope.failed || projectScope.failed || localScope.failed;
+  const elsewhereRow =
+    elsewhere.length === 0 ? null : (
+      <SettingsElsewhereRow
+        pluginId={pluginId}
+        firstKey={elsewhere[0]!.id}
+        home={home === "manager" ? "project" : "manager"}
+        projectOpen={projectId !== null}
+      />
+    );
 
-  // One group; the caller owns the heading (a section, or the tab that already names it).
+  // The caller owns the heading (a section, or the tab that already names it):
+  // the declared fields are one group, and a custom settings view is a second
+  // group directly below them under the same heading.
   return (
     <div className="grid gap-3">
       {anyFailed && (
@@ -827,33 +1106,100 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
           onRetry={() => setReloadKey((k) => k + 1)}
         />
       )}
-      <SettingsGroup>
-        {settings.map((def) => {
-          const scope = settingScope(def);
-          const state = byScope[scope];
-          const loaded = state.values !== null;
-          const values = state.values;
-          const secrets = state.secrets;
-          const secretInfo = state.secretInfo;
-          return (
-            <SettingField
-              // Remount project-bound fields on project switch so drafts reset.
-              key={
-                PROJECT_BOUND_SCOPES.includes(scope) ? `${def.id}:${projectId ?? "none"}` : def.id
-              }
-              def={def}
-              pluginId={pluginId}
-              projectId={projectId}
-              storedValue={values?.[def.id]}
-              secretIsSet={secrets.has(def.id)}
-              secretTier={secretInfo.tier}
-              secretIsPlaintext={secretInfo.plaintext.has(def.id)}
-              loaded={loaded}
-              failed={state.failed === true}
-            />
-          );
-        })}
-      </SettingsGroup>
+      {(fields.length > 0 || elsewhereRow) && (
+        <SettingsGroup>
+          {fields.map((def) => {
+            const scope = settingScope(def);
+            const state = byScope[scope];
+            const loaded = state.values !== null;
+            const values = state.values;
+            const secrets = state.secrets;
+            const secretInfo = state.secretInfo;
+            return (
+              <SettingField
+                // Remount project-bound fields on project switch so drafts reset.
+                key={
+                  PROJECT_BOUND_SCOPES.includes(scope) ? `${def.id}:${projectId ?? "none"}` : def.id
+                }
+                def={def}
+                pluginId={pluginId}
+                projectId={projectId}
+                storedValue={values?.[def.id]}
+                secretIsSet={secrets.has(def.id)}
+                secretTier={secretInfo.tier}
+                secretIsPlaintext={secretInfo.plaintext.has(def.id)}
+                loaded={loaded}
+                failed={state.failed === true}
+              />
+            );
+          })}
+          {elsewhereRow}
+        </SettingsGroup>
+      )}
+      {hasView && (
+        <div id={pluginSettingsViewId(pluginId)}>
+          <PluginSettingsView
+            plugin={plugin}
+            context={{ scope: viewScope, projectId: viewScope === "project" ? projectId : null }}
+            running={viewRunning}
+          />
+        </div>
+      )}
     </div>
+  );
+}
+
+/** How many times a deep link retries a row that is in the DOM but not yet shown. */
+const LANDING_ATTEMPTS = 20;
+const LANDING_RETRY_MS = 50;
+
+/** Whether an element is actually shown — not inside a hidden settings tab panel. */
+function isOnScreen(el: HTMLElement): boolean {
+  return el.closest(".hidden, [hidden]") === null;
+}
+
+/**
+ * The one row that says where this plugin's other settings live. It links there
+ * rather than repeating the fields, so each value still has exactly one home.
+ */
+function SettingsElsewhereRow({
+  pluginId,
+  firstKey,
+  home,
+  projectOpen,
+}: {
+  pluginId: string;
+  firstKey: string;
+  home: "manager" | "project";
+  projectOpen: boolean;
+}) {
+  const toProject = home === "project";
+  return (
+    <SettingsRow
+      label={toProject ? "Project settings" : "Settings for every project"}
+      description={
+        toProject
+          ? "Values that differ per project are set in each project's settings"
+          : "Values shared by every project are set in the plugin manager"
+      }
+      disabled={toProject && !projectOpen}
+      disabledReason="Open a project to change its settings"
+      control={({ disabled }) => (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={disabled}
+          onClick={() =>
+            void actionService.dispatch(
+              "plugin.openSettings",
+              { pluginId, key: firstKey },
+              { source: "user" }
+            )
+          }
+        >
+          {toProject ? "Open project settings" : "Open plugin manager"}
+        </Button>
+      )}
+    />
   );
 }

@@ -255,7 +255,7 @@ describe("toolbar copy visible", () => {
     seedConsoleRow({ level: "log", summaryText: "fine" });
     renderPanel();
 
-    fireEvent.click(screen.getByRole("button", { name: /errors/i }));
+    fireEvent.click(screen.getByRole("radio", { name: /errors/i }));
     fireEvent.click(getCopyVisibleButton());
 
     const text = writeText.mock.calls[0]![0];
@@ -310,7 +310,7 @@ describe("toolbar copy visible", () => {
     seedConsoleRow({ level: "error", summaryText: "only an error" });
     renderPanel();
 
-    fireEvent.click(screen.getByRole("button", { name: "Warn" }));
+    fireEvent.click(screen.getByRole("radio", { name: /^Warn/ }));
 
     const button = getCopyVisibleButton();
     expect(button.hasAttribute("disabled")).toBe(true);

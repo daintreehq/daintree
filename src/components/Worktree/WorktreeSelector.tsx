@@ -1,5 +1,15 @@
+import { useId } from "react";
 import { FolderGit2 } from "@/components/icons";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { WorktreeSnapshot } from "@/types";
+import { worktreeOptionLabel } from "./crossWorktreeDiffUtils";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 interface WorktreeSelectorProps {
   label: string;
@@ -16,27 +26,26 @@ export function WorktreeSelector({
   disabledId,
   onChange,
 }: WorktreeSelectorProps) {
+  const triggerId = useId();
   return (
-    <div className="flex flex-col gap-1 min-w-0">
-      <span className="text-xs font-medium text-text-muted uppercase tracking-wider">{label}</span>
-      <div className="relative">
-        <FolderGit2 className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted pointer-events-none" />
-        <select
-          value={selectedId ?? ""}
-          onChange={(e) => onChange(e.target.value)}
-          className="w-full appearance-none bg-surface-panel-elevated border border-border-default rounded-md pl-8 pr-3 py-2 text-sm text-text-primary focus:outline-hidden focus:border-border-default cursor-pointer"
-        >
-          <option value="" disabled>
-            Select worktree…
-          </option>
+    <div className="flex flex-col gap-1.5 min-w-0">
+      <label htmlFor={triggerId} className={SECTION_LABEL_CLASS}>
+        {label}
+      </label>
+      {/* "" is Radix's unset value: the trigger shows the placeholder. */}
+      <Select value={selectedId ?? ""} onValueChange={onChange}>
+        <SelectTrigger id={triggerId} className="justify-start">
+          <FolderGit2 aria-hidden="true" className="w-3.5 h-3.5 shrink-0 text-text-secondary" />
+          <SelectValue placeholder="Choose a worktree…" className="flex-1" />
+        </SelectTrigger>
+        <SelectContent>
           {worktrees.map((wt) => (
-            <option key={wt.id} value={wt.id} disabled={wt.id === disabledId}>
-              {wt.isMainWorktree ? wt.name : wt.branch || wt.name}{" "}
-              {wt.isMainWorktree ? "(main)" : ""}
-            </option>
+            <SelectItem key={wt.id} value={wt.id} disabled={wt.id === disabledId || !wt.branch}>
+              {worktreeOptionLabel(wt)}
+            </SelectItem>
           ))}
-        </select>
-      </div>
+        </SelectContent>
+      </Select>
     </div>
   );
 }

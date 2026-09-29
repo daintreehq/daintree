@@ -7,12 +7,15 @@ import type {
 
 /**
  * The dismiss/cancel outcome for a prompt kind — `false` for a confirm (the
- * user did not confirm), `undefined` for quick-pick / input-box. Used whenever a
- * prompt is resolved without an explicit answer (Escape, click-away, or a
- * main-process cancel after the plugin unloads).
+ * user did not confirm), `{ status: "cancelled" }` for a send-to-agent picker,
+ * `undefined` for quick-pick / input-box. Used whenever a prompt is resolved
+ * without an explicit answer (Escape, click-away, or a main-process cancel
+ * after the plugin unloads).
  */
 export function dismissValueFor(kind: PluginUiPromptParams["kind"]): PluginUiPromptResultValue {
-  return kind === "confirm" ? false : undefined;
+  if (kind === "confirm") return false;
+  if (kind === "sendToAgent") return { status: "cancelled" };
+  return undefined;
 }
 
 /**
@@ -30,7 +33,12 @@ export interface PendingUiPrompt {
   pluginId: string;
   params: PluginUiPromptParams;
   /** Resolves the promise returned by {@link enqueueUiPrompt}. */
-  resolve: (value: PluginUiPromptResultValue) => void;
+  resolve: (value: PluginUiPromptResultValue | PromiseLike<PluginUiPromptResultValue>) => void;
+  /**
+   * Told when the user answers with work still to finish — a promise passed to
+   * `resolveCurrent` — so main stops treating the prompt as cancellable.
+   */
+  onAccept?: () => void;
 }
 
 interface PluginPromptState {
@@ -40,8 +48,15 @@ interface PluginPromptState {
 
 interface PluginPromptActions {
   enqueue: (item: PendingUiPrompt) => void;
-  /** Resolve the visible prompt with the user's answer and advance the queue. */
-  resolveCurrent: (value: PluginUiPromptResultValue) => void;
+  /**
+   * Resolve the visible prompt with the user's answer and advance the queue.
+   * A promise closes the dialog now and answers the plugin once it settles —
+   * the send-to-agent picker's "new agent" rows, whose answer is the draft
+   * that lands after the agent starts. It must never reject.
+   */
+  resolveCurrent: (
+    value: PluginUiPromptResultValue | PromiseLike<PluginUiPromptResultValue>
+  ) => void;
   /**
    * Drop every prompt for `pluginId` (or one specific `promptId`), resolving
    * each with its dismiss value. Invoked when the main process broadcasts a
@@ -49,6 +64,12 @@ interface PluginPromptActions {
    */
   cancelByPluginId: (pluginId: string, promptId?: string) => void;
   reset: () => void;
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    typeof value === "object" && value !== null && typeof Reflect.get(value, "then") === "function"
+  );
 }
 
 function advance(set: (partial: Partial<PluginPromptState>) => void, queue: PendingUiPrompt[]) {
@@ -76,6 +97,9 @@ export const usePluginPromptStore = create<PluginPromptState & PluginPromptActio
   resolveCurrent: (value) => {
     const { current, queue } = get();
     if (current === null) return;
+    // Before resolving, so main hears of the acceptance ahead of anything the
+    // work itself goes on to report.
+    if (isPromiseLike(value)) current.onAccept?.();
     current.resolve(value);
     advance(set, queue);
   },
@@ -112,10 +136,12 @@ export const usePluginPromptStore = create<PluginPromptState & PluginPromptActio
 /**
  * Push a prompt request into the queue and return a Promise that resolves with
  * the user's answer (or the dismiss value if cancelled/unloaded). The Promise
- * never rejects — callers branch on the value.
+ * never rejects — callers branch on the value. `onAccept` runs if the user
+ * answers with work still to finish; the Promise then settles once it has.
  */
 export function enqueueUiPrompt(
-  request: PluginUiPromptRequest
+  request: PluginUiPromptRequest,
+  onAccept?: () => void
 ): Promise<PluginUiPromptResultValue> {
   return new Promise((resolve) => {
     usePluginPromptStore.getState().enqueue({
@@ -123,6 +149,7 @@ export function enqueueUiPrompt(
       pluginId: request.pluginId,
       params: request.params,
       resolve,
+      ...(onAccept ? { onAccept } : {}),
     });
   });
 }

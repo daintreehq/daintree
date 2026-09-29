@@ -16,6 +16,9 @@ import {
   isTooltipSuppressedForElement,
 } from "@/lib/tooltipFocusSuppression";
 
+/** The tooltip card's padding, shared with the shortcut hint card. */
+export const TOOLTIP_CARD_PADDING = "px-3 py-1.5";
+
 type TooltipProviderProps = React.ComponentProps<typeof TooltipPrimitiveType.Provider>;
 
 const TooltipProvider = ({ children, ...props }: TooltipProviderProps) => {
@@ -372,7 +375,8 @@ const TooltipContent = React.forwardRef<
           hideWhenDetached={hideWhenDetached}
           style={{ transformOrigin: "var(--radix-tooltip-content-transform-origin)", ...style }}
           className={cn(
-            "z-[var(--z-popover)] max-w-xs overflow-hidden rounded-[var(--radius-md)] surface-overlay shadow-overlay px-3 py-1.5 text-xs text-text-primary",
+            "z-[var(--z-popover)] max-w-xs overflow-hidden rounded-[var(--radius-md)] surface-overlay shadow-overlay text-xs text-text-primary",
+            TOOLTIP_CARD_PADDING,
             TOOLTIP_MOTION_CLASS,
             className
           )}

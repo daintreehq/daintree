@@ -65,6 +65,8 @@ import type {
 } from "@shared/types/ipc/mcpServer";
 import type { TerminalSpawnSource } from "@shared/types/panel";
 import { TerminalKillBatchIdsSchema } from "@shared/types/terminalKillBatch";
+import { TerminalCloseManyArgsSchema } from "@shared/types/mcpBatch";
+import { TRASH_TTL_MS } from "@shared/config/trash";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { isGenericNativeGrantEligible } from "@shared/config/nativeGrantUsePolicies";
@@ -175,6 +177,13 @@ export type McpConfirmPreviewTarget =
    */
   | { kind: "terminalKillBatch"; terminalIds: readonly string[] }
   /**
+   * The panels Daintree's own assistant asked to close (#12881), put to the
+   * user because it did not open them or their agent is mid-task. The same
+   * frozen, synchronous checklist as a batch kill, for the same reason; the
+   * user's selection travels back to main, which closes only those.
+   */
+  | { kind: "terminalClose"; terminalIds: readonly string[] }
+  /**
    * The two forge writes that publish something nobody can retract (#12118).
    *
    * Unlike every other kind here, the content is already IN the dispatch
@@ -206,6 +215,7 @@ const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
   // Unused: this kind renders a selectable checklist with its own heading
   // rather than the preview card. Present so the map stays exhaustive.
   terminalKillBatch: "Terminals",
+  terminalClose: "Panels",
   forgeCreateIssue: "Issue to be filed",
   forgeAddIssueComment: "Comment to be posted",
   terminalLaunch: "Terminal to be opened",
@@ -305,6 +315,21 @@ function terminalIdsArg(args: unknown): readonly string[] | undefined {
   if (args === null || typeof args !== "object" || !("terminalIds" in args)) return undefined;
   const parsed = TerminalKillBatchIdsSchema.safeParse(args.terminalIds);
   return parsed.success ? parsed.data : undefined;
+}
+
+/** Why the assistant's close is being put to the user (#12881). */
+export const PROTECTED_CLOSE_RATIONALE = `The assistant didn't open some of these panels, or their agent was last seen working or waiting. Most closed panels stay in the trash for ${TRASH_TTL_MS / 1000} seconds, and some are discarded at once; after that their processes are gone.`;
+
+/**
+ * The checklist for an assistant close main has put to the user (#12881), or
+ * undefined when the ids are unusable. Main builds these args itself, so a
+ * malformed list is a wiring fault: no checklist means no selection, and main
+ * reads no selection as nothing approved.
+ */
+function closeApprovalPreviewTarget(args: unknown): McpConfirmPreviewTarget | undefined {
+  if (args === null || typeof args !== "object" || !("terminalIds" in args)) return undefined;
+  const parsed = TerminalCloseManyArgsSchema.shape.terminalIds.safeParse(args.terminalIds);
+  return parsed.success ? { kind: "terminalClose", terminalIds: parsed.data } : undefined;
 }
 
 /**
@@ -734,7 +759,7 @@ export async function buildMcpConfirmPreview(
 ): Promise<McpConfirmPreviewResult> {
   // The checklist IS this kind's preview, and it is already on the item before
   // the modal opens. There is nothing to fetch and nothing to patch in later.
-  if (target.kind === "terminalKillBatch") return { lines: [] };
+  if (target.kind === "terminalKillBatch" || target.kind === "terminalClose") return { lines: [] };
   if (target.kind === "recipe") {
     // Renderer state, so no fetch — but re-read here rather than closing over
     // the resolve-time recipe so the lines reflect the store at modal-open.
@@ -939,7 +964,7 @@ function withPreviewedWorktreeCwd(
   // The batch kill pins its approval through the dispatch options rather than
   // through args, so there is nothing to rewrite here — and rewriting the id
   // list would hide the excluded targets the action has to report on.
-  if (target.kind === "terminalKillBatch") return args;
+  if (target.kind === "terminalKillBatch" || target.kind === "terminalClose") return args;
   if (target.kind === "recipe") {
     // Same rationale as the git cwd pin: the dispatch must act on the recipe the
     // human saw. `getRecipeById` resolves a shadowed id to a different winner,
@@ -1071,6 +1096,8 @@ export function useMcpBridge(): void {
         sessionOrigin,
         offerSessionApproval,
         approvalOnly,
+        approvalReason,
+        authorization,
       }) => {
         // An agent pane's replayed snapshot names its worktree by id only, so
         // describe it from this view's store once, up front (#12486): the
@@ -1129,7 +1156,16 @@ export function useMcpBridge(): void {
           // protected worktree irreversibly. So a granted force delete whose
           // LIVE tier comes back D3 gives up its pre-authorisation and asks for
           // the attestation on its own account (#12115).
-          if (effectiveConfirmed === true && actionId === "worktree.delete" && forceArg(args)) {
+          //
+          // The skip preference is the exception (#12874): it is the user's
+          // standing "don't ask" for the assistant, typed name included, so a
+          // force delete it covers runs and any failure surfaces from the action.
+          if (
+            effectiveConfirmed === true &&
+            authorization !== "skip-preference" &&
+            actionId === "worktree.delete" &&
+            forceArg(args)
+          ) {
             const grantedTarget = resolveMcpConfirmPreviewTarget(actionId, args, context);
             if (grantedTarget?.kind === "worktreeDelete") {
               const gate = resolveWorktreeDeleteGate(
@@ -1194,13 +1230,18 @@ export function useMcpBridge(): void {
               // dispatch before seeing what it affects. `setPreview` patches the
               // item and re-enables approval when the fetch lands (empty lines
               // when there's nothing to show); a no-op if already resolved.
-              previewTarget = resolveMcpConfirmPreviewTarget(actionId, args, context);
+              const closeApproval = approvalOnly === true && approvalReason === "protected-close";
+              previewTarget = closeApproval
+                ? closeApprovalPreviewTarget(args)
+                : resolveMcpConfirmPreviewTarget(actionId, args, context);
               // The checklist kind resolves synchronously below and has no
               // lines to fetch, so it must not arm the pending-preview gate —
               // that would leave its approve button disabled with nothing in
               // flight to ever re-enable it.
               const hasAsyncPreview =
-                previewTarget !== undefined && previewTarget.kind !== "terminalKillBatch";
+                previewTarget !== undefined &&
+                previewTarget.kind !== "terminalKillBatch" &&
+                previewTarget.kind !== "terminalClose";
               const previewPending = hasAsyncPreview;
               if (hasAsyncPreview && previewTarget !== undefined) {
                 void buildMcpConfirmPreview(previewTarget)
@@ -1224,7 +1265,8 @@ export function useMcpBridge(): void {
               // render and never appended to. The list the approver reads is
               // the list their approval covers.
               const selectableTargets =
-                previewTarget?.kind === "terminalKillBatch"
+                previewTarget?.kind === "terminalKillBatch" ||
+                previewTarget?.kind === "terminalClose"
                   ? buildTerminalKillBatchTargets(previewTarget.terminalIds)
                   : undefined;
               let resolution: McpConfirmResolution;
@@ -1238,9 +1280,11 @@ export function useMcpBridge(): void {
                   // confirm dialog so the human sees the same justification the
                   // model does — parity with the removed elicitation prompt,
                   // which used to be the only surface that showed it (#11342).
-                  ...(definition.dangerRationale
-                    ? { dangerRationale: definition.dangerRationale }
-                    : {}),
+                  ...(closeApproval
+                    ? { dangerRationale: PROTECTED_CLOSE_RATIONALE }
+                    : definition.dangerRationale
+                      ? { dangerRationale: definition.dangerRationale }
+                      : {}),
                   argsSummary: summarizeMcpArgs(args),
                   // Names WHICH worktree/recipe in the title. Resolved from the
                   // renderer's stores, not from the redacted args summary.
@@ -1250,7 +1294,9 @@ export function useMcpBridge(): void {
                         return subject ? { subject } : {};
                       })()
                     : {}),
-                  danger: definition.danger,
+                  // A protected close is confirm-tier in effect even though
+                  // `terminal.close` declares safe: it is what made main ask.
+                  danger: closeApproval ? "confirm" : definition.danger,
                   // Display-only requesting-bearer identity (#9157). Present
                   // only for unpinned external dispatch; the dialog renders a
                   // "Requested by" row when set, stays provenance-free when not.
@@ -1265,7 +1311,9 @@ export function useMcpBridge(): void {
                   ...(offerSessionApproval === true && isGenericNativeGrantEligible(actionId)
                     ? { offerSessionApproval: true }
                     : {}),
-                  ...(approvalOnly === true ? { approvalReason: "above-tier" as const } : {}),
+                  ...(approvalOnly === true
+                    ? { approvalReason: approvalReason ?? ("above-tier" as const) }
+                    : {}),
                   previewPending,
                   ...(hasAsyncPreview && previewTarget
                     ? { previewTitle: mcpConfirmPreviewTitle(previewTarget) }
@@ -1273,11 +1321,10 @@ export function useMcpBridge(): void {
                   ...(selectableTargets
                     ? {
                         selectableTargets,
-                        selectionConfirmLabel: {
-                          verb: "Kill",
-                          one: "terminal",
-                          many: "terminals",
-                        },
+                        selectionConfirmLabel:
+                          previewTarget?.kind === "terminalClose"
+                            ? { verb: "Close", one: "panel", many: "panels" }
+                            : { verb: "Kill", one: "terminal", many: "terminals" },
                       }
                     : {}),
                 });
@@ -1309,9 +1356,17 @@ export function useMcpBridge(): void {
                 // Main runs the call itself, preconfirmed — which is also
                 // where a force delete's live D3 re-check happens, on the
                 // dispatch that actually deletes.
+                // A checklist's answer is the rows left checked, which main
+                // needs to close exactly those and no others (#12881).
                 window.electron.mcpBridge.sendDispatchActionResponse({
                   requestId,
-                  result: { ok: true, result: null },
+                  result: {
+                    ok: true,
+                    result:
+                      selectableTargets !== undefined
+                        ? { selectedTargetIds: [...(resolution.selectedTargetIds ?? [])] }
+                        : null,
+                  },
                   confirmationDecision,
                   ...(approvalScope ? { approvalScope } : {}),
                 });

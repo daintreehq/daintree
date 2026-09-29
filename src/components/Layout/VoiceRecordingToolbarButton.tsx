@@ -4,8 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useEffectiveCombo, useShortcutHintHover } from "@/hooks";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
@@ -47,9 +49,8 @@ export function VoiceRecordingToolbarButton({
   const activeTarget = useVoiceRecordingStore((state) => state.activeTarget);
   const status = useVoiceRecordingStore((state) => state.status);
   const elapsedSeconds = useVoiceRecordingStore((state) => state.elapsedSeconds);
-  const shortcut = useKeybindingDisplay("voiceInput.toggle");
-  const pauseShortcut = useKeybindingDisplay("voiceInput.togglePause");
-  const ariaShortcut = useAriaKeyshortcuts("voiceInput.toggle");
+  const shortcut = useEffectiveCombo("voiceInput.toggle");
+  const pauseShortcut = useEffectiveCombo("voiceInput.togglePause");
   const hover = useShortcutHintHover("voiceInput.toggle");
 
   const isArming = status === "arming";
@@ -145,9 +146,13 @@ export function VoiceRecordingToolbarButton({
       const opacity = (0.45 + level * 0.55).toFixed(3);
       const opacityNum = Number(opacity);
 
+      // Reduced motion holds the arc still; its brightness still follows the
+      // voice, so the ring stays a live level meter without spinning. Read per
+      // frame so flipping either preference mid-dictation takes effect at once.
       const wrapper = wrapperRef.current;
       if (wrapper) {
-        wrapper.style.transform = `rotate(${angle}deg) translateZ(0)`;
+        const still = prefersReducedMotion();
+        wrapper.style.transform = `rotate(${still ? 0 : angle}deg) translateZ(0)`;
       }
 
       const ring = ringRef.current;
@@ -200,13 +205,13 @@ export function VoiceRecordingToolbarButton({
   const tooltipTitle = isArming
     ? targetLabel
       ? `Arming dictation: ${targetLabel}`
-      : "Arming dictation..."
+      : "Arming dictation…"
     : isConnecting
-      ? "Preparing dictation..."
+      ? "Preparing dictation…"
       : isReconnecting
-        ? "Reconnecting..."
+        ? "Reconnecting…"
         : isFinishing
-          ? "Finishing transcription..."
+          ? "Finishing transcription…"
           : isPaused
             ? contextLabel
               ? `Paused: ${contextLabel}`
@@ -214,19 +219,10 @@ export function VoiceRecordingToolbarButton({
             : contextLabel
               ? `Recording: ${contextLabel}`
               : "Recording in another panel";
-  const tooltipExtra = (() => {
-    const parts: Array<string | null> = [];
-    if (isRecording || isPaused) parts.push(formatDuration(elapsedSeconds));
-    if (isPaused) {
-      // The toggle shortcut would start a new session when focused elsewhere;
-      // the pause shortcut is the resume affordance the user actually wants.
-      if (pauseShortcut) parts.push(`Press ${pauseShortcut} to resume`);
-      else parts.push("Click to jump to panel");
-    } else {
-      parts.push(shortcut ? `Press ${shortcut} to stop` : "Click to jump to panel");
-    }
-    return parts.filter(Boolean).join(" · ");
-  })();
+  const elapsedLabel = isRecording || isPaused ? formatDuration(elapsedSeconds) : null;
+  // The toggle shortcut would start a new session when focused elsewhere; the
+  // pause shortcut is the resume affordance the user actually wants.
+  const actionCombo = isPaused ? pauseShortcut : shortcut;
 
   return (
     <ContextMenu>
@@ -247,7 +243,6 @@ export function VoiceRecordingToolbarButton({
                   "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
                 )}
                 aria-label={tooltipTitle}
-                aria-keyshortcuts={ariaShortcut}
               >
                 <Mic className="h-4 w-4" />
                 {/* Arming ring — static accent border painted during the
@@ -286,7 +281,7 @@ export function VoiceRecordingToolbarButton({
                         maskComposite: "exclude",
                         WebkitMaskComposite: "xor",
                         padding: `${BASE_THICKNESS}px`,
-                        transition: "opacity 80ms ease-out",
+                        transition: "opacity var(--duration-75) ease-out",
                       }}
                     />
                     <div
@@ -333,9 +328,17 @@ export function VoiceRecordingToolbarButton({
                 )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom" className="text-center">
-              <div className="font-medium">{tooltipTitle}</div>
-              {tooltipExtra && <div className="text-2xs text-text-secondary">{tooltipExtra}</div>}
+            <TooltipContent side="bottom">
+              <div className="flex flex-col gap-0.5">
+                <span className="font-medium">{tooltipTitle}</span>
+                {elapsedLabel && <span className="text-text-secondary">{elapsedLabel}</span>}
+                <span className="text-text-secondary">Click to jump to panel</span>
+                {actionCombo && (
+                  <span className="text-text-secondary">
+                    {createTooltipContent(isPaused ? "Resume" : "Stop", actionCombo)}
+                  </span>
+                )}
+              </div>
             </TooltipContent>
           </Tooltip>
         </span>

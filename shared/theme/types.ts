@@ -37,16 +37,15 @@ export const APP_THEME_TOKEN_KEYS = [
   // hard lines at that weight. Defaults to `border-strong`, so a theme only
   // moves when it sets this explicitly.
   "border-input",
-  // The ink of the leading rail that marks "this is the row Enter will act on"
-  // in the palettes. Named for the outline it used to draw around all four sides
-  // of the row; the geometry moved to a rail, the job did not.
+  // The ink of the outline drawn ON a highlighted row: the inset keyboard ring on
+  // menu, context-menu and select items, the increased-contrast outline every
+  // highlighted row takes, and the palette search field's focus edge.
   //
-  // Its own key rather than a reuse of `border-strong` because it is the only
-  // mark of its kind in the app that has to satisfy WCAG 1.4.11 on its own: the
-  // raised fill it sits on clears barely 1.1-1.2:1 against the palette surface,
-  // so the rail is the whole non-text indicator and carries the full 3:1. That
-  // puts it 2-3x above the resting border ladder, which is tuned for separation
-  // rather than for being the sole signal.
+  // Its own key rather than a reuse of `border-strong` because an outline is an
+  // indicator and has to satisfy WCAG 1.4.11 against both the `overlay-highlight`
+  // fill it sits on and the palette surface around it, which puts it 2-3x above
+  // the resting border ladder, tuned for separation rather than for being a
+  // signal on its own.
   "selection-outline",
 
   // Accent
@@ -106,6 +105,13 @@ export const APP_THEME_TOKEN_KEYS = [
   // unchanged. Consumers: menu/select/palette active item, active tab, focused
   // pane, notification row / active-filter chip.
   "overlay-raised",
+  // The highlighted row: the one row in a list, palette or menu that Enter or a
+  // click will act on right now, whichever of pointer or keyboard put it there.
+  // Its own token rather than `overlay-raised`, because with no rail beside it
+  // the fill alone has to be findable at a glance, and raising `overlay-raised`
+  // would drag every active tab and focused pane up with it. On DARK it matches
+  // `overlay-elevated`; on LIGHT it is the `overlay-raised` lift.
+  "overlay-highlight",
 
   // Selected-state pill backgrounds (tint-derived; neutral across hued themes)
   "filter-selected-bg-soft",
@@ -315,8 +321,6 @@ export const EXTENSION_KEYS = [
   // Settings tab
   "settings-card-bg",
   "settings-dialog-bg",
-  "settings-kbd-bg",
-  "settings-kbd-border",
   "settings-list-item-bg",
   "settings-meta-fg",
   "settings-meta-size",

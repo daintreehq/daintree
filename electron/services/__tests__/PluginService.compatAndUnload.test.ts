@@ -227,6 +227,8 @@ import {
 import { registerPluginMenuItem, unregisterPluginMenuItems } from "../pluginMenuRegistry.js";
 import { unregisterForgeProviders } from "../forgeProviderRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { agentMcpEndpointRegistry } from "../pluginAgentMcp/endpointRegistry.js";
+import { DATABASE_ENDPOINT_ID } from "../pluginAgentMcp/types.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
   return {
@@ -692,6 +694,34 @@ describe("Plugin unload lifecycle", () => {
     expect(unregisterPluginToolbarButtons).toHaveBeenCalledWith("acme.unloadable");
     expect(unregisterPluginPanelKinds).toHaveBeenCalledWith("acme.unloadable");
     expect(unregisterForgeProviders).toHaveBeenCalledWith("acme.unloadable");
+  });
+
+  it("serves a plugin's databases to agents from load until unload, without activating it", async () => {
+    await writePlugin("ledger", {
+      name: "acme.ledger",
+      version: "1.0.0",
+      main: "main.mjs",
+      contributes: { databases: [{ id: "ledger", location: "local" }] },
+    });
+    await fs.writeFile(
+      path.join(tmpDir, "ledger", "main.mjs"),
+      "globalThis.__ledgerActivated = true; export function activate() {}"
+    );
+
+    const service = new PluginService(tmpDir);
+    try {
+      await service.initialize();
+
+      const registration = agentMcpEndpointRegistry.get("acme.ledger", DATABASE_ENDPOINT_ID);
+      expect(registration?.tools.map((t) => t.name)).toEqual(["database_schema", "database_query"]);
+      expect((globalThis as { __ledgerActivated?: boolean }).__ledgerActivated).toBeUndefined();
+
+      service.unloadPlugin("acme.ledger");
+      expect(agentMcpEndpointRegistry.get("acme.ledger", DATABASE_ENDPOINT_ID)).toBeUndefined();
+    } finally {
+      delete (globalThis as { __ledgerActivated?: unknown }).__ledgerActivated;
+      agentMcpEndpointRegistry.unregisterPlugin("acme.ledger");
+    }
   });
 
   it("unloadPlugin removes the plugin from hasPlugin and listPlugins", async () => {

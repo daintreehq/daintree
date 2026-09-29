@@ -1,4 +1,4 @@
-/* The search field family: one control, two sizes, used wherever the app offers
+/* The search field family: one control, used wherever the app offers
    a place to type a query (the Worktrees rail, the settings nav, the palette
    headers, the settings-tab searches).
 
@@ -18,7 +18,7 @@
    multi-layer var() chain inside color-mix() to transparent. */
 
 /* In the components layer, unlike the older files beside it: this is a
-   primitive, so a caller's utilities (a width, a margin, a denser height in a
+   primitive, so a caller's utilities (a width, a margin, a flex basis in a
    crowded toolbar) have to be able to win over it. */
 @layer components {
   .search-field {
@@ -63,6 +63,16 @@
     height: 1.75rem;
     gap: 0.375rem;
     padding-inline: 0.5rem;
+    font-size: var(--text-xs);
+  }
+
+  /* Filter strips and pane toolbars, where the field sits level with xs chips
+     and icon buttons. The one density below compact — sites do not set their
+     own heights. */
+  .search-field[data-size="dense"] {
+    height: 1.5rem;
+    gap: 0.25rem;
+    padding-inline: 0.375rem;
     font-size: var(--text-xs);
   }
 
@@ -131,6 +141,11 @@
     height: 0.875rem;
   }
 
+  .search-field[data-size="dense"] .search-field-icon {
+    width: 0.75rem;
+    height: 0.75rem;
+  }
+
   .search-field[data-size="palette"] .search-field-icon {
     width: 1rem;
     height: 1rem;
@@ -185,14 +200,6 @@
   .search-field-clear:focus-visible {
     outline: 2px solid var(--theme-selection-outline);
     outline-offset: -2px;
-  }
-
-  @variant reduce-motion {
-    .search-field,
-    .search-field::before,
-    .search-field-clear {
-      transition: none;
-    }
   }
 
   @media (prefers-contrast: more) {

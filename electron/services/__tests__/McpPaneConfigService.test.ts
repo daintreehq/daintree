@@ -53,11 +53,10 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-import { McpPaneConfigService, pluginServerKeysFor } from "../McpPaneConfigService.js";
+import { McpPaneConfigService, type PanePluginServer } from "../McpPaneConfigService.js";
 import { PluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
 import { pluginMcpRoutePath } from "../pluginAgentMcp/types.js";
 import { makeProjectPluginInstanceKey } from "../../../shared/types/plugin.js";
-import { createHash } from "node:crypto";
 
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
@@ -88,13 +87,13 @@ describe("McpPaneConfigService", () => {
     const { configPath, token } = await service.preparePaneConfig({
       paneId: "pane-001",
       port: 45454,
-      tier: "workbench",
+      tier: "core",
     });
 
     expect(configPath).toBe(path.join(testUserData, "mcp-pane-configs", "pane-001.json"));
     expect(token).toMatch(/^[0-9a-f-]{36}$/);
 
-    const raw = await fs.readFile(configPath, "utf-8");
+    const raw = await fs.readFile(configPath!, "utf-8");
     const parsed = JSON.parse(raw);
 
     expect(parsed.mcpServers.daintree.type).toBe("sse");
@@ -109,7 +108,7 @@ describe("McpPaneConfigService", () => {
   it("creates the pane config directory with mode 0700 on POSIX", async () => {
     if (process.platform === "win32") return;
 
-    await service.preparePaneConfig({ paneId: "pane-002", port: 45454, tier: "workbench" });
+    await service.preparePaneConfig({ paneId: "pane-002", port: 45454, tier: "core" });
     const stat = await fs.stat(path.join(testUserData, "mcp-pane-configs"));
     expect(stat.mode & 0o777).toBe(0o700);
   });
@@ -120,9 +119,9 @@ describe("McpPaneConfigService", () => {
     const { configPath } = await service.preparePaneConfig({
       paneId: "pane-003",
       port: 45454,
-      tier: "workbench",
+      tier: "core",
     });
-    const stat = await fs.stat(configPath);
+    const stat = await fs.stat(configPath!);
     expect(stat.mode & 0o777).toBe(0o600);
   });
 
@@ -130,7 +129,7 @@ describe("McpPaneConfigService", () => {
     const { token } = await service.preparePaneConfig({
       paneId: "pane-004",
       port: 45454,
-      tier: "workbench",
+      tier: "core",
     });
 
     expect(service.isValidPaneToken(token)).toBe(true);
@@ -142,20 +141,20 @@ describe("McpPaneConfigService", () => {
     const { configPath, token } = await service.preparePaneConfig({
       paneId: "pane-005",
       port: 45454,
-      tier: "action",
+      tier: "core",
     });
 
     expect(service.isValidPaneToken(token)).toBe(true);
     await service.revokePaneConfig("pane-005");
 
     expect(service.isValidPaneToken(token)).toBe(false);
-    await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(configPath!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("is idempotent — revokePaneConfig tolerates missing files and unknown panes", async () => {
     await expect(service.revokePaneConfig("never-existed")).resolves.toBeUndefined();
 
-    await service.preparePaneConfig({ paneId: "pane-006", port: 45454, tier: "workbench" });
+    await service.preparePaneConfig({ paneId: "pane-006", port: 45454, tier: "core" });
     await service.revokePaneConfig("pane-006");
     // second call against an already-revoked pane must not throw
     await expect(service.revokePaneConfig("pane-006")).resolves.toBeUndefined();
@@ -165,42 +164,42 @@ describe("McpPaneConfigService", () => {
     const first = await service.preparePaneConfig({
       paneId: "pane-007",
       port: 45454,
-      tier: "workbench",
+      tier: "core",
     });
     const second = await service.preparePaneConfig({
       paneId: "pane-007",
       port: 45454,
-      tier: "system",
+      tier: "full",
     });
 
     expect(second.token).not.toBe(first.token);
     expect(service.isValidPaneToken(first.token)).toBe(false);
     expect(service.isValidPaneToken(second.token)).toBe(true);
 
-    const raw = await fs.readFile(second.configPath, "utf-8");
+    const raw = await fs.readFile(second.configPath!, "utf-8");
     const parsed = JSON.parse(raw);
     expect(parsed.mcpServers.daintree.headers.Authorization).toBe(`Bearer ${second.token}`);
   });
 
   it("rejects invalid ports", async () => {
     await expect(
-      service.preparePaneConfig({ paneId: "pane-008", port: 0, tier: "workbench" })
+      service.preparePaneConfig({ paneId: "pane-008", port: 0, tier: "core" })
     ).rejects.toThrow(/Invalid MCP port/);
     await expect(
-      service.preparePaneConfig({ paneId: "pane-009", port: 70000, tier: "workbench" })
+      service.preparePaneConfig({ paneId: "pane-009", port: 70000, tier: "core" })
     ).rejects.toThrow(/Invalid MCP port/);
     await expect(
       service.preparePaneConfig({
         paneId: "pane-010",
         port: -1 as unknown as number,
-        tier: "workbench",
+        tier: "core",
       })
     ).rejects.toThrow(/Invalid MCP port/);
   });
 
   it("rejects empty pane IDs", async () => {
     await expect(
-      service.preparePaneConfig({ paneId: "", port: 45454, tier: "workbench" })
+      service.preparePaneConfig({ paneId: "", port: 45454, tier: "core" })
     ).rejects.toThrow(/paneId is required/);
   });
 
@@ -212,17 +211,17 @@ describe("McpPaneConfigService", () => {
 
   it("rejects path-traversal pane IDs", async () => {
     await expect(
-      service.preparePaneConfig({ paneId: "../escape", port: 45454, tier: "workbench" })
+      service.preparePaneConfig({ paneId: "../escape", port: 45454, tier: "core" })
     ).rejects.toThrow(/Invalid paneId/);
     await expect(
       service.preparePaneConfig({
         paneId: "../../etc/passwd",
         port: 45454,
-        tier: "workbench",
+        tier: "core",
       })
     ).rejects.toThrow(/Invalid paneId/);
     await expect(
-      service.preparePaneConfig({ paneId: "subdir/leak", port: 45454, tier: "workbench" })
+      service.preparePaneConfig({ paneId: "subdir/leak", port: 45454, tier: "core" })
     ).rejects.toThrow(/Invalid paneId/);
 
     // Confirm no file was written outside the base directory.
@@ -231,25 +230,19 @@ describe("McpPaneConfigService", () => {
   });
 
   it("getTierForToken returns the tier the token was minted at", async () => {
-    const wb = await service.preparePaneConfig({
-      paneId: "pane-wb",
+    const core = await service.preparePaneConfig({
+      paneId: "pane-core",
       port: 45454,
-      tier: "workbench",
+      tier: "core",
     });
-    const action = await service.preparePaneConfig({
-      paneId: "pane-action",
+    const full = await service.preparePaneConfig({
+      paneId: "pane-full",
       port: 45454,
-      tier: "action",
-    });
-    const sys = await service.preparePaneConfig({
-      paneId: "pane-sys",
-      port: 45454,
-      tier: "system",
+      tier: "full",
     });
 
-    expect(service.getTierForToken(wb.token)).toBe("workbench");
-    expect(service.getTierForToken(action.token)).toBe("action");
-    expect(service.getTierForToken(sys.token)).toBe("system");
+    expect(service.getTierForToken(core.token)).toBe("core");
+    expect(service.getTierForToken(full.token)).toBe("full");
     expect(service.getTierForToken("not-a-real-token")).toBeUndefined();
     expect(service.getTierForToken("")).toBeUndefined();
   });
@@ -258,9 +251,9 @@ describe("McpPaneConfigService", () => {
     const { token } = await service.preparePaneConfig({
       paneId: "pane-revoke-tier",
       port: 45454,
-      tier: "system",
+      tier: "full",
     });
-    expect(service.getTierForToken(token)).toBe("system");
+    expect(service.getTierForToken(token)).toBe("full");
     await service.revokePaneConfig("pane-revoke-tier");
     expect(service.getTierForToken(token)).toBeUndefined();
   });
@@ -270,7 +263,7 @@ describe("McpPaneConfigService", () => {
       const { token } = await service.preparePaneConfig({
         paneId: "pane-generic",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
       // Never promoted to an assistant bearer → no pinning metadata.
       expect(service.getWebContentsIdForToken(token)).toBeNull();
@@ -283,7 +276,7 @@ describe("McpPaneConfigService", () => {
       const { token } = await service.preparePaneConfig({
         paneId: "pane-assistant",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
       const ctx = { projectId: "p1", activeWorktreeId: "wt-9" };
 
@@ -293,14 +286,14 @@ describe("McpPaneConfigService", () => {
       expect(service.getActionContextForToken(token)).toEqual(ctx);
       // The token is still a valid pane token at its minted tier.
       expect(service.isValidPaneToken(token)).toBe(true);
-      expect(service.getTierForToken(token)).toBe("action");
+      expect(service.getTierForToken(token)).toBe("core");
     });
 
     it("registerAssistantPaneBearer accepts a binding with no ActionContext", async () => {
       const { token } = await service.preparePaneConfig({
         paneId: "pane-assistant-noctx",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
 
       service.registerAssistantPaneBearer(token, 7);
@@ -317,7 +310,7 @@ describe("McpPaneConfigService", () => {
       const { token } = await service.preparePaneConfig({
         paneId: "pane-race",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
       await service.revokePaneConfig("pane-race");
       service.registerAssistantPaneBearer(token, 42);
@@ -328,7 +321,7 @@ describe("McpPaneConfigService", () => {
       const { token } = await service.preparePaneConfig({
         paneId: "pane-assistant-revoke",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
       service.registerAssistantPaneBearer(token, 42, { projectId: "p1" });
       expect(service.getWebContentsIdForToken(token)).toBe(42);
@@ -345,7 +338,7 @@ describe("McpPaneConfigService", () => {
       const { token } = await service.preparePaneConfig({
         paneId: "pane-orch",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
       service.registerPaneWorkspaceBinding(token, { workspaceId: "p1" });
 
@@ -353,7 +346,7 @@ describe("McpPaneConfigService", () => {
 
       expect(identity).toEqual({
         principalId: service.getOwnershipPrincipalForToken(token),
-        tier: "action",
+        tier: "core",
         workspaceId: "p1",
       });
       expect(service.listOrchestratorPanes()).toEqual([{ paneId: "pane-orch", ...identity }]);
@@ -365,22 +358,22 @@ describe("McpPaneConfigService", () => {
       const { token: assistantToken } = await service.preparePaneConfig({
         paneId: "pane-assistant",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
       service.registerAssistantPaneBearer(assistantToken, 42);
       expect(service.getOrchestratorPane("pane-assistant")).toBeNull();
 
-      await service.preparePaneConfig({ paneId: "pane-gone", port: 45454, tier: "action" });
+      await service.preparePaneConfig({ paneId: "pane-gone", port: 45454, tier: "core" });
       await service.revokePaneConfig("pane-gone");
       expect(service.getOrchestratorPane("pane-gone")).toBeNull();
       expect(service.listOrchestratorPanes()).toEqual([]);
     });
 
     it("names a new principal after a relaunch, so nothing handed to the old one follows", async () => {
-      await service.preparePaneConfig({ paneId: "pane-orch", port: 45454, tier: "action" });
+      await service.preparePaneConfig({ paneId: "pane-orch", port: 45454, tier: "core" });
       const before = service.getOrchestratorPane("pane-orch")?.principalId;
 
-      await service.preparePaneConfig({ paneId: "pane-orch", port: 45454, tier: "action" });
+      await service.preparePaneConfig({ paneId: "pane-orch", port: 45454, tier: "core" });
 
       const after = service.getOrchestratorPane("pane-orch")?.principalId;
       expect(after).toBeDefined();
@@ -393,7 +386,7 @@ describe("McpPaneConfigService", () => {
       const { token } = await service.preparePaneConfig({
         paneId: "pane-agent",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
       const ctx = { projectId: "p1", activeWorktreeId: "wt-3" };
 
@@ -409,7 +402,24 @@ describe("McpPaneConfigService", () => {
         actionContext: ctx,
       });
       // The tier the pane was minted at is untouched by where it routes.
-      expect(service.getTierForToken(token)).toBe("action");
+      expect(service.getTierForToken(token)).toBe("core");
+    });
+
+    it("carries the launch-time skip-confirmations setting (#12876)", async () => {
+      const { token } = await service.preparePaneConfig({
+        paneId: "pane-agent-skip",
+        port: 45454,
+        tier: "full",
+      });
+
+      service.registerPaneWorkspaceBinding(token, { workspaceId: "p1", skipConfirmations: true });
+
+      expect(service.getPaneWorkspaceBindingForToken(token)).toEqual({
+        workspaceId: "p1",
+        skipConfirmations: true,
+      });
+      await service.revokePaneConfig("pane-agent-skip");
+      expect(service.getPaneWorkspaceBindingForToken(token)).toBeNull();
     });
 
     it("never surfaces through the assistant resolvers, which confer a renderer-owned origin", async () => {
@@ -419,7 +429,7 @@ describe("McpPaneConfigService", () => {
       const { token } = await service.preparePaneConfig({
         paneId: "pane-agent-origin",
         port: 45454,
-        tier: "system",
+        tier: "full",
       });
 
       service.registerPaneWorkspaceBinding(token, {
@@ -436,7 +446,7 @@ describe("McpPaneConfigService", () => {
       const { token } = await service.preparePaneConfig({
         paneId: "pane-assistant-only",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
 
       service.registerAssistantPaneBearer(token, 42, { projectId: "p1" });
@@ -448,7 +458,7 @@ describe("McpPaneConfigService", () => {
       const { token } = await service.preparePaneConfig({
         paneId: "pane-agent-bare",
         port: 45454,
-        tier: "workbench",
+        tier: "core",
       });
 
       service.registerPaneWorkspaceBinding(token, { workspaceId: "p1" });
@@ -466,7 +476,7 @@ describe("McpPaneConfigService", () => {
       const { token } = await service.preparePaneConfig({
         paneId: "pane-agent-race",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
       await service.revokePaneConfig("pane-agent-race");
       service.registerPaneWorkspaceBinding(token, { workspaceId: "p1" });
@@ -478,7 +488,7 @@ describe("McpPaneConfigService", () => {
       const { token } = await service.preparePaneConfig({
         paneId: "pane-agent-revoke",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
       service.registerPaneWorkspaceBinding(token, { workspaceId: "p1", launchWebContentsId: 42 });
 
@@ -493,14 +503,14 @@ describe("McpPaneConfigService", () => {
       const first = await service.preparePaneConfig({
         paneId: "pane-agent-restart",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
       service.registerPaneWorkspaceBinding(first.token, { workspaceId: "p1" });
 
       const second = await service.preparePaneConfig({
         paneId: "pane-agent-restart",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
 
       expect(service.getPaneWorkspaceBindingForToken(first.token)).toBeNull();
@@ -510,8 +520,8 @@ describe("McpPaneConfigService", () => {
 
   describe("resource-ownership principal (#12487)", () => {
     it("resolves one stable principal per live token, and nothing for other tokens", async () => {
-      const a = await service.preparePaneConfig({ paneId: "pane-a", port: 45454, tier: "action" });
-      const b = await service.preparePaneConfig({ paneId: "pane-b", port: 45454, tier: "action" });
+      const a = await service.preparePaneConfig({ paneId: "pane-a", port: 45454, tier: "core" });
+      const b = await service.preparePaneConfig({ paneId: "pane-b", port: 45454, tier: "core" });
 
       const principal = service.getOwnershipPrincipalForToken(a.token);
       expect(principal).toEqual(expect.any(String));
@@ -525,7 +535,7 @@ describe("McpPaneConfigService", () => {
       const { token } = await service.preparePaneConfig({
         paneId: "pane-own",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
 
       expect(service.getPaneIdForToken(token)).toBe("pane-own");
@@ -542,7 +552,7 @@ describe("McpPaneConfigService", () => {
       const { token } = await service.preparePaneConfig({
         paneId: "pane-exit",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
       const principal = service.getOwnershipPrincipalForToken(token);
 
@@ -562,14 +572,14 @@ describe("McpPaneConfigService", () => {
       const first = await service.preparePaneConfig({
         paneId: "pane-restart",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
       const firstPrincipal = service.getOwnershipPrincipalForToken(first.token);
 
       const second = await service.preparePaneConfig({
         paneId: "pane-restart",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
 
       expect(listener).toHaveBeenCalledExactlyOnceWith(firstPrincipal);
@@ -581,8 +591,8 @@ describe("McpPaneConfigService", () => {
     it("revokes every pane's principal on revokeAll", async () => {
       const listener = vi.fn<(principal: string) => void>();
       service.setOwnershipPrincipalRevokedListener(listener);
-      const a = await service.preparePaneConfig({ paneId: "pane-a", port: 45454, tier: "action" });
-      const b = await service.preparePaneConfig({ paneId: "pane-b", port: 45454, tier: "system" });
+      const a = await service.preparePaneConfig({ paneId: "pane-a", port: 45454, tier: "core" });
+      const b = await service.preparePaneConfig({ paneId: "pane-b", port: 45454, tier: "full" });
       const principals = [a.token, b.token].map((t) => service.getOwnershipPrincipalForToken(t));
 
       await service.revokeAll();
@@ -609,13 +619,13 @@ describe("McpPaneConfigService", () => {
       const { token, configPath } = await service.preparePaneConfig({
         paneId: "pane-throw",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
 
       await service.revokePaneConfig("pane-throw");
 
       expect(service.isValidPaneToken(token)).toBe(false);
-      await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(configPath!)).rejects.toMatchObject({ code: "ENOENT" });
       expect(errorSpy).toHaveBeenCalled();
       errorSpy.mockRestore();
     });
@@ -625,12 +635,12 @@ describe("McpPaneConfigService", () => {
     const a = await service.preparePaneConfig({
       paneId: "pane-a",
       port: 45454,
-      tier: "workbench",
+      tier: "core",
     });
     const b = await service.preparePaneConfig({
       paneId: "pane-b",
       port: 45454,
-      tier: "system",
+      tier: "full",
     });
 
     expect(service.isValidPaneToken(a.token)).toBe(true);
@@ -640,11 +650,11 @@ describe("McpPaneConfigService", () => {
 
     expect(service.isValidPaneToken(a.token)).toBe(false);
     expect(service.isValidPaneToken(b.token)).toBe(false);
-    await expect(fs.stat(a.configPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(b.configPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(a.configPath!)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(b.configPath!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  describe("plugin MCP endpoints", () => {
+  describe("plugin MCP servers", () => {
     let grants: PluginMcpGrantRegistry;
 
     beforeEach(() => {
@@ -652,7 +662,11 @@ describe("McpPaneConfigService", () => {
       service = new McpPaneConfigService(grants);
     });
 
-    const ledger = { pluginInstanceId: "acme.ledger", endpointId: "data" };
+    const ledger: PanePluginServer = {
+      pluginInstanceId: "acme.ledger",
+      serverKey: "daintree-ledger",
+      scope: { databases: true, pluginEndpointId: "data" },
+    };
 
     async function readServers(configPath: string) {
       const parsed = JSON.parse(await fs.readFile(configPath, "utf-8"));
@@ -667,12 +681,12 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-plugin-off",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger], launchAgentIdHint: "claude" },
+        plugin: { projectId: PROJECT_A, servers: [ledger], launchAgentIdHint: "claude" },
       });
 
       expect(prepared).not.toBeNull();
       expect(prepared!.token).toBeNull();
-      const servers = await readServers(prepared!.configPath);
+      const servers = await readServers(prepared!.configPath!);
       expect(Object.keys(servers)).toEqual(prepared!.pluginServerKeys);
       expect(servers.daintree).toBeUndefined();
 
@@ -683,17 +697,134 @@ describe("McpPaneConfigService", () => {
       expect(service.isValidPaneToken(bearerOf(Object.values(servers)[0]))).toBe(false);
     });
 
-    it("a non-off tier keeps the Daintree entry and pane token, with the plugin entries alongside", async () => {
+    it("hands Codex its servers as -c overrides and env bearers, writing no file", async () => {
       const prepared = await service.preparePaneConfig({
-        paneId: "pane-plugin-wb",
+        paneId: "pane-codex",
         port: 45454,
-        tier: "workbench",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        tier: "core",
+        plugin: { projectId: PROJECT_A, servers: [ledger], launchAgentIdHint: "codex" },
+        injection: { format: "codex-config-overrides" },
       });
 
-      const servers = await readServers(prepared!.configPath);
+      expect(prepared!.configPath).toBeNull();
+      await expect(
+        fs.stat(path.join(testUserData, "mcp-pane-configs", "pane-codex.json"))
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      const [key] = prepared!.pluginServerKeys;
+      expect(prepared!.args).toEqual([
+        "-c",
+        'mcp_servers.daintree.url="http://127.0.0.1:45454/mcp"',
+        "-c",
+        'mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"',
+        "-c",
+        `mcp_servers.${key}.url="http://127.0.0.1:45454${pluginMcpRoutePath("acme.ledger")}"`,
+        "-c",
+        `mcp_servers.${key}.bearer_token_env_var="DAINTREE_PLUGIN_MCP_TOKEN_1"`,
+      ]);
+      expect(prepared!.env.DAINTREE_MCP_TOKEN).toBe(prepared!.token);
+      expect(service.isValidPaneToken(prepared!.env.DAINTREE_MCP_TOKEN)).toBe(true);
+      expect(grants.authenticate(prepared!.env.DAINTREE_PLUGIN_MCP_TOKEN_1)?.scope).toEqual(
+        ledger.scope
+      );
+
+      await service.revokePaneConfig("pane-codex");
+      expect(service.isValidPaneToken(prepared!.env.DAINTREE_MCP_TOKEN)).toBe(false);
+      expect(grants.authenticate(prepared!.env.DAINTREE_PLUGIN_MCP_TOKEN_1)).toBeNull();
+    });
+
+    it("switches a relaunched pane between file and env formats, leaving only the new wiring live", async () => {
+      const claude = await service.preparePaneConfig({
+        paneId: "pane-switch",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
+      });
+      const claudeBearer = bearerOf(Object.values(await readServers(claude!.configPath!))[0]);
+
+      const codex = await service.preparePaneConfig({
+        paneId: "pane-switch",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
+        injection: { format: "codex-config-overrides" },
+      });
+      expect(grants.authenticate(claudeBearer)).toBeNull();
+      await expect(fs.stat(claude!.configPath!)).rejects.toMatchObject({ code: "ENOENT" });
+      const codexBearer = codex!.env.DAINTREE_PLUGIN_MCP_TOKEN_1;
+      expect(grants.authenticate(codexBearer)?.scope).toEqual(ledger.scope);
+
+      const again = await service.preparePaneConfig({
+        paneId: "pane-switch",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
+      });
+      expect(grants.authenticate(codexBearer)).toBeNull();
+      expect(grants.listForTerminal("pane-switch")).toHaveLength(1);
+      await expect(fs.stat(again!.configPath!)).resolves.toBeDefined();
+    });
+
+    it("mints nothing when the configuration a format would replace cannot be carried forward", async () => {
+      await fs.mkdir(testUserData, { recursive: true });
+      const broken = path.join(testUserData, "broken-defaults.json");
+      await fs.writeFile(broken, "{ not json");
+
+      await expect(
+        service.preparePaneConfig({
+          paneId: "pane-broken-base",
+          port: 45454,
+          tier: "core",
+          plugin: { projectId: PROJECT_A, servers: [ledger] },
+          injection: {
+            format: "gemini-system-defaults",
+            envVar: "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
+          },
+          inheritedEnv: { GEMINI_CLI_SYSTEM_DEFAULTS_PATH: broken },
+        })
+      ).rejects.toThrow(/cannot parse/);
+      expect(grants.listForTerminal("pane-broken-base")).toEqual([]);
+      expect(service.getOrchestratorPane("pane-broken-base")).toBeNull();
+    });
+
+    it("writes Gemini's settings file and names it in the env, carrying an admin's defaults forward", async () => {
+      const adminDefaults = path.join(testUserData, "admin-defaults.json");
+      await fs.mkdir(testUserData, { recursive: true });
+      await fs.writeFile(adminDefaults, JSON.stringify({ general: { vimMode: true } }));
+
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-gemini",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
+        injection: { format: "gemini-system-defaults", envVar: "GEMINI_CLI_SYSTEM_DEFAULTS_PATH" },
+        inheritedEnv: { GEMINI_CLI_SYSTEM_DEFAULTS_PATH: adminDefaults },
+      });
+
+      expect(prepared!.args).toEqual([]);
+      expect(prepared!.env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH).toBe(prepared!.configPath);
+      const written = JSON.parse(await fs.readFile(prepared!.configPath!, "utf-8"));
+      expect(written.general).toEqual({ vimMode: true });
+      const entry = written.mcpServers[prepared!.pluginServerKeys[0]];
+      expect(entry.type).toBe("http");
+      expect(grants.authenticate(bearerOf(entry))?.scope).toEqual(ledger.scope);
+      // Windows does not report POSIX file mode bits; the dedicated mode test
+      // covers this guarantee on platforms that support it.
+      if (process.platform !== "win32") {
+        expect((await fs.stat(prepared!.configPath!)).mode & 0o777).toBe(0o600);
+      }
+    });
+
+    it("a non-off tier keeps the Daintree entry and pane token, with the plugin entries alongside", async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-plugin-core",
+        port: 45454,
+        tier: "core",
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
+      });
+
+      const servers = await readServers(prepared!.configPath!);
       expect(servers.daintree.headers.Authorization).toBe(`Bearer ${prepared!.token}`);
-      expect(service.getTierForToken(prepared!.token!)).toBe("workbench");
+      expect(service.getTierForToken(prepared!.token!)).toBe("core");
       expect(prepared!.pluginServerKeys).toHaveLength(1);
       expect(prepared!.pluginServerKeys[0]).not.toBe("daintree");
       expect(Object.keys(servers).sort()).toEqual(
@@ -701,22 +832,24 @@ describe("McpPaneConfigService", () => {
       );
     });
 
-    it("writes a Streamable HTTP entry at the endpoint's route with a literal bearer the registry accepts", async () => {
+    it("writes a Streamable HTTP entry under its server key at the plugin's route with a literal bearer the registry accepts", async () => {
       const prepared = await service.preparePaneConfig({
         paneId: "pane-plugin-entry",
         port: 45460,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
 
-      const entry = (await readServers(prepared!.configPath))[prepared!.pluginServerKeys[0]];
+      expect(prepared!.pluginServerKeys).toEqual(["daintree-ledger"]);
+      const entry = (await readServers(prepared!.configPath!))["daintree-ledger"];
       expect(entry.type).toBe("http");
-      expect(entry.url).toBe(`http://127.0.0.1:45460${pluginMcpRoutePath("acme.ledger", "data")}`);
+      expect(entry.url).toBe("http://127.0.0.1:45460/mcp/plugin/acme.ledger");
       expect(entry.headers.Authorization).not.toContain("${");
       const grant = grants.authenticate(bearerOf(entry));
       expect(grant).toMatchObject({
         pluginInstanceId: "acme.ledger",
-        endpointId: "data",
+        scope: { databases: true, pluginEndpointId: "data" },
+        serverName: "daintree-ledger",
         projectId: PROJECT_A,
         terminalId: "pane-plugin-entry",
       });
@@ -729,23 +862,24 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-plugin-mode",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
-      const stat = await fs.stat(prepared!.configPath);
+      const stat = await fs.stat(prepared!.configPath!);
       expect(stat.mode & 0o777).toBe(0o600);
     });
 
-    it("skips an endpoint the registry refuses and returns null when nothing is left to write", async () => {
-      const foreign = {
+    it("skips a plugin the registry refuses and returns null when nothing is left to write", async () => {
+      const foreign: PanePluginServer = {
+        ...ledger,
         pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_B, "acme.ledger"),
-        endpointId: "data",
+        serverKey: "daintree-ledger-1a2b3c4d",
       };
 
       const skipped = await service.preparePaneConfig({
         paneId: "pane-plugin-foreign",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [foreign] },
+        plugin: { projectId: PROJECT_A, servers: [foreign] },
       });
       expect(skipped).toBeNull();
       await expect(
@@ -756,7 +890,7 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-plugin-mixed",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [foreign, ledger] },
+        plugin: { projectId: PROJECT_A, servers: [foreign, ledger] },
       });
       expect(mixed!.pluginServerKeys).toHaveLength(1);
       expect(grants.listForTerminal("pane-plugin-mixed").map((g) => g.pluginInstanceId)).toEqual([
@@ -764,15 +898,100 @@ describe("McpPaneConfigService", () => {
       ]);
     });
 
+    it("mints one grant per plugin, each reaching only its own scope", async () => {
+      const crm: PanePluginServer = {
+        pluginInstanceId: "acme.crm",
+        serverKey: "daintree-crm",
+        scope: { databases: true },
+      };
+      const tasks: PanePluginServer = {
+        pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_A, "acme.tasks"),
+        serverKey: "daintree-tasks",
+        scope: { databases: false, pluginEndpointId: "board" },
+      };
+
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-plugin-many",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, servers: [ledger, crm, tasks] },
+      });
+
+      expect(prepared!.pluginServerKeys).toEqual([
+        "daintree-ledger",
+        "daintree-crm",
+        "daintree-tasks",
+      ]);
+      const servers = await readServers(prepared!.configPath!);
+      expect(servers["daintree-tasks"].url).toBe(
+        `http://127.0.0.1:45454/mcp/plugin/${encodeURIComponent(tasks.pluginInstanceId)}`
+      );
+      for (const server of [ledger, crm, tasks]) {
+        const grant = grants.authenticate(bearerOf(servers[server.serverKey]));
+        expect(grant).toMatchObject({
+          pluginInstanceId: server.pluginInstanceId,
+          scope: server.scope,
+          serverName: server.serverKey,
+        });
+      }
+      expect(grants.listForTerminal("pane-plugin-many")).toHaveLength(3);
+    });
+
+    it("skips a second server for the same plugin, a key already taken, and the Daintree key", async () => {
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-plugin-dupes",
+        port: 45454,
+        tier: "core",
+        plugin: {
+          projectId: PROJECT_A,
+          servers: [
+            ledger,
+            { ...ledger, serverKey: "daintree-ledger-2" },
+            {
+              pluginInstanceId: "acme.crm",
+              serverKey: "daintree-ledger",
+              scope: { databases: true },
+            },
+            { pluginInstanceId: "acme.tasks", serverKey: "daintree", scope: { databases: true } },
+          ],
+        },
+      });
+
+      expect(prepared!.pluginServerKeys).toEqual(["daintree-ledger"]);
+      const servers = await readServers(prepared!.configPath!);
+      expect(Object.keys(servers).sort()).toEqual(["daintree", "daintree-ledger"]);
+      expect(servers.daintree.headers.Authorization).toBe(`Bearer ${prepared!.token}`);
+      expect(grants.listForTerminal("pane-plugin-dupes").map((g) => g.pluginInstanceId)).toEqual([
+        "acme.ledger",
+      ]);
+    });
+
+    it("mints nothing for a server whose scope reaches no tools", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-plugin-empty-scope",
+        port: 45454,
+        tier: "core",
+        plugin: {
+          projectId: PROJECT_A,
+          servers: [{ ...ledger, scope: { databases: false } }],
+        },
+      });
+      warn.mockRestore();
+
+      expect(prepared!.pluginServerKeys).toEqual([]);
+      expect(grants.listForTerminal("pane-plugin-empty-scope")).toEqual([]);
+    });
+
     it("revokePaneConfig revokes the pane's grants", async () => {
       const prepared = await service.preparePaneConfig({
         paneId: "pane-plugin-revoke",
         port: 45454,
-        tier: "action",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        tier: "core",
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
       const bearer = bearerOf(
-        (await readServers(prepared!.configPath))[prepared!.pluginServerKeys[0]]
+        (await readServers(prepared!.configPath!))[prepared!.pluginServerKeys[0]]
       );
 
       await service.revokePaneConfig("pane-plugin-revoke");
@@ -784,7 +1003,8 @@ describe("McpPaneConfigService", () => {
     it("revokePaneConfig revokes a terminal's grants even when the pane has no record", async () => {
       grants.issue({
         pluginInstanceId: "acme.ledger",
-        endpointId: "data",
+        scope: ledger.scope,
+        serverName: ledger.serverKey,
         projectId: PROJECT_A,
         terminalId: "pane-without-record",
       });
@@ -799,17 +1019,17 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-plugin-restart",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
       const firstBearer = bearerOf(
-        (await readServers(first!.configPath))[first!.pluginServerKeys[0]]
+        (await readServers(first!.configPath!))[first!.pluginServerKeys[0]]
       );
 
       await service.preparePaneConfig({
         paneId: "pane-plugin-restart",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
 
       expect(grants.authenticate(firstBearer)).toBeNull();
@@ -821,13 +1041,13 @@ describe("McpPaneConfigService", () => {
         paneId: "pane-plugin-all-a",
         port: 45454,
         tier: "off",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
       await service.preparePaneConfig({
         paneId: "pane-plugin-all-b",
         port: 45454,
-        tier: "system",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        tier: "full",
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
 
       await service.revokeAll();
@@ -843,7 +1063,7 @@ describe("McpPaneConfigService", () => {
           paneId: "pane-plugin-blocked",
           port: 45454,
           tier: "off",
-          plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+          plugin: { projectId: PROJECT_A, servers: [ledger] },
         })
       ).rejects.toThrow("disk full");
 
@@ -861,8 +1081,8 @@ describe("McpPaneConfigService", () => {
       const pending = service.preparePaneConfig({
         paneId: "pane-plugin-late-exit",
         port: 45454,
-        tier: "action",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        tier: "core",
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
       await vi.waitFor(() => expect(writeStarted).toBe(true));
       // The previous launch's exit lands while the file is being written.
@@ -887,7 +1107,7 @@ describe("McpPaneConfigService", () => {
       const pending = service.preparePaneConfig({
         paneId: "pane-late-exit-daintree",
         port: 45454,
-        tier: "action",
+        tier: "core",
       });
       await vi.waitFor(() => expect(writeStarted).toBe(true));
       await service.revokePaneConfig("pane-late-exit-daintree");
@@ -895,7 +1115,7 @@ describe("McpPaneConfigService", () => {
 
       const prepared = await pending;
       expect(service.isValidPaneToken(prepared.token)).toBe(true);
-      await expect(fs.stat(prepared.configPath)).resolves.toBeDefined();
+      await expect(fs.stat(prepared.configPath!)).resolves.toBeDefined();
     });
 
     it("runs overlapping preparations for one pane in order, so the newer file wins", async () => {
@@ -909,15 +1129,15 @@ describe("McpPaneConfigService", () => {
       const older = service.preparePaneConfig({
         paneId: "pane-plugin-overlap",
         port: 45454,
-        tier: "action",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        tier: "core",
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
       await vi.waitFor(() => expect(olderWriteStarted).toBe(true));
       const newerPending = service.preparePaneConfig({
         paneId: "pane-plugin-overlap",
         port: 45454,
-        tier: "action",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger] },
+        tier: "core",
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
       });
 
       // The older one finishes its write after the newer was requested; the
@@ -934,7 +1154,7 @@ describe("McpPaneConfigService", () => {
       ]);
       const olderServers = JSON.parse(writeControl.written[0].data).mcpServers;
       const olderBearer = bearerOf(olderServers[olderPrepared!.pluginServerKeys[0]]);
-      const onDisk = await fs.readFile(newer!.configPath, "utf-8");
+      const onDisk = await fs.readFile(newer!.configPath!, "utf-8");
       expect(onDisk).toBe(writeControl.written[1].data);
       const newerBearer = bearerOf(JSON.parse(onDisk).mcpServers[newer!.pluginServerKeys[0]]);
 
@@ -949,109 +1169,47 @@ describe("McpPaneConfigService", () => {
       const prepared = await service.preparePaneConfig({
         paneId: "pane-plugin-ineligible",
         port: 45454,
-        tier: "action",
-        plugin: { projectId: PROJECT_A, endpoints: [ledger], isEligible: () => false },
+        tier: "core",
+        plugin: { projectId: PROJECT_A, servers: [ledger], isEligible: () => false },
       });
 
       expect(prepared!.pluginServerKeys).toEqual([]);
       expect(grants.listForTerminal("pane-plugin-ineligible")).toEqual([]);
     });
 
-    it('still rejects tier "off" with no plugin endpoints', async () => {
+    it("asks about each server on its own, minting the eligible ones", async () => {
+      const crm: PanePluginServer = {
+        pluginInstanceId: "acme.crm",
+        serverKey: "daintree-crm",
+        scope: { databases: true },
+      };
+      const isEligible = vi.fn(
+        (server: PanePluginServer) => server.pluginInstanceId === "acme.crm"
+      );
+
+      const prepared = await service.preparePaneConfig({
+        paneId: "pane-plugin-partly-eligible",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, servers: [ledger, crm], isEligible },
+      });
+
+      expect(isEligible.mock.calls.map(([server]) => server)).toEqual([ledger, crm]);
+      expect(prepared!.pluginServerKeys).toEqual(["daintree-crm"]);
+      expect(grants.listForTerminal("pane-plugin-partly-eligible")).toEqual([
+        expect.objectContaining({ pluginInstanceId: "acme.crm", scope: { databases: true } }),
+      ]);
+    });
+
+    it('still rejects tier "off" with no plugin servers', async () => {
       await expect(
         service.preparePaneConfig({
           paneId: "pane-plugin-empty",
           port: 45454,
           tier: "off",
-          plugin: { projectId: PROJECT_A, endpoints: [] },
+          plugin: { projectId: PROJECT_A, servers: [] },
         })
       ).rejects.toThrow(/should not be called with tier "off"/);
-    });
-  });
-
-  describe("pluginServerKeysFor", () => {
-    const KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
-
-    it("derives a key from the manifest id and endpoint, restricted to safe characters", () => {
-      const [key] = pluginServerKeysFor([{ pluginInstanceId: "acme.ledger", endpointId: "d.v2" }]);
-      expect(key).toMatch(KEY_PATTERN);
-      expect(key).toContain("acme_ledger");
-      expect(key).toContain("d_v2");
-      expect(key).not.toBe("daintree");
-    });
-
-    it("leaves room for a 32-character tool name inside Claude's 64-character limit", () => {
-      const keys = pluginServerKeysFor([
-        { pluginInstanceId: "acme.an-extremely-long-plugin-manifest-name", endpointId: "data" },
-        { pluginInstanceId: "acme.ledger", endpointId: "data" },
-      ]);
-      const longestTool = "t".repeat(32);
-      for (const key of keys) {
-        expect(`mcp__${key}__${longestTool}`.length).toBeLessThanOrEqual(64);
-      }
-    });
-
-    it("keeps a project plugin's key free of its 64-hex project id", () => {
-      const [key] = pluginServerKeysFor([
-        {
-          pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger"),
-          endpointId: "data",
-        },
-      ]);
-      expect(key).not.toContain(PROJECT_A);
-      expect(key).toContain("acme_ledger");
-    });
-
-    it("disambiguates endpoints that sanitise to the same key, independent of order", () => {
-      const installed = { pluginInstanceId: "acme.ledger", endpointId: "data" };
-      const project = {
-        pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger"),
-        endpointId: "data",
-      };
-      const folded = { pluginInstanceId: "acme_ledger", endpointId: "data" };
-
-      const keys = pluginServerKeysFor([installed, project, folded]);
-      expect(new Set(keys).size).toBe(3);
-      for (const key of keys) expect(key).toMatch(KEY_PATTERN);
-
-      const reversed = pluginServerKeysFor([folded, project, installed]);
-      expect(reversed).toEqual([...keys].reverse());
-    });
-
-    it("stays order-independent when a hashed key lands on another endpoint's plain key", () => {
-      const installed = { pluginInstanceId: "acme.ledger", endpointId: "data" };
-      const project = {
-        pluginInstanceId: makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger"),
-        endpointId: "data",
-      };
-      // An endpoint whose plain key is exactly the installed copy's hashed key.
-      const hash = createHash("sha256")
-        .update(`acme.ledger\0data`, "utf8")
-        .digest("hex")
-        .slice(0, 8);
-      const lookalike = { pluginInstanceId: "acme.ledger", endpointId: `data-${hash}` };
-
-      const keys = pluginServerKeysFor([installed, project, lookalike]);
-      expect(new Set(keys).size).toBe(3);
-      expect(pluginServerKeysFor([lookalike, project, installed])).toEqual([...keys].reverse());
-      expect(pluginServerKeysFor([project, lookalike, installed])).toEqual([
-        keys[1],
-        keys[2],
-        keys[0],
-      ]);
-    });
-
-    it("bounds the key length for long ids without losing uniqueness", () => {
-      const longId = `com.example.${"very-long-plugin-name-".repeat(4)}`;
-      const keys = pluginServerKeysFor([
-        { pluginInstanceId: `${longId}a`, endpointId: "data" },
-        { pluginInstanceId: `${longId}b`, endpointId: "data" },
-      ]);
-      expect(new Set(keys).size).toBe(2);
-      for (const key of keys) {
-        expect(key).toMatch(KEY_PATTERN);
-        expect(key.length).toBeLessThanOrEqual(48);
-      }
     });
   });
 });

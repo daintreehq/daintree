@@ -46,6 +46,11 @@ export interface CommandResult<T = unknown> {
   success: boolean;
   /** Human-readable message about the result */
   message?: string;
+  /**
+   * A secondary line under `message` where the result is shown — what the
+   * result was about, or what happens next. Never restates `message`.
+   */
+  detail?: string;
   /** Optional data payload */
   data?: T;
   /** Error details if success is false */
@@ -73,6 +78,8 @@ export interface BuilderFieldValidation {
   max?: number;
   /** Regex pattern to match (for text fields) */
   pattern?: string;
+  /** Whole numbers only (for number fields) */
+  integer?: boolean;
   /** Error message when validation fails */
   message?: string;
 }
@@ -87,7 +94,10 @@ export interface BuilderField {
   type: BuilderFieldType;
   /** Placeholder text */
   placeholder?: string;
-  /** Whether field is required (deprecated - all fields are now optional) */
+  /**
+   * A blank value fails validation before the command runs. Fields are optional
+   * by default; set this only where the handler rejects a blank value.
+   */
   required?: boolean;
   /** Validation rules */
   validation?: BuilderFieldValidation;
@@ -107,6 +117,11 @@ export interface BuilderStep {
   description?: string;
   /** Fields to collect in this step */
   fields: BuilderField[];
+  /**
+   * Label for the action that runs the command when this is the last step,
+   * naming what it does ("Create issue"). Defaults to "Run".
+   */
+  submitLabel?: string;
 }
 
 /** Command definition */

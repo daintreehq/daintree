@@ -85,7 +85,7 @@ export async function sceneReview(d: Director): Promise<void> {
     });
   }
   await d.beat(205.3, "type message", async () => {
-    const box = d.page.locator(`${HUB} textarea[placeholder="Commit message…"]`).first();
+    const box = d.page.locator(`${HUB} [data-testid="review-hub-commit-message"]`).first();
     await d.moveTo(box, 350);
     await d.demo("click");
     await box.focus();
@@ -96,7 +96,7 @@ export async function sceneReview(d: Director): Promise<void> {
     d.click(
       d.page
         .locator(`${HUB} button`)
-        .filter({ hasText: /^Commit \(\d+\)$/ })
+        .filter({ hasText: /^Commit$/ })
         .first(),
       400
     )

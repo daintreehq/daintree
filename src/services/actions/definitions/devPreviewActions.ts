@@ -53,7 +53,7 @@ export function registerDevPreviewActions(
     id: "devPreview.reloadPreview",
     title: "Reload preview",
     description:
-      "Reload the dev preview's page without restarting the underlying dev server. Try this first when the preview looks stale — it is fast and keeps the server warm. Restart the server instead when the process itself is wedged or its configuration changed.",
+      "Reload the dev preview page without restarting its dev server. Try this first when the preview looks stale; restart the server only when its process is wedged or its config changed.",
     category: "devServer",
     kind: "command",
     danger: "safe",
@@ -80,7 +80,7 @@ export function registerDevPreviewActions(
     id: "devPreview.restart",
     title: "Restart dev server",
     description:
-      "Stop the dev server and start it again, keeping caches and installed dependencies. Anything in flight is interrupted and the preview is unavailable until it comes back, which is slower than simply reloading the page. Reload first unless the server process itself is the problem.",
+      "Stop the dev server and start it again, keeping caches and dependencies. The preview is down until it returns; reload the page first unless the server process itself is the problem.",
     category: "devServer",
     kind: "command",
     danger: "safe",

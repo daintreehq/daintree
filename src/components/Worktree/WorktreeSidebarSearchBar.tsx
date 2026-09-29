@@ -215,14 +215,11 @@ export function WorktreeSidebarSearchBar({
         e.stopPropagation();
         return;
       }
-      if (liveQuery) {
-        e.stopPropagation();
-        handleClearSearch();
-        return;
-      }
+      // A query is SearchField's to clear; only an empty field gives up focus.
+      if (liveQuery) return;
       internalRef.current?.blur();
     },
-    [isPopoverOpen, liveQuery, handleClearSearch, onArrowIntoResults, onEscape, onSubmit]
+    [isPopoverOpen, liveQuery, onArrowIntoResults, onEscape, onSubmit]
   );
 
   const setRefs = useCallback(
@@ -309,7 +306,7 @@ export function WorktreeSidebarSearchBar({
               <button
                 type="button"
                 onClick={handleClearAll}
-                className="ml-auto shrink-0 rounded-[var(--radius-sm)] text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
+                className="ml-auto shrink-0 rounded-[var(--radius-sm)] text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
               >
                 Clear all
               </button>

@@ -1,26 +1,29 @@
 import { ArrowUp, Folders, History, Settings2 } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { ANCHOR, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import {
+  cn,
+  type CursorStep,
   MockCursor,
   MockLines,
-  MockPane,
+  MockMenu,
+  MockSpotlight,
+  MockTooltip,
   reveal,
   useMockCursor,
-  type CursorStep,
-} from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
-import { MockMenu, MockSpotlight, MockTooltip } from "./sceneParts";
+  useTourShortcuts,
+} from "@daintreehq/tour/kit";
+import { ANCHOR, MockApp, MockGrid, MockPane, MockWorktreeCard } from "@daintreehq/tour/mock-app";
+import { useCue } from "@daintreehq/tour/react";
 
 const COPY = ANCHOR["copy-context"];
-const PORTAL = ANCHOR.portal;
+const COPY_BUTTON = { anchor: "copy-context" };
+const PORTAL = { anchor: "portal" };
 // Copy context is a menu; its first item copies the whole worktree.
 const MENU = { width: 176, x: COPY.x - 166, y: COPY.y + 14 };
-const COPY_FULL = { x: MENU.x + 60, y: MENU.y + 13 };
+const COPY_FULL = { anchor: "menu-0", dx: -28, dy: -3 };
 
-const CURSOR: readonly CursorStep[] = [
-  { cue: "copy", at: COPY },
-  { cue: "copy", offset: 0.5, at: COPY, click: true },
+export const CURSOR: readonly CursorStep[] = [
+  { cue: "copy", at: COPY_BUTTON },
+  { cue: "copy", offset: 0.5, at: COPY_BUTTON, click: true },
   { cue: "copy", offset: 1.0, at: COPY_FULL },
   { cue: "copy", offset: 1.5, at: COPY_FULL, click: true },
   { cue: "portal", at: PORTAL },
@@ -79,6 +82,7 @@ export function ContextScene() {
   const portalCue = useCue("portal");
   const portalOpen = useCue("portal", 0.6);
   const pasted = useCue("paste", 0.3);
+  const shortcuts = useTourShortcuts();
   const cursor = useMockCursor({ x: 420, y: 200 }, CURSOR);
 
   return (
@@ -108,7 +112,11 @@ export function ContextScene() {
         y={MENU.y}
         width={MENU.width}
         items={[
-          { icon: <Folders />, label: "Copy full context", hint: "⌘⇧C" },
+          {
+            icon: <Folders />,
+            label: "Copy full context",
+            hint: shortcuts.hint("worktree.copyTree"),
+          },
           { icon: <History />, label: "Recent", muted: true },
           { icon: <Settings2 />, label: "Context settings", muted: true, separator: true },
         ]}

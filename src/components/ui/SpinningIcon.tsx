@@ -159,6 +159,9 @@ export function SpinningIcon({
     <span
       ref={setWrapperRef}
       className={cn("flex w-fit shrink-0", wrapperClassName, spinning && "animate-spin")}
+      // Lets a container keep the icon on screen until its turn completes, which
+      // outlasts `active` by up to one rotation.
+      data-spinning={spinning ? "" : undefined}
     >
       <Icon {...rest} className={className} />
     </span>

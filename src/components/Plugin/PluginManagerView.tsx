@@ -9,12 +9,14 @@ import {
   ChevronDown,
   ChevronLeft,
   RefreshCw,
-  X,
 } from "lucide-react";
+import { Callout } from "@/components/ui/Callout";
 import { useState, useEffect, useRef, useMemo, useDeferredValue } from "react";
 import { createPortal } from "react-dom";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,9 +35,20 @@ import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { useOverlayClaim } from "@/hooks";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
+import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import {
+  getUiTransitionDuration,
+  UI_ENTER_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_DURATION,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
 import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { isMac, isWindows } from "@/lib/platform";
 import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 import { usePluginManager } from "./usePluginManager";
@@ -49,14 +62,12 @@ import { groupPluginsByCategory } from "./pluginGrouping";
 import { filterPlugins, isQueryActive, parsePluginQuery } from "@/lib/pluginSearch";
 import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
 import type { LoadedPluginInfo, PluginDeepLinkIntent } from "@shared/types/plugin";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { Badge, CountBadge } from "@/components/ui/badge";
+import { FilterChip } from "@/components/ui/FilterChip";
 
-// Provenance badge — where the archive came from. Deliberately the quietest
-// thing in the row: it is trivia next to whether the plugin is actually running.
-const ROW_BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-border-default/50 text-text-secondary uppercase tracking-wide";
-
-const SECTION_HEADER_CLASS =
-  "px-3 text-3xs font-medium uppercase tracking-wider text-text-secondary select-none";
+const SECTION_HEADER_CLASS = cn(LIST_LABEL_CLASS, "px-3");
 
 // How long the result count waits for typing to pause before it is announced.
 // Announcing every intermediate count queues a sentence per keystroke.
@@ -126,8 +137,8 @@ interface PluginRowProps {
  * content-model violation that screen readers prune or skip.
  *
  * Selection is `PALETTE_ROW_CLASS` — the app's single definition of "this is the
- * row Enter will act on", which already owns the neutral leading rail, the
- * reduce-motion handling, and the forced-colors outline. `row-select-target`
+ * row Enter will act on", which already owns the highlight fill, the
+ * reduce-motion handling, and the high-contrast outlines. `row-select-target`
  * exempts the inner button from the high-contrast blanket button border, which
  * otherwise framed the text half of every row and left its switch outside.
  */
@@ -141,6 +152,7 @@ function PluginRow({
   highlighted,
 }: PluginRowProps) {
   const label = pluginLabel(plugin);
+  const { ref: nameRef, isTruncated: isNameTruncated } = useTruncationDetection();
   const blocklisted = plugin.blocklisted === true;
   // The switch reflects the user's INTENT, which is the only thing it controls.
   // Whether the plugin actually runs is a separate fact and gets its own line —
@@ -165,44 +177,52 @@ function PluginRow({
         !selected && !highlighted && "hover:bg-overlay-subtle"
       )}
     >
-      <button
-        type="button"
-        aria-current={selected ? "true" : undefined}
-        onClick={onSelect}
-        title={`${label} v${plugin.manifest.version}`}
-        className="row-select-target flex items-center gap-2.5 min-w-0 flex-1 py-2 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary forced-colors:border-none"
+      <TruncatedTooltip
+        content={`${label} v${plugin.manifest.version}`}
+        isTruncated={isNameTruncated}
       >
-        <PluginIconTile manifest={plugin.manifest} size="sm" dimmed={!enabled || !healthy} />
-        <span className="min-w-0 flex-1">
-          <span
-            className={cn("block text-sm font-medium truncate", !enabled && "text-text-secondary")}
-          >
-            {label}
+        <button
+          type="button"
+          aria-current={selected ? "true" : undefined}
+          onClick={onSelect}
+          className="row-select-target flex items-center gap-2.5 min-w-0 flex-1 py-2 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary forced-colors:border-none"
+        >
+          <PluginIconTile manifest={plugin.manifest} size="sm" dimmed={!enabled || !healthy} />
+          <span className="min-w-0 flex-1">
+            <span
+              ref={nameRef}
+              className={cn(
+                "block text-sm font-medium truncate",
+                !enabled && "text-text-secondary"
+              )}
+            >
+              {label}
+            </span>
+            <span
+              data-testid="plugin-row-badges"
+              className="mt-0.5 flex items-center gap-1.5 min-w-0 h-[1.125rem]"
+            >
+              {signal ? (
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 min-w-0 flex-1 text-2xs font-medium",
+                    signal.tone
+                  )}
+                >
+                  <signal.icon className="w-3 h-3 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{signal.label}</span>
+                </span>
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary">
+                  {blurb}
+                </span>
+              )}
+              {plugin.devMode && <Badge size="xs">Dev</Badge>}
+              {!plugin.isBuiltin && <Badge size="xs">{sourceLabel}</Badge>}
+            </span>
           </span>
-          <span
-            data-testid="plugin-row-badges"
-            className="mt-0.5 flex items-center gap-1.5 min-w-0 h-[1.125rem]"
-          >
-            {signal ? (
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1 min-w-0 flex-1 text-2xs font-medium",
-                  signal.tone
-                )}
-              >
-                <signal.icon className="w-3 h-3 shrink-0" aria-hidden="true" />
-                <span className="truncate">{signal.label}</span>
-              </span>
-            ) : (
-              <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary">{blurb}</span>
-            )}
-            {plugin.devMode && <span className={cn(ROW_BADGE_CLASS, "shrink-0")}>Dev</span>}
-            {!plugin.isBuiltin && (
-              <span className={cn(ROW_BADGE_CLASS, "shrink-0")}>{sourceLabel}</span>
-            )}
-          </span>
-        </span>
-      </button>
+        </button>
+      </TruncatedTooltip>
 
       <span className="shrink-0 pr-2.5">
         <SettingsSwitch
@@ -276,6 +296,11 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   // Register the viewport claim so AppLayout can `inert` the app chrome while
   // the view is open, and wire Escape-to-close through the shared LIFO stack.
   useOverlayClaim("plugin-manager", isOpen);
+  const { isVisible, shouldRender } = useAnimatedPresence({
+    isOpen,
+    animationDuration: getUiTransitionDuration("exit"),
+    syncEnter: true,
+  });
   useEscapeStack(isOpen, close);
   // The global keybinding layer takes Escape at window capture and pops the
   // escape stack before Radix's menu ever sees the key, so an open Install
@@ -458,6 +483,28 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     target?.focus();
   }, [isOpen]);
 
+  // And hand it back on close. A region traps nothing and restores nothing, so
+  // without this focus stayed on the hidden view's last control — or fell to
+  // the body — instead of the panel or control the user opened the manager
+  // from. Skipped when the user has already put focus somewhere else visible.
+  const wasOpenRef = useRef(isOpen);
+  const viewRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const wasOpen = wasOpenRef.current;
+    wasOpenRef.current = isOpen;
+    if (!wasOpen || isOpen) return;
+    const target = usePluginManagerStore.getState().returnFocusTarget;
+    usePluginManagerStore.setState({ returnFocusTarget: null });
+    // The view stays painted, inert, through its exit fade, so focus that was
+    // inside it is either still there or already on the body.
+    const active = document.activeElement;
+    const focusIsStranded =
+      active === null || active === document.body || !!viewRef.current?.contains(active);
+    if (target?.isConnected && focusIsStranded) {
+      target.focus({ preventScroll: true });
+    }
+  }, [isOpen]);
+
   // Re-validate the selection after every list refresh (reopen, uninstall,
   // cross-window provenance change). A single effect keyed on the list nulls a
   // selection whose plugin is gone — kept here rather than in a second reset
@@ -521,6 +568,23 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     setHighlightedPluginId(focusPluginId);
     clearFocusPluginId();
   }, [focusPluginId, clearFocusPluginId, pm.plugins, skipMotion]);
+
+  // A `plugin.openSettings` whose home is the manager: select the plugin the
+  // same way a deep-link `open` does. The detail pane then opens its Settings
+  // tab and lands on the key, and consumes the request once it has.
+  const settingsRequest = usePluginManagerStore((s) =>
+    s.settingsRequest?.home === "manager" ? s.settingsRequest : null
+  );
+  const consumeSettingsRequest = usePluginManagerStore((s) => s.consumeSettingsRequest);
+  const settingsRequestPluginId = settingsRequest?.pluginId ?? null;
+  const settingsRequestNonce = settingsRequest?.nonce;
+  useEffect(() => {
+    if (!isOpen || settingsRequestPluginId === null) return;
+    if (!pm.plugins.some((p) => p.manifest.name === settingsRequestPluginId)) return;
+    setQuery("");
+    setSelectedProjectPluginId(null);
+    setSelectedPluginId(settingsRequestPluginId);
+  }, [isOpen, settingsRequestPluginId, settingsRequestNonce, pm.plugins]);
 
   // Fade the deep-link highlight after a beat. Kept separate from the consume
   // effect above: clearing focusPluginId there flips that effect's own
@@ -601,17 +665,31 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     }
   };
 
-  if (!isOpen) return null;
+  if (!shouldRender) return null;
 
   return createPortal(
     <div
+      ref={viewRef}
       role="region"
       aria-label="Plugin manager"
       data-testid="plugin-manager-view"
+      // Painted through its exit fade, but nothing in it takes a click or
+      // focus once it is closing.
+      inert={!isOpen || undefined}
       onFocus={(e) => {
         lastFocusedRef.current = e.target instanceof HTMLElement ? e.target : null;
       }}
-      className="fixed inset-0 z-[var(--z-modal)] flex flex-col bg-surface-canvas motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
+      className={cn(
+        "fixed inset-0 z-[var(--z-modal)] flex flex-col bg-surface-canvas",
+        // A full-window view: it fades on the entry/exit tier and never moves,
+        // so reduced motion leaves it as it is.
+        "transition-opacity starting:opacity-0",
+        isVisible ? "opacity-100" : "opacity-0"
+      )}
+      style={{
+        transitionDuration: `${isVisible ? UI_ENTER_DURATION : UI_EXIT_DURATION}ms`,
+        transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+      }}
     >
       <header className="flex items-center justify-between gap-3 px-6 h-12 shrink-0 border-b border-border-default app-drag-region">
         <div className="flex items-center gap-2 min-w-0">
@@ -620,7 +698,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               aria-hidden="true"
               data-fullscreen={isFullscreen ? "true" : undefined}
               className={cn(
-                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
+                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120 motion-reduce:transition-none",
                 isFullscreen ? "w-0" : "w-16"
               )}
             />
@@ -674,22 +752,18 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button
+          <SurfaceHeaderCloseButton
             ref={closeButtonRef}
-            variant="ghost"
-            size="icon-sm"
             onClick={close}
             aria-label="Close plugin manager"
             className="app-no-drag"
-          >
-            <X />
-          </Button>
+          />
           {isWindows() && (
             <div
               aria-hidden="true"
               data-fullscreen={isFullscreen ? "true" : undefined}
               className={cn(
-                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
+                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120 motion-reduce:transition-none",
                 isFullscreen && "w-0"
               )}
               style={isFullscreen ? undefined : { width: `${WINDOWS_CAPTION_WIDTH_PX}px` }}
@@ -716,10 +790,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               : [
                   {
                     id: "restart",
-                    label: isRestarting ? "Restarting…" : "Restart",
+                    label: "Restart",
                     variant: "primary",
                     onClick: () => setIsRestartConfirmOpen(true),
-                    disabled: isRestarting,
+                    loading: isRestarting,
                   },
                 ]
           }
@@ -768,29 +842,13 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               {PLUGIN_FILTER_CHIPS.map(({ token, label }) => {
                 const active = queryTokens.includes(token.toLowerCase());
                 return (
-                  <button
+                  <FilterChip
                     key={token}
-                    type="button"
-                    aria-pressed={active}
+                    selected={active}
                     onClick={() => toggleFilterToken(token)}
-                    className={cn(
-                      // The ring's colour is component-owned: with no
-                      // `focus-visible` outline declared, the chips fell back to
-                      // Chromium's default blue.
-                      "px-1.5 py-0.5 rounded-sm text-3xs font-medium border transition-colors",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-                      // Pressed is the segmented control's selected treatment: a
-                      // text-secondary border clears 3:1 against the fill, where
-                      // a fill step alone read as barely different from rest.
-                      // Forced colours repaint every border alike, so the
-                      // pressed one takes the system highlight there.
-                      active
-                        ? "bg-overlay-medium border-text-secondary text-text-primary forced-colors:border-[Highlight]"
-                        : "bg-overlay-subtle border-border-default/50 text-text-secondary hover:text-text-primary hover:border-border-default"
-                    )}
                   >
                     {label}
-                  </button>
+                  </FilterChip>
                 );
               })}
             </div>
@@ -841,10 +899,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 itself — otherwise the message renders twice, once of them
                 underneath the scrim. */}
             {pm.error && !errorOwnedByDialog && (
-              <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-                <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-                <p className="text-2xs text-status-danger">{pm.error}</p>
-              </div>
+              <Callout severity="error" size="compact">
+                <p>{pm.error}</p>
+              </Callout>
             )}
           </div>
 
@@ -939,9 +996,12 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                     <section key={id} aria-labelledby={headingId} className="space-y-1">
                       <h3 id={headingId} className={SECTION_HEADER_CLASS}>
                         {label}{" "}
-                        <span className="ml-1.5 normal-case tracking-normal text-text-secondary">
+                        <CountBadge
+                          className="ml-1.5"
+                          label={`${groupPlugins.length} ${groupPlugins.length === 1 ? "plugin" : "plugins"}`}
+                        >
                           {groupPlugins.length}
-                        </span>
+                        </CountBadge>
                       </h3>
                       <ul role="list" className="space-y-1">
                         {groupPlugins.map((plugin) => (
@@ -1017,6 +1077,12 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               onRetry={() => void pm.retryPlugin(selectedPlugin)}
               onUninstall={() => pm.armUninstall(selectedPlugin)}
               onCheckForUpdate={() => void pm.handleCheckForUpdate(selectedPlugin)}
+              settingsRequest={
+                settingsRequest !== null && settingsRequest.pluginId === selectedPlugin.instanceId
+                  ? settingsRequest
+                  : null
+              }
+              onSettingsRequestHandled={consumeSettingsRequest}
             />
           ) : hasPlugins ? (
             // Catalog home — the marketplace face of the manager. Clicking a
@@ -1030,15 +1096,18 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               onSelect={setSelectedPluginId}
               onClearSearch={clearSearch}
             />
-          ) : (
+          ) : pm.loading || pm.error ? null : (
             // No plugins at all — a roomy centered prompt rather than an empty
-            // catalog shell; the master column owns the install CTAs.
-            <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center">
-              <Package className="w-8 h-8 text-text-placeholder" aria-hidden="true" />
-              <p className="text-base font-medium text-text-primary">No plugin selected</p>
-              <p className="text-sm text-text-secondary max-w-sm">
-                Install a plugin to view its details and settings here.
-              </p>
+            // catalog shell; the master column owns the install CTAs. Held
+            // back while the list is still reading or says why it couldn't.
+            <div className="h-full flex items-center justify-center">
+              <EmptyState
+                variant="zero-data"
+                scale="canvas"
+                icon={<Package />}
+                title="Install a plugin to see it here"
+                description="Its details and settings appear once it's installed."
+              />
             </div>
           )}
         </ScrollShadow>
@@ -1046,7 +1115,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
 
       <ConfirmDialog
         isOpen={pm.pendingUninstall !== null}
-        onClose={pm.isUninstalling ? undefined : pm.closeUninstall}
+        onClose={pm.closeUninstall}
         title={pm.pendingUninstall ? `Uninstall '${pluginLabel(pm.pendingUninstall)}'?` : ""}
         description="Removes the plugin and deletes its files, unloading its panels, commands, and integrations. Per-project settings under .daintree/ are always kept; this plugin's saved settings are kept too unless you check the box below."
         confirmLabel="Uninstall plugin"
@@ -1056,13 +1125,12 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         variant="destructive"
         zIndex="nested"
       >
-        <label className="flex items-center gap-2 text-xs text-text-secondary select-none cursor-pointer">
-          <input
-            type="checkbox"
+        <label className="flex cursor-pointer items-start gap-2 text-sm text-text-primary select-none">
+          <Checkbox
             checked={pm.deleteSettings}
-            onChange={(e) => pm.setDeleteSettings(e.target.checked)}
+            onCheckedChange={(checked) => pm.setDeleteSettings(checked === true)}
             disabled={pm.isUninstalling}
-            className="size-3.5 rounded-sm border border-border-default bg-surface-canvas accent-daintree-text/70"
+            className="mt-0.5"
           />
           Also delete this plugin's saved settings
         </label>
@@ -1070,22 +1138,15 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             the master column no longer renders while the dialog owns it — so
             without this the failure would be invisible in both places. */}
         {pm.error && (
-          <div
-            className="mt-3 flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20"
-            role="alert"
-          >
-            <AlertCircle
-              className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5"
-              aria-hidden="true"
-            />
-            <p className="text-2xs text-status-danger break-words">{pm.error}</p>
-          </div>
+          <Callout severity="error" className="mt-3" role="alert">
+            <p>{pm.error}</p>
+          </Callout>
         )}
       </ConfirmDialog>
 
       <ConfirmDialog
         isOpen={pm.pendingUpdate !== null}
-        onClose={pm.isReinstalling ? undefined : () => pm.dismissPendingUpdate()}
+        onClose={() => pm.dismissPendingUpdate()}
         title={pm.pendingUpdate ? `Update '${pluginLabel(pm.pendingUpdate.plugin)}'?` : ""}
         description="Reinstalls the version shown here over the current one. If the download no longer matches it, nothing is installed. Your settings are kept."
         confirmLabel="Reinstall plugin"
@@ -1131,7 +1192,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
 
       <ConfirmDialog
         isOpen={pm.pendingHttpUrl !== null}
-        onClose={pm.isInstalling ? undefined : pm.cancelHttpInstall}
+        onClose={pm.cancelHttpInstall}
         title="Install over HTTP?"
         description="This URL doesn't use HTTPS, so the download isn't encrypted or authenticated in transit. Only continue if you trust the source."
         confirmLabel="Install over HTTP"
@@ -1144,10 +1205,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
 
       <AppDialog
         isOpen={pm.showUrlDialog}
-        onClose={() => {
-          if (pm.isInstalling) return;
-          pm.closeUrlDialog();
-        }}
+        onClose={pm.closeUrlDialog}
+        // Locked while the install runs; the X says so instead of looking live.
+        dismissible={!pm.isInstalling}
         size="sm"
         zIndex="nested"
         initialFocus="first"
@@ -1163,40 +1223,30 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           </AppDialog.Description>
           {/* The security note is the reason to hesitate, so it stops sharing a
               paragraph — and a weight — with the mechanics of the field above. */}
-          <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
-            <AlertTriangle
-              className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5"
-              aria-hidden="true"
-            />
-            <p className="text-2xs text-status-warning">
+          <Callout severity="warning">
+            <p>
               Plugins run with full Node.js privileges — no sandbox, no signature check, and no
               capability prompt before install. Only install from sources you trust.
             </p>
-          </div>
+          </Callout>
           {/* A correctable failure keeps this dialog open, but the only error
               slot was the master column behind the scrim — so the user sat in an
               open dialog with the explanation hidden underneath it. */}
           {pm.error && (
-            <div
-              className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20"
-              role="alert"
-            >
-              <AlertCircle
-                className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5"
-                aria-hidden="true"
-              />
-              <p className="text-2xs text-status-danger break-words">{pm.error}</p>
-            </div>
+            <Callout severity="error" role="alert">
+              <p>{pm.error}</p>
+            </Callout>
           )}
-          <input
+          <Input
             type="url"
             value={pm.urlInput}
             onChange={(e) => pm.setUrlInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && pm.urlInput.trim()) void pm.handleInstallFromUrl();
+              if (!isEnterToSubmit(e)) return;
+              e.preventDefault();
+              if (pm.urlInput.trim()) void pm.handleInstallFromUrl();
             }}
             placeholder="https://example.com/plugin.dntr"
-            className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-interactive text-text-primary placeholder:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             aria-label="Plugin URL"
           />
         </AppDialog.Body>
@@ -1217,7 +1267,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
 
       <ConfirmDialog
         isOpen={isRestartConfirmOpen}
-        onClose={isRestarting ? undefined : () => setIsRestartConfirmOpen(false)}
+        onClose={() => setIsRestartConfirmOpen(false)}
         title="Restart Daintree now?"
         description="All running terminals and agent sessions will be closed, and any in-flight agent work and scrollback will be lost."
         confirmLabel="Restart Daintree"

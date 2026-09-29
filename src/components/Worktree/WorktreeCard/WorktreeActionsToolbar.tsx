@@ -112,7 +112,7 @@ export function WorktreeActionsToolbar({
                 onCleanupWorktree();
               }}
               data-no-dnd
-              className="sidebar-action-button p-1.5 text-status-error/70 hover:text-status-error rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+              className="sidebar-action-button rounded-[var(--radius-md)] p-1.5 text-text-secondary transition-colors hover:text-status-error focus-visible:text-status-error focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               aria-label="Delete worktree"
               data-testid="worktree-cleanup-button"
             >
@@ -123,23 +123,31 @@ export function WorktreeActionsToolbar({
         </Tooltip>
       )}
       {canCollapse && (
-        <button
-          onClick={onToggleCollapse}
-          data-no-dnd
-          className="sidebar-action-button p-1.5 text-daintree-text/60 hover:text-text-primary rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-          aria-expanded={!isCollapsed}
-          aria-controls={isCollapsed ? undefined : contentId}
-          aria-label={isCollapsed ? "Expand card" : "Collapse card"}
-        >
-          <ChevronRight
-            data-animated-chevron
-            className={cn(
-              "w-3.5 h-3.5 transition-transform duration-150",
-              isCollapsed ? "rotate-0" : "rotate-90"
-            )}
-            aria-hidden="true"
-          />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onToggleCollapse}
+              data-no-dnd
+              className="sidebar-action-button rounded-[var(--radius-md)] p-1.5 text-daintree-text/60 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+              aria-expanded={!isCollapsed}
+              aria-controls={isCollapsed ? undefined : contentId}
+              aria-label={isCollapsed ? "Expand card" : "Collapse card"}
+            >
+              <ChevronRight
+                data-animated-chevron
+                className={cn(
+                  "w-3.5 h-3.5 transition-transform duration-150 ease-out",
+                  isCollapsed ? "rotate-0" : "rotate-90"
+                )}
+                aria-hidden="true"
+              />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            {isCollapsed ? "Expand card" : "Collapse card"}
+          </TooltipContent>
+        </Tooltip>
       )}
       <DropdownMenu>
         <Tooltip>
@@ -148,7 +156,7 @@ export function WorktreeActionsToolbar({
               <button
                 onClick={(e) => e.stopPropagation()}
                 data-no-dnd
-                className="sidebar-action-button p-1.5 text-daintree-text/60 hover:text-text-primary rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                className="sidebar-action-button rounded-[var(--radius-md)] p-1.5 text-daintree-text/60 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                 aria-label="More actions"
                 data-testid="worktree-actions-menu"
               >
@@ -161,8 +169,6 @@ export function WorktreeActionsToolbar({
         <DropdownMenuContent
           align="end"
           side="bottom"
-          sideOffset={4}
-          collisionPadding={8}
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.stopPropagation()}
           className="w-64"

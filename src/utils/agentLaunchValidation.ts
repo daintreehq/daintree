@@ -51,11 +51,20 @@ export function resolveAgentLaunchKind(
 ): "agent" | "terminal" {
   if (isRegistered) return "agent";
   if (agentId === "terminal") return "terminal";
+  throw new Error(unknownAgentIdMessage(agentId));
+}
+
+/** The refusal for an agent id nothing registers, which is most often a misspelling. */
+export function unknownAgentIdMessage(agentId: string): string {
   // The id can arrive from an LLM via MCP, so keep it printable and bounded —
   // otherwise it can forge log lines or bloat the error crossing the boundary.
-  const safeId = sanitizeTerminalName(agentId).slice(0, 80);
-  throw new Error(
+  // Format characters go too: directional ones reorder how the rest of the
+  // message reads, and invisible ones hide what the id really is.
+  const safeId = sanitizeTerminalName(agentId)
+    .replace(/\p{Cf}/gu, "")
+    .slice(0, 80);
+  return (
     `Unknown agent ID '${safeId}'. Call agent.listAvailable for registered agent IDs, ` +
-      `then retry, or use terminal.new to open a plain terminal.`
+    `then retry, or use terminal.new to open a plain terminal.`
   );
 }

@@ -3,12 +3,15 @@ import fs from "fs/promises";
 import path from "path";
 
 const SIDEBAR_CONTENT_PATH = path.resolve(__dirname, "../SidebarContent.tsx");
+const BADGE_PATH = path.resolve(__dirname, "../WorktreesReconnectingBadge.tsx");
 
 describe("SidebarContent reconnecting indicator — issue #8074", () => {
   let source: string;
+  let badge: string;
 
   beforeAll(async () => {
     source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
+    badge = await fs.readFile(BADGE_PATH, "utf-8");
   });
 
   it("gates the reconnecting indicator behind useDohertyGate", () => {
@@ -22,11 +25,9 @@ describe("SidebarContent reconnecting indicator — issue #8074", () => {
     // Regression guard: anything in the render tree that reads isReconnecting
     // directly bypasses the deferred gate and flickers on every sub-400ms
     // disconnect→reconnect.
-    const reconnectingSpan = source.match(
-      /\{showReconnecting && \(\s*<span[\s\S]*?Reconnecting…[\s\S]*?<\/span>\s*\)\}/
-    );
-    expect(reconnectingSpan).not.toBeNull();
-    expect(source).not.toMatch(/\{isReconnecting && \(\s*<span/);
+    expect(source).toMatch(/\{showReconnecting && \(\s*<WorktreesReconnectingBadge/);
+    expect(source).not.toMatch(/\{isReconnecting && \(/);
+    expect(badge).toMatch(/Reconnecting…/);
   });
 
   it("drives the reconnect tick via useVisibilityAwareInterval, not a bare setInterval — issue #9583", () => {
@@ -51,7 +52,7 @@ describe("SidebarContent reconnecting indicator — issue #8074", () => {
     // class strings: the muted branch's colour token is free to change, the
     // single-line + shared-text-size contract is not.
     const badges = [
-      ...source.matchAll(/inline-flex items-center gap-1 whitespace-nowrap shrink-0 ([^"]*)"/g),
+      ...badge.matchAll(/inline-flex items-center gap-1 whitespace-nowrap shrink-0 ([^"]*)"/g),
     ].map((m) => m[1] ?? "");
     expect(badges).toHaveLength(2);
     for (const cls of badges) expect(cls).toContain("text-xs");
@@ -59,18 +60,18 @@ describe("SidebarContent reconnecting indicator — issue #8074", () => {
     // The relative-time detail moved off the visible badge into hover tooltip
     // content; the old inline combined template literal must be gone (the
     // explanatory comment at the tick may still mention the phrasing).
-    expect(source).not.toMatch(/`Reconnecting… last updated \$\{/);
-    expect(source).toMatch(
-      /<TooltipContent[\s\S]*?Last updated \{formatRelativeTime\(reconnectingAt\)\}/
+    expect(badge).not.toMatch(/`Reconnecting… last updated \$\{/);
+    expect(badge).toMatch(
+      /<TooltipContent[\s\S]*?Last updated \{formatRelativeTime\(escalatedSince\)\}/
     );
     // The tooltip must not auto-dismiss — the relative time is the substance and
     // has to stay readable while the user hovers.
-    expect(source).toMatch(/<Tooltip autoDismiss=\{false\}>/);
+    expect(badge).toMatch(/<Tooltip autoDismiss=\{false\}>/);
   });
 
   it("renders the stalled (escalated) state with the warning status color — issue #10727", () => {
     // Past 10s the reconnect reads as "action needed", not a perpetual ambient
     // spinner — driven by the theme-aware warning token, not the muted default.
-    expect(source).toMatch(/text-status-warning/);
+    expect(badge).toMatch(/text-status-warning/);
   });
 });

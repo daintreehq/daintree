@@ -2,7 +2,14 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react"
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
-import { getUiPaletteTransitionDuration, UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import {
+  getUiPaletteTransitionDuration,
+  UI_DOHERTY_THRESHOLD,
+  UI_ENTER_EASING,
+  UI_EXIT_EASING,
+  UI_PALETTE_ENTER_DURATION,
+  UI_PALETTE_EXIT_DURATION,
+} from "@/lib/animationUtils";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { useCommandHud, type CommandHudItem } from "@/hooks/useCommandHud";
 import { COMMAND_HUD_PREFIX } from "@/hooks/useGlobalKeybindings";
@@ -225,10 +232,13 @@ export function ChordIndicator() {
           "border border-[var(--border-overlay)]",
           "backdrop-blur-2xl backdrop-saturate-[var(--theme-material-saturation)]",
           "transition-[opacity,translate,scale]",
-          isVisible ? "duration-150 ease-out" : "duration-100 ease-in",
-          "reduce-motion:transition-none reduce-motion:translate-none reduce-motion:scale-none",
+          "motion-reduce:transition-opacity motion-reduce:translate-none motion-reduce:scale-none",
           isVisible ? "opacity-100 translate-y-0 scale-100" : "opacity-0 translate-y-2 scale-[0.96]"
         )}
+        style={{
+          transitionDuration: `${isVisible ? UI_PALETTE_ENTER_DURATION : UI_PALETTE_EXIT_DURATION}ms`,
+          transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+        }}
       >
         <div className="flex items-center gap-2 px-4 py-2.5">
           <span id={PREFIX_DESCRIPTION_ID} className="sr-only">
@@ -302,11 +312,11 @@ export function ChordIndicator() {
                         aria-disabled={item.enabled ? undefined : true}
                         data-hud-index={index}
                         onClick={() => runItem(item)}
-                        onMouseMove={() => setSelectedIndex(index)}
+                        onPointerMove={() => setSelectedIndex(index)}
                         className={cn(
                           PALETTE_ROW_CLASS,
                           "group flex cursor-pointer items-center gap-3 rounded-[var(--radius-sm)] px-2 py-1 text-xs",
-                          "duration-150 reduce-motion:transition-none"
+                          "duration-150 motion-reduce:transition-none"
                         )}
                       >
                         <span className="flex min-w-0 flex-1 items-baseline gap-2">

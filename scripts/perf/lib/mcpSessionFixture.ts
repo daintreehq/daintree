@@ -184,7 +184,7 @@ function installElectronStub(): void {
 // --- Product and SDK modules -------------------------------------------------
 
 /** The MCP tiers, in the order every report renders them. */
-export const MCP_TIERS: readonly McpTier[] = ["workbench", "action", "system", "external"];
+export const MCP_TIERS: readonly McpTier[] = ["core", "full", "external"];
 
 type JsonRpcMessage = Record<string, unknown>;
 
@@ -824,16 +824,21 @@ export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.interruptOwned",
   "terminal.sendCommandOwned",
   "terminal.injectOwned",
+  "terminal.sendKeysOwned",
   "terminal.readLastMessageOwned",
   "worktree.deleteOwned",
   "help.displayImage",
-  // Terminal watches (#12491) answer only a caller with a pane of its own,
-  // which no perf session has. Their admit/refuse grading lives in
+  // Terminal notices answer only a caller with a pane of its own, which no
+  // perf session has. Their admit/refuse grading lives in
   // `sessionServer.test.ts` rather than PERF-283.
-  "terminal.registerWatch",
-  "terminal.listWatches",
-  "terminal.getWatchEvents",
-  "terminal.cancelWatch",
+  "terminal.notifyWhenIdle",
+  // Batch tools validate and expand their arguments in main and run each item
+  // as its single call, so a battery of argument-free probes only reads their
+  // refusal. The items are the calls above; `sessionServer.test.ts` grades the
+  // expansion.
+  "agent.launchMany",
+  "terminal.sendCommandMany",
+  "terminal.closeMany",
 ]);
 
 /** The workspace a bound session is pinned to in these scenarios. */

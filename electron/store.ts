@@ -337,12 +337,6 @@ export interface StoreSchema {
     abusePolicyEnabled: boolean;
     abusePolicyMaxDenials: number;
     abusePolicyWindowMs: number;
-    /**
-     * Let terminal watches wake the watching agent's pane by typing one line
-     * into its prompt (#12491). Optional because stores written before it
-     * lack the key; anything but `true` reads as off.
-     */
-    paneWakeEnabled?: boolean;
   };
   /**
    * Help-assistant settings. Includes audit/permission configuration plus
@@ -354,10 +348,12 @@ export interface StoreSchema {
   helpAssistant: {
     docSearch: boolean;
     daintreeControl: boolean;
+    /** Absent in stores written before runbooks shipped; read as on. */
+    runbookSearch?: boolean;
     /**
-     * MCP capability tier for the help assistant. Migrated at read time from
-     * the legacy `skipPermissions` boolean — see `helpAssistant.ts`
-     * `sanitizeStored` and `HelpSessionService.readSettings`.
+     * MCP tool set for the help assistant. Read-time migrated from the
+     * pre-split ladder values and the legacy `skipPermissions` boolean — see
+     * `helpAssistant.ts` `sanitizeStored` and `HelpSessionService.readSettings`.
      */
     tier: HelpAssistantTier;
     /**
@@ -373,6 +369,15 @@ export interface StoreSchema {
      */
     skipPermissions?: boolean;
     auditRetention: 7 | 30 | 0;
+    /**
+     * The assistant's model per agent ID. An absent entry is that agent's
+     * recommended model; "" is the CLI default. Sanitized at read time in
+     * `helpAssistant.ts`; the legacy scalar `modelId` is moved here by
+     * migration 031.
+     */
+    modelIds?: Record<string, string>;
+    /** Absent in stores written before #12874; read as `"inherit"`. */
+    daintreeConfirmations?: "inherit" | "always-ask";
   };
   pendingErrors: ErrorRecord[];
   errorFingerprints: Record<string, { count: number; firstSeen: number; lastSeen: number }>;
@@ -404,13 +409,22 @@ export interface StoreSchema {
         ranSecondParallelAgent: boolean;
       };
     };
+    /**
+     * @deprecated Single-tour record from before progress was kept per tour.
+     * Migration 029 moves it into `tours` and `tourMuted`; kept optional so
+     * `clearInvalidConfig` doesn't strip it before that migration runs.
+     */
     tour?: {
       completed: boolean;
       dismissed: boolean;
       muted: boolean;
       lastChapter: number;
     };
+    tours?: Record<string, { completed: boolean; dismissed: boolean; lastChapter: number }>;
+    tourMuted?: boolean;
   };
+  // Once-per-agent duplicate-CLI-install warning flags. The name outlives the
+  // retired milestone toasts; renaming it would re-fire warnings already shown.
   orchestrationMilestones: Record<string, boolean>;
   shortcutHintCounts: Record<string, number>;
   /**
@@ -454,6 +468,13 @@ export interface StoreSchema {
    * attempted" — no migration entry required (mirrors `dismissedUpdateVersion`).
    */
   pendingUpdateInstallStage?: PendingUpdateInstallStage;
+  /**
+   * The running version and when it first launched on this profile, recorded
+   * at boot on every install path. `firstRunAtMs` is null for a baseline taken
+   * without an observed version change. Absent means "nothing recorded yet" —
+   * no migration entry required (mirrors `dismissedUpdateVersion`).
+   */
+  versionFirstRun?: { version: string; firstRunAtMs: number | null };
   /**
    * Windows Store notifier state. All fields are optional and read with `??`
    * fallbacks at the call site so an absent value behaves like a default —
@@ -632,13 +653,26 @@ export interface StoreSchema {
   projectSurfaceChoices?: Record<string, ProjectSurfaceChoices>;
 
   /**
-   * Plugin MCP endpoints the user turned on per project, keyed
-   * `projectId → pluginInstanceId → endpointId → { decidedAt }`; presence means on.
-   * Read and written only through `services/pluginAgentMcp/projectEnablement.ts`.
-   * Out of the repository for the same reason as `projectPluginVisibility`.
-   * Same additive-key convention as `projectPluginTrust` above.
+   * Plugin agent-tool access, read and written only through
+   * `services/pluginAgentMcp/projectEnablement.ts`: the per-endpoint answers
+   * given before access levels (`projectAgentMcpEnablement`, read-only now),
+   * the per-project access level, and an installed plugin's level for every
+   * project. Out of the repository for the same reason as
+   * `projectPluginVisibility`. Same additive-key convention as
+   * `projectPluginTrust` above.
    */
-  projectAgentMcpEnablement?: Record<string, Record<string, Record<string, { decidedAt: number }>>>;
+  projectAgentMcpEnablement?: Record<
+    string,
+    Record<string, Record<string, { decidedAt: number; enabled?: boolean }>>
+  >;
+  projectAgentMcpAccess?: Record<
+    string,
+    Record<string, { decidedAt: number; access: "off" | "read-only" | "read-write" | null }>
+  >;
+  pluginAgentMcpAccess?: Record<
+    string,
+    { decidedAt: number; access: "off" | "read-only" | "read-write" | null }
+  >;
 
   /**
    * Workspaces the user asked to keep resident in the project-view cache
@@ -806,12 +840,12 @@ const storeOptions = {
       abusePolicyEnabled: false,
       abusePolicyMaxDenials: 5,
       abusePolicyWindowMs: 60_000,
-      paneWakeEnabled: false,
     },
     helpAssistant: {
       docSearch: true,
       daintreeControl: true,
-      tier: "action" as const,
+      runbookSearch: true,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7 as const,
     },
@@ -845,12 +879,8 @@ const storeOptions = {
           ranSecondParallelAgent: false,
         },
       },
-      tour: {
-        completed: false,
-        dismissed: false,
-        muted: false,
-        lastChapter: 0,
-      },
+      tours: {},
+      tourMuted: false,
     },
     orchestrationMilestones: {},
     shortcutHintCounts: {},
@@ -882,6 +912,8 @@ const storeOptions = {
     projectPluginTrust: {},
     projectSurfaceChoices: {},
     projectAgentMcpEnablement: {},
+    projectAgentMcpAccess: {},
+    pluginAgentMcpAccess: {},
     workspaceKeepResident: {},
   },
   cwd: process.env.DAINTREE_USER_DATA,

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { Callout } from "@/components/ui/Callout";
 import {
   AlertTriangle,
   ChevronRight,
@@ -20,6 +21,8 @@ import {
   type McpConfirmSelectableTarget,
   type PendingMcpConfirm,
 } from "@/store/mcpConfirmStore";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { Badge } from "@/components/ui/badge";
 
 /**
  * Renderer-side timer that beats main's 30s `pendingDispatches` deadline by
@@ -373,9 +376,6 @@ export function confirmTitle(current: PendingMcpConfirm): string {
     : `Run '${current.actionTitle}'?`;
 }
 
-/** Shared micro-label, matching the section-heading grammar used app-wide. */
-const MICRO_LABEL = "text-2xs font-semibold uppercase tracking-wider text-text-secondary";
-
 /**
  * Who is asking, in one line.
  *
@@ -417,7 +417,7 @@ function RequesterRow({ current }: { current: PendingMcpConfirm }) {
 
   return (
     <div className="flex items-baseline gap-2 text-xs">
-      <span className={cn(MICRO_LABEL, "shrink-0")}>Requested by</span>
+      <span className="shrink-0 text-text-secondary">Requested by</span>
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
         <Icon
           aria-hidden="true"
@@ -496,20 +496,19 @@ function ConsequenceNote({
   if (!isDestructive) {
     return (
       <div className="space-y-1">
-        <div className={MICRO_LABEL}>Why this is gated</div>
+        <div className={SECTION_LABEL_CLASS}>Why this is gated</div>
         <div className="text-xs text-text-secondary break-words">{children}</div>
       </div>
     );
   }
 
   return (
-    <div className="flex items-start gap-2 rounded-[var(--radius-md)] border border-status-danger/20 bg-status-danger/10 p-3">
-      <AlertTriangle aria-hidden="true" className="w-4 h-4 shrink-0 mt-px text-status-danger" />
-      <div className="min-w-0 space-y-1">
-        <div className={cn(MICRO_LABEL, "text-status-danger/80")}>What this does</div>
-        <div className="text-xs text-text-primary break-words">{children}</div>
+    <Callout severity="danger">
+      <div className="space-y-1">
+        <div className={cn(SECTION_LABEL_CLASS, "text-status-danger")}>What this does</div>
+        <div>{children}</div>
       </div>
-    </div>
+    </Callout>
   );
 }
 
@@ -541,7 +540,7 @@ function PreviewCard({
   return (
     <div className="rounded-[var(--radius-md)] border border-tint/[0.08] bg-tint/[0.04]">
       <div className="border-b border-tint/[0.08] px-3 py-2">
-        <span className={MICRO_LABEL}>{title}</span>
+        <span className={SECTION_LABEL_CLASS}>{title}</span>
       </div>
 
       <div
@@ -639,7 +638,7 @@ function TargetChecklist({
   return (
     <div className="rounded-[var(--radius-md)] border border-tint/[0.08] bg-tint/[0.04]">
       <div className="flex items-baseline justify-between gap-2 border-b border-tint/[0.08] px-3 py-2">
-        <span className={MICRO_LABEL}>Targets</span>
+        <span className={SECTION_LABEL_CLASS}>Targets</span>
         <span className="shrink-0 text-2xs text-text-secondary">
           {selectedIds.size} of {targets.length} selected
         </span>
@@ -664,11 +663,7 @@ function TargetChecklist({
               <span id={labelId} className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="flex items-baseline gap-1.5">
                   <span className="truncate text-xs text-text-primary">{target.name}</span>
-                  {target.agentRunning && (
-                    <span className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-3xs text-text-muted">
-                      Agent running
-                    </span>
-                  )}
+                  {target.agentRunning && <Badge size="xs">Agent running</Badge>}
                 </span>
                 <span className="truncate text-2xs text-text-secondary">
                   {target.worktree ? `${target.worktree} · ` : ""}
@@ -698,8 +693,11 @@ function TargetChecklist({
  */
 function CautionRow({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-start gap-1.5 text-xs text-status-warning">
-      <AlertTriangle aria-hidden="true" className="w-3.5 h-3.5 shrink-0 mt-px" />
+    <div className="flex items-start gap-1.5 text-xs text-text-primary">
+      <AlertTriangle
+        aria-hidden="true"
+        className="w-3.5 h-3.5 shrink-0 mt-px text-status-warning"
+      />
       <span className="min-w-0 break-words">{children}</span>
     </div>
   );
@@ -736,11 +734,11 @@ function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
           // dialogs copy, so the marker travels with the pattern.
           data-animated-chevron
           className={cn(
-            "w-3 h-3 shrink-0 text-daintree-text/40 transition-transform duration-150 ease-out",
+            "w-3 h-3 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
             expanded && "rotate-90"
           )}
         />
-        <span className={MICRO_LABEL}>Arguments</span>
+        <span className={SECTION_LABEL_CLASS}>Arguments</span>
       </button>
       {expanded && (
         <pre className="mt-1 max-h-40 overflow-y-auto rounded-[var(--radius-md)] bg-overlay-subtle px-2 py-1.5 font-mono text-xs break-words whitespace-pre-wrap text-text-primary">

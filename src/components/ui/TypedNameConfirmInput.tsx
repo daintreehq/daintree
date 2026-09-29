@@ -1,5 +1,6 @@
 import type React from "react";
 import { useId } from "react";
+import { Input } from "./input";
 
 export interface TypedNameConfirmInputProps {
   target: string;
@@ -13,6 +14,12 @@ export interface TypedNameConfirmInputProps {
    * typed value cannot change out from under an awaiting dispatch.
    */
   disabled?: boolean;
+  /**
+   * The same freeze, but the field keeps focus: for a submit that can come
+   * back and ask for the gate again, where a disabled field would have
+   * dropped the user's focus on the page.
+   */
+  readOnly?: boolean;
   "data-testid"?: string;
 }
 
@@ -24,6 +31,7 @@ export function TypedNameConfirmInput({
   preamble,
   instructions,
   disabled = false,
+  readOnly = false,
   "data-testid": testId,
 }: TypedNameConfirmInputProps) {
   const instructionsId = useId();
@@ -45,7 +53,7 @@ export function TypedNameConfirmInput({
   );
 
   return (
-    <div className="space-y-2 p-3 bg-status-error/5 border border-status-error/20 rounded-[var(--radius-md)]">
+    <div className="space-y-2 p-3 bg-status-danger/10 border border-status-danger/20 rounded-[var(--radius-md)]">
       {hasPreamble && (
         <p id={preambleId} className="text-sm text-text-primary">
           {preamble}
@@ -54,11 +62,13 @@ export function TypedNameConfirmInput({
       <p id={instructionsId} className="text-sm text-text-primary">
         {instructions ?? defaultInstructions}
       </p>
-      <input
+      <Input
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
+        readOnly={readOnly}
+        aria-readonly={readOnly || undefined}
         onKeyDown={(e) => {
           if (e.key === "Enter" && isMatched && onMatchSubmit) {
             e.preventDefault();
@@ -71,7 +81,10 @@ export function TypedNameConfirmInput({
         aria-invalid={value.length > 0 && !isMatched}
         autoComplete="off"
         spellCheck={false}
-        className="w-full px-3 py-2 text-sm font-mono bg-surface-canvas border border-border-input rounded-[var(--radius-md)] focus:outline-hidden focus:ring-2 focus:ring-status-error disabled:opacity-50"
+        // The field's own chrome, with the ring in danger ink like a
+        // destructive button's. Scroll margin so focusing the field in a
+        // scrolled dialog body brings it clear of the body's bottom fade.
+        className="font-mono focus-visible:outline-status-error read-only:opacity-50 scroll-mb-8"
         data-testid={testId}
       />
       <span className="sr-only" aria-live="polite">

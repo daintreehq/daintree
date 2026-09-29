@@ -52,27 +52,26 @@ test.describe.serial("AppDialog body spacing", () => {
     if (plainDir) rmSync(plainDir, { recursive: true, force: true });
   });
 
-  test("separates the non-git dialog's path caption from its explanation", async () => {
+  test("separates the non-git dialog's introduction from its choices", async () => {
     const { window } = ctx;
     await dismissBlockingPalette(window);
 
-    const dialog = window.getByRole("dialog", { name: /^Open ‘/ });
+    const dialog = window.getByRole("dialog", { name: /^Open '/ });
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
 
-    const caption = dialog.locator("p").first();
-    const explanation = dialog.getByText(/isn’t a git repository/);
-    await expect(explanation).toBeVisible({ timeout: T_SHORT });
+    const introduction = dialog.locator("p").first().locator("..");
+    const choices = dialog.locator("dl");
+    await expect(choices).toBeVisible({ timeout: T_SHORT });
 
-    // Asserts separation exists, not its exact token value: pinning the pixel
-    // count here would just copy `space-y-3` back out of the source. Zero is
-    // the regression — the two paragraphs rendered as one block of text.
-    expect(await verticalGap(caption, explanation)).toBeGreaterThan(4);
+    // The path and explanation form one tight group. The body's spacing belongs
+    // between that group and the choice list, its direct sibling.
+    expect(await verticalGap(introduction, choices)).toBeGreaterThan(8);
   });
 
   test("separates the setup dialog's template select from the commit checkbox", async () => {
     const { window } = ctx;
 
-    const nonGitDialog = window.getByRole("dialog", { name: /^Open ‘/ });
+    const nonGitDialog = window.getByRole("dialog", { name: /^Open '/ });
     await nonGitDialog.getByRole("button", { name: "Initialize repository" }).click();
 
     const setup = window.getByRole("dialog", { name: "Set up repository" });

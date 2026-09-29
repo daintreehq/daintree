@@ -31,6 +31,7 @@ import { AgentHelpOutput } from "./AgentHelpOutput";
 import { AgentInstallSection } from "@/components/agents/AgentCard";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AgentInventorySection } from "./AgentInventorySection";
+import { AgentQuotaSection } from "./AgentQuotaSection";
 import { isAgentLaunchable, isAgentReady } from "../../../shared/utils/agentAvailability";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
 import { KbdChord } from "@/components/ui/Kbd";
@@ -424,41 +425,41 @@ export function AgentSettings({
       <p role="status" className="sr-only">
         {recheckStatus}
       </p>
-      <div ref={pickerRowRef} className="flex items-center gap-3">
-        <div className="min-w-0 flex-1">
-          <AgentSelectorDropdown
-            agentOptions={agentOptions}
-            activeSubtab={
-              isGeneralActive ? GENERAL_SUBTAB_ID : (activeAgentId ?? GENERAL_SUBTAB_ID)
-            }
-            onSubtabChange={onSubtabChange}
-          />
-        </div>
-        {activeAgent?.usageUrl && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="shrink-0"
-            onClick={async () => {
-              const url = activeAgent.usageUrl?.trim();
-              if (!url) return;
-              try {
-                const result = await actionService.dispatch(
-                  "system.openExternal",
-                  { url },
-                  { source: "user" }
-                );
-                if (!result.ok) throw new Error(result.error.message);
-              } catch (error) {
-                logError("Failed to open usage URL", error);
-              }
-            }}
-          >
-            <ExternalLink aria-hidden="true" />
-            View usage
-          </Button>
-        )}
+      <div ref={pickerRowRef}>
+        <AgentSelectorDropdown
+          agentOptions={agentOptions}
+          activeSubtab={isGeneralActive ? GENERAL_SUBTAB_ID : (activeAgentId ?? GENERAL_SUBTAB_ID)}
+          onSubtabChange={onSubtabChange}
+          actions={
+            activeAgent?.usageUrl && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="shrink-0"
+                onClick={async () => {
+                  const url = activeAgent.usageUrl?.trim();
+                  if (!url) return;
+                  try {
+                    const result = await actionService.dispatch(
+                      "system.openExternal",
+                      { url },
+                      { source: "user" }
+                    );
+                    if (!result.ok) throw new Error(result.error.message);
+                  } catch (error) {
+                    logError("Failed to open usage URL", error);
+                  }
+                }}
+              >
+                <ExternalLink aria-hidden="true" />
+                View usage
+              </Button>
+            )
+          }
+        />
       </div>
+
+      {activeAgentId && <AgentQuotaSection agentId={activeAgentId} />}
 
       {isGeneralActive && (
         <AgentInventorySection
@@ -503,7 +504,7 @@ export function AgentSettings({
             <SettingsSwitchCard
               id="agents-skip-permissions"
               title="Skip permission prompts"
-              subtitle="Agents run commands and edit files without asking — faster, but you won't get a chance to review first. Applies to every agent that supports it; Assistant sessions aren't affected."
+              subtitle="Agents run commands and edit files without asking — faster, but you won't get a chance to review first. Applies to every agent that supports it. The assistant follows it for Daintree's own confirmations unless it's set to always ask."
               isEnabled={settings?.globalSkipPermissions ?? false}
               onChange={() => {
                 void (async () => {

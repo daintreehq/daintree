@@ -1,5 +1,6 @@
 import type { PrerequisiteSpec } from "../types/ipc/system.js";
 import type { CompletionSourceConfig } from "../types/completionSources.js";
+import type { LaunchMcpInjection } from "./launchMcp.js";
 
 export interface AgentHelpConfig {
   args: string[];
@@ -598,6 +599,12 @@ export interface AgentConfig {
    * `debug models --bundled`) still outranks a curated list.
    */
   curatedModels?: boolean;
+  /**
+   * Model the Daintree assistant launches this agent with until the user picks
+   * one (no entry in `HelpAssistantSettings.modelIds`). Unset means the CLI's own
+   * default.
+   */
+  assistantDefaultModel?: string;
   supportsContextInjection: boolean;
   /**
    * Per-concern wiring shape for the Daintree assistant overlay. Replaces the
@@ -673,6 +680,14 @@ export interface AgentConfig {
      */
     decorations?: { offArgs: string[]; label: string; description: string };
     /**
+     * How a launch hands this agent Daintree's MCP servers: the orchestration
+     * server when the project's tier is not `off`, and the plugin endpoints the
+     * project turned on. Every format adds beside the user's own servers and
+     * writes nothing into the agent's config or the repository (see
+     * `launchMcp.ts`). Absent means the agent launches without them.
+     */
+    launchMcp?: LaunchMcpInjection;
+    /**
      * How the CLI takes a standing instruction appended to its own system
      * prompt — the agent-neutral `systemPrompt` argument of `agent.launch`
      * (#12431). `flag` is followed by the text itself or, when `configKey` is
@@ -684,6 +699,14 @@ export interface AgentConfig {
     appendSystemPrompt?: { flag: string; configKey?: string };
     /** Whether the agent CLI supports bracketed paste input (default: true) */
     supportsBracketedPaste?: boolean;
+    /**
+     * How the CLI turns an image file into an attachment, as verified against
+     * the CLI itself. `bracketed-path`: one bracketed paste whose whole payload
+     * is the image's raw absolute path — a path inside prose, or behind `@`,
+     * stays literal text. Omitted means unverified: images are sent as the
+     * text reference every other file gets (#12792).
+     */
+    imageInput?: "bracketed-path";
     /** Escape sequence sent for Shift+Enter / soft newline (default: "\x1b\r") */
     softNewlineSequence?: string;
     /** Input sequences the activity monitor should ignore (default: ["\x1b\r"]) */
@@ -694,6 +717,13 @@ export interface AgentConfig {
      * unverified, not unsupported.
      */
     interrupt?: AgentInterruptStrategy;
+    /**
+     * The CLI queues a message submitted while it is mid-turn and reads it once
+     * the turn allows, rather than dropping or garbling it. Daintree then types
+     * a terminal notice into a working pane at once instead of holding it for
+     * the pane's next settle. Omitted means unverified: the notice waits.
+     */
+    queuesInputWhileWorking?: boolean;
     /** Delay in ms before sending Enter key after body write (default: 200) */
     submitEnterDelayMs?: number;
     /**
@@ -1154,6 +1184,40 @@ export function getAssistantWiredAgentIds(): string[] {
     }
   }
   return [...wired];
+}
+
+/**
+ * `agentId`'s own saved assistant model from a per-agent map, or `null` when
+ * it has none (its recommended model). Never falls back to another agent's
+ * entry — model IDs are agent-specific.
+ */
+export function getSavedAssistantModelId(
+  modelIds: Readonly<Record<string, string | null>> | undefined,
+  agentId: string
+): string | null {
+  if (!modelIds || !Object.prototype.hasOwnProperty.call(modelIds, agentId)) return null;
+  return modelIds[agentId] ?? null;
+}
+
+/**
+ * The model the assistant launches `agentId` with: the saved choice, or — when
+ * nothing is saved (`null`) — the agent's recommended assistant model. An
+ * empty string means the CLI's own default (no `--model` flag). Pass the
+ * resolved catalog's IDs when known: a recommendation the installed CLI
+ * doesn't offer (an older Codex without GPT-6) falls back to the CLI default
+ * rather than launching with a model it can't serve.
+ */
+export function resolveAssistantModelId(
+  agentId: string,
+  modelId: string | null,
+  availableIds?: readonly string[]
+): string {
+  if (modelId !== null) return modelId;
+  const recommended = getEffectiveAgentConfig(agentId)?.assistantDefaultModel ?? "";
+  if (recommended && availableIds && availableIds.length > 0) {
+    return availableIds.includes(recommended) ? recommended : "";
+  }
+  return recommended;
 }
 
 export function getAgentDisplayTitle(agentId: string, modelId?: string): string {

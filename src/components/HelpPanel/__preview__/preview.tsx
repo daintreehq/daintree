@@ -4,6 +4,7 @@ import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { resolveAppTheme } from "@shared/theme/themes";
 import { WorktreeStoreProvider } from "@/contexts/WorktreeStoreContext";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { installPreviewShims } from "./previewShims";
 import { HelpPanelHeader } from "../HelpPanelHeader";
 import { HelpSessionTabs, type HelpSessionTab } from "../HelpSessionTabs";
@@ -25,7 +26,7 @@ installPreviewShims();
  * panel's real widths, from fixtures that name each state.
  *
  * What is real here: both components, `applyAppThemeToRoot`, `index.css` (so the
- * `.session-tab` rail and its forced-colors and reduced-motion fallbacks are the
+ * document-tab forced-colors and reduced-motion fallbacks are the
  * product's, not a copy), and the panel's own width constants.
  *
  * What is a stand-in, and why it does not matter for this surface:
@@ -250,7 +251,9 @@ createRoot(document.getElementById("root")!).render(
         above them — without one the harness renders blank, which is the worst way for
         a visual-review tool to fail. */}
     <WorktreeStoreProvider>
-      <App />
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>
     </WorktreeStoreProvider>
   </StrictMode>
 );

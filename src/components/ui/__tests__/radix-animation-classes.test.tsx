@@ -5,11 +5,18 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { PopoverContent } from "../popover";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "../select";
 import { primeRadix } from "../radix-loader";
-import { OVERLAY_MOTION_CLASS, TOOLTIP_MOTION_CLASS } from "../overlayMotion";
+import {
+  OVERLAY_DROP_MOTION_CLASS,
+  OVERLAY_MOTION_CLASS,
+  TOOLTIP_MOTION_CLASS,
+} from "../overlayMotion";
 import {
   UI_ENTER_DURATION,
+  UI_ENTER_EASING,
   UI_EXIT_DURATION,
+  UI_EXIT_EASING,
   UI_PALETTE_ENTER_DURATION,
   UI_PALETTE_EXIT_DURATION,
 } from "@/lib/animationUtils";
@@ -151,19 +158,38 @@ describe("Radix overlay animation classes — wrapper source", () => {
  */
 describe("overlay motion is defined once and stays on its tiers", () => {
   it.each([
-    ["open", UI_ENTER_DURATION],
-    ["closed", UI_EXIT_DURATION],
-  ])("times its %s state on the shared entry/exit tier", (state, duration) => {
+    ["open", "enter", UI_ENTER_DURATION],
+    ["closed", "exit", UI_EXIT_DURATION],
+  ])("times its %s state on the shared entry/exit tier", (state, phase, duration) => {
     // Not a tautology: these are two independent spellings of one value — a JS
     // constant the dialogs animate on, and a Tailwind class a utility cannot
     // read it from. Deriving the class here is what makes retiming
     // `animationUtils.ts` fail loudly instead of desyncing the overlays.
-    expect(OVERLAY_MOTION_CLASS).toContain(`data-[state=${state}]:duration-${duration}`);
+    expect(OVERLAY_MOTION_CLASS).toContain(
+      `data-[state=${state}]:animation-duration-[var(--overlay-${phase}-duration,${duration}ms)]`
+    );
   });
 
   it.each([
-    ["enter", UI_PALETTE_ENTER_DURATION, "duration-"],
-    ["exit", UI_PALETTE_EXIT_DURATION, "data-[state=closed]:duration-"],
+    ["open", UI_ENTER_EASING],
+    ["closed", UI_EXIT_EASING],
+  ])("eases its %s state on the same curve the dialogs use", (state, easing) => {
+    // The class names a CSS token; the dialogs read the JS constant. Resolve
+    // the token from the design contract and compare curves, so the overlays
+    // and the dialogs cannot drift onto different easings.
+    const token = new RegExp(`data-\\[state=${state}\\]:ease-\\[var\\((--[\\w-]+)\\)\\]`).exec(
+      OVERLAY_MOTION_CLASS
+    )?.[1];
+    expect(token).toBeTruthy();
+    const contract = readFileSync(path.join(SRC_ROOT, "styles", "design-contract.css"), "utf8");
+    const value = new RegExp(`${token}:\\s*([^;]+);`).exec(contract)?.[1];
+    const normalize = (curve: string) => curve.replace(/\s+/g, "");
+    expect(normalize(value ?? "")).toBe(normalize(easing));
+  });
+
+  it.each([
+    ["enter", UI_PALETTE_ENTER_DURATION, "animation-duration-"],
+    ["exit", UI_PALETTE_EXIT_DURATION, "data-[state=closed]:animation-duration-"],
   ])("times its tooltip %s on the palette/tooltip tier", (_phase, duration, prefix) => {
     expect(TOOLTIP_MOTION_CLASS).toContain(`${prefix}${duration}`);
   });
@@ -216,5 +242,80 @@ describe("overlay motion is defined once and stays on its tiers", () => {
     walk(SRC_ROOT);
 
     expect(offenders, "import OVERLAY_MOTION_CLASS instead of inlining the class list").toEqual([]);
+  });
+});
+
+describe("lists that drop from a trigger their own width", () => {
+  it("swap the corner zoom for the drop motion rather than layering both", () => {
+    render(
+      <PopoverPrimitive.Root open>
+        <PopoverPrimitive.Trigger>trigger</PopoverPrimitive.Trigger>
+        <PopoverContent forceMount motion="drop">
+          content
+        </PopoverContent>
+      </PopoverPrimitive.Root>
+    );
+    const el = assertHTMLElement(
+      document.querySelector("[data-radix-popper-content-wrapper] > *"),
+      "PopoverContent"
+    );
+    const rendered = new Set(el.className.split(/\s+/));
+    expect(rendered.has(OVERLAY_DROP_MOTION_CLASS)).toBe(true);
+    // Any surviving zoom token would scale the panel from its corner again.
+    expect([...rendered].filter((token) => /zoom-(?:in|out)/.test(token))).toEqual([]);
+  });
+
+  it("time the drop on the shared entry/exit tier", () => {
+    const css = readFileSync(path.join(SRC_ROOT, "index.css"), "utf8");
+    const rule = (state: string) =>
+      new RegExp(
+        `\\.${OVERLAY_DROP_MOTION_CLASS}\\[data-state="${state}"\\]\\s*\\{[^}]*var\\(--duration-(\\d+)\\)`
+      ).exec(css)?.[1];
+    expect(Number(rule("open"))).toBe(UI_ENTER_DURATION);
+    expect(Number(rule("closed"))).toBe(UI_EXIT_DURATION);
+  });
+
+  it("is what every popover sized to its trigger uses", () => {
+    // A panel as wide as its trigger is several hundred pixels across, and the
+    // shared 3% zoom from its corner reads as the panel widening sideways. The
+    // rule is the width, not a list of files, so the next picker sized off its
+    // trigger is held to it too.
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const full = path.join(dir, entry);
+        if (statSync(full).isDirectory()) {
+          if (entry !== "__tests__") walk(full);
+        } else if (/\.tsx$/.test(entry)) {
+          const src = readFileSync(full, "utf8");
+          if (src.includes("--radix-popover-trigger-width") && !src.includes('motion="drop"')) {
+            offenders.push(path.relative(SRC_ROOT, full));
+          }
+        }
+      }
+    };
+    walk(SRC_ROOT);
+    expect(offenders, 'pass motion="drop" to a PopoverContent sized to its trigger').toEqual([]);
+  });
+
+  it.each([
+    ["popper", true],
+    ["item-aligned", false],
+  ] as const)("is what a %s select uses: %s", (position, drops) => {
+    // A popper list hangs below its trigger at least as wide as it — the same
+    // geometry as a trigger-width popover. Item-aligned sits over the trigger.
+    render(
+      <Select open value="a">
+        <SelectTrigger>trigger</SelectTrigger>
+        <SelectContent position={position}>
+          <SelectItem value="a">A</SelectItem>
+        </SelectContent>
+      </Select>
+    );
+    const el = assertHTMLElement(document.querySelector('[role="listbox"]'), "SelectContent");
+    const content = assertHTMLElement(el.closest("[data-state]"), "SelectContent root");
+    const tokens = content.className.split(/\s+/);
+    expect(tokens.includes(OVERLAY_DROP_MOTION_CLASS)).toBe(drops);
+    expect(tokens.some((token) => /zoom-in/.test(token))).toBe(!drops);
   });
 });

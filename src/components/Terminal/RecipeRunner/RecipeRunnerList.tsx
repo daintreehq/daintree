@@ -5,6 +5,8 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { SearchField } from "@/components/ui/SearchField";
 import type { RecipeSections, RankedRecipe } from "./recipeRunnerUtils";
 import type { TerminalRecipe } from "@/types";
+import { cn } from "@/lib/utils";
+import { LIST_LABEL_CLASS, SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 interface RecipeRunnerListProps {
   sections: RecipeSections;
@@ -120,10 +122,7 @@ export function RecipeRunnerList({
         // another way to launch anything. Naming the band and shrinking the
         // input to a filter says what its scope actually is.
         <div className="mb-2 flex items-center gap-3 px-1">
-          <span
-            id="recipe-band-label"
-            className="shrink-0 text-2xs font-medium uppercase tracking-wide text-text-secondary"
-          >
+          <span id="recipe-band-label" className={cn(SECTION_LABEL_CLASS, "shrink-0")}>
             Recipes
           </span>
           <SearchField
@@ -150,7 +149,7 @@ export function RecipeRunnerList({
             <button
               type="button"
               onClick={onManage}
-              className="shrink-0 rounded-[var(--radius-sm)] px-1 text-xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+              className="shrink-0 rounded-[var(--radius-sm)] px-1 text-xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               Manage
             </button>
@@ -186,7 +185,7 @@ export function RecipeRunnerList({
               <>
                 <div
                   id="section-pinned"
-                  className="px-3 pt-1 pb-0.5 text-xs font-medium text-text-secondary uppercase tracking-wide"
+                  className={cn(LIST_LABEL_CLASS, "px-3 pt-1 pb-0.5")}
                   role="presentation"
                 >
                   Pinned
@@ -200,7 +199,7 @@ export function RecipeRunnerList({
               <>
                 <div
                   id="section-recent"
-                  className="px-3 pt-2 pb-0.5 text-xs font-medium text-text-secondary uppercase tracking-wide"
+                  className={cn(LIST_LABEL_CLASS, "px-3 pt-2 pb-0.5")}
                   role="presentation"
                 >
                   Recent
@@ -214,7 +213,7 @@ export function RecipeRunnerList({
               <>
                 <div
                   id="section-all"
-                  className="px-3 pt-2 pb-0.5 text-xs font-medium text-text-secondary uppercase tracking-wide"
+                  className={cn(LIST_LABEL_CLASS, "px-3 pt-2 pb-0.5")}
                   role="presentation"
                 >
                   All
@@ -235,12 +234,12 @@ export function RecipeRunnerList({
           tabIndex={-1}
           onClick={onCreate}
           // `border-transparent` at rest reserves the box so the active boundary
-          // below never shifts the row. Same `overlay-raised` + `selection-outline`
-          // pair the recipe rows and the palettes use: with focus parked in the
+          // below never shifts the row. Same highlight fill + `selection-outline`
+          // boundary the recipe cards use: with focus parked in the
           // filter input, this button's own focus ring can never paint, so the
           // fill alone (~1.1:1) would be the only cue that Enter creates rather
           // than runs.
-          className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] border border-transparent hover:bg-overlay-medium transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary group-focus-within/recipes:aria-selected:bg-overlay-raised group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
+          className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] border border-transparent hover:bg-overlay-medium transition-colors text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
         >
           <Plus
             className="h-3.5 w-3.5 text-text-secondary group-hover:text-text-primary transition-colors shrink-0"

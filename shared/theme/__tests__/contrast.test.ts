@@ -385,7 +385,7 @@ describe("getThemeContrastWarnings", () => {
       const selectionFailures = warnings.filter((w) => w.message.includes("selection-outline"));
       expect(
         selectionFailures,
-        `${scheme.id}: selection-outline is the palette row's only non-text indicator (a leading rail) and must hit 3:1`
+        `${scheme.id}: selection-outline is drawn on the highlight fill (focus ring, increased-contrast outline) and must hit 3:1`
       ).toHaveLength(0);
     }
   });
@@ -404,30 +404,30 @@ describe("getThemeContrastWarnings", () => {
     });
   }
 
-  it("fails a rail that clears the surrounding surface but not the row fill it touches", () => {
-    // The row lifts towards the rail on dark, so the surface pair is the
-    // permissive one — a rail can pass it while vanishing into the fill it
+  it("fails an outline that clears the surrounding surface but not the row fill it touches", () => {
+    // The row lifts towards the outline on dark, so the surface pair is the
+    // permissive one — an outline can pass it while vanishing into the fill it
     // touches. #5A5A5A is 3.04:1 on black and 1.52:1 on #767676.
     const scheme = makeFlatDarkScheme({
-      "overlay-raised": "#767676" as AppColorSchemeTokens["overlay-raised"],
+      "overlay-highlight": "#767676" as AppColorSchemeTokens["overlay-highlight"],
       "selection-outline": "#5A5A5A" as AppColorSchemeTokens["selection-outline"],
     });
     const messages = getThemeContrastWarnings(scheme)
       .filter((w) => w.message.includes("selection-outline against"))
       .map((w) => w.message);
-    expect(messages.some((m) => m.includes("the selected row fill"))).toBe(true);
+    expect(messages.some((m) => m.includes("the highlighted row fill"))).toBe(true);
     expect(messages.some((m) => m.includes("the surrounding palette surface"))).toBe(false);
   });
 
-  it("fails a rail that clears both ordinary backdrops but not a destructive row's fill", () => {
-    // The item primitives draw this rail as an inset focus ring, and a
-    // destructive row swaps `overlay-raised` out for `status-danger/10`. A pale
-    // danger token lifts that fill towards the rail: #5A5A5A is 3.04:1 on the
-    // black surface and on a black raised fill, but only 2.68:1 on the 10%
+  it("fails an outline that clears both ordinary backdrops but not a destructive row's fill", () => {
+    // The item primitives draw this outline as an inset focus ring, and a
+    // destructive row swaps `overlay-highlight` out for `status-danger/10`. A pale
+    // danger token lifts that fill towards the outline: #5A5A5A is 3.04:1 on the
+    // black surface and on a black highlight fill, but only 2.68:1 on the 10%
     // wash #F5B5B5 leaves behind. Scoring the first two pairs alone calls this
     // compliant and loses the ring on exactly the row that most needs it.
     const scheme = makeFlatDarkScheme({
-      "overlay-raised": "#000000" as AppColorSchemeTokens["overlay-raised"],
+      "overlay-highlight": "#000000" as AppColorSchemeTokens["overlay-highlight"],
       "selection-outline": "#5A5A5A" as AppColorSchemeTokens["selection-outline"],
       "status-danger": "#F5B5B5" as AppColorSchemeTokens["status-danger"],
     });
@@ -435,17 +435,17 @@ describe("getThemeContrastWarnings", () => {
       .filter((w) => w.message.includes("selection-outline against"))
       .map((w) => w.message);
     expect(messages.some((m) => m.includes("a destructive menu row's fill"))).toBe(true);
-    expect(messages.some((m) => m.includes("the selected row fill"))).toBe(false);
+    expect(messages.some((m) => m.includes("the highlighted row fill"))).toBe(false);
     expect(messages.some((m) => m.includes("the surrounding palette surface"))).toBe(false);
   });
 
-  it("still reports the ordinary rail pairs when the destructive fill is unevaluable", () => {
+  it("still reports the ordinary outline pairs when the destructive fill is unevaluable", () => {
     // An imported theme may spell `status-danger` in a syntax this math cannot read.
     // The destructive pair is the newest and least important of the three: losing it
     // is acceptable, but taking the two older ones down with it would send an author
-    // who fixes the unreadable token away believing the rail was fine.
+    // who fixes the unreadable token away believing the outline was fine.
     const scheme = makeFlatDarkScheme({
-      "overlay-raised": "#767676" as AppColorSchemeTokens["overlay-raised"],
+      "overlay-highlight": "#767676" as AppColorSchemeTokens["overlay-highlight"],
       "selection-outline": "#5A5A5A" as AppColorSchemeTokens["selection-outline"],
       "status-danger": "oklch(0.5 0.1 200)" as AppColorSchemeTokens["status-danger"],
     });
@@ -460,9 +460,9 @@ describe("getThemeContrastWarnings", () => {
     ).toBe(true);
   });
 
-  it("holds the rail to the surrounding surface on a destructive row too", () => {
-    // A translucent rail is not the same pixel over the danger wash as it is over the
-    // raised fill, and the ring's outer edge sits on the row's boundary — so the
+  it("holds the outline to the surrounding surface on a destructive row too", () => {
+    // A translucent outline is not the same pixel over the danger wash as it is over the
+    // highlight fill, and the ring's outer edge sits on the row's boundary — so the
     // surface pair has to be scored from the composited destructive ink as well.
     const scheme = makeFlatDarkScheme({
       "surface-sidebar": "#5A5A5A" as AppColorSchemeTokens["surface-sidebar"],
@@ -470,7 +470,7 @@ describe("getThemeContrastWarnings", () => {
       "surface-canvas": "#5A5A5A" as AppColorSchemeTokens["surface-canvas"],
       "surface-panel": "#5A5A5A" as AppColorSchemeTokens["surface-panel"],
       "surface-panel-elevated": "#5A5A5A" as AppColorSchemeTokens["surface-panel-elevated"],
-      "overlay-raised": "#5A5A5A" as AppColorSchemeTokens["overlay-raised"],
+      "overlay-highlight": "#5A5A5A" as AppColorSchemeTokens["overlay-highlight"],
       "selection-outline": "rgba(252, 252, 252, 0.5)" as AppColorSchemeTokens["selection-outline"],
       "status-danger": "#000000" as AppColorSchemeTokens["status-danger"],
     });
@@ -489,7 +489,7 @@ describe("getThemeContrastWarnings", () => {
     // below the floor. Scoring only the solid token would call this compliant.
     const scheme = makeFlatDarkScheme({
       "surface-panel-elevated": "#FFFFFF" as AppColorSchemeTokens["surface-panel-elevated"],
-      "overlay-raised": "#000000" as AppColorSchemeTokens["overlay-raised"],
+      "overlay-highlight": "#000000" as AppColorSchemeTokens["overlay-highlight"],
       "selection-outline": "#5A5A5A" as AppColorSchemeTokens["selection-outline"],
     });
     const messages = getThemeContrastWarnings(scheme)
@@ -498,33 +498,33 @@ describe("getThemeContrastWarnings", () => {
     expect(messages.some((m) => m.includes("the surrounding palette surface"))).toBe(true);
   });
 
-  it("composites an rgba rail token over the row fill rather than reading its raw alpha", () => {
+  it("composites an rgba outline token over the row fill rather than reading its raw alpha", () => {
     // Opaque white would score 16.67:1 on this fill and sail through; at 10%
     // alpha the pixel that actually renders is #353535, which is 1.36:1.
     const scheme = makeFlatDarkScheme({
-      "overlay-raised": "#1E1E1E" as AppColorSchemeTokens["overlay-raised"],
+      "overlay-highlight": "#1E1E1E" as AppColorSchemeTokens["overlay-highlight"],
       "selection-outline": "rgba(255, 255, 255, 0.1)" as AppColorSchemeTokens["selection-outline"],
     });
     const failures = getThemeContrastWarnings(scheme).filter((w) =>
-      w.message.includes("selection-outline against the selected row fill")
+      w.message.includes("selection-outline against the highlighted row fill")
     );
     expect(failures).toHaveLength(1);
   });
 
-  it("composites an alpha-hex rail token instead of reading it as opaque", () => {
+  it("composites an alpha-hex outline token instead of reading it as opaque", () => {
     // `#FFFFFF10` is 6% white. Read as opaque it would score 19.30:1 and pass;
     // the pixel that renders is #1D1D1D on this fill.
     const scheme = makeFlatDarkScheme({
-      "overlay-raised": "#0E0E0E" as AppColorSchemeTokens["overlay-raised"],
+      "overlay-highlight": "#0E0E0E" as AppColorSchemeTokens["overlay-highlight"],
       "selection-outline": "#FFFFFF10" as AppColorSchemeTokens["selection-outline"],
     });
     const failures = getThemeContrastWarnings(scheme).filter((w) =>
-      w.message.includes("selection-outline against the selected row fill")
+      w.message.includes("selection-outline against the highlighted row fill")
     );
     expect(failures).toHaveLength(1);
   });
 
-  it("reports the palette selection check as unevaluable when the rail token is not hex or rgba", () => {
+  it("reports the palette selection check as unevaluable when the outline token is not hex or rgba", () => {
     const scheme = makeScheme({
       "selection-outline":
         "color-mix(in oklab, #ffffff 42%, transparent)" as AppColorSchemeTokens["selection-outline"],

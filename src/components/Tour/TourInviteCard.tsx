@@ -1,22 +1,20 @@
 import { useEffect, useState } from "react";
-import { CirclePlay, X } from "lucide-react";
+import { CirclePlay } from "lucide-react";
 import type { TourOnboardingState } from "@shared/types";
+import { DAINTREE_TOUR_ID, tourProgressFor } from "@shared/utils/tourIds";
 import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { getOnboardingState } from "@/clients/onboardingClient";
 import { cn } from "@/lib/utils";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { TOUR_CHAPTERS } from "./tourChapters";
-import { resolveTourTimings } from "./tourTiming";
-import { DAINTREE_TOUR_COMPLETED_EVENT, openDaintreeTour } from "./tourEvents";
+import type { TourSummary } from "./tourDefinition";
+import { openDaintreeTour, TOUR_COMPLETED_EVENT, tourIdOf } from "./tourEvents";
+// The registry hands out summaries only: this card renders at startup, and the
+// full definition pulls the narration, cue manifest and parser in with it.
+import { getTour } from "./tourRegistry";
 
 /** How long the "find it in Help" note stays after the invitation is turned down. */
 const DISMISSED_NOTE_MS = 4000;
-
-/** The tour's length in whole minutes, from the same timings the player uses. */
-export function tourMinutes(): number {
-  const seconds = resolveTourTimings().reduce((sum, timing) => sum + timing.duration, 0);
-  return Math.max(1, Math.round(seconds / 60));
-}
 
 type InviteState =
   | { kind: "hidden" }
@@ -24,9 +22,14 @@ type InviteState =
   | { kind: "resume"; chapter: number }
   | { kind: "dismissed-note" };
 
+/** The Daintree tour is built in, so its registration is always there. */
+function daintreeSummary(): TourSummary {
+  return getTour(DAINTREE_TOUR_ID)!.summary;
+}
+
 export function inviteStateFor(tour: TourOnboardingState): InviteState {
   if (tour.completed || tour.dismissed) return { kind: "hidden" };
-  if (tour.lastChapter > 0 && tour.lastChapter < TOUR_CHAPTERS.length) {
+  if (tour.lastChapter > 0 && tour.lastChapter < daintreeSummary().chapterTitles.length) {
     return { kind: "resume", chapter: tour.lastChapter };
   }
   return { kind: "invite" };
@@ -51,22 +54,27 @@ function useTourOffer() {
           .then((onboarding) => {
             if (!active) return;
             setState((current) =>
-              current.kind === "dismissed-note" ? current : inviteStateFor(onboarding.tour)
+              current.kind === "dismissed-note"
+                ? current
+                : inviteStateFor(tourProgressFor(onboarding.tours, DAINTREE_TOUR_ID))
             );
           }),
         { context: "Reading tour invitation state" }
       );
-    const onCompleted = () => setState({ kind: "hidden" });
+    // Another tour finishing leaves this one's offer where it was.
+    const onCompleted = (event: Event) => {
+      if (tourIdOf(event) === DAINTREE_TOUR_ID) setState({ kind: "hidden" });
+    };
     const onVisible = () => {
       if (document.visibilityState === "visible") refresh();
     };
     refresh();
-    window.addEventListener(DAINTREE_TOUR_COMPLETED_EVENT, onCompleted);
+    window.addEventListener(TOUR_COMPLETED_EVENT, onCompleted);
     window.addEventListener("focus", onVisible);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       active = false;
-      window.removeEventListener(DAINTREE_TOUR_COMPLETED_EVENT, onCompleted);
+      window.removeEventListener(TOUR_COMPLETED_EVENT, onCompleted);
       window.removeEventListener("focus", onVisible);
       document.removeEventListener("visibilitychange", onVisible);
     };
@@ -104,33 +112,31 @@ export function TourInviteCard({ className }: { className?: string }) {
 
   const dismiss = () => {
     setState({ kind: "dismissed-note" });
-    safeFireAndForget(window.electron.onboarding.dismissTourInvite(), {
+    safeFireAndForget(window.electron.onboarding.dismissTourInvite(DAINTREE_TOUR_ID), {
       context: "Dismissing the tour invitation",
     });
   };
   const resuming = state.kind === "resume";
+  const summary = daintreeSummary();
 
   return (
     <div className={cn("w-full", className)} data-testid="tour-invite-card">
       <div className="relative w-full rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-4 py-3.5">
-        <button
-          type="button"
+        <DismissButton
           onClick={dismiss}
           aria-label="Dismiss tour invitation"
-          className="absolute top-2 right-2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-text-secondary transition-colors hover:bg-overlay-emphasis hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+          className="absolute top-2 right-2"
+        />
         <div className="flex items-start gap-3 pr-6">
           <CirclePlay className="mt-0.5 h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
           <div className="min-w-0 flex-1 text-left">
             <h3 className="text-sm font-semibold text-text-primary">
-              {resuming ? "Pick up the Daintree Tour" : "Take the Daintree Tour"}
+              {resuming ? `Pick up the ${summary.title}` : `Take the ${summary.title}`}
             </h3>
             <p className="mt-1 text-xs leading-relaxed text-text-secondary">
               {resuming
-                ? `You stopped at chapter ${state.chapter + 1} of ${TOUR_CHAPTERS.length}: ${TOUR_CHAPTERS[state.chapter]!.title}.`
-                : `A narrated walkthrough of worktrees, agents, the Assistant and more, about ${tourMinutes()} minutes. Skip any chapter.`}
+                ? `You stopped at chapter ${state.chapter + 1} of ${summary.chapterTitles.length}: ${summary.chapterTitles[state.chapter]!}.`
+                : `A narrated walkthrough of worktrees, agents, the Assistant and more, about ${summary.minutes} minutes. Skip any chapter.`}
             </p>
             <div className="mt-4 flex items-center gap-2">
               {/* Outline, not a fill: the launcher above is this surface's lead action. */}
@@ -138,13 +144,9 @@ export function TourInviteCard({ className }: { className?: string }) {
                 <CirclePlay className="h-3.5 w-3.5" />
                 {resuming ? "Resume tour" : "Start tour"}
               </Button>
-              <button
-                type="button"
-                onClick={dismiss}
-                className="text-xs text-text-secondary transition-colors hover:text-text-primary"
-              >
+              <Button size="sm" variant="ghost" onClick={dismiss}>
                 Not now
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -163,14 +165,10 @@ export function TourWelcomeLink({ enabled }: { enabled: boolean }) {
   const [state] = useTourOffer();
   if (!enabled || state.kind === "hidden" || state.kind === "dismissed-note") return null;
   return (
-    <button
-      type="button"
-      onClick={openDaintreeTour}
-      className="text-xs text-text-secondary underline-offset-4 transition-colors hover:text-text-primary hover:underline"
-    >
+    <Button variant="link" onClick={openDaintreeTour} className="text-xs">
       {state.kind === "resume"
         ? "Pick up where you left off in the Daintree Tour"
-        : `New here? Take the ${tourMinutes()}-minute tour`}
-    </button>
+        : `New here? Take the ${daintreeSummary().minutes}-minute tour`}
+    </Button>
   );
 }

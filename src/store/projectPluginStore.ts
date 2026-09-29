@@ -70,6 +70,40 @@ export interface ProjectPluginStoreState {
   reloading: boolean;
   /** Last mutation failure, surfaced inline by the manager. */
   error: string | null;
+  /**
+   * Which action produced `error`, and what it tried to write, so a page can
+   * state the failure on the control that caused it and offer that same write
+   * again. Set and cleared together with `error`.
+   */
+  errorSource: ProjectPluginErrorSource | null;
+}
+
+/** An action that can fail, with the value it attempted. */
+export type ProjectPluginFailedAction =
+  | { action: "decide"; decision: ProjectPluginTrustDecision }
+  | { action: "activate"; pluginId: string }
+  | { action: "mute"; pluginId: string; muted: boolean }
+  | { action: "visibility"; pluginId: string; visible: boolean | null }
+  | { action: "visibilityDefault"; pluginId: string; hidden: boolean }
+  | { action: "reload" }
+  | { action: "loadVisibility" };
+
+/**
+ * The action behind a {@link ProjectPluginStoreState.error}, the value it
+ * attempted, and main's own reason when it gave one — kept apart from the
+ * store's fallback sentence so a page can say what failed in its own words
+ * and add only what main knew.
+ */
+export type ProjectPluginErrorSource = ProjectPluginFailedAction & { reason: string | null };
+
+/** The state a failed action leaves: the legacy message plus its source. */
+function failure(
+  err: unknown,
+  fallback: string,
+  attempted: ProjectPluginFailedAction
+): Pick<ProjectPluginStoreState, "error" | "errorSource"> {
+  const reason = formatErrorMessage(err, "") || null;
+  return { error: reason ?? fallback, errorSource: { ...attempted, reason } };
 }
 
 export interface ProjectPluginActions {
@@ -114,6 +148,7 @@ const INITIAL: ProjectPluginStoreState = {
   visibility: EMPTY_VISIBILITY,
   reloading: false,
   error: null,
+  errorSource: null,
 };
 
 /**
@@ -200,7 +235,12 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       // The user is answering the gate, so a "decide later" from earlier in the
       // session stops applying: if this call fails, the next re-emit should be
       // allowed to put the banner back.
-      set({ deciding: decision, error: null, dismissedPromptProjectId: null });
+      set({
+        deciding: decision,
+        error: null,
+        errorSource: null,
+        dismissedPromptProjectId: null,
+      });
       try {
         await window.electron.plugin.setProjectPluginTrust(decision);
         // Clear the prompt only after main has the decision. Clearing first
@@ -208,9 +248,9 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
         // would believe they had answered.
         set({ prompt: null });
       } catch (err) {
-        set({
-          error: formatErrorMessage(err, "Couldn't save the plugin trust decision"),
-        });
+        set(
+          failure(err, "Couldn't save the plugin trust decision", { action: "decide", decision })
+        );
       } finally {
         set({ deciding: null });
       }
@@ -220,11 +260,15 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       const state = get();
       if (state.projectId !== null && !belongsToView(state, state.projectId)) return;
       if (state.activating.has(pluginId)) return;
-      set({ activating: new Set([...state.activating, pluginId]), error: null });
+      set({
+        activating: new Set([...state.activating, pluginId]),
+        error: null,
+        errorSource: null,
+      });
       try {
         await window.electron.plugin.activateStagedProjectPlugin(pluginId);
       } catch (err) {
-        set({ error: formatErrorMessage(err, `Couldn't activate '${pluginId}'`) });
+        set(failure(err, `Couldn't activate '${pluginId}'`, { action: "activate", pluginId }));
       } finally {
         const next = new Set(get().activating);
         next.delete(pluginId);
@@ -236,16 +280,17 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       const state = get();
       if (state.projectId !== null && !belongsToView(state, state.projectId)) return;
       if (state.muting.has(pluginId)) return;
-      set({ muting: new Set([...state.muting, pluginId]), error: null });
+      set({ muting: new Set([...state.muting, pluginId]), error: null, errorSource: null });
       try {
         await window.electron.plugin.setProjectPluginMuted(pluginId, muted);
       } catch (err) {
-        set({
-          error: formatErrorMessage(
+        set(
+          failure(
             err,
-            muted ? `Couldn't turn off '${pluginId}'` : `Couldn't turn on '${pluginId}'`
-          ),
-        });
+            muted ? `Couldn't turn off '${pluginId}'` : `Couldn't turn on '${pluginId}'`,
+            { action: "mute", pluginId, muted }
+          )
+        );
       } finally {
         const next = new Set(get().muting);
         next.delete(pluginId);
@@ -261,9 +306,19 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
     loadVisibility: async () => {
       try {
         const visibility = await window.electron.plugin.getProjectPluginVisibility();
-        set({ visibility });
+        // A read that now succeeds answers an earlier failed one; any other
+        // failure is about something else and stays.
+        set(
+          get().errorSource?.action === "loadVisibility"
+            ? { visibility, error: null, errorSource: null }
+            : { visibility }
+        );
       } catch (err) {
-        set({ error: formatErrorMessage(err, "Couldn't read this project's plugin visibility") });
+        set(
+          failure(err, "Couldn't read this project's plugin visibility", {
+            action: "loadVisibility",
+          })
+        );
       }
     },
 
@@ -277,13 +332,17 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       const overrides = { ...previous.overrides };
       if (visible === null) delete overrides[pluginId];
       else overrides[pluginId] = visible;
-      set({ visibility: { ...previous, overrides }, error: null });
+      set({ visibility: { ...previous, overrides }, error: null, errorSource: null });
       try {
         await window.electron.plugin.setProjectPluginVisibility(pluginId, visible);
       } catch (err) {
         set({
           visibility: previous,
-          error: formatErrorMessage(err, `Couldn't change visibility for '${pluginId}'`),
+          ...failure(err, `Couldn't change visibility for '${pluginId}'`, {
+            action: "visibility",
+            pluginId,
+            visible,
+          }),
         });
       }
     },
@@ -298,13 +357,18 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       set({
         visibility: { ...previous, defaultHiddenPluginIds: [...defaults] },
         error: null,
+        errorSource: null,
       });
       try {
         await window.electron.plugin.setPluginVisibilityDefault(pluginId, hidden);
       } catch (err) {
         set({
           visibility: previous,
-          error: formatErrorMessage(err, `Couldn't change the default for '${pluginId}'`),
+          ...failure(err, `Couldn't change the default for '${pluginId}'`, {
+            action: "visibilityDefault",
+            pluginId,
+            hidden,
+          }),
         });
       }
     },
@@ -313,17 +377,17 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       const state = get();
       if (state.projectId !== null && !belongsToView(state, state.projectId)) return;
       if (state.reloading) return;
-      set({ reloading: true, error: null });
+      set({ reloading: true, error: null, errorSource: null });
       try {
         await window.electron.plugin.reloadProjectPlugins();
       } catch (err) {
-        set({ error: formatErrorMessage(err, "Couldn't reload this project's plugins") });
+        set(failure(err, "Couldn't reload this project's plugins", { action: "reload" }));
       } finally {
         set({ reloading: false });
       }
     },
 
-    clearError: () => set({ error: null }),
+    clearError: () => set({ error: null, errorSource: null }),
 
     reset: () => set({ ...INITIAL }),
   })

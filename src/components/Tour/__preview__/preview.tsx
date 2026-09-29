@@ -6,8 +6,10 @@ import { resolveAppTheme } from "@shared/theme/themes";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TOUR_CHAPTERS } from "../tourChapters";
+import { DAINTREE_TOUR } from "../daintreeTour";
 import { TourDialog } from "../TourDialog";
-import type { TourPlayer } from "../TourPlayer";
+import type { TourPlayer } from "@daintreehq/tour";
+import { TOUR_KEYBOARDS, type TourKeyboard } from "../tourKeys";
 import "@/index.css";
 
 /**
@@ -17,6 +19,7 @@ import "@/index.css";
  *   ?chapter=<id>             open on a chapter (default: the first)
  *   ?t=<seconds>              freeze the scene at a moment (no playback)
  *   ?muted=1                  start muted (captions show)
+ *   ?keyboard=mac|pc          narrate and draw that keyboard's shortcuts
  *
  * `window.__tour` is the live player, for specs that step through cues.
  */
@@ -28,12 +31,17 @@ const chapterIndex = Math.max(
   TOUR_CHAPTERS.findIndex((c) => c.id === params.get("chapter"))
 );
 const freezeAt = params.get("t");
+const keyboardParam = params.get("keyboard");
+const keyboard = TOUR_KEYBOARDS.find((k): k is TourKeyboard => k === keyboardParam);
 
 applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
 document.body.style.background = "var(--color-surface-canvas)";
 document.body.style.margin = "0";
 
-/** Canvas-space centres of every `data-tour-anchor`, for refreshing `ANCHOR` in MockApp.tsx. */
+/**
+ * Canvas-space centres of every `data-tour-anchor`, for refreshing `ANCHOR` in
+ * MockApp.tsx and for working out a cursor step's `dx`/`dy` from its anchor.
+ */
 Reflect.set(window, "__tourAnchors", () => {
   const canvas = document.querySelector<HTMLElement>("[data-tour-canvas]");
   if (!canvas) return {};
@@ -63,6 +71,7 @@ createRoot(document.getElementById("root")!).render(
     <TooltipProvider>
       <TourDialog
         isOpen
+        tour={DAINTREE_TOUR}
         onClose={() => {}}
         initialChapter={chapterIndex}
         initialMuted={params.get("muted") === "1"}
@@ -70,6 +79,7 @@ createRoot(document.getElementById("root")!).render(
         onCompleted={() => {}}
         onMutedChange={() => {}}
         onPlayer={onPlayer}
+        keyboard={keyboard}
       />
     </TooltipProvider>
   </StrictMode>

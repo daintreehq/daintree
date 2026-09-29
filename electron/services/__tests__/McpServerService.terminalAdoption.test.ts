@@ -47,7 +47,7 @@ import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 
 const ORCHESTRATOR: OrchestratorPaneIdentity = {
   principalId: "principal-orch",
-  tier: "action",
+  tier: "core",
   workspaceId: "project-a",
 };
 
@@ -111,7 +111,9 @@ describe("McpServerService terminal hand-over (#12490)", () => {
       status: "refused",
       reason: "not-orchestrator",
     });
-    expect(adopt({ orchestrator: { ...ORCHESTRATOR, tier: "workbench" } })).toEqual({
+    // Both tool sets carry `terminal.sendCommandOwned` for a pane bearer, so
+    // `off` is the one tier left that could only read a handed-over terminal.
+    expect(adopt({ orchestrator: { ...ORCHESTRATOR, tier: "off" } })).toEqual({
       status: "refused",
       reason: "not-orchestrator",
     });
@@ -329,13 +331,15 @@ describe("McpServerService terminal hand-over (#12490)", () => {
 
   it("offers only panes that can submit input and are still tracked by the host", () => {
     terminals.set("pane-reader", "project-a");
+    terminals.set("pane-full", "project-a");
 
     expect(
       service.filterOrchestratorPanes([
         { paneId: "pane-orch", ...ORCHESTRATOR },
-        { paneId: "pane-reader", ...ORCHESTRATOR, tier: "workbench" },
+        { paneId: "pane-full", ...ORCHESTRATOR, tier: "full" },
+        { paneId: "pane-reader", ...ORCHESTRATOR, tier: "off" },
         { paneId: "pane-exited", ...ORCHESTRATOR },
       ])
-    ).toEqual(["pane-orch"]);
+    ).toEqual(["pane-orch", "pane-full"]);
   });
 });

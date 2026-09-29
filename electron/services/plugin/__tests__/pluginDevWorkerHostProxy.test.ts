@@ -193,6 +193,40 @@ describe("PluginDevWorkerHostProxy getWorktreesResult (#12174)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy agent handoff", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("relays agents.list and resolves with the panes", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.agents.list();
+    expect(sent.find((m) => m.type === "host-call" && m.method === "agents.list")).toBeDefined();
+    const panes = [{ terminalId: "t-1", canDraft: true }];
+    resolveCall(proxy, sent, "agents.list", panes);
+    await expect(promise).resolves.toEqual(panes);
+  });
+
+  it("relays sendToAgent with its text and options, and resolves with the result", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.sendToAgent("Card body", { title: "Fix login", worktreeId: "wt-1" });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "sendToAgent");
+    expect(call).toMatchObject({
+      params: { text: "Card body", options: { title: "Fix login", worktreeId: "wt-1" } },
+    });
+    resolveCall(proxy, sent, "sendToAgent", { status: "drafted", terminalId: "t-1" });
+    await expect(promise).resolves.toEqual({ status: "drafted", terminalId: "t-1" });
+  });
+
+  it("answers the host's own unload values when the proxy is disposed mid-call", async () => {
+    const { proxy } = makeProxy();
+    const list = proxy.host.agents.list();
+    const send = proxy.host.sendToAgent("x");
+    proxy.dispose();
+    await expect(list).resolves.toEqual([]);
+    await expect(send).resolves.toEqual({ status: "cancelled" });
+  });
+});
+
 describe("PluginDevWorkerHostProxy host.actions (#10561)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());
@@ -260,6 +294,73 @@ describe("PluginDevWorkerHostProxy host.actions (#10561)", () => {
       error: "boom",
     });
     await expect(promise).resolves.toBe("restricted");
+  });
+});
+
+describe("PluginDevWorkerHostProxy host.db", () => {
+  it("resolves the location in main and opens the file in the worker", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "proxy-db-"));
+    try {
+      const { proxy, sent } = makeProxy();
+      const opening = proxy.host.db.open("ledger", { migrations: ["CREATE TABLE t (x)"] });
+      const call = sent.find((m) => m.type === "host-call" && m.method === "db.resolve");
+      expect(call.params).toEqual({ id: "ledger" });
+      resolveCall(proxy, sent, "db.resolve", {
+        id: "ledger",
+        location: "local",
+        path: join(dir, "ledger.db"),
+        projectRelativePath: null,
+        journalMode: "delete",
+      });
+      const db = await opening;
+      await db.run("INSERT INTO t VALUES (1)");
+      expect(await db.query("SELECT x FROM t")).toEqual([{ x: 1 }]);
+      // A reload disposes the proxy; the connection must not outlive it.
+      proxy.dispose();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await expect(db.query("SELECT 1")).rejects.toMatchObject({ code: "DB_CLOSED" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("PluginDevWorkerHostProxy host error fields", () => {
+  it("rebuilds a rejected host call with the fields the host attached", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.fs.writeFile("/p/a.json", "{}", { expectedRevision: "old" });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "fs.writeFile");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: "REVISION_MISMATCH: the file changed",
+      errorFields: { code: "REVISION_MISMATCH", currentRevision: "abc123" },
+    });
+    const error = await promise.catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      message: "REVISION_MISMATCH: the file changed",
+      code: "REVISION_MISMATCH",
+      currentRevision: "abc123",
+    });
+  });
+
+  it("never lets a field overwrite the message", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.fs.stat("/p/a.json");
+    const call = sent.find((m) => m.type === "host-call" && m.method === "fs.stat");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: "real message",
+      errorFields: { message: "spoofed", code: "ENOENT" },
+    });
+    await expect(promise).rejects.toMatchObject({ message: "real message", code: "ENOENT" });
   });
 });
 
@@ -604,6 +705,74 @@ describe("PluginDevWorkerHostProxy host.fs.watch (#10526)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy host.fs revision, mkdir, append and watch options", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function reply(proxy: any, requestId: string, result: unknown): void {
+    proxy.handleMessage({ type: "host-result", requestId, ok: true, result });
+  }
+
+  it("relays readFileWithRevision and resolves the host's result", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.fs.readFileWithRevision("/repo/ledger.json");
+    const call = sent.find((m) => m.type === "host-call" && m.method === "fs.readFileWithRevision");
+    expect(call.params).toEqual({ path: "/repo/ledger.json" });
+    const result = { contents: "rows", revision: "b".repeat(64) };
+    reply(proxy, call.requestId, result);
+    await expect(promise).resolves.toEqual(result);
+  });
+
+  it("relays mkdir and appendFile with exactly the plugin's arguments", async () => {
+    const { proxy, sent } = makeProxy();
+    const made = proxy.host.fs.mkdir("/repo/data");
+    const appended = proxy.host.fs.appendFile("/repo/data/log.jsonl", "{}\n");
+    const mkdirCall = sent.find((m) => m.type === "host-call" && m.method === "fs.mkdir");
+    const appendCall = sent.find((m) => m.type === "host-call" && m.method === "fs.appendFile");
+    expect(mkdirCall.params).toEqual({ path: "/repo/data" });
+    expect(appendCall.params).toEqual({ path: "/repo/data/log.jsonl", contents: "{}\n" });
+    reply(proxy, mkdirCall.requestId, undefined);
+    reply(proxy, appendCall.requestId, undefined);
+    await expect(made).resolves.toBeUndefined();
+    await expect(appended).resolves.toBeUndefined();
+  });
+
+  it("carries recursive and debounceMs on the watch call only when set", async () => {
+    const { proxy, sent } = makeProxy();
+    void proxy.host.fs.watch(["/repo"], vi.fn(), { recursive: true, debounceMs: 150 });
+    void proxy.host.fs.watch(["/repo"], vi.fn());
+    const calls = sent.filter((m) => m.type === "host-call" && m.method === "fs.watch");
+    expect(calls[0].params).toMatchObject({ paths: ["/repo"], recursive: true, debounceMs: 150 });
+    expect(calls[1].params).not.toHaveProperty("recursive");
+    expect(calls[1].params).not.toHaveProperty("debounceMs");
+  });
+
+  it("forwards a supplied recursive unchanged so the host can reject a malformed one", () => {
+    const { proxy, sent } = makeProxy();
+    void proxy.host.fs.watch(["/repo"], vi.fn(), { recursive: "true" as unknown as boolean });
+    void proxy.host.fs.watch(["/repo"], vi.fn(), { recursive: false });
+    const calls = sent.filter((m) => m.type === "host-call" && m.method === "fs.watch");
+    expect(calls[0].params.recursive).toBe("true");
+    expect(calls[1].params.recursive).toBe(false);
+  });
+
+  it("releases main's watcher when the watch is cancelled", async () => {
+    const { proxy, sent } = makeProxy();
+    const controller = new AbortController();
+    const promise = proxy.host.fs.watch(["/repo"], vi.fn(), { signal: controller.signal });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "fs.watch");
+    controller.abort();
+    await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+    // The cancel may reach main after the watch already settled there, when it
+    // has no call left to abort; the unsubscribe covers that case.
+    const cancelAt = sent.findIndex((m) => m.type === "host-cancel");
+    const unsubscribeAt = sent.findIndex(
+      (m) => m.type === "unsubscribe" && m.subscriptionId === call.params.subscriptionId
+    );
+    expect(cancelAt).toBeGreaterThanOrEqual(0);
+    expect(unsubscribeAt).toBeGreaterThan(cancelAt);
+  });
+});
+
 describe("PluginDevWorkerHostProxy host-call post failure (#10526)", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -757,6 +926,23 @@ describe("PluginDevWorkerHostProxy host.system / clipboard.writeImage (#11299)",
     expect(call.params).toEqual({ targetPath: "/tmp/data/shot.png" });
     resolveCall(proxy, sent, wireMethod, undefined);
     await expect(promise).resolves.toBeUndefined();
+  });
+
+  it("relays host.documents.renderPdf with the options intact and resolves the host's result", async () => {
+    const { proxy, sent } = makeProxy();
+    const options = {
+      htmlPath: "/tmp/data/invoice.html",
+      outputPath: "/tmp/data/invoice.pdf",
+      pageSize: "Letter" as const,
+      margins: { top: 0.5 },
+    };
+    const promise = proxy.host.documents.renderPdf(options);
+
+    const call = sent.find((m) => m.type === "host-call" && m.method === "documents.renderPdf");
+    expect(call.params).toEqual({ options });
+    const result = { path: "/tmp/data/invoice.pdf", bytes: 2048, revision: "b".repeat(64) };
+    resolveCall(proxy, sent, "documents.renderPdf", result);
+    await expect(promise).resolves.toEqual(result);
   });
 
   it("relays clipboard.writeImage with the typed array's own bytes", async () => {

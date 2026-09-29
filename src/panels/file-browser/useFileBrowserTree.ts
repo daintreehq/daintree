@@ -757,6 +757,7 @@ export function useFileBrowserTree({
           return next;
         });
         if (dirPath === rootPath) {
+          rememberSharedRootListing(activeSource, rootPath, nodes);
           resetRootRetryState(generation);
           setRootError(null);
           setHasLoadedRoot(true);
@@ -1046,9 +1047,9 @@ export function useFileBrowserTree({
     isRefreshingRef.current = false;
     setIsRefreshing(false);
     // Stale-while-revalidate (#11367): a persisted snapshot captured under
-    // this exact identity seeds the listings so the tree paints instantly;
-    // anything else — no snapshot, another worktree, another root — starts
-    // from the empty map and the skeleton, exactly as before. On mount this
+    // this exact identity — or, lacking one, the view's last live listing of
+    // the same root — seeds the listings so the tree paints instantly;
+    // anything else starts from the empty map and the skeleton. On mount this
     // re-derives what the lazy initializers already seeded (same content),
     // which keeps a single code path for mount and identity change.
     const seeded = seedListings(treeSnapshotRef.current, sourceRef.current, rootPath);
@@ -1346,16 +1347,49 @@ function directoryHasHiddenDotfiles(
  * snapshot must exist, match the identity it was captured under exactly, and
  * carry its own root listing (#11367).
  */
+// Last live root listing per source identity and root, shared by every pane
+// in this view. A new file browser has no persisted snapshot of its own, so it
+// used to sit on the skeleton for a directory read another pane had just done;
+// seeding from here paints that root at once and the identity reset
+// revalidates it exactly as it does a snapshot seed.
+const sharedRootListings = new Map<string, readonly FileTreeNode[]>();
+const SHARED_ROOT_LISTING_LIMIT = 16;
+
+function sharedRootKey(source: FileBrowserSource, rootPath: string): string {
+  return `${sourceIdentityKey(source)}\u0000${rootPath}`;
+}
+
+function rememberSharedRootListing(
+  source: FileBrowserSource,
+  rootPath: string,
+  nodes: readonly FileTreeNode[]
+): void {
+  const key = sharedRootKey(source, rootPath);
+  sharedRootListings.delete(key);
+  sharedRootListings.set(key, nodes);
+  if (sharedRootListings.size > SHARED_ROOT_LISTING_LIMIT) {
+    const oldest = sharedRootListings.keys().next().value;
+    if (oldest !== undefined) sharedRootListings.delete(oldest);
+  }
+}
+
+/** Test seam: module state would otherwise leak across cases. */
+export function resetSharedRootListingsForTests(): void {
+  sharedRootListings.clear();
+}
+
 function seedListings(
   snapshot: FileBrowserTreeSnapshot | undefined,
   source: FileBrowserSource | null,
   rootPath: string
 ): Map<string, readonly FileTreeNode[]> | null {
-  if (!source || snapshot === undefined || !snapshotMatchesSource(snapshot, source, rootPath)) {
-    return null;
+  if (!source) return null;
+  if (snapshot !== undefined && snapshotMatchesSource(snapshot, source, rootPath)) {
+    const seeded = listingsFromSnapshot(snapshot);
+    if (seeded.has(rootPath)) return seeded;
   }
-  const seeded = listingsFromSnapshot(snapshot);
-  return seeded.has(rootPath) ? seeded : null;
+  const shared = sharedRootListings.get(sharedRootKey(source, rootPath));
+  return shared ? new Map([[rootPath, shared]]) : null;
 }
 
 /**

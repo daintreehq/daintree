@@ -10,11 +10,12 @@ import {
   FileCode,
   FileDiff,
   FileText,
-  X,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
+import { SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FileStack } from "@/components/icons";
@@ -352,15 +353,7 @@ function OutcomeLine({
       />
       <div className="min-w-0 flex-1 text-text-primary">{children}</div>
       {onDismiss && (
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={onDismiss}
-          aria-label="Dismiss"
-          className="-my-1 -mr-1"
-        >
-          <X />
-        </Button>
+        <DismissButton onClick={onDismiss} aria-label="Dismiss error" className="-my-1 -mr-1" />
       )}
     </div>
   );
@@ -483,6 +476,7 @@ function ArtifactItem({
         className="w-full flex items-center gap-2 px-2.5 py-2 text-left hover:bg-overlay-soft transition-colors duration-150 ease-out"
       >
         <ChevronRight
+          data-animated-chevron
           aria-hidden="true"
           className={cn(
             "size-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
@@ -1009,14 +1003,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
               >
                 Clear
               </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={closePanel}
-                aria-label="Close artifacts"
-              >
-                <X />
-              </Button>
+              <SurfaceHeaderCloseButton onClick={closePanel} aria-label="Close artifacts" />
             </div>
 
             {showBulkBar && (
@@ -1042,11 +1029,8 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                         size="sm"
                         onClick={() => setCodeOnly((v) => !v)}
                         disabled={isBulkActionRunning || codeArtifactCount === 0}
-                        aria-pressed={codeOnly}
-                        className={cn(
-                          "rounded-l-none",
-                          codeOnly && "bg-overlay-strong text-text-primary"
-                        )}
+                        pressed={codeOnly}
+                        className="rounded-l-none"
                       >
                         Code only
                       </Button>
@@ -1124,15 +1108,11 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                       )}
                       <span className="min-w-0 flex-1 text-text-primary">{bulkStatus.text}</span>
                       {bulkStatus.persistent && (
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
+                        <DismissButton
                           onClick={() => setBulkStatus(null)}
-                          aria-label="Dismiss"
+                          aria-label="Dismiss status"
                           className="-my-1"
-                        >
-                          <X />
-                        </Button>
+                        />
                       )}
                     </>
                   ) : null}
@@ -1166,7 +1146,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
       <ConfirmDialog
         isOpen={pendingPatch !== null}
         onClose={handleCancelApplyPatch}
-        title={`Apply patch to ${pendingPatchName}?`}
+        title={`Apply patch to '${pendingPatchName}'?`}
         description={
           <span>
             Runs <span className="font-mono">git apply</span> with the diff below in{" "}

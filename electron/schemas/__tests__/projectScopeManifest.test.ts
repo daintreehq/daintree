@@ -197,6 +197,14 @@ const UNSCOPED_SAMPLES: Record<UnscopedGroup, unknown[]> = {
   fileEditors: [{ id: "md", slot: "acme.editor", extensions: ["md"] }],
   processTools: [{ command: "acmetool", iconId: "sparkles" }],
   mcpServers: [{ id: "srv", name: "Srv", command: "node" }],
+  tours: [
+    {
+      id: "welcome",
+      title: "Welcome",
+      componentPath: "tours/welcome.js",
+      chapters: [{ id: "intro", duration: 5, audioUrl: null, narrationHash: "0a1b2c3d" }],
+    },
+  ],
 };
 
 type UnscopedGroup = (typeof PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS)[number][0];

@@ -125,6 +125,7 @@ export function RecipePickerPopover({
         // was the odd one out at a hardcoded 400px, so opening the two fields
         // in turn stepped the surface width for no reason.
         className="w-[var(--radix-popover-trigger-width)] p-0"
+        motion="drop"
         align="start"
         // Focus stays on the trigger — it is the combobox, and it is what the
         // arrow keys are bound to.
@@ -196,8 +197,7 @@ function RecipeRow({
       onClick={onSelect}
       className={cn(
         PALETTE_ROW_CLASS,
-        "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer",
-        option.kind === "recipe" && option.recipe.shadowedBy && "opacity-60"
+        "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer"
       )}
     >
       {option.kind === "clone" ? (
@@ -209,7 +209,11 @@ function RecipeRow({
         <span className="text-text-secondary">No recipe</span>
       ) : (
         <span className="flex items-center gap-2 min-w-0">
-          <span className="truncate">{option.recipe.name}</span>
+          {/* Overridden steps the name down the ramp rather than fading the
+              row, as the rest of the palette family treats a lesser row. */}
+          <span className={cn("truncate", option.recipe.shadowedBy && "text-text-secondary")}>
+            {option.recipe.name}
+          </span>
           <span className="text-xs text-text-secondary shrink-0">
             {getRecipeScope(option.recipe).label}
           </span>

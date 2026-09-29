@@ -8,6 +8,7 @@ const { Unicode11Addon } = unicode11;
 
 import { getEffectiveAgentConfig } from "../../../../shared/config/agentRegistry.js";
 import { applyXtermReflowFastpath } from "../../../../shared/utils/xtermReflowFastpath.js";
+import { PartialEscapeTracker } from "../../../../shared/utils/terminalPartialEscapeTail.js";
 import type { AgentState } from "../../../../shared/types/agent.js";
 import { ActivityMonitor, type ProcessStateValidator } from "../../ActivityMonitor.js";
 import { buildActivityMonitorOptions, buildPatternConfig } from "../terminalActivityPatterns.js";
@@ -85,6 +86,9 @@ export class AnalysisSession {
   // full-viewport extract+hash runs once per parse, not once per consumer per
   // tick (PERF-035).
   private readonly viewportSnapshotCache = new ViewportSnapshotCache();
+  // Fed from parse callbacks, so it tracks what the mirror has parsed rather
+  // than what has merely been queued to it.
+  private readonly parserTail = new PartialEscapeTracker();
 
   // Host-pushed mirrors (refreshed per data chunk + on out-of-band pushes).
   private agentLive = false;
@@ -164,6 +168,7 @@ export class AnalysisSession {
     }
 
     this.headlessTerminal.write(data, () => {
+      this.parserTail.feed(data);
       // xterm's onRender event fires before this callback and invalidates only
       // the viewport rows the parser changed, so the activity read below is
       // fresh without forcing every unchanged row through comparison again.
@@ -176,6 +181,7 @@ export class AnalysisSession {
   feedPrelude(data: string): void {
     if (this.disposed || !this.headlessTerminal) return;
     this.headlessTerminal.write(data, () => {
+      this.parserTail.feed(data);
       this.scheduleDigest();
     });
   }
@@ -349,7 +355,12 @@ export class AnalysisSession {
   }
 
   serialize(): Promise<SerializedTerminalSnapshot | null> {
-    return this.drainThen(() => this.withGeometry(this.serializeFull()));
+    return this.drainThen(() => {
+      const snapshot = this.withGeometry(this.serializeFull());
+      // Read in the same drain callback as the serialize, so the tail and the
+      // screen describe the same parsed prefix of the stream.
+      return snapshot && { ...snapshot, continuation: { pendingEscapeTail: this.parserTail.tail } };
+    });
   }
 
   serializeForPersistence(): Promise<SerializedTerminalSnapshot | null> {

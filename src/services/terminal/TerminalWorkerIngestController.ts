@@ -1,12 +1,15 @@
 import type { ManagedTerminal } from "./types";
 import { TerminalRefreshTier } from "@/types";
-import { isProjectViewCached } from "@/lib/viewCacheState";
+import { isProjectViewObservable } from "@/lib/viewCacheState";
 import { terminalClient } from "@/clients";
 import { LiveWorkerIngest } from "./workerParse/LiveWorkerIngest";
 import { createParseWorkerTransport } from "./workerParse/createParseWorkerTransport";
+import { buildMirrorApplyPayload } from "./workerParse/mirrorApply";
 import { isPaintFabricWorkerIngestEnabled } from "./paintFabric/paintFabricConfig";
 import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+
+const EMPTY_SNAPSHOT_PAYLOAD = buildMirrorApplyPayload("");
 
 // Poll interval while the worker-ingest engage barrier waits for the normal
 // pipeline (ingest queue + pending xterm writes) to quiesce (#10960).
@@ -51,8 +54,11 @@ export class TerminalWorkerIngestController {
     if (tier === TerminalRefreshTier.BACKGROUND) {
       // The cached demotion (#12514) is not a request for off-thread parse:
       // main released this view's worker ports along with its PTY connection,
-      // so a port request from here has nothing to broker it.
-      if (isProjectViewCached()) return;
+      // so a port request from here has nothing to broker it. Nor is a
+      // hidden-window demotion (#12798): worker snapshots replace the
+      // renderer buffer with a truncated mirror, and a hidden window's
+      // terminals must keep full buffers for agents and MCP.
+      if (!isProjectViewObservable()) return;
       let ingest = this.workerIngest.get(id);
       if (!ingest) {
         ingest = this.createWorkerIngest(id, managed);
@@ -87,6 +93,12 @@ export class TerminalWorkerIngestController {
             callback?.();
             return;
           }
+          // The dedicated worker port bypasses the service's onData ingress, so
+          // receipt (#12754) is stamped here. A snapshot always arrives wrapped
+          // in reset/clear sequences; only content beyond the wrapper counts.
+          if (source === "snapshot" ? data !== EMPTY_SNAPSHOT_PAYLOAD : data.length > 0) {
+            current.hasReceivedOutput = true;
+          }
           // Direct write — snapshot applies and replays are pre-acked, so the
           // write controller's ack bookkeeping must never see them. Unseen
           // tracking still counts each repaint as output activity, once it has
@@ -96,6 +108,7 @@ export class TerminalWorkerIngestController {
             if (parsed) this.deps.incrementUnseen(id, parsed.isUserScrolledBack);
             callback?.();
           };
+          current.parserTail?.feedAny(data);
           if (source !== "snapshot") {
             current.terminal.write(data, onParsed);
             return;
@@ -127,6 +140,8 @@ export class TerminalWorkerIngestController {
         const current = this.deps.getInstance(id);
         return current?.serializeAddon.serialize() ?? "";
       },
+      mirrorEscapeTail: () => this.deps.getInstance(id)?.parserTail?.tail ?? "",
+      getStreamFence: () => this.deps.getInstance(id)?.streamFence,
       getGeometry: () => {
         const current = this.deps.getInstance(id);
         return {

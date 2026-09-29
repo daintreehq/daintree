@@ -69,7 +69,7 @@ The filesystem-convention handler is a default export that receives the action a
 import type { PluginHostApi } from "@daintreehq/plugin-sdk";
 
 export async function activate(host: PluginHostApi): Promise<() => void> {
-  host.registerAction(
+  await host.registerAction(
     {
       id: "say-hello",
       title: "Say Hello",
@@ -87,7 +87,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
 }
 ```
 
-`activate` runs once when the plugin loads; the returned disposer cleans up on unload. Actions registered through `host.registerAction` are unregistered automatically, so this disposer is a no-op. Keep the `contributes.commands` entry in `plugin.json` alongside the imperative registration: the manifest entry is what puts the command in the palette before your code has run, and dispatching it is what triggers activation. An imperative `registerAction` for the same id supersedes any `src/{id}.js` file, so the two paths don't fight — what you should not do is ship both a compiled `src/say-hello.js` handler and an imperative registration and expect the file to win.
+`activate` runs the first time something needs the plugin — here, the first run of the command — and the returned disposer cleans up on unload. Await `registerAction`: it returns a promise, and an unawaited one can let activation finish before the registration lands. Actions registered through `host.registerAction` are unregistered automatically, so this disposer is a no-op. Keep the `contributes.commands` entry in `plugin.json` alongside the imperative registration: the manifest entry is what puts the command in the palette before your code has run, and dispatching it is what triggers activation. An imperative `registerAction` for the same id supersedes any `src/{id}.js` file, so the two paths don't fight — what you should not do is ship both a compiled `src/say-hello.js` handler and an imperative registration and expect the file to win.
 
 ## Run it
 
@@ -120,4 +120,5 @@ See [Distribution](./distribution.md) for how users install it.
 - Add more contribution points — see [Contribution points](./contribution-points.md)
 - Serve tools to the agents in Daintree's terminals with an agent MCP endpoint, or ship a skill — see [Agent extensions](./agent-extensions.md)
 - Explore the host API — see [Host API](./host-api.md)
+- Compose it into something real — pull-then-push views, live refresh, file and SQLite data, handing work to an agent — see [Patterns](./patterns.md)
 - Understand what runs when — see [Architecture](./architecture.md)

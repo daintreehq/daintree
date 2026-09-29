@@ -5,6 +5,7 @@ import type { FileTreeNode } from "@shared/types";
 import type { FileBrowserListDirectoryPayload } from "@shared/types/ipc/fileBrowser";
 import { useFileBrowserTree } from "../useFileBrowserTree";
 import type { FileBrowserSortOrder, FileBrowserSource } from "../fileBrowserTree";
+import { resetSharedRootListingsForTests } from "../useFileBrowserTree";
 
 const listDirectory =
   vi.fn<(payload: FileBrowserListDirectoryPayload) => Promise<FileTreeNode[]>>();
@@ -2977,4 +2978,8 @@ describe("useFileBrowserTree failure recovery edge cases (#11620)", () => {
       expect(requested(next).sort()).toEqual(["", "a"]);
     });
   });
+});
+
+afterEach(() => {
+  resetSharedRootListingsForTests();
 });

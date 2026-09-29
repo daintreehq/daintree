@@ -9,6 +9,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { Columns3, LayoutGrid } from "lucide-react";
 import { useDroppable } from "@dnd-kit/core";
 import type { Transition, TransformProperties } from "framer-motion";
 import { logError } from "@/utils/logger";
@@ -54,10 +55,11 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { CliAvailability } from "@shared/types";
 import {
   ContextMenuActionItem,
-  ContextMenuContent,
   ContextMenuCheckboxItem,
+  ContextMenuContent,
   ContextMenuItem,
   ContextMenuLabel,
+  ContextMenuMeta,
   ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
@@ -98,6 +100,7 @@ const EMPTY_TAB_GROUPS: TabGroup[] = [];
 const GRID_CONTEXT_MENU_COMPONENTS: DockLaunchMenuComponents = {
   Item: ContextMenuItem,
   Label: ContextMenuLabel,
+  Meta: ContextMenuMeta,
   Separator: ContextMenuSeparator,
 };
 
@@ -1147,7 +1150,10 @@ export function useContentGridContext({
       />
       <ContextMenuSeparator />
       <ContextMenuSub>
-        <ContextMenuSubTrigger>Grid Layout</ContextMenuSubTrigger>
+        <ContextMenuSubTrigger>
+          <Columns3 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          Grid layout
+        </ContextMenuSubTrigger>
         <ContextMenuSubContent>
           <MenuActionSourceContext.Consumer>
             {(menuSource) => (
@@ -1174,7 +1180,7 @@ export function useContentGridContext({
                     )
                   }
                 >
-                  Fixed Columns
+                  Fixed columns
                 </ContextMenuCheckboxItem>
                 <ContextMenuCheckboxItem
                   checked={layoutConfig.strategy === "fixed-rows"}
@@ -1186,7 +1192,7 @@ export function useContentGridContext({
                     )
                   }
                 >
-                  Fixed Rows
+                  Fixed rows
                 </ContextMenuCheckboxItem>
               </>
             )}
@@ -1195,7 +1201,8 @@ export function useContentGridContext({
       </ContextMenuSub>
       <ContextMenuSeparator />
       <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "terminal" }}>
-        Terminal Settings...
+        <LayoutGrid data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+        Panel grid settings…
       </ContextMenuActionItem>
     </ContextMenuContent>
   );

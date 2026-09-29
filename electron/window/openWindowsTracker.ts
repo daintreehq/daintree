@@ -305,6 +305,19 @@ export function saveOpenWindowsNow(excludeWindowId?: number): void {
   persist(excludeWindowId);
 }
 
+/**
+ * Lift a recovery launch's read-only hold (#12801).
+ *
+ * Only for a single crash whose whole fleet came back cleanly: the manifest is
+ * then describing the user's real window set again, and leaving it read-only
+ * would lose every change they make for the rest of the session. Safe mode and
+ * crash loops never call this. Does not touch suppression or the shutdown
+ * freeze.
+ */
+export function enableOpenWindowsSaves(): void {
+  if (state) state.readOnly = false;
+}
+
 /** Hold saves across the startup restore fan-out. Balanced by `resume`. */
 export function suppressOpenWindowsSaves(): void {
   suppressed = true;

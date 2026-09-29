@@ -703,10 +703,33 @@ describe("registerForgeSettingsHandlers", () => {
     registerForgeSettingsHandlers();
     const getStatus = findHandler("forge:get-credential-status");
 
-    expect(getStatus(null, "acme.gitea")).toEqual({ hasCredential: true });
+    expect(getStatus(null, "acme.gitea")).toEqual({
+      hasCredential: true,
+      fingerprint: expect.stringMatching(/^[0-9a-f]{16}$/),
+    });
     expect(getStatus(null, "acme.empty")).toEqual({ hasCredential: false });
     expect(getStatus(null, "acme.absent")).toEqual({ hasCredential: false });
     expect(getStatus(null, "")).toEqual({ hasCredential: false });
+  });
+
+  it("getCredentialStatus fingerprints the stored record without exposing it", () => {
+    storeMock._data["forgeCredentials"] = {
+      "acme.gitea": JSON.stringify({ token: "first-token" }),
+    };
+    registerForgeSettingsHandlers();
+    const getStatus = findHandler("forge:get-credential-status") as (
+      event: unknown,
+      providerId: string
+    ) => { hasCredential: boolean; fingerprint?: string };
+
+    const first = getStatus(null, "acme.gitea");
+    expect(getStatus(null, "acme.gitea").fingerprint).toBe(first.fingerprint);
+    expect(JSON.stringify(first)).not.toContain("first-token");
+
+    storeMock._data["forgeCredentials"] = {
+      "acme.gitea": JSON.stringify({ token: "second-token" }),
+    };
+    expect(getStatus(null, "acme.gitea").fingerprint).not.toBe(first.fingerprint);
   });
 
   it("setCredential audits the validateToken call with an empty args summary on success", async () => {

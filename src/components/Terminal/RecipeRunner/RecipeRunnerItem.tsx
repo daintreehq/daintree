@@ -1,4 +1,4 @@
-import { Play, Pin, Copy, Pencil, Trash2 } from "lucide-react";
+import { Play, Pin, PinOff, CopyPlus, Pencil, Trash2 } from "lucide-react";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -98,7 +98,7 @@ export function RecipeRunnerItem({
                   // over 150ms. A disabled card never enters :active, so the scale
                   // needs no disabled: reset. `launcher-press` is what lets reduced
                   // motion suppress the scale — see the rule in `index.css`.
-                  "launcher-press group flex flex-col items-start gap-1.5 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:bg-overlay-raised group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
+                  "launcher-press group flex flex-col items-start gap-1.5 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
                 )}
               >
                 <div className="flex items-center gap-2 w-full">
@@ -184,23 +184,20 @@ export function RecipeRunnerItem({
               : recipe.name
           }
           className={cn(
-            // The active option is marked the way the palettes mark theirs —
-            // `overlay-raised` plus `selection-outline` — not with a second
-            // accent ring. In list mode DOM focus stays in the filter input,
+            // The active option takes the palettes' highlight fill, and — because
+            // these are bordered cards rather than flat rows — steps its card
+            // border to `selection-outline`; not a second accent ring. In list mode DOM focus stays in the filter input,
             // which paints its own accent ring, so an accent ring here put two
             // accent anchors in one arrow-key domain and the surface claimed
             // the keyboard was in two places. The house rule allows exactly one
             // load-bearing accent per focus region, and in a combobox that one
             // belongs to the control the user is typing into.
             //
-            // Tokens lifted from `paletteRowStyles.ts`, which is the repo's one
-            // definition of "the row Enter will act on" across ten-odd call
-            // sites: `overlay-raised` clears only ~1.1:1 on its own, so the fill
-            // cannot be the WCAG 1.4.11 indicator and `selection-outline` — the
-            // same token the palette rail spends — has to carry the 3:1.
+            // The fill is `paletteRowStyles.ts`'s `overlay-highlight`, the repo's
+            // one definition of "the row Enter will act on".
             //
-            // What is NOT lifted is `PALETTE_ROW_CLASS` itself. Its rail paints
-            // on `aria-selected` unconditionally, which is right for a palette
+            // What is NOT lifted is `PALETTE_ROW_CLASS` itself. It paints on
+            // `aria-selected` unconditionally, which is right for a palette
             // that only exists while focused and wrong for a band that sits on
             // the canvas all day: it would light the default-focused first row
             // at rest, the exact thing the grid comment above forbids. Hence the
@@ -210,7 +207,7 @@ export function RecipeRunnerItem({
             // name instead of squeezing it: the name is what a user chooses by,
             // and "Migrate remaining Je…" beside an intact "Project-wide" gave
             // the classification priority over the thing being classified.
-            "launcher-press group w-full flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:bg-overlay-raised group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
+            "launcher-press group w-full flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
           )}
         >
           <Play
@@ -318,29 +315,33 @@ function RecipeContextMenu({
   return (
     <ContextMenuContent>
       <ContextMenuItem onSelect={() => onRun(recipe.id)}>
-        <Play className="h-3.5 w-3.5 mr-2" />
+        <Play data-menu-icon className="h-3.5 w-3.5 mr-2" aria-hidden="true" />
         Run
       </ContextMenuItem>
       {!fromPlugin && (
         <ContextMenuItem onSelect={() => onEdit(recipe.id)}>
-          <Pencil className="h-3.5 w-3.5 mr-2" />
+          <Pencil data-menu-icon className="h-3.5 w-3.5 mr-2" aria-hidden="true" />
           Edit
         </ContextMenuItem>
       )}
       <ContextMenuItem onSelect={() => onDuplicate(recipe.id)}>
-        <Copy className="h-3.5 w-3.5 mr-2" />
+        <CopyPlus data-menu-icon className="h-3.5 w-3.5 mr-2" aria-hidden="true" />
         Duplicate
       </ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem onSelect={() => (isPinned ? onUnpin : onPin)(recipe.id)}>
-        <Pin className="h-3.5 w-3.5 mr-2" />
+        {isPinned ? (
+          <PinOff data-menu-icon className="h-3.5 w-3.5 mr-2" aria-hidden="true" />
+        ) : (
+          <Pin data-menu-icon className="h-3.5 w-3.5 mr-2" aria-hidden="true" />
+        )}
         {isPinned ? "Unpin from canvas" : "Pin to canvas"}
       </ContextMenuItem>
       {!fromPlugin && (
         <>
           <ContextMenuSeparator />
           <ContextMenuItem destructive onSelect={() => onDelete(recipe.id)}>
-            <Trash2 className="h-3.5 w-3.5 mr-2" />
+            <Trash2 data-menu-icon className="h-3.5 w-3.5 mr-2" aria-hidden="true" />
             Delete recipe…
           </ContextMenuItem>
         </>

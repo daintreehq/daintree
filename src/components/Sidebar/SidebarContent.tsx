@@ -1,3 +1,4 @@
+import { lazyWithPreload } from "@/lib/lazyWithPreload";
 import {
   Suspense,
   lazy,
@@ -30,12 +31,10 @@ import {
   useProjectSettings,
   useWorktreeActions,
   useAriaKeyshortcuts,
-  useKeybindingDisplay,
   useEffectiveCombo,
   useDohertyGate,
   useKeepMounted,
 } from "@/hooks";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import {
   WorktreeSidebarSearchBar,
   QuickStateFilterBar,
@@ -46,7 +45,11 @@ import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps"
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
+import { WorktreesReconnectingBadge } from "./WorktreesReconnectingBadge";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { Button } from "@/components/ui/button";
+import { SIDEBAR_HEADER_ACTION, SIDEBAR_HEADER_ROW } from "./sidebarHeader";
+import { useDispatchedSidebarRefresh } from "./useDispatchedSidebarRefresh";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { useDndMonitor } from "@dnd-kit/core";
@@ -112,13 +115,14 @@ import { logError } from "@/utils/logger";
 import { useWorktreeSidebarKeyboard, type SidebarKeyboardItem } from "./useWorktreeSidebarKeyboard";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import type { WorktreeActions } from "@/hooks/useWorktreeActions";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { CountBadge } from "@/components/ui/badge";
 
-export function preloadNewWorktreeDialog() {
-  return import("@/components/Worktree/NewWorktreeDialog");
-}
-const LazyNewWorktreeDialog = lazy(() =>
-  preloadNewWorktreeDialog().then((m) => ({ default: m.NewWorktreeDialog }))
+const LazyNewWorktreeDialog = lazyWithPreload(
+  () => import("@/components/Worktree/NewWorktreeDialog"),
+  (m) => m.NewWorktreeDialog
 );
+export const preloadNewWorktreeDialog = LazyNewWorktreeDialog.preload;
 const LazyFleetPickerPalette = lazy(() =>
   import("@/components/Fleet/FleetPickerPalette").then((m) => ({
     default: m.FleetPickerPalette,
@@ -131,9 +135,7 @@ const LazyRecipeManager = lazy(() =>
   import("@/components/TerminalRecipe/RecipeManager").then((m) => ({ default: m.RecipeManager }))
 );
 
-function formatButtonTitle(label: string, shortcut?: string | null): string {
-  return shortcut ? `${label} (${shortcut})` : label;
-}
+const SIDEBAR_DEFER_FILTER_MIN_WORKTREES = 60;
 
 const NO_MATCH_QUERY_MAX = 40;
 
@@ -238,6 +240,7 @@ interface SidebarVirtuosoContext {
   homeDir: string | undefined;
   dragStartOrder: string[];
   isSortDisabled: boolean;
+  dragDisabledReason: string | null;
 }
 
 const SidebarVirtuosoScroller = forwardRef<
@@ -325,9 +328,12 @@ function renderSidebarFlatItem(
         <div
           role="rowheader"
           aria-colspan={1}
-          className="px-4 py-2 text-3xs font-medium text-text-secondary uppercase tracking-wide"
+          className={cn(LIST_LABEL_CLASS, "flex items-center gap-1.5 px-4 py-2")}
         >
-          {item.displayName} ({item.count})
+          {item.displayName}
+          {/* The pill is for the eye; the name keeps its "(n)" for a screen reader. */}
+          <CountBadge aria-hidden="true">{item.count}</CountBadge>
+          <span className="sr-only"> ({item.count})</span>
         </div>
       </div>
     );
@@ -363,6 +369,7 @@ function renderSidebarFlatItem(
       homeDir={context.homeDir}
       dragStartOrder={context.dragStartOrder}
       isSortDisabled={context.isSortDisabled}
+      dragDisabledReason={context.dragDisabledReason}
       isPinned={item.isPinned}
       rowIndex={item.rowIndex}
       ariaRowIndex={item.ariaRowIndex}
@@ -375,9 +382,9 @@ interface SidebarContentProps {
 }
 
 function SidebarContent({ onOpenOverview }: SidebarContentProps) {
-  const overviewShortcut = useKeybindingDisplay("worktree.overview");
+  const overviewShortcut = useEffectiveCombo("worktree.overview");
   const refreshShortcut = useEffectiveCombo("worktree.refresh");
-  const createWorktreeShortcut = useKeybindingDisplay("worktree.createDialog.open");
+  const createWorktreeShortcut = useEffectiveCombo("worktree.createDialog.open");
   const overviewAriaShortcut = useAriaKeyshortcuts("worktree.overview");
   const refreshAriaShortcut = useAriaKeyshortcuts("worktree.refresh");
   const createWorktreeAriaShortcut = useAriaKeyshortcuts("worktree.createDialog.open");
@@ -531,7 +538,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     reconnectingAt !== null &&
     Date.now() - reconnectingAt >= RECONNECT_ESCALATE_MS;
   const deferredWorktrees = useDeferredValue(worktrees);
-  const [isRefreshing, startRefreshTransition] = useTransition();
+  const [isRefreshPending, startRefreshTransition] = useTransition();
+  // A refresh dispatched from anywhere but the button (palette, shortcut, the
+  // sidebar's context menu) never enters the transition above.
+  const isRefreshDispatched = useDispatchedSidebarRefresh();
+  const isRefreshing = isRefreshPending || isRefreshDispatched;
   // Gate the "Reconnecting…" indicator behind the Doherty threshold so routine
   // sub-400ms port replacements don't flash the spinner. A real host crash
   // takes 2–4s to recover, well past the threshold.
@@ -613,7 +624,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const handleRetryPendingCreation = useCallback(
     (pendingCreation: PendingCreation) => {
       dismissPendingCreation(pendingCreation.path);
-      openCreateDialog(null, { initialBranchInput: pendingCreation.branch });
+      openCreateDialog(null, {
+        initialBranchInput: pendingCreation.branch,
+        initialRecipeId: pendingCreation.recipeId,
+        initialAgentId: pendingCreation.agentId,
+        initialPrompt: pendingCreation.prompt,
+      });
     },
     [dismissPendingCreation, openCreateDialog]
   );
@@ -687,7 +703,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // Lag the expensive filtering work behind the input so keystrokes stay
   // responsive. `liveQuery` updates instantly (input + urgent UI state); the
   // filtering memos consume `deferredQuery`, which yields to input events.
-  const deferredQuery = useDeferredValue(liveQuery);
+  // Only for a large sidebar: with a few dozen worktrees the filter costs a
+  // millisecond and deferring it just paints the keystroke a frame before the
+  // list answers it.
+  const laggedQuery = useDeferredValue(liveQuery);
+  const deferredQuery =
+    deferredWorktrees.length > SIDEBAR_DEFER_FILTER_MIN_WORKTREES ? laggedQuery : liveQuery;
 
   const isSortDisabledPrevRef = useRef(isGroupedByType || liveQuery.trim().length > 0);
   useEffect(() => {
@@ -1543,6 +1564,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       homeDir,
       dragStartOrder,
       isSortDisabled,
+      dragDisabledReason,
     }),
     [
       activeWorktreeId,
@@ -1556,6 +1578,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       homeDir,
       dragStartOrder,
       isSortDisabled,
+      dragDisabledReason,
     ]
   );
 
@@ -1583,6 +1606,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             initialPR={createDialog.initialPR}
             initialRecipeId={createDialog.initialRecipeId}
             initialBranchInput={createDialog.initialBranchInput}
+            initialAgentId={createDialog.initialAgentId}
+            initialPrompt={createDialog.initialPrompt}
           />
         </Suspense>
       </ErrorBoundary>
@@ -1680,7 +1705,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   if (isLoading && worktrees.length === 0) {
     return (
       <div className="flex flex-col h-full">
-        <div className="flex items-center px-3 py-3 border-b border-divider shrink-0">
+        <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
           <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
             Worktrees
           </h2>
@@ -1715,7 +1740,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return (
       <>
         <div className="flex flex-col h-full">
-          <div className="flex items-center px-3 py-3 border-b border-divider shrink-0">
+          <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
             <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
               Worktrees
             </h2>
@@ -1734,10 +1759,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               title="Open a Git repository"
               action={
                 <span className="text-xs text-text-secondary">
-                  Use{" "}
-                  <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-xs">
-                    File → Open Project
-                  </kbd>
+                  {/* A menu path, not a key — set as words, never as a key chip. */}
+                  Use <span className="text-text-primary">File → Open Project</span>
                 </span>
               }
               className="flex-1"
@@ -1806,15 +1829,17 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           with no rail the header IS the bottom of the zone and keeps it.
           Stacking a header rule on a rail rule put two hairlines in the first
           90px of the sidebar and neither was carrying hierarchy (#11991). */}
-      {/* py-3, not a fixed h-8. The zone read as cramped against the window
-          chrome above it, and an even 12px rhythm — above the title, title to
-          field, field to list — is what a control zone needs before the eye
-          will treat it as one band rather than two stacked strips. The loading
-          and error branches above carry the same box, or the sidebar jumps as
-          a project resolves. */}
+      {/* SIDEBAR_HEADER_ROW, not a bare h-8. The zone read as cramped against
+          the window chrome above it, and an even 12px rhythm — above the title,
+          title to field, field to list — is what a control zone needs before
+          the eye will treat it as one band rather than two stacked strips. The
+          loading and error branches above, and the non-git workspace sidebar,
+          carry the same row, or the sidebar jumps as a project resolves or the
+          workspace kind changes. */}
       <div
         className={cn(
-          "group/header @container/header flex items-center justify-between gap-1 px-3 py-3 bg-transparent shrink-0",
+          SIDEBAR_HEADER_ROW,
+          "group/header @container/header justify-between gap-1 bg-transparent",
           !hasNonMainWorktrees && "border-b border-divider"
         )}
       >
@@ -1823,93 +1848,98 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             Worktrees
           </h2>
           {showReconnecting && (
-            <span
-              aria-hidden="true"
-              className="shrink-0"
-              data-reconnect-escalated={showReconnectingEscalated ? "true" : undefined}
-            >
-              {showReconnectingEscalated && reconnectingAt !== null ? (
-                <Tooltip autoDismiss={false}>
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-status-warning text-xs">
-                      <span className="inline-flex shrink-0 animate-spin motion-reduce:animate-none">
-                        <RefreshCw className="w-3 h-3" aria-hidden="true" />
-                      </span>
-                      <span className="hidden @[16rem]/header:inline">Reconnecting…</span>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    Last updated {formatRelativeTime(reconnectingAt)}
-                  </TooltipContent>
-                </Tooltip>
-              ) : (
-                <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-text-secondary text-xs">
-                  <span className="inline-flex shrink-0 animate-spin motion-reduce:animate-none">
-                    <RefreshCw className="w-3 h-3" aria-hidden="true" />
-                  </span>
-                  <span className="hidden @[16rem]/header:inline">Reconnecting…</span>
-                </span>
-              )}
-            </span>
+            <WorktreesReconnectingBadge
+              escalatedSince={showReconnectingEscalated ? reconnectingAt : null}
+            />
           )}
         </div>
-        {/* gap-0.5, not gap-1: the four buttons already carry p-1, so a 4px gap
-            on top of that spent ~12px the 200px minimum width does not have —
-            the cluster crowded the "Worktrees" landmark it sits beside. */}
+        {/* gap-0.5, not gap-1: the four 24px buttons already carry their own
+            inset, so a 4px gap on top spent width the 200px minimum does not
+            have — the cluster crowded the "Worktrees" landmark it sits beside. */}
+        {/* The cluster also stays up while the refresh icon is turning, so a
+            refresh the pointer has left, or one started from the palette, still
+            shows — and it fades back only once SpinningIcon finishes its turn. */}
         <div className="flex shrink-0 items-center gap-0.5">
-          <div className="invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 group-hover/header:visible group-hover/header:opacity-100 group-hover/header:pointer-events-auto group-hover/header:delay-75 group-focus-within/header:visible group-focus-within/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:delay-75 motion-reduce:transition-none flex items-center gap-0.5">
-            <button
-              type="button"
-              onClick={onOpenOverview}
-              className="p-1 text-daintree-text/40 hover:text-text-primary hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-              aria-label="Open worktrees overview"
-              aria-keyshortcuts={overviewAriaShortcut}
-              title={formatButtonTitle("Open worktrees overview", overviewShortcut)}
-            >
-              <LayoutGrid className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={openFleetPicker}
-              className="p-1 text-daintree-text/40 hover:text-text-primary hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-              aria-label="Select terminals to arm"
-              title="Select terminals to arm"
-            >
-              <Zap className="w-3.5 h-3.5" />
-            </button>
+          <div className="invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 group-hover/header:visible group-hover/header:opacity-100 group-hover/header:pointer-events-auto group-hover/header:delay-75 group-focus-within/header:visible group-focus-within/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:delay-75 has-[[data-spinning]]:visible has-[[data-spinning]]:opacity-100 has-[[data-spinning]]:pointer-events-auto flex items-center gap-0.5">
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={onOpenOverview}
+                  className={SIDEBAR_HEADER_ACTION}
+                  aria-label="Open worktrees overview"
+                  aria-keyshortcuts={overviewAriaShortcut}
+                >
+                  <LayoutGrid aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {createTooltipContent("Open worktrees overview", overviewShortcut)}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={openFleetPicker}
+                  className={SIDEBAR_HEADER_ACTION}
+                  aria-label="Select terminals to arm"
+                >
+                  <Zap aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Select terminals to arm</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                {/* aria-disabled, not disabled: a disabled button drops keyboard
+                    focus mid-refresh. The handler already ignores a press while
+                    a refresh is in flight. Busy, not unavailable, so no dim:
+                    the spinner is the whole signal and must not be faded. */}
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
                   onClick={handleRefreshAll}
                   aria-disabled={isRefreshing || undefined}
-                  className="p-1 text-daintree-text/40 hover:text-text-primary hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-daintree-text/40"
+                  className={cn(
+                    SIDEBAR_HEADER_ACTION,
+                    "aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-text-secondary"
+                  )}
                   aria-label="Refresh sidebar"
                   aria-keyshortcuts={refreshAriaShortcut}
                 >
-                  <SpinningIcon icon={RefreshCw} active={isRefreshing} className="w-3.5 h-3.5" />
-                </button>
+                  <SpinningIcon icon={RefreshCw} active={isRefreshing} aria-hidden="true" />
+                </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
                 {createTooltipContent("Refresh sidebar", refreshShortcut)}
               </TooltipContent>
             </Tooltip>
           </div>
-          <button
-            type="button"
-            onClick={() =>
-              actionService.dispatch("worktree.createDialog.open", undefined, {
-                source: "user",
-              })
-            }
-            onPointerEnter={() => void preloadNewWorktreeDialog()}
-            className="p-1 text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-            aria-label="Create new worktree"
-            aria-keyshortcuts={createWorktreeAriaShortcut}
-            title={formatButtonTitle("Create new worktree", createWorktreeShortcut)}
-          >
-            <Plus className="w-3.5 h-3.5" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() =>
+                  actionService.dispatch("worktree.createDialog.open", undefined, {
+                    source: "user",
+                  })
+                }
+                onPointerEnter={() => void preloadNewWorktreeDialog()}
+                className={SIDEBAR_HEADER_ACTION}
+                aria-label="Create new worktree"
+                aria-keyshortcuts={createWorktreeAriaShortcut}
+              >
+                <Plus aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {createTooltipContent("Create new worktree", createWorktreeShortcut)}
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
@@ -2019,22 +2049,25 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 title={`No ${QUICK_STATE_LABELS[quickStateFilter].toLowerCase()} worktrees`}
                 action={
                   <>
-                    <button
-                      type="button"
-                      onClick={() => setQuickStateFilter("all")}
-                      className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
-                    >
+                    <Button variant="subtle" size="sm" onClick={() => setQuickStateFilter("all")}>
                       Show all worktrees
-                    </button>
-                    <button
-                      type="button"
-                      onClick={onOpenOverview}
-                      className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors ml-1"
-                      title={formatButtonTitle("Open overview", overviewShortcut)}
-                      aria-keyshortcuts={overviewAriaShortcut}
-                    >
-                      Open overview
-                    </button>
+                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="subtle"
+                          size="sm"
+                          onClick={onOpenOverview}
+                          className="ml-1"
+                          aria-keyshortcuts={overviewAriaShortcut}
+                        >
+                          Open overview
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        {createTooltipContent("Open overview", overviewShortcut)}
+                      </TooltipContent>
+                    </Tooltip>
                   </>
                 }
               />
@@ -2051,22 +2084,25 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               }
               action={
                 <>
-                  <button
-                    type="button"
-                    onClick={clearAllFilters}
-                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
-                  >
+                  <Button variant="subtle" size="sm" onClick={clearAllFilters}>
                     Show all worktrees
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onOpenOverview}
-                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors ml-1"
-                    title={formatButtonTitle("Open overview", overviewShortcut)}
-                    aria-keyshortcuts={overviewAriaShortcut}
-                  >
-                    Open overview
-                  </button>
+                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="subtle"
+                        size="sm"
+                        onClick={onOpenOverview}
+                        className="ml-1"
+                        aria-keyshortcuts={overviewAriaShortcut}
+                      >
+                        Open overview
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {createTooltipContent("Open overview", overviewShortcut)}
+                    </TooltipContent>
+                  </Tooltip>
                 </>
               }
             />
@@ -2085,22 +2121,25 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               }
               action={
                 <>
-                  <button
-                    type="button"
-                    onClick={clearAllFilters}
-                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
-                  >
+                  <Button variant="subtle" size="sm" onClick={clearAllFilters}>
                     Show all worktrees
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onOpenOverview}
-                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors ml-1"
-                    title={formatButtonTitle("Open overview", overviewShortcut)}
-                    aria-keyshortcuts={overviewAriaShortcut}
-                  >
-                    Open overview
-                  </button>
+                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="subtle"
+                        size="sm"
+                        onClick={onOpenOverview}
+                        className="ml-1"
+                        aria-keyshortcuts={overviewAriaShortcut}
+                      >
+                        Open overview
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {createTooltipContent("Open overview", overviewShortcut)}
+                    </TooltipContent>
+                  </Tooltip>
                 </>
               }
             />

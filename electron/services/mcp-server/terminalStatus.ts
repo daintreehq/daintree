@@ -157,8 +157,10 @@ function parseArgs(rawArgs: unknown): ParsedArgs {
     submissionToken = submissionTokenRaw;
   }
 
-  const includeOutputRaw = args["includeOutput"];
-  if (includeOutputRaw === undefined || includeOutputRaw === null) {
+  // `true` reads as the defaults, the same as the renderer's schema.
+  const includeOutputArg = args["includeOutput"];
+  const includeOutputRaw = includeOutputArg === true ? {} : includeOutputArg;
+  if (includeOutputRaw === undefined || includeOutputRaw === null || includeOutputRaw === false) {
     return {
       terminalIds,
       lines: DEFAULT_OUTPUT_LINES,
@@ -170,7 +172,7 @@ function parseArgs(rawArgs: unknown): ParsedArgs {
   if (typeof includeOutputRaw !== "object" || Array.isArray(includeOutputRaw)) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      "terminal.getStatus `includeOutput` must be an object."
+      "terminal.getStatus `includeOutput` must be `true` or an object."
     );
   }
   const includeOutput = includeOutputRaw as Record<string, unknown>;
@@ -221,6 +223,24 @@ function isVisibleToBoundSession(record: TerminalRecord, workspaceId: string): b
   if (record.kind !== undefined && !panelKindHasPty(record.kind)) return false;
   if (isAssistantTerminalRecord(record)) return false;
   return true;
+}
+
+/**
+ * Whether a terminal is an agent pane of this workspace, judged from the
+ * pty-host's own record (#12883) — the one the transcript read resolves
+ * against, so a spawn still in flight under the id cannot vouch for it, and a
+ * pane whose PTY exited but whose record was kept still can. Excludes what
+ * {@link isVisibleToBoundSession} does, the assistant overlay among them. An
+ * unreadable record is not a pane.
+ */
+export async function isAgentPaneInWorkspace(
+  ptyClient: Pick<PtyClient, "getTerminalAsync"> | null | undefined,
+  terminalId: string,
+  workspaceId: string
+): Promise<boolean> {
+  if (!ptyClient) return false;
+  const record = await ptyClient.getTerminalAsync(terminalId);
+  return record ? isVisibleToBoundSession(record, workspaceId) : false;
 }
 
 function buildEntry(record: TerminalRecord, submissionToken?: string): TerminalStatusEntry {

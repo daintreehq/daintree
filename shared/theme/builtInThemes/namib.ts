@@ -142,9 +142,6 @@ export const theme: BuiltInThemeSource = {
     "pulse-range-bg": "#1F1B16",
     "pulse-ring-offset": "#161310",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #2F2922 25%, #3A332B 50%, #2F2922 75%)",
-    "settings-nav-active-bg": "rgba(62,145,218,0.13)",
-    "settings-nav-active-shadow": "none",
-    "settings-nav-hover-bg": "rgba(214,181,142,0.04)",
     "settings-search-bg": "#1F1B16",
     "sidebar-action-hover-bg": "rgba(214,181,142,0.04)",
     // Registry requires white-tint rgba here — do not re-ink into the sand family.

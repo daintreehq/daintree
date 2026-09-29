@@ -16,7 +16,7 @@ When the runtime is wired, the host is an Electron `utilityProcess.fork()` child
 - A utility process gives a clean Node environment with no Chromium, carries structured JSON over the V8 structured clone (no PTY byte encoding), and is crash-supervised via `utilityProcess.on("exit")`.
 - In-process embedding is rejected — an assistant-SDK crash would take down the main process. A localhost HTTP/WebSocket sidecar is rejected — it adds port binding, collision risk, and socket overhead that a `MessagePort` does not.
 
-The CLI/Ink form stays available for development via the existing `daintree-assistant` agent id and its env-only MCP injection (`tier: "experimental"`). The native host is a separate code branch, never a replacement for that path.
+The CLI/Ink form keeps its `daintree-assistant` agent id and env-only MCP injection, but is currently retired as an assistant backend (`tier: "deprecated"`): it is detected when installed, but never offered in the picker or provisioned. The native host is a separate code branch, never a replacement for that path.
 
 ## Message protocol
 

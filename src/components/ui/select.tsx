@@ -1,12 +1,14 @@
 import * as React from "react";
 import type * as SelectPrimitiveType from "@radix-ui/react-select";
 import { Check, ChevronDown, ChevronUp } from "lucide-react";
+import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
-import { OVERLAY_MOTION_CLASS } from "./overlayMotion";
+import { OVERLAY_DROP_MOTION_CLASS, OVERLAY_MOTION_CLASS } from "./overlayMotion";
 import { composeHandlers, primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { menuRowPointerMove } from "./menu-row-hover-focus";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 const SelectIntentContext = React.createContext<((next: boolean) => void) | null>(null);
 /**
@@ -91,12 +93,35 @@ const SelectValue = React.forwardRef<
 });
 SelectValue.displayName = "SelectValue";
 
-type SelectTriggerProps = React.ComponentPropsWithoutRef<typeof SelectPrimitiveType.Trigger>;
+/**
+ * The trigger is a field, so it wears `Input`'s chrome — surface, 3:1 edge,
+ * radius and the accent outline at offset 2 — rather than a look of its own.
+ * Inputs and selects share the settings rail, and a select that focused by
+ * shifting its 1px border read as a different, fainter control than the input
+ * above it. `focus-visible`, not `focus`: Radix hands focus back to the trigger
+ * after a pick, and a ring that lights after every mouse choice is noise.
+ */
+const selectTriggerVariants = cva(
+  "flex w-full items-center justify-between gap-2 bg-surface-input border border-border-input rounded-[var(--radius-md)] text-text-primary transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed",
+  {
+    variants: {
+      density: {
+        /** Filter bars, beside a compact `SearchField` — the same 28px. */
+        compact: "h-7 px-2 text-xs",
+        default: "px-3 py-1.5 text-sm",
+      },
+    },
+    defaultVariants: { density: "default" },
+  }
+);
+
+type SelectTriggerProps = React.ComponentPropsWithoutRef<typeof SelectPrimitiveType.Trigger> &
+  VariantProps<typeof selectTriggerVariants>;
 
 const SelectTrigger = React.forwardRef<
   React.ElementRef<typeof SelectPrimitiveType.Trigger>,
   SelectTriggerProps
->(({ className, children, ...props }, ref) => {
+>(({ className, children, density, ...props }, ref) => {
   const radix = useRadixPrimitives();
   const requestOpen = React.useContext(SelectIntentContext);
   const rootDisabled = React.useContext(SelectDisabledContext);
@@ -117,15 +142,7 @@ const SelectTrigger = React.forwardRef<
       <button
         type="button"
         ref={ref as React.Ref<HTMLButtonElement>}
-        className={cn(
-          "flex w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-1.5 text-sm text-text-primary transition-colors",
-          // Full accent, not /40: the recipe in docs/themes/interaction-state-recipes.md
-          // is "border-shift, no ring", and at 40% alpha the focused border was 1.58:1
-          // against the resting one — a focus indicator you cannot see is not one.
-          "focus:outline-hidden focus:border-accent-primary",
-          "disabled:opacity-50 disabled:cursor-not-allowed",
-          className
-        )}
+        className={cn(selectTriggerVariants({ density }), className)}
         {...(props as React.ButtonHTMLAttributes<HTMLButtonElement>)}
         {...primingHandlers}
         disabled={props.disabled === true || rootDisabled}
@@ -143,9 +160,7 @@ const SelectTrigger = React.forwardRef<
     <Trigger
       ref={ref}
       className={cn(
-        "flex w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-1.5 text-sm text-text-primary transition-colors",
-        "focus:outline-hidden focus:border-accent-primary",
-        "disabled:opacity-50 disabled:cursor-not-allowed",
+        selectTriggerVariants({ density }),
         // `text-text-secondary`, not `text-muted`: a placeholder is the only
         // thing naming an unset control, and `text-muted` has no dark-theme
         // contrast floor (2.22:1 on namib, 2.50:1 on redwoods).
@@ -159,7 +174,8 @@ const SelectTrigger = React.forwardRef<
       {children}
       <Icon asChild>
         <ChevronDown
-          className="h-3.5 w-3.5 shrink-0 text-text-secondary transition-transform in-data-[state=open]:rotate-180"
+          data-animated-chevron
+          className="h-3.5 w-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out in-data-[state=open]:rotate-180"
           aria-hidden="true"
         />
       </Icon>
@@ -262,7 +278,10 @@ const SelectContent = React.forwardRef<
             // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
             "app-no-drag",
             "relative z-[var(--z-popover)] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-text-primary",
-            OVERLAY_MOTION_CLASS,
+            // A popper list hangs off its trigger at the trigger's width, so it
+            // drops rather than zooming from a corner; item-aligned sits over the
+            // trigger and keeps the shared overlay motion.
+            position === "popper" ? OVERLAY_DROP_MOTION_CLASS : OVERLAY_MOTION_CLASS,
             position === "popper" &&
               "min-w-[var(--radix-select-trigger-width)] max-h-[var(--radix-select-content-available-height)]",
             className
@@ -297,14 +316,7 @@ const SelectLabel = React.forwardRef<
   if (!radix) return null;
   const Label = radix.SelectPrimitive.Label;
   return (
-    <Label
-      ref={ref}
-      className={cn(
-        "px-2.5 py-1.5 text-2xs font-bold tracking-wider uppercase text-text-secondary",
-        className
-      )}
-      {...props}
-    />
+    <Label ref={ref} className={cn(LIST_LABEL_CLASS, "px-2.5 py-1.5", className)} {...props} />
   );
 });
 SelectLabel.displayName = "SelectLabel";
@@ -331,8 +343,8 @@ const SelectItem = React.forwardRef<
     <Item
       ref={ref}
       className={cn(
-        "relative flex w-full cursor-pointer select-none items-start rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors",
-        "data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px]",
+        "relative flex w-full cursor-pointer select-none items-start rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors duration-150 ease-out",
+        "data-[highlighted]:bg-overlay-highlight focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px]",
         "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}
@@ -403,4 +415,5 @@ export {
   SelectSeparator,
   SelectScrollUpButton,
   SelectScrollDownButton,
+  selectTriggerVariants,
 };

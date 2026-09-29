@@ -1,14 +1,12 @@
 import { cn } from "@/lib/utils";
+import { LIST_LABEL_CLASS } from "./sectionLabel";
 
 /**
  * The one definition of "this is the row Enter will act on".
  *
  * Five palettes had grown five spellings of the same visual: two drove it from
- * a JS `isSelected` ternary and three from the `aria-selected` attribute, two
- * rounded the rail's trailing edge and three did not, and two cross-faded the
- * rail while three popped it into existence with nothing to transition — which
- * left the rail arriving on the new row while the surface behind it was still
- * fading in.
+ * a JS `isSelected` ternary and three from the `aria-selected` attribute, and
+ * their marks drifted apart from there.
  *
  * Authority is the rendered `aria-selected` attribute, not a prop. One source
  * of truth means the announcement and the highlight cannot disagree, and a row's
@@ -21,30 +19,24 @@ import { cn } from "@/lib/utils";
  * treatment from this.
  */
 export const PALETTE_ROW_CLASS = cn(
-  // `palette-row` is not styling — it is the handle the `forced-colors: active`
-  // block in `index.css` needs. There the raised fill is discarded and the row
-  // has to redraw itself from system keywords, and `[role="option"]` is far too
-  // broad a hook: the file pane, the settings selectors and the agent/forge
-  // dropdowns all use it too. The transparent border is not reserving a selected
-  // border any more — the mark is a rail now — but it still holds every row's
-  // content box on the column the palette's other families are drawn from.
+  // `palette-row` is not styling — it is the handle the increased-contrast and
+  // `forced-colors: active` blocks in `index.css` need to outline the row, and
+  // `[role="option"]` is far too broad a hook: the file pane, the settings
+  // selectors and the agent/forge dropdowns all use it too. The transparent
+  // border holds every row's content box on the column the palette's other
+  // families are drawn from. `relative` stays because rows position their own
+  // absolutely placed children against it.
+  "palette-row relative border border-transparent transition-colors duration-150 ease-out",
+  // A neutral fill and nothing else — the same `overlay-highlight` step the
+  // Radix menu, context-menu and select rows use, so a highlighted row reads the
+  // same in every list in the app. No accent (#11686) and no leading rail: see
+  // `.palette-row` in `index.css` for why the rail went, and why the fill is
+  // its own token.
   //
-  // `relative` because that rail is a `::before` positioned against the row
-  // (`.palette-row` in `index.css`).
-  "palette-row relative border border-transparent transition-colors",
-  // Neutral, not accent (#11686). The fill alone can't be the indicator — it
-  // clears about 1.1-1.2:1 against the palette surface — so `selection-outline`
-  // carries WCAG 1.4.11 at 3:1 for the pair. It is the same token the palette
-  // input's focus border uses (`AppPaletteDialog`), so the focused field and the
-  // selected row are one treatment at two strengths rather than two colours;
-  // change them together. Earlier attempts at a neutral outline failed because
-  // they reused the resting border ladder, which is tuned for separation and
-  // sits inside its own noise when asked to be the only signal.
-  //
-  // The token is spent on a leading rail, not on all four sides — see
-  // `.palette-row::before` in `index.css` for why. The transparent border stays:
-  // it holds the row's content box on the same column as the palette's other
-  // families, and the `forced-colors` fallback still draws an outline there.
+  // One row carries this at a time, and the pointer and the keyboard move the
+  // same one. A row that also paints `hover:bg-*` brings back the second lit
+  // row this treatment exists to rule out — move the cursor on `pointermove`
+  // instead (see `SearchablePalette`'s `onHoverIndex`).
   //
   // `data-selected` is the opt-in for a list-detail browser that is NOT a
   // composite listbox — a plain list of rows, which is what the ARIA content
@@ -54,9 +46,9 @@ export const PALETTE_ROW_CLASS = cn(
   // NOT keyed on `aria-current` itself: five palettes mark their committed value
   // with `aria-current` independently of the cursor (`aria-selected`) and give
   // it a check mark, not a competing background — widening onto `aria-current`
-  // lit both rows at once. The CSS half in `index.css` keys off the same pair.
-  "aria-selected:bg-overlay-raised aria-selected:text-text-primary",
-  "data-[selected=true]:bg-overlay-raised data-[selected=true]:text-text-primary"
+  // lit both rows at once.
+  "aria-selected:bg-overlay-highlight aria-selected:text-text-primary",
+  "data-[selected=true]:bg-overlay-highlight data-[selected=true]:text-text-primary"
 );
 
 /**
@@ -76,8 +68,7 @@ export const PALETTE_ROW_CLASS = cn(
  * Daintree) and it is defined in all fifteen; the treatment is unchanged
  * otherwise, because the size and the tracking were never the problem.
  */
-export const PALETTE_SECTION_LABEL_CLASS =
-  "text-3xs font-medium tracking-wider uppercase text-text-secondary select-none";
+export const PALETTE_SECTION_LABEL_CLASS = LIST_LABEL_CLASS;
 
 /**
  * The keyboard-focus ring every palette control wears.

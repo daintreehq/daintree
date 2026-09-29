@@ -41,8 +41,8 @@ describe("LogFilters accessibility", () => {
 
   it("renders active and inactive level pills with aria-pressed", () => {
     render(<LogFilters {...baseProps} filters={{ levels: ["info", "error"] }} />);
-    const debugBtn = screen.getByLabelText("Debug (1)");
-    const infoBtn = screen.getByLabelText("Info (2)");
+    const debugBtn = screen.getByRole("button", { name: /^Debug\s*\(1\)$/ });
+    const infoBtn = screen.getByRole("button", { name: /^Info\s*\(2\)$/ });
     expect(debugBtn.getAttribute("aria-pressed")).toBe("false");
     expect(infoBtn.getAttribute("aria-pressed")).toBe("true");
   });

@@ -20,8 +20,8 @@ import {
   ArrowUpFromLine,
   CheckSquare,
   Clock,
-  Code,
   Copy,
+  ExternalLink,
   FileDiff,
   FileText,
   GitBranch,
@@ -31,7 +31,6 @@ import {
   GitPullRequest,
   Globe,
   History,
-  LayoutGrid,
   Link,
   MonitorPlay,
   OctagonX,
@@ -43,14 +42,16 @@ import {
   PinOff,
   Play,
   Plug,
+  Puzzle,
   RefreshCw,
+  RotateCcw,
   Save,
   Scissors,
   Server,
-  Square,
   SquareTerminal,
   Trash2,
   Zap,
+  CircleStop,
 } from "lucide-react";
 import {
   ArrowUpDown,
@@ -403,7 +404,7 @@ export function WorktreeMenuItems({
           </C.Item>
         )}
         <C.Item onSelect={onOpenEditor}>
-          <Code className={ICON} />
+          <ExternalLink className={ICON} />
           Open in editor
         </C.Item>
         <C.Item onSelect={onRevealInFinder}>
@@ -524,6 +525,10 @@ export function WorktreeMenuItems({
           : baseBehind === 0
             ? "Up to date"
             : null;
+  const rebaseLabel = baseBranchName
+    ? `Rebase onto ${baseBranchName}…`
+    : "Rebase onto base branch…";
+  const mergeLabel = baseBranchName ? `Merge ${baseBranchName} in…` : "Merge base branch in…";
 
   // Fire-and-forget on purpose. `ActionService.dispatch` CATCHES an action's
   // error and resolves `{ok: false}`, so a result read here would be one of
@@ -611,9 +616,16 @@ export function WorktreeMenuItems({
             key="git-rebase-onto-base"
             onSelect={() => dispatchGit("git.rebaseOntoBase", { baseBranch: baseBranchName ?? "" })}
             disabled={baseBlockedReason !== null}
+            aria-label={
+              baseBlockedReason
+                ? `${rebaseLabel}, ${baseBlockedReason}`
+                : baseBehind != null && baseBehind > 0
+                  ? `${rebaseLabel}, ${baseBehind} behind`
+                  : undefined
+            }
           >
             <GitBranch className={ICON} />
-            {baseBranchName ? `Rebase onto ${baseBranchName}…` : "Rebase onto base branch…"}
+            {rebaseLabel}
             {baseBlockedReason ? (
               <C.Meta>{baseBlockedReason}</C.Meta>
             ) : (
@@ -626,9 +638,10 @@ export function WorktreeMenuItems({
               dispatchGit("git.mergeBaseIntoBranch", { baseBranch: baseBranchName ?? "" })
             }
             disabled={baseBlockedReason !== null}
+            aria-label={baseBlockedReason ? `${mergeLabel}, ${baseBlockedReason}` : undefined}
           >
             <GitMerge className={ICON} />
-            {baseBranchName ? `Merge ${baseBranchName} in…` : "Merge base branch in…"}
+            {mergeLabel}
             {baseBlockedReason && <C.Meta>{baseBlockedReason}</C.Meta>}
           </C.Item>,
         ]),
@@ -681,7 +694,7 @@ export function WorktreeMenuItems({
               disabled={counts.dock === 0}
               {...counted("Move all to grid", counts.dock)}
             >
-              <LayoutGrid className={ICON} />
+              <PanelTopClose className={ICON} />
               Move all to grid
               <C.Meta>{counts.dock}</C.Meta>
             </C.Item>
@@ -731,10 +744,10 @@ export function WorktreeMenuItems({
         {(hasLivePanels || hasFleetTargets) && <C.Separator />}
 
         {/* Deletion, not repair: clearing history destroys journal records
-            permanently, so it sits with the destructive pair rather than beside
-            renderer maintenance. No count — availability isn't cached, and
+            permanently, so it sits with the destructive End all rather than
+            beside renderer maintenance. No count — availability isn't cached, and
             opening a menu must not go and read the journal to find out. */}
-        <C.Item onSelect={onClearHistory}>
+        <C.Item destructive onSelect={onClearHistory}>
           <History className={ICON} />
           Clear session history…
         </C.Item>
@@ -748,6 +761,7 @@ export function WorktreeMenuItems({
           <C.Meta>{counts.active}</C.Meta>
         </C.Item>
         <C.Item
+          destructive
           onSelect={onTerminateAll}
           disabled={counts.active === 0}
           {...counted("End all sessions", counts.active)}
@@ -780,6 +794,7 @@ export function WorktreeMenuItems({
               runningRecipeId !== null ? `${recipe.name}, a recipe is running` : recipe.name
             }
           >
+            <Workflow className={ICON} />
             {recipe.name}
             {runningRecipeId !== null && <C.Meta>Recipe running</C.Meta>}
           </C.Item>
@@ -809,13 +824,13 @@ export function WorktreeMenuItems({
     ),
     devServerState === "running" && onRestartDevServer && (
       <C.Item key="restart" onSelect={() => onRestartDevServer(worktree.id)}>
-        <RefreshCw className={ICON} />
+        <RotateCcw className={ICON} />
         Restart dev server
       </C.Item>
     ),
     devServerState === "running" && onStopDevServer && (
       <C.Item key="stop" onSelect={() => onStopDevServer(worktree.id)}>
-        <Square className={ICON} />
+        <CircleStop className={ICON} />
         Stop dev server
       </C.Item>
     ),
@@ -1108,6 +1123,7 @@ export function WorktreeMenuItems({
                   void actionService.dispatch(entry.item.actionId, undefined, { source })
                 }
               >
+                <Puzzle className={ICON} />
                 <span className="truncate">{entry.item.label}</span>
               </C.Item>
             ))}

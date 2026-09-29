@@ -6,6 +6,7 @@ import { NO_WORKTREE } from "@/store/slices/panelRegistry/worktreeIndex";
 import { CollapsedSessionIndicators } from "@/components/Worktree/WorktreeCard/CollapsedSessionIndicators";
 import { summarizeSessionStates } from "@/components/Worktree/terminalStateConfig";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   ContextMenu,
@@ -15,6 +16,8 @@ import {
 } from "@/components/ui/context-menu";
 import { actionService } from "@/services/ActionService";
 import { formatPath } from "@/utils/textParsing";
+import { fileManagerRevealLabel } from "@/lib/platform";
+import { SIDEBAR_HEADER_ACTION } from "./sidebarHeader";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
@@ -86,18 +89,19 @@ export function WorkspaceRootRow({
                 )}
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <button
-                      type="button"
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
                       onClick={() => {
                         void actionService.dispatch("worktree.openFileBrowserPanel", undefined, {
                           source: "user",
                         });
                       }}
-                      className="p-1 text-daintree-text/40 hover:text-text-primary hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                      className={SIDEBAR_HEADER_ACTION}
                       aria-label="Browse files"
                     >
-                      <FolderTree className="w-3.5 h-3.5" aria-hidden="true" />
-                    </button>
+                      <FolderTree aria-hidden="true" />
+                    </Button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">Browse files</TooltipContent>
                 </Tooltip>
@@ -123,7 +127,7 @@ export function WorkspaceRootRow({
           </ContextMenuActionItem>
           <ContextMenuActionItem actionId="system.openPath" args={{ path: workspace.path }}>
             <FolderOpen className={ICON_CLASS} />
-            Reveal in Finder
+            {fileManagerRevealLabel()}
           </ContextMenuActionItem>
         </ContextMenuContent>
       </ContextMenu>

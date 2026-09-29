@@ -128,7 +128,7 @@ export const mcpSessionScenarios: PerfScenario[] = [
       const { mods, manifest } = await fixture();
       const start = performance.now();
 
-      const unbound = await openSession(mods, manifest, { tier: "system" });
+      const unbound = await openSession(mods, manifest, { tier: "full" });
       const handshakeWireBytes = unbound.serverOutBytes;
       const instructions = unbound.client.getInstructions() ?? "";
       const capabilities = unbound.client.getServerCapabilities();
@@ -162,7 +162,7 @@ export const mcpSessionScenarios: PerfScenario[] = [
       if (JSON.stringify(echoed) !== JSON.stringify(PERF_WORKSPACE_BINDING)) handshakeMisses += 1;
       handshakeMisses += symmetricDifference(
         advertised,
-        expectedExposedIds(manifest, "system", false)
+        expectedExposedIds(manifest, "full", false)
       );
       handshakeMisses += symmetricDifference(
         boundListed,
@@ -208,8 +208,8 @@ export const mcpSessionScenarios: PerfScenario[] = [
       const wireBytes: Record<string, number> = {};
       let surfaceMisses = 0;
       let listMs = 0;
-      let payloadBytesSystem = 0;
-      let wireBytesSystem = 0;
+      let payloadBytesFull = 0;
+      let wireBytesFull = 0;
 
       for (const tier of MCP_TIERS) {
         const session = await openSession(mods, manifest, { tier });
@@ -219,9 +219,9 @@ export const mcpSessionScenarios: PerfScenario[] = [
         const tools = measured.value.tools;
         toolCounts[tier] = tools.length;
         wireBytes[tier] = measured.bytes;
-        if (tier === "system") {
-          wireBytesSystem = measured.bytes;
-          payloadBytesSystem = Buffer.byteLength(JSON.stringify({ tools }), "utf8");
+        if (tier === "full") {
+          wireBytesFull = measured.bytes;
+          payloadBytesFull = Buffer.byteLength(JSON.stringify({ tools }), "utf8");
         }
 
         surfaceMisses += symmetricDifference(
@@ -272,19 +272,17 @@ export const mcpSessionScenarios: PerfScenario[] = [
       return {
         durationMs,
         metrics: {
-          workbenchToolCount: toolCounts.workbench ?? 0,
-          actionToolCount: toolCounts.action ?? 0,
-          systemToolCount: toolCounts.system ?? 0,
+          coreToolCount: toolCounts.core ?? 0,
+          fullToolCount: toolCounts.full ?? 0,
           externalToolCount: toolCounts.external ?? 0,
           boundExternalToolCount: boundIds.size,
           boundExternalWithheldCount: (toolCounts.external ?? 0) - boundIds.size,
-          workbenchWireBytes: wireBytes.workbench ?? 0,
-          actionWireBytes: wireBytes.action ?? 0,
-          systemWireBytes: wireBytes.system ?? 0,
+          coreWireBytes: wireBytes.core ?? 0,
+          fullWireBytes: wireBytes.full ?? 0,
           externalWireBytes: wireBytes.external ?? 0,
           boundExternalWireBytes: boundMeasured.bytes,
           // What the JSON-RPC envelope adds to PERF-203's projection number.
-          jsonRpcEnvelopeBytes: wireBytesSystem - payloadBytesSystem,
+          jsonRpcEnvelopeBytes: wireBytesFull - payloadBytesFull,
           withheldByVisibilityCount,
           listMs,
           surfaceMisses,
@@ -296,7 +294,7 @@ export const mcpSessionScenarios: PerfScenario[] = [
     id: "PERF-282",
     name: "MCP tools/call Round Trip - Dispatch, Result and Client Schema Validation",
     description:
-      "Every tool a system-tier session can reach, called through the real CallTool handler: parseToolArguments strips the protocol-only fields, the gate chain admits, the result is assembled by buildToolCallResult and buildStructuredContent, and the SDK client compiles each advertised outputSchema and validates the structuredContent with AJV. The renderer is not here, so the dispatch leg is a counting stand-in that answers with a minimal instance of the action's own advertised schema. One final call is answered with a payload that schema rejects, so the client's AJV pass is observed refusing it rather than assumed to have run — a client that skipped validation would be faster and otherwise indistinguishable.",
+      "Every tool a full-tier session can reach, called through the real CallTool handler: parseToolArguments strips the protocol-only fields, the gate chain admits, the result is assembled by buildToolCallResult and buildStructuredContent, and the SDK client compiles each advertised outputSchema and validates the structuredContent with AJV. The renderer is not here, so the dispatch leg is a counting stand-in that answers with a minimal instance of the action's own advertised schema. One final call is answered with a payload that schema rejects, so the client's AJV pass is observed refusing it rather than assumed to have run — a client that skipped validation would be faster and otherwise indistinguishable.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 8, nightly: 10 },
@@ -310,7 +308,7 @@ export const mcpSessionScenarios: PerfScenario[] = [
     ],
     async run() {
       const { mods, manifest } = await fixture();
-      const session = await openSession(mods, manifest, { tier: "system" });
+      const session = await openSession(mods, manifest, { tier: "full" });
       const start = performance.now();
 
       // The battery is derived from the tier allowlist and the manifest, NOT
@@ -323,7 +321,7 @@ export const mcpSessionScenarios: PerfScenario[] = [
       // refusing is the right answer for all of them and none belongs in a
       // battery whose oracle is "every call is admitted". PERF-283 grades them
       // both ways.
-      const battery = [...expectedExposedIds(manifest, "system", false)]
+      const battery = [...expectedExposedIds(manifest, "full", false)]
         .filter((id) => !SELF_GATED_TOOLS.has(id))
         .sort();
       // Mirrors `buildToolOutputSchema`: only an object-typed schema is
@@ -389,7 +387,7 @@ export const mcpSessionScenarios: PerfScenario[] = [
       let auditRecordMisses = Math.abs(audits.length - battery.length);
       for (const record of audits) {
         if (record.outcomeKind !== "result") auditRecordMisses += 1;
-        if (record.tier !== "system") auditRecordMisses += 1;
+        if (record.tier !== "full") auditRecordMisses += 1;
       }
 
       const responseWireBytes = session.serverOutBytes - bytesBefore;
@@ -516,7 +514,7 @@ export const mcpSessionScenarios: PerfScenario[] = [
       // 2. The ownership ledger. The id comes out of the dispatch envelope the
       // creation returned, never from anything the caller said, so a session
       // can clean up what it made and nothing else.
-      const owner = await openSession(mods, manifest, { tier: "system" });
+      const owner = await openSession(mods, manifest, { tier: "full" });
       const created = await owner.client.callTool({
         name: "terminal.new",
         arguments: { cwd: "/tmp/daintree-perf" },
@@ -545,13 +543,13 @@ export const mcpSessionScenarios: PerfScenario[] = [
       // allowlist admits and the handler then refuses without a help binding —
       // and whose URL allowlist is the only thing keeping arbitrary content out
       // of the assistant panel. Both are ceilings a fail-open server clears.
-      const plainSession = await openSession(mods, manifest, { tier: "system" });
+      const plainSession = await openSession(mods, manifest, { tier: "full" });
       expected.push({ toolId: "help.displayImage", ok: false, code: mods.TIER_NOT_PERMITTED_CODE });
       outcomes.push(await probeCall(plainSession, "help.displayImage", { url: DISPLAY_IMAGE_URL }));
       await plainSession.close();
 
       const helpSession = await openSession(mods, manifest, {
-        tier: "system",
+        tier: "full",
         helpSessionId: "perf-help-session",
       });
       expected.push({ toolId: "help.displayImage", ok: true, code: null });
@@ -662,7 +660,7 @@ export const mcpSessionScenarios: PerfScenario[] = [
     correctness: ["dedupMisses", "dedupOverSuppressMisses"],
     async run() {
       const { mods, manifest } = await fixture();
-      const session = await openSession(mods, manifest, { tier: "system" });
+      const session = await openSession(mods, manifest, { tier: "full" });
       const start = performance.now();
 
       const key = `perf-284-${Math.random().toString(36).slice(2)}`;
@@ -756,7 +754,7 @@ export const mcpSessionScenarios: PerfScenario[] = [
     id: "PERF-285",
     name: "MCP Concurrent Session Fanout",
     description:
-      "Twelve sessions at rotating tiers on one SessionStore, each completing a handshake, a tools/list and a call. Reports what a fleet of external agents costs the host in transport bytes and how much of the store each session leaves behind. Each session's listing must match its own tier exactly — an external session that sees a workbench tool is a leak, not a performance result. Each creating session also names the resource it asks for, so the ownership ledger is graded, after the whole fanout has run, against what the sessions requested rather than against what the ledger itself reports — then revoking must clear every one of those records.",
+      "Twelve sessions at rotating tiers on one SessionStore, each completing a handshake, a tools/list and a call. Reports what a fleet of external agents costs the host in transport bytes and how much of the store each session leaves behind. Each session's listing must match its own tier exactly — an external session that sees a core tool it does not allow is a leak, not a performance result. Each creating session also names the resource it asks for, so the ownership ledger is graded, after the whole fanout has run, against what the sessions requested rather than against what the ledger itself reports — then revoking must clear every one of those records.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 6, nightly: 8 },

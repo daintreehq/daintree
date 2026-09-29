@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { useEventStore, type EventRecord, type EventFilterOptions } from "@/store/eventStore";
-import { Copy, Check, ChevronDown, ChevronRight, Filter, X } from "lucide-react";
+import { Copy, Check, ChevronDown, ChevronRight } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
+import { FilterChip } from "@/components/ui/FilterChip";
 import { logError } from "@/utils/logger";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { sanitizeErrorText } from "@/utils/errorText";
@@ -32,26 +33,16 @@ function ContextPill({ label, value, filterKey, currentFilters, onToggle }: Cont
       <span className="text-text-secondary">{label}:</span>
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
+          <FilterChip
+            selected={isActive}
             onClick={(e) => {
               e.stopPropagation();
               onToggle(filterKey, value);
             }}
-            className={cn(
-              "group flex items-center gap-2 px-2 py-1 rounded-[var(--radius-sm)] text-xs font-mono text-left w-fit transition max-w-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-              isActive
-                ? "bg-overlay-medium text-text-primary border border-border-strong hover:bg-overlay-strong"
-                : "hover:bg-overlay-soft border border-transparent hover:border-border-default text-text-primary"
-            )}
-            aria-pressed={isActive}
+            className="w-fit max-w-full"
           >
             <span className="truncate">{strValue}</span>
-            {isActive ? (
-              <X className="w-3 h-3 flex-shrink-0 text-text-secondary" />
-            ) : (
-              <Filter className="w-3 h-3 flex-shrink-0 opacity-0 group-hover:opacity-30" />
-            )}
-          </button>
+          </FilterChip>
         </TooltipTrigger>
         <TooltipContent side="bottom">
           {isActive ? "Click to clear filter" : `Filter by ${label}`}

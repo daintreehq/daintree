@@ -24,7 +24,8 @@
  *   DAINTREE_SHOT_THEMES   themes that get the full state set (default daintree,bondi,namib)
  *   DAINTREE_SCREENSHOT_SCALE  device scale factor (default 3 — the pill is small)
  *
- * Output: <dir>/<state>-<theme>.png, <dir>/theme-sweep.png
+ * Output: <dir>/<state>-<theme>.png, <dir>/copy-<ok|fail>-<theme>.png,
+ *         <dir>/theme-sweep.png
  */
 
 import { test, expect, type Page } from "@playwright/test";
@@ -73,10 +74,17 @@ const STATES = [
   "scratch",
   "none",
   "hover",
+  "pressed",
   "open",
   "focus",
   "tooltip",
   "narrow",
+] as const;
+
+/** The pill menu's "Copy path" toast, succeeding and failing. */
+const COPY_RESULTS = [
+  { result: "ok", text: "Path copied" },
+  { result: "fail", text: "Couldn't copy path" },
 ] as const;
 
 /** Horizontal margin of toolbar kept either side of the pill in each crop. */
@@ -166,6 +174,13 @@ test("Project pill — states and themes", async ({ browser }) => {
         await pill.hover();
         await page.waitForTimeout(250);
       }
+      if (state === "pressed") {
+        await pill.hover();
+        await page.mouse.down();
+        await page.waitForTimeout(100);
+        const pressed = await pill.evaluate((el) => el.matches(":active"));
+        if (!pressed) throw new Error("pressed: pill did not take :active");
+      }
       if (state === "focus") {
         await pill.focus();
         const visible = await pill.evaluate((el) => el.matches(":focus-visible"));
@@ -173,6 +188,15 @@ test("Project pill — states and themes", async ({ browser }) => {
         await page.waitForTimeout(200);
       }
       written.push(await snapState(page, state, `${state}-${theme}.png`));
+      if (state === "pressed") {
+        await page.mouse.move(1170, 5);
+        await page.mouse.up();
+        // The press focused the pill by pointer; drop it so the next state
+        // starts from rest and keyboard focus can still read as :focus-visible.
+        await pill.blur();
+        await page.keyboard.press("Shift");
+        await page.waitForTimeout(250);
+      }
       if (state === "hover") {
         await page.mouse.move(1170, 5);
         await page.waitForTimeout(250);
@@ -180,6 +204,21 @@ test("Project pill — states and themes", async ({ browser }) => {
       if (state === "focus") {
         await pill.blur();
       }
+    }
+  }
+
+  for (const theme of FULL_THEMES) {
+    for (const { result, text } of COPY_RESULTS) {
+      await stubViteHmrClient(page);
+      await page.setViewportSize({ width: 640, height: 320 });
+      await page.goto(`${server!.baseURL}/project-pill-preview.html?theme=${theme}&copy=${result}`);
+      await page.evaluate(() => document.fonts.ready);
+      const toast = page.getByText(text, { exact: true });
+      await expect(toast, `copy ${result}: toast not raised`).toBeVisible();
+      await page.waitForTimeout(400);
+      const out = path.join(OUT_DIR, `copy-${result}-${theme}.png`);
+      await page.screenshot({ path: out });
+      written.push(out);
     }
   }
 
@@ -217,6 +256,6 @@ test("Project pill — states and themes", async ({ browser }) => {
 
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBe(FULL_THEMES.length * STATES.length + 1);
+  expect(onDisk.length).toBe(FULL_THEMES.length * (STATES.length + COPY_RESULTS.length) + 1);
   console.log(`[project-pill-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });

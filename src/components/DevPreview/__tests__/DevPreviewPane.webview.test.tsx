@@ -334,7 +334,17 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  DropdownMenuItem: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+  }: {
+    children: React.ReactNode;
+    onSelect?: (event: Event) => void;
+  }) => (
+    <button type="button" role="menuitem" onClick={() => onSelect?.(new Event("select"))}>
+      {children}
+    </button>
+  ),
   DropdownMenuSeparator: () => null,
 }));
 
@@ -2769,7 +2779,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       saveSettingsMock.mockResolvedValue(undefined);
     });
 
-    const getRunButton = () => screen.getByRole("button", { name: "Run `pnpm dev`" });
+    const getRunButton = () => screen.getByRole("button", { name: "Run pnpm dev" });
 
     it("saves the displayed candidate command without re-running detection", async () => {
       render(<DevPreviewPane {...baseProps} />);
@@ -2794,7 +2804,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       fireEvent.click(getRunButton());
       await flushAutoDetect();
 
-      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+      expect(screen.getByText("Couldn't save the command")).toBeTruthy();
       expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     });
 
@@ -2806,7 +2816,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       await flushAutoDetect();
 
       expect(saveSettingsMock).not.toHaveBeenCalled();
-      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+      expect(screen.getByText("Couldn't save the command")).toBeTruthy();
     });
 
     it("shows the error banner when loading settings rejects", async () => {
@@ -2817,7 +2827,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       await flushAutoDetect();
 
       expect(saveSettingsMock).not.toHaveBeenCalled();
-      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+      expect(screen.getByText("Couldn't save the command")).toBeTruthy();
     });
 
     it("clears the banner on retry and saves the same command", async () => {
@@ -2826,12 +2836,12 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
       fireEvent.click(getRunButton());
       await flushAutoDetect();
-      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+      expect(screen.getByText("Couldn't save the command")).toBeTruthy();
 
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
       await flushAutoDetect();
 
-      expect(screen.queryByText("Couldn't start preview")).toBeNull();
+      expect(screen.queryByText("Couldn't save the command")).toBeNull();
       expect(saveSettingsMock).toHaveBeenCalledTimes(2);
       expect(saveSettingsMock).toHaveBeenLastCalledWith(
         expect.objectContaining({ devServerCommand: "pnpm dev" })
@@ -2846,10 +2856,10 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       saveSettingsMock.mockRejectedValueOnce(new Error("save failed"));
       render(<DevPreviewPane {...baseProps} />);
 
-      // The popover mock renders the picker entries inline; pick the alternate.
+      // The dropdown mock renders the picker entries inline; pick the alternate.
       fireEvent.click(screen.getByText("npm start"));
       await flushAutoDetect();
-      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+      expect(screen.getByText("Couldn't save the command")).toBeTruthy();
 
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
       await flushAutoDetect();
@@ -2866,7 +2876,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
       fireEvent.click(getRunButton());
       await flushAutoDetect();
-      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+      expect(screen.getByText("Couldn't save the command")).toBeTruthy();
 
       setSettingsStoreState("pnpm dev");
       rerender(<DevPreviewPane {...baseProps} />);
@@ -2875,7 +2885,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       setSettingsStoreState("");
       rerender(<DevPreviewPane {...baseProps} />);
 
-      expect(screen.queryByText("Couldn't start preview")).toBeNull();
+      expect(screen.queryByText("Couldn't save the command")).toBeNull();
     });
   });
 
@@ -2977,6 +2987,11 @@ describe("DevPreviewPane webview lifecycle regression", () => {
           });
         }
       }
+
+      // Let the previous message's crossfade finish before reading the pane.
+      act(() => {
+        vi.advanceTimersByTime(250);
+      });
 
       expect(container.textContent).toContain("Dev server unavailable");
       expect(container.textContent).not.toContain("reloads automatically");

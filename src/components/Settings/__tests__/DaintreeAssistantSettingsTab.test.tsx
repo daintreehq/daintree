@@ -177,7 +177,14 @@ import {
   DaintreeAssistantSettingsTab,
   formatGrantRemaining,
 } from "../DaintreeAssistantSettingsTab";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { DEFAULT_AGENT_SETTINGS } from "@shared/types/agentSettings";
 import { SettingsValidationProvider } from "../SettingsValidationRegistry";
+import {
+  HELP_TIER_CUMULATIVE,
+  HELP_TIER_INCREMENTAL,
+} from "@shared/config/helpAssistantTierAllowlists";
+import type { HelpAssistantTier } from "@shared/types";
 
 const writeText = vi.fn().mockResolvedValue(undefined);
 
@@ -217,7 +224,8 @@ function installApi(
     getSettings: vi.fn().mockResolvedValue({
       docSearch: true,
       daintreeControl: true,
-      tier: "action" as const,
+      runbookSearch: true,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
       customArgs: "",
@@ -225,7 +233,7 @@ function installApi(
     setSettings: vi.fn().mockResolvedValue(undefined),
     getLiveSessionStatus: vi
       .fn()
-      .mockResolvedValue({ connected: false, tier: "workbench", activeGrants: [] }),
+      .mockResolvedValue({ connected: false, tier: "core", activeGrants: [] }),
   };
   const mcpDefaults: McpServerApi = {
     getStatus: vi.fn().mockResolvedValue({
@@ -337,12 +345,60 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
+  it("persists turning runbooks off from the switch under Daintree control", async () => {
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Follow runbooks");
+
+    const toggle = screen.getByRole("switch", { name: "Follow runbooks" });
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+    });
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+        runbookSearch: false,
+      });
+    });
+  });
+
+  it("disables the runbooks row, flush rather than nested, while Daintree control is off", async () => {
+    installApi({
+      getSettings: vi.fn().mockResolvedValue({
+        docSearch: true,
+        daintreeControl: false,
+        runbookSearch: true,
+        tier: "core" as const,
+        bypassPermissions: false,
+        auditRetention: 7,
+      }),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(
+      container,
+      "Needs Daintree control. Runbooks are procedures for Daintree actions."
+    );
+
+    const toggle = screen.getByRole("switch", { name: "Follow runbooks" });
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+    expect(toggle.closest("[data-settings-dependents]")).toBeNull();
+  });
+
   it("marks the behavior switches modified only when they differ from their defaults, and resets them", async () => {
     installApi({
       getSettings: vi.fn().mockResolvedValue({
         docSearch: false,
         daintreeControl: false,
-        tier: "action" as const,
+        tier: "core" as const,
         bypassPermissions: false,
         auditRetention: 7,
       }),
@@ -440,6 +496,74 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
+  describe("Daintree confirmations (#12874)", () => {
+    afterEach(() => {
+      useAgentSettingsStore.setState({ settings: null });
+    });
+
+    it("names the live global setting in the inherit option", async () => {
+      useAgentSettingsStore.setState({
+        settings: { ...DEFAULT_AGENT_SETTINGS, globalSkipPermissions: true },
+      });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Daintree confirmations");
+      expect(container.textContent).toContain("Use Skip permission prompts (currently: on)");
+    });
+
+    it("says Daintree's confirmations are skipped too when that is in effect", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      useAgentSettingsStore.setState({
+        settings: { ...DEFAULT_AGENT_SETTINGS, globalSkipPermissions: true },
+      });
+      installApi({
+        getSettings: vi.fn().mockResolvedValue({
+          docSearch: true,
+          daintreeControl: true,
+          tier: "core" as const,
+          bypassPermissions: true,
+          auditRetention: 7,
+          customArgs: "",
+        }),
+      });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Daintree's own confirmations are skipped as well");
+      expect(container.textContent).not.toContain("unless an automation grant covers them");
+    });
+
+    it("keeps the dialog copy while the assistant is set to always ask", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      useAgentSettingsStore.setState({
+        settings: { ...DEFAULT_AGENT_SETTINGS, globalSkipPermissions: true },
+      });
+      installApi({
+        getSettings: vi.fn().mockResolvedValue({
+          docSearch: true,
+          daintreeControl: true,
+          tier: "core" as const,
+          bypassPermissions: true,
+          auditRetention: 7,
+          customArgs: "",
+          daintreeConfirmations: "always-ask",
+        }),
+      });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "unless an automation grant covers them");
+      expect(container.textContent).toContain("Always ask");
+    });
+  });
+
   // One stored boolean, three different mechanisms behind it. Labelling them
   // all as Claude's flag reads as a no-op while silently enabling
   // auto-approval, so the copy has to follow the selected agent (#11879).
@@ -497,13 +621,13 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
-  // #11907: with the confirmation sheet off, the tier carries most of the
+  // #11907: with the confirmation sheet off, the tool set carries most of the
   // remaining boundary, so the warning has to name it — and keep naming the
   // right one when the selector moves (a missing memo dependency would freeze
-  // the old tier in the copy while the selector reads the new one). #12119
+  // the old set in the copy while the selector reads the new one). #12119
   // stopped it claiming to be the *entire* boundary, so the assertions below
-  // pin both halves: the tier-named limit and the confirmation exception.
-  it("names the configured tier in the auto-approve warning and follows the selector", async () => {
+  // pin both halves: the set-named limit and the confirmation exception.
+  it("names the configured tool set in the auto-approve warning and follows the selector", async () => {
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex", "daintree-assistant"]);
     helpPanelState.preferredAgentId = "daintree-assistant";
 
@@ -525,16 +649,16 @@ describe("DaintreeAssistantSettingsTab", () => {
 
     await waitForContent(
       container,
-      "New sessions are limited to the Daintree actions the Action capability tier allows"
+      "New sessions are limited to the Daintree actions in the Core tool set"
     );
 
-    fireEvent.click(screen.getByRole("radio", { name: /^System/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /^Full/ }));
 
     await waitForContent(
       container,
-      "New sessions are limited to the Daintree actions the System capability tier allows"
+      "New sessions are limited to the Daintree actions in the Full tool set"
     );
-    expect(container.textContent).not.toContain("the Action capability tier");
+    expect(container.textContent).not.toContain("in the Core tool set");
   });
 
   // The gate is what keeps a switch off agents where flipping it does nothing.
@@ -547,7 +671,7 @@ describe("DaintreeAssistantSettingsTab", () => {
         <DaintreeAssistantSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "Capability tier");
+    await waitForContent(container, "Tool set");
 
     expect(screen.queryByRole("switch", { name: /bypass|auto-approve/i })).toBeNull();
   });
@@ -561,7 +685,7 @@ describe("DaintreeAssistantSettingsTab", () => {
         <DaintreeAssistantSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "Capability tier");
+    await waitForContent(container, "Tool set");
 
     // A dangerous flag exists for this agent, so only the supports declaration
     // keeps the switch away — and the launch path honours the same declaration.
@@ -599,7 +723,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       getSettings: vi.fn().mockResolvedValue({
         docSearch: true,
         daintreeControl: true,
-        tier: "action" as const,
+        tier: "core" as const,
         bypassPermissions: true,
         auditRetention: 7,
         customArgs: "",
@@ -611,7 +735,7 @@ describe("DaintreeAssistantSettingsTab", () => {
         <DaintreeAssistantSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "Capability tier");
+    await waitForContent(container, "Tool set");
 
     expect(screen.queryByRole("switch", { name: /bypass|auto-approve/i })).toBeNull();
     expect(container.textContent).not.toContain("unless an automation grant covers them");
@@ -640,37 +764,263 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(options).toEqual(["Default (CLI default)", "Opus", "Sonnet"]);
   });
 
-  it("changing the capability tier persists tier=system", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Capability tier");
+  describe("assistant model default", () => {
+    function mockClaudeCatalog() {
+      window.electron.agentCapabilities.getResolvedModelList = vi.fn().mockResolvedValue({
+        agentId: "claude",
+        models: [
+          { id: "opus", name: "Opus", shortLabel: "Opus" },
+          { id: "sonnet", name: "Sonnet", shortLabel: "Sonnet" },
+        ],
+        contextWindow: 200_000,
+        source: "merged",
+      });
+    }
 
-    fireEvent.click(screen.getByRole("radio", { name: /^System/ }));
+    async function renderModelSelect(modelId: string | null) {
+      helpPanelState.preferredAgentId = "claude";
+      installApi({
+        getSettings: vi.fn().mockResolvedValue({
+          docSearch: true,
+          daintreeControl: true,
+          tier: "core" as const,
+          bypassPermissions: false,
+          auditRetention: 7,
+          modelIds: modelId === null ? {} : { claude: modelId },
+          customArgs: "",
+        }),
+      });
+      mockClaudeCatalog();
+      render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      return (await screen.findByLabelText("Model")) as HTMLSelectElement;
+    }
 
-    await waitFor(() => {
-      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
-        tier: "system",
+    it("shows the CLI default when nothing is saved", async () => {
+      const select = await renderModelSelect(null);
+      await waitFor(() => expect(select.value).toBe("__default__"));
+    });
+
+    it("keeps an explicit CLI-default choice", async () => {
+      const select = await renderModelSelect("");
+      await waitFor(() => expect(select.value).toBe("__default__"));
+    });
+
+    it("stores CLI default as an empty string and a picked model as that model", async () => {
+      const select = await renderModelSelect("opus");
+      await waitFor(() => expect(select.value).toBe("opus"));
+
+      fireEvent.change(select, { target: { value: "__default__" } });
+      await waitFor(() =>
+        expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+          modelIds: { claude: "" },
+        })
+      );
+
+      fireEvent.change(select, { target: { value: "sonnet" } });
+      await waitFor(() =>
+        expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+          modelIds: { claude: "sonnet" },
+        })
+      );
+    });
+
+    describe("per-agent model (#12872)", () => {
+      function mockCatalogs() {
+        window.electron.agentCapabilities.getResolvedModelList = vi
+          .fn()
+          .mockImplementation((agentId: string) =>
+            Promise.resolve(
+              agentId === "codex"
+                ? {
+                    agentId: "codex",
+                    models: [
+                      { id: "gpt-6-astra", name: "GPT-6 Astra", shortLabel: "Astra" },
+                      { id: "gpt-6-luna", name: "GPT-6 Luna", shortLabel: "Luna" },
+                    ],
+                    contextWindow: null,
+                    source: "merged",
+                  }
+                : {
+                    agentId: "claude",
+                    models: [
+                      { id: "opus", name: "Opus", shortLabel: "Opus" },
+                      { id: "sonnet", name: "Sonnet", shortLabel: "Sonnet" },
+                    ],
+                    contextWindow: 200_000,
+                    source: "merged",
+                  }
+            )
+          );
+      }
+
+      function renderWith(preferredAgentId: string, modelIds: Record<string, string>) {
+        mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+        helpPanelState.preferredAgentId = preferredAgentId;
+        helpPanelState.setPreferredAgent = vi.fn((id: string | null) => {
+          helpPanelState.preferredAgentId = id;
+        });
+        installApi({
+          getSettings: vi.fn().mockResolvedValue({
+            docSearch: true,
+            daintreeControl: true,
+            tier: "core" as const,
+            bypassPermissions: false,
+            auditRetention: 7,
+            modelIds,
+            customArgs: "",
+          }),
+        });
+        mockCatalogs();
+        const tree = () => (
+          <SettingsValidationProvider>
+            <DaintreeAssistantSettingsTab />
+          </SettingsValidationProvider>
+        );
+        const utils = render(tree());
+        return { ...utils, rerenderTree: () => utils.rerender(tree()) };
+      }
+
+      function optionValues(select: HTMLSelectElement) {
+        return Array.from(select.querySelectorAll("option")).map((o) => o.value);
+      }
+
+      it("never shows another agent's saved model as selected or as an option", async () => {
+        renderWith("codex", { claude: "opus" });
+        const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("__default__"));
+        expect(optionValues(select)).not.toContain("opus");
+      });
+
+      it("shows a custom model the catalog doesn't list for the agent it was set on", async () => {
+        renderWith("codex", { codex: "my-fork-model", claude: "opus" });
+        const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("my-fork-model"));
+        expect(optionValues(select)).toContain("my-fork-model");
+        expect(optionValues(select)).not.toContain("opus");
+      });
+
+      it("keeps each agent's choice across a switch away and back", async () => {
+        const { rerenderTree } = renderWith("claude", { claude: "opus" });
+        let select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("opus"));
+
+        fireEvent.change(screen.getByRole("combobox", { name: "Agent" }), {
+          target: { value: "codex" },
+        });
+        rerenderTree();
+        select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("__default__"));
+
+        fireEvent.change(screen.getByRole("combobox", { name: "Agent" }), {
+          target: { value: "claude" },
+        });
+        rerenderTree();
+        select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("opus"));
+
+        expect(window.electron.helpAssistant.setSettings).not.toHaveBeenCalled();
+      });
+
+      it("writes a model change to the selected agent's entry only", async () => {
+        renderWith("codex", { claude: "opus" });
+        const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("__default__"));
+
+        fireEvent.change(select, { target: { value: "gpt-6-astra" } });
+
+        await waitFor(() =>
+          expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+            modelIds: { codex: "gpt-6-astra" },
+          })
+        );
+        await waitFor(() => expect(select.value).toBe("gpt-6-astra"));
+      });
+
+      it("rolls a failed save back to that agent's previous choice", async () => {
+        renderWith("codex", { codex: "gpt-6-astra", claude: "opus" });
+        vi.mocked(window.electron.helpAssistant.setSettings).mockRejectedValue(
+          new Error("disk full")
+        );
+        const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+        await waitFor(() => expect(select.value).toBe("gpt-6-astra"));
+
+        fireEvent.change(select, { target: { value: "__default__" } });
+
+        await waitFor(() =>
+          expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+            modelIds: { codex: "" },
+          })
+        );
+        await waitFor(() => expect(select.value).toBe("gpt-6-astra"));
       });
     });
   });
 
-  it("keeps one sentence of tier consequence visible and the full account behind the disclosure", async () => {
+  it("changing the tool set persists tier=full", async () => {
     const { container } = render(
       <SettingsValidationProvider>
         <DaintreeAssistantSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "Capability tier");
+    await waitForContent(container, "Tool set");
 
-    expect(container.textContent).toContain("Full in-app orchestration");
-    expect(container.textContent).not.toContain("Most assistance tasks need this");
+    fireEvent.click(screen.getByRole("radio", { name: /^Full/ }));
 
-    fireEvent.click(screen.getByRole("button", { name: /what this tier allows/i }));
+    await waitFor(() => {
+      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+        tier: "full",
+      });
+    });
+  });
 
-    expect(container.textContent).toContain("Most assistance tasks need this");
+  it("keeps one sentence of tool-set consequence visible and the full account behind the disclosure", async () => {
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Tool set");
+
+    expect(container.textContent).toContain(
+      "Create worktrees, launch and prompt agents, and move, rename or close terminals"
+    );
+    expect(container.textContent).not.toContain("This covers most orchestration");
+
+    fireEvent.click(screen.getByRole("button", { name: /what this tool set allows/i }));
+
+    expect(container.textContent).toContain("This covers most orchestration");
+  });
+
+  // The disclosure header is the only place the size of each set is stated, and
+  // `full` is additive — its count has to be the cumulative one with the delta
+  // over core beside it, not the addon count alone.
+  it("counts the previewed tool set's actions and, for full, how many it adds over core", async () => {
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Tool set");
+
+    const disclosure = screen.getByRole("button", { name: /what this tool set allows/i });
+    expect(disclosure.textContent).toContain(
+      `What this tool set allows · ${HELP_TIER_CUMULATIVE.core.length} actions`
+    );
+    expect(disclosure.textContent).not.toContain("more than core");
+
+    fireEvent.click(screen.getByRole("radio", { name: /^Full/ }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /what this tool set allows/i }).textContent
+      ).toContain(
+        `What this tool set allows · ${HELP_TIER_CUMULATIVE.full.length} actions (${HELP_TIER_INCREMENTAL.full.length} more than core)`
+      );
+    });
   });
 
   it("rotate key opens confirm dialog; confirming calls mcpServer.rotateApiKey", async () => {
@@ -937,7 +1287,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       getSettings: vi.fn().mockResolvedValue({
         docSearch: true,
         daintreeControl: false,
-        tier: "action" as const,
+        tier: "core" as const,
         bypassPermissions: false,
         auditRetention: 7,
         customArgs: "",
@@ -1012,7 +1362,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(screen.getByLabelText("Model")).toBeTruthy();
 
     // The select stub wraps its row in a <label>, which renames nested buttons; find by text.
-    fireEvent.click(screen.getByText("Retry", { selector: "button" }));
+    fireEvent.click(screen.getByText("Retry").closest("button")!);
 
     await waitFor(() => expect(getResolvedModelList).toHaveBeenCalledTimes(2));
     await waitFor(() =>
@@ -1042,7 +1392,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     const loaded = {
       docSearch: false,
       daintreeControl: true,
-      tier: "action" as const,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
       customArgs: "",
@@ -1082,7 +1432,7 @@ describe("DaintreeAssistantSettingsTab", () => {
         getSettings: vi.fn().mockResolvedValue({
           docSearch: false,
           daintreeControl: true,
-          tier: "action" as const,
+          tier: "core" as const,
           bypassPermissions: false,
           auditRetention: 7,
         }),
@@ -1136,7 +1486,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       alert.compareDocumentPosition(behaviorSwitch) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
     expect(
-      alert.compareDocumentPosition(screen.getByLabelText("Capability tier")) &
+      alert.compareDocumentPosition(screen.getByLabelText("Tool set")) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
 
@@ -1188,10 +1538,10 @@ describe("DaintreeAssistantSettingsTab", () => {
       getSettings: vi.fn().mockResolvedValue({
         docSearch: true,
         daintreeControl: true,
-        tier: "action" as const,
+        tier: "core" as const,
         bypassPermissions: true,
         auditRetention: 7,
-        modelId: "",
+        modelIds: {},
         customArgs: "",
         idleHibernateMinutes: 5,
         debugLogging: true,
@@ -1604,7 +1954,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       getSettings: vi.fn().mockResolvedValue({
         docSearch: true,
         daintreeControl: true,
-        tier: "action" as const,
+        tier: "core" as const,
         bypassPermissions: false,
         auditRetention: 7,
         customArgs: "--model sonnet",
@@ -1645,7 +1995,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       getSettings: vi.fn().mockResolvedValue({
         docSearch: true,
         daintreeControl: true,
-        tier: "action" as const,
+        tier: "core" as const,
         bypassPermissions: false,
         auditRetention: 7,
         customArgs: "--model sonnet",
@@ -1688,7 +2038,7 @@ describe("SessionLiveStatusCard (live help session)", () => {
     helpPanelState.sessionId = null;
   });
 
-  const settingsWithTier = (tier: "workbench" | "action" | "system") => ({
+  const settingsWithTier = (tier: HelpAssistantTier) => ({
     docSearch: true,
     daintreeControl: true,
     tier,
@@ -1698,13 +2048,13 @@ describe("SessionLiveStatusCard (live help session)", () => {
     idleHibernateMinutes: 30 as const,
   });
 
-  it("reports the live tier as elevated above the configured default", async () => {
+  it("reports the live tool set as elevated above the configured default", async () => {
     installApi(
       {
-        getSettings: vi.fn().mockResolvedValue(settingsWithTier("action")),
+        getSettings: vi.fn().mockResolvedValue(settingsWithTier("core")),
         getLiveSessionStatus: vi
           .fn()
-          .mockResolvedValue({ connected: true, tier: "system", activeGrants: [] }),
+          .mockResolvedValue({ connected: true, tier: "full", activeGrants: [] }),
       },
       {}
     );
@@ -1715,16 +2065,17 @@ describe("SessionLiveStatusCard (live help session)", () => {
     );
 
     await waitFor(() => expect(container.textContent).toContain("Live session"), { timeout: 5000 });
-    expect(container.textContent).toContain("elevated above the configured action default");
+    expect(container.textContent).toContain("Running the full tool set");
+    expect(container.textContent).toContain("elevated above the configured core default");
   });
 
-  it("reports a live tier below the configured default without claiming a match", async () => {
+  it("reports a live tool set below the configured default without claiming a match", async () => {
     installApi(
       {
-        getSettings: vi.fn().mockResolvedValue(settingsWithTier("system")),
+        getSettings: vi.fn().mockResolvedValue(settingsWithTier("full")),
         getLiveSessionStatus: vi
           .fn()
-          .mockResolvedValue({ connected: true, tier: "action", activeGrants: [] }),
+          .mockResolvedValue({ connected: true, tier: "core", activeGrants: [] }),
       },
       {}
     );
@@ -1735,20 +2086,21 @@ describe("SessionLiveStatusCard (live help session)", () => {
     );
 
     await waitFor(() => expect(container.textContent).toContain("Live session"), { timeout: 5000 });
-    expect(container.textContent).toContain("below the configured system default");
+    expect(container.textContent).toContain("Running the core tool set");
+    expect(container.textContent).toContain("below the configured full default");
     expect(container.textContent).not.toContain("matches the configured default");
   });
 
-  // The equality branch is the one a default (action-tier) assistant session
-  // lands on now that agent identity no longer forces `system` (#11907). The
+  // The equality branch is the one a default (core) assistant session lands on
+  // now that agent identity no longer forces the largest set (#11907). The
   // copy was previously unasserted — only the two drift directions were.
-  it("reports a live tier equal to the configured default as a match", async () => {
+  it("reports a live tool set equal to the configured default as a match", async () => {
     installApi(
       {
-        getSettings: vi.fn().mockResolvedValue(settingsWithTier("action")),
+        getSettings: vi.fn().mockResolvedValue(settingsWithTier("core")),
         getLiveSessionStatus: vi
           .fn()
-          .mockResolvedValue({ connected: true, tier: "action", activeGrants: [] }),
+          .mockResolvedValue({ connected: true, tier: "core", activeGrants: [] }),
       },
       {}
     );
@@ -1767,9 +2119,9 @@ describe("SessionLiveStatusCard (live help session)", () => {
   it("passes the public help-session id to the live-status bridge call", async () => {
     const getLiveSessionStatus = vi
       .fn()
-      .mockResolvedValue({ connected: true, tier: "action", activeGrants: [] });
+      .mockResolvedValue({ connected: true, tier: "core", activeGrants: [] });
     installApi(
-      { getSettings: vi.fn().mockResolvedValue(settingsWithTier("action")), getLiveSessionStatus },
+      { getSettings: vi.fn().mockResolvedValue(settingsWithTier("core")), getLiveSessionStatus },
       {}
     );
     render(

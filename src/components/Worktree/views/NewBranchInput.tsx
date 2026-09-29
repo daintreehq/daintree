@@ -82,10 +82,17 @@ export function NewBranchInput({
               onFocus={onPrefixInputFocus}
               onKeyDown={onPrefixKeyDown}
               placeholder="feature/add-user-auth"
+              spellCheck={false}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
               className={cn(
                 FIELD_INPUT,
                 "pr-9 font-mono text-xs",
-                hasError && "border-status-error"
+                // Focus now lands here on a failed Create, so the ring has to
+                // agree with the border: an accent ring around a red field is
+                // two signals disagreeing (as the shared slotted field notes).
+                hasError && "border-status-error focus-visible:outline-status-error"
               )}
               disabled={isPending}
               aria-invalid={hasError ? true : undefined}
@@ -117,6 +124,7 @@ export function NewBranchInput({
         </PopoverAnchor>
         <PopoverContent
           align="start"
+          motion="drop"
           className="w-[var(--radix-popover-trigger-width)] p-0"
           onOpenAutoFocus={(e) => e.preventDefault()}
           onEscapeKeyDown={(e) => e.stopPropagation()}

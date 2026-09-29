@@ -9,10 +9,24 @@ import {
   requestUserViewReload,
 } from "@/services/plugin/pluginPanelLifecycle";
 import { usePanelStore } from "@/store/panelStore";
+import { usePluginManagerStore } from "@/store/pluginManagerStore";
+import { useProjectStore } from "@/store/projectStore";
+import { resolvePluginSettingsTarget } from "@/services/plugin/pluginSettingsHome";
 import { usePluginPanelReloadConfirmStore } from "@/store/pluginPanelReloadConfirmStore";
 import { isBuiltInPanelKind } from "@shared/types/panel";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { ConfirmationStagedError, confirmationStagedMessage } from "../confirmationStaged";
+import { actionService } from "@/services/ActionService";
+import { notify } from "@/lib/notify";
+import { systemClient } from "@/clients/systemClient";
+import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+
+/** The folder part of a path main returned, kept in the platform's own separators. */
+function dirnameOf(filePath: string): string {
+  const cut = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  return cut > 0 ? filePath.slice(0, cut) : filePath;
+}
 
 /**
  * The plugin-authoring feedback loop (#12214). An agent writing a plugin into a
@@ -32,7 +46,7 @@ import { ConfirmationStagedError, confirmationStagedMessage } from "../confirmat
 const DIAGNOSTICS_LOG_LIMIT_DEFAULT = 50;
 const DIAGNOSTICS_LOG_LIMIT_MAX = 500;
 
-export function registerPluginActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
+export function registerPluginActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("plugin.reloadWindow", () =>
     defineAction({
       id: "plugin.reloadWindow",
@@ -63,7 +77,7 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
       id: "plugin.reloadPanel",
       title: "Reload panel",
       description:
-        "Discard a plugin panel's view and mount a fresh one, keeping its backend and the state it persisted. View state it has not persisted is lost. A view that reports unsaved work is left alone, a confirmation is staged for the user, and the call fails rather than reporting success.",
+        "Remount a plugin panel's view, keeping its backend and persisted state; unpersisted view state is lost. A view reporting unsaved work is left alone, a confirmation is staged for the user, and the call fails.",
       category: "plugins",
       kind: "command",
       // No confirmation by default, following browser Reload: what the view
@@ -79,10 +93,7 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
       palette: { mode: "hidden" },
       scope: "renderer",
       argsSchema: z.object({
-        panelId: z
-          .string()
-          .min(1)
-          .describe("The plugin panel to reload. Required: the focused panel is never assumed."),
+        panelId: z.string().min(1).describe("The plugin panel to reload; focus is never assumed."),
       }),
       resultSchema: z.object({
         panelId: z.string(),
@@ -123,7 +134,7 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
       id: "plugin.validate",
       title: "Validate plugin manifest",
       description:
-        "Check a plugin.json on disk against the schema Daintree actually loads with, and get back every rejection paired with the field path that caused it. The rules differ by where a plugin lives, so the reply names which set was applied and whether that came from the location on disk or from what the manifest claims about itself. Warnings are advisory and never stop a plugin loading.",
+        "Check a plugin.json on disk against the schema Daintree loads with, returning each rejection with its field path. Rules differ by plugin location; the reply names the rule set applied and why. Warnings never stop loading.",
       category: "plugins",
       kind: "query",
       danger: "safe",
@@ -133,7 +144,7 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
           .string()
           .min(1)
           .describe(
-            "The plugin directory, or the manifest file itself. Absolute, or relative to the project root. Must sit inside the open project or the managed plugins directory."
+            "Plugin directory or manifest file, absolute or project-relative, inside the open project or the managed plugins directory."
           ),
       }),
       examples: [
@@ -170,7 +181,7 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
       id: "plugin.diagnostics",
       title: "Read plugin diagnostics",
       description:
-        "Report why one plugin is in the state it is in: the load or activation failure it recorded, whether it is running, and the tail of the lines it wrote through the host logger. A project plugin whose manifest was refused is reported with its rejection, so one that never loaded is distinguishable from one that does not exist. An unknown id fails, listing the ids that do exist.",
+        "Report why a plugin is in its state: its recorded load or activation failure, whether it runs, and its recent host-logger lines. A refused project plugin is reported with its rejection. An unknown id fails, listing the ids that exist.",
       category: "plugins",
       kind: "query",
       danger: "safe",
@@ -180,7 +191,7 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
           .string()
           .min(1)
           .describe(
-            "The plugin's manifest id, in publisher.name form. For a project plugin this is the id in its manifest, not the directory it sits in."
+            "Manifest id, publisher.name. For a project plugin, the manifest id, not its directory."
           ),
         logLimit: z
           .number()
@@ -189,7 +200,7 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
           .max(DIAGNOSTICS_LOG_LIMIT_MAX)
           .optional()
           .describe(
-            `How many of the newest log lines to return (default ${DIAGNOSTICS_LOG_LIMIT_DEFAULT}, max ${DIAGNOSTICS_LOG_LIMIT_MAX}).`
+            `Newest log lines to return (default ${DIAGNOSTICS_LOG_LIMIT_DEFAULT}, max ${DIAGNOSTICS_LOG_LIMIT_MAX}).`
           ),
       }),
       examples: [
@@ -330,12 +341,159 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
     })
   );
 
+  actions.set("plugin.openSettings", () =>
+    defineAction({
+      id: "plugin.openSettings",
+      title: "Open plugin settings",
+      description:
+        "Show a plugin's settings in the one place they live: the plugin manager for an installed plugin's own settings, Project settings → Plugins for a project plugin or a project-scoped setting. A declared key is requested for landing; an undeclared one is ignored.",
+      category: "plugins",
+      kind: "command",
+      danger: "safe",
+      nonRepeatable: true,
+      // Needs a plugin id, and there is no focused-plugin fallback to act on.
+      palette: { mode: "hidden" },
+      // UI navigation for the plugin's own menus and `host.settings.open`. It is
+      // in no assistant or external tier, and hidden from tool listings too: an
+      // agent has nothing to gain from moving the user's settings dialog.
+      mcpVisibility: "hidden",
+      scope: "renderer",
+      argsSchema: z.object({
+        pluginId: z
+          .string()
+          .min(1)
+          .describe(
+            "An instance key (exact; an installed plugin's is its manifest id), or the manifest id of this project's own plugin."
+          ),
+        key: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("A setting id from the plugin's contributes.settings to land on."),
+      }),
+      resultSchema: z.object({
+        pluginId: z.string(),
+        /** Where the request was sent. The home lands on it once it renders. */
+        home: z.enum(["plugin-manager", "project-settings"]),
+        /** The declared setting the request asked to land on, or null. */
+        requestedKey: z.string().nullable(),
+      }),
+      run: async ({ pluginId, key }, ctx) => {
+        const projectId = ctx?.projectId ?? useProjectStore.getState().currentProject?.id ?? null;
+        const resolution = resolvePluginSettingsTarget(
+          pluginId,
+          key,
+          await pluginClient.list(),
+          projectId
+        );
+        if (!resolution.ok) {
+          throw new Error(
+            {
+              "not-found": `No plugin "${pluginId}" is loaded here`,
+              ambiguous: `"${pluginId}" names more than one plugin here — pass its instance key`,
+              "no-settings": `Plugin "${pluginId}" has no settings`,
+              "needs-project": `Plugin "${pluginId}" keeps ${key === undefined ? "its settings" : `"${key}"`} in Project settings, and no project is open`,
+            }[resolution.reason]
+          );
+        }
+        const { target } = resolution;
+        usePluginManagerStore.getState().requestSettings({
+          pluginId: target.plugin.instanceId,
+          home: target.home,
+          ...(target.key !== undefined ? { key: target.key } : {}),
+        });
+        if (target.home === "project") callbacks.onOpenSettingsTab({ tab: "project:plugins" });
+        return {
+          pluginId,
+          home: target.home === "project" ? "project-settings" : "plugin-manager",
+          requestedKey: target.key ?? null,
+        };
+      },
+    })
+  );
+
+  actions.set("plugin.backupDatabases", () =>
+    defineAction({
+      id: "plugin.backupDatabases",
+      title: "Back up plugin data",
+      description:
+        "Snapshot every database a plugin has created to a file or folder the user picks in a native dialog. A plugin with no database on disk yet gets a notice instead.",
+      category: "plugins",
+      kind: "command",
+      danger: "safe",
+      nonRepeatable: true,
+      // Needs a plugin id, and there is no focused-plugin fallback to act on.
+      palette: { mode: "hidden" },
+      // UI for the plugin panels' menus. It opens a native dialog only a person
+      // can answer, so it is in no assistant or external tier and hidden from
+      // tool listings too.
+      mcpVisibility: "hidden",
+      // A plugin reaching this would raise a save dialog for any plugin's data,
+      // its own included, with nothing the user asked for behind it.
+      denyPluginDispatch: true,
+      scope: "renderer",
+      argsSchema: z.object({
+        pluginId: z.string().min(1).describe("The plugin instance key whose data to back up."),
+      }),
+      // Every outcome, failures included, is reported by the notice below.
+      selfNotifiesOnExecutionError: true,
+      run: async ({ pluginId }) => {
+        const retry = () =>
+          void actionService.dispatch("plugin.backupDatabases", { pluginId }, { source: "user" });
+        let outcome;
+        try {
+          outcome = await pluginClient.backupDatabases(pluginId);
+        } catch (error) {
+          notify({
+            type: "error",
+            priority: "high",
+            title: "Couldn't back up plugin data",
+            message: formatErrorMessage(error, "The backup stopped before any file was written."),
+            action: { label: "Try again", onClick: retry },
+          });
+          throw error;
+        }
+        if (outcome.status === "cancelled") return outcome;
+        if (outcome.status === "no-data") {
+          notify({
+            type: "info",
+            priority: "high",
+            transient: true,
+            duration: 4000,
+            message: `${outcome.pluginName} has no data to back up yet`,
+          });
+          return outcome;
+        }
+        const [first] = outcome.paths;
+        const reveal = revealCopy();
+        notify({
+          type: "success",
+          priority: "high",
+          title: `${outcome.pluginName} data backed up`,
+          message:
+            outcome.paths.length === 1
+              ? `Saved to ${first}`
+              : `${outcome.paths.length} databases saved to ${dirnameOf(first!)}`,
+          ...(first !== undefined
+            ? {
+                action: {
+                  label: reveal.label,
+                  onClick: () => void systemClient.showItemInFolderUnconfined(first),
+                },
+              }
+            : {}),
+        });
+        return outcome;
+      },
+    })
+  );
+
   actions.set("plugin.reloadProject", () =>
     defineAction({
       id: "plugin.reloadProject",
       title: "Reload project plugins",
       description:
-        "Re-scan the open project's committed plugins and reconcile what is running against what is on disk, then report the state of every plugin directory found. This is how a newly written or rebuilt plugin is picked up without reopening the project. Trust and staging rules still apply, so an id the project has never run is listed but not executed.",
+        "Re-scan the open project's committed plugins, reconcile what runs with what is on disk, and report every plugin directory found. Picks up a new or rebuilt plugin without reopening the project. Trust rules still apply: an id the project never ran is listed, not executed.",
       category: "plugins",
       kind: "command",
       danger: "safe",

@@ -1,9 +1,22 @@
 import { describe, it, expect } from "vitest";
 import { build } from "vite";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { reactExternals, daintreePlugin, HOST_IMPORTMAP_SPECIFIERS } from "../index.js";
+import {
+  reactExternals,
+  tourExternals,
+  pluginUiExternals,
+  daintreePlugin,
+  HOST_IMPORTMAP_SPECIFIERS,
+} from "../index.js";
+
+function matchesHostExternal(specifier: string): boolean {
+  return [...reactExternals, ...tourExternals, ...pluginUiExternals].some((re) =>
+    re.test(specifier)
+  );
+}
 
 describe("@daintreehq/plugin-vite — reactExternals", () => {
   function matchesAny(specifier: string): boolean {
@@ -37,6 +50,42 @@ describe("@daintreehq/plugin-vite — reactExternals", () => {
   });
 });
 
+describe("@daintreehq/plugin-vite — tourExternals", () => {
+  function matchesAny(specifier: string): boolean {
+    return tourExternals.some((re) => re.test(specifier));
+  }
+
+  it("matches the tour root and every subpath", () => {
+    expect(matchesAny("@daintreehq/tour")).toBe(true);
+    expect(matchesAny("@daintreehq/tour/react")).toBe(true);
+    expect(matchesAny("@daintreehq/tour/kit")).toBe(true);
+  });
+
+  it("does not match adjacent package names that share a prefix", () => {
+    expect(matchesAny("@daintreehq/tour-extra")).toBe(false);
+    expect(matchesAny("@daintreehq/tourist")).toBe(false);
+    expect(matchesAny("@daintreehq/plugin-sdk")).toBe(false);
+    expect(matchesAny("@other/tour")).toBe(false);
+  });
+});
+
+describe("@daintreehq/plugin-vite — pluginUiExternals", () => {
+  function matchesAny(specifier: string): boolean {
+    return pluginUiExternals.some((re) => re.test(specifier));
+  }
+
+  it("matches the plugin-ui root and every subpath", () => {
+    expect(matchesAny("@daintreehq/plugin-ui")).toBe(true);
+    expect(matchesAny("@daintreehq/plugin-ui/internal")).toBe(true);
+  });
+
+  it("does not match adjacent package names that share a prefix", () => {
+    expect(matchesAny("@daintreehq/plugin-uikit")).toBe(false);
+    expect(matchesAny("@daintreehq/plugin-sdk")).toBe(false);
+    expect(matchesAny("@other/plugin-ui")).toBe(false);
+  });
+});
+
 describe("@daintreehq/plugin-vite — daintreePlugin", () => {
   it("returns a Vite plugin with the expected name", () => {
     const plugin = daintreePlugin();
@@ -52,11 +101,11 @@ describe("@daintreehq/plugin-vite — daintreePlugin", () => {
     return configFn(userConfig).build.rollupOptions.external;
   }
 
-  it("externalizes everything the React regexes cover, as a function", () => {
+  it("externalizes every host-served specifier, as a function", () => {
     const external = externalOf(daintreePlugin());
     expect(typeof external).toBe("function");
     for (const specifier of HOST_IMPORTMAP_SPECIFIERS) {
-      expect(reactExternals.some((re) => re.test(specifier))).toBe(true);
+      expect(matchesHostExternal(specifier)).toBe(true);
       expect(external(specifier)).toBe(true);
     }
     expect(external("react-router")).toBe(false);
@@ -69,6 +118,29 @@ describe("@daintreehq/plugin-vite — daintreePlugin", () => {
     const external = externalOf(daintreePlugin());
     expect(() => external("react-dom/server")).toThrow(/import map does not serve/);
     expect(() => external("react/compiler-runtime")).toThrow(/react\/compiler-runtime/);
+  });
+
+  it("throws from the external decision for an unmapped tour subpath", () => {
+    const external = externalOf(daintreePlugin());
+    expect(() => external("@daintreehq/tour/internal")).toThrow(
+      /@daintreehq\/tour\/internal.*import map/
+    );
+  });
+
+  it("does not let an author external smuggle an unmapped tour subpath past the guard", () => {
+    const external = externalOf(daintreePlugin({ externals: [/^@daintreehq\//] }));
+    expect(() => external("@daintreehq/tour/internal")).toThrow(/import map does not serve/);
+    expect(external("@daintreehq/tour/react")).toBe(true);
+    expect(external("@daintreehq/tour/kit")).toBe(true);
+    expect(external("@daintreehq/tour/mock-app")).toBe(true);
+  });
+
+  it("throws from the external decision for an unmapped plugin-ui subpath", () => {
+    const external = externalOf(daintreePlugin({ externals: [/^@daintreehq\//] }));
+    expect(external("@daintreehq/plugin-ui")).toBe(true);
+    expect(() => external("@daintreehq/plugin-ui/internal")).toThrow(
+      /@daintreehq\/plugin-ui\/internal.*import map does not serve/
+    );
   });
 
   it("merges caller-supplied externals with the React preset", () => {
@@ -143,6 +215,41 @@ describe("@daintreehq/plugin-vite — real build honours the unmapped subpath gu
     expect(chunks[0]?.imports).toEqual(["react-dom/client"]);
     expect(chunks[0]?.code).toContain('from "react-dom/client"');
   });
+
+  it("leaves every tour subpath external so a scene shares the host's tour instance", async () => {
+    const chunks = await buildEntry(
+      'import { TourPlayer } from "@daintreehq/tour"; import { useCue } from "@daintreehq/tour/react"; import { TourCanvas } from "@daintreehq/tour/kit"; import { MockApp } from "@daintreehq/tour/mock-app"; export { TourPlayer, useCue, TourCanvas, MockApp };'
+    );
+    expect(chunks).toHaveLength(1);
+    expect([...(chunks[0]?.imports ?? [])].sort()).toEqual([
+      "@daintreehq/tour",
+      "@daintreehq/tour/kit",
+      "@daintreehq/tour/mock-app",
+      "@daintreehq/tour/react",
+    ]);
+    expect(chunks[0]?.code).not.toContain("TourPlayerContext");
+  });
+
+  it("leaves @daintreehq/plugin-ui external, since only the host has an implementation", async () => {
+    const chunks = await buildEntry(
+      'import { Markdown } from "@daintreehq/plugin-ui"; export { Markdown };'
+    );
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.imports).toEqual(["@daintreehq/plugin-ui"]);
+    expect(chunks[0]?.code).toContain('from "@daintreehq/plugin-ui"');
+  });
+
+  it("rejects a bundle importing an unmapped plugin-ui subpath", async () => {
+    await expect(
+      buildEntry('import { internal } from "@daintreehq/plugin-ui/internal"; export { internal };')
+    ).rejects.toThrow(/@daintreehq\/plugin-ui\/internal.*import map does not serve/);
+  });
+
+  it("rejects a bundle importing an unmapped tour subpath", async () => {
+    await expect(
+      buildEntry('import { internal } from "@daintreehq/tour/internal"; export { internal };')
+    ).rejects.toThrow(/@daintreehq\/tour\/internal.*import map does not serve/);
+  });
 });
 
 describe("@daintreehq/plugin-vite — HOST_IMPORTMAP_SPECIFIERS", () => {
@@ -150,13 +257,29 @@ describe("@daintreehq/plugin-vite — HOST_IMPORTMAP_SPECIFIERS", () => {
     return reactExternals.some((re) => re.test(specifier));
   }
 
-  it("only lists specifiers that the React externals would strip", () => {
+  it("only lists specifiers that the host externals would strip", () => {
     // The host-mapped set must be a subset of what gets externalized — a mapped
     // specifier the externals didn't strip would be bundled, never resolved
     // through the import map.
     for (const specifier of HOST_IMPORTMAP_SPECIFIERS) {
-      expect(matchesAny(specifier)).toBe(true);
+      expect(matchesHostExternal(specifier)).toBe(true);
     }
+  });
+
+  it("serves exactly the public subpaths @daintreehq/tour exports", () => {
+    // A subpath the tour package publishes but the host does not serve would
+    // fail the plugin build; one the host serves but the package does not
+    // export is a facade nobody can type against.
+    const tourPackage = JSON.parse(
+      readFileSync(new URL("../../../tour/package.json", import.meta.url), "utf8")
+    ) as { exports: Record<string, unknown> };
+    const published = Object.keys(tourPackage.exports)
+      .map((subpath) =>
+        subpath === "." ? "@daintreehq/tour" : `@daintreehq/tour/${subpath.slice(2)}`
+      )
+      .sort();
+    const served = HOST_IMPORTMAP_SPECIFIERS.filter((s) => s.startsWith("@daintreehq/tour")).sort();
+    expect(served).toEqual(published);
   });
 
   it("does not list React subpaths the host cannot resolve", () => {
@@ -180,10 +303,14 @@ describe("@daintreehq/plugin-vite — unmapped subpath guard", () => {
     return plugin.resolveId as unknown as ResolveIdFn;
   }
 
-  it("throws on a React subpath the host import map does not serve", () => {
+  it("throws on a React, tour or plugin-ui subpath the host import map does not serve", () => {
     const resolveId = resolveIdOf(daintreePlugin());
     expect(() => resolveId("react-dom/server")).toThrow(/react-dom\/server/);
     expect(() => resolveId("react/compiler-runtime")).toThrow(/import map/);
+    expect(() => resolveId("@daintreehq/tour/internal")).toThrow(/@daintreehq\/tour\/internal/);
+    expect(() => resolveId("@daintreehq/plugin-ui/internal")).toThrow(
+      /@daintreehq\/plugin-ui\/internal/
+    );
   });
 
   it("allows every host-served specifier through (returns null to externalize)", () => {
@@ -193,9 +320,11 @@ describe("@daintreehq/plugin-vite — unmapped subpath guard", () => {
     }
   });
 
-  it("ignores non-React specifiers", () => {
+  it("ignores specifiers the host does not own", () => {
     const resolveId = resolveIdOf(daintreePlugin());
     expect(resolveId("react-router")).toBeNull();
+    expect(resolveId("@daintreehq/tour-extra")).toBeNull();
+    expect(resolveId("@daintreehq/plugin-uikit")).toBeNull();
     expect(resolveId("@scope/react")).toBeNull();
     expect(resolveId("./local-module")).toBeNull();
   });
@@ -219,9 +348,9 @@ describe("@daintreehq/plugin-vite — node target", () => {
     expect(external).toContain("node:fs");
   });
 
-  it("does not externalize React (node code has no host import map)", () => {
+  it("does not externalize React, the tour or plugin-ui (node code has no host import map)", () => {
     const external = nodeConfig(daintreePlugin({ target: "node" })).build.rollupOptions.external;
-    for (const re of reactExternals) {
+    for (const re of [...reactExternals, ...tourExternals, ...pluginUiExternals]) {
       expect(external).not.toContain(re);
     }
   });

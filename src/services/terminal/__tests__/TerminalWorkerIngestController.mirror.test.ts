@@ -86,6 +86,25 @@ describe("TerminalWorkerIngestController mirror writes", () => {
     mirror = deps.mirror;
   });
 
+  it("does not engage the worker for a hidden-window demotion (#12798)", () => {
+    // Worker snapshots would replace a hidden window's full buffer with a
+    // truncated mirror, and agents and MCP there still read it.
+    vi.stubGlobal("document", { hidden: true });
+    try {
+      const controller = new TerminalWorkerIngestController({
+        getInstance: () => managed,
+        getQueuedBytes: () => 0,
+        resumeFlush: vi.fn(),
+        incrementUnseen,
+        fetchAndRestore: vi.fn(async () => true),
+      });
+      controller.applyWorkerIngestPolicy("t1", TerminalRefreshTier.BACKGROUND, managed);
+      expect(controller.getIngest("t1")).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("flags a snapshot apply as Daintree's own clear until its parse callback", () => {
     const onApplied = vi.fn();
     applySnapshotToMirror(mirror, "first", onApplied);
@@ -114,6 +133,19 @@ describe("TerminalWorkerIngestController mirror writes", () => {
     expect(onParsed).toHaveBeenCalledTimes(1);
     expect(incrementUnseen).toHaveBeenCalledWith("t1", true);
     expect(managed.pendingOwnClearWrites).toBe(0);
+  });
+
+  it("records output receipt for live chunks and non-empty snapshots only (#12754)", () => {
+    applySnapshotToMirror(mirror, "");
+    mirror.write("");
+    expect(managed.hasReceivedOutput).toBeUndefined();
+
+    applySnapshotToMirror(mirror, "prompt$ ");
+    expect(managed.hasReceivedOutput).toBe(true);
+
+    managed.hasReceivedOutput = undefined;
+    mirror.write("agent output");
+    expect(managed.hasReceivedOutput).toBe(true);
   });
 
   it("a write xterm rejects releases the flag instead of stranding it", () => {

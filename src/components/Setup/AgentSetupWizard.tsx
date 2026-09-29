@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { AgentCliStep } from "./AgentCliStep";
 import { SystemRequirementsSection } from "./SystemRequirementsSection";
@@ -16,7 +17,8 @@ import type { CliAvailability } from "@shared/types";
 import { useAgentSetupPoll } from "./useAgentSetupPoll";
 import { isAgentInstalled, isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { Sparkles, ChevronLeft, ArrowRight, Check, Sun, Moon, FolderOpen } from "lucide-react";
-import { AnimatePresence, m, useReducedMotion, type Variants } from "framer-motion";
+import { AnimatePresence, m, type Variants } from "framer-motion";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { Plug } from "@/components/icons";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import {
@@ -24,7 +26,7 @@ import {
   UI_EXIT_DURATION,
   UI_PALETTE_ENTER_DURATION,
   UI_PALETTE_EXIT_DURATION,
-  EASE_OUT_EXPO_FM,
+  UI_ENTER_EASING_FM,
   UI_EXIT_EASING_FM,
 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
@@ -37,6 +39,7 @@ import type { AppColorScheme } from "@shared/types/appTheme";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
+import { CountBadge } from "@/components/ui/badge";
 
 const AGENT_ORDER = LAUNCHABLE_AGENT_IDS;
 
@@ -221,7 +224,7 @@ const stepVariants: Variants = {
   animate: {
     x: 0,
     opacity: 1,
-    transition: { duration: UI_ENTER_DURATION / 1000, ease: EASE_OUT_EXPO_FM },
+    transition: { duration: UI_ENTER_DURATION / 1000, ease: UI_ENTER_EASING_FM },
   },
   exit: (direction: number) => ({
     x: direction * -STEP_SLIDE_PX,
@@ -518,7 +521,7 @@ export function AgentSetupWizard({
   const isOpenRef = useRef(isOpen);
   const initRef = useRef(false);
   const directionRef = useRef<1 | -1>(1);
-  const prefersReducedMotion = useReducedMotion();
+  const prefersReducedMotion = useShouldSkipMotion();
 
   useEffect(() => {
     isOpenRef.current = isOpen;
@@ -851,6 +854,9 @@ export function AgentSetupWizard({
     return true;
   }, [isFirstRun, state.step.type, commitTelemetry, notifyTelemetryDefault]);
 
+  const agentsContinueBlocked =
+    selectedAgentIds.length === 0 || isSaving || hasFatalHealthFailure || isHealthChecking;
+
   return (
     <AppDialog
       isOpen={isOpen}
@@ -865,7 +871,7 @@ export function AgentSetupWizard({
         <div className="flex items-center gap-3 min-w-0">
           {/* Neutral, not accent: the header glyph is decoration, and the
               footer's primary action is this dialog's one load-bearing signal. */}
-          <AppDialog.Title icon={<Plug className="w-5 h-5 text-text-secondary" />}>
+          <AppDialog.Title icon={<Plug />}>
             {isFirstRun ? "Set up Daintree" : "Agent setup"}
           </AppDialog.Title>
           <span
@@ -975,10 +981,13 @@ export function AgentSetupWizard({
           {state.step.type !== "complete" &&
             (state.history.length > 0 ? (
               <Button
+                aria-disabled={isSaving || isInstalling || undefined}
                 variant="ghost"
-                onClick={handleBack}
-                className="text-text-secondary hover:text-text-primary"
-                disabled={isSaving || isInstalling}
+                onClick={isSaving || isInstalling ? undefined : handleBack}
+                className={cn(
+                  "text-text-secondary hover:text-text-primary",
+                  (isSaving || isInstalling) && ARIA_DISABLED_CLASSES
+                )}
               >
                 <ChevronLeft className="w-4 h-4" />
                 Back
@@ -990,63 +999,85 @@ export function AgentSetupWizard({
               // wizard uses it. "Cancel" on a re-run, where the selection the
               // user just made is discarded rather than deferred.
               <Button
+                aria-disabled={isSaving || undefined}
                 variant="ghost"
-                onClick={handleSkip}
-                disabled={isSaving}
+                onClick={isSaving ? undefined : handleSkip}
                 data-testid="agent-setup-exit"
-                className="text-text-secondary hover:text-text-primary"
+                className={cn(
+                  "text-text-secondary hover:text-text-primary",
+                  isSaving && ARIA_DISABLED_CLASSES
+                )}
               >
                 {isFirstRun ? "Not now" : "Cancel"}
               </Button>
             ))}
           {state.step.type === "appearance" && (
-            <Button variant="contrast" onClick={handleAppearanceContinue} disabled={isSaving}>
+            <Button
+              aria-disabled={isSaving || undefined}
+              className={cn(isSaving && ARIA_DISABLED_CLASSES)}
+              variant="contrast"
+              onClick={isSaving ? undefined : handleAppearanceContinue}
+            >
               Continue
-              <ArrowRight className="w-4 h-4 ml-1" />
+              <ArrowRight aria-hidden="true" />
             </Button>
           )}
           {state.step.type === "agents" && (
             <Button
+              aria-disabled={agentsContinueBlocked || undefined}
+              className={cn(agentsContinueBlocked && ARIA_DISABLED_CLASSES)}
               variant="contrast"
-              onClick={handleAgentsContinue}
-              disabled={
-                selectedAgentIds.length === 0 ||
-                isSaving ||
-                hasFatalHealthFailure ||
-                isHealthChecking
-              }
+              onClick={agentsContinueBlocked ? undefined : handleAgentsContinue}
             >
               Continue
-              <ArrowRight className="w-4 h-4 ml-1" />
+              <ArrowRight aria-hidden="true" />
             </Button>
           )}
           {state.step.type === "privacy" && (
-            <Button variant="contrast" onClick={handlePrivacyContinue} disabled={isSaving}>
+            <Button
+              aria-disabled={isSaving || undefined}
+              className={cn(isSaving && ARIA_DISABLED_CLASSES)}
+              variant="contrast"
+              onClick={isSaving ? undefined : handlePrivacyContinue}
+            >
               Continue
-              <ArrowRight className="w-4 h-4 ml-1" />
+              <ArrowRight aria-hidden="true" />
             </Button>
           )}
           {state.step.type === "cli" &&
             (hasUsableSelection ? (
-              <Button variant="contrast" onClick={handleCliContinue} disabled={isInstalling}>
+              <Button
+                aria-disabled={isInstalling || undefined}
+                className={cn(isInstalling && ARIA_DISABLED_CLASSES)}
+                variant="contrast"
+                onClick={isInstalling ? undefined : handleCliContinue}
+              >
                 Continue
-                <ArrowRight className="w-4 h-4 ml-1" />
+                <ArrowRight aria-hidden="true" />
               </Button>
             ) : (
               <Button
+                aria-disabled={isInstalling || undefined}
                 variant="ghost"
-                onClick={handleCliContinue}
-                disabled={isInstalling}
+                onClick={isInstalling ? undefined : handleCliContinue}
                 data-testid="agent-cli-defer"
-                className="text-text-secondary hover:text-text-primary"
+                className={cn(
+                  "text-text-secondary hover:text-text-primary",
+                  isInstalling && ARIA_DISABLED_CLASSES
+                )}
               >
                 Set up later
               </Button>
             ))}
           {state.step.type === "permissions" && (
-            <Button variant="contrast" onClick={handlePermissionsContinue} disabled={isSaving}>
+            <Button
+              aria-disabled={isSaving || undefined}
+              className={cn(isSaving && ARIA_DISABLED_CLASSES)}
+              variant="contrast"
+              onClick={isSaving ? undefined : handlePermissionsContinue}
+            >
               Continue
-              <ArrowRight className="w-4 h-4 ml-1" />
+              <ArrowRight aria-hidden="true" />
             </Button>
           )}
           {/* Completion resolves to the forward move, matching CloneRepoDialog's
@@ -1061,7 +1092,7 @@ export function AgentSetupWizard({
                 onClick={handleOpenProject}
                 data-testid="complete-step-open-project"
               >
-                <FolderOpen className="w-4 h-4 mr-1" />
+                <FolderOpen aria-hidden="true" />
                 Open a project
               </Button>
             ) : hasInstalledAgents ? (
@@ -1070,7 +1101,7 @@ export function AgentSetupWizard({
                 onClick={handleLaunchAgent}
                 data-testid="complete-step-launch-agent"
               >
-                <Sparkles className="w-4 h-4 mr-1" />
+                <Sparkles aria-hidden="true" />
                 Launch an agent
               </Button>
             ) : (
@@ -1278,9 +1309,9 @@ function PrivacyStep({
       />
       {/* Underlined at rest: previously this read as a third line of body
           copy and only became identifiable as a control on hover. */}
-      <button
-        type="button"
-        className="text-xs text-text-link underline underline-offset-2 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary rounded-xs"
+      <Button
+        variant="link"
+        className="text-xs"
         onClick={() =>
           void actionService.dispatch(
             "telemetry.togglePreview",
@@ -1290,7 +1321,7 @@ function PrivacyStep({
         }
       >
         Preview what would be sent
-      </button>
+      </Button>
     </section>
   );
 }
@@ -1364,12 +1395,7 @@ export function CompleteStep({
                 </BrandMark>
                 <span className="text-sm text-text-primary font-medium">{agent.name}</span>
                 {presetCount > 1 && (
-                  <span
-                    data-testid="preset-count-badge"
-                    className="text-3xs text-status-info font-medium bg-status-info/10 px-1.5 py-0.5 rounded"
-                  >
-                    {presetCount} presets
-                  </span>
+                  <CountBadge data-testid="preset-count-badge">{presetCount} presets</CountBadge>
                 )}
                 {shortcut && <KbdChord shortcut={shortcut} className="ml-auto" />}
               </div>

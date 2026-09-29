@@ -32,8 +32,16 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronRight, Ellipsis, GripVertical } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowLeftRight,
+  ArrowUp,
+  ChevronRight,
+  Ellipsis,
+  GripVertical,
+} from "lucide-react";
 import { useToolbarPreferencesStore } from "@/store";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { AnyToolbarButtonId, LauncherItemToolbarButtonId } from "@/../../shared/types/toolbar";
@@ -167,12 +175,17 @@ function ToolbarButtonMoveMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[180px]">
         <DropdownMenuItem disabled={!moves.onMoveUp} onSelect={() => moves.onMoveUp?.()}>
+          <ArrowUp data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Move up
         </DropdownMenuItem>
         <DropdownMenuItem disabled={!moves.onMoveDown} onSelect={() => moves.onMoveDown?.()}>
+          <ArrowDown data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Move down
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={moves.onMoveAcross}>{moves.acrossLabel}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={moves.onMoveAcross}>
+          <ArrowLeftRight data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          {moves.acrossLabel}
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -440,6 +453,9 @@ export function ToolbarSettingsTab() {
   const setAlwaysShowDevServer = useToolbarPreferencesStore((s) => s.setAlwaysShowDevServer);
   const setDefaultSelection = useToolbarPreferencesStore((s) => s.setDefaultSelection);
   const reset = useToolbarPreferencesStore((s) => s.reset);
+  // Confirmed like every other settings reset (shortcuts, agent settings): the
+  // layout is hand-built and nothing restores it once it's gone.
+  const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
 
   const agentSettings = useAgentSettingsStore((s) => s.settings);
   const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
@@ -1076,8 +1092,9 @@ export function ToolbarSettingsTab() {
                       )}
                     >
                       <ChevronRight
+                        data-animated-chevron
                         className={cn(
-                          "w-3.5 h-3.5 shrink-0 transition-transform duration-150",
+                          "w-3.5 h-3.5 shrink-0 transition-transform duration-150 ease-out",
                           showUninstalledAgents ? "rotate-90" : "rotate-0"
                         )}
                         aria-hidden="true"
@@ -1171,7 +1188,7 @@ export function ToolbarSettingsTab() {
               type="button"
               variant="ghost-danger"
               size="sm"
-              onClick={reset}
+              onClick={() => setIsResetConfirmOpen(true)}
               disabled={disabled}
               aria-labelledby={labelId}
               aria-describedby={descriptionId}
@@ -1181,6 +1198,19 @@ export function ToolbarSettingsTab() {
           )}
         />
       </SettingsGroup>
+      <ConfirmDialog
+        isOpen={isResetConfirmOpen}
+        variant="destructive"
+        onConfirm={() => {
+          reset();
+          setIsResetConfirmOpen(false);
+        }}
+        onClose={() => setIsResetConfirmOpen(false)}
+        title="Reset toolbar?"
+        description="Every button, its side and its order go back to the defaults, and so do the launcher palette options."
+        confirmLabel="Reset toolbar"
+        zIndex="nested"
+      />
     </div>
   );
 }

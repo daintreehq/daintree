@@ -5,7 +5,11 @@ import type { RemoteInfo } from "@shared/types/ipc/forge";
 import type { RegisteredForgeProvider } from "@shared/types/forge";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import {
+  SettingsGroup,
+  SettingsInlineError,
+  SettingsRow,
+} from "@/components/Settings/SettingsGroup";
 import { SettingsSelect } from "@/components/Settings/SettingsSelect";
 import type { SettingsSelectOption } from "@/components/Settings/SettingsSelect";
 
@@ -157,16 +161,20 @@ export function CodeForgeTab({
               loading ? (
                 <span className="text-sm text-text-secondary">Loading remotes…</span>
               ) : (
-                <span className="flex items-center gap-3">
-                  <span className="text-sm text-status-error">{error}</span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setRemotesAttempt((n) => n + 1)}
-                  >
-                    Retry
-                  </Button>
-                </span>
+                <SettingsInlineError
+                  action={
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => setRemotesAttempt((n) => n + 1)}
+                      className="-my-1 shrink-0"
+                    >
+                      Retry
+                    </Button>
+                  }
+                >
+                  {error}
+                </SettingsInlineError>
               )
             }
           />
@@ -193,16 +201,20 @@ export function CodeForgeTab({
               providersLoading ? (
                 <span className="text-sm text-text-secondary">Loading providers…</span>
               ) : (
-                <span className="flex items-center gap-3">
-                  <span className="text-sm text-status-error">{providersError}</span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setProvidersAttempt((n) => n + 1)}
-                  >
-                    Retry
-                  </Button>
-                </span>
+                <SettingsInlineError
+                  action={
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => setProvidersAttempt((n) => n + 1)}
+                      className="-my-1 shrink-0"
+                    >
+                      Retry
+                    </Button>
+                  }
+                >
+                  {providersError}
+                </SettingsInlineError>
               )
             }
           />

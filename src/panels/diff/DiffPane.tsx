@@ -14,7 +14,8 @@ import {
   Check,
   ExternalLink,
   FolderTree,
-  PanelLeft,
+  PanelLeftClose,
+  PanelLeftOpen,
   RefreshCw,
   WrapText,
   XCircle,
@@ -55,8 +56,14 @@ import { DiffViewer, FULL_FILE_MAX_LINES } from "@/components/Worktree/DiffViewe
 import type { FullFileUnavailableReason } from "@/components/Worktree/DiffViewer";
 import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
-import { IconToggle } from "@/components/FileViewer/IconToggle";
-import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
+import type { DiffViewerAnnotations } from "@/components/Worktree/DiffViewer";
+import { useDiffNotesStore } from "@/store/diffNotesStore";
+import type { DiffNoteDeliveryResult } from "@/hooks/useDiffNoteDelivery";
+import { DiffNotesSendMenu, sendDiffNotes, type DiffNoteSendRequest } from "./DiffNotesSendMenu";
+import { PendingFileNotes } from "@/components/Worktree/DiffNoteWidgets";
+import { PANE_TOOLBAR_TEXT_BUTTON_CLASS } from "@/components/ui/paneToolbarStyles";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -147,6 +154,21 @@ const LazyRenderedMarkdownDiff = lazy(() =>
     default: m.RenderedMarkdownDiff,
   }))
 );
+
+const NOTE_SENT_STATUS_MS = 5000;
+
+// Content values `useDiffContent` returns in place of a patch.
+const DIFF_SENTINEL_CONTENT: ReadonlySet<string> = new Set([
+  "NO_CHANGES",
+  "BINARY_FILE",
+  "FILE_TOO_LARGE",
+  "ERROR",
+]);
+
+function describeNotesSent(result: Extract<DiffNoteDeliveryResult, { ok: true }>): string {
+  const sent = `Pasted ${result.sent} ${result.sent === 1 ? "note" : "notes"} into ${result.targetTitle}`;
+  return result.kept > 0 ? `${sent} · ${result.kept} still pending` : sent;
+}
 
 export interface DiffPaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -366,6 +388,41 @@ export function DiffPane({
   const currentEntry = currentIndex === -1 ? undefined : changeSet?.[currentIndex];
   const isViewed = currentEntry ? viewedSet.has(currentEntry.viewedKey) : false;
 
+  // Every diff source this pane renders is a local diff of the worktree, so
+  // each one can take notes for an agent working there.
+  const annotations = useMemo<DiffViewerAnnotations | undefined>(
+    () => (worktreePath ? { worktreePath } : undefined),
+    [worktreePath]
+  );
+  const hasPendingNotes = useDiffNotesStore(
+    useCallback(
+      (state) =>
+        worktreePath !== "" &&
+        Object.values(state.notes).some((note) => note.worktreePath === worktreePath),
+      [worktreePath]
+    )
+  );
+  // A failed send keeps its notes pending and names what failed, with a retry
+  // aimed at the same agent and scope; a delivered one says where it went.
+  const [noteSend, setNoteSend] = useState<{
+    request: DiffNoteSendRequest;
+    result: DiffNoteDeliveryResult;
+  } | null>(null);
+  const handleNoteSendResult = useCallback(
+    (request: DiffNoteSendRequest, result: DiffNoteDeliveryResult) => {
+      setNoteSend({ request, result });
+    },
+    []
+  );
+  useEffect(() => {
+    if (!noteSend?.result.ok) return;
+    const timer = setTimeout(() => setNoteSend(null), NOTE_SENT_STATUS_MS);
+    return () => clearTimeout(timer);
+  }, [noteSend]);
+  useEffect(() => {
+    setNoteSend(null);
+  }, [worktreePath, filePath]);
+
   // Forces a fresh request in video, audio and PDF mode — the diff content hooks
   // don't carry those bytes, so Refresh has to re-request the protocol URL itself.
   const [previewReloadNonce, setPreviewReloadNonce] = useState(0);
@@ -473,6 +530,10 @@ export function DiffPane({
   // `[` / `]` step files and `v` marks the current file viewed — the same keys
   // the modal bound, scoped to this panel so a background one stays inert.
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // The footer is a toolbar like the header above the diff: one tab stop,
+  // arrow keys between its controls.
+  const footerRef = useRef<HTMLDivElement | null>(null);
+  const onFooterKeyDown = useToolbarRoving(footerRef);
   useEffect(() => {
     if (!isFocused) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -663,6 +724,27 @@ export function DiffPane({
   const showRendered =
     renderedRequested && renderedAvailability.visible && renderedAvailability.enabled;
   const layout: DiffPaneLayout = showRendered ? "rendered" : diffViewType;
+  // Whether the diff table (and so its note cards) is what the body shows.
+  // While a diff reloads, the last settled answer for the same file holds: a
+  // retried error keeps its fallback list (and any editor open in it) mounted,
+  // and a first load doesn't flash the list ahead of the table.
+  const [settledContent, setSettledContent] = useState<{
+    filePath: string | undefined;
+    content: string;
+  } | null>(null);
+  if (content && (settledContent?.content !== content || settledContent.filePath !== filePath)) {
+    setSettledContent({ filePath, content });
+  }
+  const shownContent =
+    content ??
+    (settledContent !== null && settledContent.filePath === filePath
+      ? settledContent.content
+      : undefined);
+  const notesRenderInline =
+    !isImageMode &&
+    !isMediaMode &&
+    !isPdfMode &&
+    (!shownContent || (!showRendered && !DIFF_SENTINEL_CONTENT.has(shownContent)));
 
   const handleLayoutChange = useCallback(
     (next: DiffPaneLayout) => {
@@ -714,13 +796,13 @@ export function DiffPane({
   // disabled segment takes no focus, so a keyboard or screen-reader user would
   // never reach a hover-only explanation.
   const scopeReasonId = `${id}-full-file-reason`;
+  // `flex`: the group is inline-flex, and inline content in a block wrapper
+  // grows the line box by the font's descender, lifting it off the toolbar's axis.
   const scopeToggle = (
-    <div
-      role="group"
-      aria-label="Diff content"
-      aria-describedby={fullFileAvailability.available ? undefined : scopeReasonId}
-    >
-      <SegmentedToggle<DiffContentScope>
+    <div className="flex">
+      <SegmentedRadioGroup<DiffContentScope>
+        aria-label="Diff content"
+        aria-describedby={fullFileAvailability.available ? undefined : scopeReasonId}
         options={[
           { value: "changes", label: "Changes" },
           {
@@ -832,12 +914,10 @@ export function DiffPane({
       : null;
   const layoutReasonId = `${id}-rendered-reason`;
   const layoutToggle = (
-    <div
-      role="group"
-      aria-label="Diff layout"
-      aria-describedby={renderedDisabledReason ? layoutReasonId : undefined}
-    >
-      <SegmentedToggle<DiffPaneLayout>
+    <div className="flex">
+      <SegmentedRadioGroup<DiffPaneLayout>
+        aria-label="Diff layout"
+        aria-describedby={renderedDisabledReason ? layoutReasonId : undefined}
         options={[
           { value: "unified", label: "Unified" },
           { value: "split", label: "Split" },
@@ -1215,7 +1295,7 @@ export function DiffPane({
                   data-testid="diff-pane-unavailable"
                   action={
                     <Button
-                      variant="subtle"
+                      variant="contrast"
                       size="sm"
                       onClick={() => void handleExternalAction("default-app")}
                     >
@@ -1263,7 +1343,7 @@ export function DiffPane({
                   data-testid="diff-pane-unavailable"
                   action={
                     <Button
-                      variant="subtle"
+                      variant="contrast"
                       size="sm"
                       onClick={() => void handleExternalAction("default-app")}
                     >
@@ -1281,6 +1361,14 @@ export function DiffPane({
                   onError={setPreviewError}
                 />
               ))}
+
+            {/* Line notes live in the diff table. Where there is no table —
+                an empty, binary or failed diff, rendered Markdown, a preview —
+                the file's pending notes are listed here instead, so none of
+                them is sendable without being editable. */}
+            {filePath && worktreePath && !notesRenderInline && (
+              <PendingFileNotes worktreePath={worktreePath} filePath={filePath} />
+            )}
 
             {filePath &&
               subject &&
@@ -1312,6 +1400,7 @@ export function DiffPane({
                   diff={content}
                   viewType={diffViewType}
                   rootPath={worktreePath}
+                  annotations={annotations}
                   source={wantsFullFile ? source : undefined}
                   fullFile={wantsFullFile}
                   onFullFileVerdict={handleFullFileVerdict}
@@ -1332,73 +1421,110 @@ export function DiffPane({
         </div>
       </div>
 
-      {(isWorkspace || currentEntry !== undefined) && (
+      {noteSend && !noteSend.result.ok && (
+        <InlineStatusBanner
+          icon={XCircle}
+          severity="error"
+          layout="pane"
+          title="Couldn't send notes"
+          description={noteSend.result.message}
+          action={{
+            id: "retry-send-notes",
+            label: "Retry",
+            icon: RefreshCw,
+            variant: "dangerFilled",
+            onClick: () => {
+              const { request } = noteSend;
+              handleNoteSendResult(request, sendDiffNotes(request));
+            },
+            ariaLabel: "Retry sending notes",
+          }}
+          onClose={() => setNoteSend(null)}
+          closeAriaLabel="Dismiss send error"
+        />
+      )}
+
+      {(isWorkspace || currentEntry !== undefined || hasPendingNotes || noteSend !== null) && (
         <div
+          ref={footerRef}
           data-testid="diff-pane-footer"
+          role="toolbar"
+          aria-label="File review controls"
+          onKeyDown={onFooterKeyDown}
           className="flex items-center justify-between gap-3 px-4 py-1.5 border-t border-border-strong bg-surface-panel shrink-0"
         >
           <div className="flex items-center gap-1 min-w-0">
             {isWorkspace && (
-              <IconToggle
-                pressed={diffShowFileList}
-                label="Show file list"
-                onToggle={() => setDiffShowFileList(!diffShowFileList)}
+              // A sidebar toggle like the file browser's: disclosure state and
+              // the icon swap carry it, not the armed chip.
+              <FileViewerToolbar.IconButton
+                label="Toggle file list"
+                expanded={diffShowFileList}
+                sidebarToggle
+                onClick={() => setDiffShowFileList(!diffShowFileList)}
+                tooltipSide="top"
               >
-                <PanelLeft className={TOOLBAR_ICON_CLASS} />
-              </IconToggle>
+                {diffShowFileList ? (
+                  <PanelLeftClose className={TOOLBAR_ICON_CLASS} />
+                ) : (
+                  <PanelLeftOpen className={TOOLBAR_ICON_CLASS} />
+                )}
+              </FileViewerToolbar.IconButton>
             )}
             {isWorkspace && (
               <>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (hasPrevFile) navigateFile(-1);
-                      }}
-                      aria-disabled={!hasPrevFile || undefined}
-                      aria-label="Previous file"
-                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default aria-disabled:opacity-40 aria-disabled:pointer-events-none"
-                    >
-                      <ChevronLeft className={TOOLBAR_ICON_CLASS} />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">Previous file ([)</TooltipContent>
-                </Tooltip>
+                <FileViewerToolbar.IconButton
+                  label="Previous file"
+                  tooltip="Previous file ([)"
+                  disabled={!hasPrevFile}
+                  onClick={() => navigateFile(-1)}
+                  tooltipSide="top"
+                >
+                  <ChevronLeft className={TOOLBAR_ICON_CLASS} />
+                </FileViewerToolbar.IconButton>
                 <span
                   data-testid="diff-file-position-indicator"
-                  className="text-xs text-muted-foreground tabular-nums"
+                  className="text-xs text-text-secondary tabular-nums"
                 >
                   {currentIndex + 1} of {changeSet?.length ?? 0}
                 </span>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (hasNextFile) navigateFile(1);
-                      }}
-                      aria-disabled={!hasNextFile || undefined}
-                      aria-label="Next file"
-                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default aria-disabled:opacity-40 aria-disabled:pointer-events-none"
-                    >
-                      <ChevronRight className={TOOLBAR_ICON_CLASS} />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">Next file (])</TooltipContent>
-                </Tooltip>
+                <FileViewerToolbar.IconButton
+                  label="Next file"
+                  tooltip="Next file (])"
+                  disabled={!hasNextFile}
+                  onClick={() => navigateFile(1)}
+                  tooltipSide="top"
+                >
+                  <ChevronRight className={TOOLBAR_ICON_CLASS} />
+                </FileViewerToolbar.IconButton>
               </>
             )}
           </div>
+          <div className="flex items-center gap-2 min-w-0">
+            {noteSend?.result.ok && (
+              <span role="status" className="truncate text-xs text-text-secondary">
+                {describeNotesSent(noteSend.result)}
+              </span>
+            )}
+            {worktreePath && (
+              <DiffNotesSendMenu
+                worktreePath={worktreePath}
+                filePath={filePath ?? ""}
+                onResult={handleNoteSendResult}
+              />
+            )}
+          </div>
           {currentEntry && worktreePath && (
-            <IconToggle
-              pressed={isViewed}
-              label="Viewed"
-              onToggle={() => toggleViewed(worktreePath, currentEntry.viewedKey)}
+            // The word is the name, so no tooltip repeats it.
+            <button
+              type="button"
+              aria-pressed={isViewed}
+              onClick={() => toggleViewed(worktreePath, currentEntry.viewedKey)}
+              className={PANE_TOOLBAR_TEXT_BUTTON_CLASS}
             >
-              <Check className={TOOLBAR_ICON_CLASS} />
-              <span className="text-xs">Viewed</span>
-            </IconToggle>
+              <Check className={TOOLBAR_ICON_CLASS} aria-hidden="true" />
+              Viewed
+            </button>
           )}
         </div>
       )}

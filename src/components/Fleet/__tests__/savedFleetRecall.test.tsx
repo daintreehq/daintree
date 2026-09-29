@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent, screen, act } from "@testing-library/react";
+import {
+  render as rtlRender,
+  fireEvent,
+  screen,
+  act,
+  type RenderOptions,
+} from "@testing-library/react";
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn() },
@@ -37,6 +43,12 @@ import {
 } from "../savedFleetMeta";
 import { SavedFleetQuickRecall } from "../SavedFleetQuickRecall";
 import { SaveFleetDialog } from "../SaveFleetDialog";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
+  return rtlRender(ui, { wrapper: TooltipProvider, ...options });
+}
 
 function snapshot(id: string, terminalIds: string[]): FleetSavedScope {
   return { kind: "snapshot", id, name: id, terminalIds, createdAt: 1 };
@@ -87,6 +99,10 @@ describe("saved fleet counts", () => {
   });
 });
 
+/** The fleet name a chip shows (the leading label span; the trailing one is its count). */
+const chipName = (chip: HTMLElement) =>
+  chip.querySelector('[data-slot="button-content"] > span')?.textContent ?? null;
+
 describe("SavedFleetQuickRecall", () => {
   it("offers exactly the fleets that would arm something now", () => {
     setSaved([
@@ -110,9 +126,7 @@ describe("SavedFleetQuickRecall", () => {
       },
     ]);
     render(<SavedFleetQuickRecall mode="replace" onManage={vi.fn()} onRecalled={vi.fn()} />);
-    const names = screen
-      .getAllByTestId("fleet-picker-saved-fleet")
-      .map((b) => b.getAttribute("title"));
+    const names = screen.getAllByTestId("fleet-picker-saved-fleet").map(chipName);
     expect(names.sort()).toEqual(["live", "rule"]);
   });
 
@@ -175,7 +189,7 @@ describe("SavedFleetQuickRecall in Append mode counts only what it would add", (
       setSaved([snapshot("covered", ["a", "b"]), snapshot("partly", ["a", "c", "d"])]);
       render(<SavedFleetQuickRecall mode="append" onManage={vi.fn()} onRecalled={vi.fn()} />);
       const chips = screen.getAllByTestId("fleet-picker-saved-fleet");
-      expect(chips.map((c) => c.getAttribute("title"))).toEqual(["partly"]);
+      expect(chips.map(chipName)).toEqual(["partly"]);
       expect(chips[0]!.getAttribute("aria-label")).toMatch(/\b2 panes\b/);
     } finally {
       useFleetArmingStore.setState({ armedIds: new Set() });

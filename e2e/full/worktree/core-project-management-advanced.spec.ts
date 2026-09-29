@@ -74,7 +74,9 @@ test.describe.serial("Core: Project Management Advanced", () => {
       await removeItem.click();
 
       // Confirm dialog appears with project name
-      const dialog = window.getByRole("alertdialog", { name: "Remove project from list?" }).last();
+      const dialog = window
+        .getByRole("alertdialog", { name: /^Remove '.+' from the list\?$/ })
+        .last();
       await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
       await expect(dialog.getByText(SECONDARY_NAME, { exact: false }).first()).toBeVisible();
 
@@ -111,7 +113,9 @@ test.describe.serial("Core: Project Management Advanced", () => {
       await expect(removeItem2).toBeVisible({ timeout: T_SHORT });
       await removeItem2.click();
 
-      const dialog = window.getByRole("alertdialog", { name: "Remove project from list?" }).last();
+      const dialog = window
+        .getByRole("alertdialog", { name: /^Remove '.+' from the list\?$/ })
+        .last();
       await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
 
       // Confirm removal

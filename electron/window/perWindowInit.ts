@@ -1,4 +1,4 @@
-import { session, type BrowserWindow } from "electron";
+import { BrowserWindow, session } from "electron";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import {
@@ -19,6 +19,7 @@ import { PortalManager } from "../services/PortalManager.js";
 import { EventBuffer } from "../services/EventBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { createApplicationMenu } from "../menu.js";
+import { onPluginToursChanged } from "../services/plugin/PluginTourRegistry.js";
 import { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import { notificationService } from "../services/NotificationService.js";
 import { projectStore } from "../services/ProjectStore.js";
@@ -106,6 +107,32 @@ export async function initPerWindowServices(
         console.error("[MAIN] Plugin menu rebuild failed:", err);
       }
     },
+  });
+
+  // Plugin tours are listed in Help, and unlike other plugin menu items they
+  // must leave it when their plugin is disabled or uninstalled (#12773), so the
+  // menu is rebuilt when the tour set changes. Debounced: one plugin load or
+  // unload can change it several times in a tick.
+  let tourMenuRebuild: ReturnType<typeof setTimeout> | null = null;
+  const unsubscribeTours = onPluginToursChanged(() => {
+    if (tourMenuRebuild) return;
+    tourMenuRebuild = setTimeout(() => {
+      tourMenuRebuild = null;
+      if (win.isDestroyed()) return;
+      // The menu is app-wide but built against one window's state; let the
+      // focused window build it when there is one.
+      const focused = BrowserWindow.getFocusedWindow();
+      if (focused && focused !== win) return;
+      try {
+        createApplicationMenu(win, cliService);
+      } catch (err) {
+        console.error("[MAIN] Plugin tour menu rebuild failed:", err);
+      }
+    }, 50);
+  });
+  win.once("closed", () => {
+    unsubscribeTours();
+    if (tourMenuRebuild) clearTimeout(tourMenuRebuild);
   });
 
   // Arm the drain trigger immediately. All tasks for this window are now

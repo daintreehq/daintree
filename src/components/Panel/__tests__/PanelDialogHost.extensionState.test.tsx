@@ -104,7 +104,10 @@ vi.mock("@/components/Plugin/PluginViewContent", () => ({
     },
 }));
 
-vi.mock("@/store/storeAccessors", () => ({
+// Spread over the real module: the plugin view host's setup strip reads the
+// project store, which registers its own accessors here at import.
+vi.mock("@/store/storeAccessors", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/store/storeAccessors")>()),
   getPanelStoreSnapshot: () => null,
   persistPanelExtensionStateThroughAccessor: () => true,
 }));

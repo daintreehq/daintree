@@ -5,6 +5,10 @@ import { existsSync } from "fs";
 import { stat, readFile, readdir, access, mkdir, realpath } from "fs/promises";
 import { resolve as pathResolve, isAbsolute, dirname } from "path";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
+import {
+  findNestedWorktreePaths,
+  nestedWorktreeDeleteMessage,
+} from "../../shared/utils/nestedWorktrees.js";
 import { sliceUtf8Window } from "../../shared/utils/boundedOutput.js";
 import {
   GIT_FILE_DIFF_MAX_BYTES,
@@ -15,6 +19,7 @@ import { SimpleGit, BranchSummary } from "simple-git";
 import { createHardenedGit, createAuthenticatedGit } from "../utils/hardenedGit.js";
 import { readRemotesWithStatus } from "../utils/baseCompareRef.js";
 import { createRemoteInventoryReader } from "./remoteInventory.js";
+import { copyWorktreeIncludeFiles } from "./worktreeInclude.js";
 import {
   classifyGitError,
   extractGitErrorMessage,
@@ -108,6 +113,7 @@ import { invalidateGitStatusCache } from "../utils/git.js";
 import { StatusTimingRecorder } from "./StatusTimingRecorder.js";
 import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
 import { withTimeout } from "../utils/withTimeout.js";
+import { sweepWorktreeAdminEntries } from "./worktreeAdminSweep.js";
 import { detectWslPath, getDefaultWslDistro } from "../utils/wsl.js";
 import {
   getGitDir,
@@ -443,6 +449,8 @@ function samePath(a: string, b: string): boolean {
 export class WorkspaceService {
   private monitors = new Map<string, WorktreeMonitor>();
   private readonly statusTiming = new StatusTimingRecorder();
+  /** Tail of the sweep chain — load, refresh and delete never sweep at once. */
+  private pruneSweepTail: Promise<void> = Promise.resolve();
   private pollQueue = new PQueue({
     concurrency: 3,
     timeout: POLL_QUEUE_TASK_TIMEOUT_MS,
@@ -1071,15 +1079,16 @@ export class WorkspaceService {
       this.startForgeRemoteDetection();
       this.listService.setGit(this.git, projectRootPath);
 
-      // #6669: prune at startup so externally-deleted worktrees (kept in
+      // #6669: clean up at startup so externally-deleted worktrees (kept in
       // `worktree list --porcelain` as `prunable` since Git 2.31+) don't
-      // re-appear in the sidebar after restart. Best-effort — a prune
-      // failure must not block project load.
+      // re-appear in the sidebar after restart — per entry, never with a bare
+      // `worktree prune`, which also destroys stranded submodule commits
+      // (#12790). Best-effort — a failure must not block project load.
       try {
-        await this.git.raw(["worktree", "prune"]);
+        await this.sweepPrunableWorktreeEntries();
       } catch (pruneError) {
         console.warn(
-          `[WorkspaceHost] worktree prune at load failed for ${projectRootPath}: ${(pruneError as Error).message}`
+          `[WorkspaceHost] worktree cleanup at load failed for ${projectRootPath}: ${(pruneError as Error).message}`
         );
       }
 
@@ -3203,24 +3212,24 @@ export class WorkspaceService {
       return;
     }
 
-    // #6669: list first, then prune only when a prunable entry is present. Git
-    // 2.31+ surfaces externally-deleted worktrees with a `prunable` marker in
-    // `worktree list --porcelain`; without a prune pass `syncMonitors` would
-    // re-create a monitor for the phantom path and the sidebar entry would
-    // never clear. Listing first lets us skip the write-lock-taking prune
-    // command on every steady-state cycle (where nothing is prunable), cutting
-    // the per-90s topology reconcile from 2 spawns to 1. When prunable entries
-    // are found we prune then re-list so the sync sees the cleaned topology.
-    // Best-effort: if prune fails (e.g. EPERM on .git/worktrees/), fall through
-    // with the original list — same recovery behaviour as before.
+    // #6669: list first, then clean up only when a prunable entry is present.
+    // Git 2.31+ surfaces externally-deleted worktrees with a `prunable` marker
+    // in `worktree list --porcelain`; without a cleanup pass `syncMonitors`
+    // would re-create a monitor for the phantom path and the sidebar entry
+    // would never clear. Listing first skips the registry sweep on every
+    // steady-state cycle (where nothing is prunable). When prunable entries are
+    // found we sweep — per entry, keeping any whose submodule stores hold
+    // commits found nowhere else (#12790) — then re-list so the sync sees the
+    // cleaned topology. Best-effort: on failure, fall through with the
+    // original list.
     let rawWorktrees = await this.listService.list({ forceRefresh: true });
     if (rawWorktrees.some((wt) => wt.isPrunable)) {
       try {
-        await this.git.raw(["worktree", "prune"]);
+        await this.sweepPrunableWorktreeEntries();
         rawWorktrees = await this.listService.list({ forceRefresh: true });
       } catch (pruneError) {
         console.warn(
-          `[WorkspaceHost] worktree prune during refresh failed: ${(pruneError as Error).message}`
+          `[WorkspaceHost] worktree cleanup during refresh failed: ${(pruneError as Error).message}`
         );
       }
     }
@@ -3728,6 +3737,9 @@ export class WorkspaceService {
           startedAt: setupStartedAt,
         });
         await this.lifecycleService.copyDaintreeDir(rootPath, canonicalPath);
+        // Same stage: `WorktreeSetupStage` is part of the MCP output schema.
+        // Never throws — a bad `.worktreeinclude` must not fail the setup.
+        await copyWorktreeIncludeFiles(rootPath, canonicalPath);
 
         // Awaited, and awaited HERE: the setup script below must not start
         // against an unpopulated submodule tree — the original "worktree is
@@ -4395,6 +4407,15 @@ export class WorkspaceService {
         throw new Error("Cannot delete the main worktree");
       }
 
+      // Before every other guard and before teardown: no consent covers this,
+      // so there is no reason to stop anything for a delete that cannot run.
+      // A checkout that is already gone has nothing left inside it to lose and
+      // its prune branch deletes no files, so the #6669 recovery path does not
+      // depend on the registry being readable.
+      if (!(await pathIsMissing(monitor.path))) {
+        await this.guardNestedWorktreeDelete(monitor);
+      }
+
       const wtChanges = monitor.getWorktreeChanges();
       if (!force && (wtChanges?.changedFileCount ?? 0) > 0) {
         const fileChanges = wtChanges?.changes ?? [];
@@ -4458,8 +4479,7 @@ export class WorkspaceService {
       if (this.git) {
         // #6669: if the directory is already gone (deleted externally), skip
         // `git worktree remove` (which fails with `is not a working tree`)
-        // and run `git worktree prune` instead to clean up the leftover
-        // metadata. This is the only UI recovery path for a phantom entry.
+        // and sweep the registry instead to clean up the leftover metadata. This is the only UI recovery path for a phantom entry.
         // Only ENOENT routes to prune — other access errors (EPERM, EACCES,
         // ENOTDIR) fall through so we don't skip the remove on transient
         // permission issues; the remove call's own errors will surface.
@@ -4473,9 +4493,13 @@ export class WorkspaceService {
           // Re-run immediately before the prune for the same reason the remove
           // branch re-runs its own guard: teardown can run for minutes with
           // terminals and external processes still writing.
+          //
+          // The sweep re-checks every entry it removes, siblings included: a
+          // bare `worktree prune` here took every other phantom entry with it,
+          // checked or not (#12790).
           await this.guardPrunableSubmoduleStores(monitor.path);
           try {
-            await this.git.raw(["worktree", "prune"]);
+            await this.sweepPrunableWorktreeEntries();
           } catch (pruneError) {
             // Best-effort: the directory is already gone, so failing to clean
             // up the metadata shouldn't block the UI from removing the entry.
@@ -4492,6 +4516,8 @@ export class WorkspaceService {
           // narrows the window rather than closing it; closing it needs a
           // prepare/commit host API, which is a separate change.
           const needsMechanicalForce = await this.guardSubmoduleDelete(monitor, worktreeId, force);
+          // Last, so no other await sits between it and the removal.
+          await this.guardNestedWorktreeDelete(monitor);
 
           const args = ["worktree", "remove"];
           if (force || needsMechanicalForce) {
@@ -4501,11 +4527,21 @@ export class WorkspaceService {
           // positional rather than parsed as a flag.
           args.push("--end-of-options", monitor.path);
           markHostPerformance("wtdelete.git-remove:start", { worktreeId });
-          const removeResult = await this.removeGitWorktreeWithRetry(this.git, args, monitor.path);
+          const removeResult = await this.removeGitWorktreeWithRetry(
+            this.git,
+            args,
+            monitor.path,
+            // A lock retry waits up to seconds between attempts; a worktree
+            // nested in that window must stop the next one.
+            () => this.guardNestedWorktreeDelete(monitor)
+          );
           markHostPerformance("wtdelete.git-remove:end", { worktreeId });
           if (removeResult === "stale") {
+            // Git no longer sees a checkout here, so this is the missing-path
+            // branch reached late — and it needs that branch's guard.
+            await this.guardPrunableSubmoduleStores(monitor.path);
             try {
-              await this.git.raw(["worktree", "prune"]);
+              await this.sweepPrunableWorktreeEntries();
             } catch (pruneError) {
               console.warn(
                 `[WorkspaceHost] worktree prune failed after stale remove for ${monitor.path}: ${(pruneError as Error).message}`
@@ -4618,6 +4654,52 @@ export class WorkspaceService {
       // resolves via the delete-worktree-result event, not the promise return).
       if (throwOnError) throw error;
     }
+  }
+
+  /**
+   * Refuse to delete a worktree whose directory holds another registered
+   * worktree. `git worktree remove` deletes the target directory recursively
+   * with no check for descendants, so the nested checkout goes with it — and a
+   * gitignored nested checkout leaves the parent looking clean. Nothing here is
+   * force-consentable: `force` means "discard this worktree's uncommitted
+   * changes", and bulk removal passes it for every target.
+   *
+   * The registry is git's own, read fresh, plus the monitors: a worktree added
+   * from a shell moments ago has no monitor yet. A registry that cannot be read
+   * refuses the delete rather than reading as "nothing nested". The main
+   * worktree is a candidate like any other — it cannot be deleted itself, but
+   * nothing stops an ancestor's delete from taking it.
+   *
+   * A nested worktree whose folder is definitively gone is skipped, or a stale
+   * entry would block its parent forever. A probe that cannot tell counts as
+   * present, which is the safe direction.
+   *
+   * Case is folded where the default filesystem is case-insensitive. On a
+   * case-sensitive APFS volume that can refuse a delete that was safe; the
+   * other direction loses a checkout.
+   */
+  private async guardNestedWorktreeDelete(monitor: WorktreeMonitor): Promise<void> {
+    let registered: string[];
+    try {
+      const records = await this.listService.list({ forceRefresh: true });
+      registered = records.filter((record) => !record.bare).map((record) => record.path);
+    } catch (error) {
+      throw new Error(
+        `Couldn't read the worktree list to check for worktrees inside this one: ${formatErrorMessage(error, "unknown error")}`,
+        { cause: error }
+      );
+    }
+    const candidates = [...registered, ...[...this.monitors.values()].map((m) => m.path)];
+    const caseInsensitive = process.platform === "win32" || process.platform === "darwin";
+    // Every spelling is probed: two that fold together on a case-sensitive
+    // volume can be two directories, one gone and one not.
+    const nested: string[] = [];
+    for (const candidate of findNestedWorktreePaths(monitor.path, candidates, {
+      caseInsensitive,
+    })) {
+      if (!(await pathIsMissing(candidate))) nested.push(candidate);
+    }
+    if (nested.length > 0) throw new Error(nestedWorktreeDeleteMessage(nested));
   }
 
   /**
@@ -4761,6 +4843,70 @@ export class WorkspaceService {
   }
 
   /**
+   * Clean up every administrative entry `git worktree prune` would, except the
+   * ones whose module stores hold commits that exist nowhere else (#12790).
+   *
+   * Replaces the unqualified prune at every call site: prune cannot be scoped,
+   * so checking one target and then pruning swept up every other phantom entry
+   * unchecked. Retained entries are reported on every sweep that keeps them.
+   * Best-effort throughout — nothing here may fail a load, refresh or delete.
+   */
+  private sweepPrunableWorktreeEntries(): Promise<void> {
+    // Serialized so one sweep's clean verdict is never acted on while another
+    // sweep is part-way through the same entry.
+    const run = this.pruneSweepTail.then(() => this.runPruneSweep());
+    this.pruneSweepTail = run.catch(() => undefined);
+    return run;
+  }
+
+  private async runPruneSweep(): Promise<void> {
+    const rootPath = this.projectRootPath;
+    if (!rootPath) return;
+    let commonDir: string | null;
+    try {
+      commonDir = await getGitCommonDir(rootPath, { logErrors: false });
+    } catch {
+      commonDir = null;
+    }
+    if (!commonDir) return;
+
+    const result = await sweepWorktreeAdminEntries({
+      commonDir,
+      timeoutMs: HOST_REFRESH_TIMEOUT_MS,
+      assessLoss: async (adminDir) =>
+        describeUnrecoverableSubmoduleLoss(await this.inventoryModuleStoresAt(adminDir)),
+      onUnknown: (adminDir, reason) =>
+        console.warn(`[WorkspaceHost] left worktree entry ${adminDir} in place: ${reason}`),
+      onRemoveFailed: (adminDir, error) =>
+        console.warn(
+          `[WorkspaceHost] failed to remove stale worktree entry ${adminDir}: ${(error as Error).message}`
+        ),
+    });
+    // A switch mid-sweep hands the warnings below to a project they don't
+    // belong to.
+    if (this.projectRootPath !== rootPath) return;
+
+    if (result.removed.length > 0) {
+      const cacheKey = this.listService.getCacheKey();
+      if (cacheKey) this.listService.invalidateCache(cacheKey);
+    }
+
+    // Reported on every sweep that keeps the entry, not once: only main knows
+    // whether a view of this project was there to show it, so the dedupe
+    // lives in the router (a warning raised during a prewarm, before any view
+    // attached, would otherwise never be seen).
+    for (const entry of result.retained) {
+      const where = entry.worktreePath ?? entry.adminDir;
+      this.sendEvent({
+        type: "worktree-prune-retained",
+        worktreePath: entry.worktreePath,
+        adminDir: entry.adminDir,
+        message: `The folder ${where} is gone, but its submodule repositories still hold ${entry.loss}. Daintree kept them instead of cleaning up. Push those commits from the submodule repositories, then delete the worktree in Daintree.`,
+      });
+    }
+  }
+
+  /**
    * The commits held by module stores that outlived their checkout.
    *
    * `buildSubmoduleDeleteRisk` cannot answer this: it inventories FROM a
@@ -4778,19 +4924,23 @@ export class WorkspaceService {
   private async inventorySurvivingModuleStores(
     worktreePath: string
   ): Promise<UnrecoverableSubmoduleRisk> {
+    const resolution = await this.resolveDetachedWorktreeGitDir(worktreePath);
+    if (resolution.kind === "unknown") return { atRiskCommits: [], incomplete: true };
+    if (resolution.kind === "none") return { atRiskCommits: [], incomplete: false };
+    return this.inventoryModuleStoresAt(resolution.gitDir);
+  }
+
+  /** The commits held by the module stores under one worktree git directory. */
+  private async inventoryModuleStoresAt(gitDir: string): Promise<UnrecoverableSubmoduleRisk> {
     const unknown: UnrecoverableSubmoduleRisk = { atRiskCommits: [], incomplete: true };
     const nothing: UnrecoverableSubmoduleRisk = { atRiskCommits: [], incomplete: false };
 
-    const resolution = await this.resolveDetachedWorktreeGitDir(worktreePath);
-    if (resolution.kind === "unknown") return unknown;
-    if (resolution.kind === "none") return nothing;
-
-    const modulesDir = pathResolve(resolution.gitDir, "modules");
+    const modulesDir = pathResolve(gitDir, "modules");
     try {
       const info = await withTimeout(
         stat(modulesDir),
         HOST_REFRESH_TIMEOUT_MS,
-        `surviving submodule store probe: ${worktreePath}`
+        `surviving submodule store probe: ${gitDir}`
       );
       if (!info.isDirectory()) return nothing;
     } catch (error) {
@@ -4976,6 +5126,12 @@ export class WorkspaceService {
         git.raw([
           "--git-dir",
           storeGitDir,
+          // An absorbed store's `core.worktree` names the submodule checkout,
+          // which is exactly what went missing, and git refuses to start
+          // (`cannot chdir`) — reading every such store as uninspectable. The
+          // walk touches no working tree, so any existing directory will do.
+          "--work-tree",
+          storeGitDir,
           "log",
           `--format=%H${SUBMODULE_COMMIT_FIELD_SEPARATOR}%s`,
           `--max-count=${SUBMODULE_AT_RISK_COMMIT_SAMPLE}`,
@@ -5005,9 +5161,11 @@ export class WorkspaceService {
   private async removeGitWorktreeWithRetry(
     git: SimpleGit,
     args: string[],
-    worktreePath: string
+    worktreePath: string,
+    beforeRetry: () => Promise<void>
   ): Promise<"removed" | "stale"> {
     for (let attempt = 0; ; attempt++) {
+      if (attempt > 0) await beforeRetry();
       try {
         await git.raw(args);
         return "removed";

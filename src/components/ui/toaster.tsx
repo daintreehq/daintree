@@ -9,12 +9,13 @@ import {
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
+  BellMinus,
+  BellOff,
   Check,
   CheckCircle2,
   Info,
   type LucideIcon,
   MoreHorizontal,
-  X,
   XCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -35,6 +36,8 @@ import {
   formatNotificationCountGlyph,
 } from "@/components/Notifications/notificationCount";
 import { Spinner } from "@/components/ui/Spinner";
+import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { useNotificationStore, type Notification } from "@/store/notificationStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -49,6 +52,7 @@ import {
 import { actionService } from "@/services/ActionService";
 import { EVENT_KIND_LABEL, isNotificationEventKind } from "@/lib/notify";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { COUNT_BADGE_CLASS } from "./badge";
 
 const ACCENT_CLASS: Record<string, string> = {
   success: "border-l-status-success",
@@ -78,15 +82,33 @@ const TYPE_ICON_CONFIG: Record<string, IconConfig> = {
 const MAX_VISIBLE_DURATION_MS = 15000;
 const VISIBLE_DURATION_MULTIPLIER = 3;
 
-function Toast({
-  notification,
-  isTopmost,
-  stackIndex,
+function CountBadge({
+  count,
+  isBumping,
+  onBumpEnd,
 }: {
-  notification: Notification;
-  isTopmost: boolean;
-  stackIndex: number;
+  count: number;
+  isBumping: boolean;
+  onBumpEnd: () => void;
 }) {
+  return (
+    // The count is spoken as text inside the live region: an aria-label on a
+    // plain span is not exposed, so the glyph alone would read as "times 5".
+    <span
+      data-testid="toast-coalesce-badge"
+      className={cn(COUNT_BADGE_CLASS, "min-w-[3.5ch]", isBumping && "animate-badge-bump")}
+      style={{ animationDuration: `${DURATION_150}ms` }}
+      onAnimationEnd={(e) => {
+        if (e.animationName === "badge-bump") onBumpEnd();
+      }}
+    >
+      <span aria-hidden="true">{formatNotificationCountGlyph(count, "×")}</span>
+      <span className="sr-only">{formatNotificationCountAriaLabel(count)}</span>
+    </span>
+  );
+}
+
+function Toast({ notification, isTopmost }: { notification: Notification; isTopmost: boolean }) {
   const { dismissNotification, removeNotification } = useNotificationStore(
     useShallow((state) => ({
       dismissNotification: state.dismissNotification,
@@ -110,14 +132,14 @@ function Toast({
   const [isWindowBlurred, setIsWindowBlurred] = useState(
     () => typeof document !== "undefined" && !document.hasFocus()
   );
-  const isPaused = isHovered || isFocusInside || isDropdownOpen || isWindowBlurred;
-  // Blurred time doesn't count against the visible-duration cap — the cap
-  // bounds *visible* time (see MAX_VISIBLE_DURATION_MS), and a toast in a
-  // blurred window isn't visible. Without this credit, a blur outlasting the
-  // cap would compute a 0ms delay on refocus and instant-dismiss the toast
-  // the user came back for (e.g. a watch-priority toast born blurred).
-  const blurredAccumRef = useRef(0);
-  const blurredSinceRef = useRef<number | null>(
+  // Paused time doesn't count against the visible-duration cap. The cap bounds
+  // unattended time (see MAX_VISIBLE_DURATION_MS): a toast in a blurred window
+  // isn't visible, and one under the pointer or focus is being read. Without
+  // this credit, a pause outlasting the cap computes a 0ms delay on resume and
+  // instant-dismisses the toast the user came back for (e.g. a watch-priority
+  // toast born blurred, or one read with the pointer resting on it).
+  const pausedAccumRef = useRef(0);
+  const pausedSinceRef = useRef<number | null>(
     typeof document !== "undefined" && !document.hasFocus() ? Date.now() : null
   );
   const toastRef = useRef<HTMLDivElement>(null);
@@ -126,6 +148,25 @@ function Toast({
   type ActionStatus = "idle" | "loading" | "success";
   const [actionStatus, setActionStatus] = useState<ActionStatus>("idle");
   const [activeActionIndex, setActiveActionIndex] = useState<number | null>(null);
+  const [actionActivatedByKeyboard, setActionActivatedByKeyboard] = useState(false);
+  // Any key pressed inside the toast: the user is navigating it by keyboard,
+  // even if the action itself was clicked.
+  const [isKeyboardEngaged, setIsKeyboardEngaged] = useState(false);
+  // An action still running holds the toast: letting the timer dismiss it
+  // mid-flight would drop the result (and its confirmation) on the floor.
+  const isActionPending = activeActionIndex !== null && actionStatus !== "success";
+  const isPaused =
+    isHovered || isFocusInside || isDropdownOpen || isWindowBlurred || isActionPending;
+  // Layout phase, so the credit is settled before the dismiss effect below
+  // reads it in the same commit.
+  useLayoutEffect(() => {
+    if (isPaused) {
+      if (pausedSinceRef.current === null) pausedSinceRef.current = Date.now();
+    } else if (pausedSinceRef.current !== null) {
+      pausedAccumRef.current += Date.now() - pausedSinceRef.current;
+      pausedSinceRef.current = null;
+    }
+  }, [isPaused]);
   const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const busyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -188,10 +229,6 @@ function Toast({
     }, DURATION_200);
   }, [notification.count]);
 
-  useLayoutEffect(() => {
-    prevFocusRef.current = document.activeElement;
-  }, []);
-
   useEffect(() => {
     const handle = requestAnimationFrame(() => setIsVisible(true));
     return () => cancelAnimationFrame(handle);
@@ -208,16 +245,10 @@ function Toast({
         clearTimeout(dismissTimerRef.current);
         dismissTimerRef.current = null;
       }
-      if (blurredSinceRef.current === null) blurredSinceRef.current = Date.now();
+      if (pausedSinceRef.current === null) pausedSinceRef.current = Date.now();
       setIsWindowBlurred(true);
     };
-    const handleFocus = (): void => {
-      if (blurredSinceRef.current !== null) {
-        blurredAccumRef.current += Date.now() - blurredSinceRef.current;
-        blurredSinceRef.current = null;
-      }
-      setIsWindowBlurred(false);
-    };
+    const handleFocus = (): void => setIsWindowBlurred(false);
     window.addEventListener("blur", handleBlur);
     window.addEventListener("focus", handleFocus);
     return () => {
@@ -309,8 +340,8 @@ function Toast({
     const cap = hasActions
       ? duration * VISIBLE_DURATION_MULTIPLIER
       : Math.min(duration * VISIBLE_DURATION_MULTIPLIER, MAX_VISIBLE_DURATION_MS);
-    // Credit accumulated blurred time so the cap only consumes visible time.
-    const deadline = (notification.firstShownAt ?? Date.now()) + cap + blurredAccumRef.current;
+    // Credit accumulated paused time so the cap only consumes unattended time.
+    const deadline = (notification.firstShownAt ?? Date.now()) + cap + pausedAccumRef.current;
     const delay = Math.min(duration, Math.max(0, deadline - Date.now()));
     dismissTimerRef.current = setTimeout(() => dismissRef.current(), delay);
     return () => {
@@ -328,34 +359,46 @@ function Toast({
     notification.actions,
   ]);
 
+  // The success confirmation dwells, then dismisses. It holds while the pointer
+  // rests on the card, the window is blurred, the options menu is open, or
+  // focus stays inside while the user is on the keyboard. Focus alone doesn't
+  // count: Chromium focuses a clicked button, so for a pointer activation
+  // focus-inside would pin the toast open until the user clicked away.
+  const holdsDwellOnFocus = isFocusInside && (actionActivatedByKeyboard || isKeyboardEngaged);
+  useEffect(() => {
+    if (
+      actionStatus !== "success" ||
+      isHovered ||
+      isWindowBlurred ||
+      isDropdownOpen ||
+      holdsDwellOnFocus
+    )
+      return;
+    dwellTimerRef.current = setTimeout(() => {
+      if (mountedRef.current) dismissRef.current();
+    }, UI_ACTION_SUCCESS_DWELL_MS);
+    return () => {
+      if (dwellTimerRef.current) {
+        clearTimeout(dwellTimerRef.current);
+        dwellTimerRef.current = null;
+      }
+    };
+  }, [actionStatus, isHovered, isWindowBlurred, isDropdownOpen, holdsDwellOnFocus]);
+
   const accentClass = ACCENT_CLASS[notification.type] ?? "border-l-status-info";
+  const countBadge =
+    notification.count != null && Number.isFinite(notification.count) && notification.count > 1 ? (
+      <CountBadge
+        count={notification.count}
+        isBumping={isCountBumping}
+        onBumpEnd={() => setIsCountBumping(false)}
+      />
+    ) : null;
   const { Icon, className: iconClassName } =
     TYPE_ICON_CONFIG[notification.type] ?? DEFAULT_ICON_CONFIG;
 
-  // Stack depth: frontmost (newest) toast is 0; background toasts lift up and
-  // scale down per index to read as a coordinated pile. The parent passes
-  // dismissed/exiting toasts index 0 so the remaining *live* toasts slide into
-  // their compacted positions. Clamp at 2 as a defensive floor against a
-  // transient over-cap from dismissed-state races (MAX_VISIBLE_TOASTS keeps the
-  // live count at 3).
-  const depth = Math.min(Math.max(stackIndex, 0), 2);
-
-  // Freeze the exit position at the toast's last live depth. Without this, an
-  // evicted *background* toast (e.g. index 2 when MAX_VISIBLE_TOASTS evicts the
-  // oldest) would fall off the parent's visible-index map, receive index 0, and
-  // animate from the back of the pile toward the front as it fades — a visible
-  // forward lurch. Holding the last depth lets it fade out in place. Uses
-  // state + useLayoutEffect rather than a render-time ref write so the React
-  // Compiler can reason about the value; the extra render on depth change is
-  // synchronous (pre-paint) so it never causes a frame of jank.
-  const [frozenDepth, setFrozenDepth] = useState(depth);
-  useLayoutEffect(() => {
-    if (!notification.dismissed) setFrozenDepth(depth);
-  }, [depth, notification.dismissed]);
-  const renderDepth = notification.dismissed ? frozenDepth : depth;
-
   // Two-node split: the outer wrapper owns ALL transform/opacity motion (entry
-  // slide, stack lift/scale, exit) and the interaction surface (ref, role,
+  // slide, exit) and the interaction surface (ref, role,
   // handlers); the inner card keeps `backdrop-blur-xl`. Chromium 146 flickers
   // or drops the blur when a `transform` transition runs on the same node as
   // `backdrop-filter`, so the animated node must never carry the blur (lessons
@@ -371,14 +414,14 @@ function Toast({
         // over the title bar even with nothing showing (#12347).
         "app-no-drag",
         "pointer-events-auto relative w-full min-w-[240px] max-w-[360px]",
-        "transition-[transform,opacity]",
-        "motion-reduce:transition-none motion-reduce:duration-0",
-        isVisible ? "opacity-100" : "opacity-0"
+        // Tailwind v4 translate-* emits the individual `translate` property, so
+        // it is listed by name. Reduced motion keeps the fade and drops the slide.
+        "transition-[translate,opacity]",
+        "motion-reduce:transition-opacity motion-reduce:translate-none",
+        isVisible ? "opacity-100 translate-x-0" : "opacity-0 translate-x-8"
       )}
       style={
         {
-          "--toast-index": renderDepth,
-          transform: `translateX(${isVisible ? "0px" : "2rem"}) translateY(calc(var(--toast-index) * -10px)) scale(calc(1 - var(--toast-index) * 0.05))`,
           transitionDuration: `${isVisible ? UI_ENTER_DURATION : UI_EXIT_DURATION}ms`,
           transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
         } as CSSProperties
@@ -401,19 +444,29 @@ function Toast({
           mouseLeaveTimerRef.current = null;
         }, 500);
       }}
-      onFocus={() => setIsFocusInside(true)}
+      onFocus={(e) => {
+        // Remember where focus came from on every entry, not at mount: the user
+        // may have moved on from wherever they were when the toast appeared.
+        const from = e.relatedTarget;
+        if (from instanceof Element && !e.currentTarget.contains(from)) {
+          prevFocusRef.current = from;
+        }
+        setIsFocusInside(true);
+      }}
       onBlur={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
           setIsFocusInside(false);
         }
       }}
-      role={notification.type === "error" ? "alert" : "status"}
-      aria-busy={isCountBusy || undefined}
+      data-toast=""
+      onKeyDown={() => setIsKeyboardEngaged(true)}
     >
       <div
         className={cn(
-          "group flex w-full items-start gap-3",
-          "rounded-[var(--radius-sm)] border-l-[3px] border border-tint/[0.08]",
+          "flex w-full items-start gap-3",
+          // The severity edge must follow `border`: cn() resolves conflicts
+          // last-wins, and a later `border` erases a left width set before it.
+          "rounded-[var(--radius-sm)] border border-tint/[0.08] border-l-[3px]",
           "bg-surface-panel/85 backdrop-blur-xl",
           "px-3 py-2.5 pr-2",
           "text-sm text-text-primary",
@@ -422,67 +475,45 @@ function Toast({
           accentClass
         )}
       >
-        <div className={cn("shrink-0 mt-0.5", iconClassName)}>
-          <Icon className="h-4 w-4" />
-        </div>
-        <div className="flex-1 space-y-1 min-w-0 py-0.5">
-          {notification.title ? (
-            <h4 className="font-medium leading-tight tracking-tight text-xs text-text-primary flex items-center gap-1.5">
-              <span className="min-w-0 truncate">{notification.title}</span>
-              {notification.count != null &&
-                Number.isFinite(notification.count) &&
-                notification.count > 1 && (
-                  <span
-                    data-testid="toast-coalesce-badge"
-                    aria-label={formatNotificationCountAriaLabel(notification.count)}
-                    className={cn(
-                      "shrink-0 rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none text-text-secondary tabular-nums min-w-[3.5ch] text-center",
-                      isCountBumping && "animate-badge-bump"
-                    )}
-                    style={{ animationDuration: `${DURATION_150}ms` }}
-                    onAnimationEnd={(e) => {
-                      if (e.animationName === "badge-bump") setIsCountBumping(false);
-                    }}
-                  >
-                    {formatNotificationCountGlyph(notification.count, "×")}
-                  </span>
-                )}
-            </h4>
-          ) : notification.count != null &&
-            Number.isFinite(notification.count) &&
-            notification.count > 1 ? (
-            <div>
-              <span
-                data-testid="toast-coalesce-badge"
-                aria-label={formatNotificationCountAriaLabel(notification.count)}
-                className={cn(
-                  "inline-block rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none text-text-secondary tabular-nums min-w-[3.5ch] text-center",
-                  isCountBumping && "animate-badge-bump"
-                )}
-                style={{ animationDuration: `${DURATION_150}ms` }}
-                onAnimationEnd={(e) => {
-                  if (e.animationName === "badge-bump") setIsCountBumping(false);
-                }}
-              >
-                {formatNotificationCountGlyph(notification.count, "×")}
-              </span>
+        <div className="min-w-0 flex-1">
+          {/* The live region holds only what the toast says. Its controls sit
+              outside it, so an announcement (and every re-announcement on a
+              count or label change) reads the event, not a list of buttons. */}
+          <div
+            role={notification.type === "error" ? "alert" : "status"}
+            aria-busy={isCountBusy || undefined}
+            className="flex items-start gap-3"
+          >
+            <div className={cn("shrink-0 mt-0.5", iconClassName)}>
+              <Icon className="h-4 w-4" />
             </div>
-          ) : null}
-          {typeof notification.message !== "string" && notification.inboxMessage ? (
-            <>
-              <span className="sr-only">{notification.inboxMessage}</span>
-              <div
-                aria-hidden="true"
-                className="text-xs text-text-secondary leading-snug break-words"
-              >
-                {notification.message}
+            <div className="flex-1 space-y-1 min-w-0 py-0.5">
+              {notification.title ? (
+                <h4 className="font-medium leading-tight tracking-tight text-xs text-text-primary flex items-start gap-1.5">
+                  <span className="min-w-0 line-clamp-2">{notification.title}</span>
+                  {countBadge}
+                </h4>
+              ) : null}
+              <div className="flex items-start gap-1.5">
+                {typeof notification.message !== "string" && notification.inboxMessage ? (
+                  <>
+                    <span className="sr-only">{notification.inboxMessage}</span>
+                    <div
+                      aria-hidden="true"
+                      className="min-w-0 flex-1 text-xs text-text-secondary leading-snug break-words"
+                    >
+                      {notification.message}
+                    </div>
+                  </>
+                ) : (
+                  <div className="min-w-0 flex-1 text-xs text-text-secondary leading-snug break-words">
+                    {notification.message}
+                  </div>
+                )}
+                {!notification.title && countBadge}
               </div>
-            </>
-          ) : (
-            <div className="text-xs text-text-secondary leading-snug break-words">
-              {notification.message}
             </div>
-          )}
+          </div>
           {(() => {
             const actions = [
               ...(notification.actions ?? []),
@@ -490,8 +521,13 @@ function Toast({
             ];
             if (actions.length === 0) return null;
 
-            const handleActionClick = (action: (typeof actions)[number], index: number) => {
+            const handleActionClick = (
+              action: (typeof actions)[number],
+              index: number,
+              byKeyboard: boolean
+            ) => {
               if (activeActionIndex !== null) return;
+              setActionActivatedByKeyboard(byKeyboard);
 
               const result = action.onClick();
 
@@ -527,9 +563,6 @@ function Toast({
                       ? `${notification.title}: ${action.successLabel}`
                       : action.successLabel!;
                     useAnnouncerStore.getState().announce(announcementText, "polite");
-                    dwellTimerRef.current = setTimeout(() => {
-                      if (mountedRef.current) dismissRef.current();
-                    }, UI_ACTION_SUCCESS_DWELL_MS);
                   })
                   .catch(() => {
                     settled = true;
@@ -551,9 +584,6 @@ function Toast({
                   ? `${notification.title}: ${action.successLabel}`
                   : action.successLabel!;
                 useAnnouncerStore.getState().announce(announcementText, "polite");
-                dwellTimerRef.current = setTimeout(() => {
-                  if (mountedRef.current) dismissRef.current();
-                }, UI_ACTION_SUCCESS_DWELL_MS);
               }
             };
 
@@ -563,7 +593,9 @@ function Toast({
             return (
               <div
                 className={cn(
-                  "mt-1.5 flex flex-wrap gap-1.5",
+                  // pl-7 aligns the row with the text column: the 16px icon
+                  // plus the live region's 12px gap.
+                  "mt-2 pl-7 flex flex-wrap gap-1.5",
                   isSuccess && "animate-action-row-bump"
                 )}
               >
@@ -573,20 +605,24 @@ function Toast({
                   const variant = action.variant ?? "primary";
 
                   return (
-                    <button
+                    <Button
                       key={action.label}
-                      type="button"
-                      onClick={() => handleActionClick(action, index)}
-                      className={cn(
-                        "px-2.5 py-1 rounded-[var(--radius-xs)]",
-                        "text-xs font-medium transition-colors",
-                        variant === "secondary"
-                          ? "text-text-secondary hover:text-text-primary hover:bg-tint/10"
-                          : "bg-status-info/10 text-status-info hover:bg-status-info/20",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                        isDimmed && "opacity-50 pointer-events-none"
-                      )}
-                      disabled={activeActionIndex !== null}
+                      // Same mapping as the grid bar and inline banners: the
+                      // recommended action is outlined, the alternative is
+                      // ghost, and severity stays on the icon and edge.
+                      variant={variant === "secondary" ? "ghost" : "outline"}
+                      size="sm"
+                      // Forced colours flatten outline and ghost to the same
+                      // border; this hook restores the primary's heavier one.
+                      data-notification-action={variant}
+                      // Enter/Space activate a button with a synthetic click
+                      // whose detail is 0; a pointer click counts presses.
+                      onClick={(e) => handleActionClick(action, index, e.detail === 0)}
+                      className={cn(isDimmed && "opacity-50 pointer-events-none")}
+                      // aria-disabled, not disabled: Chromium drops focus from a
+                      // control the moment it becomes disabled, stranding a
+                      // keyboard user on <body> mid-action.
+                      aria-disabled={activeActionIndex !== null || undefined}
                     >
                       {isActive && showLoading ? (
                         <span
@@ -607,7 +643,7 @@ function Toast({
                       ) : (
                         action.label
                       )}
-                    </button>
+                    </Button>
                   );
                 })}
               </div>
@@ -621,22 +657,20 @@ function Toast({
             return (
               <DropdownMenu onOpenChange={(open) => setIsDropdownOpen(open)}>
                 <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
                     aria-label="Notification options"
-                    className={cn(
-                      "shrink-0 rounded-[var(--radius-xs)]",
-                      "h-6 w-6 flex items-center justify-center",
-                      "text-daintree-text/40 transition-colors duration-150",
-                      "hover:text-daintree-text/80 hover:bg-tint/10",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                      "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
-                    )}
+                    className="[&_svg]:size-3.5"
                   >
-                    <MoreHorizontal className="h-3.5 w-3.5" />
-                  </button>
+                    <MoreHorizontal aria-hidden="true" />
+                  </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" sideOffset={4}>
+                <DropdownMenuContent
+                  align="end"
+                  sideOffset={4}
+                  className="z-[var(--z-toast-overlay)]"
+                >
                   {isNotificationEventKind(eventKind) && (
                     <DropdownMenuItem
                       onSelect={() => {
@@ -649,6 +683,7 @@ function Toast({
                         });
                       }}
                     >
+                      <BellMinus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Silence {EVENT_KIND_LABEL[eventKind]}
                       {notification.context?.projectId && eventKind !== "uiFeedback"
                         ? " from this project"
@@ -664,6 +699,7 @@ function Toast({
                         void actionService.dispatch("project.muteNotifications", { projectId });
                       }}
                     >
+                      <BellOff data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Mute project notifications
                     </DropdownMenuItem>
                   )}
@@ -672,20 +708,11 @@ function Toast({
             );
           })()}
 
-        <button
-          type="button"
+        <DismissButton
           onClick={handleDismiss}
           aria-label="Dismiss notification"
-          className={cn(
-            "shrink-0 rounded-[var(--radius-xs)]",
-            "h-6 w-6 flex items-center justify-center",
-            "text-daintree-text/40 transition-colors duration-150",
-            "hover:text-daintree-text/80 hover:bg-tint/10",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-          )}
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+          tooltipClassName="z-[var(--z-toast-overlay)]"
+        />
       </div>
     </div>
   );
@@ -703,10 +730,10 @@ function OverflowPill({ count }: { count: number }) {
       className={cn(
         "app-no-drag",
         "pointer-events-auto self-end",
-        "inline-flex items-center gap-1 rounded-full",
+        "inline-flex h-6 items-center gap-1 rounded-full",
         "bg-surface-panel/85 backdrop-blur-xl",
         "border border-tint/[0.08] ring-1 ring-inset ring-tint/[0.05]",
-        "px-2.5 py-1 text-2xs font-medium leading-none tabular-nums",
+        "px-2.5 text-2xs font-medium leading-none tabular-nums",
         "text-text-secondary hover:text-text-primary",
         "shadow-[var(--theme-shadow-floating)]",
         "transition-colors",
@@ -740,18 +767,11 @@ export function Toaster() {
   const renderOrder = [...toastNotifications].reverse();
   const topmostActiveId = renderOrder.find((n) => !n.dismissed)?.id;
 
-  // Stack index counts only live (non-dismissed) toasts so an exiting toast
-  // doesn't occupy a slot — the remaining toasts compact into 0,1,2 and slide
-  // up smoothly instead of snapping when one leaves. Exiting toasts get index 0
-  // (no lift/scale) for the duration of their fade-out.
-  const visibleIndexById = new Map<string, number>();
-  renderOrder.filter((n) => !n.dismissed).forEach((n, index) => visibleIndexById.set(n.id, index));
-
   return createPortal(
     <div
       role="region"
       aria-label="Notifications"
-      className="fixed top-14 z-[var(--z-toast)] flex flex-col gap-3 w-full max-w-[380px] pointer-events-none p-4"
+      className="fixed top-14 z-[var(--z-toast)] flex flex-col gap-2 w-full max-w-[380px] pointer-events-none p-4"
       style={{ right: "calc(var(--right-obstruction-offset, 0px))" }}
     >
       {renderOrder.map((notification) => (
@@ -759,7 +779,6 @@ export function Toaster() {
           key={notification.id}
           notification={notification}
           isTopmost={notification.id === topmostActiveId}
-          stackIndex={visibleIndexById.get(notification.id) ?? 0}
         />
       ))}
       {evictedToInboxCount > 0 && <OverflowPill count={evictedToInboxCount} />}

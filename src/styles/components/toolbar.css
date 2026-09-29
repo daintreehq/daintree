@@ -170,6 +170,26 @@
   background: var(--toolbar-control-active-bg, var(--theme-overlay-raised));
 }
 
+/* One disabled treatment for every toolbar icon button, whether it is natively
+ * `disabled` or `aria-disabled` (a roving toolbar keeps unavailable controls
+ * focusable, per the APG toolbar pattern). 50% matches Button's `disabled`.
+ * aria-disabled keeps its pointer: the main toolbar's aria-disabled buttons
+ * stay clickable to explain what is missing.
+ * `data-loading` is Button's own aria-disabled, which dims through its spinner
+ * overlay instead. */
+.toolbar-icon-button:disabled,
+.toolbar-icon-button[aria-disabled="true"]:not([data-loading]) {
+  opacity: 0.5;
+}
+
+/* A control that cannot be pressed never paints the hover fill, though it keeps
+ * the pointer: its tooltip still says what it is (and why it is unavailable). */
+.toolbar-icon-button:disabled:hover,
+.toolbar-icon-button[aria-disabled="true"]:not([data-loading]):hover {
+  background: transparent;
+  box-shadow: none;
+}
+
 .toolbar-divider {
   background: var(--toolbar-divider, var(--theme-border-divider));
 }
@@ -336,9 +356,14 @@
    * lift lives on the ::before overlay below — stacked OVER the pill's own
    * background (a near-transparent wash by default, an opaque near-white capsule
    * on light themes) rather than replacing it. Replacing erased the capsule fill
-   * on hover; layering preserves it. Press-scale is owned by the base Button cva,
-   * so transform stays out of the transition. */
+   * on hover; layering preserves it. The pill is a raw button, so it states the
+   * base Button cva's press snap itself (below); transform stays out of the
+   * transition so the snap is instant both ways, as on its toolbar siblings. */
   transition: color 150ms ease-out;
+}
+
+.toolbar-project-pill:active {
+  transform: scale(0.98);
 }
 
 /* Surface-lift overlay. Sits above the pill's background fill but below its
@@ -407,22 +432,29 @@
   border-color: var(--_border);
   color: var(--_fg);
   font-size: var(--_size);
-  transition: color 150ms ease;
+  transition: color 150ms ease-out;
+}
+
+.toolbar-project-meta {
+  --_fg: var(--toolbar-project-meta-fg, var(--theme-text-secondary));
+  color: var(--_fg);
+  transition: color 150ms ease-out;
 }
 
 /* The hover, armed and pressed overlays brighten the fill under the chip's own
  * translucent wash, and on several dark themes secondary text falls under 4.5:1
- * against that composite. The branch steps up the text ramp while the pill is
- * lifted, which also reads as the whole pill answering the pointer. */
+ * against that composite. The branch and the switcher chevron step up the text
+ * ramp together while the pill is lifted, which also reads as the whole pill
+ * answering the pointer. */
 .toolbar-project-pill:hover .toolbar-project-chip,
 .toolbar-project-pill:active .toolbar-project-chip,
 .toolbar-project-pill[aria-expanded="true"] .toolbar-project-chip,
-.toolbar-project-pill[data-state="open"] .toolbar-project-chip {
+.toolbar-project-pill[data-state="open"] .toolbar-project-chip,
+.toolbar-project-pill:hover .toolbar-project-meta,
+.toolbar-project-pill:active .toolbar-project-meta,
+.toolbar-project-pill[aria-expanded="true"] .toolbar-project-meta,
+.toolbar-project-pill[data-state="open"] .toolbar-project-meta {
   --_fg: var(--theme-text-primary);
-}
-
-.toolbar-project-meta {
-  color: var(--toolbar-project-meta-fg, var(--theme-text-secondary));
 }
 
 /* The chip drops as a single step at 700px. The previous two-stage degradation
@@ -517,16 +549,17 @@
   opacity: 0;
   transform: scale(0);
   transition:
-    display 120ms allow-discrete,
-    opacity 120ms ease,
-    transform 120ms ease;
+    display var(--duration-120) allow-discrete,
+    opacity var(--duration-120) var(--ease-exit),
+    transform var(--duration-120) var(--ease-exit);
 }
 
 .toolbar-badge[data-visible="true"] {
   display: block;
   opacity: 1;
   transform: scale(1);
-  transition-duration: 200ms;
+  transition-duration: var(--duration-200);
+  transition-timing-function: var(--ease-spring-critical);
 
   @starting-style {
     opacity: 0;
@@ -540,14 +573,15 @@
   display: none;
   opacity: 0;
   transition:
-    display 120ms allow-discrete,
-    opacity 120ms ease;
+    display var(--duration-120) allow-discrete,
+    opacity var(--duration-120) var(--ease-exit);
 }
 
 .toolbar-badge-chip[data-visible="true"] {
   display: block;
   opacity: 1;
-  transition-duration: 200ms;
+  transition-duration: var(--duration-200);
+  transition-timing-function: var(--ease-spring-critical);
 
   @starting-style {
     opacity: 0;
@@ -568,20 +602,20 @@
   display: none;
   opacity: 0;
   transition:
-    display 120ms allow-discrete,
-    opacity 120ms ease,
-    color 150ms ease-out,
-    background-color 150ms ease-out;
+    display var(--duration-120) allow-discrete,
+    opacity var(--duration-120) var(--ease-exit),
+    color var(--duration-150) ease-out,
+    background-color var(--duration-150) ease-out;
 }
 
 [data-toolbar-overflow-trigger][data-visible="true"] {
   display: inline-flex;
   opacity: 1;
   transition:
-    display 200ms allow-discrete,
-    opacity 200ms ease,
-    color 150ms ease-out,
-    background-color 150ms ease-out;
+    display var(--duration-200) allow-discrete,
+    opacity var(--duration-200) var(--ease-spring-critical),
+    color var(--duration-150) ease-out,
+    background-color var(--duration-150) ease-out;
 
   @starting-style {
     opacity: 0;
@@ -596,9 +630,9 @@
   background-color: var(--overflow-badge-color);
   transition:
     --overflow-badge-color 150ms ease-out,
-    display 120ms allow-discrete,
-    opacity 120ms ease,
-    transform 120ms ease;
+    display var(--duration-120) allow-discrete,
+    opacity var(--duration-120) var(--ease-exit),
+    transform var(--duration-120) var(--ease-exit);
 }
 
 /* WCAG 1.4.1: non-color shape differentiator per tier. Critical reads as a
@@ -635,9 +669,9 @@
   background-color: var(--problems-dot-color);
   transition:
     --problems-dot-color 150ms ease-out,
-    display 120ms allow-discrete,
-    opacity 120ms ease,
-    transform 120ms ease;
+    display var(--duration-120) allow-discrete,
+    opacity var(--duration-120) var(--ease-exit),
+    transform var(--duration-120) var(--ease-exit);
 }
 
 .toolbar-problems-badge[data-visible="true"] {
@@ -657,36 +691,17 @@
  * "Reduce UI animations" toggle (`body[data-reduce-animations="true"]`).
  */
 @variant reduce-motion {
+  /* The pips scale in and out; the chips and the overflow trigger already
+   * only fade, so they keep their timing untouched. Only the scale goes. The
+   * display swap keeps its timed exit so the fade-out still paints before
+   * `display: none` lands (lesson #6182). */
+  .toolbar-badge[data-visible="true"],
   .toolbar-badge {
-    transition:
-      display 0s,
-      opacity 200ms ease,
-      transform 0s;
-  }
-
-  .toolbar-badge[data-visible="true"] {
     transform: none;
 
     @starting-style {
-      opacity: 0;
       transform: none;
     }
-  }
-
-  .toolbar-badge-chip {
-    transition:
-      display 0s,
-      opacity 200ms ease;
-  }
-
-  /* Keep a timed (not `none`) display swap so the discrete show/hide still
-   * completes (lesson #6182); the fade collapses to opacity-only. */
-  [data-toolbar-overflow-trigger] {
-    transition:
-      display 0s,
-      opacity 200ms ease,
-      color 150ms ease-out,
-      background-color 150ms ease-out;
   }
 }
 

@@ -1,10 +1,10 @@
 import { Fragment, useMemo, useEffect, useRef, useState, useCallback } from "react";
+import { Callout } from "@/components/ui/Callout";
+import { isPointerClaimed } from "@/lib/pointerClaim";
 import type { JSX } from "react";
 import {
   BellOff,
-  ChevronDown,
   ChevronRight,
-  Clipboard,
   Download,
   FileText,
   FolderInput,
@@ -16,10 +16,11 @@ import {
   PinOff,
   Plus,
   Settings2,
-  Square,
   Trash2,
   X,
   AppWindow,
+  CircleStop,
+  Copy,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Moon } from "@/components/icons";
@@ -142,6 +143,12 @@ export interface ProjectSwitcherPaletteProps {
   onHoverProject?: (projectId: string, pointerType: string) => void;
   /** Pointer-leave callback used to cancel a pending hover prefetch. */
   onHoverProjectEnd?: (pointerType: string) => void;
+  /**
+   * Moves the palette's one cursor to the row under the pointer, so the row the
+   * pointer lights is the row Enter commits. Fired on `pointermove`, never
+   * `pointerenter`: rows scrolling under a resting pointer must not steal it.
+   */
+  onHoverRow?: (rowId: string) => void;
   onOpenProjectSettings?: () => void;
   /**
    * What is executing across every workspace, for the header's one-line answer
@@ -236,6 +243,8 @@ interface ProjectListItemProps {
    * to it — source-level, because vitest cannot see the freeze.
    */
   nowMs: number;
+  /** False only under the "Current project" band header, which already says it. */
+  showCurrentLabel: boolean;
   onSelect: (row: ProjectSwitcherProjectRow, source?: ProjectSwitchSelectSource) => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
@@ -247,6 +256,12 @@ interface ProjectListItemProps {
   onSelectNewWindow?: (project: SearchableProject) => void;
   onHoverProject?: (projectId: string, pointerType: string) => void;
   onHoverProjectEnd?: (pointerType: string) => void;
+  /**
+   * Moves the palette's one cursor to the row under the pointer, so the row the
+   * pointer lights is the row Enter commits. Fired on `pointermove`, never
+   * `pointerenter`: rows scrolling under a resting pointer must not steal it.
+   */
+  onHoverRow?: (rowId: string) => void;
 }
 
 /**
@@ -547,6 +562,21 @@ function ResumableAgentsLabel({ count }: { count: number }) {
   );
 }
 
+/**
+ * Where you are, in words. A trailing check read as "done" among rows that are
+ * all agent status, and the check is this app's mark for a chosen value in a
+ * picker — the switcher is navigation, so it says "Current" the way the branch
+ * and move-to-worktree pickers do. Hidden from readers because every row that
+ * draws it already carries the fact in its accessible name or selection state.
+ */
+function CurrentLabel() {
+  return (
+    <span aria-hidden="true" className="shrink-0 text-xs text-text-secondary">
+      Current
+    </span>
+  );
+}
+
 /** Matches the resolution of the wait ages on screen — they change by the minute. */
 const WAIT_AGE_TICK_MS = 60_000;
 
@@ -654,6 +684,7 @@ function ProjectListItem({
   project,
   isSelected,
   nowMs,
+  showCurrentLabel,
   onSelect,
   onStopProject,
   onCloseProject,
@@ -665,6 +696,7 @@ function ProjectListItem({
   onSelectNewWindow,
   onHoverProject,
   onHoverProjectEnd,
+  onHoverRow,
 }: ProjectListItemProps) {
   const showStop = project.processCount > 0 && !project.isMissing;
   const showSleep = canSleepProject(project);
@@ -695,21 +727,21 @@ function ProjectListItem({
         PALETTE_ROW_CLASS,
         "group w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-md)] text-left cursor-pointer",
         project.isActive
-          ? // Hover still has to answer: the band wash used to sit under this
-            // row permanently, which both marked it and made it look hovered
-            // already, so pointing at it said nothing back.
-            "text-text-primary hover:bg-overlay-subtle"
+          ? "text-text-primary"
           : project.isMissing
             ? // A missing project stays dimmed while selected: the row's own
               // brightness is what says the folder is gone, and restoring it
               // under the highlight would erase that.
-              "text-daintree-text/50 hover:bg-overlay-subtle aria-selected:text-daintree-text/50"
-            : "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
+              "text-daintree-text/50 aria-selected:text-daintree-text/50"
+            : "text-text-secondary"
       )}
       // The current project is selectable too: picking where you already are is
       // a "never mind", and the handler closes the palette rather than sitting
       // there doing nothing.
       onClick={() => onSelect(project, "pointer")}
+      // The pointer moves the palette's one cursor, so the lit row is always the
+      // one Enter switches to; the prefetch below is a separate concern.
+      onPointerMove={onHoverRow && !isSelected ? () => onHoverRow(project.id) : undefined}
       onPointerEnter={onHoverProject ? (e) => onHoverProject(project.id, e.pointerType) : undefined}
       onPointerLeave={onHoverProjectEnd ? (e) => onHoverProjectEnd(e.pointerType) : undefined}
     >
@@ -800,6 +832,9 @@ function ProjectListItem({
          */}
         <RowStatusLine status={status} />
       </div>
+      {/* Not under the "Current project" band header: it already names this
+          row, and a label beside it would say it twice. */}
+      {project.isActive && showCurrentLabel && <CurrentLabel />}
     </div>
   );
 
@@ -841,7 +876,7 @@ function ProjectListItem({
         )}
         {onCopyPath && (
           <ContextMenuItem onSelect={() => onCopyPath(project.path)}>
-            <Clipboard className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            <Copy className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Copy path
           </ContextMenuItem>
         )}
@@ -855,7 +890,7 @@ function ProjectListItem({
           (onStopProject || onSleepProject || onCloseProject) && <ContextMenuSeparator />}
         {showStop && onStopProject && (
           <ContextMenuItem destructive onSelect={() => onStopProject(project.id)}>
-            <Square className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            <CircleStop className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Stop all agents
           </ContextMenuItem>
         )}
@@ -911,13 +946,18 @@ function ScratchListItem({
   scratch,
   isSelected,
   nowMs,
+  showCurrentLabel,
   onSelect,
+  onHoverRow,
 }: {
   scratch: ProjectSwitcherScratchRow;
   isSelected: boolean;
   /** The clock this row renders against, passed rather than read — see `ProjectListItemProps`. */
   nowMs: number;
+  /** See `ProjectListItemProps`. */
+  showCurrentLabel: boolean;
   onSelect: (row: ProjectSwitcherScratchRow) => void;
+  onHoverRow?: (rowId: string) => void;
 }) {
   const status = getScratchRowStatus(scratch, nowMs);
   const showResumeDot = showResumableAgentMark(status, scratch);
@@ -934,10 +974,9 @@ function ScratchListItem({
       className={cn(
         PALETTE_ROW_CLASS,
         "group w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-md)] text-left cursor-pointer",
-        scratch.isActive
-          ? "text-text-primary hover:bg-overlay-subtle"
-          : "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
+        scratch.isActive ? "text-text-primary" : "text-text-secondary"
       )}
+      onPointerMove={onHoverRow && !isSelected ? () => onHoverRow(scratch.id) : undefined}
       onClick={() => onSelect(scratch)}
     >
       <StatusDot status={status} showResumeDot={showResumeDot} />
@@ -967,6 +1006,7 @@ function ScratchListItem({
         </div>
         <RowStatusLine status={status} />
       </div>
+      {scratch.isActive && showCurrentLabel && <CurrentLabel />}
     </div>
   );
 }
@@ -1038,7 +1078,6 @@ function BandCollapseToggle({
   testId: string;
   onToggle: () => void;
 }) {
-  const Chevron = collapsed ? ChevronRight : ChevronDown;
   return (
     <button
       type="button"
@@ -1050,7 +1089,14 @@ function BandCollapseToggle({
       aria-controls={controlsId}
       className="flex items-center gap-1.5 min-w-0 hover:text-text-secondary transition-colors"
     >
-      <Chevron className="w-3 h-3 shrink-0" aria-hidden="true" />
+      <ChevronRight
+        data-animated-chevron
+        className={cn(
+          "w-3 h-3 shrink-0 transition-transform duration-150 ease-out",
+          !collapsed && "rotate-90"
+        )}
+        aria-hidden="true"
+      />
       <BandLabel label={label} labelId={labelId} />
     </button>
   );
@@ -1264,6 +1310,12 @@ interface ProjectListContentProps {
   onSelectNewWindow?: (project: SearchableProject) => void;
   onHoverProject?: (projectId: string, pointerType: string) => void;
   onHoverProjectEnd?: (pointerType: string) => void;
+  /**
+   * Moves the palette's one cursor to the row under the pointer, so the row the
+   * pointer lights is the row Enter commits. Fired on `pointermove`, never
+   * `pointerenter`: rows scrolling under a resting pointer must not steal it.
+   */
+  onHoverRow?: (rowId: string) => void;
   /** Hands focus back to the search box after the sort menu closes. */
   onReturnFocus?: () => void;
 }
@@ -1288,6 +1340,7 @@ function ProjectListContent({
   onSelectNewWindow,
   onHoverProject,
   onHoverProjectEnd,
+  onHoverRow,
   onReturnFocus,
 }: ProjectListContentProps) {
   const isSearching = query.trim().length > 0;
@@ -1385,6 +1438,8 @@ function ProjectListContent({
 
   const setBandCollapsed = usePreferencesStore((state) => state.setProjectSwitcherBandCollapsed);
 
+  const hasBands = sections !== null && sections.length > 0;
+
   const renderItem = (row: ProjectSwitcherRow) => {
     const isSelected = row.id === selectedRowId;
     return (
@@ -1394,13 +1449,19 @@ function ProjectListContent({
             scratch={row}
             isSelected={isSelected}
             nowMs={nowMs}
+            showCurrentLabel={!hasBands}
             onSelect={onSelect}
+            onHoverRow={onHoverRow}
           />
         ) : (
           <ProjectListItem
             project={row}
             isSelected={isSelected}
             nowMs={nowMs}
+            // Band membership is frozen while the palette is open, so a
+            // project that became active mid-session can sit under another
+            // header; only the "Current project" band makes the label redundant.
+            showCurrentLabel={!hasBands || row.section !== "current"}
             onSelect={onSelect}
             onStopProject={onStopProject}
             onCloseProject={onCloseProject}
@@ -1412,6 +1473,7 @@ function ProjectListContent({
             onSelectNewWindow={onSelectNewWindow}
             onHoverProject={onHoverProject}
             onHoverProjectEnd={onHoverProjectEnd}
+            onHoverRow={onHoverRow}
           />
         )}
       </div>
@@ -1638,7 +1700,7 @@ function ScratchNameEditor({
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
         onBlur={onCancel}
-        className="flex-1 min-w-0 bg-overlay-soft border border-[var(--border-overlay)] rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
+        className="flex-1 min-w-0 bg-overlay-soft border border-[var(--border-overlay)] rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
       />
     </div>
   );
@@ -1769,11 +1831,14 @@ function ScratchSection({
             aria-controls="scratch-section-list"
           >
             <span className="flex items-center gap-1.5">
-              {collapsed ? (
-                <ChevronRight className="w-3 h-3 shrink-0" aria-hidden="true" />
-              ) : (
-                <ChevronDown className="w-3 h-3 shrink-0" aria-hidden="true" />
-              )}
+              <ChevronRight
+                data-animated-chevron
+                className={cn(
+                  "w-3 h-3 shrink-0 transition-transform duration-150 ease-out",
+                  !collapsed && "rotate-90"
+                )}
+                aria-hidden="true"
+              />
               Scratch
             </span>
             {scratches.length > 0 && <BandCollapsedCount count={scratches.length} />}
@@ -1836,9 +1901,12 @@ function ScratchSection({
                           // 1px sideways between browse and search.
                           "border border-transparent",
                           PALETTE_ROW_FOCUS_CLASS,
-                          scratch.isActive
-                            ? "bg-overlay-subtle hover:bg-overlay-medium"
-                            : "hover:bg-overlay-subtle"
+                          // The scratch you're in takes a "Current" label, not a
+                          // fill: a fill here read as a second cursor beside the
+                          // palette's own.
+                          // These rows sit outside the arrow-key domain, so hover
+                          // is the lighter list step, the same on every row.
+                          "hover:bg-overlay-subtle"
                         )}
                         role="option"
                         // No `aria-current` here, unlike the ranked rows above.
@@ -1890,6 +1958,9 @@ function ScratchSection({
                             </div>
                           )}
                         </div>
+                        {/* The band here says "Scratch", not "current", so this
+                            list always needs the label. */}
+                        {scratch.isActive && <CurrentLabel />}
                       </button>
                     </ContextMenuTrigger>
                     {hasContextActions && (
@@ -2205,6 +2276,12 @@ interface ProjectPaletteInnerProps {
   onHoverProject?: (projectId: string, pointerType: string) => void;
   onHoverProjectEnd?: (pointerType: string) => void;
   /**
+   * Moves the palette's one cursor to the row under the pointer, so the row the
+   * pointer lights is the row Enter commits. Fired on `pointermove`, never
+   * `pointerenter`: rows scrolling under a resting pointer must not steal it.
+   */
+  onHoverRow?: (rowId: string) => void;
+  /**
    * True while `results` is the ranked list carrying the scratches, so the
    * pinned section below can stand down. Trails the query by a commit; defaults
    * to the live query for callers that don't track it.
@@ -2247,6 +2324,7 @@ function ProjectPaletteInner({
   onCopyPath,
   onHoverProject,
   onHoverProjectEnd,
+  onHoverRow,
   rankedSearch,
   scratchResults,
   onCreateScratch,
@@ -2265,7 +2343,9 @@ function ProjectPaletteInner({
       const selectedItem = listRef.current.querySelector(
         `#project-option-${results[selectedIndex]!.id}`
       );
-      if (selectedItem) {
+      // A row under the pointer was just claimed by it; revealing it would
+      // scroll a half-visible row out from under the pointer.
+      if (selectedItem && !isPointerClaimed(selectedItem)) {
         selectedItem.scrollIntoView({ block: "nearest" });
       }
     }
@@ -2445,6 +2525,7 @@ function ProjectPaletteInner({
           onSelectNewWindow={onSelectNewWindow}
           onHoverProject={onHoverProject}
           onHoverProjectEnd={onHoverProjectEnd}
+          onHoverRow={onHoverRow}
           onReturnFocus={() => inputRef.current?.focus()}
         />
         {(onCreateScratch || (scratchResults && scratchResults.length > 0)) && (
@@ -2577,6 +2658,7 @@ function ModalContent({
         onSelectNewWindow={innerProps.onSelectNewWindow}
         onHoverProject={innerProps.onHoverProject}
         onHoverProjectEnd={innerProps.onHoverProjectEnd}
+        onHoverRow={innerProps.onHoverRow}
         rankedSearch={innerProps.rankedSearch}
         scratchResults={innerProps.scratchResults}
         onCreateScratch={innerProps.onCreateScratch}
@@ -2647,7 +2729,6 @@ function DropdownContent({
         className="p-0"
         data-testid="project-switcher-palette"
         align={dropdownAlign}
-        sideOffset={8}
         onEscapeKeyDown={(event) => {
           // Radix dismisses on a document-capture listener, which beats the
           // scratch-name input's own handler. While that input owns focus,
@@ -2700,6 +2781,7 @@ function DropdownContent({
           onSelectNewWindow={innerProps.onSelectNewWindow}
           onHoverProject={innerProps.onHoverProject}
           onHoverProjectEnd={innerProps.onHoverProjectEnd}
+          onHoverRow={innerProps.onHoverRow}
           rankedSearch={innerProps.rankedSearch}
           scratchResults={innerProps.scratchResults}
           onCreateScratch={innerProps.onCreateScratch}
@@ -2740,17 +2822,17 @@ function DeleteScratchConfirmDialog({
   return (
     <ConfirmDialog
       isOpen={true}
-      onClose={isDeleting ? undefined : onDismiss}
+      onClose={onDismiss}
       title={`Delete '${target.name}'?`}
       zIndex="nested"
       confirmLabel="Delete scratch"
       cancelLabel="Cancel"
       onConfirm={onConfirm}
-      // Split on purpose: the button locks the instant it is pressed, but its
-      // spinner waits out the Doherty gate, so a scratch that deletes in 80ms
-      // never flashes one. Gating the lock too would leave a window where a
-      // second press still went through.
-      confirmDisabled={isDeleting}
+      // Split on purpose: the dialog locks the instant Delete is pressed, but
+      // the spinner waits out the Doherty gate, so a scratch that deletes in
+      // 80ms never flashes one. Gating the lock too would leave a window where
+      // a second press, or a dismissal, still went through.
+      isBusy={isDeleting}
       isConfirmLoading={isDeleting && progress.isVisible}
       variant="destructive"
       // The row that opened this is gone by the time it closes, so the default
@@ -2827,6 +2909,7 @@ export function ProjectSwitcherPalette({
   onSelectNewWindow,
   onHoverProject,
   onHoverProjectEnd,
+  onHoverRow,
   onOpenProjectSettings,
   onDropdownCloseAutoFocus,
   dropdownAlign,
@@ -2897,6 +2980,7 @@ export function ProjectSwitcherPalette({
         onSelectNewWindow={onSelectNewWindow}
         onHoverProject={onHoverProject}
         onHoverProjectEnd={onHoverProjectEnd}
+        onHoverRow={onHoverRow}
         onOpenProjectSettings={onOpenProjectSettings}
         onDropdownCloseAutoFocus={onDropdownCloseAutoFocus}
         dropdownAlign={dropdownAlign}
@@ -2939,6 +3023,7 @@ export function ProjectSwitcherPalette({
         onSelectNewWindow={onSelectNewWindow}
         onHoverProject={onHoverProject}
         onHoverProjectEnd={onHoverProjectEnd}
+        onHoverRow={onHoverRow}
         onOpenProjectSettings={onOpenProjectSettings}
         rankedSearch={rankedSearch}
         scratchResults={scratchResults}
@@ -2958,8 +3043,12 @@ export function ProjectSwitcherPalette({
       {removeConfirmProject && onRemoveConfirmClose && onConfirmRemove && (
         <ConfirmDialog
           isOpen={true}
-          onClose={isRemovingProject ? undefined : onRemoveConfirmClose}
-          title={removeConfirmProject.isActive ? "Close project?" : "Remove project from list?"}
+          onClose={onRemoveConfirmClose}
+          title={
+            removeConfirmProject.isActive
+              ? `Close '${removeConfirmProject.name}'?`
+              : `Remove '${removeConfirmProject.name}' from the list?`
+          }
           zIndex="nested"
           confirmLabel={removeConfirmProject.isActive ? "Close project" : "Remove project"}
           cancelLabel="Cancel"
@@ -2976,11 +3065,8 @@ export function ProjectSwitcherPalette({
             </div>
             {removeConfirmProject.isActive
               ? hasRunningProcesses && (
-                  <div className="rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20 px-3 py-2 text-xs text-status-warning">
-                    <div className="font-medium">
-                      Warning: All running processes will be terminated
-                    </div>
-                    <div className="mt-1 text-status-warning/80">
+                  <Callout severity="warning" title="All running processes will be terminated">
+                    <div>
                       {removeConfirmProject.processCount > 0 && (
                         <div>• {removeConfirmProject.processCount} running process(es)</div>
                       )}
@@ -2991,12 +3077,11 @@ export function ProjectSwitcherPalette({
                         <div>• {removeConfirmProject.waitingAgentCount} waiting agent(s)</div>
                       )}
                     </div>
-                  </div>
+                  </Callout>
                 )
               : hasRunningProcesses && (
-                  <div className="rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20 px-3 py-2 text-xs text-status-warning">
-                    <div className="font-medium">Warning: Active sessions detected</div>
-                    <div className="mt-1 text-status-warning/80">
+                  <Callout severity="warning" title="Active sessions detected">
+                    <div>
                       {removeConfirmProject.processCount > 0 && (
                         <div>• {removeConfirmProject.processCount} running process(es)</div>
                       )}
@@ -3007,7 +3092,7 @@ export function ProjectSwitcherPalette({
                         <div>• {removeConfirmProject.waitingAgentCount} waiting agent(s)</div>
                       )}
                     </div>
-                  </div>
+                  </Callout>
                 )}
             <div className="text-xs text-text-secondary">
               {removeConfirmProject.isActive
@@ -3020,7 +3105,7 @@ export function ProjectSwitcherPalette({
       {sleepConfirmProject && onSleepConfirmClose && onConfirmSleep && (
         <ConfirmDialog
           isOpen={true}
-          onClose={isSleepingProject ? undefined : onSleepConfirmClose}
+          onClose={onSleepConfirmClose}
           title={`Sleep '${sleepConfirmProject.name}'?`}
           zIndex="nested"
           confirmLabel="Sleep project"
@@ -3039,9 +3124,8 @@ export function ProjectSwitcherPalette({
             {(sleepConfirmProject.processCount > 0 ||
               sleepConfirmProject.activeAgentCount > 0 ||
               sleepConfirmProject.waitingAgentCount > 0) && (
-              <div className="rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20 px-3 py-2 text-xs text-status-warning">
-                <div className="font-medium">Running processes will be stopped</div>
-                <div className="mt-1 text-status-warning/80">
+              <Callout severity="warning" title="Running processes will be stopped">
+                <div>
                   {sleepConfirmProject.processCount > 0 && (
                     <div>• {sleepConfirmProject.processCount} running process(es)</div>
                   )}
@@ -3052,7 +3136,7 @@ export function ProjectSwitcherPalette({
                     <div>• {sleepConfirmProject.waitingAgentCount} waiting agent(s)</div>
                   )}
                 </div>
-              </div>
+              </Callout>
             )}
             {sleepConfirmProject.isActive && (
               <div className="text-xs text-text-secondary">
@@ -3080,7 +3164,7 @@ export function ProjectSwitcherPalette({
         onConfirmDeleteAllScratches && (
           <ConfirmDialog
             isOpen={true}
-            onClose={isDeletingAllScratches ? undefined : onDismissDeleteAllScratchesConfirm}
+            onClose={onDismissDeleteAllScratchesConfirm}
             // Counted off the frozen snapshot, never the live list: the rows
             // disappear as the run lands, and the dialog must keep naming the
             // number the user actually agreed to.
@@ -3146,7 +3230,7 @@ export function ProjectSwitcherPalette({
       {saveAsProjectConfirm && onDismissSaveAsProjectConfirm && onConfirmDeleteOriginalScratch && (
         <ConfirmDialog
           isOpen={true}
-          onClose={isDeletingOriginalScratch ? undefined : onDismissSaveAsProjectConfirm}
+          onClose={onDismissSaveAsProjectConfirm}
           title={`Delete '${saveAsProjectConfirm.scratch.name}'?`}
           zIndex="nested"
           confirmLabel="Delete scratch"

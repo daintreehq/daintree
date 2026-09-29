@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Spinner } from "@/components/ui/Spinner";
 import {
   CircleCheck,
   CircleDashed,
-  Loader2,
   ExternalLink,
-  ChevronDown,
   ChevronRight,
   Download,
   AlertCircle,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { AGENT_REGISTRY, getAgentConfig } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
@@ -22,6 +22,7 @@ import { useAgentSettingsStore } from "@/store";
 import { DEFAULT_DANGEROUS_ARGS, resolveDangerousMode } from "@shared/types/agentSettings";
 import { CopyableCommand } from "./CopyableCommand";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { AGENT_DESCRIPTIONS } from "@/config/agents";
 import type { CliAvailability } from "@shared/types";
@@ -231,6 +232,14 @@ export function AgentCliStep({
     installableIds.length === 1
       ? `Install ${AGENT_REGISTRY[installableIds[0]!]?.name ?? "agent"}`
       : "Install selected agents";
+  // The label chosen when the batch started, held until it ends: the installable
+  // set shrinks as agents finish, and a busy button keeps its accessible name.
+  const [batchLabel, setBatchLabel] = useState<string | null>(null);
+  const [wasBatchRunning, setWasBatchRunning] = useState(isBatchRunning);
+  if (wasBatchRunning !== isBatchRunning) {
+    setWasBatchRunning(isBatchRunning);
+    if (!isBatchRunning) setBatchLabel(null);
+  }
 
   const updateAgent = useAgentSettingsStore((s) => s.updateAgent);
   const agentSettings = useAgentSettingsStore((s) => s.settings?.agents);
@@ -289,14 +298,14 @@ export function AgentCliStep({
                   {config.install?.docsUrl && (
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          className="text-text-secondary hover:text-text-primary transition-colors p-0.5 cursor-pointer"
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
                           onClick={() => systemClient.openExternal(config.install!.docsUrl!)}
                           aria-label="Open documentation"
                         >
                           <ExternalLink className="w-3 h-3" />
-                        </button>
+                        </Button>
                       </TooltipTrigger>
                       <TooltipContent>View documentation</TooltipContent>
                     </Tooltip>
@@ -308,7 +317,7 @@ export function AgentCliStep({
                     </span>
                   ) : isInstalling ? (
                     <span className="inline-flex items-center gap-1 text-2xs text-text-secondary font-medium">
-                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <Spinner size="xs" />
                       Installing
                     </span>
                   ) : isError ? (
@@ -327,14 +336,15 @@ export function AgentCliStep({
                     </span>
                   )}
                   {canInstall && !isBatchRunning && !singleAgent && (
-                    <button
-                      type="button"
+                    <Button
+                      variant="ghost"
+                      size="xs"
                       onClick={() => handleInstall(agentId)}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded text-2xs font-medium text-text-primary hover:bg-overlay-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+                      className="text-2xs px-2"
                     >
                       <Download className="w-3 h-3" />
                       Install
-                    </button>
+                    </Button>
                   )}
                 </div>
               </div>
@@ -349,7 +359,7 @@ export function AgentCliStep({
                       disabled={isInstalling || isBatchRunning}
                       onClick={() => handleMethodChange(agentId, idx)}
                       data-selected={idx === currentMethodIdx || undefined}
-                      className="px-1.5 py-0.5 rounded-[var(--radius-xs)] text-3xs text-text-secondary transition-colors hover:text-text-primary data-[selected]:bg-overlay-medium data-[selected]:text-text-primary disabled:opacity-50 disabled:pointer-events-none"
+                      className="px-1.5 py-0.5 rounded-[var(--radius-xs)] text-3xs text-text-secondary transition-colors hover:text-text-primary data-[selected]:bg-overlay-medium data-[selected]:text-text-primary disabled:opacity-50 disabled:pointer-events-none cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
                     >
                       {block.label ?? `Method ${idx + 1}`}
                     </button>
@@ -372,20 +382,24 @@ export function AgentCliStep({
                 <div className="pl-14 pt-1.5 pb-1 space-y-1">
                   {errorLog && (
                     <>
-                      <button
-                        type="button"
+                      <Button
+                        variant="ghost"
+                        size="xs"
                         onClick={() => toggleErrorExpanded(agentId)}
                         aria-expanded={isErrorExpanded ?? false}
                         aria-controls={`error-log-${agentId}`}
-                        className="inline-flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary transition-colors"
+                        className="text-2xs"
                       >
-                        {isErrorExpanded ? (
-                          <ChevronDown className="w-3 h-3" />
-                        ) : (
-                          <ChevronRight className="w-3 h-3" />
-                        )}
+                        <ChevronRight
+                          data-animated-chevron
+                          className={cn(
+                            "w-3 h-3 transition-transform duration-150 ease-out",
+                            isErrorExpanded && "rotate-90"
+                          )}
+                          aria-hidden="true"
+                        />
                         Show error log
-                      </button>
+                      </Button>
                       <pre
                         id={`error-log-${agentId}`}
                         hidden={!isErrorExpanded}
@@ -419,22 +433,18 @@ export function AgentCliStep({
       {(hasInstallableAgents || isBatchRunning) && (
         <Button
           variant={hasUsableSelection ? "outline" : "contrast"}
-          disabled={isBatchRunning}
-          onClick={() => void handleInstallAll(installableIds)}
+          loading={isBatchRunning}
+          onClick={() => {
+            // Taken at the press: the handler starts marking agents installing
+            // before the next render could read the label.
+            setBatchLabel(installAllLabel);
+            void handleInstallAll(installableIds);
+          }}
           className="w-full"
           data-testid="agent-cli-install-primary"
         >
-          {isBatchRunning ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Installing…
-            </>
-          ) : (
-            <>
-              <Download className="w-4 h-4" />
-              {installAllLabel}
-            </>
-          )}
+          <Download aria-hidden="true" />
+          {batchLabel ?? installAllLabel}
         </Button>
       )}
 
@@ -454,11 +464,10 @@ export function AgentCliStep({
                   key={agentId}
                   className="flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30 cursor-pointer hover:bg-surface-canvas/60 transition-colors"
                 >
-                  <input
-                    type="checkbox"
-                    className="w-3.5 h-3.5 accent-status-error shrink-0"
+                  <Checkbox
+                    size="sm"
                     checked={isEnabled}
-                    onChange={() => {
+                    onCheckedChange={() => {
                       void updateAgent(agentId, {
                         dangerousMode: isEnabled ? "inherit" : "on",
                         dangerousEnabled: !isEnabled,

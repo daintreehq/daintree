@@ -6,6 +6,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuMeta,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
@@ -15,6 +16,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import type { FileBrowserSortKey } from "@shared/types/panel";
 import type { FileBrowserSortOrder, HiddenRowCounts } from "./fileBrowserTree";
+import { PANE_TOOLBAR_ICON_BUTTON_CLASS } from "@/components/ui/paneToolbarStyles";
 
 const SORT_OPTIONS: ReadonlyArray<{ value: FileBrowserSortKey; label: string }> = [
   { value: "name", label: "Name" },
@@ -115,7 +117,7 @@ export function FileBrowserViewOptions({
               // `toolbar-icon-button` paints on `data-state="open"` is the only
               // state this control needs to carry; what the filters are actually
               // doing is said in words under the tree, not crammed in here.
-              className="toolbar-icon-button shrink-0 rounded-lg p-1.5 text-text-secondary"
+              className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
               aria-label={label}
               data-testid={testId}
             >
@@ -172,15 +174,14 @@ export function FileBrowserViewOptions({
             onHideDotfilesChange(!checked);
           }}
           data-testid="file-browser-show-dotfiles"
+          aria-label={
+            hiddenCounts.dotfiles > 0 ? `Show dotfiles, ${hiddenCounts.dotfiles} hidden` : undefined
+          }
         >
-          <span className="flex flex-1 items-center gap-2">
-            Show dotfiles
-            {hiddenCounts.dotfiles > 0 && (
-              <span className="ml-auto text-3xs tabular-nums text-text-secondary">
-                {hiddenCounts.dotfiles}
-              </span>
-            )}
-          </span>
+          Show dotfiles
+          {hiddenCounts.dotfiles > 0 && (
+            <DropdownMenuMeta>{hiddenCounts.dotfiles}</DropdownMenuMeta>
+          )}
         </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
         {/* An action, not a view setting, so it sits under its own rule at the

@@ -17,7 +17,6 @@
     "electron/ipc/handlers/helpAssistant.ts",
     "electron/ipc/handlers/keybinding.ts",
     "electron/ipc/handlers/logs.ts",
-    "electron/ipc/handlers/milestones.ts",
     "electron/ipc/handlers/notifications.ts",
     "electron/ipc/handlers/onboarding.ts",
     "electron/ipc/handlers/pluginMcp.ts",
@@ -269,16 +268,6 @@
     {
       "file": "electron/ipc/handlers/logs.ts",
       "line": 229,
-      "pattern": "sync-store-get"
-    },
-    {
-      "file": "electron/ipc/handlers/milestones.ts",
-      "line": 10,
-      "pattern": "sync-store-get"
-    },
-    {
-      "file": "electron/ipc/handlers/milestones.ts",
-      "line": 14,
       "pattern": "sync-store-get"
     },
     {

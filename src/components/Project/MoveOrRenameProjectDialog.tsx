@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { InlineError } from "@/components/ui/field";
 import {
   AlertTriangle,
   CheckCircle2,
+  CircleAlert,
   FolderInput,
   FolderSearch,
   HelpCircle,
@@ -32,6 +34,7 @@ import {
 } from "@/store/projectRelocationStore";
 import { DirectoryPickerField, PathCaption } from "./projectDialogFields";
 import { PathSegments } from "@/components/ui/PathSegments";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 /** Typing pause before the preview is requested, so a folder name isn't checked per keystroke. */
 const PREVIEW_DEBOUNCE_MS = 250;
@@ -327,8 +330,7 @@ function MoveOrRenameProjectDialogInner({
   };
 
   const handleFieldKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    // Enter that confirms an IME candidate is composition, not submission.
-    if (e.nativeEvent.isComposing || e.key !== "Enter") return;
+    if (!isEnterToSubmit(e)) return;
     e.preventDefault();
     commitFromKeyboard();
   };
@@ -382,7 +384,7 @@ function MoveOrRenameProjectDialogInner({
     "Retry the check to continue"
   ) : preview === null ? (
     <>
-      {showLoading && <Spinner className="h-3.5 w-3.5 shrink-0" />}
+      {showLoading && <Spinner size="sm" />}
       <span className="truncate">Checking what will change…</span>
     </>
   ) : hasBlockers ? (
@@ -408,7 +410,7 @@ function MoveOrRenameProjectDialogInner({
       hasPreview={true}
       zIndex="nested"
     >
-      <AppDialog.Header className="py-3">
+      <AppDialog.Header>
         {/* Neutral, not accent: the header glyph is decoration, and this focus
             region's one load-bearing accent is the keyboard focus ring. */}
         <AppDialog.Title
@@ -422,7 +424,7 @@ function MoveOrRenameProjectDialogInner({
         >
           {title}
         </AppDialog.Title>
-        {!isApplying && <AppDialog.CloseButton />}
+        <AppDialog.CloseButton />
       </AppDialog.Header>
 
       {/* A failure lands as a banner at the top of the body; after a long
@@ -507,9 +509,7 @@ function MoveOrRenameProjectDialogInner({
                     // described-by association announce it on focus, and the
                     // footer status says once that the name needs fixing.
                     folderNameError && (
-                      <p id={folderErrorId} className="text-xs text-status-error">
-                        {folderNameError}
-                      </p>
+                      <InlineError id={folderErrorId}>{folderNameError}</InlineError>
                     )
                   }
                 >
@@ -626,9 +626,12 @@ function RelocationPreviewSection({
           {preview.blockers.map((blocker, i) => (
             <li
               key={`${blocker.reason}-${i}`}
-              className="flex items-start gap-2 text-xs text-status-error"
+              className="flex items-start gap-1.5 text-xs text-text-primary"
             >
-              <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <CircleAlert
+                className="mt-px h-3.5 w-3.5 shrink-0 text-status-error"
+                aria-hidden="true"
+              />
               <span>{blocker.message}</span>
             </li>
           ))}

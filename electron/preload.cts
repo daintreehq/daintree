@@ -20,7 +20,9 @@ import type {
   McpRuntimeSnapshot,
   McpGrantLifecyclePayload,
   McpBearerIdentity,
+  McpDispatchAuthorization,
   McpSessionOrigin,
+  McpApprovalReason,
   McpToolCallStartedPayload,
   McpToolCallSettledPayload,
   McpHelpDisplayImagePayload,
@@ -58,7 +60,6 @@ import { buildCopyTreeHistoryPreloadBindings } from "./ipc/handlers/copyTreeHist
 import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
 import { buildCodexPreloadBindings } from "./ipc/handlers/codex.preload.js";
 import { buildClaudePreloadBindings } from "./ipc/handlers/claude.preload.js";
-import { buildMilestonesPreloadBindings } from "./ipc/handlers/milestones.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
 import { buildShortcutHintsPreloadBindings } from "./ipc/handlers/shortcutHints.preload.js";
 import { buildForgeRecommendationPreloadBindings } from "./ipc/handlers/forgeRecommendation.preload.js";
@@ -163,7 +164,7 @@ import type {
 } from "../shared/types/ipc.js";
 import type { SitePreviewPushPayload } from "../shared/types/ipc/sitePreview.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
-import type { PaneWatchState } from "../shared/types/terminalWatch.js";
+import type { PaneNotifyState } from "../shared/types/terminalNotify.js";
 import type {
   TerminalStatusPayload,
   TerminalSubmitStatusPayload,
@@ -175,7 +176,6 @@ import type {
 } from "../shared/types/pty-host.js";
 
 type SpawnResultPayload = SpawnResult;
-import type { PortalNewTabMenuAction } from "../shared/types/portal.js";
 import type { ResourceProfilePayload } from "../shared/types/resourceProfile.js";
 import type {
   PluginActionDescriptor,
@@ -579,6 +579,11 @@ class WorktreePortClient {
     timeoutMs?: number
   ): Promise<WorktreePortResult<K>> {
     if (!this.port) {
+      // Main can't see this rejection — it never reaches the broker — so without
+      // this line a failed request leaves no trace beside the brokering log.
+      // For app and project views, console capture tags it with the view's
+      // webContentsId, the same key WorktreePortBroker logs under (#12759).
+      console.warn(`[Preload] Worktree port request "${String(action)}" rejected: port not ready`);
       return Promise.reject(
         encodeBrokerError(new BrokerError("HOST_EXITED", "Worktree port not ready"))
       );
@@ -1008,27 +1013,31 @@ function _eventBusOn<K extends keyof IpcEventBusMap>(
 // one ipcRenderer listener dispatching by terminal id, instead of one
 // filtering listener per terminal (O(N) handler invocations per chunk and a
 // MaxListenersExceededWarning at 10+ terminals).
-type TerminalDataSubscriber = (data: string | Uint8Array) => void;
+type TerminalDataSubscriber = (data: string | Uint8Array, streamEnd?: number) => void;
 const _terminalDataSubscribers = new Map<string, Set<TerminalDataSubscriber>>();
 let _terminalDataWired = false;
 
 function _ensureTerminalDataWired(): void {
   if (_terminalDataWired) return;
   _terminalDataWired = true;
-  ipcRenderer.on(CHANNELS.TERMINAL_DATA, (_event, terminalId: unknown, data: unknown) => {
-    if (typeof terminalId !== "string") return;
-    const subs = _terminalDataSubscribers.get(terminalId);
-    if (!subs || subs.size === 0) return;
-    // Accept string, Uint8Array, or Buffer (Node.js extends Uint8Array)
-    if (typeof data === "string" || data instanceof Uint8Array || Buffer.isBuffer(data)) {
-      // Iterate the live Set directly — unlike the events:push dispatcher
-      // above, terminal data subscribers don't unsubscribe during dispatch,
-      // and this path runs per chunk, so the snapshot allocation matters.
-      for (const cb of subs) {
-        cb(data);
+  ipcRenderer.on(
+    CHANNELS.TERMINAL_DATA,
+    (_event, terminalId: unknown, data: unknown, streamEnd: unknown) => {
+      if (typeof terminalId !== "string") return;
+      const subs = _terminalDataSubscribers.get(terminalId);
+      if (!subs || subs.size === 0) return;
+      // Accept string, Uint8Array, or Buffer (Node.js extends Uint8Array)
+      if (typeof data === "string" || data instanceof Uint8Array || Buffer.isBuffer(data)) {
+        const end = typeof streamEnd === "number" ? streamEnd : undefined;
+        // Iterate the live Set directly — unlike the events:push dispatcher
+        // above, terminal data subscribers don't unsubscribe during dispatch,
+        // and this path runs per chunk, so the snapshot allocation matters.
+        for (const cb of subs) {
+          cb(data, end);
+        }
       }
     }
-  });
+  );
 }
 
 function _terminalDataOn(id: string, callback: TerminalDataSubscriber): () => void {
@@ -1233,8 +1242,23 @@ function buildElectronApi(): ElectronAPI {
 
       write: (id: string, data: string) => ipcRenderer.send(CHANNELS.TERMINAL_INPUT, id, data),
 
-      submit: (id: string, text: string, submissionToken?: string, handbackCode?: string) =>
-        _unwrappingInvoke(CHANNELS.TERMINAL_SUBMIT, id, text, submissionToken, handbackCode),
+      submit: (
+        id: string,
+        text: string,
+        submissionToken?: string,
+        handbackCode?: string,
+        imagePaths?: string[]
+      ) =>
+        imagePaths === undefined
+          ? _unwrappingInvoke(CHANNELS.TERMINAL_SUBMIT, id, text, submissionToken, handbackCode)
+          : _unwrappingInvoke(
+              CHANNELS.TERMINAL_SUBMIT,
+              id,
+              text,
+              submissionToken,
+              handbackCode,
+              imagePaths
+            ),
 
       /**
        * Resolve one submission token across several terminals (#12337). A
@@ -1256,7 +1280,7 @@ function buildElectronApi(): ElectronAPI {
 
       // Tuple payload [id, data] dispatched via the shared multiplexer above
       // Accepts both string and Uint8Array/Buffer (binary optimization for reduced GC pressure)
-      onData: (id: string, callback: (data: string | Uint8Array) => void) =>
+      onData: (id: string, callback: (data: string | Uint8Array, streamEnd?: number) => void) =>
         _terminalDataOn(id, callback),
 
       onExit: (callback: (id: string, exitCode: number) => void) =>
@@ -1338,9 +1362,6 @@ function buildElectronApi(): ElectronAPI {
         signalBuffer: SharedArrayBuffer | null;
       }> => _unwrappingInvoke(CHANNELS.TERMINAL_GET_SHARED_BUFFERS),
 
-      getAnalysisBuffer: (): Promise<SharedArrayBuffer | null> =>
-        _unwrappingInvoke(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER),
-
       forceResume: (id: string): Promise<void> =>
         _unwrappingInvoke(CHANNELS.TERMINAL_FORCE_RESUME, id),
 
@@ -1359,8 +1380,8 @@ function buildElectronApi(): ElectronAPI {
       onSubmitStatus: (callback: (data: TerminalSubmitStatusPayload) => void): (() => void) =>
         _eventBusOn("terminal:submit-status", callback),
 
-      onWatchState: (callback: (data: PaneWatchState) => void): (() => void) =>
-        _eventBusOn("terminal:watch-state", callback),
+      onNotifyState: (callback: (data: PaneNotifyState) => void): (() => void) =>
+        _eventBusOn("terminal:notify-state", callback),
 
       onReliabilityMetric: (
         callback: (data: TerminalReliabilityMetricPayload) => void
@@ -2325,9 +2346,6 @@ function buildElectronApi(): ElectronAPI {
 
       onBlur: (callback: () => void) => _typedOn(CHANNELS.PORTAL_BLUR, callback),
 
-      onNewTabMenuAction: (callback: (action: PortalNewTabMenuAction) => void) =>
-        _typedOn(CHANNELS.PORTAL_NEW_TAB_MENU_ACTION, callback),
-
       onTabEvicted: (callback: (data: { tabId: string }) => void) =>
         _typedOn(CHANNELS.PORTAL_TAB_EVICTED, callback),
       onTabsEvicted: (callback: (payload: { tabIds: string[] }) => void) =>
@@ -2909,8 +2927,6 @@ function buildElectronApi(): ElectronAPI {
       ): (() => void) => _typedOn(CHANNELS.ONBOARDING_CHECKLIST_PUSH, callback),
     },
 
-    milestones: buildMilestonesPreloadBindings(_unwrappingInvoke),
-
     shortcutHints: buildShortcutHintsPreloadBindings(_unwrappingInvoke),
 
     forgeRecommendation: buildForgeRecommendationPreloadBindings(_unwrappingInvoke),
@@ -3153,7 +3169,7 @@ function buildElectronApi(): ElectronAPI {
           sessionId: string;
           toolId: string;
           tier: string;
-          targetTier: "workbench" | "action" | "system" | null;
+          targetTier: "core" | "full" | null;
         }) => void
       ) => _typedOn(CHANNELS.MCP_TIER_NOT_PERMITTED, callback),
       onGrantLifecycle: (callback: (payload: McpGrantLifecyclePayload) => void) =>
@@ -3193,6 +3209,8 @@ function buildElectronApi(): ElectronAPI {
           sessionOrigin?: McpSessionOrigin;
           offerSessionApproval?: boolean;
           approvalOnly?: boolean;
+          approvalReason?: McpApprovalReason;
+          authorization?: McpDispatchAuthorization;
         }) => void
       ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),
 
@@ -3236,6 +3254,16 @@ function buildElectronApi(): ElectronAPI {
         entry: import("../shared/types/actions.js").PluginActionManifestEntry | null;
       }) => {
         ipcRenderer.send(CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE, payload);
+      },
+
+      onAgentsListRequest: (callback: (payload: { requestId: string }) => void) =>
+        _typedOn(CHANNELS.PLUGIN_AGENTS_LIST_REQUEST, callback),
+
+      sendAgentsListResponse: (payload: {
+        requestId: string;
+        agents: import("../shared/types/plugin.js").PluginAgentPane[];
+      }) => {
+        ipcRenderer.send(CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE, payload);
       },
 
       onUiPromptRequest: (
@@ -3315,6 +3343,8 @@ function buildElectronApi(): ElectronAPI {
         _eventBusOn("plugin:actions-changed", callback),
       onProvenanceChanged: (callback: (payload: Record<string, never>) => void) =>
         _eventBusOn("plugin:provenance-changed", callback),
+      onSettingsChanged: (callback: (payload: { pluginId: string }) => void) =>
+        _eventBusOn("plugin:settings-changed", callback),
       // Direct channel, not the event bus: install progress is targeted at the
       // window that started the install, never broadcast to every view (#11302).
       onInstallProgress: (
@@ -3339,6 +3369,11 @@ function buildElectronApi(): ElectronAPI {
           complete: boolean;
         }) => void
       ) => _eventBusOn("plugin:recipes-changed", callback),
+      onToursChanged: (
+        callback: (payload: {
+          tours: import("../shared/types/plugin.js").PluginTourDescriptor[];
+        }) => void
+      ) => _eventBusOn("plugin:tours-changed", callback),
       onToolbarButtonsChanged: (
         callback: (payload: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void
       ) => _eventBusOn("plugin:toolbar-buttons-changed", callback),

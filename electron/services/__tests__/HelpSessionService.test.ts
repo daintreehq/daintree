@@ -143,7 +143,12 @@ vi.mock("../AssistantUserConfig.js", async (importOriginal) => {
   };
 });
 
-import { HelpSessionService } from "../HelpSessionService.js";
+import {
+  HelpSessionService,
+  codexTrustArgs,
+  projectRuleRoots,
+  editDenyRuleRoots,
+} from "../HelpSessionService.js";
 
 async function makeBundledHelpFolder(root: string): Promise<string> {
   const helpDir = path.join(root, "help");
@@ -206,6 +211,7 @@ function stripManagedAddenda(content: string): string {
       /\n*<!-- DAINTREE_PROJECT_METADATA_START -->[\s\S]*?<!-- DAINTREE_PROJECT_METADATA_END -->\n*/,
       ""
     )
+    .replace(/\n*<!-- DAINTREE_RUNBOOKS_START -->[\s\S]*?<!-- DAINTREE_RUNBOOKS_END -->\n*/, "")
     .replace(/\n+$/, "");
 }
 
@@ -398,8 +404,10 @@ describe("HelpSessionService", () => {
       });
     });
 
-    it("never reads the folder for an agent that reads nothing from its cwd", async () => {
-      await service.provisionSession({ ...provisionInput(), agentId: "daintree-assistant" });
+    it("never reads the folder for an agent the assistant refuses", async () => {
+      await expect(
+        service.provisionSession({ ...provisionInput(), agentId: "daintree-assistant" })
+      ).rejects.toThrow("not assistant-supported");
       expect(mockLoadAssistantUserConfig).not.toHaveBeenCalled();
     });
 
@@ -610,6 +618,10 @@ describe("HelpSessionService", () => {
       });
       expect(lane.mcpServers.daintree?.headers?.Authorization).toMatch(/^Bearer /);
       expect(lane.mcpServers["daintree-docs"]).toBeDefined();
+      expect(lane.mcpServers["daintree-runbooks"]).toEqual({
+        type: "http",
+        url: "https://assistant.daintree.org/v1/daintree/mcp",
+      });
       // The shared cwd file stays empty so nothing raises an approval prompt.
       expect((await readSharedMcp(result.sessionPath)).mcpServers).toEqual({});
     });
@@ -742,6 +754,173 @@ describe("HelpSessionService", () => {
     expect(settings.enableAllProjectMcpServers).toBe(true);
   });
 
+  it("disables Claude auto-memory in .claude/settings.json even if the bundled baseline enables it", async () => {
+    const bundledPath = path.join(helpFolder, ".claude", "settings.json");
+    const bundled = JSON.parse(await fs.readFile(bundledPath, "utf-8"));
+    await fs.writeFile(bundledPath, JSON.stringify({ ...bundled, autoMemoryEnabled: true }));
+
+    const readSettings = async (sessionPath: string) =>
+      JSON.parse(await fs.readFile(path.join(sessionPath, ".claude", "settings.json"), "utf-8"));
+
+    const first = await service.provisionSession(provisionInput());
+    if (!first) throw new Error("expected result");
+    expect((await readSettings(first.sessionPath)).autoMemoryEnabled).toBe(false);
+
+    // A reused session folder whose settings were flipped back on must be
+    // corrected by the next provision, not just left as the first write.
+    const sessionSettingsPath = path.join(first.sessionPath, ".claude", "settings.json");
+    const tampered = await readSettings(first.sessionPath);
+    await fs.writeFile(
+      sessionSettingsPath,
+      JSON.stringify({ ...tampered, autoMemoryEnabled: true })
+    );
+
+    await service.revokeSession(first.sessionId);
+    const second = await service.provisionSession(provisionInput());
+    if (!second) throw new Error("expected result");
+    expect(second.sessionPath).toBe(first.sessionPath);
+    expect((await readSettings(second.sessionPath)).autoMemoryEnabled).toBe(false);
+  });
+
+  it("lets Claude read the project it serves without a prompt, but never edit it", async () => {
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+    );
+    expect(settings.permissions.additionalDirectories).toEqual(["/tmp/project"]);
+    expect(settings.permissions.allow).toContain("Read(//tmp/project/**)");
+    expect(settings.permissions.deny).toContain("Edit(//tmp/project/**)");
+    expect(settings.permissions.deny).toContain("Edit(**)");
+  });
+
+  it("denies edits in every known project and worktree without granting reads there (#12879)", async () => {
+    const reader = vi.fn(async () => [
+      "/tmp/project",
+      "/work/other-project",
+      "/work/project-worktrees/fix",
+    ]);
+    service.setKnownProjectRootsReader(reader);
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+    expect(reader).toHaveBeenCalledWith("/tmp/project");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+    );
+    const deny = settings.permissions.deny as string[];
+    expect(deny).toContain("Edit(**)");
+    expect(deny).toContain("Edit(//work/other-project/**)");
+    expect(deny).toContain("Edit(//work/project-worktrees/fix/**)");
+    expect(deny.filter((rule) => rule === "Edit(//tmp/project/**)")).toHaveLength(1);
+    expect(settings.permissions.allow).not.toContain("Read(//work/other-project/**)");
+    expect(settings.permissions.additionalDirectories).toEqual(["/tmp/project"]);
+  });
+
+  it("never denies edits over the assistant's own scratch and session folders", async () => {
+    service.setKnownProjectRootsReader(async () => [tmpRoot, userData, "/work/other-project"]);
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+    );
+    const deny = settings.permissions.deny as string[];
+    expect(deny).toContain("Edit(//work/other-project/**)");
+    for (const covering of [tmpRoot, userData, await fs.realpath(tmpRoot)]) {
+      expect(deny).not.toContain(`Edit(/${covering}/**)`);
+    }
+  });
+
+  it("keeps the served project's deny when the known-roots reader fails", async () => {
+    service.setKnownProjectRootsReader(async () => {
+      throw new Error("sqlite is gone");
+    });
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+    );
+    expect(settings.permissions.deny).toContain("Edit(//tmp/project/**)");
+  });
+
+  it("only gathers known roots for Claude sessions", async () => {
+    const reader = vi.fn(async () => ["/work/other-project"]);
+    service.setKnownProjectRootsReader(reader);
+
+    await service.provisionSession({ ...provisionInput(), agentId: "codex" });
+    expect(reader).not.toHaveBeenCalled();
+  });
+
+  it("never denies edits over the scratch folder even when serving a project that contains it", async () => {
+    const result = await service.provisionSession({ ...provisionInput(), projectPath: tmpRoot });
+    if (!result) throw new Error("expected result");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+    );
+    const deny = settings.permissions.deny as string[];
+    for (const covering of [tmpRoot, await fs.realpath(tmpRoot)]) {
+      expect(deny).not.toContain(`Edit(/${covering}/**)`);
+    }
+    expect(deny).toContain("Edit(**)");
+  });
+
+  it("drops roots that equal or contain a protected folder, but not prefix neighbours", async () => {
+    await expect(
+      editDenyRuleRoots(
+        ["/data", "/data/app", "/data/app-sibling", "/elsewhere", "/elsewhere"],
+        ["/data/app/help-sessions"],
+        "darwin"
+      )
+    ).resolves.toEqual(["//data/app-sibling", "//elsewhere"]);
+  });
+
+  it("still denies a root by its given path when resolving it stalls", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const realpath = vi.spyOn(fs, "realpath");
+    try {
+      realpath.mockImplementation(((p: string) =>
+        p === "/stalled/mount"
+          ? new Promise(() => {})
+          : Promise.reject(new Error("ENOENT"))) as never);
+      const pending = editDenyRuleRoots(["/stalled/mount", "/elsewhere"], ["/data/app"], "darwin");
+      await vi.advanceTimersByTimeAsync(2000);
+      await expect(pending).resolves.toEqual(["//stalled/mount", "//elsewhere"]);
+    } finally {
+      realpath.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("sees a protected folder through a symlinked parent before it exists", async () => {
+    const real = path.join(tmpRoot, "real");
+    const link = path.join(tmpRoot, "link");
+    await fs.mkdir(real);
+    await fs.symlink(real, link);
+
+    const rules = await editDenyRuleRoots(
+      [real, "/elsewhere"],
+      [path.join(link, "app", "assistant-scratch")],
+      "darwin"
+    );
+    expect(rules).toEqual(["//elsewhere"]);
+  });
+
+  it("writes project rules as literal paths, escaping glob characters", async () => {
+    await expect(projectRuleRoots("/work/repo[1]/*", "darwin")).resolves.toEqual([
+      "//work/repo\\[1\\]/\\*",
+    ]);
+    await expect(projectRuleRoots("C:\\Users\\me\\proj", "win32")).resolves.toEqual([
+      "//c/Users/me/proj",
+    ]);
+  });
+
   it("appends mcp__daintree__* to the bundled allowlist when daintreeControl is enabled", async () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
@@ -769,8 +948,8 @@ describe("HelpSessionService", () => {
     expect(settings.permissions.allow).toContain("Bash(gh *)");
     expect(settings.permissions.allow).toContain("Bash(glab *)");
     expect(settings.permissions.allow).toContain("Bash(tea *)");
-    // All destructive write paths stay hard-blocked — a partial drop of
-    // this list must fail the test, not slip through.
+    // The bundled forge creates, merges and repo deletes stay denied — a
+    // partial drop of this list must fail the test, not slip through.
     for (const denied of [
       "Bash(gh issue create*)",
       "Bash(gh pr create*)",
@@ -815,20 +994,23 @@ describe("HelpSessionService", () => {
       await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
     );
 
-    // mcp__daintree__* is appended at provision time; compare the static
-    // forge surface only.
-    expect(new Set(fallback.permissions.deny)).toEqual(new Set(bundled.permissions.deny));
+    // mcp__daintree__* and the project's own path rules are appended at
+    // provision time; compare the static forge surface only.
+    const staticDeny = (fallback.permissions.deny as string[]).filter(
+      (rule) => !rule.includes("/tmp/project")
+    );
+    expect(new Set(staticDeny)).toEqual(new Set(bundled.permissions.deny));
     for (const allowed of bundled.permissions.allow) {
       expect(fallback.permissions.allow).toContain(allowed);
     }
   });
 
-  it("sets defaultMode=bypassPermissions and tier=system when legacy skipPermissions is true", async () => {
+  it("sets defaultMode=bypassPermissions and tier=full when legacy skipPermissions is true", async () => {
     mockStoreGet.mockReturnValue({ skipPermissions: true });
 
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
-    expect(result.tier).toBe("system");
+    expect(result.tier).toBe("full");
 
     const settings = JSON.parse(
       await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
@@ -836,14 +1018,14 @@ describe("HelpSessionService", () => {
     expect(settings.defaultMode).toBe("bypassPermissions");
   });
 
-  it("writes defaultMode=bypassPermissions when bypassPermissions is on but tier stays at action", async () => {
-    mockStoreGet.mockReturnValue({ tier: "action", bypassPermissions: true });
+  it("writes defaultMode=bypassPermissions when bypassPermissions is on but tier stays at core", async () => {
+    mockStoreGet.mockReturnValue({ tier: "core", bypassPermissions: true });
 
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
-    // tier and bypassPermissions are decoupled — action tier with bypass
-    // on writes defaultMode but does NOT elevate the MCP tier to system.
-    expect(result.tier).toBe("action");
+    // tier and bypassPermissions are decoupled — core with bypass on writes
+    // defaultMode but does NOT elevate the MCP tool set to full.
+    expect(result.tier).toBe("core");
 
     const settings = JSON.parse(
       await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
@@ -851,12 +1033,12 @@ describe("HelpSessionService", () => {
     expect(settings.defaultMode).toBe("bypassPermissions");
   });
 
-  it("does NOT write defaultMode when tier=system but bypassPermissions is off", async () => {
-    mockStoreGet.mockReturnValue({ tier: "system", bypassPermissions: false });
+  it("does NOT write defaultMode when tier=full but bypassPermissions is off", async () => {
+    mockStoreGet.mockReturnValue({ tier: "full", bypassPermissions: false });
 
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
-    expect(result.tier).toBe("system");
+    expect(result.tier).toBe("full");
 
     const settings = JSON.parse(
       await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
@@ -864,27 +1046,15 @@ describe("HelpSessionService", () => {
     expect(settings.defaultMode).toBeUndefined();
   });
 
-  // #11907: agent identity must never widen the MCP surface. The Daintree
-  // Assistant used to be pinned to `system` here regardless of the stored
-  // setting, which made the Settings tier selector promise a narrower surface
-  // than it handed out. Assert the bearer too, not just the returned payload —
-  // `validateToken` is what the MCP auth layer actually reads.
-  it.each(["workbench", "action", "system"] as const)(
-    "provisions the Daintree Assistant at the stored %s tier",
-    async (tier) => {
-      mockStoreGet.mockReturnValue({ tier, bypassPermissions: false });
+  it("refuses to provision the retired Daintree Assistant even when installed", async () => {
+    mockStoreGet.mockReturnValue({ tier: "system", bypassPermissions: false });
 
-      const result = await service.provisionSession({
-        ...provisionInput(),
-        agentId: "daintree-assistant",
-      });
-      if (!result) throw new Error("expected result");
-      expect(result.tier).toBe(tier);
-      expect(service.validateToken(result.token)).toBe(tier);
-    }
-  );
+    await expect(
+      service.provisionSession({ ...provisionInput(), agentId: "daintree-assistant" })
+    ).rejects.toThrow('agentId "daintree-assistant" is not assistant-supported');
+  });
 
-  it.each(["workbench", "action", "system"] as const)(
+  it.each(["core", "full"] as const)(
     "provisions a non-assistant help agent at the stored %s tier",
     async (tier) => {
       // The non-assistant path stays independently configurable — a Claude
@@ -902,8 +1072,40 @@ describe("HelpSessionService", () => {
     }
   );
 
+  // Settings written before the core/full split carry the old ladder. They
+  // are read in place, never rewritten, so the bearer must come out at the
+  // equivalent set rather than falling through to the default.
+  it.each([
+    ["workbench", "core"],
+    ["action", "core"],
+    ["system", "full"],
+  ] as const)("provisions a pre-split stored %s tier at %s", async (stored, expected) => {
+    mockStoreGet.mockReturnValue({ tier: stored, bypassPermissions: false });
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+    expect(result.tier).toBe(expected);
+    expect(service.validateToken(result.token)).toBe(expected);
+  });
+
+  it("provisions at core when legacy skipPermissions is false", async () => {
+    mockStoreGet.mockReturnValue({ skipPermissions: false });
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+    expect(result.tier).toBe("core");
+  });
+
+  it("lets a pre-split stored tier win over legacy skipPermissions", async () => {
+    mockStoreGet.mockReturnValue({ tier: "action", skipPermissions: true });
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+    expect(result.tier).toBe("core");
+  });
+
   it("getBypassPermissions returns the snapshot taken at provision time", async () => {
-    mockStoreGet.mockReturnValue({ tier: "action", bypassPermissions: true });
+    mockStoreGet.mockReturnValue({ tier: "core", bypassPermissions: true });
 
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
@@ -923,14 +1125,14 @@ describe("HelpSessionService", () => {
   });
 
   it("getDebugLogging returns the snapshot taken at provision time", async () => {
-    mockStoreGet.mockReturnValue({ tier: "action", debugLogging: true });
+    mockStoreGet.mockReturnValue({ tier: "core", debugLogging: true });
 
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
 
     // Mutate the store after provisioning: the accessor must return the
     // value captured at provision time, not re-read the live store.
-    mockStoreGet.mockReturnValue({ tier: "action", debugLogging: false });
+    mockStoreGet.mockReturnValue({ tier: "core", debugLogging: false });
 
     expect(service.getDebugLogging(result.token)).toBe(true);
     expect(service.getDebugLogging("not-a-token")).toBe(false);
@@ -966,7 +1168,7 @@ describe("HelpSessionService", () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
 
-    expect(service.validateToken(result.token)).toBe("action");
+    expect(service.validateToken(result.token)).toBe("core");
     expect(service.validateToken("not-a-real-token")).toBe(false);
 
     await service.revokeSession(result.sessionId);
@@ -1197,7 +1399,7 @@ describe("HelpSessionService", () => {
     const lane = await readLaneConfig(second);
     expect(lane.mcpServers.daintree?.headers?.Authorization).toBe(`Bearer ${second.token}`);
     expect(service.validateToken(first.token)).toBe(false);
-    expect(service.validateToken(second.token)).toBe("action");
+    expect(service.validateToken(second.token)).toBe("core");
   });
 
   it("derives different session dirs for different project paths", async () => {
@@ -1214,7 +1416,7 @@ describe("HelpSessionService", () => {
 
     await service.revokeByWebContentsId(1);
     expect(service.validateToken(a.token)).toBe(false);
-    expect(service.validateToken(b.token)).toBe("action");
+    expect(service.validateToken(b.token)).toBe("core");
   });
 
   it("revokeAll wipes every active session", async () => {
@@ -1415,7 +1617,7 @@ describe("HelpSessionService", () => {
 
   it("probes the exact assistant SSE bearer after registering the minted session token", async () => {
     mockProbeMcpSseServer.mockImplementationOnce(async (_port, token) => {
-      expect(service.validateToken(token)).toBe("action");
+      expect(service.validateToken(token)).toBe("core");
     });
 
     const result = await service.provisionSession(provisionInput());
@@ -1493,7 +1695,7 @@ describe("HelpSessionService", () => {
       if (!second) throw new Error("expected second provision");
 
       expect(service.validateToken(first.token)).toBe(false);
-      expect(service.validateToken(second.token)).toBe("action");
+      expect(service.validateToken(second.token)).toBe("core");
       expect(mockPtyKill).toHaveBeenCalledWith("term-1", "help-session-displaced");
     });
 
@@ -1508,7 +1710,7 @@ describe("HelpSessionService", () => {
       if (!second) throw new Error("expected second provision");
 
       expect(service.validateToken(first.token)).toBe(false);
-      expect(service.validateToken(second.token)).toBe("action");
+      expect(service.validateToken(second.token)).toBe("core");
       expect(mockPtyKill).not.toHaveBeenCalled();
     });
 
@@ -1528,8 +1730,8 @@ describe("HelpSessionService", () => {
       });
       if (!second) throw new Error("expected second provision");
 
-      expect(service.validateToken(first.token)).toBe("action");
-      expect(service.validateToken(second.token)).toBe("action");
+      expect(service.validateToken(first.token)).toBe("core");
+      expect(service.validateToken(second.token)).toBe("core");
       expect(mockPtyKill).not.toHaveBeenCalled();
     });
 
@@ -1740,8 +1942,8 @@ describe("HelpSessionService", () => {
       expect(service.markTerminalForToken(second.token, "term-slot-1")).toBe(true);
 
       // The whole point of the feature: neither session displaced the other.
-      expect(service.validateToken(first.token)).toBe("action");
-      expect(service.validateToken(second.token)).toBe("action");
+      expect(service.validateToken(first.token)).toBe("core");
+      expect(service.validateToken(second.token)).toBe("core");
       expect(mockPtyKill).not.toHaveBeenCalled();
     });
 
@@ -1758,11 +1960,11 @@ describe("HelpSessionService", () => {
       if (!replacement) throw new Error("expected replacement provision");
 
       expect(service.validateToken(laneZero.token)).toBe(false);
-      expect(service.validateToken(replacement.token)).toBe("action");
+      expect(service.validateToken(replacement.token)).toBe("core");
       expect(mockPtyKill).toHaveBeenCalledWith("term-slot-0", "help-session-displaced");
       expect(mockPtyKill).not.toHaveBeenCalledWith("term-slot-1", "help-session-displaced");
       // The sibling is still fully live.
-      expect(service.validateToken(laneOne.token)).toBe("action");
+      expect(service.validateToken(laneOne.token)).toBe("core");
     });
 
     it("shares one session directory across lanes and keeps each bearer in its own lane file", async () => {
@@ -1827,7 +2029,7 @@ describe("HelpSessionService", () => {
         service.provisionSession({ ...provisionInput(), agentId: "codex", slot: 1 })
       ).rejects.toMatchObject({ name: "HelpSessionError", code: "MIXED_AGENT_LANES" });
       // The sibling is untouched.
-      expect(service.validateToken(claude.token)).toBe("action");
+      expect(service.validateToken(claude.token)).toBe("core");
 
       // Once the Claude lane is gone, the project can switch agents.
       await service.revokeSession(claude.sessionId);
@@ -1856,8 +2058,8 @@ describe("HelpSessionService", () => {
       ).rejects.toMatchObject({ name: "HelpSessionError", code: "MIXED_AGENT_LANES" });
 
       // The lane the refused launch targeted is still the user's live session.
-      expect(service.validateToken(laneOne.token)).toBe("action");
-      expect(service.validateToken(laneZero.token)).toBe("action");
+      expect(service.validateToken(laneOne.token)).toBe("core");
+      expect(service.validateToken(laneZero.token)).toBe("core");
       expect(mockPtyKill).not.toHaveBeenCalled();
     });
 
@@ -1930,8 +2132,8 @@ describe("HelpSessionService", () => {
       await fs.access(laneFile(laneZero, 0));
       await fs.access(laneFile(laneOne, 1));
       await fs.access(laneFile(warm, 2));
-      expect(service.validateToken(laneZero.token)).toBe("action");
-      expect(service.validateToken(laneOne.token)).toBe("action");
+      expect(service.validateToken(laneZero.token)).toBe("core");
+      expect(service.validateToken(laneOne.token)).toBe("core");
       expect((await readSharedMcp(laneZero.sessionPath)).mcpServers).toEqual({});
     });
 
@@ -1997,7 +2199,7 @@ describe("HelpSessionService", () => {
     it("revokes an unbound bearer older than the ceiling and tears down its MCP session", async () => {
       const result = await service.provisionSession(provisionInput());
       if (!result) throw new Error("expected result");
-      expect(service.validateToken(result.token)).toBe("action");
+      expect(service.validateToken(result.token)).toBe("core");
       // Wire the teardown spy AFTER provisioning — `ensureMcpServerReady` (run
       // during provision) re-sets `onMcpSessionRevoked`, so an earlier spy
       // would be overwritten before the sweep fires.
@@ -2021,7 +2223,7 @@ describe("HelpSessionService", () => {
       // A generous ceiling means the just-minted record is well within it.
       await service.sweepOrphanSessions(60 * 60 * 1000);
 
-      expect(service.validateToken(result.token)).toBe("action");
+      expect(service.validateToken(result.token)).toBe("core");
     });
 
     it("never sweeps a bound session regardless of age", async () => {
@@ -2033,7 +2235,7 @@ describe("HelpSessionService", () => {
       // a healthy live assistant and must survive.
       await service.sweepOrphanSessions(0);
 
-      expect(service.validateToken(result.token)).toBe("action");
+      expect(service.validateToken(result.token)).toBe("core");
       expect(mockPtyKill).not.toHaveBeenCalled();
     });
 
@@ -2538,6 +2740,115 @@ describe("HelpSessionService", () => {
       expect(setCalls[setCalls.length - 1][1].panelWasOpen).toBe(false);
     });
 
+    it("keeps the crash-time panelWasOpen when the reloaded renderer reports closed mid-capture (#12954)", async () => {
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 96,
+        projectId: "proj-crash",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-crash")).toBe(true);
+      service.reportPanelOpen("proj-crash", true);
+
+      const revoke = service.revokeByWebContentsId(96);
+      // A crash-reload keeps the WebContents: the fresh renderer mounts with
+      // the panel closed and reports it while gracefulKill is still pending.
+      service.reportPanelOpen("proj-crash", false);
+      resolveKill("agent-resume-id-crash");
+      await revoke;
+      await Promise.resolve();
+
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-crash", 0)
+      );
+      expect(setCalls[setCalls.length - 1][1]).toEqual(
+        expect.objectContaining({
+          agentSessionId: "agent-resume-id-crash",
+          panelWasOpen: true,
+        })
+      );
+    });
+
+    it("joins a second renderer-gone capture of the same view instead of graceful-killing twice (#12954)", async () => {
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 94,
+        projectId: "proj-twice",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-twice")).toBe(true);
+      service.reportPanelOpen("proj-twice", true);
+
+      // The renderer-gone hook captures at the crash; the eviction that follows
+      // on the next tick reaches the same session while gracefulKill is pending.
+      const first = service.revokeByWebContentsId(94);
+      service.reportPanelOpen("proj-twice", false);
+      const second = service.revokeByWebContentsId(94);
+      resolveKill("agent-resume-id-twice");
+      await Promise.all([first, second]);
+      await Promise.resolve();
+
+      expect(mockPtyGracefulKill).toHaveBeenCalledTimes(1);
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-twice", 0)
+      );
+      expect(setCalls).toHaveLength(2);
+      expect(setCalls[setCalls.length - 1][1]).toEqual(
+        expect.objectContaining({
+          agentSessionId: "agent-resume-id-twice",
+          panelWasOpen: true,
+        })
+      );
+
+      // Settled: a third call finds nothing left to revoke.
+      await service.revokeByWebContentsId(94);
+      expect(mockPtyGracefulKill).toHaveBeenCalledTimes(1);
+    });
+
+    it("honours a deliberate close from a live renderer during a project-scoped capture (#10815)", async () => {
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 95,
+        projectId: "proj-sleep",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-sleep")).toBe(true);
+      service.reportPanelOpen("proj-sleep", true);
+
+      // Project sleep keeps the project view alive, so the user can still
+      // close the panel while the agent is flushing.
+      const revoke = service.revokeByProjectId("proj-sleep");
+      service.reportPanelOpen("proj-sleep", false);
+      resolveKill("agent-resume-id-sleep");
+      await revoke;
+      await Promise.resolve();
+
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-sleep", 0)
+      );
+      expect(setCalls[setCalls.length - 1][1]).toEqual(
+        expect.objectContaining({
+          agentSessionId: "agent-resume-id-sleep",
+          panelWasOpen: false,
+        })
+      );
+    });
+
     it("reportPanelOpen(false) clears a prior open report so a later eviction does not auto-resume (#10815)", async () => {
       mockPtyGracefulKill.mockResolvedValueOnce("agent-resume-id-789");
 
@@ -2678,7 +2989,7 @@ describe("HelpSessionService", () => {
       if (!second) throw new Error("expected second provision");
       // Sanity: displacement already invalidated the old token.
       expect(service.validateToken(first.token)).toBe(false);
-      expect(service.validateToken(second.token)).toBe("action");
+      expect(service.validateToken(second.token)).toBe("core");
 
       // Now let gracefulKill resolve with the captured (stale) resume ID.
       resolveGraceful("stale-resume-id-from-displaced-session");
@@ -3000,12 +3311,14 @@ describe("HelpSessionService", () => {
       expect(mockProbeMcpSseServer).not.toHaveBeenCalled();
     });
 
-    it("getCodexLaunchArgs returns -c flags for both daintree and daintree-docs servers", async () => {
+    it("getCodexLaunchArgs trusts the session folder, then adds the daintree, docs and runbook servers", async () => {
       const result = await service.provisionSession(codexInput());
       if (!result) throw new Error("expected result");
 
       const args = service.getCodexLaunchArgs(result.token);
-      expect(args).toEqual([
+      expect(args!.slice(0, 2)).toEqual(await codexTrustArgs(result.sessionPath));
+      expect(args![1]).toContain(`'${result.sessionPath}' = { trust_level = "trusted" }`);
+      expect(args!.slice(2)).toEqual([
         "-c",
         'mcp_servers.daintree.transport="http"',
         "-c",
@@ -3013,9 +3326,21 @@ describe("HelpSessionService", () => {
         "-c",
         'mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"',
         "-c",
+        "mcp_servers.daintree.tool_timeout_sec=1860",
+        "-c",
+        'mcp_servers.daintree.default_tools_approval_mode="approve"',
+        "-c",
         'mcp_servers.daintree-docs.transport="http"',
         "-c",
         'mcp_servers.daintree-docs.url="https://daintree.org/api/mcp"',
+        "-c",
+        'mcp_servers.daintree-docs.default_tools_approval_mode="approve"',
+        "-c",
+        'mcp_servers.daintree-runbooks.transport="http"',
+        "-c",
+        'mcp_servers.daintree-runbooks.url="https://assistant.daintree.org/v1/daintree/mcp"',
+        "-c",
+        'mcp_servers.daintree-runbooks.default_tools_approval_mode="approve"',
       ]);
       // Token must NEVER appear in argv — Codex reads it from PTY env via
       // `bearer_token_env_var`.
@@ -3032,15 +3357,48 @@ describe("HelpSessionService", () => {
       const flat = args!.join(" ");
       expect(flat).not.toContain("mcp_servers.daintree.");
       expect(flat).toContain("mcp_servers.daintree-docs.");
+      // Runbooks drive Daintree tools, so they go when control goes.
+      expect(flat).not.toContain("mcp_servers.daintree-runbooks.");
     });
 
-    it("getCodexLaunchArgs returns [] when both server toggles are off", async () => {
+    it("getCodexLaunchArgs omits the runbook server when runbookSearch is off", async () => {
+      mockStoreGet.mockReturnValue({ runbookSearch: false });
+
+      const result = await service.provisionSession(codexInput());
+      if (!result) throw new Error("expected result");
+
+      const flat = service.getCodexLaunchArgs(result.token)!.join(" ");
+      expect(flat).toContain("mcp_servers.daintree.");
+      expect(flat).not.toContain("mcp_servers.daintree-runbooks.");
+    });
+
+    it("getCodexLaunchArgs points the runbook server at the developer override", async () => {
+      vi.stubEnv("DAINTREE_RUNBOOKS_MCP_URL", "http://127.0.0.1:8473/v1/daintree/mcp");
+      try {
+        const result = await service.provisionSession(codexInput());
+        if (!result) throw new Error("expected result");
+
+        expect(service.getCodexLaunchArgs(result.token)).toContain(
+          'mcp_servers.daintree-runbooks.url="http://127.0.0.1:8473/v1/daintree/mcp"'
+        );
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it("getCodexLaunchArgs names no servers when both server toggles are off", async () => {
       mockStoreGet.mockReturnValue({ daintreeControl: false, docSearch: false });
 
       const result = await service.provisionSession(codexInput());
       if (!result) throw new Error("expected result");
 
-      expect(service.getCodexLaunchArgs(result.token)).toEqual([]);
+      expect(service.getCodexLaunchArgs(result.token)).toEqual(
+        await codexTrustArgs(result.sessionPath)
+      );
+    });
+
+    it("trusts nothing for a folder path a TOML literal string cannot hold", async () => {
+      expect(await codexTrustArgs("/tmp/it's here")).toEqual([]);
     });
 
     it("getCodexLaunchArgs returns null for a Claude session (defense against cross-agent leakage)", async () => {
@@ -3234,6 +3592,10 @@ describe("HelpSessionService", () => {
       expect(mcp.mcpServers["daintree-docs"]).toEqual({
         type: "http",
         url: "https://daintree.org/api/mcp",
+      });
+      expect(mcp.mcpServers["daintree-runbooks"]).toEqual({
+        type: "http",
+        url: "https://assistant.daintree.org/v1/daintree/mcp",
       });
     });
 
@@ -3798,7 +4160,7 @@ describe("HelpSessionService", () => {
         expect(block).toContain("`/tmp/project` — branch `main` (main worktree)");
         expect(block).toContain("`/tmp/project-fix` — branch `fix/help`");
         expect(block).toContain("- Forge remote: `origin` `https://github.com/acme/example.git`");
-        expect(block).toContain("- Assistant tier setting: `action`");
+        expect(block).toContain("- Assistant tool set setting: `core`");
         expect(block).toContain("- Daintree MCP tools setting: `enabled`");
         // Shared by every lane: nothing lane- or session-scoped belongs here.
         expect(block).not.toContain(result.token);
@@ -3814,7 +4176,7 @@ describe("HelpSessionService", () => {
         await fs.readFile(path.join(result.sessionPath, "AGENTS.md"), "utf-8")
       );
       expect(block).toContain("- Path: `/tmp/project`");
-      expect(block).toContain("- Assistant tier setting: `action`");
+      expect(block).toContain("- Assistant tool set setting: `core`");
       expect(block).not.toContain("- Name:");
       expect(block).not.toContain("worktrees");
     });
@@ -3854,12 +4216,12 @@ describe("HelpSessionService", () => {
     });
 
     it("refreshes the block in place on re-provision even when the template copy is skipped", async () => {
-      let name = "Before";
+      let name = "OldProjectName";
       service.setProjectMetadataReader(async () => ({ name }));
 
       const first = await service.provisionSession(provisionInput());
       if (!first) throw new Error("expected result");
-      name = "After";
+      name = "NewProjectName";
       const cpSpy = vi.spyOn(fs, "cp");
       const second = await service.provisionSession(provisionInput());
       if (!second) throw new Error("expected result");
@@ -3869,8 +4231,8 @@ describe("HelpSessionService", () => {
         const content = await fs.readFile(path.join(second.sessionPath, file), "utf-8");
         expect(content.match(/<!-- DAINTREE_PROJECT_METADATA_START -->/g) ?? []).toHaveLength(1);
         expect(content.match(/<!-- DAINTREE_ASSISTANT_SCRATCH_START -->/g) ?? []).toHaveLength(1);
-        expect(content).toContain("- Name: `After`");
-        expect(content).not.toContain("Before");
+        expect(content).toContain("- Name: `NewProjectName`");
+        expect(content).not.toContain("OldProjectName");
         expect(content.startsWith(file === "CLAUDE.md" ? "# Help" : "# Agents Help")).toBe(true);
       }
       cpSpy.mockRestore();
@@ -3889,6 +4251,106 @@ describe("HelpSessionService", () => {
 
       const content = await fs.readFile(path.join(second.sessionPath, "AGENTS.md"), "utf-8");
       expect(content).not.toContain("Forge remote");
+    });
+  });
+  describe("confirmations note (#12874)", () => {
+    const START = "<!-- DAINTREE_CONFIRMATIONS_START -->";
+    const storeWith =
+      (helpAssistant: Record<string, unknown>, globalSkipPermissions: boolean) => (key: string) =>
+        key === "agentSettings" ? { globalSkipPermissions } : helpAssistant;
+
+    it("tells the session its confirm-gated calls run straight away while skipping", async () => {
+      mockStoreGet.mockImplementation(storeWith({}, true));
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      for (const file of ["CLAUDE.md", "AGENTS.md"]) {
+        const content = await fs.readFile(path.join(result.sessionPath, file), "utf-8");
+        expect(content.match(new RegExp(START, "g")) ?? []).toHaveLength(1);
+        expect(content).toContain("## Daintree Confirmations");
+      }
+    });
+
+    it.each([
+      ["the global setting is off", {}, false],
+      ["the assistant is set to always ask", { daintreeConfirmations: "always-ask" }, true],
+      ["Daintree control is off", { daintreeControl: false }, true],
+    ] as const)("writes no note while %s", async (_label, helpAssistant, globalSkip) => {
+      mockStoreGet.mockImplementation(storeWith(helpAssistant, globalSkip));
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const content = await fs.readFile(path.join(result.sessionPath, "CLAUDE.md"), "utf-8");
+      expect(content).not.toContain(START);
+    });
+
+    it("removes the note on re-provision once the assistant is set to always ask", async () => {
+      mockStoreGet.mockImplementation(storeWith({}, true));
+      await service.provisionSession(provisionInput());
+      mockStoreGet.mockImplementation(storeWith({ daintreeConfirmations: "always-ask" }, true));
+      const second = await service.provisionSession(provisionInput());
+      if (!second) throw new Error("expected result");
+
+      for (const file of ["CLAUDE.md", "AGENTS.md"]) {
+        const content = await fs.readFile(path.join(second.sessionPath, file), "utf-8");
+        expect(content).not.toContain(START);
+        expect(content).not.toContain("## Daintree Confirmations");
+      }
+    });
+  });
+
+  describe("runbook rule", () => {
+    const START = "<!-- DAINTREE_RUNBOOKS_START -->";
+
+    it("fills the slot the template carries near the top rather than appending", async () => {
+      await fs.writeFile(
+        path.join(helpFolder, "CLAUDE.md"),
+        `# Help\n\nRole.\n\n${START}\n<!-- DAINTREE_RUNBOOKS_END -->\n\n## Later\n`
+      );
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const content = await fs.readFile(path.join(result.sessionPath, "CLAUDE.md"), "utf-8");
+      expect(content.indexOf("search_runbooks")).toBeGreaterThan(-1);
+      expect(content.indexOf("search_runbooks")).toBeLessThan(content.indexOf("## Later"));
+    });
+
+    it("writes the rule into CLAUDE.md and AGENTS.md when runbooks are on", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      for (const file of ["CLAUDE.md", "AGENTS.md"]) {
+        const content = await fs.readFile(path.join(result.sessionPath, file), "utf-8");
+        expect(content.match(new RegExp(START, "g")) ?? []).toHaveLength(1);
+        expect(content).toContain("`search_runbooks`");
+      }
+    });
+
+    it("removes the rule on re-provision once runbooks are turned off", async () => {
+      await service.provisionSession(provisionInput());
+      mockStoreGet.mockReturnValue({ runbookSearch: false });
+      const second = await service.provisionSession(provisionInput());
+      if (!second) throw new Error("expected result");
+
+      for (const file of ["CLAUDE.md", "AGENTS.md"]) {
+        const content = await fs.readFile(path.join(second.sessionPath, file), "utf-8");
+        // The slot stays, empty, so a later rule lands in the same place.
+        expect(content.match(new RegExp(START, "g")) ?? []).toHaveLength(1);
+        expect(content).not.toContain("search_runbooks");
+      }
+      const lane = await readLaneConfig(second);
+      expect(lane.mcpServers["daintree-runbooks"]).toBeUndefined();
+    });
+
+    it("leaves the rule and the server out while Daintree control is off", async () => {
+      mockStoreGet.mockReturnValue({ daintreeControl: false, runbookSearch: true });
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const claude = await fs.readFile(path.join(result.sessionPath, "CLAUDE.md"), "utf-8");
+      expect(claude).not.toContain("search_runbooks");
+      const lane = await readLaneConfig(result);
+      expect(lane.mcpServers["daintree-runbooks"]).toBeUndefined();
     });
   });
 });

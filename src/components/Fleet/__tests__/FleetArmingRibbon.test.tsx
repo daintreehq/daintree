@@ -37,6 +37,9 @@ vi.stubGlobal(
 );
 
 vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenuMeta: ({ children }: { children: React.ReactNode }) => (
+    <span aria-hidden="true">{children}</span>
+  ),
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode; asChild?: boolean }) => (
     <>{children}</>
@@ -250,14 +253,17 @@ describe("FleetArmingRibbon", () => {
     expect(screen.getByTestId("fleet-pane-state-t2-exited")).toBeTruthy();
   });
 
-  it("renders 'Exit' label and ⌘Esc/Ctrl+Esc kbd on the exit chip", () => {
+  it("renders 'Exit' and the exit chord as keys, and names the button without them", () => {
     useFleetArmingStore.getState().armIds(["a", "b"]);
     render(<FleetArmingRibbon />);
     const exit = screen.getByTestId("fleet-exit");
     expect(exit.textContent).toContain("Exit");
-    // jsdom reports no platform so isMac() is false → "Ctrl+Esc".
-    expect(exit.textContent).toMatch(/Ctrl\+Esc|⌘Esc/);
-    expect(exit.getAttribute("aria-label")).toMatch(/Exit fleet mode \((?:⌘Esc|Ctrl\+Esc)\)/);
+    // jsdom reports no platform so isMac() is false → one chip per key.
+    const keys = Array.from(exit.querySelectorAll("kbd")).map((k) => k.textContent);
+    expect(keys).toEqual(["Ctrl", "Esc"]);
+    // The keys ride aria-keyshortcuts; the name stays the action's.
+    expect(exit.getAttribute("aria-label")).toBe("Exit fleet mode");
+    expect(exit.getAttribute("aria-keyshortcuts")).toBe("Control+Escape");
   });
 
   it("exit chip click restores focus to lastArmedId via panelStore.setFocused", () => {

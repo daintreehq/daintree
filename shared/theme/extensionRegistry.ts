@@ -229,8 +229,6 @@ export const EXTENSION_KEY_REGISTRY = {
   // Settings
   "settings-card-bg": OPTIONAL,
   "settings-dialog-bg": OPTIONAL,
-  "settings-kbd-bg": OPTIONAL,
-  "settings-kbd-border": OPTIONAL,
   "settings-list-item-bg": OPTIONAL,
   "settings-meta-fg": OPTIONAL,
   "settings-meta-size": OPTIONAL,

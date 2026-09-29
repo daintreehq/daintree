@@ -11,10 +11,15 @@
  *  - Removing a row commits the updated env immediately.
  *  - Renaming a key commits only when the new name is non-empty and unique.
  */
-import { useState } from "react";
+import { useState, type ReactElement } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, screen } from "@testing-library/react";
+import { render as rtlRender, fireEvent, screen, type RenderOptions } from "@testing-library/react";
 import { EnvVarEditor } from "../EnvVarEditor";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
+  return rtlRender(ui, { wrapper: TooltipProvider, ...options });
+}
 
 vi.mock("lucide-react", () => ({
   X: () => <span data-testid="x-icon" />,
@@ -26,6 +31,11 @@ vi.mock("lucide-react", () => ({
   Upload: () => <span data-testid="upload-icon" />,
   AlertTriangle: () => <span data-testid="alert-triangle-icon" />,
   ChevronDown: () => <span data-testid="chevron-down-icon" />,
+  // InlineStatusBanner's severity glyphs, reached through ImportEnvDialog.
+  XCircle: () => <span data-testid="x-circle-icon" />,
+  CheckCircle2: () => <span data-testid="check-circle-icon" />,
+  CircleAlert: () => <span data-testid="circle-alert-icon" />,
+  Info: () => <span data-testid="info-icon" />,
 }));
 
 // Render Popover children inline so jsdom doesn't need to wrestle Radix's
@@ -44,10 +54,15 @@ interface DialogAction {
   disabled?: boolean;
 }
 
+const dialogProps = vi.hoisted(() => ({
+  restoreFocusTo: undefined as { current: HTMLElement | null } | undefined,
+}));
+
 vi.mock("@/components/ui/AppDialog", () => {
   const Dialog = ({
     children,
     isOpen,
+    restoreFocusTo,
     "data-testid": testId,
   }: {
     children: React.ReactNode;
@@ -55,8 +70,12 @@ vi.mock("@/components/ui/AppDialog", () => {
     onClose?: () => void;
     size?: string;
     zIndex?: string;
+    restoreFocusTo?: { current: HTMLElement | null };
     "data-testid"?: string;
-  }) => (isOpen ? <div data-testid={testId ?? "app-dialog"}>{children}</div> : null);
+  }) => {
+    dialogProps.restoreFocusTo = restoreFocusTo;
+    return isOpen ? <div data-testid={testId ?? "app-dialog"}>{children}</div> : null;
+  };
   Dialog.Header = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   Dialog.Title = ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>;
   Dialog.CloseButton = () => <button type="button" aria-label="Close dialog" />;
@@ -553,6 +572,19 @@ describe("EnvVarEditor", () => {
       expect(queryAllByTestId("env-editor-revert")).toHaveLength(0);
     });
 
+    /** Read-only is not the same as safe to show: an inherited secret is the same secret. */
+    it("masks an inherited secret the same way it masks an editable one", () => {
+      const { getAllByTestId } = render(
+        <EnvVarEditor
+          env={{}}
+          onChange={onChange}
+          inheritedEnv={{ ANTHROPIC_API_KEY: "from-global", NODE_ENV: "dev" }}
+        />
+      );
+      const types = getAllByTestId("env-editor-value").map((el) => el.getAttribute("type"));
+      expect(types).toEqual(["password", "text"]);
+    });
+
     it("shows overrides first (insertion order), then inherited-only keys (insertion order)", () => {
       const { getAllByTestId } = render(
         <EnvVarEditor
@@ -719,6 +751,28 @@ describe("EnvVarEditor", () => {
   });
 
   describe("Import .env flow", () => {
+    /**
+     * Importing into an empty editor swaps it to the table layout, which
+     * remounts the Import button the dialog was opened from. The dialog has to
+     * be handed a way back to the button that exists after the swap, or focus
+     * falls to the first tabbable element in the whole app.
+     */
+    it("gives the dialog a focus target that survives the empty-to-table swap", () => {
+      const onChange = vi.fn<(env: Record<string, string>) => void>();
+      render(<EnvVarEditor env={{}} onChange={onChange} />);
+      const opener = screen.getByTestId("env-editor-import");
+      fireEvent.click(opener);
+      fireEvent.change(screen.getByTestId("import-env-textarea"), {
+        target: { value: "BRAND_NEW=1" },
+      });
+      fireEvent.click(screen.getByTestId("app-dialog-primary"));
+
+      expect(opener.isConnected).toBe(false);
+      const target = dialogProps.restoreFocusTo?.current;
+      expect(target?.isConnected).toBe(true);
+      expect(target).toBe(screen.getByTestId("env-editor-import"));
+    });
+
     it("renders Import button in the empty state", () => {
       renderEditor({});
       expect(screen.getByTestId("env-editor-import")).toBeTruthy();

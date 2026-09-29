@@ -2002,6 +2002,37 @@ describe("CliAvailabilityService", () => {
       expect(toastCalls).toHaveLength(0);
     });
 
+    it("stays silent for an agent already warned in a previous session", async () => {
+      // The flags live under the legacy `orchestrationMilestones` key beside
+      // retired celebratory-toast ids; both must survive the next write.
+      storeBackingMap.set("orchestrationMilestones", {
+        "duplicate-cli-warning:claude": true,
+        "first-task-complete": true,
+      });
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        const argv = args as string[] | undefined;
+        if (argv?.[1] === "claude" || argv?.[1] === "gemini") {
+          return Buffer.from(`/opt/homebrew/bin/${argv[1]}\n/Users/x/.local/bin/${argv[1]}\n`);
+        }
+        return Buffer.from("");
+      });
+
+      await service.checkAvailability();
+
+      const toastCalls = mockedBroadcast.mock.calls.filter(
+        (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+      );
+      expect(toastCalls).toHaveLength(1);
+      expect((toastCalls[0][1] as { title: string }).title).toBe(
+        "Multiple Gemini installations found"
+      );
+      expect(storeBackingMap.get("orchestrationMilestones")).toEqual({
+        "duplicate-cli-warning:claude": true,
+        "duplicate-cli-warning:gemini": true,
+        "first-task-complete": true,
+      });
+    });
+
     it("warns once per agent even when the milestone never persists", async () => {
       // The persisted milestone is read fresh at the top of every pass, so it
       // only dedupes passes that are far enough apart for `store.set` to have

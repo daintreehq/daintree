@@ -1,3 +1,5 @@
+import { PARSER_GROUND } from "@shared/utils/terminalPartialEscapeTail";
+
 // How an authority snapshot lands on the main-thread mirror terminal: one
 // atomic, in-band VT payload. Synchronized output (DEC private mode 2026,
 // which xterm honors) brackets the clear+rewrite so the renderer never paints
@@ -19,8 +21,12 @@ export const MIRROR_RESET =
 // Clear scrollback (3J), screen (2J), and home the cursor.
 export const CLEAR_ALL = "\x1b[3J\x1b[2J\x1b[H";
 
-export function buildMirrorApplyPayload(serialized: string): string {
-  return `${SYNC_OUTPUT_START}${MIRROR_RESET}${CLEAR_ALL}${serialized}${SYNC_OUTPUT_END}`;
+// CAN first: the mirror's parser may be mid-sequence (xterm.js #5019), and
+// would eat the opening of the payload. The authority's pending escape
+// sequence goes after the closing bracket, because that bracket is itself an
+// escape sequence and would cancel it (#12791).
+export function buildMirrorApplyPayload(serialized: string, pendingEscapeTail = ""): string {
+  return `${PARSER_GROUND}${SYNC_OUTPUT_START}${MIRROR_RESET}${CLEAR_ALL}${serialized}${SYNC_OUTPUT_END}${pendingEscapeTail}`;
 }
 
 // A snapshot apply carries Daintree's own ESC[3J. The target tags it so the
@@ -35,7 +41,8 @@ export interface MirrorTarget {
 export function applySnapshotToMirror(
   mirror: MirrorTarget,
   serialized: string,
-  callback?: () => void
+  callback?: () => void,
+  pendingEscapeTail?: string | null
 ): void {
-  mirror.write(buildMirrorApplyPayload(serialized), callback, "snapshot");
+  mirror.write(buildMirrorApplyPayload(serialized, pendingEscapeTail ?? ""), callback, "snapshot");
 }

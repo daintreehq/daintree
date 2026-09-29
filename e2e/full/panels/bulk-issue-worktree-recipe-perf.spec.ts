@@ -431,7 +431,7 @@ async function runSample(scale: number, round: number, warmup: boolean): Promise
 
     const selectAll = ctx.window
       .locator(SEL.github.selectionActions)
-      .getByRole("button", { name: /Select all/ });
+      .getByRole("menuitem", { name: /Select all/ });
     await expect(selectAll).toBeVisible({ timeout: T_MEDIUM });
     // Avoid coupling this benchmark to Radix's transient entry geometry. The
     // button's supported keyboard path invokes the same selection action.

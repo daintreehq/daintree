@@ -269,6 +269,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
 
@@ -490,9 +491,9 @@ describe("ReviewHub", () => {
 
   it("preserves commit message during a background resync", async () => {
     render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-    await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+    await waitFor(() => screen.getByLabelText("Commit message"));
 
-    const textarea = screen.getByPlaceholderText("Commit message…");
+    const textarea = screen.getByLabelText("Commit message");
     fireEvent.change(textarea, { target: { value: "My commit message" } });
     expect((textarea as HTMLTextAreaElement).value).toBe("My commit message");
 
@@ -565,9 +566,9 @@ describe("ReviewHub", () => {
     const { rerender } = render(
       <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
     );
-    await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+    await waitFor(() => screen.getByLabelText("Commit message"));
 
-    const textarea = screen.getByPlaceholderText("Commit message…");
+    const textarea = screen.getByLabelText("Commit message");
     fireEvent.change(textarea, { target: { value: "draft message" } });
     expect((textarea as HTMLTextAreaElement).value).toBe("draft message");
 
@@ -575,7 +576,7 @@ describe("ReviewHub", () => {
     rerender(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
     await waitFor(() => {
-      const ta = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const ta = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
       expect(ta.value).toBe("");
     });
   });
@@ -771,9 +772,9 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByText("index.ts"));
 
       expect(
-        screen.getByRole("button", { name: /working tree/i }).getAttribute("aria-pressed")
+        screen.getByRole("radio", { name: /working tree/i }).getAttribute("aria-checked")
       ).toBe("true");
-      expect(screen.getByRole("button", { name: /vs main/i }).getAttribute("aria-pressed")).toBe(
+      expect(screen.getByRole("radio", { name: /vs main/i }).getAttribute("aria-checked")).toBe(
         "false"
       );
     });
@@ -789,7 +790,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      const toggle = screen.getByRole("button", { name: /vs main/i });
+      const toggle = screen.getByRole("radio", { name: /vs main/i });
       act(() => fireEvent.click(toggle));
 
       await waitFor(() => {
@@ -816,7 +817,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      const toggle = screen.getByRole("button", { name: /vs main/i });
+      const toggle = screen.getByRole("radio", { name: /vs main/i });
       act(() => fireEvent.click(toggle));
 
       await waitFor(() => {
@@ -835,7 +836,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      const toggle = screen.getByRole("button", { name: /vs main/i });
+      const toggle = screen.getByRole("radio", { name: /vs main/i });
       act(() => fireEvent.click(toggle));
 
       await waitFor(() => {
@@ -849,7 +850,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      const toggle = screen.getByRole("button", { name: /vs main/i });
+      const toggle = screen.getByRole("radio", { name: /vs main/i });
       act(() => fireEvent.click(toggle));
 
       await waitFor(() => {
@@ -859,14 +860,14 @@ describe("ReviewHub", () => {
 
     it("does not show commit panel in base-branch mode", async () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
 
-      const toggle = screen.getByRole("button", { name: /vs main/i });
+      const toggle = screen.getByRole("radio", { name: /vs main/i });
       act(() => fireEvent.click(toggle));
 
       await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalled());
 
-      expect(screen.queryByPlaceholderText("Commit message…")).toBeNull();
+      expect(screen.queryByLabelText("Commit message")).toBeNull();
     });
 
     it("resets to working-tree mode when closed and reopened", async () => {
@@ -876,7 +877,7 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByText("index.ts"));
 
       // Switch to base-branch mode
-      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
       await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalled());
 
       // Close and reopen
@@ -885,18 +886,18 @@ describe("ReviewHub", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByRole("button", { name: /working tree/i }).getAttribute("aria-pressed")
+          screen.getByRole("radio", { name: /working tree/i }).getAttribute("aria-checked")
         ).toBe("true");
       });
     });
 
-    it("disables vs-branch button when current branch matches main branch", async () => {
+    it("disables the vs-branch segment when current branch matches main branch", async () => {
       getStagingStatusMock.mockResolvedValue(makeStatus({ currentBranch: "main" }));
 
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      const toggle = screen.getByRole("button", { name: /vs main/i });
+      const toggle = screen.getByRole("radio", { name: /vs main/i });
       expect(toggle.hasAttribute("disabled")).toBe(true);
     });
 
@@ -906,7 +907,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      const toggle = screen.getByRole("button", { name: /vs main/i });
+      const toggle = screen.getByRole("radio", { name: /vs main/i });
       fireEvent.click(toggle);
 
       expect(compareWorktreesMock).not.toHaveBeenCalled();
@@ -917,14 +918,14 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByText("index.ts"));
 
       // First toggle
-      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
       await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalledTimes(1));
 
       // Toggle back to working-tree
-      act(() => fireEvent.click(screen.getByRole("button", { name: /working tree/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /working tree/i })));
 
       // Toggle again to base-branch — should NOT re-fetch since files are cached
-      act(() => fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
 
       // Still only 1 call
       expect(compareWorktreesMock).toHaveBeenCalledTimes(1);
@@ -935,10 +936,10 @@ describe("ReviewHub", () => {
     it("commit textarea retains focus during background resync", async () => {
       const onClose = vi.fn();
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
-      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+      await waitFor(() => screen.getByLabelText("Commit message"));
       await act(async () => {});
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
       act(() => textarea.focus());
       expect(document.activeElement).toBe(textarea);
 
@@ -977,4 +978,8 @@ describe("ReviewHub", () => {
       expect(onClose).toHaveBeenCalledTimes(1);
     });
   });
+});
+
+afterEach(() => {
+  resetStagingStatusCacheForTests();
 });

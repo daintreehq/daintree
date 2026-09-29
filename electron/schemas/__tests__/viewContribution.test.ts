@@ -26,6 +26,10 @@ describe("ViewContributionSchema (issue #10464)", () => {
     expect(ViewContributionSchema.safeParse({ ...base, [field]: "x" }).success).toBe(false);
   });
 
+  it("accepts location 'settings' — the plugin's custom settings section", () => {
+    expect(ViewContributionSchema.safeParse({ ...base, location: "settings" }).success).toBe(true);
+  });
+
   it("rejects location 'sidebar' at the schema boundary (no sidebar host yet)", () => {
     expect(ViewContributionSchema.safeParse({ ...base, location: "sidebar" }).success).toBe(false);
   });

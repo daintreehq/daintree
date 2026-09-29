@@ -11,6 +11,14 @@ import {
 } from "@/store/consoleCaptureStore";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SearchField } from "@/components/ui/SearchField";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
+import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { sanitizeForClipboard } from "@/lib/clipboardSanitize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -18,6 +26,7 @@ import { ObjectInspector } from "./ObjectInspector";
 import { DisclosureChevron } from "./DisclosureChevron";
 import { StackLocation, StackTrace } from "./StackTrace";
 import { stripV8StackTail } from "./stackFrames";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 interface ConsolePanelProps {
   paneId: string;
@@ -158,7 +167,7 @@ const ConsoleRow = memo(function ConsoleRow({
     <div
       tabIndex={0}
       className={cn(
-        "group/row flex items-start gap-2 px-2 py-0.5 border-b border-overlay/30 hover:bg-overlay-subtle",
+        "group/row flex items-start gap-2 px-2 py-0.5 border-b border-overlay/30 hover:bg-overlay-subtle focus-visible:-outline-offset-2",
         style.row
       )}
       style={indentPx > 0 ? { paddingLeft: `${8 + indentPx}px` } : undefined}
@@ -183,7 +192,7 @@ const ConsoleRow = memo(function ConsoleRow({
                 onClick={handleToggle}
                 aria-expanded={!isGroupCollapsed}
                 aria-label="Toggle console group"
-                className="inline-flex align-middle rounded-[var(--radius-sm)] mr-1 text-text-secondary select-none hover:text-text-primary transition-colors duration-150 ease-out"
+                className="inline-flex align-middle rounded-[var(--radius-sm)] mr-1 text-text-secondary select-none hover:text-text-primary transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               >
                 <DisclosureChevron expanded={!isGroupCollapsed} />
               </button>
@@ -223,7 +232,9 @@ const ConsoleRow = memo(function ConsoleRow({
             <button
               type="button"
               onClick={handleCopy}
-              className="p-0.5 rounded hover:bg-overlay-medium text-text-secondary hover:text-text-primary transition-colors"
+              // A 24px target, pulled back into the row's line height by the
+              // negative margin so revealing it never grows the row.
+              className="toolbar-icon-button -my-1 inline-flex size-6 items-center justify-center rounded-[var(--radius-md)] text-text-secondary"
               aria-label="Copy console message"
             >
               {copied ? (
@@ -399,49 +410,49 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
     });
   }, []);
 
-  const buttonClass =
-    "px-2 py-0.5 rounded text-3xs font-medium transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/50";
+  const levelOptions: SegmentedRadioOption<LevelFilter>[] = FILTER_BUTTONS.map(
+    ({ filter, label }) => {
+      const count = filter === "error" ? errorCount : filter === "warning" ? warnCount : 0;
+      if (count === 0) return { value: filter, label };
+      const unit =
+        filter === "error"
+          ? count === 1
+            ? "error"
+            : "errors"
+          : count === 1
+            ? "warning"
+            : "warnings";
+      return {
+        value: filter,
+        label,
+        ariaLabel: `${label}, ${count} ${unit}`,
+        trailing: (
+          <span className={filter === "error" ? "text-status-error" : "text-status-warning"}>
+            {count}
+          </span>
+        ),
+      };
+    }
+  );
 
   return (
     <div className="flex h-full flex-col bg-surface-canvas">
       {/* Toolbar */}
-      <div className="flex items-center gap-1.5 px-2 py-1 border-b border-overlay bg-surface shrink-0">
-        <span className="text-3xs font-semibold uppercase tracking-wide text-text-secondary mr-1">
-          Console
-        </span>
+      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 px-2 py-1 border-b border-overlay bg-surface shrink-0">
+        <span className={cn(LIST_LABEL_CLASS, "mr-1")}>Console</span>
 
-        {/* Level filters */}
-        <div className="flex items-center gap-0.5">
-          {FILTER_BUTTONS.map(({ filter, label }) => (
-            <button
-              key={filter}
-              type="button"
-              onClick={() => setLevelFilter(filter)}
-              aria-pressed={levelFilter === filter}
-              className={cn(
-                buttonClass,
-                levelFilter === filter
-                  ? "bg-overlay-emphasis text-text-primary"
-                  : "text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
-              )}
-            >
-              {label}
-              {filter === "error" && errorCount > 0 && (
-                <span className="ml-1 tabular-nums text-status-error">{errorCount}</span>
-              )}
-              {filter === "warning" && warnCount > 0 && (
-                <span className="ml-1 tabular-nums text-status-warning">{warnCount}</span>
-              )}
-            </button>
-          ))}
-        </div>
+        <SegmentedRadioGroup
+          options={levelOptions}
+          value={levelFilter}
+          onChange={setLevelFilter}
+          aria-label="Console level"
+          density="compact"
+        />
 
         {/* Search */}
         <SearchField
-          size="compact"
-          // 22px matches the toolbar's icon buttons; the compact 28px would
-          // make the filter the tallest thing in this strip.
-          fieldClassName="h-5.5 flex-1 max-w-[160px] gap-1 px-1.5 text-2xs [&_.search-field-icon]:size-3"
+          size="dense"
+          fieldClassName="w-40 min-w-16 shrink"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           onClear={() => setSearch("")}
@@ -459,10 +470,10 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
               <button
                 type="button"
                 onClick={handleScrollToBottom}
-                className="p-1 rounded hover:bg-overlay-medium text-text-secondary hover:text-text-primary transition-colors"
+                className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
                 aria-label="Scroll to bottom"
               >
-                <ChevronDown className="w-3.5 h-3.5" />
+                <ChevronDown className={PANE_TOOLBAR_ICON_CLASS} />
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">Scroll to bottom</TooltipContent>
@@ -476,13 +487,15 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
               type="button"
               onClick={handleCopyVisible}
               disabled={filtered.length === 0}
-              className="p-1 rounded hover:bg-overlay-medium text-text-secondary hover:text-text-primary transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-text-secondary"
+              className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
               aria-label="Copy visible console messages"
             >
               {allCopied ? (
-                <Check className="w-3.5 h-3.5 text-status-success animate-badge-bump" />
+                <Check
+                  className={cn(PANE_TOOLBAR_ICON_CLASS, "text-status-success animate-badge-bump")}
+                />
               ) : (
-                <Copy className="w-3.5 h-3.5" />
+                <Copy className={PANE_TOOLBAR_ICON_CLASS} />
               )}
             </button>
           </TooltipTrigger>
@@ -495,10 +508,10 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
             <button
               type="button"
               onClick={handleClear}
-              className="p-1 rounded hover:bg-overlay-medium text-text-secondary hover:text-text-primary transition-colors"
+              className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
               aria-label="Clear console"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Trash2 className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Clear console</TooltipContent>

@@ -8,7 +8,11 @@ vi.mock("../../assistantTerminal.js", () => ({
     t?.isAssistantTerminal === true,
 }));
 
-import { buildViewlessTerminalStatus, viewlessStatusArgsAreAnswerable } from "../terminalStatus.js";
+import {
+  buildViewlessTerminalStatus,
+  isAgentPaneInWorkspace,
+  viewlessStatusArgsAreAnswerable,
+} from "../terminalStatus.js";
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../../shared/config/mcpLimits.js";
 import type { TerminalSubmissionRecord } from "../../../../shared/types/terminalSubmission.js";
 
@@ -66,6 +70,31 @@ function deps(
     } as any,
   };
 }
+
+// What admits the assistant's read of a pane it did not create (#12883): the
+// host's record, never the spawn tracking that a pending duplicate rewrites.
+describe("isAgentPaneInWorkspace", () => {
+  it("admits a pane of the workspace, including one whose PTY exited", async () => {
+    const d = deps([record({ id: "pane" }), record({ id: "exited", hasPty: false })]);
+
+    expect(await isAgentPaneInWorkspace(d.ptyClient, "pane", WORKSPACE)).toBe(true);
+    expect(await isAgentPaneInWorkspace(d.ptyClient, "exited", WORKSPACE)).toBe(true);
+    expect(d.ptyClient.getTerminalProjectId).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["another workspace's terminal", record({ id: "x", projectId: "ws-other" })],
+    ["a dev-preview PTY", record({ id: "x", kind: "dev-preview" })],
+    ["the assistant's terminal", record({ id: "x", isAssistantTerminal: true })],
+  ])("refuses %s", async (_label, hidden) => {
+    expect(await isAgentPaneInWorkspace(deps([hidden]).ptyClient, "x", WORKSPACE)).toBe(false);
+  });
+
+  it("refuses an unknown terminal, and without a pty client", async () => {
+    expect(await isAgentPaneInWorkspace(deps([]).ptyClient, "x", WORKSPACE)).toBe(false);
+    expect(await isAgentPaneInWorkspace(null, "x", WORKSPACE)).toBe(false);
+  });
+});
 
 describe("viewlessStatusArgsAreAnswerable", () => {
   it.each([

@@ -407,6 +407,8 @@ function collectSourceFiles(dir: string): string[] {
     }
 
     if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+    // Compiler tests create and remove these files while this source scan runs.
+    if (/\.compiled-\d+-\d+\.tsx?$/.test(entry.name)) continue;
     if (/\.(test|spec)\./.test(entry.name)) continue;
 
     result.push(fullPath);
@@ -428,10 +430,16 @@ type FocusRingAllowlistEntry = {
 
 const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
+    file: "src/components/Plugin/PluginViewContent.tsx",
+    fragment: "empty:outline-hidden",
+    reason:
+      "The status wrapper is where focus is rescued to, and it keeps the global ring whenever it holds a status; only while it is empty (zero height) is the outline dropped, since a solid outline there is a stray stripe with nothing to point at",
+  },
+  {
     file: "src/components/Settings/PresetSelector.tsx",
     fragment: "overflow-y-auto max-h-80 focus:outline-hidden",
     reason:
-      "The preset listbox keeps DOM focus while aria-activedescendant names the active option, which PALETTE_ROW_CLASS draws as a fill plus a leading selection-outline rail — the same one-focus-owner model as the palettes; a ring on the listbox itself would be a second indicator around the whole list",
+      "The preset listbox keeps DOM focus while aria-activedescendant names the active option, which PALETTE_ROW_CLASS draws as the highlight fill — the same one-focus-owner model as the palettes; a ring on the listbox itself would be a second indicator around the whole list",
   },
   {
     file: "src/components/Worktree/views/WorktreePathPicker.tsx",
@@ -534,7 +542,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   },
   {
     file: "src/components/Notifications/NotificationCenter.tsx",
-    fragment: "text-text-secondary outline-hidden",
+    fragment: "bg-overlay-raised outline-hidden",
     reason:
       "'New since last looked' chip — non-interactive label; mark-read button inside has its own focus styling. Was /50 until #12061 raised it to /70 (at /50 this measured 4.4:1, under the 4.5:1 floor for normal text), and #12065 retired the ramp underneath it",
   },
@@ -551,6 +559,12 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   // suppresses its own default outline with `focus:outline-hidden` so the
   // wrapper's ring is the only focus indication. The scanner can't see the
   // sibling JSX parent, so these get per-occurrence allowlists.
+  {
+    file: "src/components/Terminal/TerminalScratchpad.tsx",
+    fragment: "block min-h-0 w-full flex-1 resize-none border-0 bg-transparent px-3 py-2",
+    reason:
+      "The Scratchpad editor is the column's whole body, so a ring on it would trace the pane's own edges; the caret plus the title bar lifting via group-has-[textarea:focus-visible] is its focus cue, and forced-colors mode restores the ring globally",
+  },
   {
     file: "src/components/FileViewer/FileViewerModal.tsx",
     fragment:
@@ -585,7 +599,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
     file: "src/components/Panel/TabButton.tsx",
     fragment:
-      "text-xs bg-overlay-soft border border-transparent px-1 h-4 min-w-[60px] max-w-[100px] text-text-primary select-text focus:outline-hidden",
+      "absolute text-xs font-medium bg-overlay-soft border border-transparent px-1 text-text-primary select-text focus:outline-hidden",
     reason:
       "PRE-EXISTING #8940: tab rename input has no focus indicator (the input is the sole focus target while editing) — follow-up",
   },
@@ -613,16 +627,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     fragment:
       "select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-daintree-accent/65 hover:text-daintree-accent/85 transition-colors cursor-pointer focus-visible:outline-hidden",
     reason: "PRE-EXISTING #8940: command picker trigger button has no focus indicator — follow-up",
-  },
-  {
-    file: "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",
-    fragment:
-      "flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden",
-    reason:
-      "RESOLVED, not deferred: the input is a bare transparent field inside a bordered shell, " +
-      "and the shell owns the indicator — `focus-within:border-accent-primary` at full strength, " +
-      "the one accent signal this focus region is allowed. A same-element ring would draw a second " +
-      "indicator inside the first. Was the #8940 follow-up.",
   },
   {
     file: "src/components/Layout/ChordIndicator.tsx",
@@ -791,7 +795,7 @@ describe("focus-ring fallback contract", () => {
 
     throw new Error(
       `Found ${violations.length} bare \`outline-hidden\` use(s) with no element-owned focus indicator. ` +
-        `Add a same-element focus fallback (e.g. \`focus-visible:ring-2 focus-visible:ring-accent-primary\`) ` +
+        `Add a same-element focus fallback (e.g. \`focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary\`) ` +
         `or, if the element is non-interactive and delegates focus, add an ALLOWLIST entry with a rationale ` +
         `in src/config/__tests__/focusRingFallback.contract.test.ts:\n${detail}${more}`
     );

@@ -22,7 +22,14 @@ import { SEMANTIC_BUFFER_TRUNCATION_MARKER } from "./types.js";
  * - an opening marker the agent mentioned and never closed, which is skipped
  *   in favour of the next opening marker rather than swallowing it;
  * - a capture spanning a line the semantic buffer cut short, whose missing
- *   bytes could have held the placeholder.
+ *   bytes could have held the placeholder;
+ * - a marker on a spinner row, or one trailing off into an ellipsis: a status
+ *   line quoting the task while the agent is still working. Antigravity's
+ *   spinner shows a model-written title, and Gemini has written that title as
+ *   a complete marker seconds before the real reply printed.
+ *
+ * Detection also runs on every output sample while a request is open, not
+ * only at a settle, so none of these can lean on the agent having stopped.
  */
 
 /**
@@ -32,6 +39,22 @@ import { SEMANTIC_BUFFER_TRUNCATION_MARKER } from "./types.js";
  * row can legitimately start with either.
  */
 const CONTINUATION_GUTTER_RE = /^[\s\u2500-\u259f\u23bf\u23fa|>›❯•●◦·]+/u;
+
+/** Braille patterns: the spinner frames CLIs animate beside a status line. */
+const SPINNER_GLYPH_RE = /[\u2800-\u28ff]/u;
+
+/**
+ * Whether the row holding the marker opened at `openAt` is a spinner's status
+ * line, or the marker closing at `closeEnd` trails off into an ellipsis. The
+ * instruction asks for the marker as the last line exactly, so neither is a
+ * reply: a spinner row is transient, and an ellipsis means a title cut short.
+ */
+function isStatusLineMarker(text: string, openAt: number, closeEnd: number): boolean {
+  const rowStart = Math.max(text.lastIndexOf("\n", openAt - 1), text.lastIndexOf("\r", openAt - 1));
+  if (SPINNER_GLYPH_RE.test(text.slice(rowStart + 1, openAt))) return true;
+  const after = text.slice(closeEnd, closeEnd + 3);
+  return after === "..." || after.startsWith("\u2026");
+}
 
 /** Right-hand borders and cell padding at the end of any row. */
 const TRAILING_BORDER_RE = /[\s\u2500-\u259f|]+$/u;
@@ -102,11 +125,21 @@ function capMessage(message: string): HandbackMatch {
  * raw stream a newline can sit between fragments painted anywhere.
  */
 export function detectHandback(input: string, code: string, rendered = true): HandbackMatch | null {
-  if (!input) return null;
+  return scanHandback(input, code, rendered).match;
+}
+
+/** {@link detectHandback}, also saying whether a status-line marker was passed over. */
+function scanHandback(
+  input: string,
+  code: string,
+  rendered: boolean
+): { match: HandbackMatch | null; statusLine: boolean } {
+  if (!input) return { match: null, statusLine: false };
   const text = rendered ? input.replace(HYPHEN_ROW_BREAK_RE, "-") : input;
   const start = handbackStartMarker(code);
   const end = handbackEndMarker(code);
 
+  let statusLine = false;
   const captures: string[] = [];
   let cursor = text.indexOf(start);
   while (cursor !== -1) {
@@ -119,7 +152,8 @@ export function detectHandback(input: string, code: string, rendered = true): Ha
       cursor = nextOpen;
       continue;
     }
-    captures.push(text.slice(bodyStart, closeAt));
+    if (isStatusLineMarker(text, cursor, closeAt + end.length)) statusLine = true;
+    else captures.push(text.slice(bodyStart, closeAt));
     cursor = text.indexOf(start, closeAt + end.length);
   }
 
@@ -133,9 +167,9 @@ export function detectHandback(input: string, code: string, rendered = true): Ha
     // `>` gutter, while the raw capture keeps a `>` that closes the placeholder
     // at the start of a continuation row, which gutter stripping removes.
     if (isEchoedInstruction(capture) || isEchoedInstruction(message)) continue;
-    return capMessage(message);
+    return { match: capMessage(message), statusLine };
   }
-  return null;
+  return { match: null, statusLine };
 }
 
 // Cursor movement: up/down/forward/back, next/previous line, column, row and
@@ -151,8 +185,20 @@ const CURSOR_MOVE_RE = /\x1b\[(\d*)(?:;\d*)?([A-Gdf]|H)/g;
  * a cell-diff repaint of the echoed instruction can leave out the unchanged
  * `<summary>` between two markers it does rewrite.
  */
+/** How much of the buffer's end the raw fallback reads; a marker is short and last. */
+const RAW_TAIL_CHARS = 32_768;
+
 export function rawHandbackText(semanticBuffer: readonly string[]): string {
-  const moves = semanticBuffer
+  // Bounded from the end: a line with no newline keeps growing, and this runs
+  // on every output sample while a handback is outstanding.
+  const tail: string[] = [];
+  let budget = RAW_TAIL_CHARS;
+  for (let i = semanticBuffer.length - 1; i >= 0 && budget > 0; i--) {
+    const line = semanticBuffer[i] ?? "";
+    tail.unshift(line.length > budget ? line.slice(-budget) : line);
+    budget -= line.length + 1;
+  }
+  const moves = tail
     .join("\n")
     .replace(CURSOR_MOVE_RE, (_sequence, count: string, op: string) =>
       op === "C" && Number(count || "1") <= 1 ? " " : RAW_CELLS_SKIPPED
@@ -186,13 +232,21 @@ export function findHandback(
   observedAt: number
 ): HandbackHit | undefined {
   if (requests.length === 0) return undefined;
+  // Codes the rendered screen shows only on a status line. The raw stream is
+  // not asked to overrule that: it turns the carriage return a spinner repaints
+  // with into a row break, so the spinner glyph falls off the marker's row.
+  const statusLineOnly = new Set<string>();
   for (const source of sources) {
     const text = source.read();
     if (!text) continue;
     // Latest request first: it is the one the agent is answering.
     for (const request of [...requests].reverse()) {
-      const match = detectHandback(text, request.code, source.rendered);
-      if (!match) continue;
+      if (!source.rendered && statusLineOnly.has(request.code)) continue;
+      const { match, statusLine } = scanHandback(text, request.code, source.rendered);
+      if (!match) {
+        if (source.rendered && statusLine) statusLineOnly.add(request.code);
+        continue;
+      }
       return {
         code: request.code,
         handback: {

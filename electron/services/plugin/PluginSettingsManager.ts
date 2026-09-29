@@ -10,6 +10,7 @@ import { projectStore } from "../ProjectStore.js";
 import { safeStorageCipher, type SecretCipher } from "./secretCipher.js";
 import type {
   PluginManifest,
+  PluginRequiredSettingsStatus,
   PluginSettingsScope,
   PluginSettingsUiValues,
   SettingDefinition,
@@ -45,6 +46,12 @@ interface PluginSettingsManagerDeps {
   getManifest: (pluginId: string) => PluginManifest | undefined;
   /** Secret-value cipher for every store. Defaults to Electron `safeStorage`; tests inject a fake. */
   cipher?: SecretCipher;
+  /**
+   * Told after any stored value of `pluginId` changes, from either write path,
+   * so renderers can re-check what depends on it (the panel setup strip). Carries
+   * no key or value: a listener re-reads what it needs.
+   */
+  onSettingChanged?: (pluginId: string) => void;
 }
 
 /**
@@ -252,6 +259,31 @@ export class PluginSettingsManager {
   }
 
   /**
+   * The settings form's write guard. Stricter than {@link assertSettingDeclared}:
+   * the form only ever renders declared fields, and a write that arrives after
+   * the plugin unloaded has no declaration to say whether the value is secret,
+   * so it would land as plaintext — in a git-tracked file for project scope.
+   */
+  private assertSettingWritableFromUi(
+    pluginId: string,
+    key: string,
+    scope: PluginSettingsScope
+  ): void {
+    const manifest = this.deps.getManifest(pluginId);
+    if (!manifest) {
+      throw new Error(
+        `Plugin "${pluginId}" settings: "${key}" can't be changed while the plugin isn't running`
+      );
+    }
+    if (!manifest.contributes.settings?.some((s) => s.id === key)) {
+      throw new Error(
+        `Plugin "${pluginId}" settings: key "${key}" is not declared in contributes.settings`
+      );
+    }
+    this.assertSettingDeclared(pluginId, key, scope);
+  }
+
+  /**
    * Reject a `host.settings.onDidChange` subscription whose `scope` mismatches a
    * declared key's `scope`. Undeclared keys (or manifests with no declarations)
    * are left alone — only the declared scope is enforced, mirroring the set/delete
@@ -277,6 +309,16 @@ export class PluginSettingsManager {
   getDeclaredScope(pluginId: string, key: string): PluginSettingsScope | undefined {
     const def = this.deps.getManifest(pluginId)?.contributes.settings?.find((s) => s.id === key);
     return def ? (def.scope ?? "user") : undefined;
+  }
+
+  /**
+   * The manifest `default` for a declared key, as a detached copy — what
+   * `settings.get` answers, and `onDidChange` delivers, while nothing is stored.
+   */
+  getDeclaredDefault(pluginId: string, key: string): unknown {
+    const def = this.deps.getManifest(pluginId)?.contributes.settings?.find((s) => s.id === key);
+    if (def?.default === undefined) return undefined;
+    return JSON.parse(JSON.stringify(def.default)) as unknown;
   }
 
   /**
@@ -321,8 +363,12 @@ export class PluginSettingsManager {
     key: string,
     value: unknown
   ): void {
+    this.deps.onSettingChanged?.(pluginId);
     const subs = this.settingsSubscribers.get(pluginId);
     if (!subs) return;
+    // A cleared value reads back as the declared default, so that is what the
+    // subscriber hears.
+    if (value === undefined) value = this.getDeclaredDefault(pluginId, key);
     // Snapshot so a callback that disposes itself doesn't mutate the live set
     // mid-iteration.
     for (const sub of [...subs]) {
@@ -336,6 +382,76 @@ export class PluginSettingsManager {
         () => this.removeSubscriber(pluginId, sub)
       );
     }
+  }
+
+  /**
+   * Declared `required: true` settings with nothing stored, in manifest order.
+   * A declared `default` never satisfies one — the user has to choose — and a
+   * key whose scope has no target (a project scope with no project) is missing,
+   * since nothing the plugin reads there can be set.
+   */
+  private async requiredStatus(
+    pluginId: string,
+    resolveFile: (def: SettingDefinition, scope: PluginSettingsScope) => string | null | undefined
+  ): Promise<PluginRequiredSettingsStatus> {
+    const required = this.uiSettingDefinitions(pluginId).filter((def) => def.required === true);
+    // Resolved up front, outside the per-key guard: a path that can't be
+    // resolved at all (a foreign project, a malformed id) is a refused request,
+    // not an unreadable value, and must reach the caller as one.
+    const files = required.map((def) => resolveFile(def, def.scope ?? "user"));
+    const states = await Promise.all(
+      required.map(async (def, index): Promise<"set" | "missing" | "unreadable"> => {
+        const filePath = files[index];
+        if (!filePath) return "missing";
+        const store = this.getOrCreateSettingsStore(pluginId, filePath);
+        try {
+          // Presence only. A secret is never decrypted to answer this — a
+          // keychain that is locked or unavailable must not turn "is it set?"
+          // into a failure, and there is no reason to hold the plaintext.
+          if (this.isSecretSetting(def)) {
+            return (await store.storedSecretTier(def.id)) === undefined ? "missing" : "set";
+          }
+          const stored = await store.get<unknown>(def.id);
+          return stored === undefined || stored === null || stored === "" ? "missing" : "set";
+        } catch {
+          // One unreadable file answers for its own keys only; the rest of the
+          // list stands.
+          return "unreadable";
+        }
+      })
+    );
+    const idsIn = (state: "missing" | "unreadable") =>
+      required.filter((_, index) => states[index] === state).map((def) => def.id);
+    const labels: Record<string, string> = {};
+    required.forEach((def, index) => {
+      if (states[index] !== "set") labels[def.id] = def.label ?? def.id;
+    });
+    return { missing: idsIn("missing"), unreadable: idsIn("unreadable"), labels };
+  }
+
+  /**
+   * {@link requiredStatus} for the host `settings` API, resolved exactly as its
+   * reads are. A key the host can't read is reported with the missing ones: the
+   * plugin can't use it either, and gating on the list is the point of it.
+   */
+  async missingRequiredForHost(pluginId: string, projectRoot?: string | null): Promise<string[]> {
+    const status = await this.requiredStatus(pluginId, (def, scope) =>
+      this.resolveSettingsFilePathForKey(pluginId, def.id, scope, projectRoot)
+    );
+    const unreadable = new Set(status.unreadable);
+    return this.uiSettingDefinitions(pluginId)
+      .filter((def) => status.missing.includes(def.id) || unreadable.has(def.id))
+      .map((def) => def.id);
+  }
+
+  /** {@link requiredStatus} for a renderer, pinned to its own project like the form's reads. */
+  requiredStatusForUi(
+    pluginId: string,
+    projectId: string | null
+  ): Promise<PluginRequiredSettingsStatus> {
+    return this.requiredStatus(pluginId, (def, scope) =>
+      this.resolveUiSettingsFilePathForKey(pluginId, def.id, scope, projectId)
+    );
   }
 
   clearPluginSettingsState(pluginId: string): void {
@@ -551,7 +667,7 @@ export class PluginSettingsManager {
       );
     }
     this.assertSettingSerializable(pluginId, key, value);
-    this.assertSettingDeclared(pluginId, key, scope);
+    this.assertSettingWritableFromUi(pluginId, key, scope);
     const filePath = this.resolveUiSettingsFilePathForKey(pluginId, key, scope, projectId);
     if (!filePath) {
       throw new Error(
@@ -578,7 +694,7 @@ export class PluginSettingsManager {
     projectId: string | null
   ): Promise<boolean> {
     assertSettingsKey(pluginId, "delete", key);
-    this.assertSettingDeclared(pluginId, key, scope);
+    this.assertSettingWritableFromUi(pluginId, key, scope);
     const filePath = this.resolveUiSettingsFilePathForKey(pluginId, key, scope, projectId);
     if (!filePath) return false;
     const store = this.getOrCreateSettingsStore(pluginId, filePath);

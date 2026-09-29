@@ -1,9 +1,18 @@
 import { projectStore } from "./ProjectStore.js";
+import { getEffectiveRegistry } from "../../shared/config/agentRegistry.js";
+import {
+  LAUNCHABLE_AGENT_IDS,
+  isAssistantOnlyAgentId,
+  isBuiltInAgentId,
+} from "../../shared/config/agentIds.js";
+import { isAgentLaunchable } from "../../shared/utils/agentAvailability.js";
+import type { CliAvailability } from "../../shared/types/ipc/system.js";
 import { gitServiceCache } from "./GitServiceCache.js";
 import { listMatchingProviders } from "./forgeProviderRegistry.js";
 import { resolveForgeRemote } from "../../shared/utils/forgeRemoteSelection.js";
 import {
   sanitizeGitRemoteUrl,
+  type HelpSessionAgentsFact,
   type HelpSessionProjectFacts,
 } from "./helpSessionProjectMetadata.js";
 
@@ -40,11 +49,38 @@ async function readForgeRemote(
   return url ? { name: remote.name, url } : undefined;
 }
 
+/**
+ * The agents a launch accepts, in `agent.listAvailable`'s order: built-ins,
+ * then user and plugin agents by id. Once the CLIs have been probed only the
+ * launchable ones are listed; before that, every registered one is.
+ */
+export function listLaunchableAgents(availability: CliAvailability | null): HelpSessionAgentsFact {
+  const registry = getEffectiveRegistry();
+  const ids = [
+    ...LAUNCHABLE_AGENT_IDS.filter((id) => Object.hasOwn(registry, id)),
+    ...Object.keys(registry)
+      .filter((id) => !isBuiltInAgentId(id) && !isAssistantOnlyAgentId(id))
+      .sort(),
+  ];
+  return {
+    agents: ids
+      .filter((id) => availability === null || isAgentLaunchable(availability[id]))
+      .map((id) => ({ id, name: registry[id]?.name ?? id })),
+    availabilityChecked: availability !== null,
+  };
+}
+
 export async function readHelpSessionProjectFacts(
   projectId: string,
-  projectPath: string
+  projectPath: string,
+  readAvailability: () => CliAvailability | null = () => null
 ): Promise<HelpSessionProjectFacts> {
   const facts: HelpSessionProjectFacts = {};
+  try {
+    facts.launchableAgents = listLaunchableAgents(readAvailability());
+  } catch (err) {
+    warnLookupFailed("agents", err);
+  }
   try {
     const name = projectStore.getProjectById(projectId)?.name;
     if (name) facts.name = name;
@@ -73,4 +109,47 @@ export async function readHelpSessionProjectFacts(
   });
   if (forgeRemote) facts.forgeRemote = forgeRemote;
   return facts;
+}
+
+// Under the service's overall deadline, so one hung repository costs only its
+// own worktrees rather than every root gathered so far.
+const WORKTREE_LIST_TIMEOUT_MS = 3000;
+
+async function listWorktreePaths(root: string): Promise<string[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const listed = await Promise.race([
+      gitServiceCache.getGitService(root).listWorktrees(),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), WORKTREE_LIST_TIMEOUT_MS);
+        timer.unref?.();
+      }),
+    ]);
+    if (!listed) {
+      warnLookupFailed("known worktrees", undefined);
+      return [];
+    }
+    return listed.filter((wt) => !wt.bare).map((wt) => wt.path);
+  } catch (err) {
+    warnLookupFailed("known worktrees", err);
+    return [];
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Every directory Daintree knows as a project or one of its worktrees, wherever
+ * the worktree lives. A failed worktree lookup drops that project's worktrees,
+ * never the project itself.
+ */
+export async function readHelpSessionKnownRoots(projectPath: string): Promise<string[]> {
+  const projects = new Set([projectPath]);
+  try {
+    for (const { path: p } of projectStore.getAllProjectIdentities()) projects.add(p);
+  } catch (err) {
+    warnLookupFailed("projects", err);
+  }
+  const worktrees = await Promise.all([...projects].map(listWorktreePaths));
+  return [...new Set([...projects, ...worktrees.flat()])];
 }

@@ -25,6 +25,7 @@ import {
   editorSearchHighlightTheme,
   editorSearchPanelTheme,
 } from "@/components/FileViewer/editorSearchTheme";
+import { createEditorSearchPanel } from "@/components/FileViewer/editorSearchPanel";
 import {
   getDaintreeEditorTheme,
   type EditorThemePolarity,
@@ -116,7 +117,7 @@ export function buildMarkdownEditorExtensions(options: {
     rectangularSelection(),
     crosshairCursor(),
     highlightSelectionMatches(),
-    search({ top: true }),
+    search({ top: true, createPanel: createEditorSearchPanel }),
     keymap.of([
       ...searchKeymap,
       ...markdownKeymap,

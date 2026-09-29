@@ -1,11 +1,22 @@
-import React, { useCallback, useState, useRef, useEffect, forwardRef } from "react";
+import React, {
+  useCallback,
+  useState,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  forwardRef,
+} from "react";
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { m, AnimatePresence } from "framer-motion";
-import { X, AlertTriangle } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import type { PanelKind, AgentState } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Button } from "@/components/ui/button";
+import {
+  DocumentTabClose,
+  DocumentTabIndicator,
+  documentTabClassName,
+} from "@/components/ui/document-tab";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import {
   getEffectiveStateIcon,
@@ -14,7 +25,8 @@ import {
 } from "@/components/Worktree/terminalStateConfig";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
-import { UI_ANIMATION_DURATION, DURATION_100, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
+import { DURATION_100 } from "@/lib/animationUtils";
+import { inlineRenameFieldClassName, inlineRenameFieldInputProps } from "./inlineRenameField";
 
 export interface TabInfo {
   id: string;
@@ -92,15 +104,40 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(title);
   const inputRef = useRef<HTMLInputElement>(null);
+  const labelRef = useRef<HTMLSpanElement>(null);
+  // Where the rename field sits: over the label's own box. The field is a
+  // sibling of the tab rather than inside it — a focusable input inside
+  // `role="tab"` is the nesting ARIA forbids — so it is positioned onto the
+  // label's slot instead of replacing it.
+  const [editBox, setEditBox] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+
+  useLayoutEffect(() => {
+    const label = labelRef.current;
+    if (!isEditing || !label) {
+      setEditBox(null);
+      return;
+    }
+    setEditBox({
+      left: label.offsetLeft,
+      top: label.offsetTop,
+      width: label.offsetWidth,
+      height: label.offsetHeight,
+    });
+  }, [isEditing]);
   const didCommitOrCancelRef = useRef(false);
 
   // Focus input when entering edit mode
   useEffect(() => {
-    if (isEditing && inputRef.current) {
+    if (isEditing && editBox && inputRef.current) {
       inputRef.current.focus();
       inputRef.current.select();
     }
-  }, [isEditing]);
+  }, [isEditing, editBox]);
 
   // Sync edit value when title changes externally
   useEffect(() => {
@@ -131,21 +168,6 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     return () => controller.abort();
   }, [id, title, onRename]);
 
-  const handleClose = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
-      onClose();
-    },
-    [onClose]
-  );
-
-  const handleClosePointerDown = useCallback((e: React.PointerEvent) => {
-    // Keep the close button from bubbling into the panel drag handle. The close
-    // button is not a sortable activator, so this stays a pure stopPropagation —
-    // it must NOT route through the tab's sortable pointer listener.
-    e.stopPropagation();
-  }, []);
-
   // For sortable tabs, merge attributes but filter out conflicting role/tabIndex
   const mergedAttributes = sortableAttributes
     ? Object.fromEntries(
@@ -153,32 +175,29 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
       )
     : {};
 
-  const handleCloseKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-      }
-    },
-    [onClose]
-  );
+  const startEditing = useCallback(() => {
+    if (!onRename) return false;
+    setEditValue(title);
+    setIsEditing(true);
+    didCommitOrCancelRef.current = false;
+    return true;
+  }, [onRename, title]);
 
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (onRename) {
-        setEditValue(title);
-        setIsEditing(true);
-        didCommitOrCancelRef.current = false;
-      }
+      startEditing();
     },
-    [onRename, title]
+    [startEditing]
   );
 
   const handleInputKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       e.stopPropagation();
+      // Enter and Escape unmount the field; hand focus back to its tab so a
+      // keyboard rename ends where it started rather than on the body.
+      const tab = e.currentTarget.parentElement?.querySelector<HTMLElement>('[role="tab"]');
+      const returnFocus = () => requestAnimationFrame(() => tab?.focus());
       if (e.key === "Enter") {
         // Don't intercept Enter while an IME composition is being committed.
         if (e.nativeEvent.isComposing) return;
@@ -190,11 +209,13 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
         }
         didCommitOrCancelRef.current = true;
         setIsEditing(false);
+        returnFocus();
       } else if (e.key === "Escape") {
         e.preventDefault();
         setEditValue(title);
         didCommitOrCancelRef.current = true;
         setIsEditing(false);
+        returnFocus();
       }
     },
     [editValue, title, onRename]
@@ -269,6 +290,11 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // F2, not Enter: Enter and Space belong to tab activation.
+      if (e.key === "F2") {
+        if (startEditing()) e.preventDefault();
+        return;
+      }
       if (e.key === "Enter" || e.key === " ") {
         if (isActive && sortableKeyDown) {
           sortableKeyDown(e);
@@ -278,191 +304,164 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
         onClick();
       }
     },
-    [isActive, onClick, sortableKeyDown]
+    [isActive, onClick, sortableKeyDown, startEditing]
   );
 
   const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
   const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <div
-          ref={ref}
-          id={tabDomId(id)}
-          role="tab"
-          aria-selected={isActive}
-          aria-controls={tabPanelId}
-          data-tab-parked={parked || undefined}
-          tabIndex={isActive ? 0 : -1}
-          onClick={handleClick}
-          onKeyDown={handleKeyDown}
-          className={cn(
-            "relative flex items-center gap-1.5 px-2 py-1 text-xs font-medium select-none cursor-pointer group/tab",
-            "border-r border-divider transition-colors",
-            parked && "invisible",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
-            isActive
-              ? "bg-tint/[0.04] text-text-primary"
-              : "text-text-secondary hover:text-text-primary hover:bg-overlay-subtle"
-          )}
-          data-tab-id={id}
-          {...mergedAttributes}
-          {...sortablePointerListeners}
-          onPointerDown={handleTabPointerDown}
-        >
-          {isActive && (
-            <m.div
-              layoutId="panel-tab-indicator"
-              layout="position"
-              className="absolute inset-x-0 bottom-0 h-0.5 bg-accent-primary pointer-events-none"
-              transition={{ duration: UI_ANIMATION_DURATION / 1000, ease: EASE_OUT_EXPO_FM }}
-              aria-hidden="true"
-            />
-          )}
-          <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5">
-            <TerminalIcon
-              kind={kind}
-              chrome={chrome}
-              className="w-3.5 h-3.5"
-              brandColor={presetColor ?? chrome.color}
-            />
-          </span>
+    <div className="relative flex">
+      <Tooltip autoDismiss={false}>
+        <TooltipTrigger asChild>
+          <div
+            ref={ref}
+            id={tabDomId(id)}
+            role="tab"
+            aria-selected={isActive}
+            aria-controls={tabPanelId}
+            aria-keyshortcuts={onRename ? "F2 Delete" : "Delete"}
+            data-document-tab=""
+            data-tab-parked={parked || undefined}
+            tabIndex={isActive ? 0 : -1}
+            onClick={handleClick}
+            onKeyDown={handleKeyDown}
+            className={cn(documentTabClassName(isActive), "px-2 py-1", parked && "invisible")}
+            data-tab-id={id}
+            {...mergedAttributes}
+            {...sortablePointerListeners}
+            onPointerDown={handleTabPointerDown}
+          >
+            {isActive && <DocumentTabIndicator />}
+            <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5">
+              <TerminalIcon
+                kind={kind}
+                chrome={chrome}
+                className="w-3.5 h-3.5"
+                brandColor={presetColor ?? chrome.color}
+              />
+            </span>
 
-          {isEditing ? (
-            <m.input
-              ref={inputRef}
-              type="text"
-              value={editValue}
-              onChange={(e) => setEditValue(e.target.value)}
-              onKeyDown={handleInputKeyDown}
-              onBlur={handleInputBlur}
-              onClick={handleInputClick}
-              onDoubleClick={handleInputDoubleClick}
-              onPointerDown={handleInputPointerDown}
-              onTouchStart={handleInputTouchStart}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.1 }}
-              className="text-xs bg-overlay-soft border border-transparent px-1 h-4 min-w-[60px] max-w-[100px] text-text-primary select-text focus:outline-hidden"
-              aria-label={`Rename tab ${title}`}
-            />
-          ) : (
             <span
+              ref={labelRef}
               className={cn(
                 "truncate max-w-[100px] inline-block border border-transparent px-1",
-                onRename && "cursor-text"
+                onRename && "cursor-text",
+                // Holds the label's slot while the rename field sits over it.
+                isEditing && "invisible min-w-[60px]"
               )}
               onDoubleClick={handleDoubleClick}
             >
               {title}
             </span>
-          )}
 
-          {/* Visually-hidden state text so the agent state icon (aria-hidden, decorative)
+            {/* Visually-hidden state text so the agent state icon (aria-hidden, decorative)
               is announced as part of the tab's accessible name. */}
-          {displayAgentState && (
-            <span className="sr-only">Agent {getEffectiveStateLabel(displayAgentState)}</span>
-          )}
+            {displayAgentState && (
+              <span className="sr-only">Agent {getEffectiveStateLabel(displayAgentState)}</span>
+            )}
 
-          {document.body.dataset.performanceMode === "true" ? (
-            displayAgentState &&
-            StateIcon && (
-              <StateIcon
-                className={cn(
-                  "w-3 h-3 shrink-0",
-                  getEffectiveStateColor(displayAgentState),
-                  displayAgentState === "working" && "animate-spin-slow",
-                  "motion-reduce:animate-none"
+            {document.body.dataset.performanceMode === "true" ? (
+              displayAgentState &&
+              StateIcon && (
+                <StateIcon
+                  className={cn(
+                    "w-3 h-3 shrink-0",
+                    getEffectiveStateColor(displayAgentState),
+                    displayAgentState === "working" && "animate-spin-slow",
+                    "motion-reduce:animate-none"
+                  )}
+                  aria-hidden="true"
+                />
+              )
+            ) : (
+              <AnimatePresence initial={false} mode="wait">
+                {displayAgentState && StateIcon && (
+                  <m.span
+                    key={displayAgentState}
+                    initial={{ opacity: 0, scale: 0.85 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.85 }}
+                    transition={{ duration: DURATION_100 / 1000, ease: [0.16, 1, 0.3, 1] }}
+                    className="inline-flex shrink-0"
+                  >
+                    <StateIcon
+                      className={cn(
+                        "w-3 h-3",
+                        getEffectiveStateColor(displayAgentState),
+                        displayAgentState === "working" && "animate-spin-slow",
+                        "motion-reduce:animate-none"
+                      )}
+                      aria-hidden="true"
+                    />
+                  </m.span>
                 )}
-                aria-hidden="true"
-              />
-            )
-          ) : (
-            <AnimatePresence initial={false} mode="wait">
-              {displayAgentState && StateIcon && (
-                <m.span
-                  key={displayAgentState}
-                  initial={{ opacity: 0, scale: 0.85 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.85 }}
-                  transition={{ duration: DURATION_100 / 1000, ease: [0.16, 1, 0.3, 1] }}
-                  className="inline-flex shrink-0"
-                >
-                  <StateIcon
-                    className={cn(
-                      "w-3 h-3",
-                      getEffectiveStateColor(displayAgentState),
-                      displayAgentState === "working" && "animate-spin-slow",
-                      "motion-reduce:animate-none"
-                    )}
-                    aria-hidden="true"
+              </AnimatePresence>
+            )}
+
+            {isUsingFallback && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <AlertTriangle
+                    className="w-3 h-3 shrink-0 text-status-warning"
+                    aria-label="Running on fallback preset"
                   />
-                </m.span>
-              )}
-            </AnimatePresence>
-          )}
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {fallbackTooltip ?? "Running on fallback preset — original provider unavailable"}
+                </TooltipContent>
+              </Tooltip>
+            )}
 
-          {isUsingFallback && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <AlertTriangle
-                  className="w-3 h-3 shrink-0 text-status-warning"
-                  aria-label="Running on fallback preset"
-                />
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {fallbackTooltip ?? "Running on fallback preset — original provider unavailable"}
-              </TooltipContent>
-            </Tooltip>
-          )}
+            {hasDangerousFlags && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className="status-mark w-2 h-2 rounded-full bg-status-danger shrink-0"
+                    aria-label="Launched with dangerous permissions"
+                  />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  Launched with dangerous permissions — agent can modify files without prompting
+                </TooltipContent>
+              </Tooltip>
+            )}
 
-          {hasDangerousFlags && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span
-                  className="status-mark w-2 h-2 rounded-full bg-status-danger shrink-0"
-                  aria-label="Launched with dangerous permissions"
-                />
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                Launched with dangerous permissions — agent can modify files without prompting
-              </TooltipContent>
-            </Tooltip>
-          )}
-
-          {/* Close button - visible on hover */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                onClick={handleClose}
-                onKeyDown={handleCloseKeyDown}
-                onPointerDown={handleClosePointerDown}
-                // A 24px target on a 24px tab: the button spans the tab's
-                // height and gives most of its width back with -mr-1.5. Only
-                // the active tab's close is a Tab stop — the strip already
-                // roves, and an inactive tab is reached with the arrows.
-                tabIndex={isActive ? undefined : -1}
-                className={cn(
-                  "-my-1 -mr-1.5 shrink-0",
-                  "opacity-0 group-hover/tab:opacity-100 group-focus-visible/tab:opacity-100 focus-visible:opacity-100",
-                  "hover:bg-status-error/15 hover:text-status-error focus-visible:text-status-error"
-                )}
-                aria-label={`Close ${title}`}
-              >
-                <X aria-hidden="true" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Close tab</TooltipContent>
-          </Tooltip>
-        </div>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">
-        {onRename ? `${fullTitle ?? title} — Double-click to rename` : (fullTitle ?? title)}
-      </TooltipContent>
-    </Tooltip>
+            {/* A 24px target on a 24px tab: -my-1 lets it span the tab's height and
+              -mr-1.5 gives most of its width back. */}
+            <DocumentTabClose
+              title={title}
+              isActive={isActive}
+              onClose={onClose}
+              className="-my-1 -mr-1.5"
+            />
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          {onRename ? `${fullTitle ?? title} — Double-click or F2 to rename` : (fullTitle ?? title)}
+        </TooltipContent>
+      </Tooltip>
+      {isEditing && editBox && (
+        <m.input
+          ref={inputRef}
+          {...inlineRenameFieldInputProps}
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          onKeyDown={handleInputKeyDown}
+          onBlur={handleInputBlur}
+          onClick={handleInputClick}
+          onDoubleClick={handleInputDoubleClick}
+          onPointerDown={handleInputPointerDown}
+          onTouchStart={handleInputTouchStart}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: DURATION_100 / 1000 }}
+          style={editBox}
+          className={cn(inlineRenameFieldClassName, "absolute")}
+          aria-label={`Rename tab ${title}`}
+        />
+      )}
+    </div>
   );
 });
 

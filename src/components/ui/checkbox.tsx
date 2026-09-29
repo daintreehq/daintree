@@ -62,9 +62,16 @@ export interface CheckboxProps
   /** Overrides the enclosing `Field`'s state when given. */
   invalid?: boolean;
   ref?: React.Ref<React.ComponentRef<typeof CheckboxPrimitive.Root>>;
+  /** Accepted only to be discarded — see `Checkbox`. */
+  "data-state"?: string;
 }
 
-function Checkbox({ className, size, invalid, ref, ...props }: CheckboxProps) {
+function Checkbox({ className, size, invalid, ref, ...rest }: CheckboxProps) {
+  // A `TooltipTrigger asChild` (or any Radix trigger) stamps its own
+  // `data-state` onto its child, and a spread one would override Radix's
+  // checked state, which every checked style keys off. The checkbox's own state
+  // owns the attribute.
+  const { "data-state": _foreignState, ...props } = rest;
   const { invalid: resolvedInvalid, controlProps } = useFieldControl(props, invalid);
 
   return (
@@ -86,4 +93,35 @@ function Checkbox({ className, size, invalid, ref, ...props }: CheckboxProps) {
   );
 }
 
-export { Checkbox, checkboxVariants };
+interface CheckboxGlyphProps extends VariantProps<typeof checkboxVariants> {
+  checked: boolean | "indeterminate";
+  className?: string;
+}
+
+/**
+ * The checkbox drawn with no role and no name, for a row whose own element
+ * already carries the checkbox semantics (a Radix root is a `<button>`, which
+ * cannot sit inside another button). Same variants as `Checkbox`, so the glyph
+ * and the real control cannot drift apart.
+ */
+function CheckboxGlyph({ checked, size, invalid, className }: CheckboxGlyphProps) {
+  const state = checked === "indeterminate" ? "indeterminate" : checked ? "checked" : "unchecked";
+  return (
+    <span
+      aria-hidden="true"
+      data-slot="checkbox-glyph"
+      data-state={state}
+      data-size={size ?? "md"}
+      className={cn(checkboxVariants({ size, invalid }), "text-text-inverse", className)}
+    >
+      {checked !== false && (
+        <span className="animate-checkbox-check flex h-full w-full items-center justify-center">
+          <CheckIcon className="group-data-[state=indeterminate]:hidden" />
+          <MinusIcon className="hidden group-data-[state=indeterminate]:block" />
+        </span>
+      )}
+    </span>
+  );
+}
+
+export { Checkbox, CheckboxGlyph, checkboxVariants };

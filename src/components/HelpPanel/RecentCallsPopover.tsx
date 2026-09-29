@@ -7,7 +7,7 @@ import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { formatTimeAgo } from "@/utils/timeAgo";
-import type { McpAuditRecord, McpAuditResult } from "@shared/types";
+import type { HelpAssistantTier, McpAuditRecord, McpAuditResult } from "@shared/types";
 
 // Local mirror of the Settings audit viewer's outcome→severity mapping. The
 // popover is a simpler read-only view; cross-importing from Settings would
@@ -228,18 +228,24 @@ export function RecentCallsPopover({
   );
 }
 
-const TIER_HINT_LABEL: Record<"workbench" | "action" | "system", string> = {
-  workbench: "workbench",
-  action: "action",
-  system: "system",
+const TIER_HINT_LABEL: Record<HelpAssistantTier, string> = {
+  core: "Core",
+  full: "Full",
 };
+
+// Records written before the core/full split carry the old ladder names. They
+// describe a tier that no longer exists, so they read as history rather than
+// being guessed onto the new pair.
+function tierHintText(tier: string): string {
+  const label = TIER_HINT_LABEL[tier as HelpAssistantTier];
+  return label ? `Needs the ${label} tool set` : `Needed the former ${tier} tier`;
+}
 
 /** The outcome in words, with what a blocked call needs to go through. */
 function outcomeDetail(record: McpAuditRecord): string | null {
   if (record.result === "unauthorized") {
     if (record.tierHint === null) return "Not permitted at any tier";
-    if (record.tierHint)
-      return `Raise capability tier to ${TIER_HINT_LABEL[record.tierHint]} to allow`;
+    if (record.tierHint) return tierHintText(record.tierHint);
     return null;
   }
   // Worded as what the server asked for at the time, not a live countdown —
@@ -273,6 +279,7 @@ function RecentCallRow({ record, now }: { record: McpAuditRecord; now: number })
         className="grid w-full grid-cols-[auto_auto_1fr_auto] items-start gap-2 rounded-[var(--radius-md)] px-2 py-1 text-left hover:bg-overlay-soft transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
       >
         <ChevronRight
+          data-animated-chevron
           aria-hidden
           className={cn(
             "mt-px w-3 h-3 shrink-0 text-text-secondary transition-transform duration-150 ease-out",

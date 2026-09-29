@@ -1,10 +1,15 @@
-import { useEffect, useState } from "react";
-import { AlertTriangle, ChevronDown, CircleCheck, Loader2, RotateCw, CircleX } from "lucide-react";
-import { m, useReducedMotion } from "framer-motion";
+import { useEffect, useRef, useState } from "react";
+import { Spinner } from "@/components/ui/Spinner";
+import { Callout } from "@/components/ui/Callout";
+import { AlertTriangle, ChevronRight, CircleCheck, RotateCw, CircleX } from "lucide-react";
+import { m } from "framer-motion";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { UI_ENTER_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import { useSystemHealthCheck } from "./useSystemHealthCheck";
 import { PrerequisiteCard } from "./SystemToolsStep";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { Button } from "@/components/ui/button";
 
 interface SystemRequirementsSectionProps {
   onFatalFailureChange: (hasFatal: boolean) => void;
@@ -19,9 +24,26 @@ export function SystemRequirementsSection({
     useSystemHealthCheck();
 
   const [userExpanded, setUserExpanded] = useState(false);
-  const prefersReducedMotion = useReducedMotion();
+  const prefersReducedMotion = useShouldSkipMotion();
 
-  const isExpanded = userExpanded || hasFatalFailure;
+  // The last settled answer, held while a re-check runs. `hasFatalFailure`
+  // reads false mid-check, and following it would unmount the failure panel —
+  // and the "Check again" button that has focus — until the result is back.
+  const [shownFatal, setShownFatal] = useState(hasFatalFailure);
+  if (allDone && shownFatal !== hasFatalFailure) setShownFatal(hasFatalFailure);
+
+  const isExpanded = userExpanded || shownFatal;
+
+  // A re-check that clears the failure folds the panel and removes "Check
+  // again" with focus still on it. Hand focus to the disclosure that replaces
+  // it. Removal fires no blur, so the flag is still set when the swap lands.
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const checkAgainFocusedRef = useRef(false);
+  useEffect(() => {
+    if (shownFatal || !checkAgainFocusedRef.current) return;
+    checkAgainFocusedRef.current = false;
+    toggleRef.current?.focus();
+  }, [shownFatal]);
 
   useEffect(() => {
     onFatalFailureChange(hasFatalFailure);
@@ -73,8 +95,8 @@ export function SystemRequirementsSection({
 
       {isChecking && (
         <span className="flex items-center gap-1.5 ml-auto text-2xs text-text-secondary">
-          <Loader2 className="w-3 h-3 animate-spin" />
-          Checking...
+          <Spinner size="xs" />
+          Checking…
         </span>
       )}
 
@@ -105,18 +127,21 @@ export function SystemRequirementsSection({
     <div className="rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30">
       {/* While a required tool is missing the panel cannot fold, so the row is
           a heading rather than a disclosure that would do nothing. */}
-      {hasFatalFailure ? (
+      {shownFatal ? (
         <div className="flex items-center gap-2.5 w-full px-3 py-2.5">{headerSummary}</div>
       ) : (
         <button
+          ref={toggleRef}
           type="button"
           onClick={() => setUserExpanded((v) => !v)}
           aria-expanded={isExpanded}
           aria-controls="system-requirements-panel"
-          className="flex items-center gap-2.5 w-full px-3 py-2.5 text-left"
+          className="flex items-center gap-2.5 w-full px-3 py-2.5 text-left cursor-pointer rounded-[var(--radius-md)] transition-colors hover:bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         >
-          <ChevronDown
-            className={`w-3.5 h-3.5 text-text-secondary shrink-0 transition-transform ${isExpanded ? "" : "-rotate-90"}`}
+          <ChevronRight
+            aria-hidden="true"
+            data-animated-chevron
+            className={`w-3.5 h-3.5 text-text-secondary shrink-0 transition-transform duration-150 ease-out ${isExpanded ? "rotate-90" : ""}`}
           />
           {headerSummary}
         </button>
@@ -136,9 +161,9 @@ export function SystemRequirementsSection({
       >
         <div className="px-3 pb-3 space-y-3">
           {error && (
-            <div className="px-3 py-2.5 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5">
-              <p className="text-xs text-status-error">Could not run health check: {error}</p>
-            </div>
+            <Callout severity="error" role="alert">
+              <p>Could not run health check: {error}</p>
+            </Callout>
           )}
 
           {visibleSpecs.length > 0 && (
@@ -169,17 +194,43 @@ export function SystemRequirementsSection({
             </Skeleton>
           )}
 
-          {allDone && hasFatalFailure && (
-            <div
+          {shownFatal && (
+            <Callout
+              severity="error"
               role="alert"
               aria-live="assertive"
-              className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5"
+              // The control that finishes it sits beside the line that says what
+              // to do, rather than below the fold of the expanded steps.
+              action={
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() => {
+                    if (!isChecking) void runCheck();
+                  }}
+                  onFocus={() => {
+                    checkAgainFocusedRef.current = true;
+                  }}
+                  onBlur={() => {
+                    checkAgainFocusedRef.current = false;
+                  }}
+                  // Busy, not unavailable: the rotating glyph says so, and the
+                  // button keeps keyboard focus rather than dropping it to <body>.
+                  aria-busy={isChecking || undefined}
+                  aria-disabled={isChecking || undefined}
+                  className="shrink-0"
+                >
+                  <SpinningIcon
+                    icon={RotateCw}
+                    active={isChecking}
+                    className="w-3 h-3"
+                    aria-hidden
+                  />
+                  Check again
+                </Button>
+              }
             >
-              {/* Neutral text: status-coloured text misses 4.5:1 on most themes,
-                  and the tile's own mark already carries the red. This line says
-                  what to do, and the control that finishes it sits beside it
-                  rather than below the fold of the expanded steps. */}
-              <div className="flex-1 min-w-0 space-y-1.5">
+              <div className="space-y-1.5">
                 {missingFatalTools.map((spec) => (
                   <p key={spec.tool} className="text-xs text-text-primary">
                     Install {spec.label} using the steps above, then check again.
@@ -196,34 +247,22 @@ export function SystemRequirementsSection({
                   );
                 })}
               </div>
-              <button
-                type="button"
-                onClick={() => void runCheck()}
-                disabled={isChecking}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 py-1 text-xs text-text-primary ring-1 ring-border-strong bg-surface-panel-elevated transition-colors hover:bg-overlay-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
-              >
-                <RotateCw
-                  className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`}
-                  aria-hidden="true"
-                />
-                {isChecking ? "Checking…" : "Check again"}
-              </button>
-            </div>
+            </Callout>
           )}
 
-          {!(allDone && hasFatalFailure) && (
-            <button
-              type="button"
-              onClick={() => void runCheck()}
-              disabled={isChecking}
-              className="inline-flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+          {!shownFatal && (
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={() => {
+                if (!isChecking) void runCheck();
+              }}
+              aria-busy={isChecking || undefined}
+              aria-disabled={isChecking || undefined}
             >
-              <RotateCw
-                className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`}
-                aria-hidden="true"
-              />
-              {isChecking ? "Checking…" : "Re-check"}
-            </button>
+              <SpinningIcon icon={RotateCw} active={isChecking} className="w-3 h-3" aria-hidden />
+              Re-check
+            </Button>
           )}
         </div>
       </m.div>

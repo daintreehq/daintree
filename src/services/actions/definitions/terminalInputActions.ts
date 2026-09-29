@@ -10,9 +10,12 @@ import { triggerPopStash, triggerStashInput } from "@/store/terminalInputStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isPtyPanel } from "@shared/types/panel";
 import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
+import { tailCapturedOutput } from "@shared/utils/artifactParser";
+import { planChoice } from "@shared/utils/terminalChoice";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+import { NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
 
 /**
  * What an interrupt request can honestly report (#12338).
@@ -42,14 +45,77 @@ const TerminalInterruptResultSchema = z.object({
   agentStateAtDispatch: z
     .enum(["working", "waiting"])
     .describe(
-      "What the agent was last observed doing. Read off its own output and often wrong; it gated the request, it is not proof a turn was running."
+      "Last observed agent state, read off its output and often wrong; it gated the request, not proof a turn was running."
     ),
   status: z
     .enum(["requested", "requested-unverified"])
     .describe(
-      "`requested`: keystrokes handed over to an agent whose CLI names Escape as its interrupt. `requested-unverified`: same, but that CLI names no interrupt key, so the effect is unknown. Neither says the keystrokes arrived or the agent stopped — read the terminal's output to find out."
+      "`requested`: keystrokes handed to an agent whose CLI names Escape as its interrupt. `requested-unverified`: that CLI names no interrupt key. Neither says the keystrokes arrived or the agent stopped; read the terminal's output."
     ),
 });
+
+const SEND_KEY_NAMES = {
+  Up: "\x1b[A",
+  Down: "\x1b[B",
+  Right: "\x1b[C",
+  Left: "\x1b[D",
+  Enter: "\r",
+  Escape: "\x1b",
+  Tab: "\t",
+  Space: " ",
+  Backspace: "\x7f",
+} as const;
+
+const SEND_KEYS_GAP_MS = 80;
+
+function keySequence(key: string): string {
+  return Object.hasOwn(SEND_KEY_NAMES, key)
+    ? SEND_KEY_NAMES[key as keyof typeof SEND_KEY_NAMES]
+    : key;
+}
+
+const SEND_KEYS_DESCRIPTION =
+  "Answer a CLI's own dialog in a terminal (trust, permission, a list) by option label or named keys. A send can't: it types text then Enter, taking whatever is highlighted.";
+
+const SendKeysArgsSchema = z.object({
+  terminalId: z.string().min(1).describe("The terminal to press keys in."),
+  choose: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      "An option's label as shown; Daintree moves to it and presses Enter. Prefer it to `keys`."
+    ),
+  keys: z
+    .array(z.string().regex(/^(Up|Down|Left|Right|Enter|Escape|Tab|Space|Backspace|[a-z0-9])$/))
+    .min(1)
+    .max(16)
+    .optional()
+    .describe(
+      "Or up to 16 of: Up, Down, Left, Right, Enter, Escape, Tab, Space, Backspace, a-z, 0-9."
+    ),
+  // Acted on in main, like the send's: after answering a dialog, be told when
+  // the agent finishes the turn it unblocked.
+  notify: z
+    .boolean()
+    .optional()
+    .describe("As on a send: hear, with its reply, when the turn these keys unblock ends."),
+  replyLines: NotifyReplyLinesSchema,
+});
+
+const SendKeysResultSchema = z.object({
+  terminalId: z.string(),
+  keys: z.array(z.string()).describe("The keys written, in order. Not proof the CLI read them."),
+  screen: z
+    .string()
+    .optional()
+    .describe("The terminal's last lines shortly after the keys, to check the dialog went."),
+});
+
+/** How long after the last key the screen is read back. */
+const SEND_KEYS_SETTLE_MS = 700;
+const SEND_KEYS_SCREEN_LINES = 12;
 
 export function registerTerminalInputActions(
   actions: ActionRegistry,
@@ -59,7 +125,7 @@ export function registerTerminalInputActions(
     id: "terminal.inject",
     title: "Inject context",
     description:
-      "Write the active worktree's prepared context into a terminal, which is how an agent is handed a large codebase context. Name the target terminal explicitly — focus can drift between the call and its execution, and a mistarget types a multi-kilobyte dump into whatever pane happened to be focused. Target an idle terminal.",
+      "Write the active worktree's prepared context into a terminal, to hand an agent a large codebase context. Name the target: focus can drift, and a mistarget types a large dump into the wrong pane. Target an idle terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -70,9 +136,7 @@ export function registerTerminalInputActions(
           .string()
           .min(1)
           .optional()
-          .describe(
-            "Identifies the terminal to inject into, using a panel id from the terminal-listing capability. An automated caller must name it: focus can drift between the call and its execution, so relying on the focused terminal can land a large context dump in the wrong pane."
-          ),
+          .describe("Terminal to inject into. Automated callers must name it; focus can drift."),
       })
       .optional(),
     run: async (args: { terminalId?: string } | undefined, ctx) => {
@@ -102,7 +166,7 @@ export function registerTerminalInputActions(
     id: "terminal.injectOwned",
     title: "Inject context to owned terminal",
     description:
-      "Write the active worktree's prepared context into a terminal this connection created or was handed, which is how an agent it drives is given a large codebase context. Any other panel is refused. Target an idle terminal.",
+      "Write the active worktree's prepared context into a terminal this connection created or was handed, to give its agent a large codebase context. Any other panel is refused. Target an idle terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -114,9 +178,7 @@ export function registerTerminalInputActions(
       terminalId: z
         .string()
         .min(1)
-        .describe(
-          "The terminal to inject into, as an `id` this session created or the user handed it. Required: there is no focus fallback."
-        ),
+        .describe("Terminal `id` this session created or was handed. Required; no focus fallback."),
     }),
     run: async () => {
       throw new Error(
@@ -265,7 +327,7 @@ export function registerTerminalInputActions(
     id: "terminal.interruptOwned",
     title: "Interrupt owned agent",
     description:
-      "Stop the turn an agent is running in a panel this connection created or was handed, keeping the panel and its conversation. Sends cancel keystrokes, not prompt text an agent mid-turn would not read, and disposes of nothing. An idle agent, or one that binds a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
+      "Interrupt the turn an agent is running in a panel this connection created or was handed, keeping the panel and conversation. Sends cancel keystrokes, not prompt text. An idle agent, or one binding a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -278,7 +340,7 @@ export function registerTerminalInputActions(
         .string()
         .min(1)
         .describe(
-          "The agent panel to interrupt, as an `id` this session created or the user handed it. Required: there is no focus fallback."
+          "Agent panel `id` this session created or was handed. Required; no focus fallback."
         ),
     }),
     resultSchema: TerminalInterruptResultSchema,
@@ -286,6 +348,89 @@ export function registerTerminalInputActions(
     run: async () => {
       throw new Error(
         "terminal.interruptOwned must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
+  actions.set("terminal.sendKeys", () => ({
+    id: "terminal.sendKeys",
+    title: "Press keys in terminal",
+    description: SEND_KEYS_DESCRIPTION,
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    // Keystrokes into an agent terminal: the same injection surface as the
+    // interrupt, behind the `agent:input` capability (#10558).
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["key", "press", "dialog", "trust", "select", "arrow", "enter", "escape"],
+    palette: { mode: "hidden" },
+    argsSchema: SendKeysArgsSchema,
+    resultSchema: SendKeysResultSchema,
+    run: async (args: z.infer<typeof SendKeysArgsSchema>) => {
+      const { terminalId, choose } = args;
+      const state = usePanelStore.getState();
+      const panel = Object.hasOwn(state.panelsById, terminalId)
+        ? state.panelsById[terminalId]
+        : undefined;
+      if (!panel || !isPtyPanel(panel)) {
+        throw new UnactionableTargetError(`No terminal ${terminalId} to press keys in.`);
+      }
+      if (panel.isInputLocked || terminalInstanceService.get(terminalId)?.isInputLocked) {
+        throw new UnactionableTargetError(`Terminal ${terminalId} has its input locked.`);
+      }
+      let keys = args.keys;
+      if (choose !== undefined) {
+        const snapshot = await window.electron.terminal.getSerializedState(terminalId);
+        const plan = planChoice(
+          snapshot === null ? "" : tailCapturedOutput(snapshot.data, 40, true).content,
+          choose
+        );
+        if (!plan.ok) throw new UnactionableTargetError(`${plan.reason} Nothing was pressed.`);
+        keys = plan.keys;
+      }
+      if (keys === undefined) {
+        throw new UnactionableTargetError("Pass `choose` or `keys`. Nothing was pressed.");
+      }
+      // One write per key, spaced out: a TUI reading a burst as one chunk can
+      // take an arrow and an Enter as a single unknown sequence.
+      for (const [index, key] of keys.entries()) {
+        if (index > 0) await new Promise((resolve) => setTimeout(resolve, SEND_KEYS_GAP_MS));
+        terminalClient.write(terminalId, keySequence(key));
+      }
+      // A wrong key on a dialog (Quit instead of Continue) shows up here, a
+      // call sooner than a separate read would find it.
+      await new Promise((resolve) => setTimeout(resolve, SEND_KEYS_SETTLE_MS));
+      const snapshot = await window.electron.terminal
+        .getSerializedState(terminalId)
+        .catch(() => null);
+      const screen =
+        snapshot === null
+          ? undefined
+          : tailCapturedOutput(snapshot.data, SEND_KEYS_SCREEN_LINES, true).content;
+      return { terminalId, keys, ...(screen ? { screen } : {}) };
+    },
+  }));
+
+  // Manifest metadata only; main checks ownership and delegates to
+  // `terminal.sendKeys` with the key list, like `terminal.interruptOwned`.
+  actions.set("terminal.sendKeysOwned", () => ({
+    id: "terminal.sendKeysOwned",
+    title: "Press keys in owned terminal",
+    description:
+      "Answer a CLI's own dialog (trust, permission, a list) by option label or named keys, in a terminal this connection created or was handed.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["key", "press", "dialog", "trust", "select", "owned"],
+    palette: { mode: "hidden" },
+    argsSchema: SendKeysArgsSchema,
+    resultSchema: SendKeysResultSchema,
+    run: async () => {
+      throw new Error(
+        "terminal.sendKeysOwned must be invoked through the MCP main-process path, not renderer dispatch."
       );
     },
   }));

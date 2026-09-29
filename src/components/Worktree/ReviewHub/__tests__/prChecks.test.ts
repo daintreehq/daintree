@@ -6,6 +6,7 @@ import {
   preparePrChecks,
   safeDetailsUrl,
   sanitizeCheckName,
+  summarizePrChecks,
 } from "../prChecks";
 
 /* Built rather than written literally: a source file carrying raw C0 bytes is a
@@ -368,5 +369,134 @@ describe("composePrChecksAgentText", () => {
     })!;
     expect(text).toContain("Pull request: null");
     expect(text).not.toContain("javascript:");
+  });
+});
+
+describe("preparePrChecks grouping", () => {
+  const mix = [
+    check({ name: "a", conclusion: "success" }),
+    check({ name: "b", conclusion: "failure" }),
+    check({ name: "c", status: "in_progress", conclusion: undefined }),
+    check({ name: "d", conclusion: "skipped" }),
+    check({ name: "e", conclusion: undefined }),
+    check({ name: "f", conclusion: "timed_out" }),
+    check({ name: "g", status: "queued", conclusion: undefined }),
+    check({ name: "h", conclusion: "neutral" }),
+  ];
+
+  it("puts exactly the failures in the attention group", () => {
+    for (const row of preparePrChecks(mix)) {
+      expect(row.group === "attention").toBe(row.isFailure);
+    }
+  });
+
+  it("leads the attention group with what broke, ahead of what was only stopped", () => {
+    const rows = preparePrChecks([
+      check({ name: "approve", conclusion: "action_required", required: true }),
+      check({ name: "deploy", conclusion: "cancelled" }),
+      check({ name: "slow", conclusion: "timed_out" }),
+      check({ name: "unit", conclusion: "failure" }),
+    ]);
+    const names = rows.map((row) => row.name);
+    expect(names.slice(0, 2).sort()).toEqual(["slow", "unit"]);
+  });
+
+  it("never folds a check without a clean verdict in with the settled results", () => {
+    const rows = preparePrChecks(mix);
+    const settled = rows.filter((row) => row.group === "settled").map((row) => row.name);
+    expect(settled.sort()).toEqual(["a", "d", "h"]);
+  });
+
+  it("orders the groups attention, then open, then settled", () => {
+    const order = { attention: 0, open: 1, settled: 2 } as const;
+    const groups = preparePrChecks(mix).map((row) => order[row.group]);
+    expect(groups).toEqual([...groups].sort((x, y) => x - y));
+  });
+});
+
+describe("summarizePrChecks", () => {
+  const counted = (text: string | null) =>
+    (text ?? "").split(/ · |, /).reduce((sum, part) => sum + Number.parseInt(part, 10), 0);
+
+  it("leads with the failures whenever any exist", () => {
+    const summary = summarizePrChecks(
+      preparePrChecks([
+        check({ conclusion: "success" }),
+        check({ conclusion: "failure", required: true }),
+        check({ conclusion: "cancelled", required: false }),
+        check({ status: "in_progress", conclusion: undefined }),
+      ])
+    );
+    expect(summary.headline).toBe("1 failing · 1 more need attention · 1 required");
+  });
+
+  it("counts as failing only the checks that broke", () => {
+    const failingIn = (headline: string) => Number(/(\d+) failing/.exec(headline)?.[1] ?? 0);
+    const cases: Array<Array<ForgeCheckRun["conclusion"]>> = [
+      ["failure", "timed_out"],
+      ["failure", "cancelled"],
+      ["cancelled", "action_required"],
+      ["timed_out", "action_required", "cancelled"],
+    ];
+    for (const conclusions of cases) {
+      const summary = summarizePrChecks(
+        preparePrChecks(conclusions.map((c) => check({ conclusion: c })))
+      );
+      const broke = conclusions.filter((c) => c === "failure" || c === "timed_out").length;
+      expect(failingIn(summary.headline)).toBe(broke);
+    }
+  });
+
+  it("accounts for every check exactly once between headline and detail", () => {
+    const rows = preparePrChecks([
+      check({ conclusion: "failure" }),
+      check({ status: "in_progress", conclusion: undefined }),
+      check({ status: "queued", conclusion: undefined }),
+      check({ conclusion: "success" }),
+      check({ conclusion: "success" }),
+      check({ conclusion: "skipped" }),
+      check({ conclusion: undefined }),
+    ]);
+    const summary = summarizePrChecks(rows);
+    const inHeadline = [...summary.headline.matchAll(/(\d+) (?!required)/g)].reduce(
+      (sum, m) => sum + Number(m[1]),
+      0
+    );
+    expect(inHeadline + counted(summary.detail)).toBe(rows.length);
+  });
+
+  it("counts a skip or a missing verdict as itself, never as a pass", () => {
+    const summary = summarizePrChecks(
+      preparePrChecks([
+        check({ conclusion: "success" }),
+        check({ conclusion: "skipped" }),
+        check({ conclusion: undefined }),
+      ])
+    );
+    expect(summary.headline).not.toMatch(/passed/i);
+    expect(summary.detail).toContain("1 passed");
+    expect(summary.detail).toContain("1 skipped");
+    expect(summary.detail).toContain("1 no verdict");
+  });
+
+  it("only claims every check passed when every check did", () => {
+    expect(summarizePrChecks(preparePrChecks([check(), check({ name: "lint" })])).headline).toMatch(
+      /passed/
+    );
+    expect(
+      summarizePrChecks(preparePrChecks([check(), check({ conclusion: "skipped" })])).headline
+    ).not.toMatch(/passed/);
+  });
+
+  it("names the folded rows by the same count the fold hides", () => {
+    const rows = preparePrChecks([
+      check({ conclusion: "failure" }),
+      check({ conclusion: "success" }),
+      check({ conclusion: "success" }),
+      check({ conclusion: "neutral" }),
+    ]);
+    const summary = summarizePrChecks(rows);
+    expect(counted(summary.settledLabel)).toBe(summary.settledCount);
+    expect(summary.settledCount).toBe(rows.filter((row) => row.group === "settled").length);
   });
 });

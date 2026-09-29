@@ -490,7 +490,7 @@ export function TurnOutcomeDiagnostics({
 
       <ConfirmDialog
         isOpen={showClearConfirm}
-        onClose={isClearing ? undefined : handleCancelClear}
+        onClose={handleCancelClear}
         title="Clear turn outcomes?"
         description={`This permanently deletes ${plural(totalRecords, "recorded turn outcome")}. The MCP audit log isn't affected.`}
         confirmLabel="Clear turn outcomes"

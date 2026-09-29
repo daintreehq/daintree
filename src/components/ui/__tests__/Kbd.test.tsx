@@ -2,7 +2,7 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { Kbd, KbdChord } from "../Kbd";
-import { describeChord } from "@/lib/kbdShortcut";
+import { describeChord, formatChordText } from "@/lib/kbdShortcut";
 
 vi.mock("@/lib/platform", () => ({
   isMac: vi.fn(() => false),
@@ -82,15 +82,21 @@ describe("KbdChord", () => {
 
 describe("KbdChord modifier glyph face", () => {
   it.each(["default", "compact", "bare"] as const)(
-    "sets every macOS modifier glyph in one face and every other key in mono (%s)",
+    "sets every macOS key glyph in one face and every other key in mono (%s)",
     (density) => {
+      // The glyphs JetBrains Mono's subset lacks: the modifiers, the named keys
+      // macOS also draws as symbols (Return, Escape, Tab, Delete), and arrows.
       const { container } = render(
-        <KbdChord shortcut="Ctrl+Alt+Shift+Cmd+K Cmd+Enter" isMac density={density} />
+        <KbdChord
+          shortcut="Ctrl+Alt+Shift+Cmd+K Cmd+Enter Shift+Escape Tab Cmd+Backspace Alt+Up"
+          isMac
+          density={density}
+        />
       );
       const chips = Array.from(container.querySelectorAll("kbd"));
-      const glyphs = chips.filter((k) => /^[⌘⇧⌥⌃]$/.test(k.textContent ?? ""));
+      const glyphs = chips.filter((k) => /^[⌘⇧⌥⌃⏎⎋⇥⌫⌦↑↓←→]$/.test(k.textContent ?? ""));
       const others = chips.filter((k) => !glyphs.includes(k));
-      expect(glyphs.length).toBe(5);
+      expect(glyphs.length).toBe(13);
       expect(others.length).toBeGreaterThan(0);
 
       const face = (k: Element) =>
@@ -101,4 +107,28 @@ describe("KbdChord modifier glyph face", () => {
       for (const k of chips) expect(k.className).toContain("leading-none");
     }
   );
+});
+
+describe("formatChordText", () => {
+  // A string-only surface (a native title) and the chips must print one
+  // grammar. The chips' visible text is the reference, read off the DOM with
+  // the spoken sr-only label removed.
+  const COMBOS = ["Cmd+Shift+P", "Alt+P", "Ctrl+Shift+F", "Cmd+K Cmd+R", "Cmd++", "Shift+Enter"];
+
+  function chipText(shortcut: string, mac: boolean): string {
+    const { container, unmount } = render(<KbdChord shortcut={shortcut} isMac={mac} />);
+    container.querySelector(".sr-only")?.remove();
+    const text = (container.textContent ?? "").replace(/,/g, ", ");
+    unmount();
+    return text;
+  }
+
+  it.each([true, false])("prints exactly what KbdChord draws (mac=%s)", (mac) => {
+    for (const combo of COMBOS) expect(formatChordText(combo, mac)).toBe(chipText(combo, mac));
+  });
+
+  it("never joins macOS glyphs with a plus, and always joins Windows names with one", () => {
+    expect(formatChordText("Cmd+Shift+P", true)).not.toMatch(/[⌘⇧⌥⌃]\+/);
+    expect(formatChordText("Cmd+Shift+P", false)).toMatch(/^\w+\+\w+\+\w+$/);
+  });
 });

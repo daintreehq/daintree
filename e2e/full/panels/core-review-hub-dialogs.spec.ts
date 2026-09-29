@@ -45,7 +45,7 @@ test.describe.serial("Core: Review Hub Git Confirm Dialogs", () => {
     // The file list is expanded on open, but gate on the toggle rather than
     // assume it, so the per-file diff trigger is mountable either way. The
     // card-launched flow auto-stages the single uncommitted file, so
-    // "Commit & Push (1)" is the expected primary action.
+    // "Commit & push" with one staged file is the expected primary action.
     const fileListToggle = hub.locator(SEL.reviewHub.fileListToggle);
     await expect(fileListToggle).toBeVisible({ timeout: T_MEDIUM });
     if ((await fileListToggle.getAttribute("aria-expanded")) !== "true") {

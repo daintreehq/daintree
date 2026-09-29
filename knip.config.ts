@@ -1,6 +1,6 @@
 import type { KnipConfig } from "knip";
 
-const config: KnipConfig = {
+const baseConfig: KnipConfig = {
   // Every bundle entry point. Knip walks the static import graph from each
   // of these roots; anything unreachable is flagged as dead code. Mirrors
   // the esbuild entryPoints in scripts/build-main.mjs plus the renderer
@@ -19,6 +19,7 @@ const config: KnipConfig = {
     "electron/preload.cts",
     "electron/pty-host/analysisWorker.ts",
     "electron/services/persistence/dbMaintenanceWorker.ts",
+    "electron/services/pluginAgentMcp/databaseQueryWorker.ts",
     "electron/services/voice/openaiVadWorker.ts",
     "electron/workspace-host/copytreeWorker.ts",
 
@@ -31,6 +32,9 @@ const config: KnipConfig = {
     // that aren't wired through package.json.
     "electron-builder.config.cjs",
     "scripts/generate-sounds.mjs",
+    "playwright.mechanism.config.ts",
+    "playwright.plugins.config.ts",
+    "vitest.integration.config.ts",
 
     // The perf dispatcher launches these entry points by string path in
     // isolated subprocesses, so static analysis cannot follow those edges.
@@ -67,19 +71,25 @@ const config: KnipConfig = {
     // imported shims and fixtures.
     "src/components/Fleet/__preview__/preview.tsx",
     "src/components/Commands/__preview__/commandPicker.tsx",
+    "src/components/Commands/__preview__/commandBuilder.tsx",
     "src/components/DevPreview/__preview__/preview.tsx",
+    "src/components/DevPreview/__preview__/emptyStatesPreview.tsx",
     "src/components/DevPreview/__preview__/blockedNavPreview.tsx",
     "src/components/DevPreview/__preview__/consolePreview.tsx",
     "src/components/DevPreview/__preview__/destructiveConfirmPreview.tsx",
+    "src/components/DevPreview/__preview__/twinsPreview.tsx",
     "src/components/Diagnostics/__preview__/preview.tsx",
     "src/components/ErrorBoundary/__preview__/preview.tsx",
     "src/components/Errors/__preview__/preview.tsx",
     "src/components/FileViewer/__preview__/preview.tsx",
+    "src/components/FileViewer/__preview__/imageDiffPreview.tsx",
     "src/components/HelpPanel/__preview__/preview.tsx",
     "src/components/HelpPanel/__preview__/footerPreview.tsx",
+    "src/components/HelpPanel/__preview__/bannersPreview.tsx",
     "src/components/HelpPanel/__preview__/figureRailPreview.tsx",
     "src/components/HelpPanel/__preview__/launchingPreview.tsx",
     "src/components/HelpPanel/__preview__/recentCallsPreview.tsx",
+    "src/components/HelpPanel/__preview__/resizeHandlePreview.tsx",
     "src/components/Layout/__preview__/preview.tsx",
     "src/components/Layout/__preview__/dockPreview.tsx",
     "src/components/Layout/__preview__/forgeStats.tsx",
@@ -89,6 +99,7 @@ const config: KnipConfig = {
     "src/components/Layout/__preview__/sidebarFooter.tsx",
     "src/components/Layout/__preview__/commandHud.tsx",
     "src/components/Layout/__preview__/rateLimitDetails.tsx",
+    "src/components/Layout/__preview__/toolbarToggles.tsx",
     "src/components/Onboarding/__preview__/preview.tsx",
     "src/components/Portal/__preview__/preview.tsx",
     "src/components/Plugin/__preview__/preview.tsx",
@@ -96,7 +107,13 @@ const config: KnipConfig = {
     "src/components/Plugin/__preview__/installProgressPreview.tsx",
     "src/components/Panel/__preview__/transitionPreview.tsx",
     "src/components/Sidebar/__preview__/worktreeLoadError.tsx",
+    "src/components/Sidebar/__preview__/deletedWorktreeGroup.tsx",
+    "src/components/Sidebar/__preview__/sidebarHeaderRefresh.tsx",
     "src/components/Terminal/__preview__/preview.tsx",
+    "src/components/Terminal/__preview__/autocompleteMenu.tsx",
+    "src/components/Terminal/__preview__/sendToAgent.tsx",
+    "src/components/Terminal/__preview__/subagentChip.tsx",
+    "src/components/Terminal/__preview__/agentIndicator.tsx",
     "src/components/Terminal/__preview__/hybridInput.tsx",
     "src/components/Terminal/__preview__/artifactOverlay.tsx",
     "src/components/Terminal/__preview__/banners.tsx",
@@ -107,10 +124,28 @@ const config: KnipConfig = {
     "src/components/Terminal/__preview__/resourceBadge.tsx",
     "src/components/Terminal/__preview__/typingLocator.tsx",
     "src/components/Terminal/__preview__/updateCwdPreview.tsx",
+    "src/components/Terminal/__preview__/scratchpad.tsx",
     "src/components/ui/__preview__/avatarPreview.tsx",
+    "src/components/ui/__preview__/buttonStatesPreview.tsx",
+    "src/components/ui/__preview__/checkboxFamilyPreview.tsx",
+    "src/components/ui/__preview__/closeDismissCopyPreview.tsx",
+    "src/components/ui/__preview__/dialogConfirmationsPreview.tsx",
+    "src/components/ui/__preview__/errorsCalloutsPreview.tsx",
+    "src/components/ui/__preview__/focusRingsPreview.tsx",
+    "src/components/ui/__preview__/handrolledButtonsPreview.tsx",
+    "src/components/ui/__preview__/labelsBadgesPreview.tsx",
+    "src/components/ui/__preview__/menusPreview.tsx",
+    "src/components/ui/__preview__/paneStatesPreview.tsx",
+    "src/components/ui/__preview__/pressedTogglesChipsPreview.tsx",
+    "src/components/ui/__preview__/segmentedControls.tsx",
+    "src/components/ui/__preview__/shortcutDisplayPreview.tsx",
     "src/components/ui/__preview__/shortcutHintPreview.tsx",
     "src/components/ui/__preview__/skeletons.tsx",
+    "src/components/ui/__preview__/tooltipConsistencyPreview.tsx",
     "src/components/Worktree/__preview__/preview.tsx",
+    "src/components/Worktree/__preview__/bulkRemovePreview.tsx",
+    "src/components/Worktree/__preview__/issuePicker.tsx",
+    "src/components/Worktree/__preview__/prChecks.tsx",
     "src/components/Worktree/__preview__/quickStateFilter.tsx",
     "src/components/Worktree/__preview__/sessions.tsx",
     "src/components/Worktree/__preview__/alarmPill.tsx",
@@ -121,7 +156,10 @@ const config: KnipConfig = {
     "src/components/Worktree/__preview__/worktreeFilterPopover.tsx",
     "src/components/Project/__preview__/preview.tsx",
     "src/components/Project/__preview__/projectIdentityEditor.tsx",
+    "src/components/Project/__preview__/rowHighlight.tsx",
     "src/components/Settings/__preview__/toolbarSettings.tsx",
+    "src/components/Settings/__preview__/diagnosticsReviewDialogPreview.tsx",
+    "src/components/Settings/__preview__/subjectPicker.tsx",
     "src/components/TerminalRecipe/__preview__/recipes.tsx",
     "src/components/Tour/__preview__/preview.tsx",
     "src/components/Panel/__preview__/preview.tsx",
@@ -231,6 +269,7 @@ const config: KnipConfig = {
     "pgrep",
     "pkill",
     "reg",
+    "sips",
     "top",
     "where",
     "wsl.exe",
@@ -243,6 +282,11 @@ const config: KnipConfig = {
     // Vite resolves this browser-only absolute module URL in the screenshot harness.
     "e2e/screenshots/host-pause-indicator-review.spec.ts": ["unresolved"],
   },
+
+  // why: browser-only absolute module URLs that Vite resolves inside
+  // `page.evaluate` in the copy-context screenshot harness. Exact specifiers,
+  // so a misspelled import elsewhere in that spec is still flagged.
+  ignoreUnresolved: ["/src/store/copyTreeRunStore.ts", "/src/lib/copyTreeFeedback.ts"],
 
   // why: these packages are consumed via mechanisms Knip can't trace:
   //   - wait-on: invoked as a shell command from scripts/dev.mjs
@@ -265,6 +309,9 @@ const config: KnipConfig = {
     // host-repository development dependencies themselves.
     "@daintreehq/plugin-sdk",
     "@daintreehq/plugin-vite",
+    // The app compiles the tour engine from source through tsconfig, Vite and
+    // Vitest aliases rather than as an installed dependency.
+    "@daintreehq/tour",
     // scripts/ci/electron-builder-config.test.mjs reads the installed
     // electron-builder schema from node_modules/app-builder-lib/scheme.json.
     // electron-builder owns that transitive package; the test must validate
@@ -298,6 +345,18 @@ const config: KnipConfig = {
     exports: "warn",
     types: "warn",
     duplicates: "warn",
+  },
+};
+
+const { entry, project, ...options } = baseConfig;
+const config: KnipConfig = {
+  ...options,
+  workspaces: {
+    ".": { entry, project },
+    "packages/daintree-plugin": {
+      // tsup's onSuccess browser build names this entry by string path.
+      entry: ["src/tour/preview/browser/harness.tsx"],
+    },
   },
 };
 

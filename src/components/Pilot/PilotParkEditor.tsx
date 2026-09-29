@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { InlineError } from "@/components/ui/field";
 import type { KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -446,9 +447,9 @@ export function PilotParkEditor({
       </div>
 
       {error !== null && (
-        <p id={errorId} role="alert" className="text-xs text-status-danger">
+        <InlineError id={errorId} role="alert">
           {error.message}
-        </p>
+        </InlineError>
       )}
 
       {showStillWorking && error === null && (

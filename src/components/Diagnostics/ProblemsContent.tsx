@@ -1,5 +1,7 @@
 import { useMemo, useCallback, useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
+import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useErrorStore, type ErrorRecord, type RetryAction, RECURRENCE_THRESHOLD } from "@/store";
 import { Copy, Check, ChevronRight, Lightbulb, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -93,6 +95,7 @@ function ErrorRow({
 
     try {
       await navigator.clipboard.writeText(detailsText.join("\n"));
+      useAnnouncerStore.getState().announce("Copied", "polite");
       setCopied(true);
 
       if (copyTimeoutRef.current) {
@@ -102,7 +105,7 @@ function ErrorRow({
       copyTimeoutRef.current = setTimeout(() => {
         setCopied(false);
         copyTimeoutRef.current = null;
-      }, 2000);
+      }, UI_ACTION_SUCCESS_DWELL_MS);
     } catch (err) {
       logError("Failed to copy to clipboard", err);
     }
@@ -137,6 +140,7 @@ function ErrorRow({
             aria-controls={detailsId}
           >
             <ChevronRight
+              data-animated-chevron
               aria-hidden="true"
               className={cn(
                 "mt-0.5 h-3.5 w-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
@@ -248,7 +252,9 @@ function ErrorRow({
                   variant="subtle"
                   size="xs"
                   onClick={handleCopyDetails}
-                  aria-label={copied ? "Copied to clipboard" : "Copy error details to clipboard"}
+                  // Constant: the live region announces the copy, and a name that
+                  // flips under focus is announced a second time.
+                  aria-label="Copy error details to clipboard"
                 >
                   {copied ? <Check /> : <Copy />}
                   {copied ? "Copied" : "Copy details"}

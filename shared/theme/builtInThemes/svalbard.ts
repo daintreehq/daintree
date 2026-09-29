@@ -181,12 +181,10 @@ export const theme: BuiltInThemeSource = {
     "review-commit-input-bg": "#FAFCFE",
     // Small-chrome gradient between two audited near-white stops; label ink
     // holds 7.3:1 on the darker stop.
-    "settings-kbd-bg": "linear-gradient(180deg, #FBFDFE, #E6EEF4)",
-    "settings-kbd-border": "#C5CFD6",
     // Nav selection elevates to white + the 2px accent marker.
     "settings-nav-active-bg": "#FFFFFF",
     "settings-nav-active-shadow": "none",
-    "settings-nav-hover-bg": "rgba(30,42,58,0.05)",
+    "settings-nav-hover-bg": "rgba(255,255,255,0.55)",
     // Scope pill elevates to white on the tinted settings sidebar.
     "settings-scope-bg": "#FFFFFF",
     "settings-sidebar-bg": "rgba(222,234,241,0.60)",

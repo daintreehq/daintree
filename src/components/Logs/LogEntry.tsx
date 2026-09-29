@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Copy, Check, ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { safeStringify } from "@/lib/safeStringify";
 import { sanitizeErrorText } from "@/utils/errorText";
 import type { LogEntry as LogEntryType, LogLevel } from "@/types";
@@ -72,35 +71,6 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
   const hasContext = entry.context && Object.keys(entry.context).length > 0;
   const contextPanelId = hasContext ? `context-${entry.id}` : undefined;
 
-  const [copied, setCopied] = useState(false);
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimeoutRef.current) {
-        clearTimeout(copyTimeoutRef.current);
-        copyTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
-  const handleCopy = useCallback(
-    async () => {
-      try {
-        await navigator.clipboard.writeText(buildCopyPayload(entry, copyMeta));
-        setCopied(true);
-        if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-        copyTimeoutRef.current = setTimeout(() => {
-          setCopied(false);
-          copyTimeoutRef.current = null;
-        }, 1500);
-      } catch {
-        // clipboard write can reject in unusual contexts; swallow silently
-      }
-    },
-    [entry, copyMeta]
-  );
-
   const summary = (
     <>
       <Tooltip>
@@ -137,7 +107,13 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
 
       {hasContext && (
         <span className="text-text-secondary shrink-0" aria-hidden>
-          {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          <ChevronRight
+            data-animated-chevron
+            className={cn(
+              "w-3 h-3 transition-transform duration-150 ease-out",
+              isExpanded && "rotate-90"
+            )}
+          />
         </span>
       )}
     </>
@@ -178,23 +154,13 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
           <div className="flex min-w-0 flex-1 items-start gap-2">{summary}</div>
         )}
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={handleCopy}
-              aria-label={copied ? "Copied" : "Copy log entry"}
-              className={cn(
-                "h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
-                copied && "opacity-100"
-              )}
-            >
-              {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="left">{copied ? "Copied" : "Copy entry"}</TooltipContent>
-        </Tooltip>
+        <CopyButton
+          text={() => buildCopyPayload(entry, copyMeta)}
+          aria-label="Copy log entry"
+          tooltip="Copy entry"
+          tooltipSide="left"
+          className="-my-0.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-copied:opacity-100"
+        />
       </div>
 
       {isExpanded && hasContext && (

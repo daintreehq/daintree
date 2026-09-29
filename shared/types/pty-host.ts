@@ -240,6 +240,8 @@ export type PtyHostRequest =
       handbackCode?: string;
       /** Admission check run when the submission reaches the lane (#12491). */
       guard?: TerminalSubmitGuard;
+      /** Absolute paths of images attached in the composer, in order (#12792). */
+      imagePaths?: string[];
     }
   | { type: "stage"; id: string; text: string }
   /** Take back a guarded submission before its Enter (#12491). Ordinary ones are unaffected. */
@@ -600,6 +602,8 @@ export type PtyHostEvent =
       data: string;
       portDeliveredWebContentsIds?: number[];
       portRecoveryWebContentsId?: number;
+      /** End offset in the renderer-bound stream (see SnapshotContinuation). */
+      streamEnd?: number;
     }
   // A window's renderer connection is gone (#12557). Main clears its record of
   // that window's port holder so the view stops being treated as reachable by
@@ -702,6 +706,21 @@ export type PtyHostEvent =
       reason?: string;
       validationErrors?: string[];
       traceId?: string;
+      timestamp: number;
+    }
+  | {
+      /** A handback marker a submission asked for is complete in this pane (#12488). */
+      type: "agent-handback-observed";
+      terminalId: string;
+      handback: TerminalHandback;
+      code?: string;
+      timestamp: number;
+    }
+  | {
+      /** A rate-limit banner appeared in this pane (#12797). Never carries its text. */
+      type: "agent-rate-limit-observed";
+      terminalId: string;
+      observedAt: number;
       timestamp: number;
     }
   | {
@@ -1162,6 +1181,7 @@ export type SpawnErrorCode =
   | "DISCONNECTED" // Terminal process no longer exists in backend (e.g., after project switch)
   | "PENDING_SPAWNS_CAPPED" // PtyClient.pendingSpawns admission cap hit (restart-storm guard)
   | "TERMINAL_ALREADY_LIVE" // Spawn rejected: the id already has a live owner (#11341)
+  | "SPAWN_TIMEOUT" // No spawn result from the pty-host within the confirmation window (#12754)
   | "UNKNOWN"; // Unknown error
 
 /** Result of a spawn operation */
@@ -1472,6 +1492,8 @@ export type PtyHostToRendererMessage =
       id: string;
       data: Uint8Array;
       bytes: number;
+      /** End offset in the renderer-bound stream (see SnapshotContinuation). */
+      streamEnd?: number;
     }
   | {
       type: "tier-changed";

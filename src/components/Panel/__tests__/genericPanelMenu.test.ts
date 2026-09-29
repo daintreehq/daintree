@@ -13,18 +13,33 @@ import {
   canReloadPanelKind,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
+  isPluginMenuCommandId,
+  pluginMenuCommandActionId,
   readPanelKindMenuCapabilities,
   type GenericPanelMenuInput,
 } from "../genericPanelMenu";
+import { getRegisteredTourIdsSnapshot, registerTour } from "@/components/Tour/tourRegistry";
 
 const PTY_PLUGIN_KIND = "acme.shell";
 const VIEW_PLUGIN_KIND = "acme.dashboard";
 const UNDOCKABLE_PLUGIN_KIND = "acme.wallboard";
+const TOURED_PLUGIN_KIND = "acme.metrics";
 
-function registerPluginKind(id: string, overrides: { hasPty?: boolean; dockable?: boolean } = {}) {
+function registerPluginKind(
+  id: string,
+  overrides: {
+    hasPty?: boolean;
+    dockable?: boolean;
+    name?: string;
+    tourId?: string;
+    hasPluginSettings?: boolean;
+    hasPluginDatabases?: boolean;
+    pluginMenu?: Array<{ actionId: string; label?: string }>;
+  } = {}
+) {
   registerPanelKind({
     id,
-    name: id,
+    name: overrides.name ?? id,
     iconId: "terminal",
     color: "#abcdef",
     hasPty: overrides.hasPty ?? false,
@@ -32,6 +47,10 @@ function registerPluginKind(id: string, overrides: { hasPty?: boolean; dockable?
     canConvert: false,
     extensionId: "acme",
     ...(overrides.dockable !== undefined ? { dockable: overrides.dockable } : {}),
+    ...(overrides.tourId !== undefined ? { tourId: overrides.tourId } : {}),
+    ...(overrides.hasPluginSettings ? { hasPluginSettings: true } : {}),
+    ...(overrides.hasPluginDatabases ? { hasPluginDatabases: true } : {}),
+    ...(overrides.pluginMenu ? { pluginMenu: overrides.pluginMenu } : {}),
   });
 }
 
@@ -46,10 +65,24 @@ function groups(input: Partial<GenericPanelMenuInput> = {}) {
   });
 }
 
+const tourCleanups: Array<() => void> = [];
+
+/** Registers a tour under `id` so a kind declaring it has something to play. */
+function registerPlayableTour(id: string) {
+  tourCleanups.push(
+    registerTour({
+      summary: { id, title: "Acme Tour", minutes: 1, chapterTitles: ["One"] },
+      load: () => Promise.reject(new Error("not under test")),
+    })
+  );
+}
+
 afterEach(() => {
+  for (const cleanupTour of tourCleanups.splice(0)) cleanupTour();
   unregisterPanelKind(PTY_PLUGIN_KIND);
   unregisterPanelKind(VIEW_PLUGIN_KIND);
   unregisterPanelKind(UNDOCKABLE_PLUGIN_KIND);
+  unregisterPanelKind(TOURED_PLUGIN_KIND);
 });
 
 describe("readPanelKindMenuCapabilities", () => {
@@ -72,8 +105,108 @@ describe("readPanelKindMenuCapabilities", () => {
       expect(readPanelKindMenuCapabilities(snapshot, kind)).toEqual({
         hasPty: panelKindHasPty(kind),
         isDockable: panelKindIsDockable(kind),
+        tour: null,
+        pluginSettingsId: null,
+        pluginBackupId: null,
+        pluginMenuItems: [],
       });
     }
+  });
+
+  it("offers the tour a kind declares under the kind's own name (#12774)", () => {
+    registerPluginKind(TOURED_PLUGIN_KIND, { name: "Metrics", tourId: "acme.metrics-intro" });
+    registerPlayableTour("acme.metrics-intro");
+
+    expect(
+      readPanelKindMenuCapabilities(
+        getPanelKindRegistrySnapshot(),
+        TOURED_PLUGIN_KIND,
+        getRegisteredTourIdsSnapshot()
+      ).tour
+    ).toEqual({ id: "acme.metrics-intro", label: "Metrics Welcome Tour" });
+  });
+
+  it("offers no declared tour until it is registered, since it would open nothing", () => {
+    registerPluginKind(TOURED_PLUGIN_KIND, { name: "Metrics", tourId: "acme.metrics-intro" });
+    const read = () =>
+      readPanelKindMenuCapabilities(
+        getPanelKindRegistrySnapshot(),
+        TOURED_PLUGIN_KIND,
+        getRegisteredTourIdsSnapshot()
+      ).tour;
+
+    expect(read()).toBeNull();
+    registerPlayableTour("acme.metrics-intro");
+    expect(read()).toEqual({ id: "acme.metrics-intro", label: "Metrics Welcome Tour" });
+    for (const cleanupTour of tourCleanups.splice(0)) cleanupTour();
+    expect(read()).toBeNull();
+  });
+
+  it("names the plugin whose settings the menus open, only when it has some", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, { hasPluginSettings: true });
+    registerPluginKind(PTY_PLUGIN_KIND, { hasPty: true, hasPluginSettings: true });
+    registerPluginKind(UNDOCKABLE_PLUGIN_KIND);
+    const snapshot = getPanelKindRegistrySnapshot();
+
+    expect(readPanelKindMenuCapabilities(snapshot, VIEW_PLUGIN_KIND).pluginSettingsId).toBe("acme");
+    expect(readPanelKindMenuCapabilities(snapshot, PTY_PLUGIN_KIND).pluginSettingsId).toBe("acme");
+    expect(
+      readPanelKindMenuCapabilities(snapshot, UNDOCKABLE_PLUGIN_KIND).pluginSettingsId
+    ).toBeNull();
+    expect(readPanelKindMenuCapabilities(snapshot, "file").pluginSettingsId).toBeNull();
+  });
+
+  it("names the plugin whose data Back up data… copies, only when it declares databases", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, { hasPluginDatabases: true });
+    registerPluginKind(UNDOCKABLE_PLUGIN_KIND, { hasPluginSettings: true });
+    const snapshot = getPanelKindRegistrySnapshot();
+
+    expect(readPanelKindMenuCapabilities(snapshot, VIEW_PLUGIN_KIND).pluginBackupId).toBe("acme");
+    expect(readPanelKindMenuCapabilities(snapshot, VIEW_PLUGIN_KIND).pluginSettingsId).toBeNull();
+    expect(
+      readPanelKindMenuCapabilities(snapshot, UNDOCKABLE_PLUGIN_KIND).pluginBackupId
+    ).toBeNull();
+  });
+
+  it("offers a kind's own menu items in declared order, once each action is registered", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, {
+      pluginMenu: [
+        { actionId: "acme.refresh" },
+        { actionId: "acme.export", label: "Export as CSV" },
+        { actionId: "acme.pending" },
+      ],
+    });
+    const snapshot = getPanelKindRegistrySnapshot();
+    const read = (registered: Array<[string, string]>) =>
+      readPanelKindMenuCapabilities(snapshot, VIEW_PLUGIN_KIND, undefined, new Map(registered))
+        .pluginMenuItems;
+
+    expect(read([])).toEqual([]);
+    expect(
+      read([
+        ["acme.export", "Export ledger"],
+        ["acme.refresh", "Refresh data"],
+      ])
+    ).toEqual([
+      { actionId: "acme.refresh", label: "Refresh data" },
+      { actionId: "acme.export", label: "Export as CSV" },
+    ]);
+    expect(read([["acme.pending", "Sync now"]])).toEqual([
+      { actionId: "acme.pending", label: "Sync now" },
+    ]);
+  });
+
+  it("leaves out a menu item with nothing to call it", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, { pluginMenu: [{ actionId: "acme.untitled" }] });
+
+    expect(
+      readPanelKindMenuCapabilities(
+        getPanelKindRegistrySnapshot(),
+        VIEW_PLUGIN_KIND,
+        undefined,
+        new Map([["acme.untitled", ""]])
+      ).pluginMenuItems
+    ).toEqual([]);
   });
 
   it("reads the snapshot it is handed, not the live registry", () => {
@@ -204,7 +337,15 @@ describe("getGenericPanelMenuGroups", () => {
   it("gives every command but the worktree move and reload an action to dispatch", () => {
     for (const input of LAYOUT_INPUTS) {
       for (const command of groups(input).flat()) {
-        if (command.id === "move-to-worktree" || command.id === "reload") continue;
+        if (
+          command.id === "move-to-worktree" ||
+          command.id === "reload" ||
+          command.id === "tour" ||
+          command.id === "plugin-settings" ||
+          command.id === "plugin-backup" ||
+          isPluginMenuCommandId(command.id)
+        )
+          continue;
         expect(GENERIC_PANEL_MENU_ACTION_IDS[command.id]).toBeDefined();
       }
     }
@@ -219,6 +360,106 @@ describe("getGenericPanelMenuGroups", () => {
     expect(reload.label).toBe("Reload panel");
     expect(reload.destructive).toBeUndefined();
     expect(GENERIC_PANEL_RELOAD_ACTION_ID).toBe("plugin.reloadPanel");
+  });
+
+  it("offers a declared tour in a group of its own, before the removal commands (#12774)", () => {
+    const withTour = ids({ tourLabel: "Metrics Welcome Tour" });
+    const withoutTour = ids();
+
+    expect(withoutTour.flat()).not.toContain("tour");
+    expect(withTour.find((group) => group.includes("tour"))).toEqual(["tour"]);
+    expect(withTour.filter((group) => !group.includes("tour"))).toEqual(withoutTour);
+    expect(withTour.flat().indexOf("tour")).toBeLessThan(withTour.flat().indexOf("trash"));
+
+    const tour = groups({ tourLabel: "Metrics Welcome Tour" })
+      .flat()
+      .find((command) => command.id === "tour")!;
+    expect(tour.label).toBe("Metrics Welcome Tour");
+    expect(tour.destructive).toBeUndefined();
+    expect(tour.disabled).toBeUndefined();
+  });
+
+  it("offers Plugin settings… as the last of the plugin's own entries", () => {
+    const withSettings = ids({ hasPluginSettings: true });
+    expect(withSettings.find((group) => group.includes("plugin-settings"))).toEqual([
+      "plugin-settings",
+    ]);
+    expect(ids().flat()).not.toContain("plugin-settings");
+
+    const both = ids({ tourLabel: "Metrics Welcome Tour", hasPluginSettings: true });
+    expect(both.find((group) => group.includes("tour"))).toEqual(["tour", "plugin-settings"]);
+    expect(both.flat().indexOf("plugin-settings")).toBeLessThan(both.flat().indexOf("trash"));
+
+    const item = groups({ hasPluginSettings: true })
+      .flat()
+      .find((command) => command.id === "plugin-settings")!;
+    expect(item.destructive).toBeUndefined();
+    expect(item.disabled).toBeUndefined();
+  });
+
+  it("offers Back up data… after the tour and before Plugin settings…", () => {
+    expect(ids().flat()).not.toContain("plugin-backup");
+    expect(ids({ hasPluginDatabases: true }).find((g) => g.includes("plugin-backup"))).toEqual([
+      "plugin-backup",
+    ]);
+
+    const all = ids({
+      tourLabel: "Metrics Welcome Tour",
+      hasPluginSettings: true,
+      hasPluginDatabases: true,
+    });
+    expect(all.find((group) => group.includes("tour"))).toEqual([
+      "tour",
+      "plugin-backup",
+      "plugin-settings",
+    ]);
+
+    const item = groups({ hasPluginDatabases: true })
+      .flat()
+      .find((command) => command.id === "plugin-backup")!;
+    // The ellipsis promises the dialog that follows.
+    expect(item.label.endsWith("…")).toBe(true);
+    expect(item.destructive).toBeUndefined();
+    expect(item.disabled).toBeUndefined();
+  });
+
+  it("puts the plugin's own items in a group directly above its entries, in order", () => {
+    const items = [
+      { actionId: "acme.refresh", label: "Refresh data" },
+      { actionId: "acme.export", label: "Export as CSV" },
+    ];
+    const withEverything = groups({
+      tourLabel: "Metrics Welcome Tour",
+      hasPluginSettings: true,
+      pluginMenuItems: items,
+    });
+    const groupIds = withEverything.map((group) => group.map((command) => command.id));
+    const contributedIndex = groupIds.findIndex((group) => group.every(isPluginMenuCommandId));
+    const ownedIndex = groupIds.findIndex((group) => group.includes("tour"));
+
+    expect(contributedIndex).toBeGreaterThan(-1);
+    expect(ownedIndex).toBe(contributedIndex + 1);
+    const contributed = withEverything[contributedIndex]!;
+    expect(contributed.map((command) => command.label)).toEqual(["Refresh data", "Export as CSV"]);
+    expect(
+      contributed.map((command) =>
+        isPluginMenuCommandId(command.id) ? pluginMenuCommandActionId(command.id) : null
+      )
+    ).toEqual(["acme.refresh", "acme.export"]);
+    expect(contributed.every((c) => !c.destructive && !c.disabled)).toBe(true);
+
+    // Without the plugin's entries they still sit just above the removal group.
+    const alone = ids({ pluginMenuItems: items });
+    const aloneIndex = alone.findIndex((group) => group.every(isPluginMenuCommandId));
+    expect(alone[aloneIndex + 1]).toContain("trash");
+    // And nothing at all when the kind offers none.
+    expect(ids().flat().some(isPluginMenuCommandId)).toBe(false);
+  });
+
+  it("still ends on its one destructive command with a tour offered", () => {
+    const all = groups({ tourLabel: "Metrics Welcome Tour" }).flat();
+    expect(all.at(-1)?.destructive).toBe(true);
+    expect(all.filter((command) => command.destructive)).toHaveLength(1);
   });
 });
 

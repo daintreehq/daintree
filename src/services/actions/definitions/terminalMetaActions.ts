@@ -28,17 +28,12 @@ const REJECTION_MESSAGES: Record<ClientMetadataRejection, string> = {
 
 const SetClientMetadataArgsSchema = z
   .object({
-    terminalId: z
-      .string()
-      .min(1)
-      .describe(
-        "Identifies the terminal to annotate, using a panel id from the terminal-listing capability."
-      ),
+    terminalId: z.string().min(1).describe("Panel id from the terminal listing."),
     clientMetadata: z
       .record(z.string(), z.unknown())
       .nullable()
       .describe(
-        `Replaces the whole record — send every key you want kept, not a patch. Max ${MAX_CLIENT_METADATA_BYTES} bytes of JSON, ${MAX_CLIENT_METADATA_DEPTH} deep. Null deletes it. Namespace your keys: this is shared.`
+        `Replaces the whole record, not a patch. Max ${MAX_CLIENT_METADATA_BYTES} bytes of JSON, ${MAX_CLIENT_METADATA_DEPTH} deep; null deletes it. Namespace your keys: it is shared.`
       ),
   })
   .strict();
@@ -51,7 +46,7 @@ export function registerTerminalMetaActions(
     id: "terminal.setClientMetadata",
     title: "Set terminal client metadata",
     description:
-      "Attach your own JSON record to a terminal, so a reconnecting client can tell which panel is which instead of keeping a sidecar that goes stale. It outlives your connection, survives a restart, and is deleted with the panel. Read it back from the terminal listing; null clears it. Shared namespace: every external client sees the same record, and it confers no ownership.",
+      "Attach your own JSON record to a terminal so a reconnecting client can tell panels apart. It outlives your connection and restarts, and dies with the panel; read it back from the terminal listing, null clears it. Shared: every external client sees the same record, and it confers no ownership.",
     category: "terminal",
     kind: "command",
     danger: "safe",

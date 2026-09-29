@@ -31,6 +31,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "agent:state-transition-dropped": "external",
   "agent:all-clear": "bus",
   "agent:detected": "bus",
+  // Pane-attributed rate-limit observation (#12797); timestamps only.
+  "agent:rate-limit-observed": "bus",
   "agent:exited": "bus",
   "agent:fallback-triggered": "bus",
 
@@ -68,8 +70,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   // Broadcast by the MCP server handlers whenever a hand-over starts or ends.
   "terminal:adoptions-changed": "external",
 
-  // Sent project-scoped by the MCP terminal-watch service (#12491).
-  "terminal:watch-state": "external",
+  // Sent project-scoped by the MCP terminal-notify service.
+  "terminal:notify-state": "external",
 
   // Agent session journaled (relayed from TypedEventBus; emitted by the main
   // close paths and bridged from the pty-host's trash-expiry capture)
@@ -89,10 +91,13 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:context-menu-items-changed": "external",
   "plugin:agents-changed": "external",
   "plugin:recipes-changed": "external",
+  "plugin:tours-changed": "external",
   "plugin:decorations-changed": "external",
   "plugin:panel-badges-changed": "external",
   "plugin:panel-badges-cleared": "external",
   "plugin:provenance-changed": "external",
+  // PluginService sends this itself, scoped like runtime status below.
+  "plugin:settings-changed": "external",
   // PluginService sends this itself, scoped to the owning project for a
   // project-local instance and globally for an app-global one.
   "plugin:runtime-status-changed": "external",

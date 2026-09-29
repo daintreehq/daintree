@@ -1,7 +1,9 @@
 import { createContext, use, useId } from "react";
 import type { ReactNode } from "react";
-import { CircleAlert, Info, RotateCcw } from "lucide-react";
+import { Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { InlineError } from "@/components/ui/field";
+import { SettingsResetButton } from "./SettingsResetButton";
 
 /**
  * The settings page grammar: a page is a stack of `SettingsSection`s, a section holds
@@ -224,35 +226,33 @@ export function SettingsRow({
 
   const ids: SettingsRowControlIds = { labelId, descriptionId: describedBy, disabled };
   const renderedControl = typeof control === "function" ? control(ids) : control;
+  // Dimming says "this control can't be used". A disabled row with no control —
+  // a setting listed while its plugin is stopped — has nothing to grey out, so
+  // its words stay readable and the reason line says why it can't change.
+  const dimmed =
+    disabled &&
+    renderedControl !== undefined &&
+    renderedControl !== null &&
+    renderedControl !== false;
 
-  const resetButton = showReset ? (
-    <button
-      type="button"
-      aria-label={resetName}
-      data-testid={resetTestId}
-      className={cn(
-        "p-1 rounded-sm text-text-secondary hover:text-text-primary transition-colors",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-      )}
-      onClick={(e) => {
-        e.stopPropagation();
-        onReset?.();
-      }}
-    >
-      <RotateCcw className="w-3 h-3" aria-hidden="true" />
-    </button>
-  ) : null;
+  const resetButton =
+    showReset && onReset ? (
+      <SettingsResetButton label={resetName} onReset={onReset} data-testid={resetTestId} />
+    ) : null;
 
   const text = (
     <div className="min-w-0 flex-1">
-      <div className="flex items-center gap-1.5 flex-wrap">
+      {/* The whole line dims, chips included: a full-contrast chip beside a disabled
+          label read as the one live thing on the row. The reset is never shown while
+          disabled, so nothing interactive dims with it. */}
+      <div className={cn("flex items-center gap-1.5 flex-wrap", dimmed && "opacity-50")}>
         <span
           id={labelId}
           // The hook a search result lands by when its section has no DOM id.
           data-settings-row-label=""
           // min-w-0 so a label that truncates (an icon + name) shrinks inside its
           // column instead of painting under the controls on the rail.
-          className={cn("min-w-0 text-sm font-medium text-text-primary", disabled && "opacity-50")}
+          className="min-w-0 text-sm font-medium text-text-primary"
         >
           {label}
         </span>
@@ -262,7 +262,7 @@ export function SettingsRow({
       {description && (
         <div
           id={descriptionId}
-          className={cn("mt-0.5 text-xs text-text-secondary select-text", disabled && "opacity-50")}
+          className={cn("mt-0.5 text-xs text-text-secondary select-text", dimmed && "opacity-50")}
         >
           {description}
         </div>
@@ -292,6 +292,7 @@ export function SettingsRow({
     <div
       id={id}
       data-settings-row={layout}
+      data-settings-reset-scope=""
       className={cn(
         "settings-row relative py-3 pr-4 scroll-mt-6",
         rowInset(depth),
@@ -317,21 +318,9 @@ export function SettingsRow({
         renderedControl && <div className="min-w-0">{renderedControl}</div>
       )}
       {error && (
-        // The glyph carries the severity; the words stay neutral, because
-        // severity-coloured text falls under 4.5:1 on most themes.
-        <p
-          id={errorId}
-          className={cn(
-            "flex items-start gap-1.5 text-xs text-text-primary",
-            layout === "inline" && "basis-full"
-          )}
-        >
-          <CircleAlert
-            className="w-3.5 h-3.5 mt-px shrink-0 text-status-error"
-            aria-hidden="true"
-          />
-          <span>{error}</span>
-        </p>
+        <SettingsInlineError id={errorId} className={cn(layout === "inline" && "basis-full")}>
+          {error}
+        </SettingsInlineError>
       )}
     </div>
   );
@@ -358,6 +347,48 @@ export function SettingsActions({ children, status }: SettingsActionsProps) {
         {status}
       </div>
       <div className="flex items-center gap-2 shrink-0">{children}</div>
+    </div>
+  );
+}
+
+interface SettingsInlineErrorProps {
+  children: ReactNode;
+  id?: string;
+  className?: string;
+  role?: "alert" | "status";
+  /** A trailing control on the error's line — a Retry for a load that failed. */
+  action?: ReactNode;
+  "data-testid"?: string;
+}
+
+/**
+ * A settings error as words: the shared `InlineError`, the form every settings
+ * error takes, a row's own or one a custom control states.
+ */
+export function SettingsInlineError({
+  children,
+  id,
+  className,
+  role,
+  action,
+  "data-testid": testId,
+}: SettingsInlineErrorProps) {
+  return (
+    <InlineError id={id} role={role} data-testid={testId} className={className} action={action}>
+      {children}
+    </InlineError>
+  );
+}
+
+/**
+ * The actions of a `stacked` row, in the wrapping line under its description: the
+ * shape a row takes when more than one action, or one long one, would squeeze the
+ * label column on the rail. Pass it as the row's `control`.
+ */
+export function SettingsRowActions({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2" data-settings-row-actions="">
+      {children}
     </div>
   );
 }

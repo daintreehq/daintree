@@ -19,6 +19,13 @@ const ARE_YOU_SURE_TITLE_RE = /^\s*are\s+you\s+sure/i;
 
 const CANNOT_BE_UNDONE_BODY_RE = /cannot be undone|can['’]t be undone/i;
 
+/**
+ * No identifier interpolated: the gate shows the exact string. No direction
+ * either — in a long body the gate can sit below the fold, where "above" is
+ * a pointer to nothing on screen.
+ */
+const TYPED_GATE_HINT = "Type the confirmation phrase to enable";
+
 const devWarnedKeys = new Set<string>();
 
 export const __devWarnedKeys = devWarnedKeys;
@@ -39,12 +46,23 @@ type ConfirmDialogBaseProps = {
   isOpen: boolean;
   onClose?: () => void;
   title: React.ReactNode;
+  /** Forwarded to {@link AppDialog.Title.icon} — e.g. `Trash2` on a delete. */
+  titleIcon?: React.ReactNode;
   description?: React.ReactNode;
   children?: React.ReactNode;
   confirmLabel: string;
   cancelLabel?: string;
   onConfirm: () => void | Promise<void>;
   isConfirmLoading?: boolean;
+  /**
+   * The confirm is running but its spinner is still waiting out the Doherty
+   * gate. Locks the dialog exactly as {@link isConfirmLoading} does — the
+   * primary, Cancel, the X, Escape and the backdrop — without painting a
+   * spinner, so a fast action never flashes one and a second press can't
+   * slip through the gap. Pass the same stable `onClose` throughout: the X
+   * stays in place and reads as unavailable rather than disappearing.
+   */
+  isBusy?: boolean;
   /**
    * Disable the primary action while the dialog stays open — for gates
    * that depend on the body's own state (e.g. all options excluded).
@@ -114,6 +132,12 @@ export type ConfirmDialogProps =
   | (ConfirmDialogBaseProps & {
       variant: "destructive";
       typedNameTarget?: string;
+      /**
+       * Forwarded to {@link TypedNameConfirmInput.preamble}: the concrete
+       * consequence the typed attestation is for, stated inside the gate so it
+       * isn't a second warning box beside it.
+       */
+      typedNamePreamble?: React.ReactNode;
     })
   | (ConfirmDialogBaseProps & {
       variant: "default" | "info";
@@ -125,12 +149,14 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     isOpen,
     onClose,
     title,
+    titleIcon,
     description,
     children,
     confirmLabel,
     cancelLabel = "Cancel",
     onConfirm,
     isConfirmLoading = false,
+    isBusy = false,
     confirmDisabled = false,
     confirmCooldownMs,
     cooldownKey,
@@ -145,6 +171,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   } = props;
   const rawTypedNameTarget = (props as { typedNameTarget?: string }).typedNameTarget;
   const typedNameTarget = variant === "destructive" ? rawTypedNameTarget : undefined;
+  const typedNamePreamble = props.variant === "destructive" ? props.typedNamePreamble : undefined;
 
   const handleClose = onClose ?? (() => {});
   const [typedValue, setTypedValue] = useState("");
@@ -225,12 +252,15 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   const hasTypedNameGate = !!typedNameTarget;
   const isTypedMatched = !hasTypedNameGate || typedValue === typedNameTarget;
 
+  // Busy covers both the gated spinner and the pre-spinner window.
+  const isLocked = isConfirmLoading || isBusy;
+
   const handleConfirm = () => {
     // `TypedNameConfirmInput` submits on Enter by calling straight through here,
     // so neither `Button`'s loading guard nor the footer's disabled guard is on
     // this path — without the check, Enter could fire the action a second time
     // while the first is still running.
-    if (isConfirmLoading) return;
+    if (isLocked) return;
     if (isCooldownActive) return;
     if (hasTypedNameGate && !isTypedMatched) return;
     if (confirmDisabled) return;
@@ -243,8 +273,9 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       onClose={handleClose}
       // Cancel is already disabled while the confirm runs; Escape, the backdrop
       // and the close button have to agree, or dismissing mid-apply unmounts the
-      // only surface that can report how it ended.
-      dismissible={!isConfirmLoading}
+      // only surface that can report how it ended. A confirm with no `onClose`
+      // can't be dismissed at all, and its X says so.
+      dismissible={!isLocked && onClose !== undefined}
       size={size}
       variant={variant}
       hasPreview={hasPreview}
@@ -253,8 +284,10 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       restoreFocusTo={restoreFocusTo}
     >
       <AppDialog.Header>
-        <AppDialog.Title>{title}</AppDialog.Title>
-        {onClose && <AppDialog.CloseButton />}
+        <AppDialog.Title icon={titleIcon}>{title}</AppDialog.Title>
+        {/* Always present: while the dialog is locked it disables itself rather
+            than vanishing, so the header never changes shape mid-action. */}
+        <AppDialog.CloseButton />
       </AppDialog.Header>
 
       <AppDialog.Body className="space-y-3" resetScrollKey={bodyResetKey}>
@@ -268,22 +301,34 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
             onMatchSubmit={() => {
               void handleConfirm();
             }}
+            preamble={typedNamePreamble}
+            // Frozen while the confirm runs, so the attestation on screen is the
+            // one that was submitted. Read-only rather than disabled: a submit
+            // that re-checks first can hand the gate back, and the Enter that
+            // started it left focus here.
+            readOnly={isLocked}
           />
         )}
       </AppDialog.Body>
 
       <AppDialog.Footer
-        hint={hint}
+        // An unmatched gate is the one reason for a disabled primary the caller
+        // can't see, since the typed value lives here.
+        hint={hint ?? (hasTypedNameGate && !isTypedMatched ? TYPED_GATE_HINT : undefined)}
         secondaryAction={{
           label: cancelLabel,
           onClick: handleClose,
-          disabled: isConfirmLoading || !onClose,
+          disabled: isLocked || !onClose,
         }}
         primaryAction={{
           label: confirmLabel,
           onClick: handleConfirm,
           loading: isConfirmLoading,
-          disabled: (hasTypedNameGate && !isTypedMatched) || confirmDisabled || isCooldownActive,
+          disabled:
+            (hasTypedNameGate && !isTypedMatched) ||
+            confirmDisabled ||
+            isCooldownActive ||
+            (isBusy && !isConfirmLoading),
           intent: variant === "destructive" ? "destructive" : "default",
         }}
       />

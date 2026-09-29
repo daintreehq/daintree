@@ -1,15 +1,19 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { TourControls } from "./TourControls";
-import { TourPlayer, type TourAudio } from "./TourPlayer";
+import { TourPlayer, type TourAudio } from "@daintreehq/tour";
+import type { TourDefinition } from "./tourDefinition";
 import { TourCaption, TourStage } from "./TourStage";
-import { TOUR_CHAPTERS } from "./tourChapters";
-import { resolveTourTimings } from "./tourTiming";
-import { TourPlayerContext, useTourPlayerState } from "./useTourPlayer";
+import { currentTourKeyboard, type TourKeyboard } from "./tourKeys";
+import { TourPlayerContext, useTourPlayerState } from "@daintreehq/tour/react";
+import { TourShortcutsContext } from "@daintreehq/tour/kit";
+import { EMPTY_MOCK_KIT, MockKitContext } from "@daintreehq/tour/mock-app";
+import { daintreeTourShortcuts } from "./daintreeTourShortcuts";
 
 export interface TourDialogProps {
   isOpen: boolean;
+  /** The tour to play. Held for the whole opening: a different tour is a new opening. */
+  tour: TourDefinition;
   onClose: () => void;
   initialChapter: number;
   initialMuted: boolean;
@@ -18,11 +22,17 @@ export interface TourDialogProps {
   onMutedChange: (muted: boolean) => void;
   /** Harness seam: receives each player as it is created. */
   onPlayer?: (player: TourPlayer) => void;
+  /** Harness seam: the keyboard to narrate and draw. Defaults to this platform's. */
+  keyboard?: TourKeyboard;
 }
 
-function createBrowserPlayer(muted: boolean): TourPlayer {
+function createBrowserPlayer(
+  tour: TourDefinition,
+  muted: boolean,
+  keyboard: TourKeyboard
+): TourPlayer {
   return new TourPlayer(
-    resolveTourTimings(),
+    tour.resolveTimings(keyboard),
     {
       createAudio: (url) => new Audio(url) as TourAudio,
       now: () => performance.now(),
@@ -41,12 +51,13 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 function TourBody({
+  tour,
   player,
   onClose,
   onChapterReached,
   onCompleted,
   onMutedChange,
-}: Omit<TourDialogProps, "isOpen" | "initialChapter" | "initialMuted" | "onPlayer"> & {
+}: Omit<TourDialogProps, "isOpen" | "initialChapter" | "initialMuted" | "onPlayer" | "keyboard"> & {
   player: TourPlayer;
 }) {
   const state = useTourPlayerState(player);
@@ -55,8 +66,9 @@ function TourBody({
   const bodyRef = useRef<HTMLDivElement>(null);
   const backLeavingRef = useRef(false);
   const held = state.status === "ended" && heldAt === state.chapterIndex;
-  const chapter = TOUR_CHAPTERS[state.chapterIndex]!;
-  const isLast = state.chapterIndex === TOUR_CHAPTERS.length - 1;
+  const chapters = tour.chapters;
+  const chapter = chapters[state.chapterIndex]!;
+  const isLast = state.chapterIndex === chapters.length - 1;
 
   // "Stay here" holds one ending: once the chapter plays again, from any
   // control, its next ending counts down afresh.
@@ -85,12 +97,13 @@ function TourBody({
     if (isLast && state.status === "ended") completedRef.current();
   }, [isLast, state.status]);
 
+  const Icon = tour.icon;
+
   const advance = () => {
     if (isLast) {
       completedRef.current();
       onClose();
-      // The tour teaches the map; the checklist walks the first real task.
-      window.dispatchEvent(new CustomEvent("daintree:show-getting-started"));
+      tour.finish?.run();
     } else {
       player.next();
     }
@@ -131,16 +144,16 @@ function TourBody({
       <AppDialog.Header>
         <div className="flex min-w-0 items-center gap-3">
           <AppDialog.Title
-            icon={<DaintreeIcon size={20} className="shrink-0 text-text-secondary" />}
+            icon={Icon ? <Icon className="shrink-0 text-text-secondary" /> : undefined}
           >
-            Daintree Tour
+            {tour.title}
           </AppDialog.Title>
           {/* Position in the tour, beside the title like a wizard's step count. */}
           <span
             className="shrink-0 text-sm tabular-nums text-text-secondary"
             data-testid="tour-chapter-count"
           >
-            Chapter {state.chapterIndex + 1} of {TOUR_CHAPTERS.length}
+            Chapter {state.chapterIndex + 1} of {chapters.length}
           </span>
         </div>
         <AppDialog.CloseButton aria-label="Close tour" />
@@ -152,26 +165,32 @@ function TourBody({
             the chrome (header, caption band, bar, footer, padding — 21rem). */}
         <div className="mx-auto w-full max-w-[calc((92vh-21rem)*16/9)] overflow-hidden rounded-lg border border-border-subtle">
           <TourStage
+            tourId={tour.id}
             chapterId={chapter.id}
+            chapterTitle={chapter.title}
+            Scene={chapter.scene}
+            // A broken scene has nothing to narrate over; the controls stay to move on.
+            onSceneError={() => player.pause()}
             endCard={
               state.status === "ended"
                 ? {
-                    nextTitle: TOUR_CHAPTERS[state.chapterIndex + 1]?.title ?? null,
+                    nextTitle: chapters[state.chapterIndex + 1]?.title ?? null,
                     nextNumber: isLast ? null : state.chapterIndex + 2,
                     held,
                     onHold: () => setHeldAt(state.chapterIndex),
                     onNext: advance,
                     onReplay: () => player.play(),
+                    finishHint: tour.finish?.hint,
                   }
                 : null
             }
           />
           <TourCaption />
-          <TourControls player={player} onMutedChange={onMutedChange} />
+          <TourControls player={player} chapters={chapters} onMutedChange={onMutedChange} />
         </div>
         <div className="sr-only" aria-live="polite" aria-atomic="true">
           {/* Position and title only: the narration starts at the same moment. */}
-          {`Chapter ${state.chapterIndex + 1} of ${TOUR_CHAPTERS.length}: ${chapter.title}`}
+          {`Chapter ${state.chapterIndex + 1} of ${chapters.length}: ${chapter.title}`}
         </div>
       </div>
       <AppDialog.Footer
@@ -198,12 +217,13 @@ function TourBody({
 }
 
 /**
- * The Daintree Tour: short narrated chapters, each a minimal animated mockup
- * of one idea. Starts playing on open; every chapter's narration preloads as
- * soon as it does. Closing at any point is the skip.
+ * Plays a tour: short narrated chapters, each an animated mockup of one idea.
+ * Starts playing on open; every chapter's narration preloads as soon as it
+ * does. Closing at any point is the skip.
  */
 export function TourDialog({
   isOpen,
+  tour,
   onClose,
   initialChapter,
   initialMuted,
@@ -211,6 +231,7 @@ export function TourDialog({
   onCompleted,
   onMutedChange,
   onPlayer,
+  keyboard = currentTourKeyboard(),
 }: TourDialogProps) {
   const [player, setPlayer] = useState<TourPlayer | null>(null);
   // The player is built once per opening from these; afterwards chapter and
@@ -223,8 +244,8 @@ export function TourDialog({
   useEffect(() => {
     if (!isOpen) return;
     const opening = openingRef.current;
-    const next = createBrowserPlayer(opening.initialMuted);
-    const chapter = Math.min(Math.max(0, opening.initialChapter), TOUR_CHAPTERS.length - 1);
+    const next = createBrowserPlayer(tour, opening.initialMuted, keyboard);
+    const chapter = Math.min(Math.max(0, opening.initialChapter), tour.chapters.length - 1);
     next.goTo(chapter, { autoplay: true });
     opening.onPlayer?.(next);
     setPlayer(next);
@@ -232,7 +253,7 @@ export function TourDialog({
       next.dispose();
       setPlayer(null);
     };
-  }, [isOpen]);
+  }, [isOpen, tour, keyboard]);
 
   return (
     <AppDialog
@@ -244,15 +265,20 @@ export function TourDialog({
       data-testid="daintree-tour"
     >
       {player && (
-        <TourPlayerContext.Provider value={player}>
-          <TourBody
-            player={player}
-            onClose={onClose}
-            onChapterReached={onChapterReached}
-            onCompleted={onCompleted}
-            onMutedChange={onMutedChange}
-          />
-        </TourPlayerContext.Provider>
+        <MockKitContext.Provider value={tour.mockKit ?? EMPTY_MOCK_KIT}>
+          <TourPlayerContext.Provider value={player}>
+            <TourShortcutsContext.Provider value={daintreeTourShortcuts(keyboard)}>
+              <TourBody
+                tour={tour}
+                player={player}
+                onClose={onClose}
+                onChapterReached={onChapterReached}
+                onCompleted={onCompleted}
+                onMutedChange={onMutedChange}
+              />
+            </TourShortcutsContext.Provider>
+          </TourPlayerContext.Provider>
+        </MockKitContext.Provider>
       )}
     </AppDialog>
   );

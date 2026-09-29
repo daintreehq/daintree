@@ -3,6 +3,11 @@ import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { makePluginViewContent } from "@/components/Plugin/PluginViewContent";
+import { PluginSetupStrip } from "@/components/Plugin/PluginSetupStrip";
+import { AlertTriangle } from "lucide-react";
+import { PaneState } from "@/components/ui/PaneState";
+import { Button } from "@/components/ui/button";
+import { actionService } from "@/services/ActionService";
 import { logWarn } from "@/utils/logger";
 import {
   getPanelStoreSnapshot,
@@ -52,6 +57,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
   const kindId = config.id;
   const displayName = config.name;
   const stateVersion = config.stateVersion;
+  const hasRequiredSettings = config.hasRequiredSettings === true;
 
   if (!componentPath || !pluginId) {
     // The else-branch of usePluginPanelKinds guards this, but a defensive
@@ -156,6 +162,9 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
       // plugin's persisted panel re-enables (the panelProps memo doesn't depend
       // on the kind registry).
       <ContentPanel {...panelProps} kind={kindId} chrome={undefined}>
+        {/* Above the view and outside its box, so no plugin layout can cover
+            the way to finish setting the plugin up. */}
+        {hasRequiredSettings && <PluginSetupStrip pluginId={ownerPluginId} />}
         {/* `extensionState` is how the panel store persists a view's spawn
             arguments; the content layer speaks the SDK's presentation-neutral
             `initialArgs` instead, so the mapping happens here at the seam. */}
@@ -201,19 +210,31 @@ interface PluginViewLoadErrorProps {
   message: string;
 }
 
-function PluginViewLoadError({ pluginId, displayName, message }: PluginViewLoadErrorProps) {
+export function PluginViewLoadError({ pluginId, displayName, message }: PluginViewLoadErrorProps) {
   useEffect(() => {
     logWarn("[PluginViewHost] view configuration error", { pluginId, displayName, message });
   }, [pluginId, displayName, message]);
 
   return (
-    <div
-      role="region"
-      aria-label="Plugin view unavailable"
-      className="flex flex-1 flex-col items-center justify-center gap-2 bg-surface-panel p-6 text-text-muted"
-    >
-      <p className="text-sm font-medium text-text-primary">{displayName} unavailable</p>
-      <p className="max-w-sm text-center text-xs text-text-muted">{message}</p>
+    <div role="region" aria-label="Plugin view unavailable" className="flex flex-1 flex-col">
+      <PaneState
+        inFlow
+        className="flex-1"
+        live="alert"
+        icon={<AlertTriangle className="text-status-warning" />}
+        title={`${displayName} unavailable`}
+        description={message}
+      >
+        <Button
+          variant="subtle"
+          size="sm"
+          onClick={() =>
+            void actionService.dispatch("app.pluginManager", undefined, { source: "user" })
+          }
+        >
+          Open plugin manager
+        </Button>
+      </PaneState>
     </div>
   );
 }

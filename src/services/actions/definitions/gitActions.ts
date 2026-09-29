@@ -276,7 +276,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "git.getProjectPulse",
     title: "Get project pulse",
     description:
-      "Summarise a worktree's historical git activity — a commit heatmap, counts over a window, and the current streak. Use this for trends and momentum, not for what is changed right now: read the staging status for the current working tree. Widening the window or asking for the delta against the main branch costs more history to walk, so request those only when needed.",
+      "Summarise a worktree's git history: commit heatmap, counts over a window, current streak. For trends, not current changes. A wider window or the delta against main walks more history, so ask only when needed.",
     category: "git",
     kind: "query",
     danger: "safe",

@@ -160,4 +160,47 @@ describe("SystemRequirementsSection collapsed panel inert", () => {
       Object.assign(healthCheckState, saved);
     }
   });
+
+  // Mid-check the hook reports no fatal failure (nothing has settled). Following
+  // that would unmount the panel and the "Check again" button the user just
+  // pressed, dropping their focus to <body>; the last answer holds instead.
+  it("keeps the failure panel and its re-check mounted while re-checking", () => {
+    const saved = { ...healthCheckState };
+    Object.assign(healthCheckState, { hasFatalFailure: true, allDone: true, isChecking: false });
+    try {
+      const { rerender } = renderSection();
+      const before = document.querySelector('[role="alert"] button');
+      expect(before).not.toBeNull();
+
+      Object.assign(healthCheckState, { hasFatalFailure: false, allDone: false, isChecking: true });
+      rerender(
+        <SystemRequirementsSection onFatalFailureChange={vi.fn()} onCheckingChange={vi.fn()} />
+      );
+      const during = document.querySelector('[role="alert"] button');
+      expect(during).toBe(before);
+      expect(during!.getAttribute("aria-busy")).toBe("true");
+      expect(getPanel().hasAttribute("inert")).toBe(false);
+    } finally {
+      Object.assign(healthCheckState, saved);
+    }
+  });
+
+  it("hands focus to the disclosure when a re-check clears the failure", () => {
+    const saved = { ...healthCheckState };
+    Object.assign(healthCheckState, { hasFatalFailure: true, allDone: true, isChecking: false });
+    try {
+      const { container, rerender } = renderSection();
+      const checkAgain = document.querySelector<HTMLButtonElement>('[role="alert"] button')!;
+      act(() => checkAgain.focus());
+      expect(document.activeElement).toBe(checkAgain);
+
+      Object.assign(healthCheckState, { hasFatalFailure: false, allDone: true, isChecking: false });
+      rerender(
+        <SystemRequirementsSection onFatalFailureChange={vi.fn()} onCheckingChange={vi.fn()} />
+      );
+      expect(document.activeElement).toBe(getToggle(container));
+    } finally {
+      Object.assign(healthCheckState, saved);
+    }
+  });
 });

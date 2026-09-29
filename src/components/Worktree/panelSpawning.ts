@@ -24,10 +24,15 @@ export interface SpawnPanelsOptions {
   onPanelSpawned?: (index: number, panelId: string | null, error?: unknown) => void;
 }
 
+/** Whether any of these recipe terminals launches an agent rather than a shell or preview. */
+export function recipeTerminalsStartAgent(terminals: readonly RecipeTerminal[]): boolean {
+  return terminals.some((t) => t.type !== "terminal" && t.type !== "dev-preview");
+}
+
 export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promise<void> {
   const { terminals, worktreeId, cwd, signal, onPanelSpawned } = options;
 
-  const hasAgent = terminals.some((t) => t.type !== "terminal" && t.type !== "dev-preview");
+  const hasAgent = recipeTerminalsStartAgent(terminals);
 
   let agentSettings = options.agentSettings;
   let clipboardDirectory = options.clipboardDirectory;

@@ -583,6 +583,7 @@ describe("project action hardening", () => {
       "projectIconSvg",
       "resourceEnvironments",
       "daintreeMcpTier",
+      "daintreeMcpSkipConfirmations",
       "browserAllowedHosts",
     ]) {
       expect(entry?.outputSchema).not.toHaveProperty(["properties", hidden]);
@@ -613,7 +614,7 @@ describe("project action hardening", () => {
   it("project.saveSettings strips daintreeMcpTier and exposeDaintreeMcpToAgents to block self-elevation", async () => {
     mocks.projectClient.getSettings.mockResolvedValueOnce({
       runCommands: [],
-      daintreeMcpTier: "workbench",
+      daintreeMcpTier: "core",
     });
     mocks.projectClient.saveSettings.mockResolvedValueOnce(undefined);
     const { service } = buildService(registerProjectActions);
@@ -624,7 +625,7 @@ describe("project action hardening", () => {
         projectId: "project-1",
         settings: {
           devServerCommand: "vite",
-          daintreeMcpTier: "system",
+          daintreeMcpTier: "full",
           exposeDaintreeMcpToAgents: true,
         },
       },
@@ -633,9 +634,56 @@ describe("project action hardening", () => {
 
     expect(result).toEqual({ ok: true, result: undefined });
     const saved = mocks.projectClient.saveSettings.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(saved.daintreeMcpTier).toBe("workbench");
+    expect(saved.daintreeMcpTier).toBe("core");
     expect(saved.exposeDaintreeMcpToAgents).toBeUndefined();
     expect(saved.devServerCommand).toBe("vite");
+  });
+
+  it("project.saveSettings stops an agent granting itself daintreeMcpSkipConfirmations", async () => {
+    mocks.projectClient.getSettings.mockResolvedValueOnce({
+      runCommands: [],
+      daintreeMcpTier: "full",
+    });
+    mocks.projectClient.saveSettings.mockResolvedValueOnce(undefined);
+    const { service } = buildService(registerProjectActions);
+
+    const result = await service.dispatch(
+      "project.saveSettings",
+      {
+        projectId: "project-1",
+        settings: { devServerCommand: "vite", daintreeMcpSkipConfirmations: true },
+      },
+      { source: "agent" }
+    );
+
+    expect(result).toEqual({ ok: true, result: undefined });
+    const saved: unknown = mocks.projectClient.saveSettings.mock.calls[0]?.[1];
+    expect(saved).not.toHaveProperty("daintreeMcpSkipConfirmations");
+    expect(saved).toHaveProperty("devServerCommand", "vite");
+  });
+
+  it("project.saveSettings cannot clear a user's daintreeMcpSkipConfirmations and keeps it through unrelated writes", async () => {
+    mocks.projectClient.getSettings.mockResolvedValueOnce({
+      runCommands: [],
+      daintreeMcpTier: "full",
+      daintreeMcpSkipConfirmations: true,
+    });
+    mocks.projectClient.saveSettings.mockResolvedValueOnce(undefined);
+    const { service } = buildService(registerProjectActions);
+
+    const result = await service.dispatch(
+      "project.saveSettings",
+      {
+        projectId: "project-1",
+        settings: { devServerCommand: "vite", daintreeMcpSkipConfirmations: false },
+      },
+      { source: "agent" }
+    );
+
+    expect(result).toEqual({ ok: true, result: undefined });
+    const saved: unknown = mocks.projectClient.saveSettings.mock.calls[0]?.[1];
+    expect(saved).toHaveProperty("daintreeMcpSkipConfirmations", true);
+    expect(saved).toHaveProperty("devServerCommand", "vite");
   });
 
   it("project.muteNotifications surfaces saveSettings failures as { ok: false }", async () => {

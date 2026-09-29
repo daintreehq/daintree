@@ -1,0 +1,41 @@
+{
+  "name": "acme.welcome-tour",
+  "version": "0.1.0",
+  "displayName": "Acme Site Builder",
+  "description": "Installed-plugin fixture carrying a two-chapter welcome tour: a hand-written scene module, manifest timing, captions and one declared remote narration host.",
+  "engines": {
+    "daintree": ">=0.38.0"
+  },
+  "capabilities": [],
+  "contributes": {
+    "tours": [
+      {
+        "id": "welcome",
+        "title": "Welcome Tour",
+        "componentPath": "dist/tour.js",
+        "audioHosts": ["cdn.example.com"],
+        "chapters": [
+          {
+            "id": "intro",
+            "duration": 6,
+            "cues": { "title": 0.5, "pages": 2.5 },
+            "captions": [
+              { "start": 0, "end": 2.5, "text": "This is the Acme site builder." },
+              { "start": 2.5, "end": 6, "text": "Every page you add shows up here." }
+            ],
+            "audioUrl": "tours/welcome/intro.ogg",
+            "narrationHash": "3fa9c21e"
+          },
+          {
+            "id": "publish",
+            "duration": 5,
+            "cues": { "publish": 1 },
+            "captions": [{ "start": 0, "end": 5, "text": "Publish when you're ready." }],
+            "audioUrl": "https://cdn.example.com/tours/welcome/publish.ogg",
+            "narrationHash": "0b7d1c44"
+          }
+        ]
+      }
+    ]
+  }
+}

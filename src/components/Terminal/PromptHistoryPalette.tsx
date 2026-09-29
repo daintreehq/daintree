@@ -4,7 +4,10 @@ import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { KbdChord } from "@/components/ui/Kbd";
-import { SegmentedToggle, type SegmentedToggleOption } from "@/components/ui/SegmentedToggle";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
 import { HighlightedText } from "@/components/ui/HighlightedText";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import {
@@ -32,9 +35,9 @@ const SCOPE_HINT_ID = "prompt-history-scope-hint";
 
 const SCOPE_TITLE = `Switch scope (${isMac() ? "⌘R" : "Ctrl+R"})`;
 
-const SCOPE_OPTIONS: SegmentedToggleOption<HistoryScope>[] = [
-  { value: "project", label: "This project", title: SCOPE_TITLE },
-  { value: "global", label: "All projects", title: SCOPE_TITLE },
+const SCOPE_OPTIONS: SegmentedRadioOption<HistoryScope>[] = [
+  { value: "project", label: "This project", tooltip: SCOPE_TITLE },
+  { value: "global", label: "All projects", tooltip: SCOPE_TITLE },
 ];
 
 interface PromptHistoryRowProps {
@@ -86,7 +89,7 @@ export function PromptHistoryRow({
       className={cn(
         PALETTE_ROW_CLASS,
         "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
-        "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
+        "text-text-secondary"
       )}
       onClick={() => onSelect(item)}
     >
@@ -216,12 +219,12 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
             : "Showing every project's prompts."}{" "}
           {SCOPE_TITLE}.
         </span>
-        <SegmentedToggle
+        <SegmentedRadioGroup
           options={SCOPE_OPTIONS}
           value={scope}
           onChange={setScope}
           density="compact"
-          ariaLabel="History scope"
+          aria-label="History scope"
         />
       </div>
     </div>

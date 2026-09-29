@@ -20,6 +20,32 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 // Render the overflow popover open and in a tagged container so the inline
 // primary action (outside) can be told apart from the demoted items (inside).
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuTrigger: ({
+    children,
+    asChild,
+    ...props
+  }: React.ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }) =>
+    asChild ? <>{children}</> : <button {...props}>{children}</button>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="overflow-content">{children}</div>
+  ),
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    destructive: _destructive,
+    ...props
+  }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+    onSelect?: (event: Event) => void;
+    destructive?: boolean;
+  }) => (
+    <button type="button" onClick={() => onSelect?.(new Event("select"))} {...props}>
+      {children}
+    </button>
+  ),
+}));
+
 vi.mock("@/components/ui/popover", () => ({
   Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   PopoverAnchor: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -53,6 +79,7 @@ const ALL_SPAWN_ERROR_CODES: readonly SpawnErrorCode[] = [
   "DISCONNECTED",
   "PENDING_SPAWNS_CAPPED",
   "TERMINAL_ALREADY_LIVE",
+  "SPAWN_TIMEOUT",
   "UNKNOWN",
 ] as const;
 
@@ -132,6 +159,7 @@ describe("SpawnErrorBanner", () => {
     ["ENOTDIR", "Invalid working directory"],
     ["PENDING_SPAWNS_CAPPED", "Too many pending restarts"],
     ["TERMINAL_ALREADY_LIVE", "Terminal already running"],
+    ["SPAWN_TIMEOUT", "Terminal hasn't started"],
     ["UNKNOWN", "Couldn't start terminal"],
   ] as const)("renders the expected title for %s", (code, expected) => {
     renderBanner(code);
@@ -280,7 +308,9 @@ describe("SpawnErrorBanner", () => {
     renderBanner("ENOTDIR", { isRestarting: true, onRetry });
     const retry = screen.getByRole("button", { name: /retry starting terminal/i });
     expect(overflow().contains(retry)).toBe(true);
-    expect(retry.hasAttribute("disabled")).toBe(true);
+    // Unavailable to activation, but still focusable: a busy row is never
+    // disabled outright, so focus stays inside the open menu.
+    expect(retry.getAttribute("aria-disabled")).toBe("true");
     // Busy, not just unavailable: the retry is in flight.
     expect(retry.getAttribute("aria-busy")).toBe("true");
     fireEvent.click(retry);

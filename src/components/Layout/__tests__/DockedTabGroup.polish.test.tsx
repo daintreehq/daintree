@@ -289,6 +289,50 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
     vi.useRealTimers();
   });
 
+  describe("document tab keyboard contract", () => {
+    const panels = () => [
+      makePanel({ id: "t-1" }),
+      makePanel({ id: "t-2" }),
+      makePanel({ id: "t-3" }),
+    ];
+
+    it("moves focus along the strip without activating a tab", () => {
+      const { getByTestId } = render(
+        <DockedTabGroup group={makeGroup(["t-1", "t-2", "t-3"], "t-1")} panels={panels()} />
+      );
+      getByTestId("tab-t-1").focus();
+      act(() => {
+        getByTestId("tab-t-1").dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })
+        );
+      });
+      expect(document.activeElement).toBe(getByTestId("tab-t-2"));
+      expect(setActiveTabMock).not.toHaveBeenCalled();
+    });
+
+    it.each(["Delete", "Backspace"])("closes the focused tab on %s", (key) => {
+      const { getByTestId } = render(
+        <DockedTabGroup group={makeGroup(["t-1", "t-2", "t-3"], "t-1")} panels={panels()} />
+      );
+      getByTestId("tab-t-2").focus();
+      act(() => {
+        getByTestId("tab-t-2").dispatchEvent(
+          new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })
+        );
+      });
+      expect(trashPanelMock).toHaveBeenCalledWith("t-2");
+    });
+
+    it("names the popover body as the region the tabs switch", () => {
+      const { container } = render(
+        <DockedTabGroup group={makeGroup(["t-1", "t-2", "t-3"], "t-1")} panels={panels()} />
+      );
+      const body = container.querySelector('[role="tabpanel"]');
+      expect(body).not.toBeNull();
+      expect(body!.getAttribute("aria-labelledby")).toContain("t-1");
+    });
+  });
+
   describe("duplicate-tab button icon (item 1)", () => {
     it("renders the CopyPlus glyph, not the generic Plus", () => {
       const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
@@ -356,7 +400,7 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
   });
 
   describe("overflow dropdown active marker (item 3)", () => {
-    it("marks the active row with the leading accent bar and inactive rows without it", () => {
+    it("marks the active row with a check, the committed-value mark, and inactive rows without it", () => {
       mockHiddenTabIds = new Set<string>(["t-2", "t-3"]);
       mockActiveDockTerminalId = "t-2";
       mockTabGroups.set("g-1", makeGroup(["t-1", "t-2", "t-3"], "t-2"));
@@ -375,7 +419,9 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
       const activeRow = rows[0]!;
       expect(activeRow.getAttribute("aria-current")).toBe("true");
       expect(activeRow.className).toContain("font-medium");
-      expect(activeRow.className).toContain("before:bg-accent-primary");
+      expect(activeRow.querySelector("svg.lucide-check")).not.toBeNull();
+      // A rail would read as the highlighted row, not the tab on screen.
+      expect(activeRow.className).not.toContain("before:");
 
       // The non-active hidden row must NOT carry the active marker.
       const allRows = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).filter(
@@ -383,7 +429,7 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
       );
       expect(allRows.length).toBeGreaterThan(0);
       for (const row of allRows) {
-        expect(row.className).not.toContain("before:bg-accent-primary");
+        expect(row.querySelector("svg.lucide-check")).toBeNull();
         expect(row.className).not.toContain("font-medium");
       }
     });

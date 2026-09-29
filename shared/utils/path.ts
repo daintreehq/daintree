@@ -100,6 +100,31 @@ export function isPathInside(child: string, parent: string): boolean {
 }
 
 /**
+ * One spelling per directory for comparison: separators, trailing slashes, NFC
+ * vs NFD and, when `caseInsensitive`, letter case all fold away. The caller
+ * decides case sensitivity because renderer code has no `process.platform` to
+ * decide it from. Lexical only, like `isPathInside`.
+ */
+export function pathComparisonKey(value: string, options: { caseInsensitive: boolean }): string {
+  const normalized = normalize(value.normalize("NFC"));
+  return options.caseInsensitive ? normalized.toLowerCase() : normalized;
+}
+
+/**
+ * True when `child` sits strictly below `parent` — never when they are the same
+ * directory — however the two are spelled (see `pathComparisonKey`).
+ */
+export function isPathStrictlyInside(
+  child: string,
+  parent: string,
+  options: { caseInsensitive: boolean }
+): boolean {
+  const childKey = pathComparisonKey(child, options);
+  const parentKey = pathComparisonKey(parent, options);
+  return childKey !== parentKey && isPathInside(childKey, parentKey);
+}
+
+/**
  * Strip the worktree root off an absolute path. `isPathInside` is what makes
  * this safe: a raw `startsWith` accepts a sibling whose name merely extends the
  * root (`/repo-other/x.ts` under `/repo`, which then mangles into `-other/x.ts`)

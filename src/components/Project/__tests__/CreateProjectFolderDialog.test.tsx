@@ -52,10 +52,40 @@ vi.mock("@/components/ui/AppDialog", () => {
   AppDialog.Title = ({ children }: SectionProps) => <h2>{children}</h2>;
   AppDialog.CloseButton = () => <button type="button">close</button>;
   AppDialog.Body = ({ children }: SectionProps) => <div>{children}</div>;
-  AppDialog.Footer = ({ children, hint }: SectionProps & { hint?: ReactNode }) => (
+  interface FooterAction {
+    label: string;
+    onClick: () => void;
+    disabled?: boolean;
+  }
+  // Mirrors the real footer's contract: an unavailable action is aria-disabled
+  // and vetoes its own click, rather than natively disabled.
+  const renderAction = (action?: FooterAction) =>
+    action ? (
+      <button
+        type="button"
+        aria-disabled={action.disabled || undefined}
+        onClick={() => {
+          if (!action.disabled) action.onClick();
+        }}
+      >
+        {action.label}
+      </button>
+    ) : null;
+  AppDialog.Footer = ({
+    children,
+    hint,
+    primaryAction,
+    secondaryAction,
+  }: SectionProps & {
+    hint?: ReactNode;
+    primaryAction?: FooterAction;
+    secondaryAction?: FooterAction;
+  }) => (
     <div>
       {hint}
       {children}
+      {renderAction(secondaryAction)}
+      {renderAction(primaryAction)}
     </div>
   );
 
@@ -119,9 +149,9 @@ describe("CreateProjectFolderDialog validation", () => {
     // Typing never interrupts: the live check is announced through the field.
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByTitle("/Users/test/helios:dashboard")).toBeNull();
-    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Create folder" }).disabled).toBe(
-      true
-    );
+    expect(
+      screen.getByRole("button", { name: "Create folder" }).getAttribute("aria-disabled")
+    ).toBe("true");
   });
 });
 

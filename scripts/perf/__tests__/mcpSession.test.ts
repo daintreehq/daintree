@@ -46,7 +46,7 @@ describe("mcp session perf fixture", () => {
     "completes a real MCP handshake and advertises the shipped instructions",
     async () => {
       const { mods, manifest } = await harness();
-      const session = await openSession(mods, manifest, { tier: "system" });
+      const session = await openSession(mods, manifest, { tier: "full" });
       try {
         expect(session.client.getInstructions()).toBe(mods.MCP_SERVER_INSTRUCTIONS);
         const capabilities = session.client.getServerCapabilities();
@@ -133,9 +133,9 @@ describe("mcp session perf fixture", () => {
     "refuses every request once the session is revoked",
     async () => {
       const { mods, manifest } = await harness();
-      const session = await openSession(mods, manifest, { tier: "system" });
+      const session = await openSession(mods, manifest, { tier: "full" });
       try {
-        const target = permittedCallSample(manifest, "system", 1)[0]!;
+        const target = permittedCallSample(manifest, "full", 1)[0]!;
         expect(await probeCall(session, target, {})).toMatchObject({ ok: true });
         session.revoke();
         expect(await probeCall(session, target, {})).toMatchObject({
@@ -154,7 +154,7 @@ describe("mcp session perf fixture", () => {
     "singleflights duplicate creations and replays the original result",
     async () => {
       const { mods, manifest } = await harness();
-      const session = await openSession(mods, manifest, { tier: "system" });
+      const session = await openSession(mods, manifest, { tier: "full" });
       try {
         const args = { cwd: "/tmp/daintree-perf", requestKey: "unit-test-key" };
         const concurrent = await Promise.all([
@@ -192,7 +192,7 @@ describe("mcp session perf fixture", () => {
     "records ownership from the dispatch envelope and refuses a foreign id",
     async () => {
       const { mods, manifest } = await harness();
-      const session = await openSession(mods, manifest, { tier: "system" });
+      const session = await openSession(mods, manifest, { tier: "full" });
       try {
         const created = await session.client.callTool({
           name: "terminal.new",
@@ -222,9 +222,9 @@ describe("mcp session perf fixture", () => {
       // the client's AJV pass. Every other reply this fixture builds is valid,
       // so nothing else in the family can tell that pass from a no-op.
       const { mods, manifest } = await harness();
-      const session = await openSession(mods, manifest, { tier: "system" });
+      const session = await openSession(mods, manifest, { tier: "full" });
       try {
-        const target = permittedCallSample(manifest, "system", 40).find(
+        const target = permittedCallSample(manifest, "full", 40).find(
           (id) =>
             !mods.MCP_DEDUP_ALLOWLIST.has(id) &&
             requiredOutputKeys(manifest.byId.get(id)?.outputSchema).length > 0
@@ -254,8 +254,8 @@ describe("mcp session perf fixture", () => {
       // what makes twelve concurrent owners observable.
       const { mods, manifest } = await harness();
       const store = new mods.SessionStore(() => {});
-      const first = await openSession(mods, manifest, { tier: "system", store });
-      const second = await openSession(mods, manifest, { tier: "system", store });
+      const first = await openSession(mods, manifest, { tier: "full", store });
+      const second = await openSession(mods, manifest, { tier: "full", store });
       try {
         const created: string[] = [];
         for (const session of [first, second]) {
@@ -285,8 +285,8 @@ describe("mcp session perf fixture", () => {
     async () => {
       const { mods, manifest } = await harness();
       const store = new mods.SessionStore(() => {});
-      const first = await openSession(mods, manifest, { tier: "system", store });
-      const second = await openSession(mods, manifest, { tier: "system", store });
+      const first = await openSession(mods, manifest, { tier: "full", store });
+      const second = await openSession(mods, manifest, { tier: "full", store });
       try {
         const ids: unknown[] = [];
         for (const session of [first, second]) {

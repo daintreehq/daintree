@@ -4,6 +4,15 @@ import { act, render, fireEvent } from "@testing-library/react";
 import { dispatchEscape, registerEscape } from "@/lib/escapeStack";
 import { describe, expect, it, vi } from "vitest";
 
+// The app root supplies the TooltipProvider. The trigger renders its child
+// as-is; the content is dropped so tooltip text can't collide with queries.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
+
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
 
 // Same pass-through mock as PanelHeader.test.tsx — the Radix dropdown is

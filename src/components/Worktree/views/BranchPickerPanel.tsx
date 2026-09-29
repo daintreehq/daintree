@@ -1,9 +1,11 @@
 import { PopoverContent } from "@/components/ui/popover";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { Button } from "@/components/ui/button";
 import { HighlightedText } from "@/components/ui/HighlightedText";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
+import { clearSearchBeforeDismiss } from "@/components/ui/SearchField";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
@@ -75,10 +77,15 @@ export function BranchPickerPanel({
       // and ignored this; re-measured in the harness, the wrapper reports the
       // trigger's own width (546px for both), so the declaration does hold.
       className="w-[var(--radix-popover-trigger-width)] p-0"
+      motion="drop"
       align="start"
       // The popover portals out of the dialog's subtree; without this its own
-      // Escape would also dismiss the dialog behind it.
-      onEscapeKeyDown={(e) => e.stopPropagation()}
+      // Escape would also dismiss the dialog behind it. A query clears before
+      // the picker closes, as in every other search field.
+      onEscapeKeyDown={(e) => {
+        e.stopPropagation();
+        clearSearchBeforeDismiss(e, inputRef.current, () => setQuery(""));
+      }}
       onOpenAutoFocus={(e) => {
         // Cold mount: the lazy Radix chunk can land after the hook's rAF focus
         // attempt has already run, so claim focus here too.
@@ -91,6 +98,10 @@ export function BranchPickerPanel({
         placeholder={searchPlaceholder}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
+        // "Clear", not the family default: the no-match state owns "Clear
+        // search", and two buttons with one name are indistinguishable.
+        clearLabel="Clear"
+        onClear={() => setQuery("")}
         onKeyDown={handleKeyDown}
         role="combobox"
         aria-label={searchAriaLabel}
@@ -113,13 +124,9 @@ export function BranchPickerPanel({
               scale="popover"
               title={`No matches for "${trimmedQuery}"`}
               action={
-                <button
-                  type="button"
-                  onClick={() => setQuery("")}
-                  className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
-                >
+                <Button variant="subtle" size="sm" onClick={() => setQuery("")}>
                   Clear search
-                </button>
+                </Button>
               }
             />
           ) : (
@@ -220,20 +227,41 @@ function BranchPickerRowItem({
         <HighlightedText text={row.name} indices={row.matchRanges} />
       </span>
       {/* `data-branch-meta` so a test can assert a badge is here rather than
-          anywhere in the row — `origin/main`'s NAME contains "origin" too. */}
+          anywhere in the row — `origin/main`'s NAME contains "origin" too.
+          Weighted to shrink ahead of the name, down to its own minimum — which
+          the worktree holder keeps small, so a crowded row spends the holder
+          before it touches the branch name. Shrink is proportional, and at a
+          weight of 100 the name's sub-pixel share was still enough to trip its
+          ellipsis; this one rounds that share to nothing. */}
       <span
         data-branch-meta
-        className="flex items-center gap-2 shrink-0 text-xs text-text-secondary"
+        className="flex shrink-[10000] items-center gap-2 whitespace-nowrap text-xs text-text-secondary"
       >
         {showCurrentBadge && row.isCurrent && <span>current</span>}
         {row.isRemote && row.remoteName && <span>{row.remoteName}</span>}
         {lastCommit && <span>{lastCommit}</span>}
         {row.inUseWorktree && (
-          <span
-            className="text-status-warning"
-            title={`In use by worktree: ${row.inUseWorktree.name}`}
-          >
-            in use
+          // Inline rather than a tooltip: the cursor row is never DOM-focused, so
+          // a keyboard user could not reach one. A linked worktree is usually
+          // named after its branch, and repeating the row's own name says
+          // nothing to the eye, so the holder is drawn only when it differs —
+          // but it is always spoken, so the relationship is never left implied.
+          <span data-in-use className="flex min-w-0 items-center gap-1">
+            <span className="text-status-warning">in use</span>{" "}
+            {row.inUseWorktree.name === row.name ? (
+              <span className="sr-only">by worktree {row.inUseWorktree.name}</span>
+            ) : (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="sr-only">by worktree</span>{" "}
+                {/* Clamped rather than `truncate`: a nowrap ellipsis still
+                    reports the whole name as its minimum width, which pins the
+                    holder and leaves the branch name to absorb the squeeze. */}
+                <span className="line-clamp-1 min-w-16 max-w-32 break-all whitespace-normal">
+                  {row.inUseWorktree.name}
+                </span>
+              </>
+            )}
           </span>
         )}
         {isSelectedValue && (

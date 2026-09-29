@@ -5,6 +5,8 @@ import type { SimpleGit } from "simple-git";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { Worktree } from "../../../shared/types/worktree.js";
+/** The private sweep, reachable for spying. */
+type SweepHost = { sweepPrunableWorktreeEntries: () => Promise<void> };
 
 const TEST_WORKTREE_PATH = pathResolve("/test/worktree");
 
@@ -212,19 +214,23 @@ describe("WorkspaceService external worktree removal", () => {
     return monitor;
   }
 
-  describe("discoverAndSyncWorktrees() conditional prune (#6669)", () => {
-    it("prunes and re-lists when the list carries a prunable entry, clearing externally-deleted worktrees", async () => {
+  describe("discoverAndSyncWorktrees() conditional cleanup (#6669)", () => {
+    it("sweeps and re-lists when the list carries a prunable entry, clearing externally-deleted worktrees", async () => {
       createAndRegisterMonitor();
       expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(true);
 
       const callOrder: string[] = [];
       let pruned = false;
+      // Per-entry behaviour is covered against a real registry in
+      // `WorkspaceService.pruneSweep.test.ts`; this pins the ordering.
+      const sweepSpy = vi
+        .spyOn(service as unknown as SweepHost, "sweepPrunableWorktreeEntries")
+        .mockImplementation(async () => {
+          callOrder.push("sweep");
+          pruned = true;
+        });
       mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
         callOrder.push(args.join(" "));
-        if (args[0] === "worktree" && args[1] === "prune") {
-          pruned = true;
-          return undefined;
-        }
         if (args[0] === "worktree" && args[1] === "list") {
           if (pruned) {
             // Post-prune list: phantom worktree is gone, only main remains.
@@ -258,10 +264,13 @@ describe("WorkspaceService external worktree removal", () => {
 
       await service["discoverAndSyncWorktrees"]();
 
-      // List-first, prune only on a prunable marker, then re-list so the
-      // sync sees the cleaned topology.
+      // List-first, sweep only on a prunable marker, then re-list so the
+      // sync sees the cleaned topology — and never a bare `worktree prune`,
+      // which cannot spare an entry whose submodule stores hold commits.
+      expect(sweepSpy).toHaveBeenCalledTimes(1);
+      expect(callOrder.some((c) => c.startsWith("worktree prune"))).toBe(false);
       const firstListIdx = callOrder.findIndex((c) => c.startsWith("worktree list"));
-      const pruneIdx = callOrder.findIndex((c) => c.startsWith("worktree prune"));
+      const pruneIdx = callOrder.indexOf("sweep");
       const secondListIdx = callOrder.findIndex(
         (c, i) => i > pruneIdx && c.startsWith("worktree list")
       );
@@ -278,7 +287,8 @@ describe("WorkspaceService external worktree removal", () => {
       );
     });
 
-    it("skips the prune spawn entirely on a quiet cycle with nothing prunable", async () => {
+    it("skips the sweep entirely on a quiet cycle with nothing prunable", async () => {
+      const sweepSpy = vi.spyOn(service as unknown as SweepHost, "sweepPrunableWorktreeEntries");
       const callOrder: string[] = [];
       mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
         callOrder.push(args.join(" "));
@@ -297,31 +307,32 @@ describe("WorkspaceService external worktree removal", () => {
       await service["discoverAndSyncWorktrees"]();
 
       expect(callOrder.some((c) => c.startsWith("worktree list"))).toBe(true);
-      expect(callOrder.some((c) => c.startsWith("worktree prune"))).toBe(false);
+      expect(sweepSpy).not.toHaveBeenCalled();
     });
   });
 
-  describe("discoverAndSyncWorktrees() prune failure handling (#6669)", () => {
-    it("continues refresh when 'git worktree prune' itself fails", async () => {
+  describe("discoverAndSyncWorktrees() cleanup failure handling (#6669)", () => {
+    it("continues refresh with the original list when the cleanup sweep itself fails", async () => {
       createAndRegisterMonitor();
 
-      let listCalled = false;
+      let listCalls = 0;
+      const sweepSpy = vi
+        .spyOn(service as unknown as SweepHost, "sweepPrunableWorktreeEntries")
+        .mockRejectedValue(new Error("EPERM: operation not permitted, scandir"));
       mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
-        if (args[0] === "worktree" && args[1] === "prune") {
-          throw new Error("fatal: failed to prune (EPERM)");
-        }
         if (args[0] === "worktree" && args[1] === "list") {
-          listCalled = true;
-          // List still includes the registered monitor — refresh succeeds,
-          // sync runs, monitor remains registered (no phantom to clean up).
+          listCalls++;
+          // The prunable marker is what sends refresh into the sweep; once it
+          // fails, the sync runs on this same list and the entry stays.
           return [
             "worktree /test/root",
             "HEAD aaaaaaaaaaaaaaaaaaaa",
             "branch refs/heads/main",
             "",
-            "worktree /test/worktree",
+            `worktree ${TEST_WORKTREE_PATH}`,
             "HEAD bbbbbbbbbbbbbbbbbbbb",
             "branch refs/heads/feature/test",
+            "prunable gitdir file points to non-existent location",
             "",
           ].join("\n");
         }
@@ -331,7 +342,8 @@ describe("WorkspaceService external worktree removal", () => {
       service["listService"].invalidateCache();
 
       await expect(service["discoverAndSyncWorktrees"]()).resolves.not.toThrow();
-      expect(listCalled).toBe(true);
+      expect(sweepSpy).toHaveBeenCalledTimes(1);
+      expect(listCalls).toBe(1);
       expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(true);
     });
   });

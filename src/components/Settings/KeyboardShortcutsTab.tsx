@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { cn } from "@/lib/utils";
 import {
   keybindingService,
   type KeyScope,
@@ -14,6 +13,7 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { KbdChord } from "@/components/ui/Kbd";
+import { HighlightedText, substringMatchIndices } from "@/components/ui/HighlightedText";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { KeybindingProfileActions } from "./KeybindingProfileActions";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
@@ -58,6 +58,8 @@ type RowError = Extract<ShortcutError, { rowId: string }>;
 
 interface ShortcutRowProps {
   binding: ShortcutBinding;
+  /** The tab's search, trimmed and lowercased; the row marks where it matched. */
+  query: string;
   isEditing: boolean;
   /** Put focus back on this row's binding once its editor closes. */
   restoreFocus: boolean;
@@ -98,8 +100,14 @@ function ShortcutRowError({
   );
 }
 
+/** A label or description with the run the tab's substring search matched marked. */
+function Matched({ text, query }: { text: string; query: string }) {
+  return <HighlightedText text={text} indices={substringMatchIndices(text, query)} />;
+}
+
 function ShortcutRow({
   binding,
+  query,
   isEditing,
   restoreFocus,
   error,
@@ -124,7 +132,8 @@ function ShortcutRow({
     return (
       <div data-testid="shortcut-row">
         <SettingsRow
-          label={name}
+          label={<Matched text={name} query={query} />}
+          labelText={name}
           layout="stacked"
           isModified={binding.isOverridden}
           control={
@@ -151,24 +160,21 @@ function ShortcutRow({
     <div data-testid="shortcut-row">
       <SettingsRow
         className="py-2"
-        label={name}
-        description={binding.scopeNote}
+        label={<Matched text={name} query={query} />}
+        labelText={name}
+        description={binding.scopeNote && <Matched text={binding.scopeNote} query={query} />}
         isModified={binding.isOverridden}
         onReset={onReset}
         onRowClick={onEdit}
         control={
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
+              <Button
                 ref={editRef}
-                type="button"
+                variant="subtle"
+                size="xs"
                 onClick={onEdit}
-                className={cn(
-                  "inline-flex items-center h-6 px-2 rounded-[var(--radius-sm)]",
-                  "ring-1 ring-border-strong text-text-secondary",
-                  "hover:bg-overlay-soft hover:text-text-primary",
-                  "transition-colors duration-150 ease-out"
-                )}
+                className="px-2 font-normal"
               >
                 {binding.effectiveCombo ? (
                   <>
@@ -191,7 +197,7 @@ function ShortcutRow({
                     Add shortcut<span className="sr-only"> for {name}</span>
                   </span>
                 )}
-              </button>
+              </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
               {binding.effectiveCombo ? "Change shortcut" : "Add shortcut"}
@@ -534,6 +540,7 @@ export function KeyboardShortcutsTab() {
                 <ShortcutRow
                   key={binding.rowId}
                   binding={binding}
+                  query={query}
                   isEditing={editingRowId === binding.rowId}
                   restoreFocus={focusRowId === binding.rowId}
                   error={rowError}
@@ -592,8 +599,9 @@ export function KeyboardShortcutsTab() {
               <SettingsRow
                 key={fixed.label}
                 className="py-2"
-                label={fixed.label}
-                description={fixed.description}
+                label={<Matched text={fixed.label} query={query} />}
+                labelText={fixed.label}
+                description={<Matched text={fixed.description} query={query} />}
                 control={
                   <span className="inline-flex items-center gap-2 px-2">
                     {fixed.keys.map((key, index) => (
@@ -647,9 +655,9 @@ export function KeyboardShortcutsTab() {
 
       <ConfirmDialog
         isOpen={isResetDialogOpen}
-        onClose={isResetting ? undefined : handleCancelReset}
+        onClose={handleCancelReset}
         title="Reset keyboard shortcuts?"
-        description={`${overrideCount} customized ${overrideCount === 1 ? "shortcut goes" : "shortcuts go"} back to ${overrideCount === 1 ? "its default" : "their defaults"}. This can't be undone, but you can export a profile first.`}
+        description={`${overrideCount} customized ${overrideCount === 1 ? "shortcut goes" : "shortcuts go"} back to ${overrideCount === 1 ? "its default" : "their defaults"}. Export a profile first to keep a copy you can import later.`}
         confirmLabel="Reset shortcuts"
         cancelLabel="Cancel"
         onConfirm={handleConfirmReset}

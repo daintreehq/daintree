@@ -166,7 +166,7 @@ vi.mock("../persistence/auditRingStore.js", () => ({
   },
 }));
 
-const paneTokenTiers = vi.hoisted(() => new Map<string, "workbench" | "action" | "system">());
+const paneTokenTiers = vi.hoisted(() => new Map<string, "core" | "full">());
 
 vi.mock("../McpPaneConfigService.js", () => ({
   mcpPaneConfigService: {
@@ -504,7 +504,7 @@ describe("McpServerService", () => {
 
     it("getAuditDiagnostics reads the owned ring passively, before the server starts (#12508)", () => {
       const audit = service._auditService;
-      const append = (toolId: string, tier: "action" | "external") =>
+      const append = (toolId: string, tier: "core" | "external") =>
         audit.appendRecord({
           toolId,
           sessionId: "sess-1",
@@ -514,7 +514,7 @@ describe("McpServerService", () => {
           outcome: { kind: "result", value: { ok: true, result: null } },
           argsSummary: "{}",
         });
-      for (let i = 0; i < 50; i++) append("tool.a", "action");
+      for (let i = 0; i < 50; i++) append("tool.a", "core");
       service.getAuditStats(); // seed the first-seen baseline
       append("tool.new", "external");
 

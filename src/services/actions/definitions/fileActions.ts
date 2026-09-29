@@ -40,6 +40,12 @@ const viewArgsSchema = z.object({
     .describe('Initial view mode; defaults to "source". "rendered" applies to Markdown and HTML.'),
   line: z.number().int().positive().optional().describe("1-based line to scroll to."),
   col: z.number().int().positive().optional().describe("1-based column to scroll to."),
+  confineToRoot: z
+    .boolean()
+    .optional()
+    .describe(
+      "Show the file only if its real path, symlinks resolved, is inside rootPath. Requires rootPath."
+    ),
 });
 
 const openDiffArgsSchema = z.object({
@@ -191,7 +197,11 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
       },
     ],
     run: async (args: unknown) => {
-      const { path, rootPath, worktreeId, viewMode, line } = viewArgsSchema.parse(args);
+      const { path, rootPath, worktreeId, viewMode, line, confineToRoot } =
+        viewArgsSchema.parse(args);
+      if (confineToRoot && !rootPath) {
+        throw new Error("confineToRoot needs a rootPath to confine the file to");
+      }
       // Resolve before creating the record, matching file.openPanel: the panel
       // stores an absolute path and has no root to resolve against later.
       const absolutePath = resolveFilePanelPath(path, rootPath);
@@ -207,6 +217,9 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
         ...(fileName && { title: fileName }),
         ...(effectiveViewMode && { fileViewMode: effectiveViewMode }),
         ...(line != null && { initialLine: line }),
+        // The viewer's own root choice falls back to the file's directory,
+        // which a directory symlink would carry outside rootPath.
+        ...(confineToRoot && rootPath && { fileContainmentRoot: rootPath }),
       });
       if (!panelId) {
         throw new Error("Could not open the file viewer");

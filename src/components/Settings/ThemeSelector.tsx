@@ -264,12 +264,6 @@ export function ThemeSelector<T extends { id: string }>({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onClear={() => setQuery("")}
-          onKeyDown={(e) => {
-            if (e.key === "Escape" && query) {
-              e.stopPropagation();
-              setQuery("");
-            }
-          }}
           placeholder={searchPlaceholder}
           aria-label={searchLabel}
         />

@@ -20,7 +20,10 @@ describe("AppLayout theme browser mount gate — issue #5738", () => {
     // it as the mount gate produces a chicken-and-egg deadlock (the regression
     // from PR #5721). The gate must be driven by the store's isOpen flag.
     expect(source).toContain("const themeBrowserOpen = useThemeBrowserStore((s) => s.isOpen)");
-    expect(source).toMatch(/\{themeBrowserOpen &&\s*\n\s*createPortal\(/);
+    // The portal stays mounted through the sheet's exit, so it is gated on the
+    // presence the store flag drives rather than on the flag itself.
+    expect(source).toMatch(/useAnimatedPresence\(\{\s*isOpen: themeBrowserOpen,/);
+    expect(source).toMatch(/\{themeBrowserRendered &&\s*\n\s*createPortal\(/);
   });
 
   it("keeps the overlay-claim variable for inert on blocked wrappers", () => {

@@ -11,7 +11,7 @@ export type AuthorityRequest =
   | { type: "init"; cols: number; rows: number; scrollback: number }
   | { type: "write"; data: string | Uint8Array }
   | { type: "resize"; cols: number; rows: number }
-  | { type: "restore"; serialized: string }
+  | { type: "restore"; serialized: string; pendingEscapeTail?: string | null }
   | { type: "snapshot"; requestId: number; boundedScrollbackLines?: number }
   // Live-ingest control (issue #10960). `attach-port` is only meaningful on a
   // real Worker transport — the dedicated pty-host MessagePort rides the
@@ -81,7 +81,7 @@ export class AuthorityEndpoint {
           this.requireAuthority().resize(request.cols, request.rows);
           return;
         case "restore":
-          this.requireAuthority().restore(request.serialized);
+          this.requireAuthority().restore(request.serialized, request.pendingEscapeTail);
           return;
         case "snapshot": {
           try {

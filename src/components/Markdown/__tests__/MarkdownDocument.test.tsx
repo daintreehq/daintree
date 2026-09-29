@@ -244,7 +244,7 @@ describe("MarkdownDocument", () => {
 
     expect(dispatchMock).toHaveBeenCalledWith(
       "file.view",
-      { path: "/repo/README.md", rootPath: "/repo" },
+      { path: "/repo/README.md", rootPath: "/repo", confineToRoot: true },
       { source: "user" }
     );
   });
@@ -256,7 +256,7 @@ describe("MarkdownDocument", () => {
 
     expect(dispatchMock).toHaveBeenCalledWith(
       "file.view",
-      { path: "/repo/docs/guide.md", rootPath: "/repo" },
+      { path: "/repo/docs/guide.md", rootPath: "/repo", confineToRoot: true },
       { source: "user" }
     );
   });

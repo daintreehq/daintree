@@ -83,7 +83,7 @@ export function registerWorktreeResourceActions(
       id: "worktree.resource.provision",
       title: "Provision resource",
       description:
-        "Run the configured provisioning commands for a worktree's remote resource, such as creating a cloud devbox. This creates real infrastructure and may incur cost; tearing it down is a separate step. It executes whatever the project configured, so confirm the target worktree is the intended one first.",
+        "Run the project's provisioning commands for a worktree's remote resource, such as creating a cloud devbox. Creates real infrastructure and may cost money; teardown is separate. Confirm the target worktree first.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -122,7 +122,7 @@ export function registerWorktreeResourceActions(
       id: "worktree.resource.teardown",
       title: "Teardown resource",
       description:
-        "Run the project's configured teardown commands for a worktree's remote resource, typically to destroy a cloud devbox. These are arbitrary commands the project defines, so what they destroy, and whether anything can be recovered, depends entirely on that configuration; read it before running this. The project's pause commands are the lighter path when the resource is still needed.",
+        "Run the project's teardown commands for a worktree's remote resource, typically destroying a cloud devbox. What is destroyed and whether it is recoverable depends on that config; read it first. Pause is the lighter path if the resource is still needed.",
       category: "worktree",
       kind: "command",
       danger: "confirm",
@@ -163,7 +163,7 @@ export function registerWorktreeResourceActions(
       id: "worktree.resource.resume",
       title: "Resume resource",
       description:
-        "Run the configured resume commands to bring a paused remote resource back up. This may take time and may incur cost from the moment it returns. Resuming something that was never paused does whatever the project's command does, so it is not guaranteed to be harmless.",
+        "Run the project's resume commands to bring a paused remote resource back up. May take time and cost money once it returns; on a resource never paused it does whatever the command does.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -202,7 +202,7 @@ export function registerWorktreeResourceActions(
       id: "worktree.resource.pause",
       title: "Pause resource",
       description:
-        "Run the project's configured pause commands for a worktree's remote resource, typically to stop a cloud devbox and save cost. These are arbitrary commands the project defines: resuming runs a separate sequence, and nothing guarantees it undoes what pausing did. Read the configuration before assuming this is reversible.",
+        "Run the project's pause commands for a worktree's remote resource, typically stopping a cloud devbox to save cost. These are arbitrary project commands; resume is a separate sequence, not guaranteed to undo this.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -241,7 +241,7 @@ export function registerWorktreeResourceActions(
       id: "worktree.resource.status",
       title: "Check resource status",
       description:
-        "Run the configured status command for a worktree's remote resource, such as a cloud devbox, and report what it said. This executes a real command and waits for it, so it costs whatever that command costs. It reports nothing when no status command is configured, and a failing command fails the call rather than falling back to a cached answer — so a failure never masquerades as stale-but-fine.",
+        "Run the project's status command for a worktree's remote resource, such as a cloud devbox, and report its output. Runs a real command and waits. Reports nothing when none is configured; a failing command fails the call rather than returning a cached answer.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -252,7 +252,7 @@ export function registerWorktreeResourceActions(
             .string()
             .optional()
             .describe(
-              "Identifies the worktree whose remote resource is targeted, using an id from the worktree-listing capability. Defaults to the focused or active worktree."
+              "Worktree id from the worktree listing (default: focused or active worktree)."
             ),
         })
         .optional(),

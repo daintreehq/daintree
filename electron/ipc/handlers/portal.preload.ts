@@ -10,7 +10,6 @@ export const PORTAL_METHOD_CHANNELS = {
   goBack: "portal:go-back",
   goForward: "portal:go-forward",
   reload: "portal:reload",
-  showNewTabMenu: "portal:show-new-tab-menu",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PORTAL_METHOD_CHANNELS;

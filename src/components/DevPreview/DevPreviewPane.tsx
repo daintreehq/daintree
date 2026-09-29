@@ -10,6 +10,7 @@ import { BrowserToolbar } from "../Browser/BrowserToolbar";
 import { InlineStatusBanner } from "../Terminal/InlineStatusBanner";
 import { DevPreviewStuckBanner, DevPreviewHmrDeadBanner } from "./DevPreviewBanners";
 import { initializeBrowserHistory } from "../Browser/historyUtils";
+import { focusWebviewPage } from "../Browser/browserUtils";
 import { useDevServer } from "@/hooks/useDevServer";
 import { ConsoleDrawer } from "./ConsoleDrawer";
 import { useDevPreviewConsoleCapture } from "./useDevPreviewConsoleCapture";
@@ -30,7 +31,6 @@ import { cn } from "@/lib/utils";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
 import { useHasBeenVisible } from "@/hooks/useHasBeenVisible";
 import { useWebviewEviction } from "@/hooks/useWebviewEviction";
-import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { useFindInPage } from "@/hooks/useFindInPage";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
@@ -46,6 +46,7 @@ import { blockedNavReducer } from "./BlockedNavBanner";
 import { looksLikeOAuthUrl } from "@shared/utils/urlUtils";
 import { buildDevPreviewProxyOrigin } from "@shared/utils/devPreviewProxy";
 import { buildDevPreviewPartition } from "@shared/utils/partitionUtils";
+import { Badge } from "@/components/ui/badge";
 
 async function captureWebviewSessionStorage(
   webviewElement: Electron.WebviewTag | null
@@ -296,15 +297,16 @@ export function DevPreviewPane({
     candidates,
     primaryCandidate,
     isAutoDetecting,
+    attemptingCommand,
     autoDetectFailedCommand,
     handleAutoDetect,
     handlePickCandidate,
-    pickerOpen,
-    setPickerOpen,
     commandInput,
     setCommandInput,
     commandInputError,
     handleSaveCommand,
+    isSavingCommand,
+    saveCommandFailed,
     handleOpenSettings,
   } = useDevPreviewCommandConfig({
     currentProjectId,
@@ -341,7 +343,8 @@ export function DevPreviewPane({
     previousIsEvictedRef.current = isEvicted;
   }, [isEvicted, hasBeenVisible]);
 
-  const showRecoverySpinner = useDohertyGate(isRecoveringFromEviction);
+  // PaneLoadingState gates itself; a second gate here would double the delay.
+  const showRecoverySpinner = isRecoveringFromEviction;
 
   useEffect(() => {
     const webview = webviewElement;
@@ -958,6 +961,7 @@ export function DevPreviewPane({
           onBack={handleBack}
           onForward={handleForward}
           onReload={handleReload}
+          onFocusPage={() => isWebviewReady && !isEvicted && focusWebviewPage(webviewRef.current)}
           onStop={handleCancelLoad}
           onHardReload={handleHardReload}
           onOpenExternal={handleOpenExternal}
@@ -1032,11 +1036,15 @@ export function DevPreviewPane({
             )}
           >
             {viewportPreset && effectiveViewport && (
-              <div className="absolute top-1 left-1/2 -translate-x-1/2 z-10 px-1.5 py-0.5 rounded text-3xs font-medium bg-surface/90 text-text-secondary border border-overlay/50">
+              <Badge
+                size="xs"
+                tone="outline"
+                className="absolute top-1 left-1/2 z-10 -translate-x-1/2 bg-surface/90"
+              >
                 {getViewportPreset(viewportPreset).label} · {effectiveViewport.width}×
                 {effectiveViewport.height}
                 {viewportFit && fitScale < 1 && ` · ${Math.round(fitScale * 100)}%`}
-              </div>
+              </Badge>
             )}
             {showEmptyState ? (
               <DevPreviewEmptyStates
@@ -1053,18 +1061,19 @@ export function DevPreviewPane({
                 isUnconfigured={isUnconfigured}
                 primaryCandidate={primaryCandidate}
                 isAutoDetecting={isAutoDetecting}
+                attemptingCommand={attemptingCommand}
                 isSettingsLoading={isSettingsLoading}
                 handleAutoDetect={handleAutoDetect}
                 autoDetectFailedCommand={autoDetectFailedCommand}
                 candidates={candidates}
-                pickerOpen={pickerOpen}
-                setPickerOpen={setPickerOpen}
                 handlePickCandidate={handlePickCandidate}
                 handleOpenSettings={handleOpenSettings}
                 commandInput={commandInput}
                 setCommandInput={setCommandInput}
                 handleSaveCommand={handleSaveCommand}
                 commandInputError={commandInputError}
+                isSavingCommand={isSavingCommand}
+                saveCommandFailed={saveCommandFailed}
                 devCommand={devCommand}
                 handleStartFromRestored={handleStartFromRestored}
                 hasBeenVisible={hasBeenVisible}

@@ -199,7 +199,8 @@ describe("GitHubListItem", () => {
 
   it("renders author and time in metadata row", () => {
     render(<GitHubListItem item={baseIssue} type="issue" />);
-    expect(screen.getByText("testuser")).toBeTruthy();
+    // Once as the row text, once as its tooltip (rendered inline by the mock).
+    expect(screen.getAllByText("testuser").length).toBeGreaterThan(0);
     expect(screen.getByText("time:1001")).toBeTruthy();
   });
 
@@ -245,8 +246,8 @@ describe("GitHubListItem", () => {
       fireEvent.click(copyButton);
     });
 
-    // Check icon should be visible (status-success class)
-    const checkIcon = copyButton.querySelector(".text-status-success");
+    // Check icon should be visible (a neutral check replaces the # sigil)
+    const checkIcon = copyButton.querySelector("svg.lucide-check");
     expect(checkIcon).not.toBeNull();
 
     act(() => {
@@ -254,7 +255,7 @@ describe("GitHubListItem", () => {
     });
 
     // Check icon should be gone
-    const checkIconAfter = copyButton.querySelector(".text-status-success");
+    const checkIconAfter = copyButton.querySelector("svg.lucide-check");
     expect(checkIconAfter).toBeNull();
   });
 
@@ -274,14 +275,14 @@ describe("GitHubListItem", () => {
       fireEvent.click(copyButton);
     });
 
-    const checkIcon = copyButton.querySelector(".text-status-success");
+    const checkIcon = copyButton.querySelector("svg.lucide-check");
     expect(checkIcon).not.toBeNull();
 
     rerender(<Harness mode="hidden" />);
     rerender(<Harness mode="visible" />);
 
     const copyButtonAfter = screen.getByLabelText("Copy number 42");
-    const checkIconAfter = copyButtonAfter.querySelector(".text-status-success");
+    const checkIconAfter = copyButtonAfter.querySelector("svg.lucide-check");
     expect(checkIconAfter).toBeNull();
   });
 
@@ -387,7 +388,8 @@ describe("GitHubListItem", () => {
   it("separates the keyboard cursor from membership, and spends no accent on either", () => {
     // Three distinct states have to stay distinguishable: resting, the row
     // Enter would act on, and the rows bulk actions would act on. The cursor
-    // gets the leading rail; membership gets the heavier fill. Accent is
+    // gets the highlight fill; membership gets the filled checkbox and no fill
+    // of its own, so the two can never be read as one another. Accent is
     // reserved for the one focus anchor in the region (the search field).
     const resting = render(<GitHubListItem item={baseIssue} type="issue" />);
     const restingClass = resting.container.querySelector("[role='row']")!.className;
@@ -410,7 +412,9 @@ describe("GitHubListItem", () => {
     );
     const selectedOption = selected.container.querySelector("[role='row']")!;
     expect(selectedOption.getAttribute("aria-selected")).toBe("true");
-    expect(selectedOption.className).not.toBe(restingClass);
+    // Membership's mark is the checked box, not a fill that competes with the
+    // cursor's.
+    expect(selectedOption.querySelector("svg.lucide-check")).not.toBeNull();
     expect(selectedOption.className).not.toBe(activeOption.className);
 
     for (const cls of [restingClass, activeOption.className, selectedOption.className]) {
@@ -441,9 +445,8 @@ describe("GitHubListItem", () => {
     const iconWrapper = container.querySelector(".group\\/icon");
     expect(iconWrapper).not.toBeNull();
 
-    const children = iconWrapper!.querySelectorAll(":scope > span");
-    const stateIcon = children[0];
-    const checkbox = children[1];
+    const stateIcon = iconWrapper!.querySelector(":scope > span");
+    const checkbox = iconWrapper!.querySelector('[data-slot="checkbox"]');
 
     expect(stateIcon?.className).toContain("group-hover/icon:hidden");
     expect(stateIcon?.className).not.toContain("group-hover:hidden");
@@ -459,9 +462,8 @@ describe("GitHubListItem", () => {
     const iconWrapper = container.querySelector(".group\\/icon");
     expect(iconWrapper).not.toBeNull();
 
-    const children = iconWrapper!.querySelectorAll(":scope > span");
-    const stateIcon = children[0];
-    const checkbox = children[1];
+    const stateIcon = iconWrapper!.querySelector(":scope > span");
+    const checkbox = iconWrapper!.querySelector('[data-slot="checkbox"]');
 
     expect(stateIcon?.className).toContain("hidden");
     expect(stateIcon?.className).not.toContain("group-hover/icon:hidden");
@@ -642,7 +644,7 @@ describe("GitHubListItem", () => {
     });
 
     // After copy: Check icon replaces #
-    const checkIcon = copyButton.querySelector(".text-status-success");
+    const checkIcon = copyButton.querySelector("svg.lucide-check");
     expect(checkIcon).not.toBeNull();
     // The # yields to the check during the copied state, and the digits stay
     // put so the row does not reflow.
@@ -1037,5 +1039,45 @@ describe("skeleton/row parity (#12294)", () => {
     // that the two differ would be satisfied by swapping them.
     expect(RESOURCE_STATE_BONE.issue).toBe("rounded-full");
     expect(RESOURCE_STATE_BONE.pr).not.toBe("rounded-full");
+  });
+});
+
+describe("row controls that must not steal the grid's focus", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("draws the selection mark as a square checkbox, never a round one", () => {
+    const { container } = render(
+      <GitHubListItem item={baseIssue} type="issue" isSelectionActive onToggleSelect={vi.fn()} />
+    );
+    const mark = container.querySelector('[data-slot="checkbox"]');
+    expect(mark).not.toBeNull();
+    const tokens = mark!.className.split(/\s+/);
+    // Bare `rounded` resolves to the 10px step here, which on a 16px box reads
+    // as a radio; `rounded-full` is a radio outright.
+    expect(tokens).not.toContain("rounded");
+    expect(tokens).not.toContain("rounded-full");
+  });
+
+  it("keeps DOM focus where it is when any in-row control is pressed", () => {
+    const withLinkedPr: Issue = {
+      ...baseIssue,
+      linkedPR: { number: 77, state: "open", url: "https://github.com/o/r/pull/77" },
+    };
+    const { container } = render(
+      <GitHubListItem item={withLinkedPr} type="issue" isSelectionActive onToggleSelect={vi.fn()} />
+    );
+    const controls = [
+      ...container.querySelectorAll<HTMLElement>('button[tabindex="-1"]'),
+      // The actions trigger opens a menu, which is allowed to take focus; the
+      // menu hands it back to the search field when it closes.
+    ].filter((el) => el.getAttribute("aria-haspopup") !== "menu");
+    expect(controls.length).toBeGreaterThan(3);
+    for (const control of controls) {
+      // `fireEvent` returns false when the default was prevented — a pressed
+      // native button would otherwise take focus off the search field.
+      expect(fireEvent.mouseDown(control), control.getAttribute("aria-label") ?? "").toBe(false);
+    }
   });
 });

@@ -496,7 +496,14 @@ export function TrashContainer({
       data-visible="true"
     >
       <Popover open={isOpen} onOpenChange={setIsOpen}>
-        <Tooltip open={hintOpen || scopeTooltipOpen} onOpenChange={setScopeTooltipOpen}>
+        <Tooltip
+          open={hintOpen || scopeTooltipOpen}
+          onOpenChange={(open) => {
+            setScopeTooltipOpen(open);
+            // A close request (Escape, the pointer leaving) ends the moved hint too.
+            if (!open) setShowMovedHint(false);
+          }}
+        >
           <TooltipTrigger asChild>
             <PopoverTrigger asChild>
               <Button
@@ -533,7 +540,7 @@ export function TrashContainer({
               </Button>
             </PopoverTrigger>
           </TooltipTrigger>
-          <TooltipContent side="top" align="center" sideOffset={6}>
+          <TooltipContent side="top" align="center">
             {hintOpen
               ? "Moved to trash"
               : `Recently closed ${dockStatusScopeDescription(count, hereCount)}`}
@@ -547,7 +554,6 @@ export function TrashContainer({
           className="w-96 p-0"
           side="top"
           align="end"
-          sideOffset={8}
           onFocusCapture={noteFocusEntered}
           onOpenAutoFocus={(e) => e.preventDefault()}
           onCloseAutoFocus={focusHandoff.onCloseAutoFocus}
@@ -566,8 +572,8 @@ export function TrashContainer({
               </div>
               <Button
                 variant="ghost-danger"
-                size="sm"
-                className="shrink-0 text-2xs h-auto py-0.5 px-1.5"
+                size="xs"
+                className="shrink-0"
                 onClick={() => {
                   // Hand the surface over to the confirm rather than stacking
                   // on top of it: this popover is anchored to the toolbar and
@@ -656,7 +662,7 @@ export function TrashContainer({
         <ConfirmDialog
           isOpen={pendingRemoval !== null}
           onClose={closeRemoval}
-          title={`Remove ${pendingRemoval?.label ?? ""}?`}
+          title={pendingRemoval?.label ? `Remove '${pendingRemoval.label}'?` : "Remove panel?"}
           description={
             (pendingRemoval?.ids.length ?? 0) === 1
               ? `${pendingRemoval?.label ?? "This panel"} will be permanently removed.`

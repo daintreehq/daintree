@@ -2,7 +2,7 @@ import { useEffect, useRef, type CSSProperties } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useMarkdownRenderPolicy } from "./markdownRenderPolicy";
-import { useScopedSelectAll } from "@/hooks/useScopedSelectAll";
+import { useScopedSelectAll, type SelectAllScope } from "@/hooks/useScopedSelectAll";
 import { cn } from "@/lib/utils";
 import type { MarkdownFontSize } from "@/store/preferencesStore";
 import "./MarkdownDocument.css";
@@ -60,6 +60,12 @@ export interface MarkdownDocumentProps {
    * across the swap into rendered mode use this to release the pin (#11255).
    */
   onRendered?: () => void;
+  /**
+   * What Select All covers. `"surface"` (default) treats the document as the
+   * whole pane's content; `"self"` is for a document embedded among other
+   * content, such as a plugin view's Markdown block.
+   */
+  selectAllScope?: SelectAllScope;
 }
 
 /**
@@ -78,6 +84,7 @@ export function MarkdownDocument({
   className,
   fontSize,
   onRendered,
+  selectAllScope = "surface",
 }: MarkdownDocumentProps) {
   // Runs after the first commit, which is the point the host's height pin can
   // hand the box back to the document. Cold fence grammars land later and swap
@@ -90,7 +97,7 @@ export function MarkdownDocument({
   // Nothing owns Select All over plain rendered DOM, so the native Edit-menu
   // command falls back to the whole app (#12135). Claim it for the document.
   const rootRef = useRef<HTMLDivElement>(null);
-  useScopedSelectAll(rootRef);
+  useScopedSelectAll(rootRef, true, selectAllScope);
 
   const { components, urlTransform } = useMarkdownRenderPolicy({
     filePath,

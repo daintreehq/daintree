@@ -139,7 +139,7 @@ export function AgentInventorySection({
         <ChevronRight
           data-animated-chevron
           className={cn(
-            "h-3.5 w-3.5 shrink-0 text-text-secondary transition-transform duration-150 group-hover:text-text-primary",
+            "h-3.5 w-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out group-hover:text-text-primary",
             open ? "rotate-90" : "rotate-0"
           )}
           aria-hidden="true"
@@ -166,8 +166,8 @@ export function AgentInventorySection({
       action={
         <>
           {known && installed > 0 && wizardButton}
-          <Button size="sm" variant="outline" onClick={onRefresh} disabled={isRefreshing}>
-            {isRefreshing ? "Checking…" : "Re-check"}
+          <Button size="sm" variant="outline" onClick={onRefresh} loading={isRefreshing}>
+            Re-check
           </Button>
         </>
       }

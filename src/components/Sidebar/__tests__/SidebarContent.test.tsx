@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
+import { readFileSync } from "fs";
 import path from "path";
 
 const SIDEBAR_CONTENT_PATH = path.resolve(__dirname, "../SidebarContent.tsx");
@@ -92,6 +93,15 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     expect(source).toMatch(/scopeText \?\? dragDisabledReason/);
   });
 
+  it("hands the same drag reason to each row's grip tooltip", () => {
+    // One sentence, one source: the grip tooltip and the status line must
+    // not be able to disagree about why reorder is off.
+    const rowSource = readFileSync(path.resolve(__dirname, "../SidebarWorktreeRow.tsx"), "utf-8");
+    expect(source).toMatch(/dragDisabledReason=\{context\.dragDisabledReason\}/);
+    expect(source).toMatch(/isSortDisabled,\s*dragDisabledReason,\s*\}\)/);
+    expect(rowSource).toMatch(/dragDisabledReason=\{dragDisabledReason\}/);
+  });
+
   it("derives drag-disabled reason with query taking priority over group-by-type", () => {
     // Query-first precedence: hasQuery ? "searching" : isGroupedByType ? "grouped by type" : null
     expect(source).toMatch(/hasQuery\s*\?[\s\S]*?Drag to reorder is off while searching/);
@@ -154,8 +164,13 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     expect(source).toMatch(/hasFilters\s*=\s*[\s\S]*?liveQuery\.trim\(\)\.length\s*>\s*0/);
   });
 
-  it("drives the filtering memo from a deferred query so keystrokes stay responsive", () => {
-    expect(source).toContain("const deferredQuery = useDeferredValue(liveQuery)");
+  it("defers the filtering memo only for a sidebar large enough to hold up typing", () => {
+    // Small sidebars filter in the keystroke's own frame; past the threshold
+    // the memo reads the lagged query so keystrokes stay responsive.
+    expect(source).toContain("const laggedQuery = useDeferredValue(liveQuery)");
+    expect(source).toMatch(
+      /deferredWorktrees\.length > SIDEBAR_DEFER_FILTER_MIN_WORKTREES \? laggedQuery : liveQuery/
+    );
     expect(source).toMatch(/query:\s*deferredQuery/);
   });
 });

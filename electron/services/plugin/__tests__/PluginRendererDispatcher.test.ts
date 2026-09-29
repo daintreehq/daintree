@@ -42,7 +42,7 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
   isCachedViewWebContents: registryMock.isCachedViewWebContents,
 }));
 
-import { PluginRendererDispatcher } from "../PluginRendererDispatcher.js";
+import { PluginRendererDispatcher, projectAgentPanes } from "../PluginRendererDispatcher.js";
 import { isAppError } from "../../../utils/errorTypes.js";
 
 /** Assert a promise rejected with the frozen `PROJECT_VIEW_UNAVAILABLE` AppError. */
@@ -289,5 +289,61 @@ describe("PluginRendererDispatcher", () => {
     const wcB = makeWebContents(22);
     setFocusedWebContents(wcB);
     expect(d.resolveScopeWebContents()).toBe(wcB);
+  });
+
+  it("projects a malformed agents.list response instead of passing it through", async () => {
+    const wc = makeWebContents(7);
+    setFocusedWebContents(wc);
+    const d = new PluginRendererDispatcher({ isDisposed: () => false });
+    const promise = d.sendAgentsListToRenderer();
+    const requestId = lastRequestId(wc, CHANNELS.PLUGIN_AGENTS_LIST_REQUEST);
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE,
+      { sender: { id: 7 } },
+      { requestId, agents: [{ terminalId: 7 }, "junk"] }
+    );
+    await expect(promise).resolves.toEqual([]);
+    d.dispose();
+  });
+});
+
+describe("projectAgentPanes", () => {
+  const pane = {
+    terminalId: "t-1",
+    title: "Claude: auth",
+    agentId: "claude",
+    worktree: { id: "wt-1", name: "main", branch: "develop" },
+    observedState: "working",
+    isFocused: true,
+    canDraft: false,
+    draftRefusal: "input-locked",
+  };
+
+  it("passes a well-formed pane through with only its public fields", () => {
+    const [projected] = projectAgentPanes([{ ...pane, cwd: "/secret", panelKind: "terminal" }]);
+    expect(projected).toEqual(pane);
+    expect(projected).not.toHaveProperty("cwd");
+  });
+
+  it("drops malformed entries and keeps the rest", () => {
+    expect(
+      projectAgentPanes([
+        pane,
+        null,
+        "t-2",
+        { ...pane, terminalId: "" },
+        { ...pane, isFocused: "yes" },
+        { ...pane, observedState: "thinking" },
+        { ...pane, draftRefusal: "nope" },
+        { ...pane, title: "x".repeat(5_000) },
+        { ...pane, worktree: { id: "wt", name: 3 } },
+      ])
+    ).toEqual([pane]);
+  });
+
+  it("answers no panes for a response that isn't a list, and caps a long one", () => {
+    expect(projectAgentPanes({ agents: [pane] })).toEqual([]);
+    expect(projectAgentPanes(undefined)).toEqual([]);
+    expect(projectAgentPanes(Array.from({ length: 1_000 }, () => pane))).toHaveLength(256);
   });
 });

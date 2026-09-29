@@ -980,7 +980,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "voiceInput.toggle",
-    combo: "Cmd+Shift+V",
+    combo: "Cmd+.",
     scope: "global",
     priority: 0,
     description: "Toggle voice dictation",
@@ -1167,14 +1167,35 @@ const WINDOWS_ONLY_KEYBINDINGS: KeybindingConfig[] = [
   },
 ];
 
+// Replacements, not additions: each entry displaces the core row with the same
+// actionId and scope. Ctrl+. is the IBus emoji picker on GNOME, and Ctrl+Alt+.
+// is taken by agent.focusNextWorking once Cmd folds to Ctrl.
+const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
+  {
+    actionId: "voiceInput.toggle",
+    combo: "Ctrl+Alt+,",
+    scope: "global",
+    priority: 0,
+    description: "Toggle voice dictation",
+    category: "Voice",
+  },
+];
+
 /**
  * Platform-parameterized so every consumer states its platform explicitly:
  * the renderer passes its detected platform, the main process passes
- * process.platform, and the docs generator emits both variants regardless of
+ * process.platform, and the docs generator emits every variant regardless of
  * the host OS it runs on.
  */
-export function buildDefaultKeybindings(isWindows: boolean): KeybindingConfig[] {
-  return isWindows ? [...CORE_KEYBINDINGS, ...WINDOWS_ONLY_KEYBINDINGS] : [...CORE_KEYBINDINGS];
+export function buildDefaultKeybindings(isWindows: boolean, isLinux = false): KeybindingConfig[] {
+  if (isWindows) return [...CORE_KEYBINDINGS, ...WINDOWS_ONLY_KEYBINDINGS];
+  if (!isLinux) return [...CORE_KEYBINDINGS];
+  return CORE_KEYBINDINGS.map(
+    (binding) =>
+      LINUX_REPLACEMENT_KEYBINDINGS.find(
+        (r) => r.actionId === binding.actionId && r.scope === binding.scope
+      ) ?? binding
+  );
 }
 
 export const KEYBINDING_PRIORITY = {

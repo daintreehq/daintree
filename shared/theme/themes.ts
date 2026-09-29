@@ -125,6 +125,11 @@ export function createDaintreeTokens(
   // On light, the interactive ladder routes through overlayBase (RC-3) so the
   // per-theme tint carries hue identity now that the alphas are perceptible (RC-2).
   const overlayBase = tokens["overlay-base"] ?? overlayTone;
+  const overlayRaised =
+    tokens["overlay-raised"] ??
+    (dark
+      ? withAlpha(overlayTone, 0.04)
+      : `color-mix(in oklab, ${tokens["surface-panel-elevated"]} 92%, ${tokens["text-primary"]})`);
   const accentSoft =
     tokens["accent-soft"] ?? withAlpha(tokens["accent-primary"], dark ? 0.18 : 0.18);
   const accentMuted =
@@ -254,11 +259,14 @@ export function createDaintreeTokens(
     // recessed sidebar/canvas/panel containers. On DARK it aliases the additive-
     // white `overlay-selected` (withAlpha(overlayTone, 0.04)) so dark is byte-for-
     // byte unchanged. `?? `-sourced so a per-theme override wins.
-    "overlay-raised":
-      tokens["overlay-raised"] ??
-      (dark
-        ? withAlpha(overlayTone, 0.04)
-        : `color-mix(in oklab, ${tokens["surface-panel-elevated"]} 92%, ${tokens["text-primary"]})`),
+    "overlay-raised": overlayRaised,
+    // Dark lands on the `overlay-elevated` value on purpose: brand marks on a
+    // highlighted row are already measured against that lift
+    // (`brandMarkMatrix.test.ts`), and it sits in the band shipping palettes use
+    // for a fill-only active row. Light keeps the raised plane, which is already
+    // an opaque upward lift rather than an ink wash.
+    "overlay-highlight":
+      tokens["overlay-highlight"] ?? (dark ? withAlpha(overlayTone, 0.06) : overlayRaised),
     "filter-selected-bg-soft":
       tokens["filter-selected-bg-soft"] ?? withAlpha(dark ? tint : overlayBase, dark ? 0.08 : 0.08),
     "filter-selected-bg-strong":
@@ -624,12 +632,34 @@ function followBorderStrongForInput(
   }
 }
 
+/**
+ * On light, `overlay-highlight` is the `overlay-raised` plane unless the theme
+ * names it — including when the theme retuned `overlay-raised` itself, which
+ * most light themes do with an opaque hex. Same reason as `border-input` above:
+ * the engine derives the highlight before token overrides are merged, so
+ * without this a light theme's highlighted row would fall back to the engine's
+ * `color-mix()` plane instead of the lift the theme chose. Dark's highlight is
+ * its own alpha step and never follows.
+ */
+function followRaisedForHighlight(
+  tokens: Record<string, unknown>,
+  overrides: Record<string, unknown> | undefined,
+  type: "dark" | "light"
+): void {
+  if (type !== "light") return;
+  if (typeof overrides?.["overlay-highlight"] === "string") return;
+  if (typeof tokens["overlay-raised"] === "string") {
+    tokens["overlay-highlight"] = tokens["overlay-raised"];
+  }
+}
+
 function createThemeFromSource(source: BuiltInThemeSource): AppColorScheme {
   const compiledTokens = compilePaletteToTokens(source.palette);
   const tokens = source.tokens
     ? normalizeAppThemeTokens(source.tokens, compiledTokens)
     : compiledTokens;
   if (source.tokens) followBorderStrongForInput(tokens, source.tokens);
+  if (source.tokens) followRaisedForHighlight(tokens, source.tokens, source.type);
   const extensions = resolveStrategyExtensions(source.palette, source.extensions);
 
   return {
@@ -1014,6 +1044,7 @@ export function normalizeAppColorScheme(
   const normalizedTokens = normalizeAppThemeTokens(rawTokens ?? {}, baseScheme.tokens);
   Object.assign(normalizedTokens, normalizeAppThemeTokens(tokenOverrides, normalizedTokens));
   followBorderStrongForInput(normalizedTokens, tokenOverrides);
+  followRaisedForHighlight(normalizedTokens, tokenOverrides, resolvedType);
   if (
     typeof tokenOverrides["accent-foreground"] !== "string" &&
     typeof normalizedTokens["accent-primary"] === "string"

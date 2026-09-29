@@ -71,7 +71,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       const perWindowBatcher = new PortBatcher({
         portQueueManager: perWindowQueueManager,
         getFocusedTerminalId: () => windowFocusedTerminalMap.get(windowId) ?? null,
-        postMessage: (id, data, bytes) => {
+        postMessage: (id, data, bytes, streamEnd) => {
           // Structured-clone the chunk — no transfer list. This port is
           // Electron's utility-process MessagePortMain, whose postMessage
           // transfer array accepts MessagePortMain entries only: passing an
@@ -81,7 +81,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
           // never exercised before terminals carried a resolved projectId
           // (the project filter kept this path dormant), so the clone here
           // is the proven behaviour.
-          receivedPort.postMessage({ type: "data", id, data, bytes });
+          receivedPort.postMessage({ type: "data", id, data, bytes, streamEnd });
         },
         onError: (error: unknown, failedBatches: PortBatcherFailedBatch[]) => {
           console.warn(
@@ -101,6 +101,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
               id: batch.id,
               data: batchDataToString(batch.data),
               portRecoveryWebContentsId: holderWebContentsId,
+              streamEnd: batch.streamEnd,
             });
           }
           disconnectWindow(windowId, "postMessage-error");
@@ -270,6 +271,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
               id: batch.id,
               data: batchDataToString(batch.data),
               portRecoveryWebContentsId: rendererConnections.get(windowId)?.holderWebContentsId,
+              streamEnd: batch.streamEnd,
             });
           }
           disconnectTerminalWorkerPort(windowId, terminalId, "postMessage-error");

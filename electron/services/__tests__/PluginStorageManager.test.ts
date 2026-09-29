@@ -274,8 +274,8 @@ describe("PluginStorageManager evictWorktreeScopedStores", () => {
     // Simulate the file changing out from under the cached store while the
     // worktree was inactive (e.g. another window wrote it).
     await fs.writeFile(filePath, JSON.stringify({ k: "new" }), "utf-8");
-    // The cached store still serves its stale in-memory snapshot.
-    expect(await first.get("k")).toBe("old");
+    // The cached store notices the file changed rather than serving its snapshot.
+    expect(await first.get("k")).toBe("new");
 
     mgr.evictWorktreeScopedStores();
 

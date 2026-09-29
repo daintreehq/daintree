@@ -124,6 +124,22 @@ export const imageChipField = StateField.define<ImageChipEntry[]>({
   ],
 });
 
+/**
+ * Paths of the image chips still in `view`'s document, in document order
+ * (#12792). A chip whose range no longer spells its path — an edit that
+ * slipped past the field's own pruning — is left out, so what is sent as an
+ * attachment is always something the text also says.
+ */
+export function readImageChipPaths(view: EditorView | null | undefined): string[] {
+  if (!view) return [];
+  const entries = view.state.field(imageChipField, false);
+  if (!entries || entries.length === 0) return [];
+  return [...entries]
+    .sort((a, b) => a.from - b.from)
+    .filter((entry) => view.state.doc.sliceString(entry.from, entry.to) === entry.filePath)
+    .map((entry) => entry.filePath);
+}
+
 export function createImageChipTooltip() {
   return hoverTooltip((view, pos) => {
     const entries = view.state.field(imageChipField, false);

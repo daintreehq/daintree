@@ -22,6 +22,7 @@ import { usePluginPanelKinds } from "./hooks/usePluginPanelKinds";
 import { usePluginPanelLifecycle } from "./hooks/usePluginPanelLifecycle";
 import { usePluginAgents } from "./hooks/usePluginAgents";
 import { usePluginRecipes } from "./hooks/usePluginRecipes";
+import { usePluginTours } from "./hooks/usePluginTours";
 import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
 import { usePluginMcpConsentBridge } from "./hooks/usePluginMcpConsentBridge";
 import { usePluginCapabilityConsentBridge } from "./hooks/usePluginCapabilityConsentBridge";
@@ -37,7 +38,6 @@ import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { notifyViewPainted } from "./utils/removeStartupSkeleton";
 import {
   usePanelStoreBootstrap,
-  useSemanticWorkerLifecycle,
   useCloudSyncWarning,
   useRosettaWarning,
   useAccessibilityAnnouncements,
@@ -225,6 +225,7 @@ function AppInner() {
     settingsTab,
     settingsSubtab,
     settingsSectionId,
+    settingsNavNonce,
     handleSettings,
     handleOpenSettingsTab,
     setIsSettingsOpen,
@@ -384,6 +385,7 @@ function AppInner() {
   usePluginPanelLifecycle();
   usePluginAgents();
   usePluginRecipes();
+  usePluginTours();
   usePluginKeybindings();
   usePluginMcpConsentBridge();
   usePluginCapabilityConsentBridge();
@@ -401,7 +403,6 @@ function AppInner() {
 
   // App lifecycle hooks
   usePanelStoreBootstrap(bootResult?.terminalConfig ?? null);
-  useSemanticWorkerLifecycle();
   useCloudSyncWarning(homeDir);
   useRosettaWarning(bootResult);
   useAccessibilityAnnouncements();
@@ -571,6 +572,7 @@ function AppInner() {
                 settingsTab={settingsTab}
                 settingsSubtab={settingsSubtab}
                 settingsSectionId={settingsSectionId}
+                settingsNavNonce={settingsNavNonce}
                 refreshSettings={refreshSettings}
                 currentProject={currentProject}
                 isShortcutsOpen={isShortcutsOpen}

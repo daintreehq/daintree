@@ -3105,6 +3105,44 @@ describe("ActionService", () => {
         restore();
       }
     });
+
+    it("redacts prompt text while the action still receives it", async () => {
+      const emit = vi.fn().mockResolvedValue(undefined);
+      const restore = installEmit(emit);
+      const run = vi.fn().mockResolvedValue(undefined);
+      try {
+        service.register({
+          id: "actions.list" as ActionId,
+          title: "T",
+          description:
+            "Test action with a short title for verifying title/description field propagation in manifest entries.",
+          category: "test",
+          kind: "command",
+          danger: "safe",
+          scope: "renderer",
+          run,
+        });
+        await service.dispatch("actions.list" as ActionId, {
+          agentId: "claude",
+          prompt: "SENTINEL-PROMPT",
+          nested: { systemPrompt: "SENTINEL-SYSTEM" },
+        });
+        await Promise.resolve();
+
+        expect(run.mock.calls[0]?.[0]).toMatchObject({ prompt: "SENTINEL-PROMPT" });
+        const payload: unknown = emit.mock.calls[0]?.[1];
+        expect(payload).toMatchObject({
+          args: {
+            agentId: "claude",
+            prompt: "[REDACTED]",
+            nested: { systemPrompt: "[REDACTED]" },
+          },
+        });
+        expect(JSON.stringify(payload)).not.toContain("SENTINEL");
+      } finally {
+        restore();
+      }
+    });
   });
 
   describe("cloneArgsForReplay fallback (issue #7284)", () => {

@@ -55,6 +55,7 @@ export const config: AgentConfig = {
   contextWindow: 1_000_000,
   capabilities: {
     scrollback: 10000,
+    launchMcp: { format: "qwen-mcp-config" },
     blockAltScreen: true,
     blockMouseReporting: true,
     resizeStrategy: "settled",

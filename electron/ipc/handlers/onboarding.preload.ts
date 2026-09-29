@@ -14,7 +14,6 @@ export const ONBOARDING_METHOD_CHANNELS = {
   getChecklist: "onboarding:checklist-get",
   dismissChecklist: "onboarding:checklist-dismiss",
   markChecklistItem: "onboarding:checklist-mark-item",
-  markChecklistCelebrationShown: "onboarding:checklist-mark-celebration-shown",
   dismissTourInvite: "onboarding:tour-dismiss-invite",
   setTourProgress: "onboarding:tour-set-progress",
   setTourMuted: "onboarding:tour-set-muted",

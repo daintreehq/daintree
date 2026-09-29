@@ -13,12 +13,15 @@ import { useFleetRunStore } from "@/store/fleetRunStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Button } from "@/components/ui/button";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { useFleetWorktreeScope } from "./useFleetWorktreeScope";
 import { FleetWorktreeDots } from "./FleetWorktreeDots";
 import { renderPaneStateBadge } from "./renderPaneStateBadge";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { FLEET_RIBBON_ICON_BUTTON_CLASS } from "./fleetRibbonStyles";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { Badge } from "@/components/ui/badge";
 
 interface FleetCountChipProps {
   armedCount: number;
@@ -213,7 +216,6 @@ export function FleetCountChip({
       <PopoverContent
         side="bottom"
         align="start"
-        sideOffset={6}
         data-testid="fleet-armed-list"
         className={cn(
           "flex flex-col overflow-hidden p-1",
@@ -222,9 +224,7 @@ export function FleetCountChip({
       >
         {popoverMode === "list" ? (
           <>
-            <div className="px-2 py-1 text-3xs font-medium uppercase tracking-wide text-text-secondary">
-              Fleet terminals
-            </div>
+            <div className={cn(LIST_LABEL_CLASS, "px-2 py-1")}>Fleet terminals</div>
             <ul className="flex flex-col overflow-y-auto">
               {armOrder.length === 0 ? (
                 <li className="px-2 py-1 text-xs leading-[inherit] text-text-secondary">None</li>
@@ -272,12 +272,9 @@ export function FleetCountChip({
                         )}
                         <span className="truncate">{title}</span>
                         {id === focusedId && (
-                          <span
-                            className="shrink-0 text-3xs uppercase tracking-wide text-text-secondary"
-                            data-testid={`fleet-row-primary-${id}`}
-                          >
+                          <Badge size="xs" data-testid={`fleet-row-primary-${id}`}>
                             Primary
-                          </span>
+                          </Badge>
                         )}
                       </button>
                       {sendFailed && (
@@ -303,41 +300,34 @@ export function FleetCountChip({
                 })
               )}
             </ul>
-            <button
-              type="button"
-              onClick={() => setPopoverMode("picker")}
-              data-testid="fleet-armed-list-add-panes"
-              className={cn(
-                "mt-1 flex items-center gap-2 rounded-[var(--radius-md)] px-2 py-1.5 text-xs leading-[inherit] text-text-secondary",
-                "hover:bg-tint/[0.08] hover:text-text-primary",
-                "border-t border-daintree-border/50 pt-2",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-              )}
-            >
-              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>Add panes…</span>
-            </button>
+            <div className="mt-1 border-t border-border-default/50 pt-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setPopoverMode("picker")}
+                data-testid="fleet-armed-list-add-panes"
+                className="w-full justify-start gap-2 px-2 focus-visible:-outline-offset-2"
+              >
+                <Plus aria-hidden="true" />
+                <span>Add panes…</span>
+              </Button>
+            </div>
           </>
         ) : picker.acquired ? (
           <>
             <div className="flex items-center gap-2 px-1 pb-1">
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="xs"
                 onClick={() => setPopoverMode("list")}
                 aria-label="Back to fleet list"
                 data-testid="fleet-picker-back"
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-[var(--radius-md)] px-1.5 py-1 text-xs leading-[inherit] text-text-secondary",
-                  "hover:bg-tint/[0.08] hover:text-text-primary",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                )}
+                className="px-1.5 text-xs [&_svg]:size-3.5"
               >
-                <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                <ArrowLeft aria-hidden="true" />
                 <span>Back</span>
-              </button>
-              <span className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
-                Add panes
-              </span>
+              </Button>
+              <span className={LIST_LABEL_CLASS}>Add panes</span>
             </div>
             <FleetPickerContent picker={picker} testIdPrefix="fleet-picker-add" autoFocusSearch />
             <div className="mt-1 flex items-center justify-between gap-2 border-t border-daintree-border/50 px-1 pt-2">
@@ -351,33 +341,26 @@ export function FleetCountChip({
                     }`}
               </span>
               <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="xs"
                   onClick={() => setPopoverMode("list")}
-                  className={cn(
-                    "rounded-[var(--radius-md)] px-2 py-1 text-2xs text-text-secondary",
-                    "hover:bg-tint/[0.08] hover:text-text-primary",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                  )}
+                  className="px-2 text-2xs"
                 >
                   Cancel
-                </button>
-                <button
-                  type="button"
+                </Button>
+                {/* Matches the cold-start picker's confirm: the house neutral
+                    high-contrast primary, not a category fill. */}
+                <Button
+                  variant="contrast"
+                  size="xs"
                   onClick={picker.handleConfirm}
                   disabled={picker.confirmedIds.length === 0}
                   data-testid="fleet-picker-add-confirm"
-                  className={cn(
-                    // Matches the cold-start picker's confirm: the house
-                    // neutral high-contrast primary, not a category fill.
-                    "rounded-sm bg-text-primary px-2 py-1 text-2xs text-text-inverse ring-1 ring-tint/15",
-                    "transition-[background-color,opacity] duration-150 hover:bg-[color-mix(in_oklab,var(--color-text-primary)_90%,var(--color-text-inverse))]",
-                    "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                  )}
+                  className="px-2 text-2xs"
                 >
                   {picker.confirmedIds.length === 0 ? "Add" : `Add ${picker.confirmedIds.length}`}
-                </button>
+                </Button>
               </div>
             </div>
           </>

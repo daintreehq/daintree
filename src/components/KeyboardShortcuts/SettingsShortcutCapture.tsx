@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useId, useMemo, useRef } from "react";
+import { InlineError } from "@/components/ui/field";
 import { AlertTriangle } from "lucide-react";
 import { isMac } from "@/lib/platform";
 import {
@@ -14,6 +15,10 @@ import { logError, logWarn } from "@/utils/logger";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { KbdChord } from "@/components/ui/Kbd";
+
+const CHORD_WINDOW_STYLE: React.CSSProperties & Record<"--chord-window", string> = {
+  "--chord-window": `${CHORD_TIMEOUT_MS}ms`,
+};
 
 export interface SettingsShortcutCaptureProps {
   /** Called when user saves the captured key combination */
@@ -571,12 +576,27 @@ export function SettingsShortcutCapture({
               tabIndex={-1}
               data-testid="shortcut-capture-field"
               data-recording="true"
-              className={cn(fieldClass, "border-border-strong bg-overlay-subtle text-text-primary")}
+              className={cn(
+                fieldClass,
+                "relative border-border-strong bg-overlay-subtle text-text-primary"
+              )}
             >
               {chordStep === "waiting" && capturedCombos[0] ? (
                 <span className="inline-flex items-center gap-2">
                   <KbdChord shortcut={capturedCombos[0]} />
                   <span className="text-text-secondary">Press second key or wait to finish</span>
+                  {/* How long the second key has. Mounted only while waiting, so every
+                      entry starts a full bar; the status copy is what gets announced. */}
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 overflow-hidden rounded-[var(--radius-md)]"
+                  >
+                    <span
+                      data-chord-window=""
+                      className="absolute inset-x-0 bottom-0 h-0.5 bg-text-secondary animate-chord-window"
+                      style={CHORD_WINDOW_STYLE}
+                    />
+                  </span>
                 </span>
               ) : held.length > 0 ? (
                 <span className="inline-flex items-center gap-2">
@@ -647,15 +667,9 @@ export function SettingsShortcutCapture({
       </div>
 
       {validationError && (
-        <div
-          id={validationId}
-          className="flex items-start gap-2 text-status-error text-sm"
-          role="alert"
-          data-testid="shortcut-capture-validation-error"
-        >
-          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" aria-hidden="true" />
-          <span>{validationError}</span>
-        </div>
+        <InlineError id={validationId} role="alert" data-testid="shortcut-capture-validation-error">
+          {validationError}
+        </InlineError>
       )}
 
       {hasConflicts && (

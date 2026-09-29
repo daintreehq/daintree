@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useId } from "react";
+import { InlineError } from "@/components/ui/field";
 import { CheckCircle, AlertCircle, RefreshCw, ExternalLink, ChevronRight } from "lucide-react";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
@@ -254,8 +255,14 @@ export function EditorIntegrationTab() {
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    onClick={handleRescan}
-                    disabled={disabled || isRescanning}
+                    onClick={() => {
+                      if (!isRescanning) handleRescan();
+                    }}
+                    // Busy, not unavailable: the rotating glyph says so, at full
+                    // strength, and the button keeps keyboard focus.
+                    aria-busy={isRescanning || undefined}
+                    aria-disabled={isRescanning || undefined}
+                    disabled={disabled}
                     aria-label="Re-scan for installed editors"
                   >
                     <SpinningIcon icon={RefreshCw} active={isRescanning} />
@@ -303,10 +310,10 @@ export function EditorIntegrationTab() {
               label="Detected editors"
               description={
                 rescanFailed ? (
-                  <span className="text-status-error">
+                  <InlineError>
                     Couldn&apos;t re-scan — showing the previous scan. Use the re-scan button to try
                     again.
-                  </span>
+                  </InlineError>
                 ) : (
                   `${foundCount} of ${discoveredEditors.length} found on this machine`
                 )
@@ -345,7 +352,7 @@ export function EditorIntegrationTab() {
                   <ChevronRight
                     data-animated-chevron
                     className={cn(
-                      "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 group-hover:text-text-primary",
+                      "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out group-hover:text-text-primary",
                       showDetected ? "rotate-90" : "rotate-0"
                     )}
                     aria-hidden="true"
@@ -422,17 +429,15 @@ export function EditorIntegrationTab() {
         <SettingsActions
           status={
             loadError ? (
-              <span className="text-status-error">{loadError}</span>
+              <InlineError>{loadError}</InlineError>
             ) : saveError ? (
-              <span className="text-status-error">{saveError}</span>
+              <InlineError>{saveError}</InlineError>
             ) : testResult === "ok" ? (
               <span className="flex items-center gap-1">
                 <CheckCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> Open requested
               </span>
             ) : testResult === "error" ? (
-              <span className="flex items-center gap-1 text-status-error">
-                <AlertCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> Failed to open
-              </span>
+              <InlineError>Failed to open</InlineError>
             ) : isLoadingConfig ? null : preferredEditor ? (
               <span>
                 Saved:{" "}
@@ -459,20 +464,20 @@ export function EditorIntegrationTab() {
             variant="outline"
             size="sm"
             onClick={handleTest}
-            disabled={isTesting || !preferredEditor || isDirty}
+            loading={isTesting}
+            disabled={!preferredEditor || isDirty}
           >
             <ExternalLink aria-hidden="true" />
-            {isTesting ? "Testing…" : "Test saved editor"}
+            Test saved editor
           </Button>
           <Button
             variant="contrast"
             size="sm"
             onClick={handleSave}
-            disabled={
-              isSaving || isLoadingConfig || !activeProjectId || !isDirty || Boolean(loadError)
-            }
+            loading={isSaving}
+            disabled={isLoadingConfig || !activeProjectId || !isDirty || Boolean(loadError)}
           >
-            {isSaving ? "Saving…" : "Save"}
+            Save
           </Button>
         </SettingsActions>
       </SettingsGroup>

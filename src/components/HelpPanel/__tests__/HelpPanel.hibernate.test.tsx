@@ -58,9 +58,10 @@ const {
   mockGetHelpAssistantSettings: vi.fn().mockResolvedValue({
     docSearch: true,
     daintreeControl: true,
-    tier: "action" as const,
+    tier: "core" as const,
     bypassPermissions: false,
     auditRetention: 7,
+    modelIds: { claude: "", codex: "", gemini: "" },
     customArgs: "",
     idleHibernateMinutes: 30,
   }),
@@ -537,9 +538,10 @@ function resetState() {
   mockGetHelpAssistantSettings.mockResolvedValue({
     docSearch: true,
     daintreeControl: true,
-    tier: "action" as const,
+    tier: "core" as const,
     bypassPermissions: false,
     auditRetention: 7,
+    modelIds: { claude: "", codex: "", gemini: "" },
     customArgs: "",
     idleHibernateMinutes: 30,
   });
@@ -612,7 +614,7 @@ beforeEach(() => {
           onSessionRevoked: vi.fn(() => () => {}),
           onGrantLifecycle: vi.fn(() => () => {}),
           onTurnOutcomeAlert: vi.fn(() => () => {}),
-          setSessionTier: vi.fn().mockResolvedValue({ sessionId: "", tier: "workbench" }),
+          setSessionTier: vi.fn().mockResolvedValue({ sessionId: "", tier: "core" }),
           resetDenialCounts: vi.fn().mockResolvedValue(undefined),
           issueGrant: vi.fn().mockResolvedValue({
             sessionId: "",
@@ -1689,9 +1691,10 @@ describe("HelpPanel — resume preserves user-configured launch flags", () => {
     mockGetHelpAssistantSettings.mockResolvedValue({
       docSearch: true,
       daintreeControl: true,
-      tier: "action" as const,
+      tier: "core" as const,
       bypassPermissions: false,
       auditRetention: 7,
+      modelIds: { claude: "", codex: "", gemini: "" },
       customArgs: "--model claude-opus-4-5",
       idleHibernateMinutes: 30,
     });
@@ -1981,9 +1984,10 @@ describe("HelpPanel — idle hibernation timer", () => {
       mockGetHelpAssistantSettings.mockResolvedValue({
         docSearch: true,
         daintreeControl: true,
-        tier: "action" as const,
+        tier: "core" as const,
         bypassPermissions: false,
         auditRetention: 7,
+        modelIds: { claude: "", codex: "", gemini: "" },
         customArgs: "",
         idleHibernateMinutes: 0,
       });

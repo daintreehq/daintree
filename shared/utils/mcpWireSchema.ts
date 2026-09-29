@@ -158,3 +158,32 @@ export function findWireStrippedKeywords(node: unknown, path = ""): string[] {
   walk(node, path);
   return found;
 }
+
+/**
+ * A top-level object schema with some arguments left off — see
+ * `MCP_EXTERNAL_OMITTED_ARGS`. Copies rather than mutates, because manifest
+ * schema objects are shared across sessions. Anything that is not an object
+ * schema with `properties` comes back unchanged.
+ */
+export function omitWireSchemaArgs(
+  schema: Record<string, unknown>,
+  omitted: readonly string[]
+): Record<string, unknown> {
+  const properties = schema["properties"];
+  if (properties === null || typeof properties !== "object" || Array.isArray(properties)) {
+    return schema;
+  }
+  const kept = Object.fromEntries(
+    Object.entries(properties as Record<string, unknown>).filter(([key]) => !omitted.includes(key))
+  );
+  const required = Array.isArray(schema["required"])
+    ? (schema["required"] as unknown[]).filter(
+        (key) => typeof key !== "string" || !omitted.includes(key)
+      )
+    : undefined;
+  return {
+    ...schema,
+    properties: kept,
+    ...(required !== undefined ? { required } : {}),
+  };
+}

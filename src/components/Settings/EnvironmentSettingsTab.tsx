@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { InlineError } from "@/components/ui/field";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
@@ -227,16 +228,14 @@ export function EnvironmentSettingsTab() {
   );
 
   const status = saveError ? (
-    <span role="alert" className="text-status-error">
-      {saveError}
-    </span>
+    <InlineError role="alert">{saveError}</InlineError>
   ) : errorCount > 0 ? (
     // The actions row is already a polite live region; each field names its own error.
-    <span className="text-status-error">
+    <InlineError>
       {errorCount === 1
         ? "Fix the name above to save"
         : `Fix the ${errorCount} names above to save`}
-    </span>
+    </InlineError>
   ) : isDirty ? (
     "Unsaved changes — they're also saved when you close Settings"
   ) : (
@@ -283,8 +282,14 @@ export function EnvironmentSettingsTab() {
           >
             Discard
           </Button>
-          <Button variant="contrast" size="sm" onClick={handleSave} disabled={!isDirty || isSaving}>
-            {isSaving ? "Saving…" : "Save"}
+          <Button
+            variant="contrast"
+            size="sm"
+            onClick={handleSave}
+            loading={isSaving}
+            disabled={!isDirty}
+          >
+            Save
           </Button>
         </SettingsActions>
       </SettingsGroup>

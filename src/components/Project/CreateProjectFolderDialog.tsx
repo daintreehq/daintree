@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useId, useMemo } from "react";
+import { Callout } from "@/components/ui/Callout";
+import { InlineError } from "@/components/ui/field";
 import { join } from "@shared/utils/path";
-import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { FolderPlus } from "lucide-react";
 import { projectClient } from "@/clients";
@@ -18,6 +19,7 @@ import {
   PathCaption,
   type ProjectOpenDestination,
 } from "./projectDialogFields";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 interface CreateProjectFolderDialogProps {
   isOpen: boolean;
@@ -32,6 +34,9 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
   const [pickedEmoji, setPickedEmoji] = useState<string | null>(null);
   const [destination, setDestination] = useState<ProjectOpenDestination>("current");
   const [error, setError] = useState<string | null>(null);
+  // A failure that isn't the name's fault — the picker, the location, the create
+  // itself — so it isn't stated under the name, and the name isn't marked invalid.
+  const [failure, setFailure] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const folderNameInputRef = useRef<HTMLInputElement>(null);
   const homeDirFetchedRef = useRef(false);
@@ -46,6 +51,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
       setDestination("current");
       setParentPath("");
       setError(null);
+      setFailure(null);
       setIsCreating(false);
       homeDirFetchedRef.current = false;
       return;
@@ -79,10 +85,11 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
         homeDirFetchedRef.current = true; // Prevent homeDir overwriting user's pick
         setParentPath(selected);
         setError(null);
+        setFailure(null);
         folderNameInputRef.current?.focus();
       }
     } catch {
-      setError("Could not open directory picker");
+      setFailure("Could not open directory picker");
     }
   }, []);
 
@@ -99,12 +106,13 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
       return;
     }
     if (!parentPath.trim()) {
-      setError("Please select a parent directory");
+      setFailure("Please select a parent directory");
       return;
     }
 
     setIsCreating(true);
     setError(null);
+    setFailure(null);
 
     try {
       await createProjectFolder(parentPath, folderName.trim(), effectiveEmoji, {
@@ -114,7 +122,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
       onClose();
     } catch (err) {
       // Show error inline — keep dialog open so user can retry or correct input
-      setError(formatErrorMessage(err, "Failed to create folder"));
+      setFailure(formatErrorMessage(err, "Failed to create folder"));
     } finally {
       setIsCreating(false);
     }
@@ -122,7 +130,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && !isCreating) {
+      if (isEnterToSubmit(e) && !isCreating) {
         e.preventDefault();
         void handleCreate();
       }
@@ -143,13 +151,13 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
 
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" dismissible={!isCreating}>
-      <AppDialog.Header className="py-3">
+      <AppDialog.Header>
         {/* Neutral, not accent: the header glyph is decoration, and this focus
             region's one load-bearing accent is the keyboard focus ring. */}
         <AppDialog.Title icon={<FolderPlus className="h-4 w-4 text-text-secondary" />}>
           Create project folder
         </AppDialog.Title>
-        {!isCreating && <AppDialog.CloseButton />}
+        <AppDialog.CloseButton />
       </AppDialog.Header>
 
       <AppDialog.Body className="space-y-5">
@@ -159,6 +167,10 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
               id="create-folder-parent"
               value={parentPath}
               onBrowse={() => void handleBrowseParent()}
+              // Enter here answers like the folder name field does.
+              onEnter={() => {
+                if (!isCreating) void handleCreate();
+              }}
               disabled={isCreating}
               browseLabel="Browse for a location"
             />
@@ -167,16 +179,12 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
             label="Name"
             htmlFor="create-folder-name"
             hint={
-              // Only a failed create interrupts. The live name check stays
+              // Only a refused submit interrupts. The live name check stays
               // silent, like `FieldError`: an alert would speak mid-word.
               shownError && (
-                <p
-                  id={errorId}
-                  role={error ? "alert" : undefined}
-                  className="text-xs text-status-error"
-                >
+                <InlineError id={errorId} role={error ? "alert" : undefined}>
                   {shownError}
-                </p>
+                </InlineError>
               )
             }
           >
@@ -187,6 +195,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
               onChange={(e) => {
                 setFolderName(e.target.value);
                 setError(null);
+                setFailure(null);
               }}
               onKeyDown={handleKeyDown}
               invalid={shownError != null}
@@ -214,6 +223,11 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
             />
           </FormRow>
         </FormGrid>
+        {failure && (
+          <Callout severity="error" role="alert">
+            <p>{failure}</p>
+          </Callout>
+        )}
       </AppDialog.Body>
 
       <AppDialog.Footer
@@ -233,21 +247,14 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
             </span>
           )
         }
-      >
-        <div className="flex shrink-0 items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={onClose} disabled={isCreating}>
-            Cancel
-          </Button>
-          <Button
-            variant="contrast"
-            size="sm"
-            onClick={handleCreate}
-            disabled={isCreating || !parentPath || !folderName.trim() || nameError !== null}
-          >
-            {isCreating ? "Creating…" : "Create folder"}
-          </Button>
-        </div>
-      </AppDialog.Footer>
+        secondaryAction={{ label: "Cancel", onClick: onClose, disabled: isCreating }}
+        primaryAction={{
+          label: "Create folder",
+          onClick: () => void handleCreate(),
+          loading: isCreating,
+          disabled: !parentPath || !folderName.trim() || nameError !== null,
+        }}
+      />
     </AppDialog>
   );
 }

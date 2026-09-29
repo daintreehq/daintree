@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useId, useRef, useState } from "react";
+import { useProgressiveRenderLimit } from "@/hooks/useProgressiveRenderLimit";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import {
   KBD_CLASS,
@@ -216,6 +217,11 @@ export function ActionPalette({
   // produced them, so this can't sectionize a set of search results (or strip
   // the headers off a browse list that is still on screen) mid-keystroke.
   const showSections = sections.length > 0;
+  const renderLimit = useProgressiveRenderLimit(
+    results.length,
+    `${isOpen}\u0000${query}`,
+    selectedIndex
+  );
 
   useEffect(() => {
     if (!showSections) return;
@@ -276,6 +282,7 @@ export function ActionPalette({
           aria-busy={isStale || undefined}
         >
           {sections.map((section) => {
+            if (section.start >= renderLimit) return null;
             const canHide = section.id === RECENTLY_USED_SECTION_ID;
             // A category band's header already names every row's category.
             const showCategory = !section.id.startsWith("category:");
@@ -299,7 +306,7 @@ export function ActionPalette({
                   {section.label}
                 </div>
                 {results
-                  .slice(section.start, section.start + section.count)
+                  .slice(section.start, Math.min(section.start + section.count, renderLimit))
                   // Rows are indexed against `results`, not the slice, so the
                   // highlight and hover handlers keep addressing the flat list
                   // the keyboard navigates.
@@ -314,7 +321,7 @@ export function ActionPalette({
     );
     // No overflow notice here: the browse rail is uncapped, so `shown` always
     // equals `total`. The search path keeps its notice via SearchablePalette.
-  }, [results, sections, isStale, renderActionRow]);
+  }, [results, sections, isStale, renderActionRow, renderLimit]);
 
   const [activeMode, setActiveMode] = useState<ActionPaletteMode | null>(null);
   // Hold the last rendered chip label across the exit animation so the chip

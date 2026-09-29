@@ -276,6 +276,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 /**
  * A `Virtuoso` that mounts every row but reports an arbitrary rendered range.
@@ -389,15 +390,15 @@ const makeStatus = (overrides?: Partial<StagingStatus>): StagingStatus => ({
  */
 
 /** Past the 80-row windowing threshold, split across both sections. */
-const makeLargeStatus = () =>
+const makeLargeStatus = (stagedCount = 60, unstagedCount = 60) =>
   makeStatus({
-    staged: Array.from({ length: 60 }, (_, i) => ({
+    staged: Array.from({ length: stagedCount }, (_, i) => ({
       path: `src/staged/file-${String(i).padStart(3, "0")}.ts`,
       status: "modified" as const,
       insertions: i,
       deletions: 1,
     })),
-    unstaged: Array.from({ length: 60 }, (_, i) => ({
+    unstaged: Array.from({ length: unstagedCount }, (_, i) => ({
       path: `src/unstaged/file-${String(i).padStart(3, "0")}.ts`,
       status: "modified" as const,
       insertions: i,
@@ -543,8 +544,8 @@ describe("ReviewHub windowed file list (#12241)", () => {
     HTMLElement.prototype.scrollIntoView = vi.fn();
   });
 
-  const renderLargeHub = async () => {
-    getStagingStatusMock.mockResolvedValue(makeLargeStatus());
+  const renderLargeHub = async (status = makeLargeStatus()) => {
+    getStagingStatusMock.mockResolvedValue(status);
     render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     // Waits on the listbox, not on a particular row: a narrow window may not
     // mount row zero at all.
@@ -622,19 +623,17 @@ describe("ReviewHub windowed file list (#12241)", () => {
   });
 
   it("reveals into the unstaged section using that section's own indices", async () => {
-    // A window in the middle of each section, so the second unstaged row is
-    // genuinely absent and only the virtualizer can bring it back.
+    // Keep the total above the windowing threshold, with two staged rows so
+    // the second unstaged row needs only four keyboard steps to reach.
+    // The unstaged window still excludes that row, forcing a reveal.
     virtuosoRange.current = { startIndex: 20, endIndex: 30 };
-    await renderLargeHub();
+    await renderLargeHub(makeLargeStatus(2, 79));
 
-    // 62 steps: 60 staged rows, then the second unstaged row.
-    for (let i = 0; i < 62; i++) {
+    for (let i = 0; i < 4; i++) {
       act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
     }
     expect(screen.queryByTestId("file-stage-row-src/unstaged/file-001.ts")).toBeNull();
-    // Flat index 60 is the unstaged section's index 0 — the reveal has to speak
-    // the section's coordinates, not the cursor's.
-    // Flat index 61 is the unstaged section's index 1 — the reveal has to speak
+    // Flat index 3 is the unstaged section's index 1 — the reveal has to speak
     // the section's own coordinates, and reach the unstaged list, not the
     // staged one that happens to have a row at index 1 too.
     expect(scrollToIndexMock).toHaveBeenLastCalledWith(
@@ -717,7 +716,7 @@ describe("ReviewHub windowed file list (#12241)", () => {
     render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => screen.getByTestId("file-stage-row-src/staged/file-000.ts"));
 
-    act(() => void fireEvent.click(screen.getByRole("button", { name: /vs main/i })));
+    act(() => void fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
     await waitFor(() => screen.getByText("file-000.ts"));
 
     // Windowed, but still the same read-only rows: a native button per file,
@@ -744,4 +743,8 @@ describe("ReviewHub windowed file list (#12241)", () => {
     // the row menu ever opened.
     await waitFor(() => screen.getByRole("menuitem", { name: /open diff/i }));
   });
+});
+
+afterEach(() => {
+  resetStagingStatusCacheForTests();
 });

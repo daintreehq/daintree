@@ -129,6 +129,27 @@ describe("TerminalOutputIngestService", () => {
     expect(writeToTerminal).toHaveBeenCalledWith("term-1", "abc", 3);
   });
 
+  it("merges only a contiguous run of the stream, carrying its combined range (#12791)", () => {
+    const writeToTerminal = vi.fn();
+    const service = new TerminalOutputIngestService(writeToTerminal);
+
+    service.bufferData("term-1", "x".repeat(140_000), { start: 0, end: 140_000 });
+    service.bufferData("term-1", "a", { start: 140_000, end: 140_001 });
+    service.bufferData("term-1", "b", { start: 140_001, end: 140_002 });
+    // Bytes 140_002..140_010 never reached this view.
+    service.bufferData("term-1", "c", { start: 140_010, end: 140_011 });
+
+    service.notifyWriteComplete("term-1", 140_000);
+    expect(writeToTerminal).toHaveBeenNthCalledWith(2, "term-1", "ab", 2, {
+      start: 140_000,
+      end: 140_002,
+    });
+    expect(writeToTerminal).toHaveBeenNthCalledWith(3, "term-1", "c", 1, {
+      start: 140_010,
+      end: 140_011,
+    });
+  });
+
   it("caps coalesced batch at 256 KB and drains remainder on next acknowledgment", () => {
     const writeToTerminal = vi.fn();
     const service = new TerminalOutputIngestService(writeToTerminal);

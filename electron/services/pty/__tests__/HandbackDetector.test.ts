@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectHandback, rawHandbackText } from "../HandbackDetector.js";
+import { detectHandback, findHandback, rawHandbackText } from "../HandbackDetector.js";
 import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
 import { HANDBACK_MESSAGE_MAX_CHARS } from "../../../../shared/types/handback.js";
 
@@ -60,6 +60,38 @@ describe("detectHandback", () => {
   it("ignores a capture spanning a line the semantic buffer cut short", () => {
     const text = `DAINTREE-DONE-k7f3qa: <sum... [truncated]\nmore output END-k7f3qa`;
     expect(detectHandback(text, CODE)).toBeNull();
+  });
+
+  it("ignores a marker a spinner row shows while the agent is still working", () => {
+    // Antigravity 1.2.11: the spinner's model-written title was a complete
+    // marker two seconds before the reply printed.
+    const text = [
+      "  empty): DAINTREE-DONE-k7f3qa: <summary> END-k7f3qa",
+      "⣟  DAINTREE-DONE-k7f3qa: Exploring distinctive facts. END-k7f3qa...",
+      "└ Tip: Press ctrl+b to send a long task to the background.",
+      "esc to cancel                                  Gemini 3.8 Flash · high",
+    ].join("\n");
+    expect(detectHandback(text, CODE)).toBeNull();
+    expect(detectHandback(text, CODE, false)).toBeNull();
+  });
+
+  it("ignores a marker cut short by an ellipsis", () => {
+    expect(detectHandback("  DAINTREE-DONE-k7f3qa: Drafting END-k7f3qa…", CODE)).toBeNull();
+  });
+
+  it("finds the real reply once it prints above a spinner still showing a marker", () => {
+    const text = [
+      "  Runner-up: the Antarctic self-appendectomy.",
+      "  DAINTREE-DONE-k7f3qa: Provided two facts. END-k7f3qa",
+      "⣟  DAINTREE-DONE-k7f3qa: Exploring distinctive facts. END-k7f3qa...",
+    ].join("\n");
+    expect(detectHandback(text, CODE)?.message).toBe("Provided two facts.");
+  });
+
+  it("keeps a marker followed by a single full stop", () => {
+    expect(detectHandback("  DAINTREE-DONE-k7f3qa: fixed it END-k7f3qa.", CODE)?.message).toBe(
+      "fixed it"
+    );
   });
 
   it("finds a marker the TUI split at a hyphen", () => {
@@ -172,5 +204,46 @@ describe("detectHandback over the raw stream", () => {
 
   it("never rejoins a hyphen across raw rows, which may not be neighbours on screen", () => {
     expect(raw("DAINTREE-DONE-", "k7f3qa: done END-k7f3qa")).toBeNull();
+  });
+});
+
+describe("rawHandbackText bound", () => {
+  it("reads only the end of a buffer whose last line never breaks", () => {
+    const huge = "x".repeat(200_000) + "DAINTREE-DONE-abc123: done END-abc123";
+    const text = rawHandbackText(["earlier", huge]);
+    expect(text.length).toBeLessThanOrEqual(32_768);
+    expect(text.endsWith("DAINTREE-DONE-abc123: done END-abc123")).toBe(true);
+  });
+});
+
+describe("findHandback", () => {
+  const request = { code: CODE, seq: 1, delivered: true };
+
+  it("never lets the raw stream overrule a marker the screen shows on a status line", () => {
+    // The spinner repaints with a carriage return, which the raw stream keeps
+    // as a row break, so the spinner glyph is gone from the marker's row there.
+    const screen = "⣟  DAINTREE-DONE-k7f3qa: Exploring facts END-k7f3qa";
+    const raw = "⣟\n  DAINTREE-DONE-k7f3qa: Exploring facts END-k7f3qa";
+    const hit = findHandback(
+      [
+        { read: () => screen, rendered: true },
+        { read: () => raw, rendered: false },
+      ],
+      [request],
+      1
+    );
+    expect(hit).toBeUndefined();
+  });
+
+  it("still falls back to the raw stream for a screen that has not caught up", () => {
+    const hit = findHandback(
+      [
+        { read: () => "• thinking", rendered: true },
+        { read: () => "DAINTREE-DONE-k7f3qa: done END-k7f3qa", rendered: false },
+      ],
+      [request],
+      1
+    );
+    expect(hit?.handback.message).toBe("done");
   });
 });

@@ -2,6 +2,7 @@ import { logWarn } from "@/utils/logger";
 import type { MirrorTarget } from "./mirrorApply";
 import type { AuthorityResponse, AuthorityTransport } from "./parseTransport";
 import { WorkerParseSession } from "./WorkerParseSession";
+import { stripCoveredOutput, type StreamRange } from "../streamFence";
 
 export interface LiveWorkerIngestDeps {
   id: string;
@@ -18,6 +19,8 @@ export interface LiveWorkerIngestDeps {
   /** The live xterm instance, written directly — never via TerminalWriteController. */
   mirror: MirrorTarget;
   serializeMirror(): string;
+  /** The mirror's pending escape sequence, read alongside serializeMirror(). */
+  mirrorEscapeTail?(): string | null;
   getGeometry(): { cols: number; rows: number; scrollback: number };
   /**
    * Quiesce the NORMAL ingest pipeline (TerminalOutputIngestService queue +
@@ -44,6 +47,8 @@ export interface LiveWorkerIngestDeps {
   onDidFallback?(reason: string): void;
   /** Engage/release barrier timeout (default 5s). */
   barrierTimeoutMs?: number;
+  /** The pane's committed restore fence (ManagedTerminal.streamFence). */
+  getStreamFence?(): number | undefined;
   /** Mirror repaint cadence override (deterministic tests pass 0). */
   cadenceMs?: number;
 }
@@ -80,7 +85,7 @@ export class LiveWorkerIngest {
   private diverting = false;
   private engaging = false;
   private releasing = false;
-  private releasingBuffer: Array<string | Uint8Array> = [];
+  private releasingBuffer: Array<{ data: string | Uint8Array; range?: StreamRange }> = [];
   private fallbackLatched = false;
   private disposedFlag = false;
   private nextDrainId = 1;
@@ -128,14 +133,15 @@ export class LiveWorkerIngest {
    * snapshot — the snapshot already contains every dedicated-port byte, and
    * these chunks are strictly newer.
    */
-  feedDiverted(data: string | Uint8Array): void {
+  feedDiverted(data: string | Uint8Array, range?: StreamRange): void {
     if (this.disposedFlag) return;
     this.deps.ackDiverted(data);
     if (this.releasing || this.engaging || !this.session) {
-      this.releasingBuffer.push(data);
+      this.releasingBuffer.push({ data, range });
       return;
     }
-    this.session.feed(data);
+    const paint = stripCoveredOutput(this.deps.getStreamFence?.(), data, range);
+    if ((typeof paint === "string" ? paint.length : paint.byteLength) > 0) this.session.feed(paint);
   }
 
   resize(cols: number, rows: number): void {
@@ -236,6 +242,7 @@ export class LiveWorkerIngest {
           scrollback: geometry.scrollback,
           cadenceMs: this.deps.cadenceMs,
           initialSerializedState: this.deps.serializeMirror(),
+          initialEscapeTail: this.deps.mirrorEscapeTail?.(),
         });
         this.unsubTransport = transport.onResponse(this.onTransportResponse);
         transport.attachIngestPort(port);
@@ -252,7 +259,7 @@ export class LiveWorkerIngest {
         }
         await this.drainMirror();
         if (this.disposedFlag) return;
-        this.session.demoteToWorker(this.deps.serializeMirror());
+        this.session.demoteToWorker(this.deps.serializeMirror(), this.deps.mirrorEscapeTail?.());
       }
     } finally {
       this.engaging = false;
@@ -311,10 +318,26 @@ export class LiveWorkerIngest {
     return new Promise((resolve) => this.deps.mirror.write("", resolve));
   }
 
-  private flushReleasingBuffer(): void {
-    if (this.releasingBuffer.length === 0) return;
+  /**
+   * Drain the buffer, minus output a host snapshot restore already put on the
+   * mirror while it was held (#12791) — an engage can wait out such a restore
+   * with chunks buffered from during its fetch.
+   */
+  private bufferedOutput(): Array<string | Uint8Array> {
     const buffered = this.releasingBuffer;
     this.releasingBuffer = [];
+    const fence = this.deps.getStreamFence?.();
+    const out: Array<string | Uint8Array> = [];
+    for (const { data, range } of buffered) {
+      const paint = stripCoveredOutput(fence, data, range);
+      if ((typeof paint === "string" ? paint.length : paint.byteLength) > 0) out.push(paint);
+    }
+    return out;
+  }
+
+  private flushReleasingBuffer(): void {
+    if (this.releasingBuffer.length === 0) return;
+    const buffered = this.bufferedOutput();
     if (this.session && !this.releasing) {
       for (const chunk of buffered) this.session.feed(chunk);
     } else {
@@ -394,9 +417,7 @@ export class LiveWorkerIngest {
     this.deps.releasePort();
     // Whatever was buffered mid-transition still lands on the mirror (already
     // acked), then the host snapshot re-syncs canonical state over it.
-    const buffered = this.releasingBuffer;
-    this.releasingBuffer = [];
-    for (const chunk of buffered) this.deps.mirror.write(chunk);
+    for (const chunk of this.bufferedOutput()) this.deps.mirror.write(chunk);
     this.releasing = false;
     this.engaging = false;
     this.diverting = false;

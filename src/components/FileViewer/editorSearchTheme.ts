@@ -19,9 +19,26 @@ export const editorSearchPanelTheme = EditorView.theme({
     color: "var(--theme-text-primary)",
     borderBottom: "1px solid var(--theme-border-default)",
   },
+  // The right inset clears the absolutely placed close button, so a field
+  // shrunk to a narrow pane never runs under it.
   ".cm-panel.cm-search": {
-    padding: "4px 8px",
+    padding: "4px 24px 4px 8px",
   },
+  // The query is the app's search field (`editorSearchPanel.ts`) and brings its
+  // own paint from search-field.css; this only seats it in the panel's row.
+  ".cm-search .search-field": {
+    display: "inline-flex",
+    verticalAlign: "middle",
+    width: "16rem",
+    maxWidth: "100%",
+    margin: ".2em .6em .2em 0",
+  },
+  // Beats @codemirror/search's `.cm-panel.cm-search input` margin, which would
+  // push the text off-centre inside the field.
+  ".cm-panel.cm-search input.search-field-input": {
+    margin: "0",
+  },
+  // Replacement text keeps the form-control treatment.
   ".cm-search .cm-textfield": {
     backgroundColor: "var(--theme-surface-canvas)",
     color: "var(--theme-text-primary)",

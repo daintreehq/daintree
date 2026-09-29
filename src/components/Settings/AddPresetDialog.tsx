@@ -11,6 +11,13 @@ import {
   CHOICE_LABEL_INSET,
 } from "@/components/ui/RadioChoice";
 import { cn } from "@/lib/utils";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { TriangleAlert } from "lucide-react";
 
 type CreationChoice = "blank" | "clone" | "template";
@@ -107,7 +114,14 @@ export function AddPresetDialog({
     (choice !== "template" || !!selectedTemplate) && (choice !== "clone" || !!currentPreset);
 
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="sm" data-testid="add-preset-dialog">
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="sm"
+      // Locked while the preset is being created, like every dialog mid-action.
+      dismissible={!isCreating}
+      data-testid="add-preset-dialog"
+    >
       <AppDialog.Header>
         <AppDialog.Title>Add preset</AppDialog.Title>
         <AppDialog.CloseButton />
@@ -166,19 +180,18 @@ export function AddPresetDialog({
                     >
                       Provider
                     </label>
-                    <select
-                      id={providerId}
-                      value={selectedTemplateId}
-                      onChange={(e) => setSelectedTemplateId(e.target.value)}
-                      className="w-full rounded-[var(--radius-md)] border border-border-strong bg-surface-input px-3 py-1.5 text-sm text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                      data-testid="template-select"
-                    >
-                      {templates.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}
-                        </option>
-                      ))}
-                    </select>
+                    <Select value={selectedTemplateId} onValueChange={setSelectedTemplateId}>
+                      <SelectTrigger id={providerId} data-testid="template-select">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {templates.map((t) => (
+                          <SelectItem key={t.id} value={t.id}>
+                            {t.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                     {selectedTemplate?.description && (
                       <p className="text-xs text-text-secondary select-text">
                         {/* Trimmed at render, not at the source: these strings
@@ -213,7 +226,7 @@ export function AddPresetDialog({
       </AppDialog.Body>
 
       <AppDialog.Footer
-        secondaryAction={{ label: "Cancel", onClick: onClose }}
+        secondaryAction={{ label: "Cancel", onClick: onClose, disabled: isCreating }}
         primaryAction={{
           label: "Create preset",
           onClick: handleCreate,

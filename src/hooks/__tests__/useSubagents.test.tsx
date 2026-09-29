@@ -74,6 +74,22 @@ describe("useSubagents", () => {
     await waitFor(() => expect(listSubagents).toHaveBeenCalledTimes(1));
   });
 
+  it("hands a lookup's answer to a pane that remounted while it was running", async () => {
+    let answer: (value: AgentSubagentsResult) => void = () => {};
+    listSubagents.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    const first = renderHook(() => useSubagents("t1", { provider: "codex" }));
+    await waitFor(() => expect(listSubagents).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    const second = renderHook(() => useSubagents("t1", { provider: "codex" }));
+    expect(second.result.current.isLoading).toBe(true);
+    await act(async () => answer(ok("child-1")));
+
+    expect(second.result.current.result).toEqual(ok("child-1"));
+    expect(second.result.current.isLoading).toBe(false);
+    expect(listSubagents).toHaveBeenCalledTimes(1);
+  });
+
   it("rehydrates a remount from the cached answer instead of asking again", async () => {
     listSubagents.mockResolvedValue(ok("child-1"));
     const first = renderHook(() => useSubagents("t1", { provider: "codex" }));
@@ -213,5 +229,41 @@ describe("useSubagents", () => {
         reason: "store-unreadable",
       })
     );
+  });
+
+  it("keeps the list it already read when a refresh fails to answer", async () => {
+    listSubagents.mockResolvedValueOnce(ok("child-1"));
+    const { result } = renderHook(() => useSubagents("t1", { provider: "codex" }));
+    await waitFor(() => expect(result.current.result?.status).toBe("ok"));
+
+    listSubagents.mockRejectedValueOnce(new Error("app-server exited"));
+    act(() => result.current.refresh());
+    await waitFor(() => expect(result.current.refreshError).toBe("protocol-error"));
+    expect(result.current.result).toEqual(ok("child-1"));
+
+    // A remount inside the throttle window rehydrates to the list, not the
+    // failure, and still says the list is the old one.
+    const again = renderHook(() => useSubagents("t1", { provider: "codex" }));
+    expect(again.result.current.result).toEqual(ok("child-1"));
+    expect(again.result.current.refreshError).toBe("protocol-error");
+
+    listSubagents.mockResolvedValueOnce(ok("child-2"));
+    act(() => result.current.refresh());
+    await waitFor(() => expect(result.current.result).toEqual(ok("child-2")));
+    expect(result.current.refreshError).toBeNull();
+  });
+
+  it("drops the list when a refresh says the session can no longer be identified", async () => {
+    listSubagents.mockResolvedValueOnce(ok("child-1"));
+    const { result } = renderHook(() => useSubagents("t1", { provider: "codex" }));
+    await waitFor(() => expect(result.current.result?.status).toBe("ok"));
+
+    // Fail closed: another terminal's children would look exactly like these.
+    listSubagents.mockResolvedValueOnce({ status: "unavailable", reason: "ambiguous-session" });
+    act(() => result.current.refresh());
+    await waitFor(() =>
+      expect(result.current.result).toEqual({ status: "unavailable", reason: "ambiguous-session" })
+    );
+    expect(result.current.refreshError).toBeNull();
   });
 });

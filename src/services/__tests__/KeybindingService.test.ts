@@ -155,6 +155,46 @@ describe("KeybindingService", () => {
       expect(service.matchesEvent(event, "Ctrl+Alt+E")).toBe(false);
     });
 
+    it("matches the Linux dictation default from the physical comma key", () => {
+      setPlatform("Linux x86_64");
+
+      const service = new KeybindingService();
+      const event = createKeyboardEvent({
+        key: ",",
+        code: "Comma",
+        ctrlKey: true,
+        altKey: true,
+      });
+
+      expect(service.matchesEvent(event, "Ctrl+Alt+,")).toBe(true);
+      expect(service.matchesEvent(event, "Cmd+Alt+.")).toBe(false);
+    });
+
+    it("routes the period shortcut to voice dictation by default on macOS and Windows", () => {
+      setPlatform("MacIntel");
+      const mac = new KeybindingService();
+      const cmdPeriod = createKeyboardEvent({ key: ".", code: "Period", metaKey: true });
+      expect(mac.findMatchingAction(cmdPeriod)?.actionId).toBe("voiceInput.toggle");
+
+      setPlatform("Win32");
+      const windows = new KeybindingService();
+      const ctrlPeriod = createKeyboardEvent({ key: ".", code: "Period", ctrlKey: true });
+      expect(windows.findMatchingAction(ctrlPeriod)?.actionId).toBe("voiceInput.toggle");
+    });
+
+    it("keeps ⌘. distinct from the ⌘⇧. and ⌘⌥. defaults on macOS", () => {
+      setPlatform("MacIntel");
+
+      const service = new KeybindingService();
+      const plain = createKeyboardEvent({ key: ".", code: "Period", metaKey: true });
+      const alt = createKeyboardEvent({ key: "≥", code: "Period", metaKey: true, altKey: true });
+
+      expect(service.matchesEvent(plain, "Cmd+.")).toBe(true);
+      expect(service.matchesEvent(plain, "Cmd+Shift+.")).toBe(false);
+      expect(service.matchesEvent(alt, "Cmd+.")).toBe(false);
+      expect(service.matchesEvent(alt, "Cmd+Alt+.")).toBe(true);
+    });
+
     it("rejects Ctrl+Alt+E on Linux AltGr when ctrlKey+altKey are also synthesized", () => {
       // Some X11/Wayland setups synthesize ctrlKey+altKey alongside the
       // AltGraph modifier. The explicit guard must still reject the match.
@@ -2464,5 +2504,31 @@ describe("when-clause context provider", () => {
 
     service.setWhenContext({ testFlag: true });
     expect(service.resolveKeybinding(event).match?.actionId).toBe("test.whenGatedStatic");
+  });
+});
+
+describe("formatComboForDisplay — one grammar with KbdChord", () => {
+  afterEach(() => setPlatform("MacIntel"));
+
+  it.each([
+    ["MacIntel", true],
+    ["Win32", false],
+  ])("prints every default binding the way the chips draw it (%s)", async (platform, mac) => {
+    setPlatform(platform);
+    const { formatChordText } = await import("@/lib/kbdShortcut");
+    const service = new KeybindingService();
+    for (const { combo } of DEFAULT_KEYBINDINGS) {
+      if (!combo) continue;
+      expect(service.formatComboForDisplay(combo)).toBe(formatChordText(combo, mac));
+    }
+  });
+
+  it("never joins macOS glyphs with a plus sign", () => {
+    setPlatform("MacIntel");
+    const service = new KeybindingService();
+    for (const { combo } of DEFAULT_KEYBINDINGS) {
+      if (!combo) continue;
+      expect(service.formatComboForDisplay(combo)).not.toMatch(/[⌘⇧⌥⌃]\+/);
+    }
   });
 });

@@ -14,6 +14,9 @@ const notificationServiceMock = vi.hoisted(() => ({
   showWatchNotification: vi.fn(),
   showNativeNotification: vi.fn(),
   isWindowFocused: vi.fn(() => false),
+  getUserPresence: vi.fn<() => "present" | "away" | "unknown">(() => "present"),
+  closeNotificationsForPanel: vi.fn(),
+  isOwnerViewFocused: vi.fn<(owner: number | undefined) => boolean>(() => false),
 }));
 
 const soundServiceMock = vi.hoisted(() => ({
@@ -182,7 +185,7 @@ describe("AgentNotificationService adversarial", () => {
       "agent-1 is waiting for input",
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      { silent: true, ownerWebContentsId: OWNER }
+      { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
     );
     expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
   });
@@ -271,7 +274,7 @@ describe("AgentNotificationService adversarial", () => {
       "agent-1 is waiting for input",
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
-      { silent: true, ownerWebContentsId: OWNER }
+      { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"] }
     );
     expect(notificationServiceMock.showWatchNotification).toHaveBeenNthCalledWith(
       2,

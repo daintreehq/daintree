@@ -844,4 +844,55 @@ describe("PortBatcher", () => {
       expect(vi.getTimerCount()).toBe(0);
     });
   });
+
+  describe("stream offsets (#12791)", () => {
+    it("posts a merged batch with the end offset of its last chunk", () => {
+      const deps = createDeps();
+      const batcher = new PortBatcher(deps);
+      batcher.write("t1", bytes("aaa"), 3, false, false, false, 3);
+      batcher.write("t1", bytes("bbb"), 3, false, false, false, 6);
+      batcher.flush();
+      expect(deps.postMessage).toHaveBeenCalledOnce();
+      expect(deps.postMessage).toHaveBeenCalledWith("t1", bytes("aaabbb"), 6, 6);
+    });
+
+    it("splits the batch at a gap left by a chunk this window never accepted", () => {
+      const deps = createDeps();
+      const batcher = new PortBatcher(deps);
+      batcher.write("t1", bytes("aaa"), 3, false, false, false, 3);
+      // Offsets 3..6 went to another window only.
+      batcher.write("t1", bytes("ccc"), 3, false, false, false, 9);
+      batcher.flush();
+      expect(deps.postMessage).toHaveBeenNthCalledWith(1, "t1", bytes("aaa"), 3, 3);
+      expect(deps.postMessage).toHaveBeenNthCalledWith(2, "t1", bytes("ccc"), 3, 9);
+    });
+
+    it("never merges a chunk that carries an offset with one that does not", () => {
+      const deps = createDeps();
+      const batcher = new PortBatcher(deps);
+      batcher.write("t1", bytes("aaa"), 3);
+      batcher.write("t1", bytes("bbb"), 3, false, false, false, 6);
+      batcher.write("t1", bytes("ccc"), 3);
+      batcher.flush();
+      expect(deps.postMessage).toHaveBeenNthCalledWith(1, "t1", bytes("aaa"), 3);
+      expect(deps.postMessage).toHaveBeenNthCalledWith(2, "t1", bytes("bbb"), 3, 6);
+      expect(deps.postMessage).toHaveBeenNthCalledWith(3, "t1", bytes("ccc"), 3);
+    });
+
+    it("hands the end offset to the failed-batch recovery", () => {
+      const onError = vi.fn();
+      const deps = createDeps({
+        postMessage: vi.fn(() => {
+          throw new Error("port closed");
+        }),
+        onError,
+      });
+      const batcher = new PortBatcher(deps);
+      batcher.write("t1", bytes("aaa"), 3, false, false, false, 12);
+      batcher.flush();
+      expect(onError.mock.calls[0]![1]).toEqual([
+        { id: "t1", data: bytes("aaa"), bytes: 3, streamEnd: 12 },
+      ]);
+    });
+  });
 });

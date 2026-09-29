@@ -67,16 +67,16 @@ export const ABSOLUTE_MAX_GRID_TERMINALS = 16;
 export const GRID_TRANSITION_DURATION_MS = 200;
 
 /**
- * Sidebar width transition duration. Mirrors the `duration-[var(--duration-250)]`
- * value applied in Sidebar.tsx. Used to gate PTY resize propagation so xterm
- * doesn't deliver mid-animation fractional dimensions to the host.
+ * Sidebar width transition duration: the longer (opening) leg of the panel tier
+ * the sidebar shares with the assistant, 200ms in and 120ms out (AppLayout.tsx).
+ * Used to gate PTY resize propagation so xterm doesn't deliver mid-animation
+ * fractional dimensions to the host.
  */
-export const SIDEBAR_TRANSITION_MS = 250;
+export const SIDEBAR_TRANSITION_MS = 200;
 /**
  * Dead-man TTL for the resize-suppression lock armed on a sidebar/assistant
- * width transition. Pegged to the 250ms sidebar transition. The assistant slide
- * (#10704) is asymmetric — 200ms enter / 120ms exit — so its longest leg (200ms)
- * is conservatively covered by this 250ms lock; no separate assistant TTL needed.
+ * width transition. Both panels move on the same asymmetric tier (200ms enter /
+ * 120ms exit), so the longest leg covers either; no separate assistant TTL.
  */
 export const SIDEBAR_TOGGLE_LOCK_MS = SIDEBAR_TRANSITION_MS;
 

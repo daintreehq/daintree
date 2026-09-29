@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check } from "lucide-react";
+import { Check, CircleAlert } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -173,14 +173,13 @@ function SectionRow({ section }: { section: ConfigBundlePreviewSection }) {
           {added.length > MAX_NAMED && (
             <>
               {hiddenAdded === 0 && " "}
-              <button
-                type="button"
+              <Button
+                variant="link"
                 aria-expanded={showAllAdded}
-                className="rounded-[var(--radius-sm)] text-text-primary underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                 onClick={() => setShowAllAdded((open) => !open)}
               >
                 {showAllAdded ? "show fewer" : `${hiddenAdded} more`}
-              </button>
+              </Button>
             </>
           )}
         </p>
@@ -488,13 +487,16 @@ export function ImportConfigDialog() {
           <p
             className={cn(
               "flex items-center gap-1.5 text-xs",
-              exportNote?.failed ? "text-status-error" : "text-text-secondary"
+              exportNote?.failed ? "text-text-primary" : "text-text-secondary"
             )}
             role="status"
           >
             {/* Neutral, not success-green: a finished side step, not the outcome. */}
             {exportNote && !exportNote.failed && (
               <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            )}
+            {exportNote?.failed && (
+              <CircleAlert className="h-3.5 w-3.5 shrink-0 text-status-error" aria-hidden="true" />
             )}
             {exportNote?.text ?? "Save the current values before importing"}
           </p>

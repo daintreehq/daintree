@@ -20,7 +20,8 @@ import {
 import { logError } from "@/utils/logger";
 import { extractHelpSessionErrorCode } from "@/utils/clientHelpSessionError";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
-import { openDaintreeTour } from "@/components/Tour/tourEvents";
+import { loadCustomLaunchFlags } from "@/lib/assistantLaunchFlags";
+import { openTour } from "@/components/Tour/tourEvents";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { getAssistantSupportedAgentIds } from "@shared/config/agentRegistry";
 
@@ -58,14 +59,15 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
   // inline in the MCP CallTool handler (electron/services/mcp-server/
   // sessionServer.ts): the URL is validated against the daintree.org allowlist,
   // a figure number is assigned sequentially per help session, and the figure
-  // is pushed to the pinned renderer. The tool lives only in WORKBENCH_TIER_TOOLS
-  // (never the external/api-key allowlist), so only help sessions can call it.
+  // is pushed to the pinned renderer. The tool lives only in CORE_TIER_TOOLS
+  // (never the external/api-key allowlist), and the handler refuses any session
+  // without a help-session id, so only help sessions can call it.
   // `run()` throws if the renderer ever invokes it directly.
   actions.set("help.displayImage", () => ({
     id: "help.displayImage",
     title: "Display documentation image",
     description:
-      "Show a documentation image inline in the assistant panel so an answer can point at it. Use this only when an image genuinely illustrates the answer, not for decorative ones. Reference the returned figure label as plain text at the insertion point rather than as markdown image syntax, which command-line renderers strip. Figure numbers are assigned in sequence and must never be chosen yourself.",
+      "Show a documentation image inline in the assistant panel, only when it genuinely illustrates the answer. Cite the returned figure label as plain text where it belongs, not as markdown image syntax, which CLI renderers strip. Never choose figure numbers yourself.",
     category: "help",
     kind: "command",
     danger: "safe",
@@ -76,8 +78,8 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         .string()
         .min(1)
         .describe("An https://daintree.org image URL. data:, blob:, and other hosts are rejected."),
-      caption: z.string().optional().describe("Optional caption shown beneath the figure."),
-      altText: z.string().optional().describe("Optional alternative text for accessibility."),
+      caption: z.string().optional().describe("Caption shown under the figure."),
+      altText: z.string().optional().describe("Alt text for accessibility."),
     }),
     rawOutputSchema: {
       type: "object",
@@ -263,6 +265,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         DAINTREE_PROJECT_ID: workspace.id,
       };
 
+      const agentLaunchFlags = await loadCustomLaunchFlags(agentId);
       const result = await actionService.dispatch<{ terminalId: string | null }>(
         "agent.launch",
         {
@@ -273,6 +276,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
           excludeFromPersistence: true,
           removeOnExit: true,
           ...(env && { env }),
+          ...(agentLaunchFlags.length > 0 && { agentLaunchFlags }),
         },
         { source: "user" }
       );
@@ -370,8 +374,15 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     nonRepeatable: true,
     scope: "renderer",
     keywords: ["tour", "tutorial", "walkthrough", "onboarding", "intro", "video"],
-    run: async () => {
-      openDaintreeTour();
+    // Optional so every existing zero-argument caller (menu, palette, MCP) keeps working.
+    // An id no tour is registered under is the host's to handle, not a validation error.
+    argsSchema: z
+      .object({
+        tourId: z.string().optional().describe("Tour to play; defaults to the Daintree tour"),
+      })
+      .optional(),
+    run: async (args: { tourId?: string } | undefined) => {
+      openTour(args?.tourId);
     },
   }));
 

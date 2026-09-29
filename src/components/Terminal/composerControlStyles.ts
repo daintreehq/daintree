@@ -26,4 +26,4 @@ export const COMPOSER_CONTROL_HOVER_BG_CLASS =
  * and not the editor beside it.
  */
 export const COMPOSER_CONTROL_FOCUS_CLASS =
-  "focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-[color-mix(in_oklab,var(--ib-fg)_60%,var(--ib-bg))]";
+  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[color-mix(in_oklab,var(--ib-fg)_60%,var(--ib-bg))]";

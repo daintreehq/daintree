@@ -37,6 +37,7 @@ const ALLOWED_METHODS = Object.freeze([
   "thread/list",
   "thread/read",
   "thread/turns/list",
+  "account/rateLimits/read",
 ] as const);
 
 export function isAllowedCodexAppServerMethod(method: string): boolean {
@@ -346,6 +347,8 @@ async function spawnCodexAppServerSession<T>(
       // server's problem, not a reason to fail queries that may still succeed.
       return;
     }
+    // Server notifications (`account/rateLimits/updated` and the like) carry no
+    // id. A one-shot session has no subscriber for them, so they are dropped.
     if (typeof message.id !== "number") return;
     const entry = pending.get(message.id);
     if (!entry) return;

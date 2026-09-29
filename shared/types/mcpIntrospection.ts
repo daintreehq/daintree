@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { HelpAssistantTier } from "./ipc/maps.js";
 
 /**
  * The first-party existence catalog (#12117).
@@ -37,7 +38,7 @@ export interface McpUnavailableActionStub {
    * to raise the session to. Never `external`: that allowlist is a flat peer of
    * the in-app ladder, not a rung a first-party session could climb to.
    */
-  minimumTier: "workbench" | "action" | "system";
+  minimumTier: HelpAssistantTier;
   /**
    * Always `false`. Written out rather than implied so a model reading one
    * entry in isolation cannot mistake it for something it may dispatch.
@@ -55,6 +56,6 @@ export const McpUnavailableActionStubSchema = z.strictObject({
   id: z.string().min(1),
   title: z.string().min(1),
   band: z.enum(["reversible", "external-effect", "destructive-local", "destructive-network"]),
-  minimumTier: z.enum(["workbench", "action", "system"]),
+  minimumTier: z.enum(["core", "full"]),
   callable: z.literal(false),
 });

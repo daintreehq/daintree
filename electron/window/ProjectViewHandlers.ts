@@ -28,8 +28,11 @@ import {
 } from "../lifecycle/windowRecreationState.js";
 import { evictDeadView, getAvailableMemoryMb } from "./ProjectViewEvictionController.js";
 import { deliverPowerPolicy } from "./powerPolicyDelivery.js";
+import { logError, logWarn } from "../utils/logger.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
+import { rendererReloadNotice } from "./rendererReloadNotice.js";
+import { getTerminationIntent } from "../services/processTerminationIntent.js";
 
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
@@ -149,20 +152,41 @@ export function setupViewHandlers(
     if (details.reason === "clean-exit") return;
 
     const projectId = host.webContentsToProject.get(wc.id);
-    console.error(
-      `[ProjectViewManager] View renderer gone (project: ${projectId}):`,
-      details.reason,
-      details.exitCode
-    );
-    // Memory eviction is not a crash — skip the one-shot crash log so a
-    // genuine crash in the same session can still be recorded.
+    const goneContext = {
+      process: "project-view",
+      reason: details.reason,
+      exitCode: details.exitCode,
+      webContentsId: wc.id,
+      windowId: win.isDestroyed() ? undefined : win.id,
+      projectId,
+    };
+    if (details.reason === "memory-eviction") {
+      logWarn("View renderer gone", goneContext);
+    } else {
+      logError("View renderer gone", undefined, goneContext);
+    }
+    // Main survives a view renderer's death, so it is recorded as a non-fatal
+    // event, never as the session's crash. Memory eviction is routine and not
+    // recorded at all.
     if (details.reason !== "memory-eviction") {
-      getCrashRecoveryService().recordCrash(
-        new Error(`View renderer gone: ${details.reason} (exit code ${details.exitCode})`)
-      );
+      getCrashRecoveryService().recordRendererGone({
+        process: "project-view",
+        projectId,
+        webContentsId: wc.id,
+        reason: details.reason,
+        exitCode: details.exitCode,
+      });
     }
 
     if (win.isDestroyed()) return;
+
+    // Before any early return or recovery branch (#12954): the assistant
+    // pinned to this renderer is capture-revoked on every death, not only
+    // through the active-view crash hook or the deferred cached eviction —
+    // the eviction reloads instead when the project is reactivated first, an
+    // outgoing view behind a paint gate is neither active nor cached, and the
+    // crash-loop branch never reaches the eviction at all.
+    host.notifyViewRendererGone(wc);
 
     const crashEntry = projectId ? host.views.get(projectId) : null;
 
@@ -312,9 +336,18 @@ export function setupViewHandlers(
     } else {
       console.log("[ProjectViewManager] Renderer crash, auto-reloading view");
       if (projectId && projectId === host.activeProjectId) {
-        notifyError(new Error("A project view crashed and was automatically reloaded."), {
-          source: "renderer-crash",
-        });
+        notifyError(
+          new Error(
+            rendererReloadNotice(
+              "A project view",
+              details.reason,
+              getTerminationIntent({ webContentsId: wc.id })
+            )
+          ),
+          {
+            source: "renderer-crash",
+          }
+        );
       }
       setImmediate(() => {
         if (!wc.isDestroyed()) wc.reload();

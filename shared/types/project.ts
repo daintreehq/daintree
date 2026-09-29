@@ -14,6 +14,7 @@ import type {
   FileBrowserTreeSnapshot,
   TerminalSpawnSource,
   PanelRestoreRecovery,
+  TerminalScratchpad,
 } from "./panel.js";
 import type { PersistedPanelKindRef } from "../config/panelKindRegistry.js";
 import type { CommandOverride } from "./commands.js";
@@ -315,6 +316,8 @@ export interface PanelSnapshot {
    * restore holds it again instead of starting a fresh conversation.
    */
   restoreRecovery?: PanelRestoreRecovery;
+  /** The terminal's Scratchpad notes (#12835). Untrusted on read — sanitized at restore. */
+  scratchpad?: TerminalScratchpad;
   /** Last known agent state for crash recovery display */
   agentState?: AgentState;
   /** Timestamp of last agent state change */
@@ -783,16 +786,23 @@ export interface ProjectSettings {
   /** Hostnames the user approved for the browser panel beyond the implicit local/private allow-list */
   browserAllowedHosts?: string[];
   /**
-   * Tier of Daintree MCP access exposed to agents launched in this project's worktrees.
+   * Daintree MCP tool set exposed to agents launched in this project's worktrees.
    * - `off` (default): no MCP server injected
-   * - `workbench`: read-only introspection (worktree/files/terminal output, project state, history)
-   * - `action`: workbench + in-app orchestration (create worktrees from recipes, open terminals and send input to the ones the agent's own session opened, confirm-gated worktree cleanup)
-   * - `system`: action + worktree creation at an explicit root, terminal arm/disarm, git stage/fetch/commit/push, clipboard and CopyTree-to-disk writes, forge reads and writes
+   * - `core`: orchestration — create worktrees, launch agents, prompt, read, wait on, move and close the terminals the agent's own session opened
+   * - `full`: core + recipes, workflows, project checks, forge and git reads, context tools, and diagnostics
    */
   daintreeMcpTier?: DaintreeMcpTier;
   /**
+   * Whether an agent pane at the `full` tier runs the destructive actions its
+   * tier permits without the confirmation dialog. Independent of the tier so no
+   * tier skips a confirm on its own; a project stored at the pre-split `system`
+   * tier, which auto-confirmed, reads as `true` until the user changes it. A
+   * force delete that would discard changes still asks for the typed name.
+   */
+  daintreeMcpSkipConfirmations?: boolean;
+  /**
    * @deprecated Use `daintreeMcpTier` instead. Kept for one-cycle migration of existing project files.
-   * `true` migrates to `workbench` on read; `false`/undefined migrates to `off`.
+   * `true` migrates to `core` on read; `false`/undefined migrates to `off`.
    */
   exposeDaintreeMcpToAgents?: boolean;
 }
@@ -841,6 +851,7 @@ export const PROJECT_SETTINGS_SHAREABILITY = {
   defaultWorktreeMode: "local",
   browserAllowedHosts: "local",
   daintreeMcpTier: "local",
+  daintreeMcpSkipConfirmations: "local",
   exposeDaintreeMcpToAgents: "local",
 } as const satisfies Record<keyof ProjectSettings, FieldShareability>;
 
@@ -867,7 +878,7 @@ export type ProjectSettingsAgentExposure = "exposed" | "internal";
  *   secure storage into `environmentVariables` in plaintext) and `projectIconSvg` (250KB
  *   of markup). `resourceEnvironments` joins them because it stores raw provisioning and
  *   `connect` shell strings that routinely embed credentials.
- * - Access-control state: `daintreeMcpTier` (`project.saveSettings` already strips it from
+ * - Access-control state: `daintreeMcpTier` and `daintreeMcpSkipConfirmations` (`project.saveSettings` already strips them from
  *   writes to block self-elevation; it should not be readable either) and
  *   `browserAllowedHosts`, which is the browser panel's approval list.
  * - Renderer-only UI state: dismissal flags, editor/viewer preferences, saved fleet scopes.
@@ -914,6 +925,7 @@ export const PROJECT_SETTINGS_AGENT_EXPOSURE = {
   defaultWorktreeMode: "exposed",
   browserAllowedHosts: "internal",
   daintreeMcpTier: "internal",
+  daintreeMcpSkipConfirmations: "internal",
   exposeDaintreeMcpToAgents: "internal",
 } as const satisfies Record<keyof ProjectSettings, ProjectSettingsAgentExposure>;
 
@@ -1020,17 +1032,38 @@ export function pickAgentVisibleProjectSettings(
   return visible as AgentVisibleProjectSettings;
 }
 
-/** Tier of Daintree MCP access exposed to agents in a project. */
-export type DaintreeMcpTier = "off" | "workbench" | "action" | "system";
+/** Daintree MCP tool set exposed to agents in a project. */
+export type DaintreeMcpTier = "off" | "core" | "full";
 
-/** Resolve the legacy boolean field into the new tier enum. */
+/**
+ * Map a stored tier onto the current enum. The pre-split ladder values are
+ * read in place — `workbench` and `action` become `core`, `system` becomes
+ * `full` — so a project file written by an older build keeps working without a
+ * rewrite. Anything unrecognised is `null`.
+ */
+export function normalizeDaintreeMcpTier(value: unknown): DaintreeMcpTier | null {
+  switch (value) {
+    case "off":
+    case "core":
+    case "full":
+      return value;
+    case "workbench":
+    case "action":
+      return "core";
+    case "system":
+      return "full";
+    default:
+      return null;
+  }
+}
+
+/** Resolve the stored tier, or the legacy boolean field, into the current enum. */
 export function resolveDaintreeMcpTier(settings: {
-  daintreeMcpTier?: DaintreeMcpTier;
+  daintreeMcpTier?: unknown;
   exposeDaintreeMcpToAgents?: boolean;
 }): DaintreeMcpTier {
-  const tier = settings.daintreeMcpTier;
-  if (tier === "workbench" || tier === "action" || tier === "system") return tier;
-  if (tier === "off") return "off";
-  if (settings.exposeDaintreeMcpToAgents === true) return "workbench";
+  const tier = normalizeDaintreeMcpTier(settings.daintreeMcpTier);
+  if (tier !== null) return tier;
+  if (settings.exposeDaintreeMcpToAgents === true) return "core";
   return "off";
 }

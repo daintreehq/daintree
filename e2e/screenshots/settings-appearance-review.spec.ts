@@ -308,7 +308,57 @@ const STATES: ShotState[] = [
       await expect(page.locator(PANEL)).toContainText("between 8 and 24");
     },
   },
+  {
+    id: "terminal-font-step",
+    subtab: "terminal",
+    scroll: "#appearance-font-family",
+    enter: async (page) => {
+      // One stepper step, focus still in the field: the sample is what answers it.
+      const input = page.locator("#appearance-font-size input");
+      await input.focus();
+      await page.keyboard.press("ArrowUp");
+      await expect(input).toHaveValue("13");
+      await expect(input).toBeFocused();
+    },
+    leave: resetTerminalFontSize,
+  },
+  {
+    id: "terminal-font-enter",
+    subtab: "terminal",
+    scroll: "#appearance-font-family",
+    enter: async (page) => {
+      const input = page.locator("#appearance-font-size input");
+      await input.fill("16");
+      await page.keyboard.press("Enter");
+      await expect(input).toHaveValue("16");
+      await expect(input).toBeFocused();
+    },
+    leave: resetTerminalFontSize,
+  },
+  {
+    id: "terminal-font-escape",
+    subtab: "terminal",
+    scroll: "#appearance-font-family",
+    enter: async (page) => {
+      const input = page.locator("#appearance-font-size input");
+      await input.fill("40");
+      await page.keyboard.press("Escape");
+      await expect(page.locator(DIALOG)).toBeVisible();
+      await expect(input).toHaveValue("12");
+      await expect(input).not.toHaveAttribute("aria-invalid", "true");
+    },
+  },
 ];
+
+async function resetTerminalFontSize(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    await window.__daintreeDispatchAction?.(
+      "terminalConfig.setFontSize",
+      { fontSize: 12 },
+      { source: "test" }
+    );
+  });
+}
 
 interface ManifestEntry {
   file: string;

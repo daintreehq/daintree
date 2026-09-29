@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { Unplug } from "lucide-react";
-import { Joystick } from "@/components/icons";
+import { Plug } from "@/components/icons";
 import { usePanelStore } from "@/store";
 import { useTerminalAdoptionStore } from "@/store/terminalAdoptionStore";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -16,6 +16,8 @@ import { closeAndAnnounce } from "@/lib/accessibility";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import type { TerminalAdoptionRefusal } from "@shared/types/ipc/mcpServer";
+import { cn } from "@/lib/utils";
+import { HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE } from "./terminalHeaderChip";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
@@ -80,7 +82,7 @@ function OrchestratorMenuItem({
   if (name === null) return null;
   return (
     <ContextMenuItem aria-haspopup="dialog" onSelect={() => onSelect(paneId)}>
-      <Joystick className={ICON_CLASS} aria-hidden="true" />
+      <Plug className={ICON_CLASS} aria-hidden="true" />
       {name}
     </ContextMenuItem>
   );
@@ -123,7 +125,7 @@ export function TerminalHandOverMenuItems({
   return (
     <ContextMenuSub>
       <ContextMenuSubTrigger>
-        <Joystick className={ICON_CLASS} aria-hidden="true" />
+        <Plug className={ICON_CLASS} aria-hidden="true" />
         Hand to orchestrator
       </ContextMenuSubTrigger>
       <ContextMenuSubContent>
@@ -250,12 +252,12 @@ export function TerminalDrivenByBadge({ terminalId }: { terminalId: string }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <div
-          className="inline-flex items-center gap-1 min-w-0 max-w-[14rem] text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded-full border border-divider"
+          className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE, "min-w-0 max-w-[14rem] shrink")}
           role="status"
           aria-live="off"
           data-testid="terminal-driven-by-badge"
         >
-          <Joystick className="w-3 h-3 shrink-0" aria-hidden="true" />
+          <Plug className="w-3 h-3 shrink-0" aria-hidden="true" />
           <span className="truncate">{label}</span>
         </div>
       </TooltipTrigger>

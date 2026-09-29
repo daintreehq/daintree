@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
+  DropdownMenuMeta,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSub,
@@ -17,6 +18,7 @@ import {
   MARKDOWN_FONT_SIZE_STEPS,
   type MarkdownFontSize,
 } from "@/store/preferencesStore";
+import { PANE_TOOLBAR_ICON_BUTTON_CLASS } from "@/components/ui/paneToolbarStyles";
 
 /**
  * What each rung measures at the app's 16px root, for the readout. Labels only:
@@ -115,7 +117,7 @@ export function MarkdownTextSizeControl({
               // Same footprint as its neighbours in the row; the armed chip
               // `toolbar-icon-button` paints on `data-state="open"` carries the
               // only state this trigger has.
-              className="toolbar-icon-button shrink-0 rounded-lg p-1.5 text-text-secondary"
+              className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
               // Carries the current size, so a screen reader hears where the
               // document already is before opening anything.
               aria-label={`Text size, ${label} pixels`}
@@ -129,8 +131,6 @@ export function MarkdownTextSizeControl({
       </Tooltip>
       <PopoverContent
         align="end"
-        sideOffset={6}
-        collisionPadding={8}
         className="w-auto p-2"
         aria-label="Text size"
         onKeyDown={handleKeyDown}
@@ -202,12 +202,10 @@ export function MarkdownTextSizeMenuItems({
 }: Pick<MarkdownTextSizeControlProps, "value" | "onValueChange">) {
   return (
     <DropdownMenuSub>
-      <DropdownMenuSubTrigger>
+      <DropdownMenuSubTrigger aria-label={`Text size, ${STEP_LABEL[value]} px`}>
         <ALargeSmall className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
         Text size
-        <span className="ml-auto pl-3 text-2xs tabular-nums text-text-secondary">
-          {STEP_LABEL[value]} px
-        </span>
+        <DropdownMenuMeta>{STEP_LABEL[value]} px</DropdownMenuMeta>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent>
         <DropdownMenuRadioGroup
@@ -219,8 +217,15 @@ export function MarkdownTextSizeMenuItems({
           }}
         >
           {MARKDOWN_FONT_SIZE_STEPS.map((step) => (
-            <DropdownMenuRadioItem key={step} value={step}>
-              {STEP_LABEL[step]} px{step === DEFAULT_MARKDOWN_FONT_SIZE ? " (default)" : ""}
+            <DropdownMenuRadioItem
+              key={step}
+              value={step}
+              aria-label={
+                step === DEFAULT_MARKDOWN_FONT_SIZE ? `${STEP_LABEL[step]} px, default` : undefined
+              }
+            >
+              {STEP_LABEL[step]} px
+              {step === DEFAULT_MARKDOWN_FONT_SIZE && <DropdownMenuMeta>Default</DropdownMenuMeta>}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>

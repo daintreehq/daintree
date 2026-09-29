@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { InlineError } from "@/components/ui/field";
 import {
   FolderOpen,
   FolderPlus,
@@ -6,7 +7,6 @@ import {
   Newspaper,
   ExternalLink,
   GitBranch,
-  X,
   Plug,
   Pin,
   Sparkles,
@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { KbdChord } from "@/components/ui/Kbd";
 import { AppWindow, BrandMark, DaintreeIcon } from "@/components/icons";
 import { useProjectStore } from "@/store/projectStore";
@@ -37,6 +38,7 @@ import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import type { AgentAvailabilityState } from "../../../shared/types/ipc/system";
 import type { GettingStartedChecklistState } from "@/hooks/app/useGettingStartedChecklist";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 interface WelcomeScreenProps {
   gettingStarted: GettingStartedChecklistState;
@@ -174,7 +176,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   return (
     <div className="@container/welcome h-full w-full">
       <div
-        className="flex flex-col items-center h-full w-full overflow-y-auto animate-in fade-in duration-500"
+        className="flex flex-col items-center h-full w-full overflow-y-auto animate-in fade-in [--tw-animation-duration:var(--duration-200)]"
         // Theme-authored wash layered over the existing canvas; `none` = today.
         style={{ background: "var(--welcome-field-wash, none)" }}
       >
@@ -208,10 +210,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
               nudge below reports progress and offers optional setup. */}
           <div className="w-full">
             {hasProjects && (
-              <h3
-                id="quick-actions-heading"
-                className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-3"
-              >
+              <h3 id="quick-actions-heading" className={cn(SECTION_LABEL_CLASS, "mb-3")}>
                 Quick actions
               </h3>
             )}
@@ -240,7 +239,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                       aria-label={title}
                       aria-describedby={`qa-desc-${id}`}
                       className={cn(
-                        "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left @min-[1800px]/welcome:p-4",
+                        "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left cursor-pointer @min-[1800px]/welcome:p-4",
                         // Room for the secondary action pinned in the corner.
                         secondary && "h-full w-full pr-10 @min-[1800px]/welcome:pr-11",
                         "transition-colors duration-150",
@@ -278,18 +277,15 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                       {card}
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <button
-                            type="button"
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
                             onClick={secondary.onClick}
                             aria-label={secondary.label}
-                            className={cn(
-                              "absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary",
-                              "transition-colors duration-150 hover:bg-overlay-medium hover:text-text-primary",
-                              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                            )}
+                            className="absolute right-2 top-2 [&_svg]:size-4"
                           >
                             <AppWindow className="h-4 w-4" aria-hidden="true" />
-                          </button>
+                          </Button>
                         </TooltipTrigger>
                         <TooltipContent side="bottom">{secondary.label}</TooltipContent>
                       </Tooltip>
@@ -312,9 +308,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
               is up, so the two never compete for the same screen. */}
           {visibleShortcutTips.length > 0 && !showChecklist && (
             <div className="w-full">
-              <h3 className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-3">
-                Keyboard shortcuts
-              </h3>
+              <h3 className={cn(SECTION_LABEL_CLASS, "mb-3")}>Keyboard shortcuts</h3>
               <div className="grid grid-cols-2 gap-x-8 gap-y-2 @min-[1800px]/welcome:gap-x-10">
                 {visibleShortcutTips.map(({ label, actionId }) => {
                   const combo = keybindingService.getEffectiveCombo(actionId);
@@ -334,17 +328,19 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
             {/* The way back into setup once the banner is gone — declined or
                 finished, a user can always reach it again from here. */}
             {onboardingLoaded && setupBannerDismissed && (
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="xs"
                 onClick={() => openAgentSetup(false)}
-                className="flex items-center gap-1.5 rounded-[var(--radius-xs)] hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                className="gap-1.5 text-xs"
               >
                 <Sparkles className="h-3 w-3" aria-hidden="true" />
                 Set up agents
-              </button>
+              </Button>
             )}
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={() => {
                 const promise = window.electron?.system?.openExternal(
                   "https://daintree.org/newsletter"
@@ -353,12 +349,12 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                   safeFireAndForget(promise, { context: "Opening newsletter link" });
                 }
               }}
-              className="flex items-center gap-1.5 rounded-[var(--radius-xs)] hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              className="gap-1.5 text-xs"
             >
               <Newspaper className="h-3 w-3" aria-hidden="true" />
               Newsletter
               <ExternalLink className="h-2.5 w-2.5" />
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -454,9 +450,7 @@ function TopProjects({
     <div className="w-full">
       {/* "Your projects", not "Recent projects": the order follows the switcher's
           Other-band sort mode, so no fixed order-word belongs in the heading. */}
-      <h3 className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-3">
-        Your projects
-      </h3>
+      <h3 className={cn(SECTION_LABEL_CLASS, "mb-3")}>Your projects</h3>
       <div className="space-y-1">
         {projects.map((project) => (
           <button
@@ -464,7 +458,7 @@ function TopProjects({
             type="button"
             onClick={() => void onSelect(project.id)}
             className={cn(
-              "w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-left transition-colors @min-[1800px]/welcome:px-4 @min-[1800px]/welcome:py-3",
+              "w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-left cursor-pointer transition-colors @min-[1800px]/welcome:px-4 @min-[1800px]/welcome:py-3",
               "hover:bg-overlay-soft",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             )}
@@ -523,15 +517,12 @@ function AgentSetupBannerCard() {
   return (
     <div className="w-full" data-testid="agent-setup-banner">
       <div className="relative w-full rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4">
-        <button
-          type="button"
+        <DismissButton
           onClick={handleDismiss}
           aria-label="Dismiss agent setup banner"
           data-testid="agent-setup-banner-dismiss"
-          className="absolute top-2 right-2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-text-secondary transition-colors hover:bg-overlay-emphasis hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+          className="absolute top-2 right-2"
+        />
         <div className="flex items-start gap-3 pr-6">
           <Sparkles
             className="h-4 w-4 text-text-secondary mt-0.5 shrink-0 @min-[1920px]/welcome:h-5 @min-[1920px]/welcome:w-5"
@@ -558,13 +549,14 @@ function AgentSetupBannerCard() {
                 <Sparkles className="h-3.5 w-3.5" />
                 Set up agents
               </Button>
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={handleDismiss}
-                className="text-xs text-text-secondary hover:text-text-primary transition-colors @min-[1920px]/welcome:text-sm"
+                className="@min-[1920px]/welcome:h-8 @min-[1920px]/welcome:text-sm"
               >
                 Not now
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -628,14 +620,11 @@ function AgentWelcomeCard() {
   return (
     <div className="w-full">
       <div className="relative w-full rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4">
-        <button
-          type="button"
+        <DismissButton
           onClick={handleDismiss}
           aria-label="Dismiss welcome card"
-          className="absolute top-2 right-2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-text-secondary transition-colors hover:bg-overlay-emphasis hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+          className="absolute top-2 right-2"
+        />
         <div className="flex items-start gap-3 pr-6">
           <Plug
             className="h-4 w-4 text-text-secondary mt-0.5 shrink-0 @min-[1920px]/welcome:h-5 @min-[1920px]/welcome:w-5"
@@ -680,22 +669,23 @@ function AgentWelcomeCard() {
                 <Pin className="h-3.5 w-3.5" />
                 Pin all to toolbar
               </Button>
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={handleDismiss}
-                className="text-xs text-text-secondary hover:text-text-primary transition-colors @min-[1920px]/welcome:text-sm"
+                className="@min-[1920px]/welcome:h-8 @min-[1920px]/welcome:text-sm"
               >
                 Not now
-              </button>
+              </Button>
             </div>
             {pinError && (
-              <p
+              <InlineError
                 role="alert"
                 data-testid="welcome-card-pin-error"
-                className="mt-2 text-xs text-status-error @min-[1920px]/welcome:text-sm"
+                className="mt-2 @min-[1920px]/welcome:text-sm"
               >
                 Couldn&apos;t pin all agents. Please try again.
-              </p>
+              </InlineError>
             )}
           </div>
         </div>
@@ -723,28 +713,18 @@ function InlineChecklist({
   return (
     <section className="w-full" aria-labelledby="welcome-getting-started-heading">
       <div className="flex items-center gap-3 mb-3">
-        <h3
-          id="welcome-getting-started-heading"
-          className="text-xs font-medium text-text-secondary uppercase tracking-wider"
-        >
+        <h3 id="welcome-getting-started-heading" className={SECTION_LABEL_CLASS}>
           Getting started
         </h3>
         <span className="text-3xs text-text-secondary font-mono tabular-nums @min-[1920px]/welcome:text-xs">
           {progressDone}/{progressTotal}
         </span>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={onDismiss}
-              aria-label="Hide getting started"
-              className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-[var(--radius-xs)] text-text-secondary transition-colors hover:bg-overlay-medium hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-            >
-              <X className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Hide — reopen from Help → Getting Started</TooltipContent>
-        </Tooltip>
+        <DismissButton
+          onClick={onDismiss}
+          aria-label="Hide getting started"
+          tooltip="Hide — reopen from Help → Getting Started"
+          className="ml-auto"
+        />
       </div>
 
       <div
@@ -756,7 +736,7 @@ function InlineChecklist({
         className="w-full h-1 bg-overlay-medium rounded-full mb-4 overflow-hidden"
       >
         <div
-          className="h-full bg-text-secondary rounded-full transition-[width] duration-500"
+          className="h-full bg-text-secondary rounded-full transition-[width] duration-150 ease-out"
           style={{ width: `${(progressDone / progressTotal) * 100}%` }}
         />
       </div>

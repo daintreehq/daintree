@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
+import { events } from "../../events.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import type { TerminalInputController } from "../TerminalInputController.js";
 import { OUTPUT_PROGRESS_SAMPLE_MS } from "../OutputProgressTracker.js";
@@ -322,6 +323,70 @@ describe("TerminalProcess handback requests (#12488)", () => {
 
     expect(terminal.getSubmission("tok-2")?.phase).toBe("pty_written");
     expect(terminal.getInfo().handbackTracker?.hasRequests()).toBe(false);
+    terminal.dispose();
+  });
+
+  it("reports a done marker the moment it is complete on screen, without waiting for a settle", async () => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    const seen: Array<{ terminalId: string; message: string | null }> = [];
+    const off = events.on("agent:handback-observed", (payload) =>
+      seen.push({ terminalId: payload.terminalId, message: payload.handback.message })
+    );
+    const terminal = createTerminal({ launchAgentId: "claude", handbackCode: "k7f3qa" });
+
+    ptyOnDataCallback!("● Fact: honey never spoils.\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(seen).toEqual([]);
+
+    ptyOnDataCallback!("DAINTREE-DONE-k7f3qa: gave a fact END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(seen).toEqual([{ terminalId: "t1", message: "gave a fact" }]);
+    expect(terminal.getInfo().handbackTracker?.deliveredRequests()).toEqual([]);
+    // Retired, so a later sample of the same screen reports nothing more.
+    ptyOnDataCallback!("\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(seen).toHaveLength(1);
+    off();
+    vi.useRealTimers();
+    terminal.dispose();
+  });
+
+  it("keeps a code open while the agent works, reporting a changed capture once", async () => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    const seen: Array<string | null> = [];
+    const off = events.on("agent:handback-observed", (payload) =>
+      seen.push(payload.handback.message)
+    );
+    const terminal = createTerminal({ launchAgentId: "grok", handbackCode: "k7f3qa" });
+    terminal.getInfo().agentState = "working";
+
+    // A drafted marker in a thinking preview, before the reply itself prints.
+    ptyOnDataCallback!("  draft: DAINTREE-DONE-k7f3qa: Voted A END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(seen).toEqual(["Voted A"]);
+    expect(terminal.getInfo().handbackTracker?.deliveredRequests()).toHaveLength(1);
+
+    // The same screen sampled again reports nothing new.
+    ptyOnDataCallback!("\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(seen).toHaveLength(1);
+
+    ptyOnDataCallback!("  DAINTREE-DONE-k7f3qa: Voted A, runner-up C. END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(seen).toEqual(["Voted A", "Voted A, runner-up C."]);
+    expect(terminal.getInfo().lastHandback?.message).toBe("Voted A, runner-up C.");
+
+    // Out of `working`, the same capture retires the code without reporting again.
+    terminal.getInfo().agentState = "waiting";
+    ptyOnDataCallback!("\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(seen).toHaveLength(2);
+    expect(terminal.getInfo().handbackTracker?.deliveredRequests()).toEqual([]);
+    off();
+    vi.useRealTimers();
     terminal.dispose();
   });
 

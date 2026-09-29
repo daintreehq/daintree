@@ -22,6 +22,7 @@ const IN_USE = [
   "McpConfirmDialog",
   "PanelDialog:terminal",
   "PluginView:acme.dashboard",
+  "TourScene",
 ];
 
 describe("resolveBoundaryDisplayName", () => {

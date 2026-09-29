@@ -17,6 +17,7 @@ import type { PanelTitleMode } from "../../../shared/types/panel.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { applyXtermReflowFastpath } from "../../../shared/utils/xtermReflowFastpath.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { PartialEscapeTracker } from "../../../shared/utils/terminalPartialEscapeTail.js";
 import { ProcessDetector, type DetectionResult } from "../ProcessDetector.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 import type { ImagePathProbe } from "./ImagePathProbe.js";
@@ -37,9 +38,11 @@ import type { TerminalSubmissionRecord } from "../../../shared/types/terminalSub
 import { AgentOutputForwarder } from "./AgentOutputForwarder.js";
 import { TerminalInputController } from "./TerminalInputController.js";
 import { HandbackTracker } from "./HandbackTracker.js";
+import { findHandback, rawHandbackText } from "./HandbackDetector.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
+import { hasRateLimitMessage } from "./WaitingReasonClassifier.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
@@ -116,9 +119,22 @@ import {
 // `agentOutputContentSnapshot` baseline makes the skipped chunks' delta
 // accumulate into it rather than being lost.
 const AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS = 50;
+/** Minimum gap between two rate-limit observations from one pane (#12797). */
+const RATE_LIMIT_OBSERVATION_COOLDOWN_MS = 60_000;
 
 export interface TerminalProcessCallbacks {
-  emitData: (id: string, data: string | Uint8Array) => void;
+  /**
+   * `streamEnd` is the UTF-8 byte offset, in this process's renderer-bound
+   * stream, just past `data`. A live snapshot is stamped with the same offset
+   * (#12791) so the renderer can tell which chunks it already contains.
+   */
+  emitData: (id: string, data: string, streamEnd: number) => void;
+  /**
+   * Where this process's stream offsets start. The owner carries it over from
+   * the previous process at the same id, so offsets never go backwards across
+   * a respawn and a restore fence can never cover the new process's output.
+   */
+  streamOffsetBase?: number;
   onExit: (id: string, exitCode: number, signal?: number) => void;
   /**
    * Fired once the preserved-exit snapshot has actually been captured (after
@@ -239,6 +255,15 @@ export class TerminalProcess {
   private agentOutputNoteTimer: NodeJS.Timeout | null = null;
   private readonly outputProgress = new OutputProgressTracker();
   private outputProgressTimer: NodeJS.Timeout | null = null;
+  /**
+   * Whether the last viewport read showed a rate-limit banner. An observation
+   * fires on the rising edge only, so a banner that sits on screen is one
+   * observation rather than one per repaint (#12797).
+   */
+  private rateLimitBannerVisible = false;
+  private lastRateLimitObservedAt = Number.NEGATIVE_INFINITY;
+  /** True only while the exit path settles the mirror's last frame. */
+  private samplingFinalFrame = false;
 
   private agentOutputForwarder!: AgentOutputForwarder;
 
@@ -268,6 +293,9 @@ export class TerminalProcess {
   private _restoreBannerStart: IMarker | null = null;
   private _restoreBannerEnd: IMarker | null = null;
   private readonly textDecoder = new TextDecoder();
+  private emittedBytes = 0;
+  // In-thread mirror only; the worker's AnalysisSession tracks its own.
+  private readonly parserTail = new PartialEscapeTracker();
 
   private restoreSessionIfPresent(headlessTerminal: HeadlessTerminalType): void {
     if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
@@ -384,6 +412,7 @@ export class TerminalProcess {
     prelude: string = "",
     dataHandoff?: PooledPtyDataHandoff
   ) {
+    this.emittedBytes = callbacks.streamOffsetBase ?? 0;
     const { shell, args: spawnArgs } = spawnContext;
     const spawnedAt = Date.now();
 
@@ -747,7 +776,7 @@ export class TerminalProcess {
       },
       readViewportLines: (n) => readLastNLines(this.terminalInfo.headlessTerminal, n),
       readCursorLine: () => readCursorLine(this.terminalInfo.headlessTerminal),
-      serialize: () => serializeTerminalAsync(this.id, this.terminalInfo),
+      serialize: () => this.serializeLiveInThread(),
       serializeForPersistence: () => this.serializeForPersistence(),
       captureFinalSnapshot: async (): Promise<AnalysisFinalCapture> => {
         const snapshot = await serializeTerminalAsync(this.id, this.terminalInfo);
@@ -1018,7 +1047,12 @@ export class TerminalProcess {
     // Settle a pending sample against the mirror before it goes: a preserved
     // exit drains its final output first, and that frame is the last change
     // this terminal will ever show.
-    this.flushOutputProgressSample();
+    this.samplingFinalFrame = true;
+    try {
+      this.flushOutputProgressSample();
+    } finally {
+      this.samplingFinalFrame = false;
+    }
     this.analysis.release();
   }
 
@@ -1309,11 +1343,17 @@ export class TerminalProcess {
    * handback (#12488); its instruction is already in `text`. A terminal that
    * never asked keeps no tracker, so its submits pay one property read.
    */
-  submit(text: string, token?: string, handbackCode?: string, guard?: TerminalSubmitGuard): void {
+  submit(
+    text: string,
+    token?: string,
+    handbackCode?: string,
+    guard?: TerminalSubmitGuard,
+    imagePaths?: readonly string[]
+  ): void {
     const tracker =
       handbackCode !== undefined ? this.ensureHandbackTracker() : this.terminalInfo.handbackTracker;
     const onPtyWritten = tracker?.noteSubmission(handbackCode, token);
-    this.inputController.submit(text, token, onPtyWritten, guard);
+    this.inputController.submit(text, token, onPtyWritten, guard, imagePaths);
   }
 
   private ensureHandbackTracker(): HandbackTracker {
@@ -1705,7 +1745,41 @@ export class TerminalProcess {
       terminal.preservedSnapshotLastAccessedAt = Date.now();
       return Promise.resolve(terminal.preservedSnapshot);
     }
-    return this.analysis.serialize();
+    // Sampled before the request leaves: every chunk emitted so far has
+    // already been fed to the analysis mirror (the pipeline forwards and feeds
+    // in the same step), and the serialize below drains exactly those feeds.
+    const streamOffset = this.emittedBytes;
+    return this.analysis.serialize().then((snapshot) => {
+      if (!snapshot?.continuation) return snapshot;
+      return { ...snapshot, continuation: { ...snapshot.continuation, streamOffset } };
+    });
+  }
+
+  /**
+   * Drain the scheduler and serialize inside the drain callback, so the screen
+   * and the parser tail describe the same parsed prefix. The yielding
+   * serializer is skipped on purpose: its deferred serialize would run after
+   * later chunks had parsed, and the snapshot would cover bytes past the
+   * offset it is stamped with.
+   */
+  private serializeLiveInThread(): Promise<SerializedTerminalSnapshot | null> {
+    const terminal = this.terminalInfo;
+    const headless = terminal.headlessTerminal;
+    if (terminal.preservedSnapshot !== undefined || !headless || !terminal.serializeAddon) {
+      return serializeTerminalAsync(this.id, terminal);
+    }
+    return new Promise((resolve) => {
+      headlessMirrorScheduler.flush(this.id, headless, () => {
+        if (terminal.headlessTerminal !== headless) {
+          resolve(serializeTerminal(this.id, terminal));
+          return;
+        }
+        const snapshot = serializeTerminal(this.id, terminal);
+        resolve(
+          snapshot && { ...snapshot, continuation: { pendingEscapeTail: this.parserTail.tail } }
+        );
+      });
+    });
   }
 
   serializeForPersistence(): SerializedTerminalSnapshot | null {
@@ -1731,7 +1805,7 @@ export class TerminalProcess {
 
     const recentLines = terminal.semanticBuffer.slice(-linesToReplay);
     const historyChunk = recentLines.join("\n") + "\n";
-    this.callbacks.emitData(this.id, historyChunk);
+    this.emitDataDirect(historyChunk);
 
     return linesToReplay;
   }
@@ -2044,6 +2118,84 @@ export class TerminalProcess {
     if (this.outputProgress.observe(lines, now)) {
       this.terminalInfo.lastOutputChangeAt = now;
     }
+    this.observeRateLimitBanner(lines, now);
+    this.observeHandback(now);
+  }
+
+  /**
+   * Report a handback marker the moment it is complete on screen (#12488),
+   * rather than waiting for the agent-state heuristic to call the turn over:
+   * for some CLIs that settle lags the reply by a minute or more, and the
+   * orchestrator waiting on this marker waits with it. Runs only while a
+   * delivered request is outstanding; the detector rejects the echoed
+   * instruction, a marker still streaming and one on a spinner's status line.
+   *
+   * A hit while the agent still reads as working leaves its code open: Grok's
+   * thinking preview carries its drafted marker, and a status line can quote
+   * one, before the reply itself prints. A later capture that says something
+   * different is reported again, and the settle-time check has the last look
+   * and retires the code. A hit outside `working` retires it at once.
+   */
+  private observeHandback(now: number): void {
+    const t = this.terminalInfo;
+    const tracker = t.handbackTracker;
+    if (tracker === undefined || !this.isAgentLive) return;
+    const delivered = tracker.deliveredRequests();
+    if (delivered.length === 0) return;
+    const hit = findHandback(
+      [
+        { read: () => tracker.screenText(), rendered: true },
+        { read: () => rawHandbackText(t.semanticBuffer), rendered: false },
+      ],
+      delivered,
+      now
+    );
+    if (hit === undefined) return;
+    const changed = tracker.noteReported(hit.code, hit.handback.message);
+    // Retired outside `working` even when the capture repeats one already
+    // reported, or the code would stay open until the next submission.
+    if (t.agentState !== "working") tracker.retire(hit.code);
+    if (!changed) return;
+    t.lastHandback = hit.handback;
+    t.lastHandbackUnpublished = true;
+    events.emit("agent:handback-observed", {
+      terminalId: this.id,
+      handback: hit.handback,
+      code: hit.code,
+      timestamp: now,
+    });
+  }
+
+  /**
+   * Report that this pane showed an agent's rate-limit banner. The event is
+   * the fact and its time only — never the matched line, which is terminal
+   * content (#12797).
+   */
+  private observeRateLimitBanner(lines: readonly string[], now: number): void {
+    // A live agent only, so a shell that outlived its agent is never blamed.
+    // The one exception is the exit path's last frame: an agent that prints
+    // its limit and exits at once is already marked exited by then.
+    const t = this.terminalInfo;
+    const hasAgent =
+      this.isAgentLive ||
+      (this.samplingFinalFrame &&
+        (t.detectedAgentId !== undefined || t.launchAgentId !== undefined));
+    const visible = hasAgent && hasRateLimitMessage(lines);
+    // The cooldown absorbs a TUI repaint that blanks the banner for one frame,
+    // which would otherwise read as a fresh appearance each time.
+    if (
+      visible &&
+      !this.rateLimitBannerVisible &&
+      now - this.lastRateLimitObservedAt >= RATE_LIMIT_OBSERVATION_COOLDOWN_MS
+    ) {
+      this.lastRateLimitObservedAt = now;
+      events.emit("agent:rate-limit-observed", {
+        terminalId: this.id,
+        observedAt: now,
+        timestamp: now,
+      });
+    }
+    this.rateLimitBannerVisible = visible;
   }
 
   // In-thread counterpart of the worker's viewport digest: one trailing read
@@ -2076,6 +2228,7 @@ export class TerminalProcess {
     if (terminal.headlessTerminal) {
       terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
       headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, prelude, () => {
+        this.parserTail.feed(prelude);
         terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
         this.scheduleOutputProgressSample();
       });
@@ -2117,6 +2270,7 @@ export class TerminalProcess {
       // the callback fires only after the chunk has actually parsed).
       terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
       headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, data, () => {
+        this.parserTail.feed(data);
         terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
         // Invalidate before noteAgentOutputActivity reads the viewport: xterm
         // fires per-write callbacks before the onWriteParsed event the cache
@@ -2153,7 +2307,8 @@ export class TerminalProcess {
   }
 
   private emitDataDirect(data: string): void {
-    this.callbacks.emitData(this.id, data);
+    this.emittedBytes += Buffer.byteLength(data, "utf8");
+    this.callbacks.emitData(this.id, data, this.emittedBytes);
   }
 
   handleAgentDetection(result: DetectionResult, spawnedAt: number): void {

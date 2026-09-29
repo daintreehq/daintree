@@ -232,12 +232,26 @@ vi.mock("../services/pluginMenuRegistry.js", () => ({
   getPluginMenuItems: vi.fn(() => []),
 }));
 
+vi.mock("../services/plugin/PluginTourRegistry.js", () => ({
+  getPluginTours: vi.fn(() => []),
+}));
+
 const getAppWebContentsMock = vi.hoisted(() =>
   vi.fn((_win: { id: number }): unknown => mockWebContents)
 );
 
+const getProjectForWebContentsMock = vi.hoisted(() => vi.fn((_id: number): string | null => null));
+
 vi.mock("../window/webContentsRegistry.js", () => ({
   getAppWebContents: getAppWebContentsMock,
+  getProjectForWebContents: getProjectForWebContentsMock,
+}));
+
+const isPluginVisibleInProjectMock = vi.hoisted(() =>
+  vi.fn((_pluginId: string, _projectId: string | null) => true)
+);
+vi.mock("../services/plugin/projectPluginVisibility.js", () => ({
+  isPluginVisibleInProject: isPluginVisibleInProjectMock,
 }));
 
 const isWindowsStoreBuildMock = vi.hoisted(() => vi.fn(() => true));
@@ -257,6 +271,7 @@ import {
 } from "../services/ProjectHistoryService.js";
 import { getBuildChannelLabel } from "../../shared/config/distribution.js";
 import { getPluginMenuItems } from "../services/pluginMenuRegistry.js";
+import { getPluginTours } from "../services/plugin/PluginTourRegistry.js";
 import { webContents, app, Menu, dialog } from "electron";
 import { CHANNELS } from "../ipc/channels.js";
 import { getWorkspaceClientRef } from "../window/windowServices.js";
@@ -2160,5 +2175,70 @@ describe("handleDirectoryOpen failure dialogs", () => {
     } as unknown as Electron.BrowserWindow);
 
     expect(dialog.showMessageBox).not.toHaveBeenCalled();
+  });
+});
+
+describe("Help menu plugin tours (#12773)", () => {
+  afterEach(() => {
+    vi.mocked(getPluginTours).mockReturnValue([]);
+    getProjectForWebContentsMock.mockReturnValue(null);
+    isPluginVisibleInProjectMock.mockReturnValue(true);
+  });
+
+  function helpItems(): Electron.MenuItemConstructorOptions[] {
+    capturedTemplate = [];
+    createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+    const help = capturedTemplate.find((m) => m.role === "help");
+    return help!.submenu as Electron.MenuItemConstructorOptions[];
+  }
+
+  const tour = (id: string, title: string, panelKind?: string) => ({
+    id,
+    pluginId: "acme.site",
+    pluginName: "Acme Site Builder",
+    title,
+    moduleUrl: "plugin://pi-1/__dtv-1/dist/tour.js",
+    chapters: [],
+    ...(panelKind ? { panelKind } : {}),
+  });
+
+  it("lists plugin tours after the Daintree Tour under the plugin's name, panel tours excepted", () => {
+    vi.mocked(getPluginTours).mockReturnValue([
+      tour("acme.site.welcome", "Welcome Tour"),
+      tour("acme.site.panel", "Panel Tour", "site-builder"),
+    ]);
+    const labels = helpItems().map((item) => item.label);
+    const at = labels.indexOf("Daintree Tour");
+    expect(labels.slice(at, at + 3)).toEqual([
+      "Daintree Tour",
+      "Acme Site Builder: Welcome Tour",
+      "Keyboard Shortcuts",
+    ]);
+  });
+
+  it("opens the tour it names through help.tour.show", () => {
+    vi.mocked(getPluginTours).mockReturnValue([tour("acme.site.welcome", "Welcome Tour")]);
+    const item = helpItems().find((i) => i.label === "Acme Site Builder: Welcome Tour");
+    item!.click!(
+      {} as Electron.MenuItem,
+      mockBrowserWindow as unknown as Electron.BaseWindow,
+      {} as Electron.KeyboardEvent
+    );
+    expect(mockWebContents.send).toHaveBeenCalledWith("menu-action", {
+      actionId: "help.tour.show",
+      args: { tourId: "acme.site.welcome" },
+    });
+  });
+
+  it("drops a tour whose plugin is hidden in this window's project", () => {
+    vi.mocked(getPluginTours).mockReturnValue([tour("acme.site.welcome", "Welcome Tour")]);
+    getProjectForWebContentsMock.mockReturnValue("project-a");
+    isPluginVisibleInProjectMock.mockImplementation(
+      (pluginId, projectId) => !(pluginId === "acme.site" && projectId === "project-a")
+    );
+    expect(helpItems().some((i) => i.label === "Acme Site Builder: Welcome Tour")).toBe(false);
+
+    getProjectForWebContentsMock.mockReturnValue("project-b");
+    expect(helpItems().some((i) => i.label === "Acme Site Builder: Welcome Tour")).toBe(true);
   });
 });

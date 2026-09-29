@@ -134,6 +134,7 @@ If the answer is **Workshop**, we don't build the feature. At most, we build a *
 | Integrated Browser | **APPROVE** | Localhost preview, console capture, and agent-app debugging. Bridges gap. Not a general-purpose browser. |
 | Daintree Assistant | **APPROVE** | Wraps AI with orchestration context (panels, worktrees, actions). Not a generic chat — it's orchestration-aware. |
 | Notes Panel | **REJECT** | Daintree is a terminal manager, not a document store. Removed in #5616: the save bug was architectural, not a tractable defect, and the agent-facing copy link never resolved. Markdown files in the worktree cover this. |
+| Terminal Scratchpad | **APPROVE** | Not the Notes Panel. Scoped to one terminal and disposable by design: the notes ride that terminal's own record, move with it across worktrees, survive a restart, and are deleted when the terminal is permanently removed. No document list, no cross-terminal store, no agent-facing surface (#12835). |
 | Terminal Recipes | **APPROVE** | Enables automation. Repeatable multi-agent setups reduce manual panel configuration. |
 | Portal (Web Agent Dock) | **APPROVE** | Bridges gap between CLI agents and web agent UIs. Manages multiplicity across agent interfaces. |
 | Reintroducing the DAG Workflow Engine | **REJECT** | Removed in #4118: zero usage, ~8,000 lines of maintenance, and it bypassed the action system entirely. Scoped to the old DAG engine only — terminal recipes and worktree actions like `workflow.startWorkOnIssue` stay core. |

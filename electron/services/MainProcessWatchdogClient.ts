@@ -17,6 +17,10 @@ import { app, utilityProcess, type UtilityProcess } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { trackEvent } from "./TelemetryService.js";
+import { createLogger } from "../utils/logger.js";
+import { noteTerminationIntent } from "./processTerminationIntent.js";
+
+const logger = createLogger("main:Watchdog");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -158,6 +162,12 @@ export class MainProcessWatchdogClient {
       process.stderr.write(`[watchdog] ${chunk.toString()}`);
     });
 
+    // Electron assigns `pid` only once the child has spawned.
+    const launchedChild = this.child;
+    let watchdogPid = launchedChild.pid;
+    launchedChild.on("spawn", () => {
+      watchdogPid = launchedChild.pid;
+    });
     this.child.on("exit", (code) => {
       const wasDisposed = this.isDisposed;
       this.child = null;
@@ -172,7 +182,12 @@ export class MainProcessWatchdogClient {
       if (wasDisposed) return;
 
       this.lastExitCode = code ?? null;
-      console.warn(`[MainProcessWatchdogClient] Watchdog exited (code=${code})`);
+      // The `exit` code cannot tell a crash from a signal kill; the
+      // ProcessDeathLogger line for "daintree-watchdog" carries the reason.
+      logger.warn(`Watchdog process exited unexpectedly (code=${code})`, {
+        pid: watchdogPid ?? null,
+        exitCode: code ?? null,
+      });
       this.scheduleRestart();
     });
 
@@ -215,8 +230,8 @@ export class MainProcessWatchdogClient {
     this.crashTimestamps.push(crashAt);
 
     if (this.crashTimestamps.length >= CRASH_THRESHOLD) {
-      console.error(
-        `[MainProcessWatchdogClient] Max restart attempts reached (${CRASH_THRESHOLD} crashes in ${RAPID_CRASH_WINDOW_MS}ms), giving up. Deadlock detection disabled until next launch.`
+      logger.warn(
+        `Max restart attempts reached (${CRASH_THRESHOLD} crashes in ${RAPID_CRASH_WINDOW_MS}ms), giving up. Deadlock detection disabled until next launch.`
       );
       this.notifyDisabled();
       return;
@@ -231,8 +246,8 @@ export class MainProcessWatchdogClient {
     const delay =
       RESTART_FLOOR_MS + Math.floor(Math.random() * Math.max(0, cap - RESTART_FLOOR_MS));
 
-    console.log(
-      `[MainProcessWatchdogClient] Restarting watchdog in ${delay}ms (${windowAttempt}/${CRASH_THRESHOLD} crashes in window)`
+    logger.info(
+      `Restarting watchdog in ${delay}ms (${windowAttempt}/${CRASH_THRESHOLD} crashes in window)`
     );
 
     if (this.restartTimer) {
@@ -413,6 +428,7 @@ export class MainProcessWatchdogClient {
       } catch {
         // Channel may already be closed; falling through to kill().
       }
+      noteTerminationIntent({ serviceName: SERVICE_NAME }, "dispose");
       try {
         this.child.kill();
       } catch {

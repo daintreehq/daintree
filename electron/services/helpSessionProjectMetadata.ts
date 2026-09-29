@@ -10,6 +10,9 @@ export const PROJECT_METADATA_END = "<!-- DAINTREE_PROJECT_METADATA_END -->";
 export const MAX_LISTED_WORKTREES = 20;
 const WORKTREE_LIST_BUDGET_BYTES = 3000;
 const MAX_VALUE_BYTES = 300;
+// Agent ids and names are short; the list is bounded the same way.
+const AGENT_LIST_BUDGET_BYTES = 800;
+const MAX_AGENT_VALUE_BYTES = 64;
 export const MAX_PROJECT_METADATA_BYTES = 6 * 1024;
 
 export interface HelpSessionWorktreeFact {
@@ -17,6 +20,18 @@ export interface HelpSessionWorktreeFact {
   /** Empty when git reported no branch line for the worktree. */
   branch: string;
   isMainWorktree: boolean;
+}
+
+export interface HelpSessionAgentFact {
+  id: string;
+  /** The registry's display name, which is what a user calls the agent. */
+  name: string;
+}
+
+export interface HelpSessionAgentsFact {
+  agents: HelpSessionAgentFact[];
+  /** False before the first CLI probe: every registered agent is listed. */
+  availabilityChecked: boolean;
 }
 
 /**
@@ -28,6 +43,8 @@ export interface HelpSessionProjectFacts {
   name?: string;
   worktrees?: HelpSessionWorktreeFact[];
   forgeRemote?: { name: string; url: string };
+  /** The agents a launch accepts, so a user's "Anti-Gravity" maps to `antigravity`. */
+  launchableAgents?: HelpSessionAgentsFact;
 }
 
 export interface ProjectMetadataInput {
@@ -97,6 +114,58 @@ export function sanitizeGitRemoteUrl(raw: string): string | null {
   return `${host}:${scp[2]}`;
 }
 
+/** Format characters — directional marks, zero-width and invisible ones — which reorder or hide text. */
+const FORMAT_CONTROLS = /\p{Cf}/u;
+
+/**
+ * An agent id or name as it may appear in the block. Names come from user and
+ * plugin registries, so on top of {@link cleanValue} a name that could reorder
+ * the line it sits on is dropped too.
+ */
+function cleanAgentValue(value: string): string | null {
+  const cleaned = cleanValue(value);
+  return cleaned !== null &&
+    Buffer.byteLength(cleaned, "utf8") <= MAX_AGENT_VALUE_BYTES &&
+    !FORMAT_CONTROLS.test(cleaned)
+    ? cleaned
+    : null;
+}
+
+/** Letters and digits only, for telling whether a name adds anything to its id. */
+function comparable(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * One line naming each agent by the id a launch takes, with its display name
+ * where that reads differently. Names come from user and plugin registries,
+ * so they sit in code spans like every other value here.
+ */
+function formatAgentList(fact: HelpSessionAgentsFact): string | null {
+  const entries: string[] = [];
+  let bytes = 0;
+  let skipped = 0;
+  for (const agent of fact.agents) {
+    const id = cleanAgentValue(agent.id);
+    if (!id) continue;
+    const name = cleanAgentValue(agent.name);
+    const entry =
+      name && comparable(name) !== comparable(id) ? `\`${id}\` (\`${name}\`)` : `\`${id}\``;
+    bytes += Buffer.byteLength(entry, "utf8") + 2;
+    if (bytes > AGENT_LIST_BUDGET_BYTES) {
+      skipped = fact.agents.length - entries.length;
+      break;
+    }
+    entries.push(entry);
+  }
+  if (entries.length === 0) return null;
+  const label = fact.availabilityChecked
+    ? "Agents installed and ready to launch"
+    : "Registered agents (installs not checked yet)";
+  const more = skipped > 0 ? `, and ${skipped} more (\`agent.listAvailable\`)` : "";
+  return `- ${label}; launch them by these ids exactly: ${entries.join(", ")}${more}`;
+}
+
 export function buildProjectMetadataAddendum(input: ProjectMetadataInput): string {
   const { facts } = input;
   const lines = [
@@ -139,9 +208,15 @@ export function buildProjectMetadataAddendum(input: ProjectMetadataInput): strin
     if (remaining > 0) lines.push(`  - …and ${remaining} more not listed`);
   }
 
+  // Only useful with the tools that launch them.
+  if (input.daintreeControl && facts.launchableAgents) {
+    const line = formatAgentList(facts.launchableAgents);
+    if (line) lines.push(line);
+  }
+
   // Settings, not session state: lanes launched earlier keep whatever wiring
   // they were provisioned with, and this block is shared by all of them.
-  lines.push(`- Assistant tier setting: \`${input.tier}\``);
+  lines.push(`- Assistant tool set setting: \`${input.tier}\``);
   lines.push(`- Daintree MCP tools setting: \`${input.daintreeControl ? "enabled" : "disabled"}\``);
   lines.push("");
   return lines.join("\n");

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MCP_SSE_IDLE_TIMEOUT_MS,
   MCP_TIER_ELEVATION_TTL_MS,
+  type HelpAssistantTier,
   type McpSseSession,
   type McpHttpSession,
 } from "../shared.js";
@@ -70,8 +71,8 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
   it("drain() clears the pinned map alongside other session maps", () => {
     store.sessions.set("a", fakeSseSession());
     store.httpSessions.set("b", fakeHttpSession());
-    store.sessionTierMap.set("a", "action");
-    store.sessionTierMap.set("b", "action");
+    store.sessionTierMap.set("a", "core");
+    store.sessionTierMap.set("b", "core");
     store.sessionWebContentsMap.set("a", 100);
     store.sessionWebContentsMap.set("b", 200);
     store.sessionHelpIdMap.set("a", "help-a");
@@ -91,7 +92,7 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
     const session = fakeSseSession();
     const sessionId = "sse-1";
     store.sessions.set(sessionId, session);
-    store.sessionTierMap.set(sessionId, "action");
+    store.sessionTierMap.set(sessionId, "core");
     store.sessionWebContentsMap.set(sessionId, 42);
     store.sessionHelpIdMap.set(sessionId, "help-1");
 
@@ -114,7 +115,7 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
     const session = fakeHttpSession();
     const sessionId = "http-1";
     store.httpSessions.set(sessionId, session);
-    store.sessionTierMap.set(sessionId, "action");
+    store.sessionTierMap.set(sessionId, "core");
     store.sessionWebContentsMap.set(sessionId, 99);
     store.sessionHelpIdMap.set(sessionId, "help-1");
 
@@ -133,15 +134,15 @@ describe("SessionStore.sessionWebContentsMap (#7002)", () => {
   });
 
   it("drain() clears the grant cache without disposing it (cache stays usable across stop/start)", () => {
-    store.grantCache.issueGrant("s1", "git.commit");
-    expect(store.grantCache.check("s1", "git.commit").granted).toBe(true);
+    store.grantCache.issueGrant("s1", "project.runCheck");
+    expect(store.grantCache.check("s1", "project.runCheck").granted).toBe(true);
 
     store.drain();
-    expect(store.grantCache.check("s1", "git.commit").granted).toBe(false);
+    expect(store.grantCache.check("s1", "project.runCheck").granted).toBe(false);
 
     // Cache is still alive — a subsequent issueGrant should not throw.
-    expect(() => store.grantCache.issueGrant("s2", "git.commit")).not.toThrow();
-    expect(store.grantCache.check("s2", "git.commit").granted).toBe(true);
+    expect(() => store.grantCache.issueGrant("s2", "project.runCheck")).not.toThrow();
+    expect(store.grantCache.check("s2", "project.runCheck").granted).toBe(true);
   });
 
   it("SSE idle-timer expiry calls revokeSession with the session-idle reason", () => {
@@ -224,7 +225,7 @@ describe("SessionStore.recomputeIdleTimers", () => {
     setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
     const session = fakeSseSession();
     store.sessions.set("sse-1", session);
-    store.sessionTierMap.set("sse-1", "action");
+    store.sessionTierMap.set("sse-1", "core");
     clearTimeout(session.idleTimer);
     session.idleTimer = store.createIdleTimer("sse-1");
 
@@ -239,7 +240,7 @@ describe("SessionStore.recomputeIdleTimers", () => {
     setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
     const session = fakeHttpSession();
     store.httpSessions.set("http-1", session);
-    store.sessionTierMap.set("http-1", "action");
+    store.sessionTierMap.set("http-1", "core");
     clearTimeout(session.idleTimer);
     session.idleTimer = store.createHttpIdleTimer("http-1");
 
@@ -436,7 +437,7 @@ describe("SessionStore.revokeSession", () => {
     const session = fakeSseSession();
     const closeSpy = session.transport.close as ReturnType<typeof vi.fn>;
     store.sessions.set("sse-1", session);
-    store.sessionTierMap.set("sse-1", "action");
+    store.sessionTierMap.set("sse-1", "core");
     store.sessionWebContentsMap.set("sse-1", 42);
     store.sessionContextMap.set("sse-1", { worktreeId: "w1" } as never);
     store.sessionHelpIdMap.set("sse-1", "help-1");
@@ -457,7 +458,7 @@ describe("SessionStore.revokeSession", () => {
     const session = fakeHttpSession();
     const closeSpy = session.transport.close as ReturnType<typeof vi.fn>;
     store.httpSessions.set("http-1", session);
-    store.sessionTierMap.set("http-1", "system");
+    store.sessionTierMap.set("http-1", "full");
     store.sessionWebContentsMap.set("http-1", 99);
 
     const result = store.revokeSession("http-1");
@@ -475,7 +476,7 @@ describe("SessionStore.revokeSession", () => {
   it("is idempotent — double revoke is harmless", () => {
     const session = fakeSseSession();
     store.sessions.set("sse-1", session);
-    store.sessionTierMap.set("sse-1", "action");
+    store.sessionTierMap.set("sse-1", "core");
 
     expect(store.revokeSession("sse-1")).toBe(true);
     expect(store.revokeSession("sse-1")).toBe(false);
@@ -486,14 +487,14 @@ describe("SessionStore.revokeSession", () => {
     const s2 = fakeSseSession();
     store.sessions.set("s1", s1);
     store.sessions.set("s2", s2);
-    store.sessionTierMap.set("s1", "action");
-    store.sessionTierMap.set("s2", "system");
+    store.sessionTierMap.set("s1", "core");
+    store.sessionTierMap.set("s2", "full");
 
     store.revokeSession("s1");
 
     expect(store.sessions.has("s1")).toBe(false);
     expect(store.sessions.has("s2")).toBe(true);
-    expect(store.sessionTierMap.get("s2")).toBe("system");
+    expect(store.sessionTierMap.get("s2")).toBe("full");
   });
 
   it("clears dedup state for the revoked session", () => {
@@ -663,7 +664,7 @@ describe("SessionStore.getTier liveness gate (#11799)", () => {
     // The precise shape of the bug: teardown removes the transport, and until
     // the tier row goes too, a read would answer from a session that is gone.
     // `external` makes the stakes explicit — the old default resolved this to
-    // `workbench`, a peer allowlist holding tools `external` withholds.
+    // `core`, a peer allowlist holding tools `external` withholds.
     store.sessionTierMap.set("orphan", "external");
 
     expect(store.getTier("orphan")).toBeNull();
@@ -681,9 +682,9 @@ describe("SessionStore.getTier liveness gate (#11799)", () => {
 
   it("returns null for every session after drain()", () => {
     store.sessions.set("s", fakeSseSession());
-    store.sessionTierMap.set("s", "system");
+    store.sessionTierMap.set("s", "full");
     store.httpSessions.set("h", fakeHttpSession());
-    store.sessionTierMap.set("h", "action");
+    store.sessionTierMap.set("h", "core");
 
     store.drain();
 
@@ -691,13 +692,13 @@ describe("SessionStore.getTier liveness gate (#11799)", () => {
     expect(store.getTier("h")).toBeNull();
   });
 
-  it("keeps the workbench fallback for a live session with no tier row", () => {
+  it("keeps the core fallback for a live session with no tier row", () => {
     // Liveness and tier are separate signals: a live transport whose tier row
     // is missing is not the revocation case, and must not be answered with the
     // refusal reserved for it.
     store.sessions.set("s", fakeSseSession());
 
-    expect(store.getTier("s")).toBe("workbench");
+    expect(store.getTier("s")).toBe("core");
   });
 });
 
@@ -725,68 +726,68 @@ describe("SessionStore tier-elevation decay (#8462)", () => {
     vi.useRealTimers();
   });
 
-  it("decays a workbench-baseline session back to workbench after the TTL and fires onTierDecayed", () => {
+  it("decays a core-baseline session back to core after the TTL and fires onTierDecayed", () => {
     store.sessions.set("s", fakeSseSession());
-    store.sessionTierMap.set("s", "action");
-    store.armTierElevationTimer("s", "action", "workbench");
+    store.sessionTierMap.set("s", "full");
+    store.armTierElevationTimer("s", "full", "core");
 
     setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
     vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
 
-    expect(store.getTier("s")).toBe("workbench");
+    expect(store.getTier("s")).toBe("core");
     expect(decayed).toEqual(["s"]);
   });
 
   it("passes the elevated tier and baseline to onTierDecayed for the audit trail (#9151)", () => {
     store.sessions.set("s", fakeSseSession());
-    store.sessionTierMap.set("s", "action");
-    store.armTierElevationTimer("s", "system", "action");
-    store.sessionTierMap.set("s", "system");
+    store.sessionTierMap.set("s", "core");
+    store.armTierElevationTimer("s", "full", "core");
+    store.sessionTierMap.set("s", "full");
 
     setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
     vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
 
-    expect(decayedArgs).toEqual([{ sessionId: "s", previousTier: "system", newTier: "action" }]);
+    expect(decayedArgs).toEqual([{ sessionId: "s", previousTier: "full", newTier: "core" }]);
   });
 
-  it("decays to the session's token baseline, not hardcoded workbench", () => {
-    // A help-session bearer configured with `tier: "action"` connects at
-    // the action baseline, then gets elevated to system. After the window
-    // it must fall back to action — dropping to workbench would strip
-    // tools the user legitimately held from handshake.
+  it("never decays a session whose token baseline is already full", () => {
+    // A help-session bearer configured with `tier: "full"` connects at the
+    // full baseline. A re-approval at that tier elevates nothing, so the
+    // window must never drop it to core — that would strip tools the user
+    // legitimately held from handshake.
     store.sessions.set("s", fakeSseSession());
-    store.sessionTierMap.set("s", "action");
-    store.armTierElevationTimer("s", "system", "action");
-    store.sessionTierMap.set("s", "system");
+    store.sessionTierMap.set("s", "full");
+    store.armTierElevationTimer("s", "full", "full");
 
     setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
     vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
 
-    expect(store.getTier("s")).toBe("action");
-    expect(decayed).toEqual(["s"]);
+    expect(store.getTier("s")).toBe("full");
+    expect(decayed).toEqual([]);
   });
 
   it("a chained elevation decays all the way to the original baseline", () => {
-    // workbench → action → system: the second arm must preserve the
-    // workbench baseline captured by the first, not decay to action.
+    // core → full, then a repeat approval that passes `full` as its baseline
+    // candidate: the second arm must preserve the core baseline captured by
+    // the first. Taking the candidate would read `full === full` as "not
+    // elevated" and leave the session at full for good.
     store.sessions.set("s", fakeSseSession());
-    store.sessionTierMap.set("s", "workbench");
-    store.armTierElevationTimer("s", "action", "workbench");
-    store.sessionTierMap.set("s", "action");
-    store.armTierElevationTimer("s", "system", "action");
-    store.sessionTierMap.set("s", "system");
+    store.sessionTierMap.set("s", "core");
+    store.armTierElevationTimer("s", "full", "core");
+    store.sessionTierMap.set("s", "full");
+    store.armTierElevationTimer("s", "full", "full");
 
     setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
     vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
 
-    expect(store.getTier("s")).toBe("workbench");
+    expect(store.getTier("s")).toBe("core");
     expect(decayed).toEqual(["s"]);
   });
 
   it("does not arm a timer when the requested tier equals the baseline (nothing to decay)", () => {
     store.sessions.set("s", fakeSseSession());
-    store.sessionTierMap.set("s", "workbench");
-    store.armTierElevationTimer("s", "workbench", "workbench");
+    store.sessionTierMap.set("s", "core");
+    store.armTierElevationTimer("s", "core", "core");
 
     setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
     vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
@@ -796,8 +797,8 @@ describe("SessionStore tier-elevation decay (#8462)", () => {
 
   it("drops stale denial-suppression counters on decay so the banner re-triggers", () => {
     store.sessions.set("s", fakeSseSession());
-    store.sessionTierMap.set("s", "action");
-    store.armTierElevationTimer("s", "action", "workbench");
+    store.sessionTierMap.set("s", "full");
+    store.armTierElevationTimer("s", "full", "core");
 
     // Tool was denied enough times before the elevation that the banner
     // is now suppressed for it.
@@ -809,84 +810,87 @@ describe("SessionStore tier-elevation decay (#8462)", () => {
     setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
     vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
 
-    expect(store.getTier("s")).toBe("workbench");
+    expect(store.getTier("s")).toBe("core");
     // Post-decay the next out-of-baseline call must surface the banner.
     expect(store.grantCache.shouldSuppressBanner("s", "worktree.delete")).toBe(false);
   });
 
   it("re-arming refreshes the window from now (repeat Always allow)", () => {
     store.sessions.set("s", fakeSseSession());
-    store.sessionTierMap.set("s", "action");
-    store.armTierElevationTimer("s", "action", "workbench");
+    store.sessionTierMap.set("s", "full");
+    store.armTierElevationTimer("s", "full", "core");
 
     // Halfway through the window the user re-approves — window resets.
     setAwakeTime(MCP_TIER_ELEVATION_TTL_MS / 2);
     vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS / 2);
-    store.armTierElevationTimer("s", "action", "workbench");
+    store.armTierElevationTimer("s", "full", "core");
 
     // Original deadline passes — must NOT have decayed (window was reset).
     setAwakeTime(MCP_TIER_ELEVATION_TTL_MS / 2 + 1);
     vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS / 2 + 1);
-    expect(store.getTier("s")).toBe("action");
+    expect(store.getTier("s")).toBe("full");
 
     // Full fresh window elapsed from the re-arm — now it decays.
     setAwakeTime(MCP_TIER_ELEVATION_TTL_MS + 1);
     vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS);
-    expect(store.getTier("s")).toBe("workbench");
+    expect(store.getTier("s")).toBe("core");
   });
 
   it("does not count suspended time against the window (awake-time corrected)", () => {
     store.sessions.set("s", fakeSseSession());
-    store.sessionTierMap.set("s", "system");
-    store.armTierElevationTimer("s", "system", "workbench");
+    store.sessionTierMap.set("s", "full");
+    store.armTierElevationTimer("s", "full", "core");
 
     // Wall clock advances a full TTL but the machine was asleep — zero
     // awake time elapsed, so the elevation must survive.
     setAwakeTime(0);
     vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
 
-    expect(store.getTier("s")).toBe("system");
+    expect(store.getTier("s")).toBe("full");
     expect(decayed).toEqual([]);
   });
 
   it("recomputeIdleTimers does not prematurely decay when awake time is below the TTL (suspend correction)", () => {
     store.httpSessions.set("h", fakeHttpSession());
-    store.sessionTierMap.set("h", "action");
+    store.sessionTierMap.set("h", "full");
     clearTimeout(store.httpSessions.get("h")!.idleTimer);
     store.httpSessions.get("h")!.idleTimer = store.createHttpIdleTimer("h");
-    store.armTierElevationTimer("h", "action", "workbench");
+    store.armTierElevationTimer("h", "full", "core");
 
     // Long wall-clock sleep but ~no awake time elapsed — the wake recompute
     // must keep both the idle and elevation windows armed, not collapse them.
     setAwakeTime(0);
     store.recomputeIdleTimers();
 
-    expect(store.getTier("h")).toBe("action");
+    expect(store.getTier("h")).toBe("full");
     expect(store.httpSessions.has("h")).toBe(true);
     expect(decayed).toEqual([]);
   });
 
-  it("does not wipe a tier the user re-approved between arm and fire (stale-token guard, #2243)", () => {
+  it("does not wipe a tier that changed between arm and fire (stale-token guard, #2243)", () => {
     store.sessions.set("s", fakeSseSession());
-    store.sessionTierMap.set("s", "action");
-    store.armTierElevationTimer("s", "action", "workbench");
+    store.sessionTierMap.set("s", "full");
+    store.armTierElevationTimer("s", "full", "core");
 
-    // Simulate a re-elevation to a different tier just before the original
-    // timer fires: the live tier no longer matches the captured token.
-    store.sessionTierMap.set("s", "system");
+    // Simulate the live tier moving just before the original timer fires, so
+    // it no longer matches the captured token. With two in-app tiers the only
+    // value that is neither the token nor the baseline is `external`; moving
+    // to `core` would be a no-op for the at-baseline check too and could not
+    // tell the guard apart from it.
+    store.sessionTierMap.set("s", "external");
 
     setAwakeTime(MCP_TIER_ELEVATION_TTL_MS);
     vi.advanceTimersByTime(MCP_TIER_ELEVATION_TTL_MS + 1);
 
-    // The original timer's decay must be a no-op — the re-approval stands.
-    expect(store.getTier("s")).toBe("system");
+    // The original timer's decay must be a no-op — the newer tier stands.
+    expect(store.getTier("s")).toBe("external");
     expect(decayed).toEqual([]);
   });
 
   it("is a safe no-op when the session was torn down before the timer fires (#3728)", () => {
     store.sessions.set("s", fakeSseSession());
-    store.sessionTierMap.set("s", "action");
-    store.armTierElevationTimer("s", "action", "workbench");
+    store.sessionTierMap.set("s", "full");
+    store.armTierElevationTimer("s", "full", "core");
 
     store.revokeSession("s");
 
@@ -897,15 +901,15 @@ describe("SessionStore tier-elevation decay (#8462)", () => {
 
   it("clears elevation state on revokeSession, drain, and clearElevationTimer", () => {
     store.sessions.set("s1", fakeSseSession());
-    store.armTierElevationTimer("s1", "action", "workbench");
+    store.armTierElevationTimer("s1", "full", "core");
     store.revokeSession("s1");
 
     store.httpSessions.set("h1", fakeHttpSession());
-    store.armTierElevationTimer("h1", "action", "workbench");
+    store.armTierElevationTimer("h1", "full", "core");
     store.clearElevationTimer("h1");
 
     store.sessions.set("s2", fakeSseSession());
-    store.armTierElevationTimer("s2", "action", "workbench");
+    store.armTierElevationTimer("s2", "full", "core");
     store.drain();
 
     // No armed timer survives — advancing past the TTL decays nothing.
@@ -916,10 +920,10 @@ describe("SessionStore tier-elevation decay (#8462)", () => {
 
   it("idle expiry beating elevation decay leaves the decay a no-op", () => {
     store.sessions.set("s", fakeSseSession());
-    store.sessionTierMap.set("s", "action");
+    store.sessionTierMap.set("s", "full");
     clearTimeout(store.sessions.get("s")!.idleTimer);
     store.sessions.get("s")!.idleTimer = store.createIdleTimer("s");
-    store.armTierElevationTimer("s", "action", "workbench");
+    store.armTierElevationTimer("s", "full", "core");
 
     // Both windows are equal; the idle reaper collects the session first.
     setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
@@ -1032,10 +1036,10 @@ describe("SessionStore.listExternalActiveClients (#8779)", () => {
     expect(store.listExternalActiveClients().map((c) => c.sessionId)).toEqual(["bound"]);
   });
 
-  it("excludes non-external (workbench/action/system) sessions", () => {
+  it("excludes non-external (core/full) sessions", () => {
     addExternal("ext", "Claude Code", "sse");
     store.sessions.set("pane", fakeSseSession());
-    store.sessionTierMap.set("pane", "action");
+    store.sessionTierMap.set("pane", "core");
     store.registerClientMetadata("pane", "pane-token-client", "sse");
 
     const clients = store.listExternalActiveClients();
@@ -1193,7 +1197,7 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
   const TRANSPORT = "transport-x";
   const HELP_ID = "help-public-1";
 
-  function wireLiveHelpSession(opts?: { tier?: "workbench" | "action" | "system" }): void {
+  function wireLiveHelpSession(opts?: { tier?: HelpAssistantTier }): void {
     store.httpSessions.set(TRANSPORT, fakeHttpSession());
     store.sessionWebContentsMap.set(TRANSPORT, WC);
     store.sessionHelpIdMap.set(TRANSPORT, HELP_ID);
@@ -1201,31 +1205,31 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
   }
 
   it("resolves the transport session from the public help id and returns its live tier", () => {
-    wireLiveHelpSession({ tier: "system" });
+    wireLiveHelpSession({ tier: "full" });
 
     const result = store.getLiveStatusForHelpSession(HELP_ID, WC);
 
     expect(result).not.toBeNull();
-    expect(result?.tier).toBe("system");
+    expect(result?.tier).toBe("full");
     expect(result?.activeGrants).toEqual([]);
   });
 
-  it("defaults the tier to workbench when the tier map has no entry", () => {
+  it("defaults the tier to core when the tier map has no entry", () => {
     wireLiveHelpSession();
 
-    expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.tier).toBe("workbench");
+    expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.tier).toBe("core");
   });
 
   it("maps active grants to {toolId, expiresAt, ttlMs} for the resolved transport id", () => {
-    wireLiveHelpSession({ tier: "action" });
+    wireLiveHelpSession({ tier: "core" });
     store.grantCache.issueGrant(TRANSPORT, "terminal.kill");
-    store.grantCache.issueGrant(TRANSPORT, "git.push");
+    store.grantCache.issueGrant(TRANSPORT, "project.runCheck");
     // A grant on an unrelated session must not leak into this snapshot.
     store.grantCache.issueGrant("other-transport", "worktree.delete");
 
     const grants = store.getLiveStatusForHelpSession(HELP_ID, WC)?.activeGrants ?? [];
 
-    expect(grants.map((g) => g.toolId).sort()).toEqual(["git.push", "terminal.kill"]);
+    expect(grants.map((g) => g.toolId).sort()).toEqual(["project.runCheck", "terminal.kill"]);
     for (const grant of grants) {
       expect(grant.expiresAt).toBeGreaterThan(Date.now());
       expect(grant.ttlMs).toBeGreaterThan(0);
@@ -1233,13 +1237,13 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
   });
 
   it("returns null when the caller is not the pinned WebContents (forgery defence)", () => {
-    wireLiveHelpSession({ tier: "system" });
+    wireLiveHelpSession({ tier: "full" });
 
     expect(store.getLiveStatusForHelpSession(HELP_ID, WC + 1)).toBeNull();
   });
 
   it("returns null when the help id maps to no transport session", () => {
-    wireLiveHelpSession({ tier: "system" });
+    wireLiveHelpSession({ tier: "full" });
 
     expect(store.getLiveStatusForHelpSession("unknown-help", WC)).toBeNull();
   });
@@ -1249,24 +1253,24 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
     // session is no longer live and must not report as connected.
     store.sessionWebContentsMap.set(TRANSPORT, WC);
     store.sessionHelpIdMap.set(TRANSPORT, HELP_ID);
-    store.sessionTierMap.set(TRANSPORT, "system");
+    store.sessionTierMap.set(TRANSPORT, "full");
 
     expect(store.getLiveStatusForHelpSession(HELP_ID, WC)).toBeNull();
   });
 
   it("returns null for an empty help id", () => {
-    wireLiveHelpSession({ tier: "system" });
+    wireLiveHelpSession({ tier: "full" });
 
     expect(store.getLiveStatusForHelpSession("", WC)).toBeNull();
   });
 
   it("omits grants past their expiry that the sweep hasn't yet evicted", () => {
-    wireLiveHelpSession({ tier: "action" });
+    wireLiveHelpSession({ tier: "core" });
     // Issue one grant, advance the wall clock past its expiry WITHOUT firing
     // the sweep interval (setSystemTime doesn't run timers), then issue a
     // second one still in its window. The first lingers in the cache (lazy
     // eviction) but must not surface as active.
-    const expired = store.grantCache.issueGrant(TRANSPORT, "git.push");
+    const expired = store.grantCache.issueGrant(TRANSPORT, "project.runCheck");
     vi.setSystemTime(expired.expiresAt + 1);
     store.grantCache.issueGrant(TRANSPORT, "terminal.kill");
 
@@ -1282,11 +1286,11 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
     store.httpSessions.set("stale-transport", fakeHttpSession());
     store.sessionWebContentsMap.set("stale-transport", WC + 99);
     store.sessionHelpIdMap.set("stale-transport", HELP_ID);
-    store.sessionTierMap.set("stale-transport", "workbench");
+    store.sessionTierMap.set("stale-transport", "core");
 
-    wireLiveHelpSession({ tier: "system" });
+    wireLiveHelpSession({ tier: "full" });
 
-    expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.tier).toBe("system");
+    expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.tier).toBe("full");
   });
 });
 

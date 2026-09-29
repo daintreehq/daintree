@@ -422,7 +422,7 @@ export function GitHubSettingsTab() {
 
       <ConfirmDialog
         isOpen={cliImportPhase === "confirming" || cliImportPhase === "committing"}
-        onClose={cliImportPhase === "committing" ? undefined : () => setCliImportPhase("idle")}
+        onClose={() => setCliImportPhase("idle")}
         title={`Import token for @${cliImportPreview?.account ?? ""}?`}
         description="Daintree saves its own copy of the token the GitHub CLI holds for this account, stored in plain text in Daintree's settings."
         confirmLabel="Import token"

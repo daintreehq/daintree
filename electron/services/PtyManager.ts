@@ -114,6 +114,25 @@ export class PtyManager extends EventEmitter {
     string,
     { cols: number; rows: number; generation: number | null }
   >();
+  // Output the TerminalProcess constructor emits before `registry.add` — the
+  // pooled-shell prelude and any chunks the data handoff buffered while the
+  // shell sat in the pool. `emitData` routes by registry entry, so without this
+  // those bytes were dropped and a shell blocked on a prompt stayed blank
+  // (#12753). Flushed in order right after registration.
+  // Last renderer-bound stream offset per terminal id, outliving the process
+  // so a respawn at the same id continues the sequence (#12791). A restarted
+  // host starts from a clock-derived base instead of zero, so its output also
+  // lands past any fence the renderer still holds from the host before it —
+  // the renderer only clears those once it has processed the recovery event,
+  // and output on the fresh port can beat that. 2 KiB per millisecond of
+  // uptime is headroom no terminal's lifetime average approaches, and keeps
+  // offsets far inside Number.MAX_SAFE_INTEGER.
+  private streamOffsets = new Map<string, number>();
+  private readonly streamOffsetOrigin = Date.now() * 2048;
+  private constructionOutput: {
+    id: string;
+    chunks: Array<{ data: string; streamEnd: number }>;
+  } | null = null;
   // Host-local lifecycle ledger. Adopts the generation Main stamped on spawn
   // options so both processes key each incarnation identically; guards the
   // pendingResizes buffer across same-id respawns and provides the audit
@@ -348,19 +367,25 @@ export class PtyManager extends EventEmitter {
    * Emit terminal data with project-based filtering.
    * Accepts both string and Uint8Array data for binary optimization.
    */
-  private emitData(id: string, data: string | Uint8Array): void {
+  private emitData(id: string, data: string, streamEnd: number): void {
+    this.streamOffsets.set(id, streamEnd);
+    if (this.constructionOutput?.id === id) {
+      this.constructionOutput.chunks.push({ data, streamEnd });
+      return;
+    }
+
     const terminalProcess = this.registry.get(id);
     if (!terminalProcess) {
       return;
     }
 
     if (!this.activeProjectId) {
-      this.emit("data", id, data);
+      this.emit("data", id, data, undefined, streamEnd);
       return;
     }
 
     if (this.registry.terminalBelongsToProject(terminalProcess, this.activeProjectId)) {
-      this.emit("data", id, data);
+      this.emit("data", id, data, undefined, streamEnd);
     }
   }
 
@@ -510,12 +535,18 @@ export class PtyManager extends EventEmitter {
     const { ptyProcess, prelude, dataHandoff } = acquired;
 
     let terminalProcess: TerminalProcess;
+    const constructionOutput = {
+      id,
+      chunks: [] as Array<{ data: string; streamEnd: number }>,
+    };
+    this.constructionOutput = constructionOutput;
     try {
       terminalProcess = new TerminalProcess(
         id,
         options,
         {
-          emitData: (termId, data) => this.emitData(termId, data),
+          emitData: (termId, data, streamEnd) => this.emitData(termId, data, streamEnd),
+          streamOffsetBase: this.streamOffsets.get(id) ?? this.streamOffsetOrigin,
           onExit: (termId, exitCode, signal) => {
             // Guard against stale exit events from previous terminal with same ID
             if (this.registry.get(termId) !== terminalProcess) {
@@ -580,11 +611,16 @@ export class PtyManager extends EventEmitter {
         // Process may already be dead
       }
       throw error;
+    } finally {
+      this.constructionOutput = null;
     }
 
     const consumedPendingResize = this.pendingResizes.has(id);
     this.pendingResizes.delete(id);
     this.registry.add(id, terminalProcess);
+    for (const chunk of constructionOutput.chunks) {
+      this.emitData(id, chunk.data, chunk.streamEnd);
+    }
 
     if (consumedPendingResize) {
       // A resize that beat the spawn became this PTY's boot geometry without
@@ -651,7 +687,8 @@ export class PtyManager extends EventEmitter {
     text: string,
     submissionToken?: string,
     handbackCode?: string,
-    guard?: TerminalSubmitGuard
+    guard?: TerminalSubmitGuard,
+    imagePaths?: readonly string[]
   ): void {
     const terminal = this.registry.get(id);
     if (!terminal) {
@@ -662,7 +699,7 @@ export class PtyManager extends EventEmitter {
       // that would answer for tokens this host never accepted.
       return;
     }
-    terminal.submit(text, submissionToken, handbackCode, guard);
+    terminal.submit(text, submissionToken, handbackCode, guard, imagePaths);
   }
 
   /**
@@ -1415,6 +1452,7 @@ export class PtyManager extends EventEmitter {
 
     this.registry.dispose();
     this.pendingResizes.clear();
+    this.streamOffsets.clear();
     this.lifecycleLedger.clear();
     this.removeAllListeners();
 

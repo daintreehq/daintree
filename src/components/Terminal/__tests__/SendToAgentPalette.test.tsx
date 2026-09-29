@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeAll, afterAll } from "vitest";
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import type { SendToAgentItem } from "@/hooks/useSendToAgentPalette";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 
@@ -71,20 +71,24 @@ function item(id: string, overrides: Partial<SendToAgentItem> = {}): SendToAgent
   };
 }
 
-function renderPalette(results: SendToAgentItem[]) {
+function renderPalette(
+  results: SendToAgentItem[],
+  { selectedIndex = 0, setSelectedIndex = vi.fn() } = {}
+) {
   return render(
     <SendToAgentPalette
       isOpen
       query=""
       results={results}
       totalResults={results.length}
-      selectedIndex={0}
+      selectedIndex={selectedIndex}
       close={vi.fn()}
       setQuery={vi.fn()}
       selectPrevious={vi.fn()}
       selectNext={vi.fn()}
       selectItem={vi.fn()}
       confirmSelection={vi.fn()}
+      setSelectedIndex={setSelectedIndex}
     />
   );
 }
@@ -138,5 +142,113 @@ describe("SendToAgentPalette rows", () => {
     const label = rowFor("a").getAttribute("aria-label") ?? "";
     expect(label).toBe("Claude, Claude Code");
     expect(rowFor("a").textContent).not.toContain("peregrine");
+  });
+});
+
+describe("SendToAgentPalette locked rows", () => {
+  const locked = (id: string) =>
+    item(id, {
+      title: "Codex: write the migration",
+      subtitle: "Input locked",
+      isInputLocked: true,
+    });
+
+  it("keeps a locked row legible rather than fading it", () => {
+    renderPalette([item("a"), locked("b")]);
+
+    // Opacity dims the reason line with the title; the row family steps the
+    // title down instead, so nothing on any row may carry an opacity utility.
+    for (const el of [rowFor("b"), ...rowFor("b").querySelectorAll("*")]) {
+      expect(el.getAttribute("class") ?? "").not.toMatch(/(^|\s)opacity-/);
+    }
+    expect(rowFor("b").textContent).toContain("Input locked");
+    expect(rowFor("b").getAttribute("aria-label")).toContain("Input locked");
+    expect(rowFor("b").getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("never marks a locked row as the one Enter acts on", () => {
+    renderPalette([locked("a"), locked("b")], { selectedIndex: 0 });
+
+    expect(document.querySelectorAll('[role="option"][aria-selected="true"]')).toHaveLength(0);
+    // …and the combobox points at no option, rather than at a row Enter skips.
+    expect(document.querySelector("input")!.getAttribute("aria-activedescendant")).toBeNull();
+    expect(document.body.textContent).toMatch(/unlock/i);
+  });
+
+  it("offers the unlock hint only when nothing can receive", () => {
+    renderPalette([item("a"), locked("b")]);
+
+    expect(document.body.textContent).not.toMatch(/unlock/i);
+  });
+});
+
+describe("SendToAgentPalette footer", () => {
+  it("names the pane Enter will paste into", () => {
+    renderPalette([item("a", { title: "Codex: write the migration" }), item("b")]);
+
+    expect(document.body.textContent).toMatch(/into Codex: write the migration/);
+  });
+
+  it("offers no Enter hint for a locked selection", () => {
+    renderPalette(
+      [
+        item("a", {
+          title: "Codex: write the migration",
+          isInputLocked: true,
+          subtitle: "Input locked",
+        }),
+      ],
+      { selectedIndex: 0 }
+    );
+
+    expect(document.body.textContent).not.toMatch(/into /);
+  });
+});
+
+describe("SendToAgentPalette pointer and Home/End", () => {
+  it("moves the cursor to the row under the pointer, but never onto a locked one", () => {
+    const setSelectedIndex = vi.fn();
+    renderPalette([item("a"), item("b", { isInputLocked: true }), item("c")], { setSelectedIndex });
+
+    fireEvent.pointerMove(rowFor("c"));
+    expect(setSelectedIndex).toHaveBeenLastCalledWith(2);
+
+    setSelectedIndex.mockClear();
+    fireEvent.pointerMove(rowFor("b"));
+    expect(setSelectedIndex).not.toHaveBeenCalled();
+  });
+
+  it("leaves the cursor alone when the pointer crosses a locked row at either end", () => {
+    const setSelectedIndex = vi.fn();
+    renderPalette(
+      [item("a", { isInputLocked: true }), item("b"), item("c", { isInputLocked: true })],
+      {
+        setSelectedIndex,
+        selectedIndex: 1,
+      }
+    );
+
+    fireEvent.pointerMove(rowFor("a"));
+    fireEvent.pointerMove(rowFor("c"));
+    expect(setSelectedIndex).not.toHaveBeenCalled();
+  });
+
+  it("lands Home and End on the nearest row that can receive", () => {
+    const setSelectedIndex = vi.fn();
+    renderPalette(
+      [
+        item("a", { isInputLocked: true }),
+        item("b"),
+        item("c"),
+        item("d", { isInputLocked: true }),
+      ],
+      { setSelectedIndex, selectedIndex: 1 }
+    );
+    const search = document.querySelector("input")!;
+
+    fireEvent.keyDown(search, { key: "Home" });
+    expect(setSelectedIndex).toHaveBeenLastCalledWith(1);
+    fireEvent.keyDown(search, { key: "End" });
+    expect(setSelectedIndex).toHaveBeenLastCalledWith(2);
   });
 });

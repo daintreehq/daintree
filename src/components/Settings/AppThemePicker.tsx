@@ -770,7 +770,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
                     <li key={kind} className="text-xs text-text-secondary">
                       {WARNING_KIND_COPY[kind] ?? "Some theme values may need attention"}
                       <details className="mt-0.5">
-                        <summary className="cursor-pointer text-text-secondary transition-colors hover:text-text-primary">
+                        <summary className="cursor-pointer rounded-[var(--radius-xs)] text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary">
                           Technical details
                         </summary>
                         <ul className="mt-1 space-y-0.5 pl-3">

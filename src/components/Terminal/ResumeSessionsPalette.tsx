@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { isPointerClaimed } from "@/lib/pointerClaim";
+import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
@@ -17,10 +18,18 @@ interface ResumeSessionRowProps {
   isSelected: boolean;
   matches: readonly FuseResultMatch[] | undefined;
   onSelect: (item: ResumeSessionItem) => void;
+  onHover: () => void;
   itemRef: (el: HTMLElement | null) => void;
 }
 
-function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: ResumeSessionRowProps) {
+function ResumeSessionRow({
+  item,
+  isSelected,
+  matches,
+  onSelect,
+  onHover,
+  itemRef,
+}: ResumeSessionRowProps) {
   // Location first: it is the stronger identifier, and the one that must
   // survive when a long branch name pushes the line into its ellipsis.
   const meta = [item.location, item.modelName].filter(Boolean).join(" · ");
@@ -37,12 +46,16 @@ function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: Resu
         PALETTE_ROW_CLASS,
         "w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
         "text-text-secondary",
-        // A removed-worktree row is inert: no hover lift promising an action
-        // Enter will not take, and its title steps down the text hierarchy
-        // rather than fading the whole row — the title is still what says
-        // which session this was.
-        item.isStale ? "cursor-default" : "hover:bg-overlay-subtle hover:text-text-primary"
+        // A removed-worktree row is inert: it never takes the cursor, so the
+        // pointer lights nothing Enter will not act on, and its title steps down
+        // the text hierarchy rather than fading the whole row — the title is
+        // still what says which session this was.
+        item.isStale && "cursor-default"
       )}
+      // The pointer moves the one cursor rather than painting a second row, so
+      // the lit row is always the one Enter resumes. `pointermove`, not
+      // `pointerenter`: rows scrolling under a resting pointer must not steal it.
+      onPointerMove={item.isStale ? undefined : onHover}
       onClick={() => onSelect(item)}
     >
       <div className="shrink-0 mt-0.5">
@@ -101,7 +114,6 @@ function RemovedHeading({
       </div>
     );
   }
-  const Chevron = expanded ? ChevronDown : ChevronRight;
   return (
     <div>
       <button
@@ -113,7 +125,14 @@ function RemovedHeading({
         aria-expanded={expanded}
         className={cn(className, "w-full text-left transition-colors hover:text-text-primary")}
       >
-        <Chevron className="h-3 w-3 shrink-0" aria-hidden="true" />
+        <ChevronRight
+          data-animated-chevron
+          className={cn(
+            "h-3 w-3 shrink-0 transition-transform duration-150 ease-out",
+            expanded && "rotate-90"
+          )}
+          aria-hidden="true"
+        />
         <span>Worktree removed</span>
         <span aria-hidden="true">·</span>
         <span className="tabular-nums">{count}</span>
@@ -137,6 +156,7 @@ export function ResumeSessionsPalette() {
     setQuery,
     selectPrevious,
     selectNext,
+    setSelectedIndex,
     close,
     isLoading,
     isSearching,
@@ -164,6 +184,9 @@ export function ResumeSessionsPalette() {
   useEffect(() => {
     if (selectedIndex >= 0 && results[selectedIndex]) {
       const node = itemsRef.current.get(results[selectedIndex]!.id);
+      // A row under the pointer was just claimed by it; revealing it would
+      // scroll a half-visible row out from under the pointer.
+      if (isPointerClaimed(node)) return;
       node?.scrollIntoView({ block: "nearest" });
     }
   }, [selectedIndex, results, visibleResults]);
@@ -245,6 +268,9 @@ export function ResumeSessionsPalette() {
         isSelected={index === selectedIndex}
         matches={matchesById.get(item.id)}
         onSelect={launch}
+        onHover={() => {
+          if (index !== selectedIndex) setSelectedIndex(index);
+        }}
         itemRef={setItemRef(item.id)}
       />
     );

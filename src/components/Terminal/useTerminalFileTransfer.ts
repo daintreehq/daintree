@@ -16,12 +16,20 @@ import {
 } from "@/lib/fileDragPayload";
 import { formatAtFileTokenForCwd } from "./hybridInputParsing";
 import { usePanelStore } from "@/store/panelStore";
+import { hasAgentContextDrag, readAgentContextDrag } from "@/lib/agentContextDragPayload";
+import { draftAgentContext, getDraftRefusal } from "@/services/agentHandoff/agentDraft";
+import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import {
+  IMAGE_EXTENSIONS,
+  isImageAttachmentPath,
+  type ImageInputSegment,
+} from "@shared/utils/imageAttachmentInput";
 
-/**
- * Image file extension pattern shared with HybridInputBar.
- * Exported so both the input bar and terminal can use the same detection.
- */
-export const IMAGE_EXTENSIONS = /\.(png|jpe?g|bmp|tiff?|avif|heic)$/i;
+export { IMAGE_EXTENSIONS };
+
+/** Gap between the separate pastes of one image-bearing drop (#12792). */
+const IMAGE_PASTE_GAP_MS = 200;
 
 /**
  * Runtime identity inputs used to decide whether an agent CLI — rather than a
@@ -106,6 +114,13 @@ interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
  * - **Text paste:** Passes through to xterm's native handler (bracketed paste, etc.).
  * - **File drop:** Resolves file paths via `webUtils.getPathForFile()` and writes them
  *   into the terminal as text. Works for both image and non-image files.
+ * - **Images to an agent that attaches them** (#12792): when the agent declares
+ *   `imageInput: "bracketed-path"` and xterm reports bracketed-paste mode, each
+ *   image is pasted on its own as its raw absolute path — the only form the
+ *   CLI turns into an attachment — with the surrounding text pasted between.
+ * - **Agent-context drop:** a handoff dragged out of a plugin view goes to the
+ *   pane's input-bar draft, never the PTY, and only an agent pane with a usable
+ *   bar accepts it; everything else refuses the drag outright.
  *
  * Two independent axes decide what reaches the PTY (#11574):
  *
@@ -169,8 +184,13 @@ export function useTerminalFileTransfer(
   // and re-register all five DOM listeners that often.
   const onDropSelectRef = useRef(onDropSelect);
 
+  // Bumped each time input locks, so paced writes queued before a lock stay
+  // cancelled even if the lock lifts again before their next timer fires.
+  const lockEpochRef = useRef(0);
+
   useLayoutEffect(() => {
     identityRef.current = { launchAgentId, detectedAgentId, agentState };
+    if (isInputLocked && !isInputLockedRef.current) lockEpochRef.current++;
     isInputLockedRef.current = isInputLocked;
     cwdProviderRef.current = cwdProvider;
     onDropSelectRef.current = onDropSelect;
@@ -228,6 +248,105 @@ export function useTerminalFileTransfer(
       onInput?.(text);
     };
 
+    // A gesture that lands while earlier ones are still queued or pacing goes
+    // behind them, so no two can interleave or reorder their bytes. With
+    // nothing pending, a write still goes out synchronously as it always has.
+    let writeChain: Promise<void> = Promise.resolve();
+    let pendingGestures = 0;
+
+    /**
+     * Whether images go to this terminal as attachments (#12792): the agent
+     * declares the lone-bracketed-path protocol, and the live xterm positively
+     * reports bracketed-paste mode. An instance that is not up yet is not
+     * evidence of the mode, so it keeps the text reference.
+     */
+    const takesImagePaths = (): boolean => {
+      const { isAgent, agentId } = deriveTerminalChrome(identityRef.current);
+      if (!isAgent || !agentId) return false;
+      if (getEffectiveAgentConfig(agentId)?.capabilities?.imageInput !== "bracketed-path") {
+        return false;
+      }
+      return terminalInstanceService.get(terminalId)?.terminal.modes.bracketedPasteMode === true;
+    };
+
+    const joinText = (segments: readonly ImageInputSegment[]): string =>
+      segments.map((segment) => (segment.kind === "text" ? segment.text : segment.path)).join("");
+
+    /**
+     * Build what one gesture writes: each file in order, separated by a space
+     * and followed by one. Images become their own segment when the terminal
+     * takes them as attachments; everything else is the usual text reference.
+     */
+    const buildSegments = (filePaths: readonly string[], isAgent: boolean): ImageInputSegment[] => {
+      const imagesAttach = isAgent && takesImagePaths();
+      const segments: ImageInputSegment[] = [];
+      const pushText = (text: string) => {
+        const last = segments[segments.length - 1];
+        if (last?.kind === "text") last.text += text;
+        else segments.push({ kind: "text", text });
+      };
+      filePaths.forEach((filePath, index) => {
+        if (index > 0) pushText(" ");
+        if (imagesAttach && isImageAttachmentPath(filePath)) {
+          segments.push({ kind: "image", path: filePath });
+        } else {
+          pushText(formatPath(filePath, isAgent));
+        }
+      });
+      pushText(" ");
+      return segments;
+    };
+
+    /**
+     * Writes a gesture's segments. Without an image segment this is the single
+     * insertion it has always been. With one, each segment is its own
+     * bracketed paste — an image's payload is only its raw path, the one shape
+     * the CLIs turn into an attachment — spaced so the CLI neither drops a
+     * same-tick write nor folds the pastes back into one.
+     */
+    const writeSegments = (
+      segments: readonly ImageInputSegment[],
+      isAgent: boolean,
+      lockEpoch: number = lockEpochRef.current
+    ) => {
+      const hasImage = segments.some((segment) => segment.kind === "image");
+      if (!hasImage && pendingGestures === 0) {
+        writeToTerminal(joinText(segments), isAgent);
+        return;
+      }
+      const isStale = () =>
+        cancelled ||
+        !isMountedRef.current ||
+        isInputLockedRef.current ||
+        lockEpochRef.current !== lockEpoch;
+      // Anything queued behind another gesture waits one gap first, so its
+      // first write cannot land in the same tick as that gesture's last.
+      const queued = pendingGestures > 0;
+      const gap = () => new Promise((resolve) => setTimeout(resolve, IMAGE_PASTE_GAP_MS));
+
+      pendingGestures++;
+      writeChain = writeChain
+        .then(async () => {
+          if (!hasImage) {
+            await gap();
+            if (!isStale()) writeToTerminal(joinText(segments), isAgent);
+            return;
+          }
+          for (let index = 0; index < segments.length; index++) {
+            if (index > 0 || queued) await gap();
+            if (isStale()) return;
+            const segment = segments[index]!;
+            const text = segment.kind === "image" ? segment.path : segment.text;
+            terminalClient.write(terminalId, formatWithBracketedPaste(text));
+            terminalInstanceService.notifyUserInput(terminalId);
+            onInput?.(text);
+          }
+        })
+        .finally(() => {
+          pendingGestures--;
+        });
+    };
+
     const handlePaste = async (event: ClipboardEvent) => {
       if (isInputLockedRef.current) return;
       if (!hasImageClipboardItem(event)) return;
@@ -235,22 +354,36 @@ export function useTerminalFileTransfer(
       // Prevent xterm from processing the image paste as text
       event.preventDefault();
       event.stopPropagation();
+      // Taken before the save: a lock that comes and goes while the image is
+      // written to disk still cancels this paste.
+      const lockEpoch = lockEpochRef.current;
 
       try {
         const { filePath } = await window.electron.clipboard.saveImage();
         // Re-check after the await: the pane may have unmounted or locked, and
         // the running agent may have changed, while the image was being saved.
         if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
+        if (lockEpochRef.current !== lockEpoch) return;
         if (!filePath || !isDeliverablePath(filePath)) return;
         const isAgent = isAgentTerminal();
-        writeToTerminal(`${formatPath(filePath, isAgent)} `, isAgent);
+        writeSegments(buildSegments([filePath], isAgent), isAgent, lockEpoch);
       } catch {
         // Empty clipboard, IPC failure during window close, etc. — nothing to do.
       }
     };
 
+    // An agent-context drag is a handoff to this pane's draft, which only a
+    // grid agent with a usable input bar has. Asked live, because the answer
+    // moves with the pane's state mid-drag.
+    const acceptsAgentContext = (): boolean => getDraftRefusal(terminalId) === null;
+
     const handleDragEnter = (e: DragEvent) => {
-      if (!e.dataTransfer || !hasFileDrag(e.dataTransfer.types)) return;
+      if (!e.dataTransfer) return;
+      const types = e.dataTransfer.types;
+      // Agent context wins over files here as it does at drop, so a mixed drag
+      // over a shell is refused rather than shown a file affordance.
+      const accepted = hasAgentContextDrag(types) ? acceptsAgentContext() : hasFileDrag(types);
+      if (!accepted) return;
       e.preventDefault();
       e.stopPropagation();
       dragDepthRef.current++;
@@ -258,7 +391,18 @@ export function useTerminalFileTransfer(
     };
 
     const handleDragOver = (e: DragEvent) => {
-      if (!e.dataTransfer || !hasFileDrag(e.dataTransfer.types)) return;
+      if (!e.dataTransfer) return;
+      const types = e.dataTransfer.types;
+      if (hasAgentContextDrag(types)) {
+        // Refused explicitly rather than ignored: the drag also carries
+        // `text/plain`, and xterm's helper textarea would otherwise take a drop
+        // that lands on it as typed input — the one thing a shell must not get.
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = acceptsAgentContext() ? "copy" : "none";
+        return;
+      }
+      if (!hasFileDrag(types)) return;
       e.preventDefault();
       e.stopPropagation();
       e.dataTransfer.dropEffect = isInputLockedRef.current ? "none" : "copy";
@@ -283,6 +427,28 @@ export function useTerminalFileTransfer(
       const transfer = e.dataTransfer;
       if (!transfer) return;
 
+      // A handoff never reaches the PTY: it drafts into this pane's input bar,
+      // through the same path the bar's own drop and `host.sendToAgent` use,
+      // and the user submits it. A pane without a usable bar refused the drag
+      // at dragover, so reaching here without one is a race — the draft path
+      // then refuses with the reason instead of typing anything.
+      if (hasAgentContextDrag(transfer.types)) {
+        const payload = readAgentContextDrag(transfer);
+        if (payload === null) return;
+        const result = draftAgentContext(terminalId, {
+          text: payload.text,
+          title: payload.title,
+          sourceLabel: payload.source?.label,
+        });
+        if (result.status !== "drafted") return;
+        // Lands like a drop on the bar itself: pane selected, keyboard in the
+        // bar rather than xterm, since that is where the text went.
+        usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
+        onDropSelectRef.current?.();
+        focusPanelInput(terminalId);
+        return;
+      }
+
       // A drag out of the file browser (#11576) carries paths where the OS
       // hands over `File` objects. Only the source of the paths differs —
       // both axes below stay exactly as an OS drop drives them, so the two
@@ -293,16 +459,15 @@ export function useTerminalFileTransfer(
         : Array.from(transfer.files).map((file) => window.electron.webUtils.getPathForFile(file));
 
       const isAgent = isAgentTerminal();
-      const formatted: string[] = [];
-      for (const filePath of paths) {
-        if (filePath && isDeliverablePath(filePath)) formatted.push(formatPath(filePath, isAgent));
-      }
+      const deliverable = paths.filter(
+        (filePath): filePath is string => !!filePath && isDeliverablePath(filePath)
+      );
 
-      if (formatted.length === 0) return;
+      if (deliverable.length === 0) return;
 
       // Trailing space terminates the last token and leaves the caret ready for
       // the next argument or prompt word, matching the hybrid input's drop.
-      writeToTerminal(`${formatted.join(" ")} `, isAgent);
+      writeSegments(buildSegments(deliverable, isAgent), isAgent);
 
       // The gesture already pointed at this terminal, so it ends the same way a
       // click on it does: pane selected, keyboard here, ready to type about the

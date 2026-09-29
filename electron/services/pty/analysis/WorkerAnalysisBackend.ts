@@ -103,6 +103,10 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   // persisted scrollback: persistence-oriented serialization returns null
   // until real PTY output has landed in the new buffer.
   private persistSuppressed = false;
+  // Set once the mirror has lost output (overflow or worker loss rebuilt it
+  // empty). Its snapshots then no longer cover the stream they would be
+  // fenced against, so they go out without a continuation (#12791).
+  private continuityLost = false;
   private viewportLines: string[] = [];
   private cursorLine: string | null = null;
   private monitorSpec: MonitorStartOptions | null = null;
@@ -204,6 +208,10 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     });
     if (sent) {
       this.outstandingFeedBytes += data.length;
+    } else {
+      // The caller may keep the hold and retry, but a chunk it drops instead
+      // is a hole in the mirror no later snapshot can be fenced across.
+      this.continuityLost = true;
     }
     return sent;
   }
@@ -429,9 +437,13 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
 
   async serialize(): Promise<SerializedTerminalSnapshot | null> {
     if (this.inactive()) return null;
-    this.flushHeldFeed();
+    const flushed = this.flushHeldFeed();
     const result = await this.pool.request(this.spec.terminalId, "serialize");
-    return asSnapshot(result);
+    const snapshot = asSnapshot(result);
+    if (!snapshot || (flushed && !this.continuityLost)) return snapshot;
+    // Held output the worker never received is missing from this snapshot.
+    const { continuation: _dropped, ...screenOnly } = snapshot;
+    return screenOnly;
   }
 
   async serializeForPersistence(): Promise<SerializedTerminalSnapshot | null> {
@@ -554,6 +566,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   // epoch and resets the flow-control ledger so acks from the old generation
   // (and the dropped hold) can't debit the new one.
   private rebuildFreshSlot(): void {
+    this.continuityLost = true;
     this.feedEpoch++;
     this.outstandingFeedBytes = 0;
     this.heldFeed = null;

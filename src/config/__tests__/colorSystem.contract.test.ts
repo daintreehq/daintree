@@ -52,6 +52,11 @@ function collectSourceFiles(dir: string): string[] {
       return [];
     }
 
+    // Compiler tests write and remove these modules while this scan runs.
+    if (/\.compiled-\d+-\d+\.tsx?$/.test(entry.name)) {
+      return [];
+    }
+
     if (/\.(test|spec)\./.test(entry.name)) {
       return [];
     }

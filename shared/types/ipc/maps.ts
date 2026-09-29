@@ -27,6 +27,7 @@ import type {
   AgentStateChangePayload,
   AgentStateTransitionDroppedPayload,
   AgentDetectedPayload,
+  AgentRateLimitObservedPayload,
   AgentExitedPayload,
   AgentFallbackTriggeredPayload,
   ArtifactDetectedPayload,
@@ -173,11 +174,11 @@ export interface ChecklistState {
   items: ChecklistItems;
 }
 
+/** One tour's progress. Keyed by tour id in `OnboardingState.tours`. */
 export interface TourOnboardingState {
   completed: boolean;
   /** The user turned down the tour's invitation; it is never offered again unasked. */
   dismissed: boolean;
-  muted: boolean;
   /** Chapter the user last reached, so a reopened tour resumes there. */
   lastChapter: number;
 }
@@ -200,14 +201,18 @@ export interface OnboardingState {
   welcomeCardDismissed: boolean;
   setupBannerDismissed: boolean;
   checklist: ChecklistState;
-  tour: TourOnboardingState;
+  /** Progress per tour id; a tour with no entry has never been started. */
+  tours: Record<string, TourOnboardingState>;
+  /** One narration preference across every tour. */
+  tourMuted: boolean;
 }
 
 /**
- * Tier classifications for the help-panel agent session. Maps to the
- * action danger boundaries from the help-assistant settings (#6517).
+ * The Daintree MCP tool set a help-panel session or agent pane is served:
+ * `core` is the orchestration surface, `full` adds the rest. Nothing outside
+ * `full` is reachable over MCP at all.
  */
-export type HelpAssistantTier = "workbench" | "action" | "system";
+export type HelpAssistantTier = "core" | "full";
 
 /** Serializable toast payload sent from main process to renderer via IPC. */
 export interface MainProcessToastPayload {
@@ -1113,7 +1118,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "forge:get-credential-status": {
     args: [providerId: string];
-    result: { hasCredential: boolean };
+    result: { hasCredential: boolean; fingerprint?: string };
   };
   "forge:clear-credential": {
     args: [providerId: string];
@@ -1428,8 +1433,8 @@ export interface IpcEventMap {
   // Every terminal currently handed to an orchestrating pane (#12490). The
   // whole list on each change: it is small and rarely changes.
   "terminal:adoptions-changed": import("./mcpServer.js").TerminalAdoptionEntry[];
-  // A pane's terminal watches changed (#12491); project-scoped send.
-  "terminal:watch-state": import("../terminalWatch.js").PaneWatchState;
+  // A pane's pending terminal notices changed; project-scoped send.
+  "terminal:notify-state": import("../terminalNotify.js").PaneNotifyState;
   "terminal:reliability-metric": TerminalReliabilityMetricPayload;
   "terminal:resource-metrics": { metrics: TerminalResourceBatchPayload; timestamp: number };
   "terminal:broadcast-write-result": BroadcastWriteResultPayload;
@@ -1474,6 +1479,7 @@ export interface IpcEventMap {
   "agent:state-transition-dropped": AgentStateTransitionDroppedPayload;
   "agent:all-clear": { timestamp: number; shouldFlash: boolean };
   "agent:detected": AgentDetectedPayload;
+  "agent:rate-limit-observed": AgentRateLimitObservedPayload;
   "agent:exited": AgentExitedPayload;
   "agent:fallback-triggered": AgentFallbackTriggeredPayload;
 
@@ -1555,9 +1561,12 @@ export interface IpcEventMap {
     confirmed: boolean;
     context?: import("../actions.js").ActionContext;
     callerInfo?: import("./mcpServer.js").McpBearerIdentity;
-    /** Agent-pane approval controls (#12692); both set only by main. */
+    /** Approval controls (#12692, #12881); all set only by main. */
     offerSessionApproval?: boolean;
     approvalOnly?: boolean;
+    approvalReason?: import("./mcpServer.js").McpApprovalReason;
+    /** What pre-authorized a `confirmed` dispatch (#12874); set only by main. */
+    authorization?: import("./mcpServer.js").McpDispatchAuthorization;
   };
 
   /**
@@ -1602,6 +1611,16 @@ export interface IpcEventMap {
   };
 
   /**
+   * Plugin agent-pane listing (`host.agents.list()`). Main emits this on the
+   * plugin's project WebContents and awaits a renderer `ipcRenderer.send` reply
+   * on `CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE`, correlated by `requestId`. Same
+   * fire-and-forget response discipline as `plugin:actions-list-request`.
+   */
+  "plugin:agents-list-request": {
+    requestId: string;
+  };
+
+  /**
    * Imperative plugin UI-prompt request (#10522). Main emits this on the active
    * project WebContents when a plugin calls `host.showQuickPick`/`showInputBox`/
    * `showConfirm`, and awaits a renderer `ipcRenderer.send` reply on
@@ -1641,7 +1660,7 @@ export interface IpcEventMap {
     sessionId: string;
     toolId: string;
     tier: string;
-    targetTier: "workbench" | "action" | "system" | null;
+    targetTier: HelpAssistantTier | null;
   };
 
   /**
@@ -1744,7 +1763,6 @@ export interface IpcEventMap {
   "portal:nav-event": import("../portal.js").PortalNavEvent;
   "portal:focus": void;
   "portal:blur": void;
-  "portal:new-tab-menu-action": import("../portal.js").PortalNewTabMenuAction;
   "portal:tab-evicted": { tabId: string };
 
   // System Sleep events
@@ -1999,6 +2017,11 @@ export interface IpcEventMap {
     complete: boolean;
   };
 
+  // Plugin tour registry snapshot (main → renderer, scoped to the view's project).
+  "plugin:tours-changed": {
+    tours: import("../plugin.js").PluginTourDescriptor[];
+  };
+
   // Plugin file-decoration invalidation (main → renderer). Carries only the
   // changed scope (optionally narrowed to `paths`) — never decoration data.
   // The renderer re-pulls fresh decorations via `plugin:file-decorations-get`.
@@ -2025,6 +2048,11 @@ export interface IpcEventMap {
   // Plugin provenance record changed (main → renderer). Signal-only — the
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
+
+  // A plugin's stored settings changed, from the settings form or the plugin's
+  // own `host.settings.set` (main → renderer). Signal-only: receivers re-read
+  // what they derive from it. Project-scoped for a project-local instance.
+  "plugin:settings-changed": { pluginId: string };
 
   // Live health of one plugin instance — worker lifecycle plus dev session
   // (main → renderer, #12277/#12278). Carries the whole per-instance snapshot,
@@ -2169,6 +2197,7 @@ export type IpcEventBusMap = Pick<
   | "agent:state-transition-dropped"
   | "agent:all-clear"
   | "agent:detected"
+  | "agent:rate-limit-observed"
   | "agent:exited"
   | "agent:fallback-triggered"
   // Window lifecycle (window-scoped)
@@ -2209,6 +2238,7 @@ export type IpcEventBusMap = Pick<
   | "plugin:agents-changed"
   // Plugin recipe registry (global broadcast)
   | "plugin:recipes-changed"
+  | "plugin:tours-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
   // Plugin panel-badge state (global broadcast)
@@ -2216,6 +2246,9 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-badges-cleared"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
+  // Plugin stored settings changed (global broadcast for an app-global
+  // instance, project-scoped send for a project one)
+  | "plugin:settings-changed"
   // Plugin instance runtime health: worker lifecycle + dev session (global
   // broadcast for an app-global instance, project-scoped send for a project one)
   | "plugin:runtime-status-changed"
@@ -2252,7 +2285,7 @@ export type IpcEventBusMap = Pick<
   | "terminal:submit-status"
   // Terminals handed to an orchestrating pane (global broadcast)
   | "terminal:adoptions-changed"
-  | "terminal:watch-state"
+  | "terminal:notify-state"
   // Agent session journaled — resume surfaces refetch (global broadcast)
   | "agent-session:recorded"
   // A gated park auto-released — the ready-again hand-back (global broadcast)

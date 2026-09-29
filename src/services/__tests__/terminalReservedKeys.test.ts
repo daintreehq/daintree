@@ -4,6 +4,7 @@ import {
   isTerminalClipboardPasteKey,
   isTerminalReservedKey,
   isTuiReservedKey,
+  terminalClipboardCombos,
   TUI_KEYBINDS,
 } from "../terminalReservedKeys";
 
@@ -118,5 +119,43 @@ describe("isTerminalReservedKey", () => {
     expect(isTerminalReservedKey(keyEvent({ key: "b", ctrlKey: true, shiftKey: true }))).toBe(
       false
     );
+  });
+});
+
+describe("terminalClipboardCombos", () => {
+  // The menu advertises these; the predicates are what actually copy and paste.
+  // Build the event each advertised combo describes and ask the predicate, so a
+  // label that drifts from the handler fails here.
+  function eventFor(combo: string, mac: boolean): KeyboardEvent {
+    const parts = combo.split("+");
+    const key = parts.pop()!;
+    const mods = new Set(parts.map((p) => p.toLowerCase()));
+    return keyEvent({
+      key,
+      code: `Key${key.toUpperCase()}`,
+      metaKey: mac && mods.has("cmd"),
+      ctrlKey: mods.has("ctrl") || (!mac && mods.has("cmd")),
+      shiftKey: mods.has("shift"),
+      altKey: mods.has("alt"),
+    });
+  }
+
+  it("advertises exactly the keys the Windows/Linux handlers act on", () => {
+    setPlatform("Win32");
+    const { copy, paste } = terminalClipboardCombos(false);
+    expect(isTerminalClipboardCopyKey(eventFor(copy, false))).toBe(true);
+    expect(isTerminalClipboardPasteKey(eventFor(paste, false))).toBe(true);
+    // Plain Ctrl+C is SIGINT in a terminal; advertising it would teach the
+    // wrong key.
+    expect(isTerminalClipboardCopyKey(keyEvent({ key: "c", ctrlKey: true }))).toBe(false);
+  });
+
+  it("advertises the Command keys on macOS, where the native Edit roles own them", () => {
+    const { copy, paste } = terminalClipboardCombos(true);
+    for (const combo of [copy, paste]) {
+      const event = eventFor(combo, true);
+      expect(event.metaKey).toBe(true);
+      expect(event.ctrlKey || event.shiftKey || event.altKey).toBe(false);
+    }
   });
 });

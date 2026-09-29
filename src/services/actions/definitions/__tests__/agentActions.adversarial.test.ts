@@ -139,6 +139,7 @@ function launchedResult(overrides: Record<string, unknown> = {}) {
     location: "grid",
     spawnStatus: null,
     ...LAUNCH_IDENTITY,
+    reply: null,
     ...overrides,
   };
 }
@@ -336,6 +337,28 @@ describe("agentActions adversarial", () => {
     expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
   });
 
+  it("agent.launch names a misspelt agent id as unknown when handback or notify rides with it", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    for (const flags of [{ handback: true }, { notify: true }]) {
+      await expect(
+        callAction(actions, "agent.launch", { agentId: "anti-gravity", prompt: "do it", ...flags })
+      ).rejects.toThrow(/Unknown agent ID 'anti-gravity'\. Call agent\.listAvailable/);
+    }
+    await expect(
+      callAction(actions, "agent.launch", { agentId: "terminal", prompt: "do it", handback: true })
+    ).rejects.toThrow(/not a registered agent/);
+    await expect(
+      callAction(actions, "agent.launch", {
+        agentId: "anti\u202e\u2060\u061cgravity",
+        prompt: "do it",
+        handback: true,
+      })
+    ).rejects.toThrow("Unknown agent ID 'antigravity'.");
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
   it("agent.launch refuses handback for a panel id even when a registry entry shares it", async () => {
     const callbacks = makeCallbacks();
     const actions = setupActions(callbacks);
@@ -350,6 +373,29 @@ describe("agentActions adversarial", () => {
     } finally {
       vi.mocked(isRegisteredAgent).mockImplementation(actual.isRegisteredAgent);
     }
+  });
+
+  it("agent.launch refuses notify for a launch that starts no agent", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    for (const agentId of ["terminal", "browser", "dev-preview", "not-an-agent"]) {
+      await expect(
+        callAction(actions, "agent.launch", { agentId, prompt: "do it", notify: true })
+      ).rejects.toBeInstanceOf(UnactionableTargetError);
+    }
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("agent.launch launches an agent asked to notify exactly as it would otherwise", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", { agentId: "claude", prompt: "hi", notify: true });
+
+    const options: unknown = callbacks.onLaunchAgent.mock.calls[0]?.[1];
+    expect(options).toMatchObject({ prompt: "hi" });
+    expect(options).not.toHaveProperty("notify");
   });
 
   it("agent.launch leaves the prompt alone when handback is not asked for", async () => {
@@ -483,6 +529,7 @@ describe("agentActions adversarial", () => {
       worktreePath: "/repo/wt-42",
       branch: "feature/parallel",
       cwd: "/repo/wt-42/packages/app",
+      reply: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });
@@ -520,6 +567,7 @@ describe("agentActions adversarial", () => {
       location: "grid",
       spawnStatus: "missing-cli",
       ...LAUNCH_IDENTITY,
+      reply: null,
     });
     const actions = setupActions(callbacks);
 
@@ -533,6 +581,7 @@ describe("agentActions adversarial", () => {
       location: "grid",
       spawnStatus: "missing-cli",
       ...LAUNCH_IDENTITY,
+      reply: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });
@@ -557,6 +606,7 @@ describe("agentActions adversarial", () => {
       worktreePath: null,
       branch: null,
       cwd: null,
+      reply: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });

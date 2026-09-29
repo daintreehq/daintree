@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
 
 vi.mock("electron", () => ({
   app: {
@@ -55,6 +55,8 @@ import {
   TIER1_REPRIEVE_MS,
   TIER1_MITIGATION_COOLDOWN_MS,
   MITIGATION_BACKOFF_MAX_MS,
+  KERNEL_PRESSURE_WINDOW,
+  KERNEL_WARN_RECLAIM_COOLDOWN_MS,
   recordBlinkSample,
   forgetBlinkSample,
   getBlinkSamples,
@@ -66,9 +68,13 @@ import {
   RENDERER_ELU_HIGH_SAMPLE_COUNT,
   hasSustainedRendererSaturation,
   getTrendSnapshot,
+  getSessionPeakSnapshot,
+  setAppMetricsMonitorPollInterval,
+  refreshAppMetricsMonitor,
   type MemoryPressureActions,
 } from "../ProcessMemoryMonitor.js";
 import type { TrimStateSummary } from "../../../shared/types/pty-host.js";
+import type { KernelPressureLevel } from "../SystemMemoryPressureMonitor.js";
 
 const EIGHT_GB = 8 * 1024 * 1024 * 1024;
 
@@ -397,6 +403,120 @@ describe("ProcessMemoryMonitor", () => {
     expect(
       (trendCalls[0]![1] as { growthMbPerHour: number }).growthMbPerHour
     ).toBeGreaterThanOrEqual(5);
+  });
+
+  describe("trend rate uses measured time, not nominal cadence (#12802)", () => {
+    afterEach(() => {
+      setAppMetricsMonitorPollInterval(30_000);
+    });
+
+    function trendWarnings() {
+      return vi
+        .mocked(logWarn)
+        .mock.calls.filter((c) => c[0] === "process-memory-trend-warning")
+        .map((c) => c[1] as { growthMbPerHour: number; mb: number; peakMb: number });
+    }
+
+    // Memory grows at a fixed MB/hour of wall-clock time, whatever the poll cadence.
+    function growByWallClock(mbPerHour: number) {
+      const t0 = Date.now();
+      mockGetAppMetrics.mockImplementation(() => {
+        const mb = 100 + ((Date.now() - t0) / 3_600_000) * mbPerHour;
+        return [makeMetric("Tab", mb * 1024, 500)];
+      });
+    }
+
+    it("does not inflate a sub-threshold rate when polling is stretched 10x", () => {
+      setAppMetricsMonitorPollInterval(300_000);
+      growByWallClock(2);
+      stop = startAppMetricsMonitor();
+
+      vi.advanceTimersByTime(70 * 300_000);
+
+      // Nominal-cadence math would report well over 5 MB/hr here and warn.
+      expect(trendWarnings()).toHaveLength(0);
+    });
+
+    it("reports the real rate when polling is stretched 5x", () => {
+      setAppMetricsMonitorPollInterval(150_000);
+      growByWallClock(10);
+      stop = startAppMetricsMonitor();
+
+      vi.advanceTimersByTime(70 * 150_000);
+
+      const warnings = trendWarnings();
+      expect(warnings).toHaveLength(1);
+      // The one-shot warning fires as the EMA slope climbs past 5 toward the
+      // true 10; nominal-cadence math would report ~50 here.
+      expect(warnings[0]!.growthMbPerHour).toBeGreaterThanOrEqual(5);
+      expect(warnings[0]!.growthMbPerHour).toBeLessThanOrEqual(12);
+    });
+
+    it("reports the real rate when the cadence changes mid-window", () => {
+      growByWallClock(10);
+      stop = startAppMetricsMonitor();
+
+      vi.advanceTimersByTime(30 * 30_000);
+      setAppMetricsMonitorPollInterval(300_000);
+      vi.advanceTimersByTime(70 * 300_000);
+
+      const warnings = trendWarnings();
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]!.growthMbPerHour).toBeGreaterThanOrEqual(5);
+      expect(warnings[0]!.growthMbPerHour).toBeLessThanOrEqual(15);
+    });
+
+    it("carries the current and peak size in the warning", () => {
+      let tick = 0;
+      mockGetAppMetrics.mockImplementation(() => {
+        tick++;
+        // Steady growth, with one early spike that stays the peak.
+        const mb = tick === 3 ? 900 : 100 + tick * 0.5;
+        return [makeMetric("Tab", mb * 1024, 500)];
+      });
+      stop = startAppMetricsMonitor();
+
+      vi.advanceTimersByTime(62 * 30_000);
+
+      const warnings = trendWarnings();
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]!.mb).toBeGreaterThan(120);
+      expect(warnings[0]!.mb).toBeLessThan(140);
+      expect(warnings[0]!.peakMb).toBe(900);
+    });
+
+    it("ignores wall-clock steps when measuring the span", () => {
+      let tick = 0;
+      mockGetAppMetrics.mockImplementation(() => {
+        tick++;
+        // ~2 MB/hr at the 30s cadence.
+        return [makeMetric("Tab", (100 + tick / 60) * 1024, 500)];
+      });
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(200 * 30_000);
+
+      // A 25-minute correction would make the 29-minute window look 4 minutes
+      // long on the wall clock, inflating 2 MB/hr past the threshold.
+      vi.setSystemTime(Date.now() - 25 * 60_000);
+      vi.advanceTimersByTime(4 * 30_000);
+
+      expect(trendWarnings()).toHaveLength(0);
+    });
+
+    it("does not warn after slow polling speeds back up", () => {
+      setAppMetricsMonitorPollInterval(300_000);
+      growByWallClock(2);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(72 * 300_000);
+
+      // A fixed per-bucket EMA alpha carries 10x the lag out of slow polling
+      // and sheds it once polling speeds up, reading as a growth spurt.
+      setAppMetricsMonitorPollInterval(30_000);
+      refreshAppMetricsMonitor();
+      vi.advanceTimersByTime(120 * 30_000);
+
+      expect(trendWarnings()).toHaveLength(0);
+    });
   });
 
   it("suppresses trend warning before 30 buckets are accumulated", () => {
@@ -777,6 +897,222 @@ describe("ProcessMemoryMonitor", () => {
       expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
       expect(mockActions.evictCachedProjectViews).toHaveBeenCalledTimes(1);
       expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("kernel memory pressure (#12799)", () => {
+    let mockActions: MemoryPressureActions;
+    let level: KernelPressureLevel | null;
+    let readKernelPressureLevel: Mock<() => Promise<KernelPressureLevel | null>>;
+
+    beforeEach(() => {
+      level = 1;
+      readKernelPressureLevel = vi.fn(async () => {
+        if (level === null) throw new Error("spawn ENOMEM");
+        return level;
+      });
+      mockActions = {
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(0),
+        evictCachedProjectViews: vi.fn().mockResolvedValue(0),
+        releaseRendererMemory: vi.fn(),
+        readKernelPressureLevel,
+      };
+      // Neither footprint nor available memory reports anything: the kernel
+      // level is the only signal in play.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100)]);
+    });
+
+    async function advancePolls(n: number): Promise<void> {
+      for (let i = 0; i < n; i++) {
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+      await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
+    }
+
+    const tier1Calls = () =>
+      vi.mocked(mockActions.destroyHiddenWebviews).mock.calls.filter(([tier]) => tier === 1).length;
+
+    /** Footprint pressure tier 1 visibly eases but does not clear. */
+    function arrangeReprievedFootprint(onTier1?: () => void): void {
+      let postTier1 = false;
+      mockGetAppMetrics.mockImplementation(() => {
+        const mb = postTier1 ? 330 : 400;
+        return [makeMetric("Browser", mb * 1024, 100)];
+      });
+      vi.mocked(mockActions.destroyHiddenWebviews).mockImplementation(async (tier) => {
+        if (tier === 1) {
+          postTier1 = true;
+          onTier1?.();
+        }
+        return 0;
+      });
+    }
+
+    it("runs the ladder on a critical level with healthy footprint and available memory", async () => {
+      level = 4;
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(1);
+      expect(mockActions.releaseRendererMemory).toHaveBeenCalledTimes(1);
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+
+      await advancePolls(PRESSURE_COUNT_TIER2 - 1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
+      expect(mockActions.evictCachedProjectViews).toHaveBeenCalledTimes(1);
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+    });
+
+    it("pulls only the cheap lever on a warning, after warmup and on its own cooldown", async () => {
+      level = 2;
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS);
+      expect(mockActions.releaseRendererMemory).not.toHaveBeenCalled();
+      await advancePolls(1);
+      expect(mockActions.releaseRendererMemory).toHaveBeenCalledTimes(1);
+
+      const pollsPerCooldown = KERNEL_WARN_RECLAIM_COOLDOWN_MS / 30_000;
+      await advancePolls(pollsPerCooldown - 1);
+      expect(mockActions.releaseRendererMemory).toHaveBeenCalledTimes(1);
+      await advancePolls(1);
+      expect(mockActions.releaseRendererMemory).toHaveBeenCalledTimes(2);
+
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+      expect(mockActions.evictCachedProjectViews).not.toHaveBeenCalled();
+    });
+
+    it("does nothing on a normal level", async () => {
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 5);
+
+      expect(readKernelPressureLevel).toHaveBeenCalled();
+      expect(mockActions.releaseRendererMemory).not.toHaveBeenCalled();
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
+    });
+
+    it("does not re-run tier 1 on every dip of a flapping level", async () => {
+      let reads = 0;
+      readKernelPressureLevel.mockImplementation(async () => (reads++ % 2 === 0 ? 4 : 1));
+      stop = startAppMetricsMonitor(mockActions);
+
+      // Stays inside tier 1's cooldown; without the window each normal reading
+      // would clear the episode and re-arm tier 1 for the next critical one.
+      await advancePolls(WARMUP_INTERVALS + 8);
+
+      expect(tier1Calls()).toBe(1);
+      expect(mockActions.releaseRendererMemory).toHaveBeenCalledTimes(1);
+    });
+
+    it("holds the episode through fewer lower readings than the window", async () => {
+      level = 4;
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + 1);
+      expect(tier1Calls()).toBe(1);
+
+      level = 1;
+      await advancePolls(KERNEL_PRESSURE_WINDOW - 1);
+      level = 4;
+      await advancePolls(2);
+
+      // Still inside tier 1's cooldown, so a second run could only come from
+      // the episode having cleared and re-armed it.
+      expect(tier1Calls()).toBe(1);
+    });
+
+    it("stands down once a full window of lower readings is in", async () => {
+      level = 4;
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + 1);
+      expect(tier1Calls()).toBe(1);
+
+      level = 1;
+      await advancePolls(KERNEL_PRESSURE_WINDOW + 1);
+      level = 4;
+      await advancePolls(2);
+
+      // Inside the cooldown too: the clear re-armed tier 1.
+      expect(tier1Calls()).toBe(2);
+    });
+
+    it("lets a failed read neither engage pressure nor count toward recovery", async () => {
+      level = null;
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS + 2);
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
+      expect(mockActions.releaseRendererMemory).not.toHaveBeenCalled();
+
+      level = 4;
+      await advancePolls(2);
+      expect(tier1Calls()).toBe(1);
+
+      // Every read fails from here, the post-settle recheck's included. The
+      // critical readings already in keep the count building to tier 2.
+      level = null;
+      await advancePolls(PRESSURE_COUNT_TIER2 - 1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
+    });
+
+    it("treats a reader that throws synchronously as a failed read, not a stuck one", async () => {
+      let throwSync = true;
+      readKernelPressureLevel.mockImplementation(() => {
+        if (throwSync) throw new Error("spawn EAGAIN");
+        return Promise.resolve(4);
+      });
+      stop = startAppMetricsMonitor(mockActions);
+      await advancePolls(WARMUP_INTERVALS);
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
+
+      throwSync = false;
+      await advancePolls(2);
+      expect(tier1Calls()).toBe(1);
+    });
+
+    it("discards readings taken before a suspend", async () => {
+      level = 4;
+      stop = startAppMetricsMonitor(mockActions);
+      const sleepService = vi.mocked(getSystemSleepService)();
+      const onSuspend = vi.mocked(sleepService.onSuspend).mock.calls.at(-1)![0];
+      const onWake = vi.mocked(sleepService.onWake).mock.calls.at(-1)![0];
+      await advancePolls(WARMUP_INTERVALS - 1);
+
+      // Wakes into a healthy machine with the critical readings still young
+      // enough to count, had suspend kept them.
+      level = 1;
+      onSuspend();
+      onWake(0);
+      await advancePolls(3);
+
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
+      expect(mockActions.releaseRendererMemory).not.toHaveBeenCalled();
+    });
+
+    it("rechecks the kernel after tier 1, overriding a reprieve its reclaim earned", async () => {
+      arrangeReprievedFootprint();
+      level = 4;
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
+    });
+
+    it("keeps the reprieve when the fresh recheck reads normal", async () => {
+      // Critical until tier 1 acts: the window still holds critical readings,
+      // so only the fresh post-settle read can know the kernel recovered.
+      arrangeReprievedFootprint(() => {
+        level = 1;
+      });
+      level = 4;
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+
+      expect(tier1Calls()).toBe(1);
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalledWith(2);
     });
   });
 
@@ -2473,6 +2809,23 @@ describe("ProcessMemoryMonitor", () => {
       expect(getTrendSnapshot().some((s) => s.pid === 7777)).toBe(false);
     });
 
+    it("reports type, latest size and peak size per pid", () => {
+      let kb = 200 * 1024;
+      mockGetAppMetrics.mockImplementation(() => [makeMetric("Utility", kb, 4242)]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+      kb = 350 * 1024;
+      vi.advanceTimersByTime(30_000);
+      kb = 250 * 1024;
+      vi.advanceTimersByTime(30_000);
+
+      expect(getTrendSnapshot().find((s) => s.pid === 4242)).toMatchObject({
+        type: "Utility",
+        mb: 250,
+        peakMb: 350,
+      });
+    });
+
     it("clears stale pids when the monitor is restarted", () => {
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 4242)]);
       stop = startAppMetricsMonitor();
@@ -2483,6 +2836,53 @@ describe("ProcessMemoryMonitor", () => {
       // A fresh monitor must not surface the previous lifetime's pid.
       stop = startAppMetricsMonitor();
       expect(getTrendSnapshot()).toEqual([]);
+    });
+  });
+  describe("getSessionPeakSnapshot (#12802)", () => {
+    it("keeps each type's single-process peak after the pid exits", () => {
+      mockGetAppMetrics.mockReturnValue([
+        makeMetric("Tab", 600 * 1024, 11),
+        makeMetric("Tab", 400 * 1024, 12),
+        makeMetric("Browser", 250 * 1024, 1),
+      ]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+
+      mockGetAppMetrics.mockReturnValue([
+        makeMetric("Tab", 450 * 1024, 12),
+        makeMetric("Browser", 240 * 1024, 1),
+      ]);
+      vi.advanceTimersByTime(30_000);
+
+      expect(getTrendSnapshot().some((s) => s.pid === 11)).toBe(false);
+      const peaks = getSessionPeakSnapshot();
+      expect(peaks.find((p) => p.type === "Tab")).toMatchObject({ pid: 11, peakMb: 600 });
+      expect(peaks.find((p) => p.type === "Browser")).toMatchObject({ pid: 1, peakMb: 250 });
+      expect(peaks).toHaveLength(2);
+    });
+
+    it("excludes non-monitored types", () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("GPU", 900 * 1024, 7777)]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+      expect(getSessionPeakSnapshot()).toEqual([]);
+    });
+
+    it("survives suspend but resets on a fresh monitor start", () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Tab", 600 * 1024, 11)]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+
+      const sleep = vi.mocked(getSystemSleepService)();
+      const onSuspend = vi.mocked(sleep.onSuspend).mock.calls.at(-1)![0] as () => void;
+      onSuspend();
+
+      expect(getTrendSnapshot()).toEqual([]);
+      expect(getSessionPeakSnapshot()).toHaveLength(1);
+
+      stop();
+      stop = startAppMetricsMonitor();
+      expect(getSessionPeakSnapshot()).toEqual([]);
     });
   });
 });

@@ -73,13 +73,22 @@ describe("quick state filter empty-glyph dimming", () => {
   });
 
   it("keeps the selected segment visible under forced colors in both bars", () => {
-    // The selection underline is a box-shadow, which forced colors removes.
+    // The selection underline is a box-shadow, which forced colors removes. The
+    // redraw keys off the radio's own checked state, so it only reaches a bar
+    // that marks its segments and exposes the selection as aria-checked — a bar
+    // that went back to aria-pressed would lose its underline silently.
     const css = read(path.resolve(here, "../../../index.css"));
     const redraws = mediaBlocks(css, "forced-colors: active").filter((block) =>
-      /\[data-quick-state-segment\]\[aria-pressed="true"\]::after/.test(block)
+      /\[data-quick-state-segment\]\[aria-checked="true"\]::after/.test(block)
     );
     expect(redraws).toHaveLength(1);
-    expect(redraws[0]).toMatch(/\[data-quick-state-segment\]\[aria-checked="true"\]::after/);
-    for (const bar of BARS) expect(read(bar)).toMatch(/data-quick-state-segment/);
+    for (const bar of BARS) {
+      const source = read(bar);
+      const name = path.basename(bar);
+      expect(source, name).toMatch(/data-quick-state-segment/);
+      expect(source, name).toMatch(/role="radio"/);
+      expect(source, name).toMatch(/aria-checked=\{isActive\}/);
+      expect(source, name).not.toMatch(/aria-pressed/);
+    }
   });
 });

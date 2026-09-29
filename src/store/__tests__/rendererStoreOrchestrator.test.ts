@@ -55,12 +55,6 @@ vi.mock("../../persistence/panelPersistence", () => ({
   },
 }));
 
-vi.mock("@/services/SemanticAnalysisService", () => ({
-  semanticAnalysisService: {
-    unregisterTerminal: vi.fn(),
-  },
-}));
-
 vi.mock("../terminalInputStore", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../terminalInputStore")>();
   return {
@@ -97,12 +91,13 @@ const { useResourceMonitoringStore } = await import("../resourceMonitoringStore"
 const { useVoiceRecordingStore } = await import("../voiceRecordingStore");
 const { usePluginPanelBadgeStore } = await import("../pluginPanelBadgeStore");
 const { unregisterInputController } = await import("../terminalInputStore");
-const { semanticAnalysisService } = await import("@/services/SemanticAnalysisService");
 const { useCliAvailabilityStore, cleanupCliAvailabilityStore } =
   await import("../cliAvailabilityStore");
 const { useAgentSettingsStore, cleanupAgentSettingsStore } = await import("../agentSettingsStore");
 const { agentSettingsClient } = await import("@/clients");
 const { DEFAULT_AGENT_SETTINGS } = await import("@shared/types");
+const { useHelpPanelStore } = await import("../helpPanelStore");
+const { usePortalStore } = await import("../portalStore");
 const { initStoreOrchestrator, destroyStoreOrchestrator } =
   await import("../rendererStoreOrchestrator");
 
@@ -1077,28 +1072,7 @@ describe("rendererStoreOrchestrator", () => {
     expect(unregisterInputController).toHaveBeenCalledWith("term-1");
   });
 
-  it("calls semanticAnalysisService.unregisterTerminal when terminal is removed", () => {
-    usePanelStore.setState({
-      panelsById: {
-        "term-1": {
-          id: "term-1",
-          title: "T1",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      },
-      panelIds: ["term-1"],
-    });
-
-    usePanelStore.getState().removePanel("term-1");
-
-    expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledWith("term-1");
-  });
-
-  it("calls both new cleanup hooks for each terminal in batch removal", () => {
+  it("unregisters the input controller for each terminal in batch removal", () => {
     usePanelStore.setState({
       panelsById: {
         "t-a": {
@@ -1128,9 +1102,6 @@ describe("rendererStoreOrchestrator", () => {
     expect(unregisterInputController).toHaveBeenCalledTimes(2);
     expect(unregisterInputController).toHaveBeenCalledWith("t-a");
     expect(unregisterInputController).toHaveBeenCalledWith("t-b");
-    expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledTimes(2);
-    expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledWith("t-a");
-    expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledWith("t-b");
   });
 
   it("debounces persistMruList during rapid focus changes", async () => {
@@ -1993,6 +1964,51 @@ describe("rendererStoreOrchestrator", () => {
       stores.useFleetArmingStore.getState().clear();
       expect(stores.useFleetFailureStore.getState().failedIds.size).toBe(0);
       expect(stores.useFleetFailureStore.getState().payload).toBeNull();
+    });
+  });
+
+  describe("assistant / web chat exclusivity", () => {
+    beforeEach(() => {
+      useHelpPanelStore.setState({ isOpen: false });
+      usePortalStore.setState({ isOpen: false });
+    });
+
+    it("closes web chat when the assistant opens", () => {
+      usePortalStore.getState().toggle();
+      expect(usePortalStore.getState().isOpen).toBe(true);
+
+      useHelpPanelStore.getState().toggle();
+
+      expect(useHelpPanelStore.getState().isOpen).toBe(true);
+      expect(usePortalStore.getState().isOpen).toBe(false);
+    });
+
+    it("closes the assistant when web chat opens", () => {
+      useHelpPanelStore.getState().setOpen(true);
+
+      usePortalStore.getState().toggle();
+
+      expect(usePortalStore.getState().isOpen).toBe(true);
+      expect(useHelpPanelStore.getState().isOpen).toBe(false);
+    });
+
+    it("leaves the other surface alone when one closes", () => {
+      useHelpPanelStore.getState().setOpen(true);
+      useHelpPanelStore.getState().setOpen(false);
+      usePortalStore.getState().setOpen(true);
+      usePortalStore.getState().setOpen(false);
+
+      expect(useHelpPanelStore.getState().isOpen).toBe(false);
+      expect(usePortalStore.getState().isOpen).toBe(false);
+    });
+
+    it("stops enforcing after the orchestrator is destroyed", () => {
+      destroyStoreOrchestrator();
+      useHelpPanelStore.getState().setOpen(true);
+      usePortalStore.getState().setOpen(true);
+
+      expect(useHelpPanelStore.getState().isOpen).toBe(true);
+      expect(usePortalStore.getState().isOpen).toBe(true);
     });
   });
 });

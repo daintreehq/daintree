@@ -9,6 +9,7 @@ import React, {
   type ReactNode,
 } from "react";
 import {
+  Check,
   X,
   Maximize2,
   Minimize2,
@@ -19,13 +20,16 @@ import {
   Bell,
   BellOff,
   ChevronDown,
+  CirclePlay,
   CopyPlus,
+  DatabaseBackup,
   Ellipsis,
   Lock,
   PanelBottomClose,
   PanelTopClose,
   Pencil,
   RefreshCw,
+  Settings,
   ShieldAlert,
   Trash2,
   Unlock,
@@ -49,12 +53,16 @@ import {
 } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { PanelTabList } from "./PanelTabList";
+import { inlineRenameFieldClassName, inlineRenameFieldInputProps } from "./inlineRenameField";
+import { focusPaneWhenStripCloses, revealTabInStrip } from "@/components/ui/document-tab";
+import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import type { PanelKind } from "@/types";
 import { cn } from "@/lib/utils";
 import { formatShortcutForTooltip } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
+import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import { Button } from "@/components/ui/button";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import {
@@ -66,14 +74,13 @@ import {
 } from "@/components/Worktree/terminalStateConfig";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PluginPanelBadges } from "@/components/Panel/PluginPanelBadges";
-import { BellDot, FolderGit2 } from "@/components/icons";
+import { BellDot, FolderGit2, NotebookPen } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
 import {
   useAriaKeyshortcuts,
   useBackgroundPanelStats,
   useEffectiveCombo,
-  useKeybindingDisplay,
   useTabOverflow,
 } from "@/hooks";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
@@ -84,7 +91,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { PopoverAnchor } from "@/components/ui/popover";
@@ -94,14 +100,27 @@ import { TabButton, type TabInfo } from "./TabButton";
 import { SortableTabButton } from "./SortableTabButton";
 import { MoveToWorktreePicker } from "./MoveToWorktreePicker";
 import {
+  getRegisteredTourIdsSnapshot,
+  subscribeToTourRegistry,
+} from "@/components/Tour/tourRegistry";
+import {
   GENERIC_PANEL_MENU_ACTION_IDS,
   GENERIC_PANEL_RELOAD_ACTION_ID,
+  GENERIC_PANEL_TOUR_ACTION_ID,
+  GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
+  GENERIC_PANEL_PLUGIN_BACKUP_ACTION_ID,
   canReloadPanelKind,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
+  isPluginMenuCommandId,
+  pluginMenuCommandActionId,
   readPanelKindMenuCapabilities,
   type GenericPanelMenuCommandId,
 } from "./genericPanelMenu";
+import {
+  getRegisteredPluginActionsSnapshot,
+  subscribeToRegisteredPluginActions,
+} from "@/services/plugin/registeredPluginActions";
 
 import {
   getPanelKindRegistrySnapshot,
@@ -118,12 +137,14 @@ import {
 import { isPtyPanel } from "@shared/types/panel";
 import { actionService } from "@/services/ActionService";
 import { fireWatchNotification } from "@/lib/watchNotification";
+import { scratchpadHasContent } from "@/lib/terminalScratchpad";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { ActionId } from "@shared/types/actions";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
+import { HEADER_CHIP_CLASS } from "@/components/Terminal/terminalHeaderChip";
 
 /**
  * The window controls keep `icon-xs`'s 24px target but draw a 14px glyph, the
@@ -132,11 +153,11 @@ import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
  */
 const CONTROL_ICON = "[&_svg]:size-3.5";
 
-/** An overflow item's shortcut: the action's live keybinding, or nothing. */
-function OverflowMenuShortcut({ actionId }: { actionId: ActionId }) {
-  const combo = useKeybindingDisplay(actionId);
-  return combo ? <DropdownMenuShortcut>{combo}</DropdownMenuShortcut> : null;
-}
+/**
+ * A task turn after a menu's close hook: the menu primitive restores focus in
+ * that same hook, so work that moves focus elsewhere starts after it lands.
+ */
+const AFTER_MENU_FOCUS_RESTORE_MS = 0;
 
 export interface PanelHeaderProps {
   id: string;
@@ -165,6 +186,8 @@ export interface PanelHeaderProps {
   isEditingTitle: boolean;
   editingValue: string;
   titleInputRef: React.RefObject<HTMLInputElement | null>;
+  /** The static title, so a keyboard rename can hand focus back to it. */
+  titleRef?: React.Ref<HTMLSpanElement>;
   onEditingValueChange: (value: string) => void;
   onTitleDoubleClick: (e: React.MouseEvent) => void;
   onTitleKeyDown: (e: React.KeyboardEvent) => void;
@@ -257,6 +280,7 @@ function PanelHeaderComponent({
   isEditingTitle,
   editingValue,
   titleInputRef,
+  titleRef,
   onEditingValueChange,
   onTitleDoubleClick,
   onTitleKeyDown,
@@ -395,6 +419,20 @@ function PanelHeaderComponent({
     return panel && isPtyPanel(panel) ? (panel.isInputLocked ?? false) : false;
   });
   const hasPty = panelKindHasPty(kind);
+  // A primitive, so the header re-renders on a visibility or empty/non-empty
+  // change and never on a keystroke into the notes. "empty" is an open
+  // scratchpad with no notes yet, which earns no header toggle.
+  const scratchpadState = usePanelStore((state) => {
+    const panel = state.panelsById[id];
+    if (!panel || !isPtyPanel(panel)) return "unavailable";
+    if (!panel.scratchpad) return "hidden";
+    if (panel.scratchpad.collapsed) return "collapsed";
+    return scratchpadHasContent(panel.scratchpad) ? "open" : "empty";
+  });
+  const showScratchpad = usePanelStore((state) => state.showScratchpad);
+  const collapseScratchpad = usePanelStore((state) => state.collapseScratchpad);
+  const scratchpadToggleLabel =
+    scratchpadState === "collapsed" ? "Show scratchpad" : "Hide scratchpad";
   const isHibernated = useIsHibernated(id);
 
   // Read from the subscribed snapshot, not the registry helpers: a plugin
@@ -422,6 +460,60 @@ function PanelHeaderComponent({
   // through TerminalPane, which hands this header "terminal", but only the
   // stored kind says whether Duplicate has a recipe to run.
   const storedKind = usePanelStore((state) => state.panelsById[id]?.kind);
+  // Read off the stored kind for the same reason: a PTY-backed plugin kind's
+  // tour belongs to it, not to "terminal".
+  const registeredTourIds = useSyncExternalStore(
+    subscribeToTourRegistry,
+    getRegisteredTourIdsSnapshot,
+    getRegisteredTourIdsSnapshot
+  );
+  // Plugin menu items appear once their action registers, which can be long
+  // after the kind did.
+  const registeredPluginActions = useSyncExternalStore(
+    subscribeToRegisteredPluginActions,
+    getRegisteredPluginActionsSnapshot,
+    getRegisteredPluginActionsSnapshot
+  );
+  const storedKindCapabilities = readPanelKindMenuCapabilities(
+    panelKindRegistry,
+    storedKind ?? kind,
+    registeredTourIds,
+    registeredPluginActions
+  );
+  const kindTour = storedKindCapabilities.tour;
+  const pluginSettingsId = storedKindCapabilities.pluginSettingsId;
+  const pluginBackupId = storedKindCapabilities.pluginBackupId;
+  // Recorded on select and spent by the menu's close hook, after it has handed
+  // focus back to the trigger: opening the settings home, a save dialog or a
+  // plugin's own confirmation from `onSelect` would race that restore, and
+  // whatever returns focus on its own close would capture the dying menu item
+  // instead of this panel.
+  const pendingMenuDispatchRef = useRef<{
+    actionId: ActionId;
+    args: Record<string, unknown>;
+  } | null>(null);
+  const handlePluginSettingsSelect = () => {
+    if (pluginSettingsId === null) return;
+    pendingMenuDispatchRef.current = {
+      actionId: GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
+      args: { pluginId: pluginSettingsId },
+    };
+  };
+  const handlePluginBackupSelect = () => {
+    if (pluginBackupId === null) return;
+    pendingMenuDispatchRef.current = {
+      actionId: GENERIC_PANEL_PLUGIN_BACKUP_ACTION_ID,
+      args: { pluginId: pluginBackupId },
+    };
+  };
+  const handleTourSelect = () => {
+    if (!kindTour) return;
+    void actionService.dispatch(
+      GENERIC_PANEL_TOUR_ACTION_ID,
+      { tourId: kindTour.id },
+      { source: "menu" }
+    );
+  };
   // A count, not the worktree list, so a poll that changes nothing but a
   // worktree's status doesn't re-render every header. Counted against the live
   // map rather than as `size > 1`: a panel whose worktree has already gone
@@ -462,27 +554,37 @@ function PanelHeaderComponent({
   const handleMoveToWorktreeSelect = useCallback(() => {
     pendingMovePickerRef.current = id;
   }, [id]);
-  const handleOverflowMenuOpenChange = useCallback((open: boolean) => {
+  const handleOverflowMenuOpenChange = (open: boolean) => {
     if (!open) return;
     setOverflowTooltipOpen(false);
     // A menu reopened inside its exit animation never unmounts, so the close
     // hook below never runs for that close; drop the intent rather than let it
     // open the picker on some later, unrelated close.
     pendingMovePickerRef.current = null;
-  }, []);
-  const handleOverflowMenuCloseAutoFocus = useCallback(
-    (event: Event) => {
-      const pendingPanelId = pendingMovePickerRef.current;
-      pendingMovePickerRef.current = null;
-      if (pendingPanelId === null || pendingPanelId !== id) return;
-      // The picker takes focus into its search field; returning it to the
-      // button first would only flash a ring on the way.
-      event.preventDefault();
-      setHasOpenedMovePicker(true);
-      setMovePickerPanelId(id);
-    },
-    [id]
-  );
+    pendingMenuDispatchRef.current = null;
+  };
+  const handleOverflowMenuCloseAutoFocus = (event: Event) => {
+    const pendingDispatch = pendingMenuDispatchRef.current;
+    pendingMenuDispatchRef.current = null;
+    if (pendingDispatch !== null) {
+      // Left to the menu primitive's own restore (ringless for a pointer,
+      // ringed for the keyboard), then dispatched once focus is back.
+      setTimeout(() => {
+        void actionService.dispatch(pendingDispatch.actionId, pendingDispatch.args, {
+          source: "menu",
+        });
+      }, AFTER_MENU_FOCUS_RESTORE_MS);
+      return;
+    }
+    const pendingPanelId = pendingMovePickerRef.current;
+    pendingMovePickerRef.current = null;
+    if (pendingPanelId === null || pendingPanelId !== id) return;
+    // The picker takes focus into its search field; returning it to the
+    // button first would only flash a ring on the way.
+    event.preventDefault();
+    setHasOpenedMovePicker(true);
+    setMovePickerPanelId(id);
+  };
 
   // The same list the right-click menu renders for these kinds (#12606), so
   // the two menus offer one set of panel commands.
@@ -493,9 +595,22 @@ function PanelHeaderComponent({
         isDockable: kindCapabilities.isDockable,
         canMoveToWorktree,
         canReload: canReloadPanelKind(kind),
+        tourLabel: kindTour?.label,
+        hasPluginSettings: pluginSettingsId !== null,
+        hasPluginDatabases: pluginBackupId !== null,
+        pluginMenuItems: storedKindCapabilities.pluginMenuItems,
       })
     : null;
   const handleGenericMenuCommand = (commandId: GenericPanelMenuCommandId) => {
+    if (isPluginMenuCommandId(commandId)) {
+      // The panel the menu was opened on, by id: the plugin's action decides
+      // what that means for it.
+      pendingMenuDispatchRef.current = {
+        actionId: pluginMenuCommandActionId(commandId),
+        args: { panelId: id },
+      };
+      return;
+    }
     if (commandId === "move-to-worktree") {
       handleMoveToWorktreeSelect();
       return;
@@ -506,6 +621,18 @@ function PanelHeaderComponent({
         { panelId: id },
         { source: "menu" }
       );
+      return;
+    }
+    if (commandId === "tour") {
+      handleTourSelect();
+      return;
+    }
+    if (commandId === "plugin-settings") {
+      handlePluginSettingsSelect();
+      return;
+    }
+    if (commandId === "plugin-backup") {
+      handlePluginBackupSelect();
       return;
     }
     if (commandId === "kill" && hasPanelCloseGuard(id)) {
@@ -667,27 +794,65 @@ function PanelHeaderComponent({
 
   const activeTabId = tabs?.find((t) => t.isActive)?.id ?? null;
 
+  // The tab the arrow keys have reached. Under manual activation it is often not
+  // the selected one, and a tab the overflow observer parked is invisible and
+  // refuses focus, so this one is kept painted until focus leaves the strip.
+  const [keyboardTabId, setKeyboardTabId] = useState<string | null>(null);
+  const stripHiddenTabIds = useMemo(() => {
+    if (keyboardTabId === null || !hiddenTabIds.has(keyboardTabId)) return hiddenTabIds;
+    const next = new Set(hiddenTabIds);
+    next.delete(keyboardTabId);
+    return next;
+  }, [hiddenTabIds, keyboardTabId]);
+
+  // Focus after the render that un-parks the tab: a `visibility: hidden` tab
+  // refuses focus.
+  const focusTab = useCallback(
+    (tabId: string) => {
+      setKeyboardTabId(tabId);
+      if (pendingTabFocusRef.current !== null) {
+        cancelAnimationFrame(pendingTabFocusRef.current);
+      }
+      pendingTabFocusRef.current = requestAnimationFrame(() => {
+        pendingTabFocusRef.current = null;
+        for (const el of tabListEl?.querySelectorAll<HTMLElement>("[data-tab-id]") ?? []) {
+          if (el.getAttribute("data-tab-id") === tabId) {
+            el.focus();
+            break;
+          }
+        }
+      });
+    },
+    [tabListEl]
+  );
+
+  const { armKeyboardClose, disarmKeyboardClose } = useKeyboardTabClose({
+    ids: tabIds,
+    activeId: activeTabId,
+    focusTab,
+  });
+
+  const handleTabListBlur = useCallback((e: React.FocusEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setKeyboardTabId(null);
+  }, []);
+
+  const handleTabListFocus = useCallback(
+    (e: React.FocusEvent<HTMLDivElement>) => {
+      const tabId = (e.target as HTMLElement).getAttribute("data-tab-id");
+      // Focus coming back to a tab a keyboard close was waiting on means the
+      // close was cancelled.
+      if (tabId) disarmKeyboardClose(tabId);
+    },
+    [disarmKeyboardClose]
+  );
+
   useLayoutEffect(() => {
     if (!tabListEl || !activeTabId || isDragging) return;
 
     const tabEl = tabListEl.querySelector(`[data-tab-id="${activeTabId}"]`) as HTMLElement | null;
     if (!tabEl) return;
 
-    const containerLeft = tabListEl.scrollLeft;
-    const containerRight = containerLeft + tabListEl.clientWidth;
-    const tabLeft = tabEl.offsetLeft;
-    const tabRight = tabLeft + tabEl.offsetWidth;
-
-    // A tab wider than the strip cannot fit either way; show its start — the
-    // brand glyph and the first words are what identify it, not its close.
-    if (tabLeft < containerLeft || tabEl.offsetWidth > tabListEl.clientWidth) {
-      tabListEl.scrollTo({ left: tabLeft, behavior: prefersReducedMotion() ? "auto" : "smooth" });
-    } else if (tabRight > containerRight) {
-      tabListEl.scrollTo({
-        left: tabRight - tabListEl.clientWidth,
-        behavior: prefersReducedMotion() ? "auto" : "smooth",
-      });
-    }
+    revealTabInStrip(tabListEl, tabEl, prefersReducedMotion() ? "auto" : "smooth");
   }, [activeTabId, isDragging, tabListEl]);
 
   // Sensors for tab drag-and-drop (require small distance to differentiate from clicks)
@@ -754,15 +919,36 @@ function PanelHeaderComponent({
     [tabs, onTabReorder]
   );
 
-  // Arrow key navigation for tabs (standard tablist behavior)
+  // APG tabs with manual activation, like every document tab strip: arrows and
+  // Home/End move focus, Enter/Space activate (TabButton), Delete closes.
+  // Switching a tab swaps a live pane and refits it, which is too much to do on
+  // every arrow press while skimming.
   const handleTabListKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (isTabDragActiveRef.current) return;
-      if (!tabs || tabs.length < 2 || !onTabClick) return;
+      if (!tabs || tabs.length === 0) return;
 
-      const currentIndex = tabs.findIndex((t) => t.isActive);
-      let nextIndex: number | undefined;
+      // Only keys from a tab: the add and overflow buttons share the strip.
+      const focusedTabId = (e.target as HTMLElement).getAttribute("data-tab-id");
+      if (!focusedTabId) return;
+      const currentIndex = tabs.findIndex((t) => t.id === focusedTabId);
+      if (currentIndex === -1) return;
 
+      if (isTabCloseKey(e.key)) {
+        if (!onTabClose) return;
+        e.preventDefault();
+        armKeyboardClose(focusedTabId);
+        // Two tabs becoming one takes the whole strip away — and in the grid the
+        // tab group with it — so there is no tab left to hand focus to. Land on
+        // the surviving pane's header instead of dropping focus to the body.
+        const survivor = tabs.length === 2 ? tabs.find((t) => t.id !== focusedTabId) : undefined;
+        onTabClose(focusedTabId);
+        if (survivor) focusPaneWhenStripCloses(survivor.id);
+        return;
+      }
+
+      if (tabs.length < 2) return;
+      let nextIndex: number;
       switch (e.key) {
         case "ArrowLeft":
           nextIndex = currentIndex > 0 ? currentIndex - 1 : tabs.length - 1;
@@ -782,24 +968,9 @@ function PanelHeaderComponent({
 
       e.preventDefault();
       const nextTab = tabs[nextIndex];
-      if (nextTab) {
-        onTabClick(nextTab.id);
-        // Focus after the activation has rendered: a parked tab is
-        // `visibility: hidden` until it becomes active, and a hidden element
-        // refuses focus.
-        if (pendingTabFocusRef.current !== null) {
-          cancelAnimationFrame(pendingTabFocusRef.current);
-        }
-        pendingTabFocusRef.current = requestAnimationFrame(() => {
-          pendingTabFocusRef.current = null;
-          const tabButton = tabListEl?.querySelector(
-            `[data-tab-id="${nextTab.id}"]`
-          ) as HTMLElement | null;
-          tabButton?.focus();
-        });
-      }
+      if (nextTab) focusTab(nextTab.id);
     },
-    [tabs, onTabClick, tabListEl]
+    [tabs, onTabClose, armKeyboardClose, focusTab]
   );
 
   // A tab you cannot see can still be the one asking for you. The trigger wears
@@ -819,7 +990,8 @@ function PanelHeaderComponent({
               variant="ghost"
               size="icon-xs"
               onPointerDown={(e) => e.stopPropagation()}
-              className={cn(CONTROL_ICON, "relative shrink-0")}
+              // Inset like every control inside a document tab strip.
+              className={cn(CONTROL_ICON, "relative shrink-0 focus-visible:outline-offset-[-2px]")}
               aria-label={hiddenTabsLabel}
               aria-haspopup="menu"
               data-testid="panel-tabs-overflow"
@@ -848,6 +1020,8 @@ function PanelHeaderComponent({
               key={tab.id}
               onSelect={() => onTabClick?.(tab.id)}
               aria-current={tab.isActive ? "true" : undefined}
+              // The tab on screen takes the committed-value check, as in the
+              // docked tab-group menu, not weight alone.
               className={cn(tab.isActive && "font-medium")}
             >
               <span className="shrink-0 mr-2 inline-flex items-center justify-center w-3.5 h-3.5">
@@ -858,14 +1032,21 @@ function PanelHeaderComponent({
                   brandColor={tab.presetColor ?? tab.chrome.color}
                 />
               </span>
-              <span className="truncate">{tab.title}</span>
+              <span className="mr-3 truncate">{tab.title}</span>
               {StateIcon && tab.agentState && (
                 <span className="sr-only">, {getEffectiveStateLabel(tab.agentState)}</span>
+              )}
+              {tab.isActive && (
+                <Check
+                  className="ml-auto h-3.5 w-3.5 shrink-0 text-text-secondary"
+                  aria-hidden="true"
+                />
               )}
               {StateIcon && tab.agentState && (
                 <StateIcon
                   className={cn(
-                    "ml-auto h-3 w-3 shrink-0",
+                    tab.isActive ? "ml-1.5" : "ml-auto",
+                    "h-3 w-3 shrink-0",
                     getEffectiveStateColor(tab.agentState),
                     tab.agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
                   )}
@@ -917,6 +1098,10 @@ function PanelHeaderComponent({
       brandSurface={brandSurface}
       ref={headerActivatorRef}
       {...dragListeners}
+      onMouseDown={(e: React.MouseEvent<HTMLElement>) => {
+        dragListeners?.onMouseDown?.(e);
+        suppressShiftClickTextSelection(e);
+      }}
       tabIndex={headerHasDrag ? 0 : undefined}
       role={headerHasDrag ? "group" : undefined}
       aria-roledescription={
@@ -929,7 +1114,7 @@ function PanelHeaderComponent({
       data-fleet-previewed={isFleetPreviewed || undefined}
       data-pane-chrome=""
       className={cn(
-        "@container/header text-xs transition-colors relative overflow-hidden group select-none",
+        "@container/header text-xs transition-colors relative overflow-hidden group select-none focus-visible:-outline-offset-2",
         isMaximized
           ? "h-10 bg-surface-sidebar border-border-default"
           : location === "dock"
@@ -981,9 +1166,11 @@ function PanelHeaderComponent({
                 <PanelTabList
                   layoutGroupId={`panel-tabs-dnd-${id}`}
                   tabs={tabs}
-                  hiddenTabIds={hiddenTabIds}
+                  hiddenTabIds={stripHiddenTabIds}
                   tabListRef={setTabListEl}
                   onKeyDown={handleTabListKeyDown}
+                  onFocus={handleTabListFocus}
+                  onBlur={handleTabListBlur}
                   onAddTab={onAddTab}
                   addTabTooltipContent={addTabTooltipContent}
                   overflowTrigger={overflowTrigger}
@@ -1017,9 +1204,11 @@ function PanelHeaderComponent({
             <PanelTabList
               layoutGroupId={`panel-tabs-static-${id}`}
               tabs={tabs}
-              hiddenTabIds={hiddenTabIds}
+              hiddenTabIds={stripHiddenTabIds}
               tabListRef={setTabListEl}
               onKeyDown={handleTabListKeyDown}
+              onFocus={handleTabListFocus}
+              onBlur={handleTabListBlur}
               onAddTab={onAddTab}
               addTabTooltipContent={addTabTooltipContent}
               overflowTrigger={overflowTrigger}
@@ -1092,7 +1281,7 @@ function PanelHeaderComponent({
                 <input
                   data-no-dnd
                   ref={titleInputRef}
-                  type="text"
+                  {...inlineRenameFieldInputProps}
                   size={1}
                   value={editingValue}
                   onChange={(e) => onEditingValueChange(e.target.value)}
@@ -1100,7 +1289,10 @@ function PanelHeaderComponent({
                   onBlur={onTitleSave}
                   // Focus is shown by the field itself, without accent (#7926):
                   // the wash deepens and its edge appears while it has focus.
-                  className="col-start-1 row-start-1 -mx-1 h-6 w-[calc(100%+0.5rem)] rounded-sm border border-transparent bg-overlay-soft px-1 text-xs font-medium leading-6 text-text-primary select-text transition-colors focus:outline-hidden focus-visible:border-divider focus-visible:bg-overlay-medium"
+                  className={cn(
+                    inlineRenameFieldClassName,
+                    "col-start-1 row-start-1 -mx-1 h-6 w-[calc(100%+0.5rem)] leading-6"
+                  )}
                   aria-label={getAriaLabel()}
                 />
               </div>
@@ -1109,6 +1301,7 @@ function PanelHeaderComponent({
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span
+                      ref={titleRef}
                       className={cn(
                         // min-w-[6ch]: the title is the last thing to yield —
                         // a badge or a queue count never squeezes it to nothing.
@@ -1116,7 +1309,7 @@ function PanelHeaderComponent({
                         // default so it matches the controls beside it.
                         "text-xs font-medium font-sans select-none transition-colors block truncate min-w-[6ch] min-h-6 leading-6 rounded-sm",
                         onTitleChange &&
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1",
+                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
                         isFocused || isSelected ? "text-text-primary" : "text-text-secondary",
                         onTitleChange && "cursor-text hover:text-text-primary",
                         isPinged &&
@@ -1127,6 +1320,7 @@ function PanelHeaderComponent({
                       onKeyDown={onTitleKeyDown}
                       tabIndex={onTitleChange ? 0 : undefined}
                       role={onTitleChange ? "button" : undefined}
+                      aria-keyshortcuts={onTitleChange ? "F2" : undefined}
                       aria-label={onTitleChange ? getTitleAriaLabel() : undefined}
                       data-fleet-gesture-passthrough=""
                     >
@@ -1174,7 +1368,7 @@ function PanelHeaderComponent({
                     data-testid="panel-fleet-failure-dot"
                     // The mark stays an 8px dot; the button around it is the
                     // 24px target. -mx-1 keeps its footprint in the row at 16px.
-                    className="-mx-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
+                    className="-mx-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
                   >
                     <span
                       className="status-mark h-2 w-2 rounded-full bg-status-error"
@@ -1229,7 +1423,13 @@ function PanelHeaderComponent({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span
-                    className="min-w-[7ch] max-w-[120px] inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-3xs font-medium leading-none text-text-primary select-none @max-[420px]/header:hidden"
+                    className={cn(
+                      HEADER_CHIP_CLASS,
+                      // Mono like every other branch in the app, and never
+                      // uppercased: refs are case-sensitive. Yields three times
+                      // faster than the title, which is what names the pane.
+                      "min-w-[7ch] max-w-[120px] shrink-[3] font-mono text-text-primary select-none @max-[420px]/header:hidden"
+                    )}
                     style={
                       {
                         backgroundColor:
@@ -1354,6 +1554,31 @@ function PanelHeaderComponent({
         data-testid="panel-header-controls"
         className="ml-1.5 flex shrink-0 items-center gap-1"
       >
+        {/* Marks a terminal that has notes and toggles them (#12835). Only a
+            scratchpad with notes collapses, so an empty one never shows it. */}
+        {(scratchpadState === "collapsed" || scratchpadState === "open") && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className={CONTROL_ICON}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (scratchpadState === "collapsed") showScratchpad(id);
+                  else collapseScratchpad(id);
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                aria-label={scratchpadToggleLabel}
+                data-testid="panel-toggle-scratchpad"
+              >
+                <NotebookPen aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{scratchpadToggleLabel}</TooltipContent>
+          </Tooltip>
+        )}
+
         {/* Overflow menu — panel management actions */}
         {hasOverflowItems && (
           <DropdownMenu onOpenChange={handleOverflowMenuOpenChange}>
@@ -1393,12 +1618,10 @@ function PanelHeaderComponent({
                         disabled={command.disabled}
                         destructive={command.destructive}
                         onSelect={() => handleGenericMenuCommand(command.id)}
+                        keybinding={command.shortcutActionId}
                       >
                         <command.icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                         {command.label}
-                        {command.shortcutActionId && (
-                          <OverflowMenuShortcut actionId={command.shortcutActionId} />
-                        )}
                       </DropdownMenuItem>
                     ))}
                     {groupIndex === genericMenuGroups.length - 2 && headerActions && (
@@ -1495,6 +1718,15 @@ function PanelHeaderComponent({
                     <Pencil className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                     Rename
                   </DropdownMenuItem>
+                  {(scratchpadState === "hidden" || scratchpadState === "collapsed") && (
+                    <DropdownMenuItem
+                      onSelect={() => showScratchpad(id)}
+                      data-testid="panel-show-scratchpad"
+                    >
+                      <NotebookPen className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Show scratchpad
+                    </DropdownMenuItem>
+                  )}
                   {canDuplicatePanelKind(storedKind ?? kind) && (
                     <DropdownMenuItem
                       onSelect={() =>
@@ -1507,6 +1739,24 @@ function PanelHeaderComponent({
                     >
                       <CopyPlus className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Duplicate
+                    </DropdownMenuItem>
+                  )}
+                  {kindTour && (
+                    <DropdownMenuItem onSelect={handleTourSelect}>
+                      <CirclePlay className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      {kindTour.label}
+                    </DropdownMenuItem>
+                  )}
+                  {pluginBackupId && (
+                    <DropdownMenuItem onSelect={handlePluginBackupSelect}>
+                      <DatabaseBackup className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Back up data…
+                    </DropdownMenuItem>
+                  )}
+                  {pluginSettingsId && (
+                    <DropdownMenuItem onSelect={handlePluginSettingsSelect}>
+                      <Settings className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Plugin settings…
                     </DropdownMenuItem>
                   )}
                   {hasPty && (
@@ -1542,10 +1792,8 @@ function PanelHeaderComponent({
                   {headerActions && <DropdownMenuSeparator />}
                   {headerActions}
 
-                  {/* Destructive group */}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
-                    destructive
                     onSelect={() =>
                       void actionService.dispatch(
                         "terminal.trash",

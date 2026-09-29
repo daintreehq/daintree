@@ -16,7 +16,7 @@ const getConsoleMessagesArgsSchema = z
       .positive()
       .max(500)
       .optional()
-      .describe("Maximum messages to return, newest first (max 500). Omit for all captured."),
+      .describe("Max messages, newest first (max 500). Omit for all."),
   })
   .optional();
 
@@ -330,7 +330,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     palette: { mode: "hidden" },
     title: "Get browser console messages",
     description:
-      "Read captured console output (logs, warnings, errors, and stack traces) from a dev preview panel. Returns the most recent messages plus error/warning counts so an agent can inspect runtime issues without opening the console UI.",
+      "Read captured console output (logs, warnings, errors, stack traces) from a dev preview panel: the newest messages plus error and warning counts.",
     category: "browser",
     kind: "query",
     danger: "safe",

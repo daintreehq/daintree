@@ -1,5 +1,88 @@
 import type { CompletionTrigger } from "@shared/types";
 import { toWorktreeRelative } from "@shared/utils/path";
+import {
+  AGENT_CONTEXT_FENCE_INFO,
+  agentContextBlockRanges,
+  backtickFenceFor,
+  closingFenceForOpenBlock,
+} from "@shared/utils/agentContextDrag";
+
+/**
+ * Drop the context tokens that sit inside a plugin's handoff block. The block
+ * is quoted material — a card that mentions `@diff` reaches the agent as
+ * written, not as the user's diff — so it neither shows a chip nor expands on
+ * submit. Only handoff blocks: a token the user types in a fence of their own
+ * still expands, as it always has.
+ */
+function outsideHandoffBlocks<T extends { start: number }>(text: string, tokens: T[]): T[] {
+  if (tokens.length === 0 || !text.includes(AGENT_CONTEXT_FENCE_INFO)) return tokens;
+  const ranges = agentContextBlockRanges(text);
+  return tokens.filter(
+    (token) => !ranges.some(([from, to]) => token.start >= from && token.start < to)
+  );
+}
+
+/**
+ * A context token's expansion as a fenced block, tagged `info`. The fence is
+ * longer than any backtick run in `content`, so a selection, terminal buffer or
+ * diff that carries its own fence cannot close the block early and leave the
+ * rest of the prompt inside an unintended one.
+ */
+export function fenceTokenExpansion(content: string, info = ""): string {
+  const fence = backtickFenceFor(content);
+  return `${fence}${info}\n${content}\n${fence}`;
+}
+
+/** One context token's expansion, spliced over `[start, end)` of the draft. */
+export interface TokenExpansion {
+  start: number;
+  end: number;
+  replacement: string;
+}
+
+/**
+ * The draft as submitted: every expansion spliced in, with each handoff block
+ * still a block. A handoff opener carries an info string, so it can never
+ * close a fence — whatever is left open above it, by an expansion or by the
+ * user's own editing, would swallow the opener and let the block's closing
+ * fence end the stray one instead, turning the rest of the quoted payload into
+ * ordinary prompt text. So each block starts only after any fence the text
+ * before it leaves open is closed on its own line, judged on the expanded
+ * text, which is what the agent reads.
+ *
+ * Expansions never fall inside a handoff block — the token readers leave those
+ * out — and any that did would be dropped rather than spliced into quoted text.
+ */
+export function resolveTokenExpansions(
+  text: string,
+  expansions: readonly TokenExpansion[]
+): string {
+  const sorted = [...expansions].sort((a, b) => a.start - b.start);
+  const blocks = text.includes(AGENT_CONTEXT_FENCE_INFO) ? agentContextBlockRanges(text) : [];
+  let out = "";
+  let cursor = 0;
+  let next = 0;
+  const copyUpTo = (limit: number) => {
+    while (next < sorted.length && sorted[next]!.start < limit) {
+      const expansion = sorted[next++]!;
+      if (expansion.start < cursor) continue;
+      out += text.slice(cursor, expansion.start) + expansion.replacement;
+      cursor = expansion.end;
+    }
+    if (cursor < limit) out += text.slice(cursor, limit);
+    cursor = Math.max(cursor, limit);
+  };
+  for (const [from, to] of blocks) {
+    copyUpTo(from);
+    const closer = closingFenceForOpenBlock(out);
+    if (closer !== null) out += `${out.length === 0 || out.endsWith("\n") ? "" : "\n"}${closer}\n`;
+    out += text.slice(Math.max(cursor, from), to);
+    cursor = to;
+    while (next < sorted.length && sorted[next]!.start < to) next++;
+  }
+  copyUpTo(text.length);
+  return out;
+}
 
 /**
  * One completion menu is open at a time, keyed by the trigger char that opened
@@ -141,7 +224,7 @@ export function getAllAtDiffTokens(text: string): AtDiffToken[] {
     }
   }
 
-  return tokens;
+  return outsideHandoffBlocks(text, tokens);
 }
 
 // --- @terminal context ---
@@ -188,7 +271,7 @@ export function getAllAtTerminalTokens(text: string): AtTerminalToken[] {
     }
   }
 
-  return tokens;
+  return outsideHandoffBlocks(text, tokens);
 }
 
 // --- @selection context ---
@@ -235,7 +318,7 @@ export function getAllAtSelectionTokens(text: string): AtSelectionToken[] {
     }
   }
 
-  return tokens;
+  return outsideHandoffBlocks(text, tokens);
 }
 
 // --- @file token ---

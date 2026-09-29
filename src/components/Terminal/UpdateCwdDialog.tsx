@@ -1,9 +1,12 @@
 import { useState, useCallback, useEffect, useId, useRef } from "react";
+import { InlineError } from "@/components/ui/field";
 import type { KeyboardEvent } from "react";
-import { CircleAlert, FolderPen } from "lucide-react";
+import { FolderPen } from "lucide-react";
 import { basename, dirname, normalize } from "@shared/utils/path";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { PathSegments } from "@/components/ui/PathSegments";
 import { FormGrid, FormRow } from "@/components/Worktree/views";
 import { BrowseSlotButton, SlottedInputField } from "@/components/Project/projectDialogFields";
@@ -16,6 +19,7 @@ import { projectClient } from "@/clients/projectClient";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 interface UpdateCwdDialogProps {
   isOpen: boolean;
@@ -202,7 +206,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+      if (isEnterToSubmit(e)) {
         e.preventDefault();
         void handleUpdate();
       }
@@ -224,6 +228,9 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
       isOpen={isOpen}
       onClose={onClose}
       size="md"
+      // Locked while the restart runs, like every dialog mid-action: the X
+      // stays and reads as unavailable.
+      dismissible={!busy}
       // The field takes focus itself, with its value selected.
       initialFocus="none"
       restoreFocusTo={restoreFocusToTerminal}
@@ -232,9 +239,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
         {/* Neutral, not accent: the header glyph is decoration, and this focus
             region's one load-bearing accent is the keyboard focus ring. Same
             glyph as the banner's "Change directory" that opens this. */}
-        <AppDialog.Title icon={<FolderPen className="w-5 h-5 text-text-secondary" />}>
-          Change working directory
-        </AppDialog.Title>
+        <AppDialog.Title icon={<FolderPen />}>Change working directory</AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
@@ -273,27 +278,12 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
                 <div className="space-y-1.5">
                   {/* No live role: aria-invalid plus the described-by link
                       announce it when focus lands back on the field. */}
-                  {fieldError && (
-                    <p id={errorId} className="flex items-start gap-1 text-xs text-status-error">
-                      <CircleAlert className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                      {fieldError}
-                    </p>
-                  )}
+                  {fieldError && <InlineError id={errorId}>{fieldError}</InlineError>}
                   {shownSuggestions.length > 0 && (
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-xs text-text-secondary">Use</span>
                       {shownSuggestions.map((path) => (
-                        <Button
-                          key={path}
-                          variant="subtle"
-                          size="xs"
-                          className="max-w-full font-mono"
-                          title={path}
-                          aria-label={`Use ${path}`}
-                          onClick={() => choosePath(path)}
-                        >
-                          <span className="truncate">{basename(path) || path}</span>
-                        </Button>
+                        <SuggestionChip key={path} path={path} onChoose={choosePath} />
                       ))}
                     </div>
                   )}
@@ -329,14 +319,41 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
         </FormGrid>
       </AppDialog.Body>
 
-      <AppDialog.Footer>
-        <Button variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button variant="contrast" onClick={() => void handleUpdate()} loading={showBusy}>
-          Restart terminal
-        </Button>
-      </AppDialog.Footer>
+      <AppDialog.Footer
+        secondaryAction={{ label: "Cancel", onClick: onClose, disabled: busy }}
+        primaryAction={{
+          label: "Restart terminal",
+          onClick: () => void handleUpdate(),
+          loading: showBusy,
+          // Locked from the press; the spinner waits out the Doherty gate.
+          disabled: busy && !showBusy,
+        }}
+      />
     </AppDialog>
+  );
+}
+
+/**
+ * A suggested folder, named by its basename. The name is an abbreviation of the path —
+ * two suggestions can share it — so the full path is revealed whenever the chip shows
+ * less than the whole path, not only once the name itself clips.
+ */
+function SuggestionChip({ path, onChoose }: { path: string; onChoose: (path: string) => void }) {
+  const { ref: nameRef, isTruncated: isNameTruncated } = useTruncationDetection();
+  const name = basename(path) || path;
+  return (
+    <TruncatedTooltip content={path} isTruncated={isNameTruncated || name !== path}>
+      <Button
+        variant="subtle"
+        size="xs"
+        className="max-w-full font-mono"
+        aria-label={`Use ${path}`}
+        onClick={() => onChoose(path)}
+      >
+        <span ref={nameRef} className="truncate">
+          {name}
+        </span>
+      </Button>
+    </TruncatedTooltip>
   );
 }

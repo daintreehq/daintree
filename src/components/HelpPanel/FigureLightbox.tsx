@@ -329,12 +329,12 @@ export function FigureLightbox({
             <Button
               variant="ghost"
               size="xs"
-              aria-pressed={isActualSize}
+              pressed={isActualSize}
               aria-disabled={status !== "loaded" || undefined}
               onClick={() => {
                 if (status === "loaded") toggleActualSize();
               }}
-              className="shrink-0 aria-pressed:bg-overlay-selected aria-pressed:text-text-primary aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+              className="shrink-0 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
             >
               Actual size
             </Button>
@@ -378,7 +378,7 @@ function StepButton({ ref, direction, available, onStep }: StepButtonProps) {
       onClick={() => {
         if (available) onStep();
       }}
-      className="shrink-0 rounded-full aria-disabled:opacity-40 aria-disabled:pointer-events-none"
+      className="shrink-0 rounded-full aria-disabled:opacity-50 aria-disabled:pointer-events-none"
     >
       <Icon aria-hidden="true" />
     </Button>

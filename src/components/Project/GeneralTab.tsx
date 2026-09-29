@@ -1,14 +1,20 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Image, Upload, Check, FolderInput, Copy, Palette, AlertTriangle } from "lucide-react";
+import { InlineError } from "@/components/ui/field";
+import { Image, Upload, Check, FolderInput, Copy, Palette } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import type { ChoiceboxOption } from "@/components/Settings/SettingsChoicebox";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import {
+  SettingsDependents,
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/Settings/SettingsGroup";
 import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
 import { useNumberDraft } from "@/components/Settings/useNumberDraft";
 import { getProjectGradient, isValidHexColor } from "@/lib/colorUtils";
@@ -30,22 +36,16 @@ const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
     description: "No Daintree MCP access. Default for new projects.",
   },
   {
-    value: "workbench",
-    label: "Workbench",
+    value: "core",
+    label: "Core",
     description:
-      "Read-only: worktree status, terminal output, file search, project history. Anything more asks you first.",
+      "Create worktrees, launch agents, read, wait on and move terminals, and prompt or close the ones the agent opened. Deleting a worktree the agent created asks you first.",
   },
   {
-    value: "action",
-    label: "Action",
+    value: "full",
+    label: "Full",
     description:
-      "Workbench + create worktrees, open terminals and run commands in them. Destructive actions such as worktree deletes, and anything above this tier, ask you first. Over MCP, an agent can only type into terminals it opened.",
-  },
-  {
-    value: "system",
-    label: "System",
-    description:
-      "Action + git commits and pushes, forge and file writes, terminal arming, worktree creation anywhere on disk. Runs all of it, destructive actions included, without asking.",
+      "Core + recipes, workflows, project checks, forge and git reads, context tools and diagnostics. Deletes and teardowns ask you first unless Skip confirmations is on.",
   },
 ];
 
@@ -93,6 +93,8 @@ interface GeneralTabProps {
   onTurbopackEnabledChange: (value: boolean) => void;
   daintreeMcpTier: DaintreeMcpTier;
   onDaintreeMcpTierChange: (value: DaintreeMcpTier) => void;
+  daintreeMcpSkipConfirmations: boolean;
+  onDaintreeMcpSkipConfirmationsChange: (value: boolean) => void;
   projectIconSvg: string | undefined;
   onProjectIconSvgChange: (value: string | undefined) => void;
   enableInRepoSettings: (projectId: string) => Promise<Project>;
@@ -117,6 +119,8 @@ export function GeneralTab({
   onTurbopackEnabledChange,
   daintreeMcpTier,
   onDaintreeMcpTierChange,
+  daintreeMcpSkipConfirmations,
+  onDaintreeMcpSkipConfirmationsChange,
   projectIconSvg,
   onProjectIconSvgChange,
   enableInRepoSettings,
@@ -436,20 +440,25 @@ export function GeneralTab({
               control={({ labelId, descriptionId }) => (
                 <div className="flex items-center gap-3">
                   <Popover open={isEmojiPickerOpen} onOpenChange={setIsEmojiPickerOpen}>
-                    <PopoverTrigger asChild>
-                      <button
-                        type="button"
-                        aria-label="Change project emoji"
-                        className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-lg)] shadow-inner shrink-0 border border-border-strong cursor-pointer group"
-                        style={{
-                          background: getProjectGradient(color),
-                        }}
-                      >
-                        <span className="text-2xl select-none filter drop-shadow-sm group-hover:scale-110 transition-transform">
-                          {emoji}
-                        </span>
-                      </button>
-                    </PopoverTrigger>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <PopoverTrigger asChild>
+                          <button
+                            type="button"
+                            aria-label="Change project emoji"
+                            className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-lg)] shadow-inner shrink-0 border border-border-strong cursor-pointer group"
+                            style={{
+                              background: getProjectGradient(color),
+                            }}
+                          >
+                            <span className="text-2xl select-none filter drop-shadow-sm group-hover:scale-110 transition-transform">
+                              {emoji}
+                            </span>
+                          </button>
+                        </PopoverTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Change project emoji</TooltipContent>
+                    </Tooltip>
                     <PopoverContent className="w-auto p-0">
                       <EmojiPicker
                         currentEmoji={emoji}
@@ -486,34 +495,42 @@ export function GeneralTab({
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
                     {resolvedSwatches.map((hex, i) => (
-                      <button
-                        key={PRESET_SWATCHES[i]!.cssVar}
-                        type="button"
-                        title={PRESET_SWATCHES[i]!.label}
-                        aria-label={`Set project color to ${PRESET_SWATCHES[i]!.label}`}
-                        onClick={() => onColorChange(hex)}
-                        className={cn(
-                          "h-7 w-7 rounded-full transition-[border-color,scale,box-shadow] border-2 shrink-0",
-                          color === hex
-                            ? "border-text-primary scale-110 shadow-sm"
-                            : "border-transparent hover:border-border-default hover:scale-105"
-                        )}
-                        style={{ backgroundColor: hex }}
-                      />
+                      <Tooltip key={PRESET_SWATCHES[i]!.cssVar}>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            aria-label={`Set project color to ${PRESET_SWATCHES[i]!.label}`}
+                            onClick={() => onColorChange(hex)}
+                            className={cn(
+                              "h-7 w-7 rounded-full transition-[border-color,scale,box-shadow] border-2 shrink-0",
+                              color === hex
+                                ? "border-text-primary scale-110 shadow-sm"
+                                : "border-transparent hover:border-border-default hover:scale-105"
+                            )}
+                            style={{ backgroundColor: hex }}
+                          />
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">{PRESET_SWATCHES[i]!.label}</TooltipContent>
+                      </Tooltip>
                     ))}
                   </div>
                   <div className="flex items-center gap-2">
                     {/* The native input is invisible, so the ring is drawn on the swatch
                         it covers — the same has-focus shell RadioChoice uses. */}
                     <div className="relative rounded-[var(--radius-md)] has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent-primary">
-                      <input
-                        ref={colorInputRef}
-                        type="color"
-                        value={color ?? "#6366f1"}
-                        onChange={(e) => onColorChange(e.target.value.toLowerCase())}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                        aria-label="Pick a custom color"
-                      />
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <input
+                            ref={colorInputRef}
+                            type="color"
+                            value={color ?? "#6366f1"}
+                            onChange={(e) => onColorChange(e.target.value.toLowerCase())}
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            aria-label="Pick a custom color"
+                          />
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">Pick a custom color</TooltipContent>
+                      </Tooltip>
                       <div
                         className="h-8 w-8 rounded-[var(--radius-md)] border border-border-strong flex items-center justify-center cursor-pointer"
                         style={{
@@ -700,11 +717,11 @@ export function GeneralTab({
       <SettingsSection
         id="project-agent-integrations"
         title="Agent integrations"
-        description="How much of Daintree the Claude Code agents launched in this project's worktrees can do without asking you. Anything beyond the tier asks for your approval first. Newly launched agents pick up the change."
+        description="Which Daintree tools the Claude Code agents launched in this project's worktrees can call. At Core, a Full tool asks for your approval first. Newly launched agents pick up the change."
       >
         <SettingsGroup className="checkbox-neutral">
           <fieldset className="divide-y divide-border-subtle">
-            <legend className="sr-only">Daintree MCP access tier</legend>
+            <legend className="sr-only">Daintree MCP tool set</legend>
             {DAINTREE_MCP_TIER_OPTIONS.map((option) => (
               <RadioChoiceRow
                 key={option.value}
@@ -719,19 +736,17 @@ export function GeneralTab({
               />
             ))}
           </fieldset>
-          {daintreeMcpTier === "system" && (
-            <div className="flex items-start gap-2 px-4 py-3">
-              <AlertTriangle className="w-4 h-4 text-status-warning shrink-0 mt-px" />
-              <p className="text-xs text-text-secondary leading-relaxed select-text">
-                System tier adds git commits and pushes, forge issue/PR writes, clipboard and file
-                writes, terminal arming, and worktree creation anywhere on disk — some of these are
-                irreversible or visible to teammates. It also removes the approval step for
-                destructive actions: agents delete worktrees and run the rest without asking you. A
-                force delete that would discard changes still asks you to type its name. Only enable
-                it for projects where you trust the agent to take that kind of action.
-              </p>
-            </div>
-          )}
+          <SettingsDependents
+            disabled={daintreeMcpTier !== "full"}
+            reason="Applies only at Full. Select Full to use it."
+          >
+            <SettingsSwitchCard
+              title="Skip confirmations"
+              subtitle="Agents run everything Full allows without asking you first, deletes and teardowns included. A force delete that would discard changes still asks you to type its name."
+              isEnabled={daintreeMcpSkipConfirmations}
+              onChange={() => onDaintreeMcpSkipConfirmationsChange(!daintreeMcpSkipConfirmations)}
+            />
+          </SettingsDependents>
         </SettingsGroup>
         <SettingsGroup>
           <SettingsSwitchCard
@@ -742,12 +757,9 @@ export function GeneralTab({
             disabled={keepResidentBusy}
           />
           {keepResidentError && (
-            <p
-              className="whitespace-pre-line px-4 py-2.5 text-xs text-status-error select-text"
-              role="alert"
-            >
+            <InlineError className="whitespace-pre-line px-4 py-2.5" role="alert">
               {keepResidentError}
-            </p>
+            </InlineError>
           )}
         </SettingsGroup>
       </SettingsSection>
@@ -831,21 +843,18 @@ export function GeneralTab({
                   variant="contrast"
                   size="sm"
                   onClick={() => void handleEnableInRepoSettings()}
-                  disabled={inRepoEnabling}
+                  loading={inRepoEnabling}
                 >
-                  {inRepoEnabling ? "Enabling…" : "Confirm and enable"}
+                  Confirm and enable
                 </Button>
               </div>
             </div>
           )}
 
           {inRepoError && (
-            <p
-              className="whitespace-pre-line px-4 py-2.5 text-xs text-status-error select-text"
-              role="alert"
-            >
+            <InlineError className="whitespace-pre-line px-4 py-2.5" role="alert">
               {inRepoError}
-            </p>
+            </InlineError>
           )}
         </SettingsGroup>
       </SettingsSection>

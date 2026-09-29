@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useInsertionEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -9,6 +10,7 @@ import {
   useContext,
   type CSSProperties,
 } from "react";
+import { InsetSurface } from "@/components/ui/insetSurface";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
@@ -82,6 +84,8 @@ interface AppDialogContextValue {
   variant: DialogVariant;
   /** Mirrors the dialog's `dismissible`, so the close button can say it's unavailable. */
   dismissible: boolean;
+  /** `AppDialog.Description` announces itself, so the dialog never points at a missing id. */
+  registerDescription: () => () => void;
 }
 
 const AppDialogContext = createContext<AppDialogContextValue | null>(null);
@@ -157,6 +161,10 @@ export function AppDialog({
   const effectiveInitialFocus: DialogInitialFocus =
     initialFocus ?? (variant === "destructive" ? "cancel" : "first");
   const previousActiveElement = useRef<HTMLElement | null>(null);
+  // Set when this opening's opener is recorded; cleared only once focus has
+  // gone back to it, so reopening during the exit animation keeps the
+  // original opener rather than recording the dialog's own still-focused field.
+  const openerCapturedRef = useRef(false);
   const backdropPointerRef = useRef<number | null>(null);
   // State, not a ref: `DialogDismissSurface` has to re-render once the node
   // exists, and a ref would leave it registering `null` forever.
@@ -165,6 +173,13 @@ export function AppDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const descriptionId = useId();
+  // Counted rather than a flag: a dialog that swaps one description for another
+  // mounts the new one before the old one unmounts.
+  const [descriptionCount, setDescriptionCount] = useState(0);
+  const registerDescription = useCallback(() => {
+    setDescriptionCount((count) => count + 1);
+    return () => setDescriptionCount((count) => count - 1);
+  }, []);
 
   const { isOpen: portalOpen, width: portalWidth } = usePortalStore(
     useShallow((s) => ({ isOpen: s.isOpen, width: s.width }))
@@ -185,6 +200,7 @@ export function AppDialog({
   const restoreFocus = useCallback(() => {
     const el = previousActiveElement.current;
     previousActiveElement.current = null;
+    openerCapturedRef.current = false;
     if (!el) return;
     // Re-arm the tooltip focus-open suppression right before the focus
     // move: focusing a tooltip trigger re-opens its tooltip synchronously
@@ -221,6 +237,7 @@ export function AppDialog({
     isOpen,
     animationDuration: getUiTransitionDuration("exit"),
     onAnimateOut: restoreFocus,
+    syncEnter: true,
   });
 
   useOverlayState(isOpen || shouldRender);
@@ -251,16 +268,33 @@ export function AppDialog({
   }, [isOpen]);
 
   // Initial focus is owed once per opening, and is paid only once the surface
-  // exists. The surface mounts on the render *after* `isOpen` flips, because
-  // `shouldRender` is presence state set from an effect — so a frame queued at the
-  // flip can run before that render commits, find no dialog, and leave focus on
-  // the trigger behind the modal. A click- or keypress-driven open from a surface
-  // that mounts the dialog fresh reliably loses that race.
+  // exists. With `syncEnter` the surface mounts in the render that flips
+  // `isOpen`, but the focus frame stays keyed on `shouldRender` so it can never
+  // run against a render that has not committed the dialog — a frame queued
+  // before the surface exists would find nothing and leave focus on the trigger
+  // behind the modal.
   const initialFocusOwedRef = useRef(false);
+
+  // The opener is read in the insertion phase, before this commit's layout
+  // work: the surface mounts in the opening render (`syncEnter`), and a
+  // descendant's `autoFocus` moves focus during that commit — a passive or
+  // layout effect would record the dialog's own field as the element to
+  // restore on close.
+  // Also recorded every opening, separately from the opener: focus found inside
+  // the dialog at a mid-exit reopen is the last opening's leftover, not a
+  // choice, and the initial-focus pass below replaces it.
+  const focusAtOpenRef = useRef<HTMLElement | null>(null);
+  useInsertionEffect(() => {
+    if (!isOpen) return;
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    focusAtOpenRef.current = active;
+    if (openerCapturedRef.current) return;
+    openerCapturedRef.current = true;
+    previousActiveElement.current = active;
+  }, [isOpen]);
 
   useEffect(() => {
     if (isOpen) {
-      previousActiveElement.current = document.activeElement as HTMLElement;
       initialFocusOwedRef.current = effectiveInitialFocus !== "none";
     } else {
       initialFocusOwedRef.current = false;
@@ -280,7 +314,7 @@ export function AppDialog({
       // mid-exit still holds the last request's button, and the new request's
       // initial focus (Cancel, for a destructive one) has to replace it.
       const active = document.activeElement;
-      if (root.contains(active) && active !== previousActiveElement.current) return;
+      if (root.contains(active) && active !== focusAtOpenRef.current) return;
       let target: HTMLElement | null = null;
       if (effectiveInitialFocus === "cancel" || effectiveInitialFocus === "confirm") {
         target = root.querySelector<HTMLElement>(`[data-confirm-role="${effectiveInitialFocus}"]`);
@@ -470,7 +504,14 @@ export function AppDialog({
 
   return createPortal(
     <AppDialogContext.Provider
-      value={{ onClose: handleClose, titleId, descriptionId, variant, dismissible }}
+      value={{
+        onClose: handleClose,
+        titleId,
+        descriptionId,
+        variant,
+        dismissible,
+        registerDescription,
+      }}
     >
       <div
         className={cn(
@@ -478,7 +519,7 @@ export function AppDialog({
           effectiveZIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
           // Opacity-only, so reduced motion leaves it alone: a scrim fade is not
           // spatial motion. WCAG 2.3.3.
-          "transition-opacity",
+          "transition-opacity starting:opacity-0",
           isVisible ? "opacity-100" : "opacity-0"
         )}
         style={{
@@ -493,7 +534,9 @@ export function AppDialog({
         role={variant === "destructive" && !hasPreview ? "alertdialog" : "dialog"}
         aria-modal="true"
         aria-labelledby={titleId}
-        aria-describedby={descriptionId}
+        // Only while a description is mounted: an id that resolves to nothing
+        // gives assistive technology an empty description.
+        aria-describedby={descriptionCount > 0 ? descriptionId : undefined}
         // Marks the surface as one a Radix layer underneath can hand Escape to
         // — see `ESCAPE_BACKSTOP_DIALOG_ATTR`. Tracks the backstop registration
         // (`isOpen`), not merely being mounted: a dialog mid-exit has already
@@ -521,6 +564,9 @@ export function AppDialog({
             // Reduced motion keeps the fade and drops only the rise/zoom: opacity
             // is not vestibular, movement is. WCAG 2.3.3.
             "motion-reduce:transition-opacity motion-reduce:translate-none motion-reduce:scale-none",
+            // Enter "from" state: rendered visible on the opening commit, so
+            // the rise starts from @starting-style in the first frame.
+            "starting:opacity-0 starting:translate-y-1 starting:scale-[0.98]",
             isVisible
               ? "opacity-100 translate-y-0 scale-100"
               : "opacity-0 translate-y-1 scale-[0.98]",
@@ -594,10 +640,25 @@ interface AppDialogTitleProps {
   as?: "h2" | "h3";
 }
 
+/**
+ * Every dialog's title glyph is the same 16px mark in the secondary text colour.
+ * The slot owns the size, so a caller's `w-5 h-5` (or a brand mark's `size`
+ * attribute) can't make one dialog's header louder than the rest. Colour is only
+ * a default: a caller whose glyph carries meaning — a destructive `Trash2`, a
+ * warning triangle — names its status colour on the icon, and that wins.
+ */
+const DIALOG_TITLE_ICON_SLOT =
+  "inline-flex shrink-0 items-center text-text-secondary [&>svg]:size-4 [&>svg]:shrink-0";
+
 AppDialog.Title = function AppDialogTitle({ children, icon, className, as }: AppDialogTitleProps) {
   const context = useContext(AppDialogContext);
+  const slot = icon ? (
+    <span className={DIALOG_TITLE_ICON_SLOT} aria-hidden="true" data-dialog-title-icon="">
+      {icon}
+    </span>
+  ) : undefined;
   return (
-    <SurfaceHeaderTitle as={as} id={context?.titleId} icon={icon} className={className}>
+    <SurfaceHeaderTitle as={as} id={context?.titleId} icon={slot} className={className}>
       {children}
     </SurfaceHeaderTitle>
   );
@@ -676,7 +737,7 @@ AppDialog.Body = function AppDialogBody({
       className="flex-1 min-h-0"
       scrollClassName={cn("py-6 dialog-body-inset", className)}
     >
-      {children}
+      <InsetSurface>{children}</InsetSurface>
     </ScrollShadow>
   );
 };
@@ -697,7 +758,7 @@ AppDialog.BodyScroll = function AppDialogBodyScroll({
   // leave the reservation behind as dead inset.
   return (
     <div className={cn("flex-1 overflow-auto min-h-0 py-6 dialog-body-inset", className)}>
-      {children}
+      <InsetSurface>{children}</InsetSurface>
     </div>
   );
 };
@@ -720,6 +781,14 @@ interface AppDialogFooterProps {
   className?: string;
   primaryAction?: DialogAction;
   secondaryAction?: DialogAction;
+  /**
+   * A third answer that is neither the safe dismissal nor the primary — "Discard
+   * changes" beside Cancel and Save. It sits on the leading edge, apart from the
+   * Cancel / primary pair, so the destructive choice is never adjacent to the one
+   * the user reaches for. Destructive intent renders it `ghost-danger`: the
+   * primary keeps the dialog's single filled button.
+   */
+  leadingAction?: DialogAction;
   hint?: React.ReactNode;
 }
 
@@ -728,6 +797,7 @@ AppDialog.Footer = function AppDialogFooter({
   className,
   primaryAction,
   secondaryAction,
+  leadingAction,
   hint,
 }: AppDialogFooterProps) {
   const context = useContext(AppDialogContext);
@@ -755,10 +825,29 @@ AppDialog.Footer = function AppDialogFooter({
       className={cn(
         DIALOG_INSET,
         "py-4 border-t border-border-strong bg-surface-panel flex items-center gap-3 shrink-0",
-        hint ? "justify-between" : "justify-end",
+        hint || leadingAction ? "justify-between" : "justify-end",
         className
       )}
     >
+      {leadingAction && (
+        <Button
+          variant={leadingAction.intent === "destructive" ? "ghost-danger" : "ghost"}
+          onClick={(event) => {
+            if (leadingAction.disabled) {
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
+            leadingAction.onClick();
+          }}
+          aria-disabled={leadingAction.disabled || undefined}
+          loading={leadingAction.loading}
+          className={cn("shrink-0", leadingAction.disabled && ARIA_DISABLED_CLASSES)}
+          data-confirm-role="leading"
+        >
+          {leadingAction.label}
+        </Button>
+      )}
       {/* min-w-0 so a long hint can shrink and truncate rather than squeezing the
           action row: as a flex child its default min-width:auto floor is its own
           content, so without this it pushes the buttons past the card edge and
@@ -835,6 +924,8 @@ AppDialog.Description = function AppDialogDescription({
   className,
 }: AppDialogDescriptionProps) {
   const context = useContext(AppDialogContext);
+  const register = context?.registerDescription;
+  useLayoutEffect(() => register?.(), [register]);
   return (
     <p id={context?.descriptionId} className={cn("text-sm text-text-secondary", className)}>
       {children}

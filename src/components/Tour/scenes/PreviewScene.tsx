@@ -9,35 +9,38 @@ import {
   Search,
   SquareTerminal,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { ANCHOR, GRID_RECT, MockApp, MockGrid, MockWorktreeCard } from "../mockup/MockApp";
 import {
+  cn,
+  type CursorStep,
   MockCursor,
-  MockPane,
-  MockStateGlyph,
+  MockMenu,
+  MockPanel,
+  MockSearchField,
+  MockSpotlight,
   MockStreamingLines,
   reveal,
   useMockCursor,
-  type CursorStep,
-} from "../mockup/TourMock";
-import { useCue } from "../useTourPlayer";
-import { MockMenu, MockPanel, MockSearchField, MockSpotlight } from "./sceneParts";
+} from "@daintreehq/tour/kit";
+import {
+  ANCHOR,
+  MockApp,
+  MockGrid,
+  MockPane,
+  MockStateGlyph,
+  MockWorktreeCard,
+} from "@daintreehq/tour/mock-app";
+import { useCue } from "@daintreehq/tour/react";
 
 const LAUNCHER = ANCHOR.launcher;
 const MENU = { x: LAUNCHER.x - 8, y: LAUNCHER.y + 14, width: 164 };
-// The menu's fourth row, Dev preview; measured from the render.
-const DEV_PREVIEW_ITEM = { x: 118, y: 138 };
+// The menu's fourth row, Dev preview, on its label.
+const DEV_PREVIEW_ITEM = { anchor: "menu-3", dx: -7 };
+const RUN_BUTTON = { anchor: "dev-run" };
+const CONSOLE_TOGGLE = { anchor: "dev-console", dx: 2 };
 
-// Two equal columns once the preview opens; the preview is the right one.
-const COLUMN = (GRID_RECT.width - 6) / 2;
-const PREVIEW_X = GRID_RECT.x + COLUMN + 6;
-// The start prompt's Run button, centred in the preview; measured from the render.
-const RUN_BUTTON = { x: PREVIEW_X + COLUMN / 2, y: 229 };
-const CONSOLE_TOGGLE = { x: GRID_RECT.x + GRID_RECT.width - 12, y: GRID_RECT.y + 36 };
-
-const CURSOR: readonly CursorStep[] = [
-  { cue: "launch", at: LAUNCHER },
-  { cue: "launch", offset: 0.5, at: LAUNCHER, click: true },
+export const CURSOR: readonly CursorStep[] = [
+  { cue: "launch", at: { anchor: "launcher" } },
+  { cue: "launch", offset: 0.5, at: { anchor: "launcher" }, click: true },
   { cue: "pickpreview", offset: -0.4, at: DEV_PREVIEW_ITEM },
   { cue: "pickpreview", offset: 0.1, at: DEV_PREVIEW_ITEM, click: true },
   { cue: "start", at: RUN_BUTTON },
@@ -58,7 +61,7 @@ function MockPage({ withSearch }: { withSearch: boolean }) {
           data-tour-anchor="dev-search"
           className={cn(
             "flex h-4 w-24 items-center gap-1 rounded-full border border-border-strong px-1.5",
-            "transition-[opacity,scale] duration-300 ease-out reduce-motion:scale-100",
+            "transition-[opacity,scale] duration-300 ease-out motion-reduce:scale-100",
             withSearch ? "scale-100 opacity-100" : "scale-90 opacity-0"
           )}
         >

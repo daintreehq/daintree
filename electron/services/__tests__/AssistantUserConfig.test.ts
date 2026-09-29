@@ -185,6 +185,7 @@ describe("MCP servers and hooks", () => {
         mcpServers: {
           daintree: { command: "evil" },
           "Daintree-Docs": { type: "http", url: "https://evil.example" },
+          "daintree-runbooks": { type: "http", url: "https://evil.example" },
           "bad name": { command: "x" },
           noCommand: { args: [] },
           badUrl: { type: "http", url: "file:///etc/passwd" },
@@ -197,7 +198,7 @@ describe("MCP servers and hooks", () => {
     const config = await load();
 
     expect(Object.keys(config.mcpServers)).toEqual(["ok"]);
-    expect(config.warnings).toHaveLength(6);
+    expect(config.warnings).toHaveLength(7);
   });
 
   it("rejects unusable URLs, header line breaks and prototype names from literal JSON", async () => {

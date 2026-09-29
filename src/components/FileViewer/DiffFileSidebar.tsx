@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GroupedVirtuoso, type GroupedVirtuosoHandle } from "react-virtuoso";
-import { Check, Folder } from "lucide-react";
+import { Folder } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { shouldVirtualizeFileList } from "@/lib/fileListWindowing";
 import { basename, dirname, join } from "@shared/utils/path";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -15,7 +17,7 @@ import {
   useFileRowMenuItems,
 } from "@/hooks/useFileRowMenuItems";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
-import { DIFF_STATUS_CONFIG, summarizeChangeSet } from "./diffChangeSet";
+import { DIFF_STATUS_CONFIG, formatDiffDir, summarizeChangeSet } from "./diffChangeSet";
 import type { DiffChangeSetEntry } from "./diffChangeSet";
 
 export interface DiffFileSidebarProps {
@@ -38,13 +40,6 @@ interface IndexedEntry extends DiffChangeSetEntry {
 interface DirGroup {
   dir: string;
   files: IndexedEntry[];
-}
-
-function formatDir(dir: string, maxSegments = 3): string {
-  if (!dir || dir === ".") return "(root)";
-  const segments = dir.split("/");
-  if (segments.length <= maxSegments) return dir;
-  return "…/" + segments.slice(-maxSegments).join("/");
 }
 
 /** Per-row inputs, shared by the static and windowed paths so they cannot drift. */
@@ -80,7 +75,7 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
       // falls through to that handler as it did before.
       data-row-menu={ctx.hasRowMenu ? "" : undefined}
       className={cn(
-        "group/diffrow flex items-center rounded px-1.5 py-1 text-xs font-mono transition-colors",
+        "group/diffrow flex items-center rounded-[var(--radius-lg)] px-1.5 py-1 text-xs font-mono transition-colors",
         isCurrent ? "bg-overlay-subtle" : "hover:bg-tint/5",
         // The row whose menu is open lifts a tier above the open
         // file's own subtle fill, so the two never read as one.
@@ -101,7 +96,7 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
         }}
         aria-current={isCurrent || undefined}
         aria-label={`Open ${file.path}`}
-        className="flex min-w-0 flex-1 items-center text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary"
+        className="-my-1 -ml-1.5 flex min-w-0 flex-1 items-center rounded-[var(--radius-lg)] py-1 pr-1 pl-1.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         data-testid="diff-sidebar-file"
       >
         <span className={cn("w-4 shrink-0 font-bold", config.color)}>{config.label}</span>
@@ -115,30 +110,31 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-2xs">
           {(file.insertions ?? 0) > 0 && (
-            <span className="text-status-success/80">+{file.insertions}</span>
+            <span className="text-status-success">+{file.insertions}</span>
           )}
           {(file.deletions ?? 0) > 0 && (
-            <span className="text-status-error/80">-{file.deletions}</span>
+            <span className="text-status-error">-{file.deletions}</span>
           )}
         </span>
       </button>
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => ctx.toggleViewed(ctx.worktreePath, file.viewedKey)}
-            aria-pressed={viewed}
+          <Checkbox
+            size="sm"
+            checked={viewed}
+            onCheckedChange={() => ctx.toggleViewed(ctx.worktreePath, file.viewedKey)}
             aria-label={`Mark ${file.path} as viewed`}
             className={cn(
-              "ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border transition-colors",
-              viewed
-                ? "border-status-success/60 bg-status-success/20 text-status-success"
-                : "border-border-default text-transparent opacity-0 hover:border-border-strong group-hover/diffrow:opacity-100 focus-visible:opacity-100"
+              // A 14px box with a 24px hit area (WCAG 2.5.8); the pseudo-element
+              // stays inside the row's own padding.
+              "ml-1.5 before:absolute before:-inset-[5px] before:content-['']",
+              // Unviewed boxes only show on the row that is being pointed at or
+              // tabbed through, so a long list is not a column of empty squares.
+              !viewed &&
+                "opacity-0 group-hover/diffrow:opacity-100 group-focus-within/diffrow:opacity-100 focus-visible:opacity-100"
             )}
             data-testid="diff-sidebar-viewed-toggle"
-          >
-            <Check className="h-3 w-3" />
-          </button>
+          />
         </TooltipTrigger>
         <TooltipContent side="right">Viewed</TooltipContent>
       </Tooltip>
@@ -186,7 +182,7 @@ function DiffShelfGroupHeader({ dir }: { dir: string }) {
   return (
     <div className="flex items-center gap-1.5 bg-surface-sidebar px-1.5 py-1 text-2xs text-text-secondary">
       <Folder className="h-3 w-3 shrink-0" />
-      <span className="truncate font-mono">{formatDir(dir)}</span>
+      <span className="truncate font-mono">{formatDiffDir(dir)}</span>
     </div>
   );
 }
@@ -352,7 +348,7 @@ export function DiffFileSidebar({
       className="flex min-h-0 w-60 shrink-0 select-none flex-col self-stretch border-r border-border-default bg-surface-sidebar"
       data-testid="diff-file-sidebar"
     >
-      <div className="shrink-0 border-b border-border-default px-3 py-2">
+      <div className="shrink-0 border-b border-border-default px-3.5 py-2">
         <div className="flex items-baseline justify-between gap-2 text-xs">
           <span className="font-medium text-text-primary">
             {files.length} {files.length === 1 ? "file" : "files"}
@@ -373,7 +369,14 @@ export function DiffFileSidebar({
           {/* The track only appears once review has started — an empty
               full-width strip at zero progress reads as stray chrome. */}
           {viewedCount > 0 && (
-            <div className="mt-1 h-0.5 overflow-hidden rounded-full bg-tint/10">
+            <div
+              role="progressbar"
+              aria-label="Files viewed"
+              aria-valuemin={0}
+              aria-valuemax={files.length}
+              aria-valuenow={viewedCount}
+              className="mt-1 h-0.5 overflow-hidden rounded-full bg-tint/10"
+            >
               <div
                 className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
                 style={{ width: `${files.length ? (viewedCount / files.length) * 100 : 0}%` }}
@@ -390,15 +393,6 @@ export function DiffFileSidebar({
           onChange={(event) => setFilter(event.target.value)}
           onClear={() => setFilter("")}
           clearLabel="Clear file filter"
-          onKeyDown={(event) => {
-            // Escape clears an active filter instead of bubbling to the
-            // dialog's escape stack and closing the whole workspace.
-            if (event.key === "Escape" && filter) {
-              event.preventDefault();
-              event.stopPropagation();
-              setFilter("");
-            }
-          }}
           placeholder="Filter files"
           aria-label="Filter files"
           data-testid="diff-sidebar-filter"
@@ -420,13 +414,9 @@ export function DiffFileSidebar({
             scale="sidebar"
             title="No files match the filter"
             action={
-              <button
-                type="button"
-                onClick={() => setFilter("")}
-                className="text-xs text-text-secondary hover:text-text-primary transition-colors underline underline-offset-2"
-              >
+              <Button variant="subtle" size="sm" onClick={() => setFilter("")}>
                 Clear filter
-              </button>
+              </Button>
             }
           />
         )}

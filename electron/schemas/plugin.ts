@@ -9,6 +9,7 @@ import {
 import {
   AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN,
   BUILT_IN_PLUGIN_CAPABILITIES,
+  PANEL_MENU_MAX_ITEMS,
   PLUGIN_CATEGORY_IDS,
   PLUGIN_PANEL_BADGE_LABEL_MAX,
 } from "../../shared/types/plugin.js";
@@ -63,6 +64,24 @@ const BUILT_IN_ACTION_ID_SET: ReadonlySet<string> = new Set([
 // contribution wired to one is a dead button — reject it at parse time (#10580).
 const DENY_PLUGIN_DISPATCH_SET: ReadonlySet<string> = new Set(DENY_PLUGIN_DISPATCH_ACTION_IDS);
 
+// The whole-id grammar the host's action registration enforces
+// (`PLUGIN_ACTION_ID_RE` in PluginService), so a panel menu accepts exactly
+// the ids a plugin can actually register.
+const PANEL_MENU_ACTION_ID = /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
+
+/**
+ * One `contributes.panels[].menu` entry. `actionId` must name one of the
+ * plugin's own actions, enforced by the manifest-level `superRefine` below;
+ * the host shows the entry while that action is registered and dispatches it
+ * with `{ panelId }`.
+ */
+export const PanelMenuItemSchema = z
+  .object({
+    actionId: z.string().min(1).max(200),
+    label: z.string().trim().min(1).max(80).optional(),
+  })
+  .strict();
+
 /**
  * The unrefined object base — exported so the field-consumer contract test
  * (`manifestContributionConsumers.test.ts`) can enumerate `.shape` without
@@ -93,18 +112,24 @@ export const PanelContributionObjectSchema = z
     // a NEWER build of the plugin rather than let it be misread and rewritten.
     // Bump it when the shape changes incompatibly, never for an additive key.
     stateVersion: z.number().int().min(1).max(1_000_000).optional(),
+    // The plugin's own actions on this panel's ⋯ and right-click menus, in
+    // declared order. Which actions may appear is checked at manifest level,
+    // where the plugin's namespace and declared commands are known.
+    menu: z.array(PanelMenuItemSchema).max(PANEL_MENU_MAX_ITEMS).optional(),
   })
   .strict();
 
 /**
- * The validated `contributes.panels` entry: the object base plus a cross-field
- * rule. `hasPty: true` with an explicit `dockable: false` is rejected — a
+ * The validated `contributes.panels` entry: the object base plus cross-field
+ * rules. `hasPty: true` with an explicit `dockable: false` is rejected — a
  * PTY-backed plugin kind renders through `TerminalPane` and its kind collapses
  * to the built-in dockable `terminal` at creation (`addPanel.ts`), so the
- * opt-out could never be honored and would silently vanish. Plugin PTY kinds
- * are unsupported in v1 anyway; surface the conflict to the author at
- * manifest-write time instead of swallowing it at runtime (#11375). `hasPty`
- * has already defaulted to `false` here, so an omitted `hasPty` never trips it.
+ * opt-out could never be honored and would silently vanish; surface the
+ * conflict to the author at manifest-write time instead of swallowing it at
+ * runtime (#11375). `hasPty` with menu entries is rejected for the same reason: a
+ * PTY kind uses the terminal menus, where the entries would never show.
+ * `hasPty` has already defaulted to `false` here, so an omitted `hasPty` never
+ * trips either.
  */
 export const PanelContributionSchema = PanelContributionObjectSchema.superRefine((panel, ctx) => {
   if (panel.hasPty === true && panel.dockable === false) {
@@ -116,6 +141,27 @@ export const PanelContributionSchema = PanelContributionObjectSchema.superRefine
       params: { errorCode: "pty_panel_dock_opt_out_unsupported" },
     });
   }
+  if (panel.hasPty === true && panel.menu !== undefined && panel.menu.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["menu"],
+      message:
+        "A PTY-backed panel (hasPty: true) renders as a terminal and uses the terminal's menus, so its menu entries would never appear. Remove the menu, or put the actions on a view panel.",
+      params: { errorCode: "pty_panel_menu_unsupported" },
+    });
+  }
+  const seenMenuActions = new Set<string>();
+  panel.menu?.forEach((item, index) => {
+    if (seenMenuActions.has(item.actionId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["menu", index, "actionId"],
+        message: `Duplicate menu action "${item.actionId}" — each action appears at most once in a panel's menu.`,
+        params: { errorCode: "panel_menu_duplicate_action" },
+      });
+    }
+    seenMenuActions.add(item.actionId);
+  });
 });
 
 export const ToolbarButtonContributionSchema = z
@@ -246,13 +292,14 @@ function isSafePluginAssetPath(componentPath: string): boolean {
 }
 
 /**
- * View contribution. A view renders into a `contributes.panels` entry with a
- * matching `id`; at plugin load (`PluginService.loadPlugin`) the panels loop
- * attaches the view's `componentPath` to that panel kind. A view whose `id`
- * matches no panel is rejected by the manifest-level `superRefine` (#10620) —
- * it would otherwise silently never render. Only `location: "panel"` is supported — it
- * sets `showInPalette: true` so the view is spawnable from the panel palette.
- * `"sidebar"` is rejected at the schema boundary: the sidebar host does not
+ * View contribution. A `location: "panel"` view renders into a
+ * `contributes.panels` entry with a matching `id`; at plugin load
+ * (`PluginService.loadPlugin`) the panels loop attaches the view's
+ * `componentPath` to that panel kind. A panel view whose `id` matches no panel
+ * is rejected by the manifest-level `superRefine` (#10620) — it would otherwise
+ * silently never render. A `location: "settings"` view is the plugin's custom
+ * settings section instead: it names no panel, and a manifest may declare at
+ * most one. `"sidebar"` is rejected at the schema boundary: the sidebar host does not
  * exist yet, so accepting it would validate a manifest the runtime cannot
  * honor. Contributed via the stable `contributes.views` key (the pre-1.0
  * `experimental_views` name is still accepted as a deprecated alias). See
@@ -265,7 +312,10 @@ export const ViewContributionSchema = z
       message:
         "componentPath must be a relative plugin asset path (no leading /, backslash, URL scheme, NUL, or .. segments)",
     }),
-    location: z.literal("panel"),
+    // `"settings"` is the plugin's custom settings section: tied to no panel,
+    // at most one per manifest (both checked in the manifest `superRefine`),
+    // and mounted in the plugin's settings home below its declared fields.
+    location: z.enum(["panel", "settings"]),
     // `iconId` is advisory only — the SDK `validate` command flags an
     // unrenderable id, but at runtime the matching `contributes.panels` entry
     // owns the rendered icon (the panels loop reads `panel.iconId`, never the
@@ -318,6 +368,44 @@ export const AgentMcpContributionSchema = z
     name: z.string().min(1).max(80),
     description: z.string().min(1).max(400).optional(),
     mode: z.literal("tools"),
+  })
+  .strict();
+
+const DATABASE_FILE_EXTENSION = /\.(db|sqlite|sqlite3)$/;
+
+/**
+ * `contributes.databases` manifest entry — a SQLite file the plugin opens
+ * through `host.db`. The declaration is what names the file, discloses it, and
+ * decides where it lives, so the host can resolve and contain the path before
+ * the plugin ever sees it.
+ *
+ * `path` is only meaningful for a `"project"` database: it is relative to the
+ * project root, so the committed data contract an agent reads can name the
+ * same file. A `"local"` database always lives in the plugin's own data
+ * directory. Strict, so a stray `url` or `driver` is refused rather than read
+ * as a backend the host does not have.
+ */
+export const DatabaseContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    description: z.string().min(1).max(400).optional(),
+    location: z.enum(["project", "local"]).default("project"),
+    path: z
+      .string()
+      .min(1)
+      .max(512)
+      .refine(isSafePluginAssetPath, {
+        message:
+          "path must be a relative project path (no leading /, backslash, URL scheme, NUL, or .. segments)",
+      })
+      .refine((value) => !/(^|\/)\.git(\/|$)/i.test(value.replace(/^\.\//, "")), {
+        message: "path must not be inside .git",
+      })
+      .refine((value) => DATABASE_FILE_EXTENSION.test(value), {
+        message: "path must end in .db, .sqlite or .sqlite3",
+      })
+      .optional(),
+    journalMode: z.enum(["delete", "wal"]).default("delete"),
   })
   .strict();
 
@@ -961,6 +1049,230 @@ const PluginAuthorUrlSchema = z.string().superRefine((value, ctx) => {
 });
 
 /**
+ * Upper bounds inside one `contributes.tours` entry. Like
+ * {@link MANIFEST_CONTRIBUTION_CAPS} these reject pathological manifests rather
+ * than shape authoring; a panel tour is expected to use a couple of chapters.
+ * Exported so tests reference the values without magic numbers.
+ */
+export const TOUR_CONTRIBUTION_LIMITS = {
+  chapters: 32,
+  captionsPerChapter: 128,
+  cuesPerChapter: 128,
+  audioHosts: 8,
+  chapterDurationSeconds: 600,
+} as const;
+
+/** Same shape the built-in tour's `narrationFingerprint` produces. */
+const TOUR_NARRATION_HASH_PATTERN = /^[0-9a-f]{8}$/;
+
+/** A string that opens with a URL scheme is remote audio; anything else is a bundled asset. */
+const URL_SCHEME_PREFIX = /^[a-z][a-z0-9+.-]*:/i;
+
+/**
+ * A declared narration host is a bare, exact DNS hostname — the list is a
+ * disclosure the user reads, so it must say precisely where audio comes from.
+ * Round-tripping through `URL` rejects ports, paths, credentials and non-ASCII
+ * spellings (their `host` differs from the input); IP literals and empty
+ * labels (a leading, doubled or trailing dot) are rejected so matching stays a
+ * plain case-insensitive string compare.
+ * Every private/loopback literal is single-label or an IP, so those rules also
+ * cover the SSRF check; `isPrivateOrLoopbackHostname` stays as a backstop.
+ */
+const TourAudioHostSchema = z
+  .string()
+  .min(1)
+  .max(253)
+  .superRefine((value, ctx) => {
+    let host: string | null;
+    try {
+      host = new URL(`https://${value}/`).hostname;
+    } catch {
+      host = null;
+    }
+    const lower = value.toLowerCase();
+    if (
+      host !== lower ||
+      value.includes("*") ||
+      !value.includes(".") ||
+      value.split(".").some((label) => label === "") ||
+      value.startsWith("[") ||
+      /^[\d.]+$/.test(value) ||
+      isPrivateOrLoopbackHostname(lower)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `audioHosts entries must be bare public multi-label hostnames such as "cdn.example.com" (no scheme, port, path, wildcard or IP literal): "${value}"`,
+        params: { errorCode: "tour_audio_host_invalid" },
+      });
+    }
+  });
+
+/**
+ * A chapter's narration audio: a plugin-relative asset path, or an https URL
+ * whose hostname the tour lists in `audioHosts` (checked on the tour, which
+ * holds the list).
+ */
+const TourAudioUrlSchema = z
+  .string()
+  .min(1)
+  .max(4096)
+  .superRefine((value, ctx) => {
+    // URL parsing strips leading/trailing C0 controls and spaces (<= U+0020),
+    // so " //host/a.mp3" would resolve remotely past the host declaration and a
+    // padded https URL would not be the string the declaration was checked on.
+    if (value.charCodeAt(0) <= 0x20 || value.charCodeAt(value.length - 1) <= 0x20) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "audioUrl must not start or end with whitespace or control characters",
+        params: { errorCode: "tour_audio_url_padded" },
+      });
+      return;
+    }
+    if (URL_SCHEME_PREFIX.test(value)) {
+      refinePluginHttpsUrl(value, ctx, "tours[].chapters[].audioUrl");
+      return;
+    }
+    if (!isSafePluginAssetPath(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "audioUrl must be an https URL or a relative plugin asset path (no leading /, backslash, NUL, or .. segments)",
+        params: { errorCode: "tour_audio_path_unsafe" },
+      });
+    }
+  });
+
+/** One caption line, in seconds from the start of its chapter. */
+export const TourCaptionSchema = z
+  .object({
+    start: z.number().min(0),
+    end: z.number().positive(),
+    text: z.string().min(1).max(500),
+  })
+  .strict();
+
+/**
+ * Timing for one tour chapter, mirroring the built-in tour's
+ * `TourChapterTiming` plus its `narrationHash`. Cues are named scene triggers in
+ * seconds; every cue and caption must fall inside the chapter's duration.
+ */
+export const TourChapterSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    duration: z.number().positive().max(TOUR_CONTRIBUTION_LIMITS.chapterDurationSeconds),
+    cues: z.record(z.string().min(1).max(64).regex(SAFE_ID_PATTERN), z.number().min(0)).default({}),
+    captions: z
+      .array(TourCaptionSchema)
+      .max(TOUR_CONTRIBUTION_LIMITS.captionsPerChapter)
+      .default([]),
+    audioUrl: TourAudioUrlSchema.nullable(),
+    narrationHash: z.string().regex(TOUR_NARRATION_HASH_PATTERN, {
+      message: "narrationHash must be the 8-character lowercase hex narration fingerprint",
+    }),
+  })
+  .strict()
+  .superRefine((chapter, ctx) => {
+    const cues = Object.entries(chapter.cues);
+    if (cues.length > TOUR_CONTRIBUTION_LIMITS.cuesPerChapter) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["cues"],
+        message: `A chapter may declare at most ${TOUR_CONTRIBUTION_LIMITS.cuesPerChapter} cues.`,
+        params: { errorCode: "tour_cues_too_many" },
+      });
+    }
+    for (const [name, at] of cues) {
+      if (at > chapter.duration) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["cues", name],
+          message: `Cue "${name}" at ${at}s falls after the chapter's ${chapter.duration}s duration.`,
+          params: { errorCode: "tour_cue_out_of_range" },
+        });
+      }
+    }
+    chapter.captions.forEach((caption, index) => {
+      if (caption.end <= caption.start || caption.end > chapter.duration) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["captions", index],
+          message: `Caption ${index} must end after it starts and within the chapter's ${chapter.duration}s duration.`,
+          params: { errorCode: "tour_caption_out_of_range" },
+        });
+      }
+    });
+  });
+
+/**
+ * One `contributes.tours` entry (#12768): a welcome tour that plays in the same
+ * dialog as the Daintree tour. Without `panelKind` it is a plugin tour offered
+ * from Help and the command palette; with one it is a panel tour opened from
+ * that panel's menu, and the manifest-level `superRefine` requires the kind to
+ * be one of this plugin's own `contributes.panels`. `componentPath` is the
+ * module exporting the chapter scenes, validated like a view's.
+ */
+export const TourContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    title: z.string().min(1).max(120),
+    componentPath: z.string().min(1).refine(isSafePluginAssetPath, {
+      message:
+        "componentPath must be a relative plugin asset path (no leading /, backslash, URL scheme, NUL, or .. segments)",
+    }),
+    panelKind: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
+    audioHosts: z.array(TourAudioHostSchema).max(TOUR_CONTRIBUTION_LIMITS.audioHosts).default([]),
+    chapters: z.array(TourChapterSchema).min(1).max(TOUR_CONTRIBUTION_LIMITS.chapters),
+  })
+  .strict()
+  .superRefine((tour, ctx) => {
+    const hosts = new Set<string>();
+    tour.audioHosts.forEach((host, index) => {
+      const lower = host.toLowerCase();
+      if (hosts.has(lower)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["audioHosts", index],
+          message: `Duplicate audio host "${host}".`,
+          params: { errorCode: "tour_audio_host_duplicate" },
+        });
+      }
+      hosts.add(lower);
+    });
+
+    const chapterIds = new Set<string>();
+    tour.chapters.forEach((chapter, index) => {
+      if (chapterIds.has(chapter.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["chapters", index, "id"],
+          message: `Duplicate chapter id "${chapter.id}" in tour "${tour.id}".`,
+          params: { errorCode: "tour_chapter_duplicate_id" },
+        });
+      }
+      chapterIds.add(chapter.id);
+
+      // Remote narration may only come from a host the tour declared, so the
+      // list the user sees is the whole story. Malformed URLs were already
+      // reported on the field itself.
+      if (chapter.audioUrl === null || !URL_SCHEME_PREFIX.test(chapter.audioUrl)) return;
+      let hostname: string;
+      try {
+        hostname = new URL(chapter.audioUrl).hostname;
+      } catch {
+        return;
+      }
+      if (!hosts.has(hostname)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["chapters", index, "audioUrl"],
+          message: `audioUrl host "${hostname}" is not declared in this tour's audioHosts.`,
+          params: { errorCode: "tour_audio_host_undeclared" },
+        });
+      }
+    });
+  });
+
+/**
  * A single attribution entry in the plugin manifest's `authors` array. `name`
  * is required; `url`, `email`, and `role` are optional. `strictObject` rejects
  * unknown keys so manifest typos surface loudly.
@@ -1198,6 +1510,11 @@ export const SettingDefinitionObjectSchema = z
     // File-extension filter for type: "file" (no leading dot). Non-empty when present.
     extensions: z.array(z.string().min(1)).min(1).optional(),
     secret: z.boolean().optional(),
+    // Drives the panel "needs setup" strip and `host.settings.missingRequired`.
+    required: z.boolean().optional(),
+    // "view": the plugin's own settings section edits this value, so the
+    // generated form leaves it out rather than showing it twice.
+    editor: z.enum(["form", "view"]).optional(),
   })
   .strict();
 
@@ -1227,6 +1544,18 @@ export const SettingDefinitionSchema = SettingDefinitionObjectSchema.superRefine
   // `extensions` narrows the native file chooser — it is only meaningful for
   // `type: "file"`. Reject it on every other type at the manifest gate so a
   // misplaced filter surfaces loudly instead of silently doing nothing.
+  // A secret's default would ship in plugin.json — committed to the plugin's
+  // repository and readable by anyone who has it — which is the one place a
+  // credential must never live. It would also silently stand in for a key the
+  // user never entered. Rejected at the gate rather than ignored.
+  if (val.default !== undefined && effectiveType === "secret") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        'Settings of type "secret" cannot declare a default — it would ship in plugin.json. Leave it unset and mark it required instead.',
+      path: ["default"],
+    });
+  }
   if (val.extensions !== undefined && effectiveType !== "file") {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -1313,6 +1642,8 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   settings: 200,
   recipes: 50,
   agentMcp: AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN,
+  tours: 10,
+  databases: 16,
 } as const;
 
 /**
@@ -1364,6 +1695,33 @@ function normalizeDeprecatedContributionAliases(raw: unknown): unknown {
 }
 
 /**
+ * `z.record` skips an own `__proto__` key before validating it, so a cue named
+ * that would vanish from `contributes.tours[].chapters[].cues` without a word.
+ * Refuse it while the raw JSON still carries it. This runs in the `contributes`
+ * preprocess rather than on the `cues` field because a preprocess below a
+ * `.default()` makes the JSON Schema emitter drop every default above it.
+ */
+function reportReservedTourCueNames(raw: unknown, ctx: z.RefinementCtx): void {
+  const tours = (raw as { tours?: unknown } | null)?.tours;
+  if (!Array.isArray(tours)) return;
+  tours.forEach((tour, tourIndex) => {
+    const chapters = (tour as { chapters?: unknown } | null)?.chapters;
+    if (!Array.isArray(chapters)) return;
+    chapters.forEach((chapter, chapterIndex) => {
+      const cues = (chapter as { cues?: unknown } | null)?.cues;
+      if (typeof cues === "object" && cues !== null && Object.hasOwn(cues, "__proto__")) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["tours", tourIndex, "chapters", chapterIndex, "cues"],
+          message: 'Cue name "__proto__" is reserved.',
+          params: { errorCode: "tour_cue_name_reserved" },
+        });
+      }
+    });
+  });
+}
+
+/**
  * `contributes.*` groups a `scope: "project"` plugin may not declare, each with
  * the structural reason it cannot yet be narrowed to one project.
  *
@@ -1412,6 +1770,10 @@ export const PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS = [
     "mcpServers",
     "contributed MCP servers run under one app-wide supervisor whose tools Daintree and its in-app Assistant call with no project binding to check the contribution against. To serve tools to this project's agents, declare contributes.agentMcp instead.",
   ],
+  [
+    "tours",
+    "plugin tours are offered from the app-wide Help menu and command palette with no project axis, and tour playback has no per-project visibility to narrow a panel tour to the owning project's views either.",
+  ],
 ] as const satisfies ReadonlyArray<readonly [string, string]>;
 
 /** The schema {@link getPluginManifestSchema} hands back, for the overloads. */
@@ -1437,6 +1799,53 @@ export function getPluginManifestSchema(origin: PluginOrigin | boolean): PluginM
   return buildPluginManifestSchema(
     typeof origin === "boolean" ? (origin ? "builtin" : "user") : origin
   );
+}
+
+/**
+ * Parse a manifest for loading, isolating malformed `contributes.tours` entries
+ * (#12768): a tour is optional polish, so a bad one is dropped and its issues
+ * returned as `droppedTourIssues` rather than refusing the whole plugin. Only
+ * issues addressed to a single tour entry are isolated — a cap overflow or the
+ * project-scope refusal sits on the array itself and still fails the parse, as
+ * does any other issue. Authoring surfaces (`daintree-plugin validate`, the
+ * installer) keep the strict parse so the author still sees every error.
+ */
+export function parsePluginManifestForLoad(
+  origin: PluginOrigin,
+  json: unknown
+): {
+  result: ReturnType<PluginManifestSchema["safeParse"]>;
+  droppedTourIssues: z.core.$ZodIssue[];
+} {
+  const schema = getPluginManifestSchema(origin);
+  const result = schema.safeParse(json);
+  const raw = json as { contributes?: { tours?: unknown } } | null;
+  if (result.success || !Array.isArray(raw?.contributes?.tours)) {
+    return { result, droppedTourIssues: [] };
+  }
+
+  // Manifest-level refinements (duplicate ids, panelKind) may be withheld while
+  // an entry is still malformed, so a drop can surface another round. Each
+  // round removes at least one entry, which bounds the loop by the array length.
+  let tours: unknown[] = raw.contributes.tours;
+  let originalIndex = tours.map((_tour, index) => index);
+  let current: ReturnType<PluginManifestSchema["safeParse"]> = result;
+  const dropped: z.core.$ZodIssue[] = [];
+  while (!current.success) {
+    const bad = new Set<number>();
+    for (const issue of current.error.issues) {
+      const [root, group, index, ...rest] = issue.path;
+      if (root !== "contributes" || group !== "tours" || typeof index !== "number") {
+        return { result, droppedTourIssues: [] };
+      }
+      bad.add(index);
+      dropped.push({ ...issue, path: ["contributes", "tours", originalIndex[index], ...rest] });
+    }
+    tours = tours.filter((_tour, index) => !bad.has(index));
+    originalIndex = originalIndex.filter((_original, index) => !bad.has(index));
+    current = schema.safeParse({ ...raw, contributes: { ...raw.contributes, tours } });
+  }
+  return { result: current, droppedTourIssues: dropped };
 }
 
 /**
@@ -1544,6 +1953,8 @@ export function describeManifestIssues(
   return `${where}${first?.message ?? "manifest failed validation"}`;
 }
 
+const PLUGIN_MCP_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,15}$/;
+
 function buildPluginManifestSchema(origin: PluginOrigin) {
   return z
     .strictObject({
@@ -1563,6 +1974,15 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           message: "version must be a valid semver (e.g. 1.2.3)",
         }),
       displayName: z.string().optional(),
+      // Agents see the plugin's MCP server as `daintree-<mcpName>`, which must
+      // fit Claude's 25-character server key and be a bare TOML key for Codex.
+      mcpName: z
+        .string()
+        .regex(PLUGIN_MCP_NAME_PATTERN, {
+          error:
+            "mcpName must be 1-16 lowercase letters, digits or hyphens, starting with a letter or digit",
+        })
+        .optional(),
       description: z.string().optional(),
       tagline: z.string().trim().min(1).max(120).optional(),
       authors: z.array(PluginAuthorSchema).max(MANIFEST_AUTHORS_CAP).optional(),
@@ -1588,7 +2008,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       scopes: PluginManifestScopesSchema.optional(),
       activationEvents: z.array(z.literal("onStartupFinished")).default([]),
       contributes: z.preprocess(
-        normalizeDeprecatedContributionAliases,
+        (raw, ctx) => {
+          reportReservedTourCueNames(raw, ctx);
+          return normalizeDeprecatedContributionAliases(raw);
+        },
         z
           .strictObject({
             panels: z
@@ -1667,6 +2090,14 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(AgentMcpContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.agentMcp)
               .default([]),
+            tours: z
+              .array(TourContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.tours)
+              .default([]),
+            databases: z
+              .array(DatabaseContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.databases)
+              .default([]),
             // Not an array, so it carries no MANIFEST_CONTRIBUTION_CAPS entry —
             // three optional fixed slots are structurally bounded already.
             surfaces: SurfaceContributionsSchema.default({}),
@@ -1691,6 +2122,8 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             settings: [],
             recipes: [],
             agentMcp: [],
+            tours: [],
+            databases: [],
             surfaces: {},
           })
       ),
@@ -1771,6 +2204,39 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           });
         }
       }
+
+      // A project database is a file in the repository, so it is disclosed
+      // and gated like any other project write — and it needs a project to
+      // resolve against, which an installed plugin does not have.
+      manifest.contributes.databases.forEach((database, index) => {
+        if (database.location === "project") {
+          if (manifest.scope !== "project") {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "databases", index, "location"],
+              message:
+                'a "project" database is available only to a "scope": "project" plugin — an installed plugin is bound to no project to put the file in. Use "location": "local".',
+              params: { errorCode: "database_project_scope_only" },
+            });
+          } else if (!manifest.capabilities.includes("fs:project-write")) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "databases", index, "location"],
+              message:
+                'a "project" database writes into the repository and requires the "fs:project-write" capability to be declared in capabilities.',
+              params: { errorCode: "database_project_write_required" },
+            });
+          }
+        } else if (database.path !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "databases", index, "path"],
+            message:
+              'path applies only to a "project" database; a "local" database always lives in the plugin\'s own data directory.',
+            params: { errorCode: "database_local_path_unsupported" },
+          });
+        }
+      });
 
       // The inverse asymmetry: `contributes.surfaces` is available to project
       // plugins ALONE. An installed plugin taking over a project's empty canvas,
@@ -2027,6 +2493,39 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
         });
       }
 
+      // A panel's `menu` offers only the plugin's OWN actions: each entry is
+      // dispatched with `{ panelId }`, which no built-in takes, and the panel
+      // menus already carry the host's commands. So a built-in id, allowed on
+      // the surfaces above, is refused here; the own-namespace rules match
+      // theirs, including the imperative escape hatch when no commands exist.
+      manifest.contributes.panels.forEach((panel, panelIndex) => {
+        panel.menu?.forEach((item, itemIndex) => {
+          const { actionId } = item;
+          const issuePath = ["contributes", "panels", panelIndex, "menu", itemIndex, "actionId"];
+          if (
+            !actionId.startsWith(ownNamespacePrefix) ||
+            actionId.length === ownNamespacePrefix.length ||
+            !PANEL_MENU_ACTION_ID.test(actionId)
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: issuePath,
+              message: `Panel menu actionId "${actionId}" must be one of this plugin's own actions, written "${manifest.name}.<id>" — a panel's menu can't offer built-in or other plugins' actions.`,
+              params: { errorCode: "panel_menu_action_not_own" },
+            });
+            return;
+          }
+          if (declaredCommandActionIds.size > 0 && !declaredCommandActionIds.has(actionId)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: issuePath,
+              message: `Panel menu actionId "${actionId}" is in this plugin's "${manifest.name}" namespace but matches no entry in contributes.commands — likely a typo for a declared command.`,
+              params: { errorCode: "action_id_undeclared_command" },
+            });
+          }
+        });
+      });
+
       // Duplicate contribution ids — within each contribution array, the bare
       // `id` is the lookup key the runtime keys its registries on (panel kind,
       // command descriptor, MCP server, agent, view, setting, forge provider,
@@ -2068,12 +2567,17 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       reportDuplicateIds("settings", manifest.contributes.settings);
       reportDuplicateIds("recipes", manifest.contributes.recipes);
       reportDuplicateIds("agentMcp", manifest.contributes.agentMcp);
+      reportDuplicateIds("tours", manifest.contributes.tours);
+      reportDuplicateIds("databases", manifest.contributes.databases);
 
       // Cross-reference integrity — a contribution that names another by id must
       // point at one that exists in the same manifest, else the reference dangles
       // and the wiring silently no-ops at runtime.
       const settingIds = new Set(manifest.contributes.settings.map((setting) => setting.id));
       const viewIds = new Set(manifest.contributes.views.map((view) => view.id));
+      const settingsViewIds = new Set(
+        manifest.contributes.views.filter((view) => view.location === "settings").map((v) => v.id)
+      );
       const panelIds = new Set(manifest.contributes.panels.map((panel) => panel.id));
 
       // `forgeProvider.settingsScopeRef` → a declared setting; `viewRefs[]` →
@@ -2118,6 +2622,17 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           });
           continue;
         }
+        // A surface mounts through the claimed view's panel kind, and a
+        // settings view has none.
+        if (settingsViewIds.has(claim.viewId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "surfaces", slot, "viewId"],
+            message: `surfaces.${slot}.viewId "${claim.viewId}" names a location: "settings" view — a surface draws a panel view, and a settings view renders only in the plugin's settings.`,
+            params: { errorCode: "surface_view_ref_settings" },
+          });
+          continue;
+        }
         // A PTY panel is rendered by TerminalPane, so its matching view is
         // ignored at load and no component path is ever attached. The claim
         // would then hold the project's slot against every other plugin while
@@ -2135,7 +2650,45 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // A view renders into a `contributes.panels` entry with a matching id; a
       // view whose id matches no panel can never be shown (#10620). This is a
       // hard error now — it previously silently no-op'd at load.
+      // A panel tour opens from its panel's menu, so it may only name a panel
+      // kind this plugin declares — never a built-in or another plugin's kind.
+      manifest.contributes.tours.forEach((tour, index) => {
+        if (tour.panelKind !== undefined && !panelIds.has(tour.panelKind)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "tours", index, "panelKind"],
+            message: `Tour "${tour.id}" panelKind "${tour.panelKind}" matches no contributes.panels[].id — a panel tour can only attach to one of this plugin's own panels.`,
+            params: { errorCode: "tour_panel_kind_unknown" },
+          });
+        }
+      });
+
+      // A settings view is the plugin's one custom settings section. It renders
+      // into the plugin's settings home, not a panel, so it may not share an id
+      // with a panel (the panels loop would otherwise attach it as that panel's
+      // view), and a second one has nowhere to go.
+      let settingsViewSeen = false;
       manifest.contributes.views.forEach((view, index) => {
+        if (view.location === "settings") {
+          if (settingsViewSeen) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "views", index, "location"],
+              message: `View "${view.id}" is a second location: "settings" view — a plugin has one settings section, so declare at most one.`,
+              params: { errorCode: "settings_view_duplicate" },
+            });
+          }
+          settingsViewSeen = true;
+          if (panelIds.has(view.id)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "views", index, "id"],
+              message: `Settings view "${view.id}" shares its id with a contributes.panels entry — a settings view renders in the plugin's settings, not a panel, so give it an id of its own.`,
+              params: { errorCode: "settings_view_panel_id_collision" },
+            });
+          }
+          return;
+        }
         if (!panelIds.has(view.id)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,

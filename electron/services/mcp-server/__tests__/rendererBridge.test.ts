@@ -223,6 +223,40 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
     expect(sentPayload?.context).toEqual(boundContext);
   });
 
+  it("tells the renderer why a pinned dispatch is pre-confirmed, and only when it is (#12874)", async () => {
+    const wc = makeWebContents(703);
+    mockWebContentsRegistry.set(703, wc);
+
+    const sent: Array<{ confirmed?: boolean; authorization?: unknown }> = [];
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+      sent.push(payload as { confirmed?: boolean; authorization?: unknown });
+      queueMicrotask(() => {
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: 703 } },
+          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
+        );
+      });
+    });
+
+    await bridge.dispatchActionForWebContents(703, "worktree.delete", {}, true, undefined, "help", {
+      authorization: "skip-preference",
+    });
+    await bridge.dispatchActionForWebContents(
+      703,
+      "worktree.delete",
+      {},
+      false,
+      undefined,
+      "help",
+      { authorization: "skip-preference" }
+    );
+
+    expect(sent[0]).toMatchObject({ confirmed: true, authorization: "skip-preference" });
+    expect(sent[1]).not.toHaveProperty("authorization");
+  });
+
   it("sends context: undefined when no override is supplied — unpinned path is untouched (#8317)", async () => {
     const wc = makeWebContents(702);
     mockWebContentsRegistry.set(702, wc);
@@ -327,6 +361,50 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
     // degrade to an opaque retriable EXECUTION_ERROR.
     await expect(promise).rejects.toBeInstanceOf(SessionBindingError);
     await expect(promise).rejects.toThrow(/Do not retry/);
+  });
+
+  // A workflow with more than ten calls in flight to one view (parallel waits
+  // and notices) tripped Node's MaxListeners warning when every request added
+  // its own `destroyed` listener.
+  it("shares one destroyed listener across many in-flight dispatches, and rejects them all", async () => {
+    const wc = makeWebContents(506);
+    mockWebContentsRegistry.set(506, wc);
+
+    const promises = Array.from({ length: 12 }, () =>
+      bridge.dispatchActionForWebContents(506, "actions.list", {}, false)
+    );
+    for (const p of promises) p.catch(() => {});
+    await Promise.resolve();
+
+    expect(wc.destroyedListenerCount()).toBe(1);
+    wc.triggerDestroyed();
+    for (const p of promises) {
+      await expect(p).rejects.toBeInstanceOf(SessionBindingError);
+    }
+  });
+
+  it("drops the shared destroyed listener once the last in-flight dispatch settles", async () => {
+    const wc = makeWebContents(507, {
+      onSend: (channel, payload) => {
+        if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+        queueMicrotask(() =>
+          mockIpcMain.emit(
+            CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+            { sender: { id: 507 } },
+            { requestId: payload.requestId, result: { ok: true, result: null } }
+          )
+        );
+      },
+    });
+    mockWebContentsRegistry.set(507, wc);
+
+    await Promise.all(
+      Array.from({ length: 3 }, () =>
+        bridge.dispatchActionForWebContents(507, "actions.list", {}, false)
+      )
+    );
+
+    expect(wc.destroyedListenerCount()).toBe(0);
   });
 });
 

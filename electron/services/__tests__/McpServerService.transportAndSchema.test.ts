@@ -166,7 +166,7 @@ vi.mock("../persistence/auditRingStore.js", () => ({
   },
 }));
 
-const paneTokenTiers = vi.hoisted(() => new Map<string, "workbench" | "action" | "system">());
+const paneTokenTiers = vi.hoisted(() => new Map<string, "core" | "full">());
 
 vi.mock("../McpPaneConfigService.js", () => ({
   mcpPaneConfigService: {
@@ -762,7 +762,7 @@ describe("McpServerService", () => {
       ],
     });
     await service.start(window);
-    paneTokenTiers.set("pane-token", "system");
+    paneTokenTiers.set("pane-token", "full");
     const port = service.currentPort!;
 
     const pane = await connectHttpClient(port, { Authorization: "Bearer pane-token" });
@@ -823,7 +823,7 @@ describe("McpServerService", () => {
           ? { ok: true, result: { terminalId: "terminal-pane" } }
           : { ok: true, result: listing },
     });
-    paneTokenTiers.set("pane-token", "system");
+    paneTokenTiers.set("pane-token", "full");
     service.setPaneOwnershipPrincipalResolver((token) =>
       token === "pane-token" ? "principal-pane" : null
     );

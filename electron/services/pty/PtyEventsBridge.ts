@@ -7,6 +7,7 @@
  */
 
 import { events } from "../events.js";
+import { HANDBACK_CODE_PATTERN } from "../../../shared/types/handback.js";
 import type { PtyHostEvent, TerminalFlowStatus } from "../../../shared/types/pty-host.js";
 import type { AgentStateChangeTrigger } from "../../types/index.js";
 
@@ -117,6 +118,26 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
           ? { validationErrors: event.validationErrors }
           : {}),
         ...(event.traceId !== undefined ? { traceId: event.traceId } : {}),
+        timestamp: event.timestamp,
+      });
+      return true;
+
+    case "agent-handback-observed":
+      events.emit("agent:handback-observed", {
+        terminalId: event.terminalId,
+        handback: event.handback,
+        // Crossed a process boundary, so only a well-formed code is passed on.
+        ...(typeof event.code === "string" && HANDBACK_CODE_PATTERN.test(event.code)
+          ? { code: event.code }
+          : {}),
+        timestamp: event.timestamp,
+      });
+      return true;
+
+    case "agent-rate-limit-observed":
+      events.emit("agent:rate-limit-observed", {
+        terminalId: event.terminalId,
+        observedAt: event.observedAt,
         timestamp: event.timestamp,
       });
       return true;

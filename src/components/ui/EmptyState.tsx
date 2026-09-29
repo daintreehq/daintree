@@ -81,12 +81,14 @@ function renderInner(
   const iconClass = isCanvas
     ? "text-text-placeholder [&_svg]:h-10 [&_svg]:w-10 @max-[280px]/empty-state:[&_svg]:h-6 @max-[280px]/empty-state:[&_svg]:w-6"
     : "text-text-placeholder [&_svg]:h-6 [&_svg]:w-6 @max-[280px]/empty-state:[&_svg]:h-4 @max-[280px]/empty-state:[&_svg]:w-4";
+  // `text-balance` so a line that just overflows wraps into two even lines
+  // rather than stranding its last word beneath a full one.
   const titleClass = isCanvas
-    ? "text-lg font-semibold text-text-secondary @max-[280px]/empty-state:text-sm @max-[280px]/empty-state:font-medium"
-    : "text-sm font-medium text-text-secondary";
+    ? "text-lg font-semibold text-text-secondary text-balance @max-[280px]/empty-state:text-sm @max-[280px]/empty-state:font-medium"
+    : "text-sm font-medium text-text-secondary text-balance";
   const descriptionClass = isCanvas
-    ? "text-sm text-text-secondary max-w-xs @max-[280px]/empty-state:text-xs"
-    : "text-xs text-text-secondary max-w-xs";
+    ? "text-sm text-text-secondary max-w-xs text-balance @max-[280px]/empty-state:text-xs"
+    : "text-xs text-text-secondary max-w-xs text-balance";
   return (
     <>
       {icon ? (
@@ -196,7 +198,7 @@ export function EmptyState(props: EmptyStateProps) {
         <div
           key={`current-${generation}`}
           className={cn(
-            "[grid-area:1/1] flex flex-col items-center motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150",
+            "[grid-area:1/1] flex flex-col items-center animate-in fade-in [--tw-animation-duration:var(--duration-150)]",
             props.scale === "canvas" ? "gap-3 @max-[280px]/empty-state:gap-2" : "gap-2"
           )}
         >
@@ -212,7 +214,7 @@ export function EmptyState(props: EmptyStateProps) {
             // `aria-hidden` alone leaves it focusable via keyboard.
             inert
             className={cn(
-              "[grid-area:1/1] flex flex-col items-center pointer-events-none motion-safe:animate-out motion-safe:fade-out motion-safe:duration-100",
+              "[grid-area:1/1] flex flex-col items-center pointer-events-none animate-out fade-out [--tw-animation-duration:var(--duration-100)]",
               outgoing.scale === "canvas" ? "gap-3 @max-[280px]/empty-state:gap-2" : "gap-2"
             )}
             onAnimationEnd={handleExitEnd}

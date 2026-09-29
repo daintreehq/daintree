@@ -10,13 +10,15 @@ import {
   Upload,
 } from "lucide-react";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { cn } from "@/lib/utils";
-import { looksLikeSecret } from "@/utils/secretDetection";
-import { isSensitiveEnvKey } from "../../../shared/utils/envVars";
+import { isSecretEnvEntry, looksLikeSecret } from "@/utils/secretDetection";
 import { ImportEnvDialog } from "./ImportEnvDialog";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRowFocus } from "./useRowFocus";
 import { ENV_KEY_DUPLICATE_MESSAGE, ENV_KEY_INVALID_MESSAGE, isValidEnvKey } from "./EnvVarRow";
+import { SettingsInlineError } from "@/components/Settings/SettingsGroup";
 
 /**
  * Inline env var CRUD editor with validation and optional inheritance.
@@ -371,10 +373,12 @@ function EnvVarKeyCell({
                   role="option"
                   aria-selected={idx === activeIndex}
                   onClick={() => handleSelect(s.key)}
-                  onMouseEnter={() => setActiveIndex(idx)}
+                  // `pointermove`, not `mouseenter`: rows scrolling under a
+                  // resting pointer must not steal the cursor from the keys.
+                  onPointerMove={idx === activeIndex ? undefined : () => setActiveIndex(idx)}
                   className={cn(
-                    "flex items-start gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer",
-                    idx === activeIndex && "bg-overlay-soft"
+                    PALETTE_ROW_CLASS,
+                    "flex items-start gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer"
                   )}
                   data-testid="env-editor-key-suggestion"
                 >
@@ -389,9 +393,9 @@ function EnvVarKeyCell({
         </Popover>
       </div>
       {hasError && (
-        <p
+        <SettingsInlineError
           id={messageId}
-          className="px-2.5 pb-2 text-xs text-status-error"
+          className="px-2.5 pb-2"
           data-testid={
             isEmptyKey
               ? "env-editor-error-empty"
@@ -405,7 +409,7 @@ function EnvVarKeyCell({
             : isMalformed
               ? ENV_KEY_INVALID_MESSAGE
               : ENV_KEY_DUPLICATE_MESSAGE}
-        </p>
+        </SettingsInlineError>
       )}
     </div>
   );
@@ -444,6 +448,7 @@ export function EnvVarEditor({
   // When non-null, the focus-recovery effect focuses the key input for that rowId.
   const [pendingFocusKey, setPendingFocusKey] = useState<string | null>(null);
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const importButtonRef = useRef<HTMLButtonElement>(null);
   const focus = useRowFocus();
   // Per-row "Pasted text normalized" inline indicator. Auto-clears after 2s.
   const [normalizedRows, setNormalizedRows] = useState<Set<string>>(() => new Set());
@@ -756,6 +761,7 @@ export function EnvVarEditor({
   );
   const importButton = (
     <Button
+      ref={importButtonRef}
       variant="outline"
       size="sm"
       onClick={() => setIsImportOpen(true)}
@@ -771,6 +777,10 @@ export function EnvVarEditor({
       onClose={() => setIsImportOpen(false)}
       env={env}
       onImport={handleImportConfirm}
+      // An import into an empty editor swaps it to the table layout, which
+      // remounts this button — so the opener the dialog captured is gone by
+      // the time it closes. The ref follows whichever layout is mounted.
+      restoreFocusTo={importButtonRef}
     />
   );
 
@@ -812,7 +822,10 @@ export function EnvVarEditor({
             !row.isInherited && trimmedKey !== "" && duplicateKeys.has(trimmedKey);
           const isMalformed = !row.isInherited && trimmedKey !== "" && !isValidEnvKey(trimmedKey);
           const hasSecretWarning = !row.isInherited && looksLikeSecret(row.value);
-          const isSecret = !row.isInherited && (isSensitiveEnvKey(row.key) || hasSecretWarning);
+          // Inherited rows are masked too: read-only is not the same as safe
+          // to show, and the value is the same secret it is in the editor it
+          // came from.
+          const isSecret = isSecretEnvEntry(row.key, row.value);
           const isRevealed = revealedRows.has(row.rowId);
           const valueInputType = isSecret && !isRevealed ? "password" : "text";
           const isOverride =
@@ -909,20 +922,30 @@ export function EnvVarEditor({
                     data-testid="env-editor-value"
                   />
                   {isSecret && (
-                    <button
-                      type="button"
-                      onClick={() => toggleReveal(row.rowId)}
-                      aria-pressed={isRevealed}
-                      aria-label={`${isRevealed ? "Hide" : "Show"} value${trimmedKey ? ` of ${trimmedKey}` : ""}`}
-                      className={cn(ENV_CELL_ACTION, "absolute right-1.5 top-1/2 -translate-y-1/2")}
-                      data-testid="env-editor-reveal"
-                    >
-                      {isRevealed ? (
-                        <EyeOff size={12} aria-hidden="true" />
-                      ) : (
-                        <Eye size={12} aria-hidden="true" />
-                      )}
-                    </button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => toggleReveal(row.rowId)}
+                          aria-pressed={isRevealed}
+                          aria-label={`Show value${trimmedKey ? ` of ${trimmedKey}` : ""}`}
+                          className={cn(
+                            ENV_CELL_ACTION,
+                            "absolute right-1.5 top-1/2 -translate-y-1/2"
+                          )}
+                          data-testid="env-editor-reveal"
+                        >
+                          {isRevealed ? (
+                            <EyeOff size={12} aria-hidden="true" />
+                          ) : (
+                            <Eye size={12} aria-hidden="true" />
+                          )}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        {isRevealed ? "Hide value" : "Show value"}
+                      </TooltipContent>
+                    </Tooltip>
                   )}
                 </div>
                 {hasSecretWarning && (
@@ -950,40 +973,51 @@ export function EnvVarEditor({
               {/* Actions cell — remove / revert / override by row kind. */}
               <div className="flex items-start justify-center w-9 pt-1.5 border-l border-border-subtle">
                 {row.isInherited ? (
-                  <button
-                    type="button"
-                    className={ENV_CELL_ACTION}
-                    aria-label={`Override ${trimmedKey} in this preset`}
-                    onClick={() => handleOverride(row.rowId)}
-                    data-testid="env-editor-override"
-                    title="Override this inherited value"
-                  >
-                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className={ENV_CELL_ACTION}
+                        aria-label={`Override ${trimmedKey} in this preset`}
+                        onClick={() => handleOverride(row.rowId)}
+                        data-testid="env-editor-override"
+                      >
+                        <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Override this inherited value</TooltipContent>
+                  </Tooltip>
                 ) : isOverride ? (
-                  <button
-                    type="button"
-                    className={ENV_CELL_ACTION}
-                    aria-label={`Revert ${trimmedKey} to inherited value`}
-                    onClick={() => handleRevert(row.rowId)}
-                    data-testid="env-editor-revert"
-                    title="Revert to inherited value"
-                  >
-                    <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className={ENV_CELL_ACTION}
+                        aria-label={`Revert ${trimmedKey} to inherited value`}
+                        onClick={() => handleRevert(row.rowId)}
+                        data-testid="env-editor-revert"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Revert to inherited value</TooltipContent>
+                  </Tooltip>
                 ) : (
-                  <button
-                    type="button"
-                    className={cn(
-                      ENV_CELL_ACTION,
-                      "text-status-error hover:text-status-error hover:bg-status-error/10"
-                    )}
-                    aria-label={`Delete ${trimmedKey || "unnamed variable"} (row ${rowIndex + 1})`}
-                    onClick={() => handleRemove(row.rowId)}
-                    data-testid="env-editor-remove"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost-danger"
+                        size="icon-xs"
+                        className="[&_svg]:size-3.5"
+                        aria-label={`Delete ${trimmedKey || "unnamed variable"} (row ${rowIndex + 1})`}
+                        onClick={() => handleRemove(row.rowId)}
+                        data-testid="env-editor-remove"
+                      >
+                        <Trash2 aria-hidden="true" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Delete variable</TooltipContent>
+                  </Tooltip>
                 )}
               </div>
             </div>
@@ -992,9 +1026,9 @@ export function EnvVarEditor({
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2 px-2.5 py-2 border-t border-border-default bg-overlay-subtle">
         {hasBlockingError && (
-          <p className="w-full text-xs text-status-error" role="status">
-            Changes aren't saved until every name is valid and unique
-          </p>
+          <SettingsInlineError className="w-full" role="status">
+            Changes aren&apos;t saved until every name is valid and unique
+          </SettingsInlineError>
         )}
         {addButton}
         {importButton}

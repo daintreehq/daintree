@@ -10,9 +10,10 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ExternalLink, MessageCircle, Settings2, ShieldAlert, Sparkles, X } from "lucide-react";
+import { ExternalLink, MessageCircle, Settings2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { MissingCliGate } from "@/components/Terminal/MissingCliGate";
 import {
@@ -37,8 +38,10 @@ import {
 } from "@/controllers/helpSessionControllerRegistry";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
+import { HelpAssistantAgentChooser } from "./HelpAssistantAgentChooser";
 import { HelpLaunchingState } from "./HelpLaunchingState";
 import { HelpPanelFooter } from "./HelpPanelFooter";
+import { HelpPanelResizeHandle } from "./HelpPanelResizeHandle";
 import { FigureRail } from "./FigureRail";
 import {
   useHelpPanelStore,
@@ -46,6 +49,7 @@ import {
   selectOpenSlots,
   HELP_PANEL_MIN_WIDTH,
   HELP_PANEL_MAX_WIDTH,
+  HELP_PANEL_DEFAULT_WIDTH,
 } from "@/store/helpPanelStore";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import {
@@ -191,6 +195,10 @@ export function HelpPanel({
   // Null means no close is pending — closing is destructive (the conversation
   // is discarded, not paused), so it takes the same gate the Stop control uses.
   const [pendingCloseSlot, setPendingCloseSlot] = useState<number | null>(null);
+  // The lane focus should land on once a confirmed close removes a background
+  // lane: its neighbour, the following one first. Null when the lane being
+  // closed is the selected one — focus then follows the store's new selection.
+  const [pendingCloseSuccessor, setPendingCloseSuccessor] = useState<number | null>(null);
   // Tracks the last preferredAgentId the switch effect acted on so a single
   // preference change drives at most one switch attempt (the effect re-runs
   // on unrelated dep changes while the async launch settles).
@@ -228,6 +236,7 @@ export function HelpPanel({
     setWidth,
     setOpen,
     setAutoLaunchEnabled,
+    setPreferredAgent,
     dismissIntro,
     clearDroppedPreferredAgent,
   } = useHelpPanelStore(
@@ -250,6 +259,7 @@ export function HelpPanel({
       setWidth: s.setWidth,
       setOpen: s.setOpen,
       setAutoLaunchEnabled: s.setAutoLaunchEnabled,
+      setPreferredAgent: s.setPreferredAgent,
       dismissIntro: s.dismissIntro,
       clearDroppedPreferredAgent: s.clearDroppedPreferredAgent,
     }))
@@ -994,6 +1004,10 @@ export function HelpPanel({
     };
   }, []);
 
+  const handleResetWidth = useCallback(() => {
+    setWidth(HELP_PANEL_DEFAULT_WIDTH);
+  }, [setWidth]);
+
   // Resize via keyboard.
   const handleResizeKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -1015,9 +1029,12 @@ export function HelpPanel({
       } else if (e.key === "End") {
         e.preventDefault();
         setWidth(HELP_PANEL_MAX_WIDTH);
+      } else if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        handleResetWidth();
       }
     },
-    [width, setWidth]
+    [width, setWidth, handleResetWidth]
   );
 
   // Hide the panel without tearing down the agent or conversation.
@@ -1186,12 +1203,18 @@ export function HelpPanel({
   const handleCloseSlot = useCallback(
     (slot: number) => {
       if (laneNeedsCloseConfirm(slot)) {
+        const index = sessionTabs.findIndex((tab) => tab.slot === slot);
+        const successor =
+          slot === activeSlot
+            ? null
+            : (sessionTabs[index + 1]?.slot ?? sessionTabs[index - 1]?.slot ?? null);
+        setPendingCloseSuccessor(successor);
         setPendingCloseSlot(slot);
         return;
       }
       closeSlotNow(slot);
     },
-    [laneNeedsCloseConfirm, closeSlotNow]
+    [laneNeedsCloseConfirm, closeSlotNow, sessionTabs, activeSlot]
   );
 
   const handleConfirmCloseSlot = useCallback(() => {
@@ -1318,7 +1341,7 @@ export function HelpPanel({
   // The agent the idle empty state's "Start assistant" CTA would launch — the
   // user's preference, or the sole installed assistant backend. Mirrors the
   // controller's own auto-launch eligibility so the CTA is shown only when a
-  // single unambiguous target exists; otherwise the user is sent to settings.
+  // single unambiguous target exists; with several, the empty state asks.
   const launchableAgentId =
     preferredAgentId ??
     (supportedInstalledAgentIds.length === 1 ? (supportedInstalledAgentIds[0] ?? null) : null);
@@ -1353,6 +1376,17 @@ export function HelpPanel({
       });
     },
     [controller, launchableAgentId, setAutoLaunchEnabled]
+  );
+
+  // First-run choice when several installed agents could run the assistant:
+  // the pick is stored as the default, then launched like "Start assistant".
+  const handleChooseAssistant = useCallback(
+    (chosenAgentId: string) => {
+      setPreferredAgent(chosenAgentId);
+      setAutoLaunchEnabled(true);
+      controller.launch({ agentId: chosenAgentId, replaceExisting: true });
+    },
+    [controller, setAutoLaunchEnabled, setPreferredAgent]
   );
 
   // Recovery resume after the eviction/crash path killed the assistant PTY on a
@@ -1457,24 +1491,14 @@ export function HelpPanel({
       )}
       style={{ width: effectiveWidth }}
     >
-      {/* Resize handle */}
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize Daintree Assistant panel"
-        aria-controls="daintree-assistant-panel"
-        aria-valuenow={width}
-        aria-valuemin={HELP_PANEL_MIN_WIDTH}
-        aria-valuemax={HELP_PANEL_MAX_WIDTH}
-        tabIndex={isVisible ? 0 : -1}
-        className={cn(
-          "absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10",
-          "hover:bg-overlay-soft active:bg-overlay-medium transition-colors",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
-          isResizing && "bg-overlay-medium"
-        )}
+      <HelpPanelResizeHandle
+        width={width}
+        isResizing={isResizing}
+        isVisible={isVisible}
+        controlsId="daintree-assistant-panel"
         onMouseDown={handleResizeStart}
         onKeyDown={handleResizeKeyDown}
+        onReset={handleResetWidth}
       />
 
       <HelpPanelHeader
@@ -1604,13 +1628,17 @@ export function HelpPanel({
                     agentHasLifecycleEvent={terminalPty?.stateChangeTrigger !== undefined}
                     agentState={terminalPty?.agentState}
                     disabled={terminalPty?.isInputLocked === true}
-                    onSend={({ text }) => {
+                    onSend={({ text, imagePaths }) => {
                       if (terminalPty?.isInputLocked === true) return;
                       terminalInstanceService.notifyUserInput(terminalId);
                       // submit can now reject for dead PTYs (#8706); swallow
                       // to log so the unhandled rejection doesn't leak — the
                       // help panel is a one-shot send with no recovery UI.
-                      terminalClient.submit(terminalId, text).catch((err) => {
+                      const submission =
+                        imagePaths !== undefined && imagePaths.length > 0
+                          ? terminalClient.submitWithImages(terminalId, text, imagePaths)
+                          : terminalClient.submit(terminalId, text);
+                      submission.catch((err) => {
                         logWarn("[HelpPanel] submit failed", { terminalId, error: err });
                       });
                     }}
@@ -1649,45 +1677,21 @@ export function HelpPanel({
         ) : (
           <div className="flex-1 flex flex-col">
             {droppedPreferredAgentId && (
-              <div
-                role="alert"
-                className={cn(
-                  "flex items-start gap-2 px-3 py-2.5 mx-3 mt-3 mb-1",
-                  "rounded-[var(--radius-md)]",
-                  "bg-status-warning/10 border border-status-warning/20",
-                  "text-xs text-text-primary"
-                )}
+              <InlineStatusBanner
+                severity="warning"
+                animated={false}
                 data-testid="help-dropped-agent-banner"
-              >
-                <ShieldAlert
-                  className="w-3.5 h-3.5 shrink-0 mt-0.5 text-status-warning"
-                  aria-hidden="true"
-                />
-                <div className="flex-1 select-text">
-                  <p className="font-medium text-text-primary">
-                    {getAgentConfig(droppedPreferredAgentId)?.name ?? droppedPreferredAgentId} is no
-                    longer available
-                  </p>
-                  <p className="mt-0.5 text-text-secondary">
-                    The agent was removed or is no longer supported as an assistant backend
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleOpenSettings}
-                    className="mt-1 text-text-secondary hover:text-text-primary underline underline-offset-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                  >
-                    Open assistant settings
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  onClick={clearDroppedPreferredAgent}
-                  aria-label="Dismiss agent unavailable notice"
-                  className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
+                title={`${getAgentConfig(droppedPreferredAgentId)?.name ?? droppedPreferredAgentId} is no longer available`}
+                description="The agent was removed or is no longer supported as an assistant backend"
+                action={{
+                  id: "open-settings",
+                  label: "Open assistant settings",
+                  variant: "primary",
+                  onClick: handleOpenSettings,
+                }}
+                onClose={clearDroppedPreferredAgent}
+                closeAriaLabel="Dismiss agent unavailable notice"
+              />
             )}
             <div className="flex-1 flex flex-col items-center justify-center gap-6 p-8 text-center">
               <p className="text-sm text-text-secondary max-w-[30ch]">
@@ -1740,6 +1744,13 @@ export function HelpPanel({
                       ))}
                     </div>
                   )}
+                </div>
+              ) : supportedInstalledAgentIds.length > 1 ? (
+                <div className="w-full max-w-[34ch]">
+                  <HelpAssistantAgentChooser
+                    agentIds={supportedInstalledAgentIds}
+                    onChoose={handleChooseAssistant}
+                  />
                 </div>
               ) : (
                 <p className="text-xs text-text-secondary max-w-[32ch]">
@@ -1813,14 +1824,23 @@ export function HelpPanel({
         onConfirm={handleConfirmCloseSlot}
         onClose={handleCancelCloseSlot}
         variant="destructive"
-        // Where focus goes once the tab this was opened from no longer exists. The
-        // strip has already moved its single tab stop to the lane that took over,
-        // so asking for "the tab that currently holds the stop" lands on the same
-        // element the strip chose, without this dialog needing to know which one.
-        // On cancel the trigger still exists and the dialog restores to it directly.
-        restoreFocusTo={() =>
-          panelRef.current?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]') ?? null
-        }
+        // Where focus goes once the tab this was opened from no longer exists: the
+        // closed lane's neighbour, or the newly selected lane when the selected one
+        // was closed — the same rule the strip's own Delete handoff follows. On
+        // cancel the trigger still exists and the dialog restores to it directly.
+        restoreFocusTo={() => {
+          const panel = panelRef.current;
+          if (!panel) return null;
+          const successor =
+            pendingCloseSuccessor === null
+              ? null
+              : panel.querySelector<HTMLElement>(
+                  `[role="tab"][data-slot="${pendingCloseSuccessor}"]`
+                );
+          return (
+            successor ?? panel.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+          );
+        }}
       />
       <ConfirmDialog
         isOpen={showAgentSwitchConfirm}

@@ -271,6 +271,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
 
@@ -588,9 +589,10 @@ describe("ReviewHub", () => {
       const dot = container.querySelector(".status-mark");
       expect(dot).toBeTruthy();
       expect(dot?.className).toContain("bg-status-warning");
-      // …and the words beside it take a text colour, not the disc's background
-      // class, which would paint nothing on the label at all.
-      expect(label.className).toContain("text-status-warning");
+      // …and the words beside it stay on a neutral text token: status colours
+      // only promise the 3:1 non-text floor, so the colour rides on the mark.
+      expect(label.className).toContain("text-text-secondary");
+      expect(label.className).not.toMatch(/\bbg-status-/);
     });
 
     it("omits CI status when prCiStatus is undefined", async () => {
@@ -747,7 +749,7 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByText("index.ts"));
 
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: /vs main/i }));
+        fireEvent.click(screen.getByRole("radio", { name: /vs main/i }));
       });
       await waitFor(() => screen.getByText("component.tsx"));
     }
@@ -905,4 +907,8 @@ describe("ReviewHub", () => {
       expect(openExternalMock).toHaveBeenCalledWith(deepLinkA);
     });
   });
+});
+
+afterEach(() => {
+  resetStagingStatusCacheForTests();
 });

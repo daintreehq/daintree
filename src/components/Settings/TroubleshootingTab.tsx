@@ -3,7 +3,6 @@ import { Button } from "@/components/ui/button";
 import { AlertTriangle } from "lucide-react";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { ErrorRetryRow, InlineErrorRow } from "./auditLogParts";
-import { Spinner } from "@/components/ui/Spinner";
 import { appClient, systemClient, logsClient } from "@/clients";
 import type { AppState, SystemHealthCheckResult } from "@shared/types";
 import { actionService } from "@/services/ActionService";
@@ -18,6 +17,10 @@ import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { ClearLogsConfirmDialog } from "@/components/Diagnostics/ClearLogsConfirmDialog";
+import { notify } from "@/lib/notify";
+
+/** How long an Undo stays offered — the same window as the app's other undo toasts. */
+const UNDO_WINDOW_MS = 5_000;
 
 const PROFILE_UPDATE_INTERVAL_MS = 250;
 
@@ -69,8 +72,8 @@ function SystemHealthSection() {
         description="Checks that the command-line tools Daintree relies on are installed and on your PATH"
         error={checkError}
         control={
-          <Button variant="outline" size="sm" onClick={() => void runCheck()} disabled={isChecking}>
-            {isChecking ? "Checking…" : result ? "Run health check again" : "Run health check"}
+          <Button variant="outline" size="sm" onClick={() => void runCheck()} loading={isChecking}>
+            {result ? "Run health check again" : "Run health check"}
           </Button>
         }
       />
@@ -132,9 +135,8 @@ export function DownloadDiagnosticsSection() {
       description="A snapshot of your system environment, app state, and recent logs. You review it before anything is saved."
       error={downloadError}
       control={
-        <Button variant="outline" size="sm" onClick={handleOpenReview} disabled={isCollecting}>
-          {isCollecting && <Spinner size="sm" />}
-          {isCollecting ? "Collecting…" : "Download diagnostics"}
+        <Button variant="outline" size="sm" onClick={handleOpenReview} loading={isCollecting}>
+          Download diagnostics
         </Button>
       }
     />
@@ -224,9 +226,9 @@ function RendererCpuProfileSection() {
             variant="subtle"
             size="sm"
             onClick={() => void handleRecord()}
-            disabled={phase === "saving"}
+            loading={phase === "saving"}
           >
-            {phase === "saving" ? "Saving…" : "Record profile"}
+            Record profile
           </Button>
         )
       }
@@ -339,6 +341,15 @@ export function ApplicationLogsSection() {
   );
 }
 
+/**
+ * The Undo for "Clear all overrides": puts the cleared levels back, except for a
+ * module set again since the clear, which keeps its newer level.
+ */
+export async function restoreClearedLogOverrides(cleared: Record<string, string>): Promise<void> {
+  const current = await logsClient.getLevelOverrides();
+  await logsClient.setLevelOverrides({ ...cleared, ...current });
+}
+
 /** Destructive, so it closes the logging group rather than sharing the logs row. */
 export function ClearLogsRow() {
   const [showClearDialog, setShowClearDialog] = useState(false);
@@ -346,7 +357,7 @@ export function ClearLogsRow() {
   return (
     <SettingsRow
       label="Clear logs"
-      description="Deletes the application log files. Asks for confirmation first."
+      description="Empties the log view and the buffer diagnostic reports are built from. The log file on disk is kept."
       control={
         <>
           <Button variant="ghost-danger" size="sm" onClick={() => setShowClearDialog(true)}>
@@ -405,11 +416,40 @@ export function TroubleshootingTab() {
     window.dispatchEvent(new CustomEvent("daintree:open-log-level-palette"));
   };
 
+  // Overrides are configuration the user can put back, so clearing them is
+  // undone rather than confirmed — unlike Clear logs beside it, which empties
+  // a buffer nothing can restore.
   const handleClearLogOverrides = async () => {
     setClearOverridesError(null);
+    const cleared = logOverrides;
     try {
       await logsClient.clearLevelOverrides();
       setLogOverrides({});
+      const count = Object.keys(cleared).length;
+      notify({
+        type: "success",
+        title: "Log overrides cleared",
+        message: `${count} ${count === 1 ? "module is" : "modules are"} back on the default level.`,
+        priority: "high",
+        transient: true,
+        duration: UNDO_WINDOW_MS,
+        context: { eventKind: "uiFeedback" },
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await restoreClearedLogOverrides(cleared);
+            } catch (error) {
+              setClearOverridesError(
+                "Overrides couldn't be restored. Set them again from Set log level."
+              );
+              logError("Failed to restore log level overrides", error);
+            } finally {
+              setLogOverridesRefreshKey((k) => k + 1);
+            }
+          },
+        },
+      });
     } catch (error) {
       setClearOverridesError("Overrides couldn't be cleared. Try again.");
       logError("Failed to clear log level overrides", error);

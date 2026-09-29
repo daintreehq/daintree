@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { ActionDanger } from "@shared/types/actions";
 import type {
+  McpApprovalReason,
   McpApprovalScope,
   McpBearerIdentity,
   McpConfirmationDecision,
@@ -151,8 +152,10 @@ export interface PendingMcpConfirm {
    * something its project's MCP tier does not cover on its own, which the
    * dialog says in so many words — the action may well be harmless, and the
    * approver needs to know the question is about reach, not danger.
+   * `protected-close` is Daintree's own assistant closing panels it did not
+   * open or whose agent is mid-task (#12881); the checklist names them.
    */
-  approvalReason?: "above-tier";
+  approvalReason?: McpApprovalReason;
   enqueuedAt: number;
 }
 

@@ -13,6 +13,8 @@ vi.mock("../../../utils/logger.js", () => ({
 }));
 
 import { PluginDevWorkerMainBridge } from "../PluginDevWorkerMainBridge.js";
+import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
+import { databaseBackupApprovers } from "../pluginInternalApprovers.js";
 
 class FakeWorkerHost extends EventEmitter {
   sent: any[] = [];
@@ -54,6 +56,10 @@ function makeHost() {
     setPanelBadge: vi.fn(async () => {}),
     showToast: vi.fn(async () => {}),
     showQuickPick: vi.fn(async (): Promise<unknown> => undefined),
+    sendToAgent: vi.fn(async (): Promise<unknown> => ({ status: "drafted", terminalId: "t-1" })),
+    agents: {
+      list: vi.fn(async () => [{ terminalId: "t-1", canDraft: true }]),
+    },
     showInputBox: vi.fn(async (): Promise<unknown> => undefined),
     showConfirm: vi.fn(async () => false),
     dispatch: vi.fn(async () => ({ ok: true, result: undefined })),
@@ -90,7 +96,10 @@ function makeHost() {
     },
     fs: {
       readFile: vi.fn(async () => ""),
+      readFileWithRevision: vi.fn(async () => ({ contents: "", revision: "0".repeat(64) })),
       writeFile: vi.fn(async () => {}),
+      mkdir: vi.fn(async () => {}),
+      appendFile: vi.fn(async () => {}),
       readdir: vi.fn(async () => []),
       stat: vi.fn(async () => ({})),
       watch: vi.fn(async (_paths: string[], _cb: (p: string) => void) => vi.fn()),
@@ -98,6 +107,13 @@ function makeHost() {
     clipboard: {
       writeText: vi.fn(async () => {}),
       readText: vi.fn(async () => "clip-contents"),
+    },
+    documents: {
+      renderPdf: vi.fn(async (): Promise<unknown> => ({
+        path: "/data/out.pdf",
+        bytes: 1234,
+        revision: "a".repeat(64),
+      })),
     },
   };
 }
@@ -208,6 +224,80 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(result).toMatchObject({ ok: true, result: [{ id: "w1" }] });
   });
 
+  it("relays db.resolve with only the database id", async () => {
+    const { host, workerHost } = makeBridge();
+    (host as unknown as { db: { resolve: ReturnType<typeof vi.fn> } }).db = {
+      resolve: vi.fn(async (id: string) => ({ id, path: "/p/.daintree/data/x/ledger.db" })),
+    } as never;
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-db",
+      method: "db.resolve",
+      params: { id: "ledger", path: "/etc/passwd" },
+    });
+    await flush();
+    expect(
+      (host as unknown as { db: { resolve: ReturnType<typeof vi.fn> } }).db.resolve
+    ).toHaveBeenCalledWith("ledger");
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-db");
+    expect(result).toMatchObject({ ok: true, result: { id: "ledger" } });
+  });
+
+  it("relays db.prepareBackup to the host's internal approver, never to the plugin's host.db", async () => {
+    const { host, workerHost } = makeBridge();
+    const db = { resolve: vi.fn(), open: vi.fn() };
+    const approve = vi.fn(async (_id: string, destPath: string) => `/real${destPath}`);
+    databaseBackupApprovers.set(db as never, approve);
+    (host as unknown as { db: unknown }).db = db;
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-bk",
+      method: "db.prepareBackup",
+      params: { id: "ledger", destPath: "/p/backups/ledger.db" },
+    });
+    await flush();
+    expect(approve).toHaveBeenCalledWith("ledger", "/p/backups/ledger.db");
+    expect(workerHost.sent.find((m) => m.requestId === "c-bk")).toMatchObject({
+      ok: true,
+      result: "/real/p/backups/ledger.db",
+    });
+
+    (host as unknown as { db: unknown }).db = { resolve: vi.fn(), open: vi.fn() };
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-bk2",
+      method: "db.prepareBackup",
+      params: { id: "ledger", destPath: "/p/backups/ledger.db" },
+    });
+    await flush();
+    expect(workerHost.sent.find((m) => m.requestId === "c-bk2")).toMatchObject({ ok: false });
+  });
+
+  it("carries a host error's primitive fields to the worker, not just its message", async () => {
+    const { host, workerHost } = makeBridge();
+    host.getWorktrees.mockRejectedValueOnce(
+      Object.assign(new Error("REVISION_MISMATCH: the file changed"), {
+        code: "REVISION_MISMATCH",
+        currentRevision: "abc123",
+        nested: { dropped: true },
+      })
+    );
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-err",
+      method: "getWorktrees",
+      params: undefined,
+    });
+    await flush();
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-err");
+    expect(result).toMatchObject({
+      ok: false,
+      error: "REVISION_MISMATCH: the file changed",
+      errorFields: { code: "REVISION_MISMATCH", currentRevision: "abc123" },
+    });
+    expect(result.errorFields).not.toHaveProperty("nested");
+  });
+
   it("relays reloadPanel with only the panel id and returns the acknowledgment (#12610)", async () => {
     const { host, workerHost } = makeBridge();
     workerHost.emit("worker-message", {
@@ -281,6 +371,42 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(result).toMatchObject({ ok: true, result: "" });
   });
 
+  it("routes documents.renderPdf to the host with the options exactly as sent", async () => {
+    const { host, workerHost } = makeBridge();
+    // Unknown keys ride through untouched so the host's strict validation,
+    // not the bridge, is what refuses them.
+    const options = { html: "<p>hi</p>", outputPath: "/data/out.pdf", bogus: 1 };
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "pdf1",
+      method: "documents.renderPdf",
+      params: { options },
+    });
+    await flush();
+    expect(host.documents.renderPdf).toHaveBeenCalledWith(options);
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "pdf1");
+    expect(result).toMatchObject({
+      ok: true,
+      result: { path: "/data/out.pdf", bytes: 1234, revision: "a".repeat(64) },
+    });
+  });
+
+  it("relays a documents.renderPdf rejection with its code prefix intact", async () => {
+    const { host, workerHost } = makeBridge();
+    host.documents.renderPdf.mockRejectedValueOnce(
+      new Error("RENDER_TIMEOUT: render exceeded 30000 ms")
+    );
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "pdf2",
+      method: "documents.renderPdf",
+      params: { options: { html: "x", outputPath: "/data/out.pdf" } },
+    });
+    await flush();
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "pdf2");
+    expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/^RENDER_TIMEOUT:/) });
+  });
+
   it("replies host-result ok:false when the host method throws", async () => {
     const { host, workerHost } = makeBridge();
     host.getWorktrees.mockRejectedValueOnce(new Error("boom"));
@@ -309,6 +435,38 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(result).toMatchObject({
       ok: true,
       result: [{ id: "terminal.new", danger: "safe", requiresArgs: false }],
+    });
+  });
+
+  it("routes agents.list and sendToAgent to the real host", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "g1",
+      method: "agents.list",
+      params: undefined,
+    });
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "g2",
+      method: "sendToAgent",
+      params: { text: "Card body", options: { title: "Fix login", terminalId: "t-1" } },
+    });
+    await flush();
+
+    expect(host.agents.list).toHaveBeenCalledTimes(1);
+    expect(host.sendToAgent).toHaveBeenCalledWith(
+      "Card body",
+      { title: "Fix login", terminalId: "t-1" },
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
+    expect(workerHost.sent.find((m) => m.requestId === "g1")).toMatchObject({
+      ok: true,
+      result: [{ terminalId: "t-1", canDraft: true }],
+    });
+    expect(workerHost.sent.find((m) => m.requestId === "g2")).toMatchObject({
+      ok: true,
+      result: { status: "drafted", terminalId: "t-1" },
     });
   });
 
@@ -1197,6 +1355,8 @@ describe("PluginDevWorkerMainBridge", () => {
     { method: "showQuickPick", params: { items: [{ id: "a", label: "A" }] }, signalArg: 2 },
     { method: "showInputBox", params: { options: {} }, signalArg: 1 },
     { method: "showConfirm", params: { options: { title: "Sure?" } }, signalArg: 1 },
+    // The send-to-agent picker is a prompt too.
+    { method: "sendToAgent", params: { text: "body", options: {} }, signalArg: 2 },
   ])("$method cancellation (#12279)", ({ method, params, signalArg }) => {
     const openPrompt = async (host: any, workerHost: FakeWorkerHost) => {
       let seenSignal: AbortSignal | undefined;
@@ -1643,6 +1803,65 @@ describe("PluginDevWorkerMainBridge", () => {
       expect(dispose).toHaveBeenCalled();
     });
 
+    it("forwards recursive and debounceMs only when the worker sent them", async () => {
+      const { host, workerHost } = makeBridge();
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "w4",
+        method: "fs.watch",
+        params: { subscriptionId: "fs4", paths: ["/repo"], recursive: true, debounceMs: 200 },
+      });
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "w5",
+        method: "fs.watch",
+        params: { subscriptionId: "fs5", paths: ["/repo"] },
+      });
+      await flush();
+      const optionsOf = (call: number) => (host.fs.watch.mock.calls[call] as unknown[])[2];
+      expect(optionsOf(0)).toMatchObject({ recursive: true, debounceMs: 200 });
+      expect(optionsOf(1)).not.toHaveProperty("recursive");
+      expect(optionsOf(1)).not.toHaveProperty("debounceMs");
+    });
+
+    it("forwards a supplied recursive unchanged so the host can reject a malformed one", async () => {
+      const { host, workerHost } = makeBridge();
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "w6",
+        method: "fs.watch",
+        params: { subscriptionId: "fs6", paths: ["/repo"], recursive: "true" },
+      });
+      await flush();
+      expect((host.fs.watch.mock.calls[0] as unknown[])[2]).toMatchObject({ recursive: "true" });
+    });
+
+    it("disposes a watch that settles after the worker cancelled it", async () => {
+      const { host, workerHost } = makeBridge();
+      const dispose = vi.fn();
+      let settle!: (value: typeof dispose) => void;
+      host.fs.watch.mockImplementationOnce(
+        () =>
+          new Promise<typeof dispose>((resolve) => {
+            settle = resolve;
+          })
+      );
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "w7",
+        method: "fs.watch",
+        params: { subscriptionId: "fs7", paths: ["/repo"] },
+      });
+      await flush();
+      workerHost.emit("worker-message", { type: "host-cancel", requestId: "w7" });
+      settle(dispose);
+      await flush();
+      expect(dispose).toHaveBeenCalledTimes(1);
+      // Nothing was kept for a later unsubscribe to find.
+      workerHost.emit("worker-message", { type: "unsubscribe", subscriptionId: "fs7" });
+      expect(dispose).toHaveBeenCalledTimes(1);
+    });
+
     it("replies with an error when the host watch rejects", async () => {
       const { host, workerHost } = makeBridge();
       host.fs.watch.mockRejectedValueOnce(new Error("PERMISSION_REQUIRED: fs:project-read"));
@@ -1658,6 +1877,73 @@ describe("PluginDevWorkerMainBridge", () => {
       );
       expect(res).toMatchObject({ ok: false });
       expect(res.error).toMatch(/PERMISSION_REQUIRED/);
+    });
+  });
+
+  describe("host.fs revision, mkdir and append relay", () => {
+    it("relays readFileWithRevision with the call's signal and returns the host result", async () => {
+      const { host, workerHost } = makeBridge();
+      const result = { contents: "rows", revision: "a".repeat(64) };
+      host.fs.readFileWithRevision.mockResolvedValueOnce(result);
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "r1",
+        method: "fs.readFileWithRevision",
+        params: { path: "/repo/ledger.json" },
+      });
+      await flush();
+      expect(host.fs.readFileWithRevision).toHaveBeenCalledWith(
+        "/repo/ledger.json",
+        expect.objectContaining({ signal: expect.anything() })
+      );
+      const res = workerHost.sent.find(
+        (m: any) => m.type === "host-result" && m.requestId === "r1"
+      );
+      expect(res).toMatchObject({ ok: true, result });
+    });
+
+    it("relays mkdir and appendFile and resolves them void", async () => {
+      const { host, workerHost } = makeBridge();
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "m1",
+        method: "fs.mkdir",
+        params: { path: "/repo/data" },
+      });
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "a1",
+        method: "fs.appendFile",
+        params: { path: "/repo/data/log.jsonl", contents: "{}\n" },
+      });
+      await flush();
+      expect(host.fs.mkdir).toHaveBeenCalledWith("/repo/data");
+      expect(host.fs.appendFile).toHaveBeenCalledWith("/repo/data/log.jsonl", "{}\n");
+      for (const requestId of ["m1", "a1"]) {
+        const res = workerHost.sent.find(
+          (m: any) => m.type === "host-result" && m.requestId === requestId
+        );
+        expect(res).toMatchObject({ ok: true, result: undefined });
+      }
+    });
+
+    it("replies with the host's error when an append is refused", async () => {
+      const { host, workerHost } = makeBridge();
+      host.fs.appendFile.mockRejectedValueOnce(
+        new Error("TARGET_IS_SYMLINK: refusing to write through a symlink")
+      );
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "a2",
+        method: "fs.appendFile",
+        params: { path: "/repo/link.jsonl", contents: "x" },
+      });
+      await flush();
+      const res = workerHost.sent.find(
+        (m: any) => m.type === "host-result" && m.requestId === "a2"
+      );
+      expect(res).toMatchObject({ ok: false });
+      expect(res.error).toMatch(/^TARGET_IS_SYMLINK/);
     });
   });
 
@@ -1980,5 +2266,83 @@ describe("PluginDevWorkerMainBridge manifest commands (#12274)", () => {
     workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
     void bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {}).catch(() => undefined);
     expect(workerHost.sent.filter((m: any) => m.kind === "command")).toHaveLength(2);
+  });
+});
+
+describe("sendToAgent cancelled from the worker after main has acted", () => {
+  /** A bridge and a worker-side proxy wired back to back, as the port wires them. */
+  function makeConnectedPair() {
+    const pair = makeBridge();
+    const proxy = new PluginDevWorkerHostProxy(
+      "acme.demo",
+      (msg) => pair.workerHost.emit("worker-message", msg),
+      {
+        instanceId: "acme.demo",
+        manifestId: "acme.demo",
+        origin: "global",
+        projectId: null,
+        projectRoot: null,
+      }
+    );
+    pair.workerHost.send.mockImplementation((msg: any) => {
+      pair.workerHost.sent.push(msg);
+      proxy.handleMessage(msg);
+      return true;
+    });
+    return { ...pair, proxy };
+  }
+
+  it("reports the draft main made rather than settling the abort as cancelled", async () => {
+    const { host, proxy } = makeConnectedPair();
+    let seenSignal: AbortSignal | undefined;
+    let answer!: (value: unknown) => void;
+    (host.sendToAgent as any).mockImplementation(
+      (_text: any, _options: any, call?: { signal?: AbortSignal }) => {
+        seenSignal = call?.signal;
+        // A targeted send is atomic on the renderer: once it is on its way the
+        // draft lands, and main reports it however the caller has since felt.
+        return new Promise((resolve) => {
+          answer = resolve;
+        });
+      }
+    );
+
+    const controller = new AbortController();
+    const result = proxy.host.sendToAgent(
+      "Card body",
+      { terminalId: "t-1" },
+      { signal: controller.signal }
+    );
+    let settled = false;
+    void result.then(() => {
+      settled = true;
+    });
+    await flush();
+
+    controller.abort();
+    await flush();
+    // The cancel reached main, and the caller is still waiting on main's answer.
+    expect(seenSignal?.aborted).toBe(true);
+    expect(settled).toBe(false);
+
+    answer({ status: "drafted", terminalId: "t-1" });
+    await expect(result).resolves.toEqual({ status: "drafted", terminalId: "t-1" });
+  });
+
+  it("still settles as cancelled when main answers the cancel that way", async () => {
+    const { host, proxy } = makeConnectedPair();
+    (host.sendToAgent as any).mockImplementation(
+      (_text: any, _options: any, call?: { signal?: AbortSignal }) =>
+        new Promise((resolve) => {
+          call?.signal?.addEventListener("abort", () => resolve({ status: "cancelled" }));
+        })
+    );
+
+    const controller = new AbortController();
+    const result = proxy.host.sendToAgent("Card body", {}, { signal: controller.signal });
+    await flush();
+    controller.abort();
+
+    await expect(result).resolves.toEqual({ status: "cancelled" });
   });
 });
