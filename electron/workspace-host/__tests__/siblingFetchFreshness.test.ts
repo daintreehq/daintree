@@ -517,7 +517,12 @@ describe("sibling schedulers sharing one coordinator", () => {
       ...Array.from({ length: 4 }, (_, i) => wire(coord, `up${i}`, false, ["upstream", "origin"])),
     ];
 
-    await vi.advanceTimersByTimeAsync(10_000);
+    // Initial runs keep the default window and re-arm from now, so a sibling's
+    // fetch they reused can run up to 15 s past one interval until each
+    // scheduler's first cadence run anchors it. Warm up past the latest that
+    // can land: the longest initial delay plus one full background interval.
+    await vi.advanceTimersByTimeAsync(5_000 + 6.25 * 60_000);
+    mockRaw.mockClear();
     const worstAge = { origin: 0, upstream: 0 };
     for (let t = 0; t < 30 * 60; t++) {
       await vi.advanceTimersByTimeAsync(1_000);
