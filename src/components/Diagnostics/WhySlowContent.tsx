@@ -6,6 +6,7 @@ import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { systemClient } from "@/clients/systemClient";
 import { logError } from "@/utils/logger";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import type { WhySlowSnapshot } from "@shared/types/whySlow";
 import type { HostMemoryPauseSnapshot } from "@shared/types/pty-host";
 import { HOST_MEMORY_PAUSE_COPY } from "@/lib/hostMemoryPauseCopy";
@@ -325,14 +326,10 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const hostMemory = useHostMemoryPauseStore((s) => s.snapshot);
   const mountedRef = useRef(true);
-  const inFlightRef = useRef(false);
+  const inFlightRef = useRef<Promise<void> | null>(null);
   const failStreakRef = useRef(0);
 
-  const refresh = useCallback(async () => {
-    // Skip if a fetch is already in flight so the poll interval can't stack
-    // overlapping requests when a snapshot is slow to return.
-    if (inFlightRef.current) return;
-    inFlightRef.current = true;
+  const fetchSnapshot = useCallback(async () => {
     setIsRefreshing(true);
     try {
       const next = await systemClient.getWhySlowSnapshot();
@@ -352,20 +349,67 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
       }
       setError(true);
     } finally {
-      inFlightRef.current = false;
       if (mountedRef.current) setIsRefreshing(false);
     }
   }, []);
 
+  const refresh = useCallback(() => {
+    // Skip if a fetch is already in flight so the poll interval can't stack
+    // overlapping requests when a snapshot is slow to return.
+    if (inFlightRef.current) return inFlightRef.current;
+    // Cleared off the returned promise, not inside the fetch, so a fetch that
+    // settles synchronously can't clear the slot before it is claimed.
+    const run: Promise<void> = fetchSnapshot().finally(() => {
+      if (inFlightRef.current === run) inFlightRef.current = null;
+    });
+    inFlightRef.current = run;
+    return run;
+  }, [fetchSnapshot]);
+
   useEffect(() => {
     mountedRef.current = true;
-    void refresh();
-    const timer = setInterval(() => {
-      void refresh();
-    }, REFRESH_INTERVAL_MS);
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    // Each snapshot fans out to five collectors across main and the hosts, so
+    // polling while nobody can see the dock is pure cost. A cached project view
+    // keeps reporting "visible", hence the separate lifecycle gate (#11212).
+    const shouldPoll = () => !document.hidden && !isProjectViewCached();
+
+    // The interval handle is the polling-state sentinel, so a repeated signal
+    // (visible while visible, `revealed` right after `active`) can't stack
+    // intervals or double-fetch. Resuming refreshes at once, so what the user
+    // sees on coming back is as fresh as a new mount.
+    const syncPolling = () => {
+      if (!shouldPoll()) {
+        if (timer !== null) {
+          clearInterval(timer);
+          timer = null;
+        }
+        return;
+      }
+      if (timer !== null) return;
+      timer = setInterval(() => {
+        void refresh();
+      }, REFRESH_INTERVAL_MS);
+      // A read started before the pause would otherwise stand in for this one.
+      const stale = inFlightRef.current;
+      if (stale) {
+        void stale.then(() => {
+          if (mountedRef.current && shouldPoll()) void refresh();
+        });
+      } else {
+        void refresh();
+      }
+    };
+
+    const offViewLifecycle = subscribeProjectViewLifecycle(() => syncPolling());
+    document.addEventListener("visibilitychange", syncPolling);
+    syncPolling();
     return () => {
       mountedRef.current = false;
-      clearInterval(timer);
+      document.removeEventListener("visibilitychange", syncPolling);
+      offViewLifecycle();
+      if (timer !== null) clearInterval(timer);
     };
   }, [refresh]);
 
