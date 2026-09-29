@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { RecipeRunnerList } from "../RecipeRunnerList";
 import { buildRecipeSections } from "../recipeRunnerUtils";
