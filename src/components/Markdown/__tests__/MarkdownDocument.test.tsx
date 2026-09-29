@@ -10,7 +10,22 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock },
 }));
 
+// react-markdown builds a fresh processor per parse, attaching every remark
+// plugin each time — so counting remark-gfm attaches counts parses.
+const gfmAttaches = vi.hoisted(() => ({ count: 0 }));
+vi.mock("remark-gfm", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("remark-gfm")>();
+  return {
+    default: function countedRemarkGfm(this: unknown, ...args: unknown[]) {
+      gfmAttaches.count += 1;
+      return (actual.default as (...a: unknown[]) => unknown).apply(this, args);
+    },
+  };
+});
+
+import { refractor } from "refractor/core";
 import { MarkdownDocument, MARKDOWN_FONT_SIZE_TOKEN } from "../MarkdownDocument";
+import { _clearHighlightCacheForTests } from "../markdownRenderPolicy";
 import { MARKDOWN_FONT_SIZE_STEPS } from "@/store/preferencesStore";
 
 const FIXTURE_PROPS = {
@@ -222,6 +237,97 @@ describe("MarkdownDocument", () => {
     // The whole reason for busting the src rather than keying the document: the
     // element is reused, so the reader's scroll position survives the swap.
     expect(imgAfter).toBe(imgBefore);
+  });
+
+  it("does not re-parse the document when only the cache token changes", () => {
+    // Hosts move the token on every refresh tick while an agent writes. It only
+    // matters to local images, so it must not cost a full re-parse.
+    const content = "# Title\n\n![diagram](./img/arch.png)\n\nBody text.";
+    const { container, rerender } = render(
+      <MarkdownDocument {...FIXTURE_PROPS} cacheBust="rev-1" content={content} />
+    );
+    gfmAttaches.count = 0;
+
+    rerender(<MarkdownDocument {...FIXTURE_PROPS} cacheBust="rev-2" content={content} />);
+    rerender(<MarkdownDocument {...FIXTURE_PROPS} cacheBust="rev-3" content={content} />);
+
+    expect(gfmAttaches.count).toBe(0);
+    const src = container.querySelector("img")!.getAttribute("src") ?? "";
+    expect(new URL(src).searchParams.get("v")).toBe("rev-3");
+
+    rerender(
+      <MarkdownDocument {...FIXTURE_PROPS} cacheBust="rev-3" content={`${content} More.`} />
+    );
+    expect(gfmAttaches.count).toBe(1);
+  });
+
+  it("reuses a highlighted fence across remounts instead of re-highlighting", () => {
+    _clearHighlightCacheForTests();
+    const highlight = vi.spyOn(refractor, "highlight");
+    try {
+      const content = "```typescript\nconst cached: number = 1;\n```";
+      render(<MarkdownDocument {...FIXTURE_PROPS} content={content} />).unmount();
+      const { container } = render(<MarkdownDocument {...FIXTURE_PROPS} content={content} />);
+
+      expect(highlight).toHaveBeenCalledTimes(1);
+      const code = container.querySelector("code.language-typescript");
+      expect(code!.querySelector(".token.keyword")).not.toBeNull();
+      expect(code!.textContent).toBe("const cached: number = 1;");
+    } finally {
+      highlight.mockRestore();
+      _clearHighlightCacheForTests();
+    }
+  });
+
+  it("re-highlights cached fences once another grammar is registered", () => {
+    // Markdown and markup fences highlight embedded languages only when those
+    // grammars are loaded, so a newly registered grammar can change the output
+    // of a fence whose own language was already cached.
+    _clearHighlightCacheForTests();
+    const highlight = vi.spyOn(refractor, "highlight");
+    try {
+      const content = "```typescript\nconst again = 1;\n```";
+      render(<MarkdownDocument {...FIXTURE_PROPS} content={content} />).unmount();
+      render(<MarkdownDocument {...FIXTURE_PROPS} content={content} />).unmount();
+      expect(highlight).toHaveBeenCalledTimes(1);
+
+      const fakeGrammar = Object.assign(
+        (prism: { languages: Record<string, unknown> }) => {
+          prism.languages.zzzcachetestlang = { word: /\w+/ };
+        },
+        { displayName: "zzzcachetestlang", aliases: [] as string[] }
+      );
+      refractor.register(fakeGrammar);
+
+      render(<MarkdownDocument {...FIXTURE_PROPS} content={content} />);
+      expect(highlight).toHaveBeenCalledTimes(2);
+    } finally {
+      highlight.mockRestore();
+    }
+  });
+
+  it("evicts the least recently used fence once the cache is full", () => {
+    _clearHighlightCacheForTests();
+    const highlight = vi.spyOn(refractor, "highlight");
+    try {
+      const fence = (n: number) => `\`\`\`typescript\nconst v${n} = ${n};\n\`\`\``;
+      render(<MarkdownDocument {...FIXTURE_PROPS} content={fence(0)} />).unmount();
+      render(<MarkdownDocument {...FIXTURE_PROPS} content={fence(1)} />).unmount();
+      // Touch fence 0 so fence 1 is the oldest when the 65th entry arrives.
+      render(<MarkdownDocument {...FIXTURE_PROPS} content={fence(0)} />).unmount();
+      for (let n = 2; n <= 64; n++) {
+        render(<MarkdownDocument {...FIXTURE_PROPS} content={fence(n)} />).unmount();
+      }
+      expect(highlight).toHaveBeenCalledTimes(65);
+
+      render(<MarkdownDocument {...FIXTURE_PROPS} content={fence(0)} />).unmount();
+      expect(highlight).toHaveBeenCalledTimes(65);
+      render(<MarkdownDocument {...FIXTURE_PROPS} content={fence(1)} />).unmount();
+      expect(highlight).toHaveBeenCalledTimes(66);
+    } finally {
+      highlight.mockRestore();
+      _clearHighlightCacheForTests();
+    }
   });
 
   it("opens external links through browser.openExternal instead of navigating", () => {

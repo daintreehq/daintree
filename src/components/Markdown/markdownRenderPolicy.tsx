@@ -1,5 +1,18 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { defaultUrlTransform, type Components, type Options } from "react-markdown";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
+import {
+  defaultUrlTransform,
+  type Components,
+  type ExtraProps,
+  type Options,
+} from "react-markdown";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import { refractor } from "refractor/core";
@@ -58,6 +71,67 @@ function canonicalLang(lang: string): string {
 }
 
 /**
+ * Highlighted fences, shared across instances. The per-instance memo alone
+ * re-highlights every fence on each remount (Source/Rendered toggle, reopening
+ * the file), and a large fence costs hundreds of milliseconds on the main
+ * thread. React elements are immutable, so one highlighted tree can be rendered
+ * by any number of instances. Bounded by entries and by source length, since
+ * the element tree grows with the fence.
+ *
+ * A fence's output also depends on grammars other than its own: markdown and
+ * markup highlight embedded languages only if those are registered at the time.
+ * Grammars are only ever added, so the cache drops everything whenever the
+ * registered count moves, and a remount picks up the newly loaded grammar just
+ * as it did before the cache existed.
+ */
+const HIGHLIGHT_CACHE_MAX_ENTRIES = 64;
+const HIGHLIGHT_CACHE_MAX_CHARS = 2_000_000;
+const highlightCache = new Map<string, ReactNode>();
+let highlightCacheChars = 0;
+let highlightCacheGrammarCount = -1;
+
+function highlightFence(code: string, lang: string): ReactNode {
+  const grammarCount = refractor.listLanguages().length;
+  if (grammarCount !== highlightCacheGrammarCount) {
+    clearHighlightCache();
+    highlightCacheGrammarCount = grammarCount;
+  }
+  const key = `${lang}\n${code}`;
+  const cached = highlightCache.get(key);
+  if (cached !== undefined) {
+    highlightCache.delete(key);
+    highlightCache.set(key, cached);
+    return cached;
+  }
+  const highlighted: ReactNode = toJsxRuntime(refractor.highlight(code, lang), {
+    Fragment,
+    jsx,
+    jsxs,
+  });
+  if (key.length > HIGHLIGHT_CACHE_MAX_CHARS) return highlighted;
+  highlightCache.set(key, highlighted);
+  highlightCacheChars += key.length;
+  for (const oldest of highlightCache.keys()) {
+    if (
+      highlightCache.size <= HIGHLIGHT_CACHE_MAX_ENTRIES &&
+      highlightCacheChars <= HIGHLIGHT_CACHE_MAX_CHARS
+    ) {
+      break;
+    }
+    highlightCache.delete(oldest);
+    highlightCacheChars -= oldest.length;
+  }
+  return highlighted;
+}
+
+function clearHighlightCache(): void {
+  highlightCache.clear();
+  highlightCacheChars = 0;
+}
+
+export const _clearHighlightCacheForTests = clearHighlightCache;
+
+/**
  * Syntax-highlighted fence body. Highlights synchronously when the grammar is
  * registered; otherwise kicks off diffRefractor's lazy grammar load and
  * re-renders once it lands. Falls back to plain text for unknown grammars —
@@ -82,7 +156,7 @@ export function HighlightedCode({ language, code }: { language: string; code: st
     void grammarRevision;
     if (!isLanguageRegistered(lang)) return null;
     try {
-      return toJsxRuntime(refractor.highlight(code, lang), { Fragment, jsx, jsxs });
+      return highlightFence(code, lang);
     } catch (error) {
       console.warn("[markdownRenderPolicy] fence highlight failed", error);
       return null;
@@ -104,12 +178,37 @@ export interface MarkdownRenderPolicyOptions {
   filePath: string;
   /** Containment root for daintree-file:// image loads. */
   rootPath: string;
-  /**
-   * Cache-busting token appended to local image URLs. The daintree-file:// URL
-   * is otherwise a pure function of path + root, so a rewritten image keeps a
-   * byte-identical `src` and Chromium never refetches it (#11587).
-   */
-  cacheBust?: string;
+}
+
+/**
+ * Cache-busting token appended to local image URLs. The daintree-file:// URL
+ * is otherwise a pure function of path + root, so a rewritten image keeps a
+ * byte-identical `src` and Chromium never refetches it (#11587).
+ *
+ * Carried by context and applied by the `img` component rather than folded
+ * into `urlTransform`: react-markdown has no parse cache, so a new transform
+ * re-parses the whole document, and hosts move this token on every refresh
+ * tick. Through context only the images re-render.
+ */
+export const MarkdownImageCacheBust = createContext<string | undefined>(undefined);
+
+const LOCAL_IMAGE_PREFIX = "daintree-file:";
+
+function MarkdownImage({ node: _node, src, ...props }: ComponentProps<"img"> & ExtraProps) {
+  const cacheBust = useContext(MarkdownImageCacheBust);
+  // Only `urlTransform` mints daintree-file:// URLs — remote and data: sources
+  // pass through the default sanitizer, which never yields that scheme.
+  //
+  // Undefined-checked rather than truthy, matching FileImagePreview and
+  // ZoomableImage: the token is opaque, so only "no host is tracking
+  // freshness" suppresses it — "" is a value like any other, and folding it in
+  // with absent would make a host that legitimately reached "" stop busting.
+  // The protocol handler reads only path/root, so `v` is inert.
+  const busted =
+    cacheBust !== undefined && typeof src === "string" && src.startsWith(LOCAL_IMAGE_PREFIX)
+      ? `${src}&v=${encodeURIComponent(cacheBust)}`
+      : src;
+  return <img {...props} src={busted} />;
 }
 
 export interface MarkdownRenderPolicy {
@@ -157,7 +256,6 @@ export function activateMarkdownLink(
 export function useMarkdownRenderPolicy({
   filePath,
   rootPath,
-  cacheBust,
 }: MarkdownRenderPolicyOptions): MarkdownRenderPolicy {
   const urlTransform = useMemo<MarkdownRenderPolicy["urlTransform"]>(() => {
     return (url: string, key: string): string | null | undefined => {
@@ -174,17 +272,12 @@ export function useMarkdownRenderPolicy({
         // The protocol handler would refuse it on the real path anyway; dropping
         // it here keeps an escaping reference from even asking.
         if (!isPathInside(resolved, rootPath)) return null;
-        const local = buildDaintreeFileUrl(resolved, rootPath);
-        // Undefined-checked rather than truthy, matching FileImagePreview and
-        // ZoomableImage: the token is opaque, so only "no host is tracking
-        // freshness" suppresses it — "" is a value like any other, and folding
-        // it in with absent would make a host that legitimately reached "" stop
-        // busting. The protocol handler reads only path/root, so `v` is inert.
-        return cacheBust === undefined ? local : `${local}&v=${encodeURIComponent(cacheBust)}`;
+        // The cache token is added by `MarkdownImage`, not here.
+        return buildDaintreeFileUrl(resolved, rootPath);
       }
       return defaultUrlTransform(url);
     };
-  }, [filePath, rootPath, cacheBust]);
+  }, [filePath, rootPath]);
 
   const handleLinkActivate = useMemo(() => {
     return (href: string | undefined) => activateMarkdownLink(href, { filePath, rootPath });
@@ -192,6 +285,7 @@ export function useMarkdownRenderPolicy({
 
   const components = useMemo<Components>(
     () => ({
+      img: MarkdownImage,
       code: ({ node: _node, className: codeClassName, children, ...props }) => {
         const language = /language-([\w+-]+)/.exec(codeClassName ?? "")?.[1];
         if (language) {

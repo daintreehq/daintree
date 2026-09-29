@@ -384,6 +384,38 @@ describe("RenderedMarkdownDiff", () => {
     expect(container.querySelector("img")?.getAttribute("src")).toContain("daintree-file://");
   });
 
+  it("carries the host's cache token on local images and follows it when it moves", () => {
+    const source = "![shot](./img/a.png)\n\n![logo](https://example.com/logo.png)\n";
+    const diff = patch([
+      "@@ -0,0 +1,3 @@",
+      "+![shot](./img/a.png)",
+      "+",
+      "+![logo](https://example.com/logo.png)",
+    ]);
+
+    const { container, rerender } = renderDiff(diff, source, {
+      status: "added",
+      cacheBust: "rev-1",
+    });
+    const [local, remote] = Array.from(container.querySelectorAll("img"));
+    expect(new URL(local!.getAttribute("src") ?? "").searchParams.get("v")).toBe("rev-1");
+    expect(remote!.getAttribute("src")).toBe("https://example.com/logo.png");
+
+    rerender(
+      <RenderedMarkdownDiff
+        diff={diff}
+        newSource={source}
+        status="added"
+        filePath={FILE}
+        rootPath={ROOT}
+        attemptKey="attempt-1"
+        cacheBust="rev-2"
+      />
+    );
+    const after = container.querySelector("img")!.getAttribute("src") ?? "";
+    expect(new URL(after).searchParams.get("v")).toBe("rev-2");
+  });
+
   it("reports its refusal to the host, stamped with the attempt it judged", () => {
     const onVerdict = vi.fn();
     const diff = patch(["@@ -1,2 +1,2 @@", " intro", "-old", "+new"]);
