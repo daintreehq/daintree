@@ -353,11 +353,12 @@ export function HelpPanel({
     pinnedContext?.worktreeId != null &&
     focusedWorktreeId !== null &&
     pinnedContext.worktreeId !== focusedWorktreeId;
+  const pinnedWorktreeId = pinnedContext?.worktreeId;
   const returnToPinnedWorktree = useCallback(() => {
-    if (pinnedContext?.worktreeId) {
-      selectWorktree(pinnedContext.worktreeId, { source: "user" });
+    if (pinnedWorktreeId) {
+      selectWorktree(pinnedWorktreeId, { source: "user" });
     }
-  }, [pinnedContext?.worktreeId, selectWorktree]);
+  }, [pinnedWorktreeId, selectWorktree]);
 
   const agentConfig = agentId ? getAgentConfig(agentId) : undefined;
   // The model the live session actually launched with, read from its persisted
