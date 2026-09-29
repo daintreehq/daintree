@@ -44,6 +44,7 @@ import { getWebviewDialogService } from "../services/WebviewDialogService.js";
 import { looksLikeOAuthUrl } from "../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { logWarn } from "../utils/logger.js";
+import { isPluginDirResolverLive, markPluginDirResolverLive } from "./pluginProtocolReadiness.js";
 
 /**
  * Resolve a `plugin://` authority to the plugin root that serves it.
@@ -1285,6 +1286,57 @@ async function proxyPluginTourAudio(
 }
 
 /**
+ * Which check produced a `plugin://` 404. A module import that 404s is
+ * permanent for that specifier in the renderer's module map, so the log line is
+ * the only place the cause survives — and `resolverLive` tells a request that
+ * raced the deferred resolver install (#12996) apart from a genuinely unknown
+ * or unloaded authority.
+ */
+type PluginNotFoundStage =
+  | "no-authority"
+  | "unknown-authority"
+  | "no-path"
+  | "backslash"
+  | "malformed-generation"
+  | "tour-audio"
+  | "traversal"
+  | "realpath"
+  | "outside-root"
+  | "open"
+  | "not-a-file"
+  | "media";
+
+function logPluginNotFound(
+  stage: PluginNotFoundStage,
+  authority: string,
+  pathname: string,
+  cause?: unknown
+): void {
+  const errno = cause as NodeJS.ErrnoException | undefined;
+  logWarn("plugin.protocol.not-found", {
+    stage,
+    authority,
+    pathname,
+    resolverLive: isPluginDirResolverLive(),
+    ...(errno?.code ? { code: errno.code } : {}),
+    ...(errno?.syscall !== undefined ? { syscall: errno.syscall } : {}),
+  });
+}
+
+function pluginNotFound(
+  stage: PluginNotFoundStage,
+  authority: string,
+  pathname: string,
+  cause?: unknown
+): Response {
+  logPluginNotFound(stage, authority, pathname, cause);
+  return new Response("Not Found", {
+    status: 404,
+    headers: buildPluginErrorHeaders(),
+  });
+}
+
+/**
  * Create the plugin:// protocol handler.
  *
  * URL shape: `plugin://{authority}/{relative/path}`. The host segment is an
@@ -1319,10 +1371,7 @@ export function createPluginProtocolHandler(
 
     const authority = url.hostname;
     if (!authority) {
-      return new Response("Not Found", {
-        status: 404,
-        headers: buildPluginErrorHeaders(),
-      });
+      return pluginNotFound("no-authority", authority, url.pathname);
     }
 
     const pluginRoot = getPluginRoot(authority);
@@ -1330,19 +1379,13 @@ export function createPluginProtocolHandler(
       // Unknown authority, an authority invalidated by an unload, or a plugin
       // that is currently disabled. 404 — do not leak the existence of the disk
       // path via a different status code.
-      return new Response("Not Found", {
-        status: 404,
-        headers: buildPluginErrorHeaders(),
-      });
+      return pluginNotFound("unknown-authority", authority, url.pathname);
     }
 
     const pathname = url.pathname;
     if (pathname === "/" || pathname === "") {
       // No directory listings — a bare `plugin://id/` is not a valid asset URL.
-      return new Response("Not Found", {
-        status: 404,
-        headers: buildPluginErrorHeaders(),
-      });
+      return pluginNotFound("no-path", authority, url.pathname);
     }
 
     let decodedPath: string;
@@ -1363,10 +1406,7 @@ export function createPluginProtocolHandler(
     }
 
     if (decodedPath.includes("\\")) {
-      return new Response("Not Found", {
-        status: 404,
-        headers: buildPluginErrorHeaders(),
-      });
+      return pluginNotFound("backslash", authority, url.pathname);
     }
 
     // Drop the virtual view-generation namespace (#11301) before anything is
@@ -1376,10 +1416,7 @@ export function createPluginProtocolHandler(
     // reaching a real `__dtv-…` directory.
     const stripped = stripPluginViewGeneration(decodedPath);
     if (!stripped) {
-      return new Response("Not Found", {
-        status: 404,
-        headers: buildPluginErrorHeaders(),
-      });
+      return pluginNotFound("malformed-generation", authority, url.pathname);
     }
     decodedPath = stripped.path;
 
@@ -1390,7 +1427,7 @@ export function createPluginProtocolHandler(
           ? undefined
           : getTourAudio(authority, tourAudio.tourId, tourAudio.chapterId);
       if (!source) {
-        return new Response("Not Found", { status: 404, headers: buildPluginErrorHeaders() });
+        return pluginNotFound("tour-audio", authority, url.pathname);
       }
       return proxyPluginTourAudio(source, request, netFetch);
     }
@@ -1404,10 +1441,7 @@ export function createPluginProtocolHandler(
     // traversal defense is the realpath/path.relative containment below.
     const normalizedPosix = path.posix.normalize("/" + decodedPath).slice(1);
     if (normalizedPosix.split("/").some((seg) => seg === "..")) {
-      return new Response("Not Found", {
-        status: 404,
-        headers: buildPluginErrorHeaders(),
-      });
+      return pluginNotFound("traversal", authority, url.pathname);
     }
 
     const candidatePath = path.resolve(pluginRoot, normalizedPosix);
@@ -1419,19 +1453,13 @@ export function createPluginProtocolHandler(
     try {
       realRoot = await fs.realpath(pluginRoot);
       realFile = await fs.realpath(candidatePath);
-    } catch {
-      return new Response("Not Found", {
-        status: 404,
-        headers: buildPluginErrorHeaders(),
-      });
+    } catch (err) {
+      return pluginNotFound("realpath", authority, url.pathname, err);
     }
 
     const rel = path.relative(realRoot, realFile);
     if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) {
-      return new Response("Not Found", {
-        status: 404,
-        headers: buildPluginErrorHeaders(),
-      });
+      return pluginNotFound("outside-root", authority, url.pathname);
     }
 
     // Open the user-derived candidate path (not the realpath-resolved one)
@@ -1444,10 +1472,7 @@ export function createPluginProtocolHandler(
     } catch (err) {
       const errCode = (err as NodeJS.ErrnoException).code;
       if (errCode === "ELOOP" || errCode === "ENOENT" || errCode === "EISDIR") {
-        return new Response("Not Found", {
-          status: 404,
-          headers: buildPluginErrorHeaders(),
-        });
+        return pluginNotFound("open", authority, url.pathname, err);
       }
       console.error("[MAIN] plugin protocol open failed:", candidatePath, err);
       return new Response("Internal Server Error", {
@@ -1464,10 +1489,7 @@ export function createPluginProtocolHandler(
       // short-circuit so a directory URL carrying If-Modified-Since falls
       // through to 404 instead of returning 304. Mirrors app://.
       if (!fileStats.isFile()) {
-        return new Response("Not Found", {
-          status: 404,
-          headers: buildPluginErrorHeaders(),
-        });
+        return pluginNotFound("not-a-file", authority, url.pathname);
       }
 
       const mimeType = getMimeType(realFile);
@@ -1476,6 +1498,8 @@ export function createPluginProtocolHandler(
       // contained path with the same O_NOFOLLOW discipline.
       if (isMediaMimeType(mimeType)) {
         const streamed = await streamContainedMediaFile(candidatePath, mimeType, request);
+        // The streamer reopens the file, so it can still miss after the checks above.
+        if (streamed.status === 404) logPluginNotFound("media", authority, url.pathname);
         // Keep the trusted-document read a view's own fetch() of its bundled
         // media had before narration was streamed (WebAudio, blob playback).
         const mediaCorsOrigin = trustedAppCorsOrigin(request);
@@ -1638,9 +1662,13 @@ export function registerPluginProtocol(getPluginRoot: GetPluginRootByAuthority):
  * `cachedPluginRootResolver` live, so the swap reaches every handler already
  * registered (default session plus any per-session handlers wired during
  * `createWindow`).
+ *
+ * Also releases `whenPluginDirResolverLive()`, which every PluginService load
+ * awaits — so the call is what lets any plugin publish a URL at all (#12996).
  */
 export function setPluginDirResolver(getPluginRoot: GetPluginRootByAuthority): void {
   cachedPluginRootResolver = getPluginRoot;
+  markPluginDirResolverLive();
 }
 
 /**

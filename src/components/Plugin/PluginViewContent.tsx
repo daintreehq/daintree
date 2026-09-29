@@ -933,7 +933,11 @@ export function makePluginViewContent(
       // gone and a new one is live. Every panel on the instance runs this from
       // the same broadcast, which is what makes them move together — no
       // main-side panel registry is involved (#12278).
-      replaceAttempt(false);
+      //
+      // A view whose module fetch is what failed needs a fresh generation just
+      // as "Try again" does: remounting would re-import the specifier the module
+      // map already holds as failed (#12996).
+      replaceAttempt(boundaryShowingError.current && lastErrorWasImportStage.current);
     }, [worker, replaceAttempt]);
 
     /**

@@ -40,6 +40,7 @@ import {
 import { PluginPtyTransport } from "./plugin/PluginPtyTransport.js";
 import { PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
+import { whenPluginDirResolverLive } from "../setup/pluginProtocolReadiness.js";
 import type { HostGitFactory } from "./plugin/pluginHostGit.js";
 import type { PluginDataBackupSource } from "./plugin/pluginDataBackup.js";
 import {
@@ -996,6 +997,7 @@ export class PluginService {
    * constant-folded to `""` via `scripts/build-main.mjs` defines.
    */
   private sideloadPluginsRoot: string | undefined;
+  private readonly whenProtocolReady: (() => Promise<void>) | undefined;
   private appVersion: string;
   /**
    * Owns the coalesced per-tick contribution broadcasts (actions, panel kinds,
@@ -1069,6 +1071,13 @@ export class PluginService {
       blocklistService?: PluginBlocklistService;
       /** Overridable so tests can point the recipe metadata sidecar at a tmpdir. */
       globalConfigDir?: string | null;
+      /**
+       * Settles once `plugin://` requests reach this service's authorities.
+       * Every load awaits it before minting anything addressable (#12996).
+       * Absent means requests are always served, which only a test harness
+       * without a protocol handler can claim.
+       */
+      whenProtocolReady?: () => Promise<void>;
     }
   ) {
     this.pluginsRoot = pluginsRoot ?? path.join(os.homedir(), ".daintree", "plugins");
@@ -1078,6 +1087,7 @@ export class PluginService {
     this.appVersion = appVersion ?? app.getVersion();
     this.builtinPluginsRoot = options?.builtinPluginsRoot;
     this.sideloadPluginsRoot = options?.sideloadPluginsRoot;
+    this.whenProtocolReady = options?.whenProtocolReady;
     this.blocklistService = options?.blocklistService ?? new PluginBlocklistService();
 
     this.initPromise = new Promise<void>((resolve) => {
@@ -1682,6 +1692,17 @@ export class PluginService {
       binding?: PluginHostBinding;
     }
   ): Promise<LoadedPlugin | null> {
+    // Every load path funnels through here — startup scans, a background-
+    // restored project's `onProjectOpened` (which never waits on the deferred
+    // `plugin-service` task), reloads, installs — and each one ends by
+    // publishing `plugin://` URLs. Served by the placeholder resolver, those
+    // 404, and a failed import is permanent for its specifier (#12996). Waiting
+    // here, before a view generation or authority is minted, means no URL
+    // exists until the handler can serve it.
+    if (this.whenProtocolReady) {
+      await this.whenProtocolReady();
+      if (this.disposed) return null;
+    }
     const origin: PluginOrigin = opts.origin ?? (opts.isBuiltin ? "builtin" : "user");
     const isProject = origin === "project";
     const isUserInstalled = origin === "user";
@@ -5480,7 +5501,16 @@ export class PluginService {
     dir: string;
     dirName: string;
     manifest: Readonly<PluginManifest>;
+    isCurrent?: () => boolean;
   }): Promise<boolean> {
+    // `loadPlugin` waits on the same gate, but a project load can sit there for
+    // seconds on a relaunch (#12996) — long enough for its project to close or
+    // lose trust. Waiting here first lets it stop before it publishes or
+    // activates, which the controller's after-the-fact unload cannot undo.
+    if (this.whenProtocolReady) {
+      await this.whenProtocolReady();
+      if (this.disposed || args.isCurrent?.() === false) return false;
+    }
     const instanceKey = makeProjectPluginInstanceKey(args.projectId, args.manifest.name);
     // Re-derive the parent from the realpath-resolved directory discovery
     // returned, so the load reads through the same resolved path the symlink
@@ -6917,6 +6947,7 @@ export class PluginService {
 // `""` in production builds, so no shipped binary ever sideloads anything.
 export const pluginService = new PluginService(undefined, undefined, {
   sideloadPluginsRoot: e2eSideloadPluginDir,
+  whenProtocolReady: whenPluginDirResolverLive,
 });
 
 // E2E backdoor: activate a loaded plugin by id without adding a production IPC
