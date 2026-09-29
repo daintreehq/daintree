@@ -162,3 +162,78 @@ describe("TerminalBurstController — scroll boosts stay terminal-scoped (#12518
     expect(controller.isWheelActive("t1")).toBe(false);
   });
 });
+
+describe("TerminalBurstController — keystroke echo hold", () => {
+  let frames: Map<number, FrameRequestCallback>;
+  let nextHandle: number;
+  let controller: TerminalBurstController;
+
+  const flushFrame = () => {
+    const due = [...frames.values()];
+    frames.clear();
+    due.forEach((cb) => cb(0));
+  };
+
+  beforeEach(() => {
+    frames = new Map();
+    nextHandle = 0;
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.set(++nextHandle, cb);
+      return nextHandle;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (handle: number) => frames.delete(handle));
+    controller = new TerminalBurstController({
+      getInstance: () => undefined,
+      applyRendererPolicy: vi.fn(),
+      holdWebGLForScroll: vi.fn(),
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("releases the hold one frame after a multi-chunk echo, with one frame queued", () => {
+    controller.onEchoPendingInput("t1");
+    controller.onEchoData("t1");
+    controller.onEchoData("t1");
+    controller.onEchoData("t1");
+
+    expect(frames.size).toBe(1);
+    expect(controller.getEchoPendingHoldId()).toBe("t1");
+    flushFrame();
+    expect(controller.getEchoPendingHoldId()).toBeNull();
+  });
+
+  it("ignores output from other terminals", () => {
+    controller.onEchoPendingInput("t1");
+    controller.onEchoData("t2");
+
+    expect(frames.size).toBe(0);
+  });
+
+  it("keeps a hold re-armed by the next keystroke before its echo lands", () => {
+    controller.onEchoPendingInput("t1");
+    controller.onEchoData("t1");
+    controller.onEchoPendingInput("t1");
+    flushFrame();
+
+    expect(controller.getEchoPendingHoldId()).toBe("t1");
+  });
+
+  it("requeues the release when the next keystroke's echo lands before the frame", () => {
+    controller.onEchoPendingInput("t1");
+    controller.onEchoData("t1");
+    controller.onEchoPendingInput("t2");
+    controller.onEchoData("t2");
+    controller.onEchoData("t2");
+
+    expect(frames.size).toBe(1);
+    flushFrame();
+    expect(controller.getEchoPendingHoldId()).toBeNull();
+
+    controller.onEchoPendingInput("t1");
+    controller.onEchoData("t1");
+    expect(frames.size).toBe(1);
+  });
+});

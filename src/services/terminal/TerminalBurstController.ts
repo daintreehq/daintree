@@ -52,6 +52,11 @@ export class TerminalBurstController {
   private echoPendingId: string | null = null;
   private echoPendingAt = 0;
   private echoPendingGen = 0;
+  // One pending release frame per keystroke generation, however many chunks the
+  // echo arrives in. Data for a newer generation requeues it so the release
+  // still lands one full frame after that generation's first chunk.
+  private echoReleaseFrame: number | null = null;
+  private echoReleaseGen = 0;
 
   constructor(private deps: TerminalBurstControllerDeps) {}
 
@@ -71,7 +76,13 @@ export class TerminalBurstController {
   onEchoData(id: string): void {
     if (this.echoPendingId !== id) return;
     const gen = this.echoPendingGen;
-    requestAnimationFrame(() => {
+    if (this.echoReleaseFrame !== null) {
+      if (this.echoReleaseGen === gen) return;
+      cancelAnimationFrame(this.echoReleaseFrame);
+    }
+    this.echoReleaseGen = gen;
+    this.echoReleaseFrame = requestAnimationFrame(() => {
+      this.echoReleaseFrame = null;
       if (this.echoPendingGen === gen && this.echoPendingId === id) {
         this.echoPendingId = null;
       }
