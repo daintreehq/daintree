@@ -33,12 +33,15 @@ vi.mock("../../../services/GitServiceCache.js", () => ({
 import { registerDiffMediaHandlers } from "../diffMedia.js";
 import { DIFF_MEDIA_METHOD_CHANNELS } from "../diffMedia.preload.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
-import type { DiffMediaFileVersions } from "../../../../shared/types/ipc/diffMedia.js";
+import type {
+  DiffMediaFileVersionsResponse,
+  DiffMediaReadFileVersionsPayload,
+} from "../../../../shared/types/ipc/diffMedia.js";
 
 type Handler = (
   event: Electron.IpcMainInvokeEvent,
   ...args: unknown[]
-) => Promise<DiffMediaFileVersions>;
+) => Promise<DiffMediaFileVersionsResponse>;
 
 function getHandler(): Handler {
   const fn = ipcHandlers.get(DIFF_MEDIA_METHOD_CHANNELS.readFileVersions);
@@ -50,7 +53,7 @@ function fakeEvent(): Electron.IpcMainInvokeEvent {
   return { sender: {} as Electron.WebContents } as Electron.IpcMainInvokeEvent;
 }
 
-function invoke(payload: { cwd: string; filePath: string }): Promise<DiffMediaFileVersions> {
+function invoke(payload: DiffMediaReadFileVersionsPayload): Promise<DiffMediaFileVersionsResponse> {
   return getHandler()(fakeEvent(), payload);
 }
 
@@ -268,5 +271,181 @@ describe("diffMedia readFileVersions", () => {
       path.join(REPO_ROOT, "logo.svg"),
       fsMock.constants.O_RDONLY | fsMock.constants.O_NOFOLLOW
     );
+  });
+  describe("revalidation against known versions", () => {
+    // Well outside the racy window.
+    const OLD_NS = BigInt(Date.now() - 60_000) * 1_000_000n;
+    const FD_STAT = {
+      size: BigInt(WORKING_BUFFER.byteLength),
+      isFile: () => true,
+      dev: 1n,
+      ino: 42n,
+      mtimeNs: OLD_NS,
+      ctimeNs: OLD_NS + 250n,
+    };
+    const HEAD_OID = "c".repeat(40);
+
+    beforeEach(() => {
+      fileHandleMock.stat.mockResolvedValue(FD_STAT);
+      readFileAtHeadMock.mockImplementation(
+        async (
+          _path: string,
+          _max: number,
+          options: { knownVersion?: string; beforeRead?: () => void }
+        ) => {
+          if (options?.knownVersion === HEAD_OID) {
+            return { ok: true, unchanged: true, version: HEAD_OID };
+          }
+          options?.beforeRead?.();
+          return { ok: true, content: HEAD_BUFFER, version: HEAD_OID };
+        }
+      );
+    });
+
+    async function freshVersions(): Promise<{ head: string; working: string }> {
+      const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+      if (!result.head.ok || !result.working.ok) throw new Error("expected both sides");
+      const head = result.head.version;
+      const working = result.working.version;
+      if (head === undefined || working === undefined) throw new Error("expected versions");
+      return { head, working };
+    }
+
+    it("stamps each loaded side with a version", async () => {
+      const versions = await freshVersions();
+      expect(versions.head).toBe(HEAD_OID);
+      expect(versions.working).toEqual(expect.any(String));
+    });
+
+    it("returns unchanged sides without reading or resending bytes", async () => {
+      const known = await freshVersions();
+      fileHandleMock.readFile.mockClear();
+
+      const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png", known });
+
+      expect(result.head).toEqual({ ok: true, unchanged: true, version: known.head });
+      expect(result.working).toEqual({ ok: true, unchanged: true, version: known.working });
+      expect(fileHandleMock.readFile).not.toHaveBeenCalled();
+      expect(fileHandleMock.close).toHaveBeenCalled();
+    });
+
+    it("rereads a working file whose stat moved", async () => {
+      const known = await freshVersions();
+      fileHandleMock.stat.mockResolvedValue({ ...FD_STAT, mtimeNs: FD_STAT.mtimeNs + 1n });
+
+      const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png", known });
+
+      expect(result.head).toEqual({ ok: true, unchanged: true, version: known.head });
+      expect(result.working.ok && "dataUrl" in result.working).toBe(true);
+      expect(result.working.ok && result.working.version).not.toBe(known.working);
+    });
+
+    it("omits the working version when the stat can't pin one", async () => {
+      fileHandleMock.stat.mockResolvedValue({
+        size: WORKING_BUFFER.byteLength,
+        isFile: () => true,
+      });
+
+      const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+
+      expect(result.working.ok && "dataUrl" in result.working).toBe(true);
+      expect(result.working.ok && result.working.version).toBeUndefined();
+    });
+
+    it("gives no version to a file modified inside the racy window", async () => {
+      fileHandleMock.stat.mockResolvedValue({
+        ...FD_STAT,
+        ctimeNs: BigInt(Date.now()) * 1_000_000n,
+      });
+
+      const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+
+      expect(result.working.ok && "dataUrl" in result.working).toBe(true);
+      expect(result.working.ok && result.working.version).toBeUndefined();
+    });
+
+    it("reads nothing when a revalidation needing both sides is denied", async () => {
+      const known = await freshVersions();
+      for (let i = 0; i < 9; i++) await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+      fileHandleMock.stat.mockResolvedValue({ ...FD_STAT, ctimeNs: FD_STAT.ctimeNs + 1n });
+      fileHandleMock.readFile.mockClear();
+      const headReads = vi.fn();
+      readFileAtHeadMock.mockImplementation(
+        async (_path: string, _max: number, options: { beforeRead?: () => void }) => {
+          options.beforeRead?.();
+          headReads();
+          return { ok: true, content: HEAD_BUFFER, version: "f".repeat(40) };
+        }
+      );
+
+      await expect(invoke({ cwd: REPO_ROOT, filePath: "img.png", known })).rejects.toMatchObject({
+        code: "RATE_LIMITED",
+      });
+      expect(headReads).not.toHaveBeenCalled();
+      expect(fileHandleMock.readFile).not.toHaveBeenCalled();
+    });
+
+    it("passes the known head version through to the committed-deletion fallback", async () => {
+      mockCommittedDeletion();
+      readFileAtHeadMock.mockResolvedValue({ ok: false, reason: "NOT_FOUND" });
+      readPreviousFileVersionMock.mockResolvedValue({
+        ok: true,
+        unchanged: true,
+        version: "commit:abc",
+      });
+
+      const result = await invoke({
+        cwd: REPO_ROOT,
+        filePath: "img.png",
+        known: { head: "commit:abc" },
+      });
+
+      expect(readPreviousFileVersionMock).toHaveBeenCalledWith(
+        "img.png",
+        expect.any(Number),
+        expect.objectContaining({ knownVersion: "commit:abc" })
+      );
+      expect(result.head).toEqual({ ok: true, unchanged: true, version: "commit:abc" });
+    });
+
+    it("keeps the fresh-read budget at 10 calls per window", async () => {
+      for (let i = 0; i < 10; i++) await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+
+      await expect(invoke({ cwd: REPO_ROOT, filePath: "img.png" })).rejects.toMatchObject({
+        code: "RATE_LIMITED",
+      });
+    });
+
+    it("serves unchanged revalidations after the byte budget is spent", async () => {
+      const known = await freshVersions();
+      for (let i = 0; i < 9; i++) await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+
+      const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png", known });
+
+      expect(result.working).toEqual({ ok: true, unchanged: true, version: known.working });
+    });
+
+    it("charges a revalidation that has to resend bytes against the byte budget", async () => {
+      const known = await freshVersions();
+      for (let i = 0; i < 9; i++) await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+      fileHandleMock.stat.mockResolvedValue({ ...FD_STAT, ctimeNs: FD_STAT.ctimeNs + 1n });
+      fileHandleMock.readFile.mockClear();
+
+      await expect(invoke({ cwd: REPO_ROOT, filePath: "img.png", known })).rejects.toMatchObject({
+        code: "RATE_LIMITED",
+      });
+      expect(fileHandleMock.readFile).not.toHaveBeenCalled();
+    });
+
+    it("caps unchanged revalidations with their own budget", async () => {
+      const known = await freshVersions();
+      for (let i = 0; i < 60; i++) {
+        await invoke({ cwd: REPO_ROOT, filePath: "img.png", known });
+      }
+
+      await expect(invoke({ cwd: REPO_ROOT, filePath: "img.png", known })).rejects.toMatchObject({
+        code: "RATE_LIMITED",
+      });
+    });
   });
 });
