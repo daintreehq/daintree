@@ -134,6 +134,10 @@ const background = (page: Page, locator: ReturnType<Page["locator"]>) =>
 // One test, not one per theme: Playwright gives each test its own worker, and
 // each worker's beforeAll would clear the frames the other one wrote.
 test("file-list rows", async ({ page }) => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_FILELIST is required for the file-list row capture",
+  });
   test.skip(!ENABLED, "set DAINTREE_SHOT_FILELIST=1 to capture");
   const snap = makeSnap(OUT_DIR);
   for (const theme of THEMES) {
