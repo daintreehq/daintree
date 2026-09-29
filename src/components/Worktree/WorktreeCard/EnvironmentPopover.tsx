@@ -16,7 +16,7 @@ import {
   Terminal as TerminalIcon,
 } from "lucide-react";
 import type { WorktreeLifecycleStatus } from "@shared/types/worktree";
-import { Hourglass, TriangleAlert } from "@/components/icons";
+import { CircleX, Hourglass } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { Button } from "../../ui/button";
@@ -60,7 +60,7 @@ const STATUS_GLYPHS: Partial<
   >
 > = {
   yellow: { icon: Hourglass, className: "text-status-warning" },
-  red: { icon: TriangleAlert, className: "text-status-error" },
+  red: { icon: CircleX, className: "text-status-error" },
 };
 
 const RELATIVE_TIME_REFRESH_MS = 30_000;

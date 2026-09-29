@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, Check, Copy, ExternalLink, Globe, RefreshCw } from "lucide-react";
+import { Check, Copy, ExternalLink, Globe, RefreshCw, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { COPIED_LABEL, COPY_FAILED_LABEL } from "@/components/ui/CopyButton";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
@@ -97,7 +97,7 @@ export function BrowserLoadErrorOverlay({
     <PaneState
       live="alert"
       className="z-30"
-      icon={<AlertTriangle className="text-status-warning" />}
+      icon={<XCircle className="text-status-error" />}
       title={loadErrorTitle(loadError.kind)}
       description={loadError.message}
     >

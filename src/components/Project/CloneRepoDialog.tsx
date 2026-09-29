@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { cn } from "@/lib/utils";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Check, CircleSlash, FolderOpen, LogIn } from "lucide-react";
+import { Check, CircleSlash, FolderOpen, LogIn, CheckCircle2 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { FolderDown } from "@/components/icons";
@@ -627,7 +627,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             aria-atomic="true"
           >
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-status-success/15">
-              <Check className="h-6 w-6 text-status-success" />
+              <CheckCircle2 className="h-6 w-6 text-status-success" />
             </div>
             <div className="space-y-1">
               <h3 className="text-base font-semibold text-text-primary">Repository cloned</h3>

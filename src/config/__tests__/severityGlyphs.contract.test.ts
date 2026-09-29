@@ -112,11 +112,15 @@ function holders(sf: ts.SourceFile): Holder[] {
   return found;
 }
 
+/** Modules whose named exports are Lucide glyphs under their Lucide names. */
+const GLYPH_MODULES = new Set(["lucide-react", "@/components/icons"]);
+
 /** The lucide export an identifier resolves to in this file, following `import { A as B }`. */
 function lucideGlyph(sf: ts.SourceFile, local: string): unknown {
   for (const stmt of sf.statements) {
     if (!ts.isImportDeclaration(stmt)) continue;
-    if ((stmt.moduleSpecifier as ts.StringLiteral).text !== "lucide-react") continue;
+    if (!ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+    if (!GLYPH_MODULES.has(stmt.moduleSpecifier.text)) continue;
     const bindings = stmt.importClause?.namedBindings;
     if (!bindings || !ts.isNamedImports(bindings)) continue;
     for (const el of bindings.elements) {
@@ -188,6 +192,43 @@ describe("severity glyph contract", () => {
           offenders.push(`${rel}:${h.line} severity=${h.severity}`);
         }
       }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("paints each severity glyph only in its own severity's ink", () => {
+    // Red ink on a triangle says "failed" in colour and "careful" in shape; under
+    // forced colours only the shape survives, so the two must agree.
+    const INK: Array<[RegExp, Set<unknown>, string]> = [
+      [
+        /\b(text|stroke)-status-(error|danger)\b/,
+        new Set([SEVERITY_GLYPH.error, lucide.OctagonAlert]),
+        "error",
+      ],
+      [/\b(text|stroke)-status-warning\b/, new Set([SEVERITY_GLYPH.warning]), "warning"],
+      [/\b(text|stroke)-status-success\b/, new Set([SEVERITY_GLYPH.success]), "success"],
+    ];
+    const offenders: string[] = [];
+    for (const { rel, sf } of FILES) {
+      const visit = (node: ts.Node) => {
+        if (ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) {
+          const glyph = lucideGlyph(sf, node.tagName.getText(sf));
+          if (glyph && SEVERITY_FAMILY.has(glyph)) {
+            const cls = node.attributes.properties
+              .filter(ts.isJsxAttribute)
+              .find((a) => a.name.getText(sf) === "className")
+              ?.initializer?.getText(sf);
+            for (const [ink, allowed, level] of INK) {
+              if (cls && ink.test(cls) && !allowed.has(glyph)) {
+                const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+                offenders.push(`${rel}:${line} ${node.tagName.getText(sf)} in ${level} ink`);
+              }
+            }
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
     }
     expect(offenders).toEqual([]);
   });

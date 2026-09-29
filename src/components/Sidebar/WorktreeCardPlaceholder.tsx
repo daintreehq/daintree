@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { TriangleAlert } from "lucide-react";
+import { XCircle } from "lucide-react";
 import type { PendingCreation } from "@/store/worktreeStore";
 import { BranchLabel } from "@/components/Worktree/BranchLabel";
 import { Button } from "@/components/ui/button";
@@ -52,7 +52,7 @@ export function WorktreeCardPlaceholder({
         data-pending-creation-path={pendingCreation.path}
         className="flex items-start gap-2 border-b border-divider px-4 py-3"
       >
-        <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-status-error" aria-hidden="true" />
+        <XCircle className="mt-0.5 size-3.5 shrink-0 text-status-error" aria-hidden="true" />
         <div className="min-w-0 flex-1 space-y-1">
           <TruncatedTooltip content={title}>
             <span className="block truncate text-xs text-text-primary">{title}</span>

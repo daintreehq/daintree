@@ -153,6 +153,8 @@ Forced colours repaint every glyph in one ink, so shape is the only channel left
 - `OctagonAlert` is a severe caution about something that has not failed: a destructive consequence (`Callout`'s `danger` tone), a dangerous plugin capability, a reading in its red band. It is never a failure, and a warning never borrows it.
 - `CircleAlert` and `CircleCheckBig` are not severity glyphs. `CircleAlert` read as a failure beside `XCircle` and as a caution beside the triangle; `CircleCheckBig` is a second success mark. The only holders left are the Problems toolbar button and the GitHub "Changes requested" verdict, each its own concept.
 
+Glyph and ink agree: a severity glyph painted in error or danger ink is `XCircle` or `OctagonAlert`, in warning ink the triangle, in success ink `CheckCircle2`. A pane that could not load, a terminal that could not start and a failed environment are failures, so they take `XCircle` in error ink rather than an amber triangle. A bare `Check` is not a result mark: it stays the copy-feedback and selection tick, and a finished operation or a passed test shows `CheckCircle2`.
+
 A banner or callout may swap in a domain glyph (a key for a sign-in state, a folder, a spinner), but never another severity's shape; a callout takes one only in its `neutral` tone. `Callout` covers error, warning, danger, success, info and neutral, so no surface hand-draws the tinted box. `src/config/__tests__/severityGlyphs.contract.test.ts` enforces all of this.
 
 ## Scales

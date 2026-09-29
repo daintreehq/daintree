@@ -1141,7 +1141,7 @@ export function BulkCreateWorktreeDialog({
               failedCount > 0 ? (
                 <AlertTriangle className="w-5 h-5 text-status-warning" />
               ) : (
-                <Check className="w-5 h-5 text-status-success" />
+                <CheckCircle2 className="w-5 h-5 text-status-success" />
               )
             ) : (
               <FolderGit2 className="w-5 h-5 text-text-muted" />

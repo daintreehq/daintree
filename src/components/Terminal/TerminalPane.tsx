@@ -10,7 +10,7 @@ import React, {
 } from "react";
 import { PaneState } from "@/components/ui/PaneState";
 import { useShallow } from "zustand/react/shallow";
-import { AlertTriangle, Plug, RotateCcw, Hourglass, Folders } from "lucide-react";
+import { Plug, RotateCcw, Hourglass, Folders, XCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
@@ -1604,7 +1604,7 @@ function TerminalPaneComponent({
           ) : spawnStatus === "failed" ? (
             <div className="relative flex-1 min-h-0">
               <PaneState
-                icon={<AlertTriangle className="text-status-warning" />}
+                icon={<XCircle className="text-status-error" />}
                 title="Terminal failed to start"
               />
             </div>
