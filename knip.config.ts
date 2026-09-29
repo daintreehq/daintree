@@ -32,9 +32,6 @@ const baseConfig: KnipConfig = {
     // that aren't wired through package.json.
     "electron-builder.config.cjs",
     "scripts/generate-sounds.mjs",
-    "playwright.mechanism.config.ts",
-    "playwright.plugins.config.ts",
-    "vitest.integration.config.ts",
 
     // The perf dispatcher launches these entry points by string path in
     // isolated subprocesses, so static analysis cannot follow those edges.
@@ -204,7 +201,6 @@ const baseConfig: KnipConfig = {
     // src/App.tsx. Knip cannot trace import() calls, so these index.ts
     // re-exports appear unused despite being public API surfaces.
     "src/components/ActionPalette/index.ts",
-    "src/components/LogLevelPalette/index.ts",
     "src/components/QuickSwitcher/index.ts",
     "src/components/TerminalPalette/index.ts",
     "src/components/ThemePalette/index.ts",
@@ -250,12 +246,11 @@ const baseConfig: KnipConfig = {
 
   ignoreBinaries: [
     // The release workflow invokes CLI binaries from local npm workspaces.
-    // Screenshot and tour tooling require ffmpeg, ffprobe, and wrangler from
+    // Screenshot and tour tooling require ffmpeg and wrangler from
     // the host OS rather than npm dependencies in this package.
     "create-daintree-plugin",
     "daintree-plugin",
     "ffmpeg",
-    "ffprobe",
     "sqlite3",
     "wrangler",
     // why: Host OS commands invoked directly by platform-specific runtime,
