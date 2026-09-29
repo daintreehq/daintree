@@ -729,6 +729,7 @@ export const createAddPanelActions = (
       exitBehavior: options.exitBehavior,
       agentSessionId: options.agentSessionId,
       agentLaunchFlags: options.agentLaunchFlags,
+      callerLaunchFlags: options.callerLaunchFlags,
       agentModelId: options.agentModelId,
       everDetectedAgent: options.everDetectedAgent,
       agentIncarnation: options.agentIncarnation,

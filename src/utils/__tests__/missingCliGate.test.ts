@@ -39,7 +39,8 @@ describe("buildMissingCliRelaunchOptions", () => {
       gate({
         command: "claude --resume",
         titleMode: "custom",
-        agentLaunchFlags: ["--verbose"],
+        agentLaunchFlags: ["--verbose", "--effort", "high"],
+        callerLaunchFlags: ["--effort", "high"],
         agentModelId: "opus",
         agentPresetId: "fast",
         agentPresetColor: "#ff0000",
@@ -62,7 +63,8 @@ describe("buildMissingCliRelaunchOptions", () => {
       cwd: "/repo",
       worktreeId: "wt-1",
       location: "grid",
-      agentLaunchFlags: ["--verbose"],
+      agentLaunchFlags: ["--verbose", "--effort", "high"],
+      callerLaunchFlags: ["--effort", "high"],
       agentModelId: "opus",
       agentPresetId: "fast",
       agentPresetColor: "#ff0000",
@@ -134,6 +136,65 @@ describe("buildMissingCliContinueArgs", () => {
     const args = buildMissingCliContinueArgs(
       gate({
         agentLaunchFlags: ["--verbose", "--append-system-prompt", "Be terse", "--model", "opus"],
+      })
+    );
+
+    expect(args?.agentLaunchFlags).toEqual(["--append-system-prompt", "Be terse"]);
+  });
+
+  // #13046: a caller's own flags have no setting to be rebuilt from either, so
+  // the continued launch has to carry them — once, and after the instruction.
+  it("replays the caller's own flags once, without the settings-derived rest", () => {
+    const args = buildMissingCliContinueArgs(
+      gate({
+        launchAgentId: "codex",
+        agentLaunchFlags: [
+          "-c",
+          "tui.whimsy=false",
+          "--model",
+          "gpt-5",
+          "-c",
+          "model_reasoning_effort=high",
+        ],
+        callerLaunchFlags: ["-c", "model_reasoning_effort=high"],
+      })
+    );
+
+    expect(args?.agentLaunchFlags).toEqual(["-c", "model_reasoning_effort=high"]);
+  });
+
+  it("does not replay a standing instruction the caller passed twice", () => {
+    const args = buildMissingCliContinueArgs(
+      gate({
+        agentLaunchFlags: ["--verbose", "--append-system-prompt", "Be terse"],
+        callerLaunchFlags: ["--append-system-prompt", "Be terse"],
+      })
+    );
+
+    expect(args?.agentLaunchFlags).toEqual(["--append-system-prompt", "Be terse"]);
+  });
+
+  it("puts a generated instruction ahead of the caller's own flags", () => {
+    const args = buildMissingCliContinueArgs(
+      gate({
+        agentLaunchFlags: ["--append-system-prompt", "Be terse", "--effort", "high"],
+        callerLaunchFlags: ["--effort", "high"],
+      })
+    );
+
+    expect(args?.agentLaunchFlags).toEqual([
+      "--append-system-prompt",
+      "Be terse",
+      "--effort",
+      "high",
+    ]);
+  });
+
+  it("falls back to the instruction alone when the caller tail no longer matches", () => {
+    const args = buildMissingCliContinueArgs(
+      gate({
+        agentLaunchFlags: ["--effort", "high", "--append-system-prompt", "Be terse"],
+        callerLaunchFlags: ["--effort", "high"],
       })
     );
 

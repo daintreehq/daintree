@@ -20,6 +20,10 @@ import { getWorktreePathIndex } from "@/store/storeAccessors";
 import { classifyLaunchRootAlignment } from "@/utils/worktreeAlignment";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import {
+  appendCallerLaunchFlagsToCommand,
+  splitCallerLaunchFlags,
+} from "@shared/utils/callerLaunchFlags";
+import {
   buildAgentLaunchFlagsForRuntimeSettings,
   resolveAgentRuntimeSettings,
 } from "@/utils/agentRuntimeSettings";
@@ -42,6 +46,8 @@ export interface ResolvedCommand {
   command: string | undefined;
   env: Record<string, string> | undefined;
   agentLaunchFlags: string[] | undefined;
+  /** The caller's verbatim tail of `agentLaunchFlags` (#13046), when known. */
+  callerLaunchFlags: string[] | undefined;
   /** Resolved preset, or undefined if the saved presetId is stale/deleted. */
   preset: import("@/config/agents").AgentPreset | undefined;
   /** True when the caller requested a preset but it no longer resolves. */
@@ -89,12 +95,14 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
         // and the CLI would reject the second launch outright.
         const agentSessionId = mintAssignedSessionId(panel.launchAgentId);
         // Settings rebuild everything else; the source pane's standing
-        // instruction came from its launch caller, so carry it across (#12431).
-        const systemPromptArgs = extractSystemPromptArgs(
+        // instruction and verbatim flags came from its launch caller, so carry
+        // them across (#12431, #13046).
+        const { base, caller } = splitCallerLaunchFlags(
           panel.agentLaunchFlags,
-          panel.launchAgentId
+          panel.callerLaunchFlags
         );
-        const command = generateAgentCommand(
+        const systemPromptArgs = extractSystemPromptArgs(base, panel.launchAgentId);
+        const generatedCommand = generateAgentCommand(
           agentConfig.command,
           effectiveEntry,
           panel.launchAgentId,
@@ -109,7 +117,8 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
             sessionId: agentSessionId,
           }
         );
-        const agentLaunchFlags = buildAgentLaunchFlagsForRuntimeSettings(
+        const command = appendCallerLaunchFlagsToCommand(generatedCommand, caller);
+        const baseLaunchFlags = buildAgentLaunchFlagsForRuntimeSettings(
           effectiveEntry,
           panel.launchAgentId,
           preset,
@@ -123,7 +132,8 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
         return {
           command,
           env: runtimeSettings.env,
-          agentLaunchFlags,
+          agentLaunchFlags: [...baseLaunchFlags, ...caller],
+          callerLaunchFlags: caller.length > 0 ? caller : undefined,
           preset,
           presetWasStale,
           agentSessionId,
@@ -143,6 +153,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
           ),
           env: undefined,
           agentLaunchFlags: panel.agentLaunchFlags,
+          callerLaunchFlags: panel.callerLaunchFlags,
           preset: undefined,
           presetWasStale: false,
           agentSessionId: undefined,
@@ -154,6 +165,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
     command: isPtyPanel(panel) ? panel.command : undefined,
     env: undefined,
     agentLaunchFlags: isPtyPanel(panel) ? panel.agentLaunchFlags : undefined,
+    callerLaunchFlags: isPtyPanel(panel) ? panel.callerLaunchFlags : undefined,
     preset: undefined,
     presetWasStale: false,
     agentSessionId: undefined,
@@ -275,6 +287,7 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
       isUsingFallback: panel.isUsingFallback,
       fallbackChainIndex: panel.fallbackChainIndex,
       agentLaunchFlags: panel.agentLaunchFlags ? [...panel.agentLaunchFlags] : undefined,
+      callerLaunchFlags: panel.callerLaunchFlags ? [...panel.callerLaunchFlags] : undefined,
     };
   }
 
@@ -318,6 +331,7 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
       agentPresetId: panel.agentPresetId,
       agentPresetColor: panel.agentPresetColor,
       agentLaunchFlags: panel.agentLaunchFlags ? [...panel.agentLaunchFlags] : undefined,
+      callerLaunchFlags: panel.callerLaunchFlags ? [...panel.callerLaunchFlags] : undefined,
       // Same one-shot rule as the agent branch above (#11782).
       command: panel.command
         ? stripAssignedSessionIdArgs(panel.command, panel.launchAgentId)
@@ -358,8 +372,15 @@ export async function buildPanelDuplicateOptions(
   targetLocation: TabGroupLocation
 ): Promise<AddPanelOptions> {
   const kind = sourcePanel.kind;
-  const { command, env, agentLaunchFlags, preset, presetWasStale, agentSessionId } =
-    await resolveCommandForPanel(sourcePanel);
+  const {
+    command,
+    env,
+    agentLaunchFlags,
+    callerLaunchFlags,
+    preset,
+    presetWasStale,
+    agentSessionId,
+  } = await resolveCommandForPanel(sourcePanel);
 
   if (isPtyPanel(sourcePanel) && sourcePanel.launchAgentId && kind === "terminal") {
     if (!command) {
@@ -393,6 +414,7 @@ export async function buildPanelDuplicateOptions(
       agentPresetId,
       agentPresetColor,
       agentLaunchFlags,
+      callerLaunchFlags,
       agentSessionId,
       env,
     };
@@ -442,6 +464,7 @@ export async function buildPanelDuplicateOptions(
       agentPresetId: sourcePanel.agentPresetId,
       agentPresetColor: sourcePanel.agentPresetColor,
       agentLaunchFlags: sourcePanel.agentLaunchFlags,
+      callerLaunchFlags: sourcePanel.callerLaunchFlags,
       env,
       command,
     };

@@ -72,6 +72,21 @@ describe("serializePtyPanel — other fields are unaffected by agentPresetId", (
     expect(snapshot.agentPresetId).toBe("user-xyz");
     expect(snapshot.agentLaunchFlags).toEqual(["--dangerously-skip-permissions"]);
   });
+
+  it("persists the caller's own flags alongside the launch flags they end", () => {
+    const snapshot = serializePtyPanel(
+      makePanel({
+        agentLaunchFlags: ["--model", "opus", "--effort", "high"],
+        callerLaunchFlags: ["--effort", "high"],
+      })
+    );
+    expect(snapshot.callerLaunchFlags).toEqual(["--effort", "high"]);
+  });
+
+  it("drops the caller's flags when no launch flags are persisted", () => {
+    const snapshot = serializePtyPanel(makePanel({ callerLaunchFlags: ["--effort", "high"] }));
+    expect("callerLaunchFlags" in snapshot).toBe(false);
+  });
 });
 
 // ── adversarial: agentPresetColor must survive the serialise/restore round-trip ─
