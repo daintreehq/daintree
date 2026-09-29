@@ -2947,17 +2947,46 @@ interface PluginHostCallOptions {
     signal?: AbortSignal;
 }
 /**
- * Options accepted by high-frequency event subscriptions (today
- * {@link PluginActivationApi.onDidChangeWorktrees}). `debounceMs` coalesces a
- * burst of change events into a single trailing callback fired `debounceMs`
- * after the last event — the host re-emits the worktree set on every git-status
- * poll, so a UI-updating plugin can opt into far fewer callbacks. A burst that
- * never goes quiet still fires at least every few `debounceMs`. Values below a
- * small floor (~50ms) are clamped up; `0` / omitted means no debounce (fire on
- * every change). The coalesced callback receives the most recent snapshot list.
+ * Options accepted by the bursty host subscriptions —
+ * {@link PluginActivationApi.onDidChangeWorktrees},
+ * {@link PluginActivationApi.onDidChangeActiveWorktree} and
+ * {@link PluginActivationApi.onDidChangeAgentState}. These coalesce by default:
+ * a burst of events becomes one trailing callback fired `debounceMs` after the
+ * last event (the host re-emits the worktree set on every git-status poll, and
+ * agents change state many times a second). A burst that never goes quiet
+ * still fires at least every `4 × debounceMs`, so a busy project never
+ * withholds its latest state indefinitely.
+ *
+ * - omitted (or not a number) — the default window, 100ms
+ * - `0` (or a negative number) — no coalescing: every event is delivered
+ * - any other value — used as the window, clamped to 50–60000ms
+ *
+ * What a coalesced callback receives is documented on each subscription; the
+ * common rule is that the most recent value is always delivered.
  */
 interface PluginHostSubscriptionOptions {
     debounceMs?: number;
+}
+/**
+ * What changed in the worktree set since the previous
+ * {@link PluginActivationApi.onDidChangeWorktrees} delivery to the same
+ * subscription, as snapshot `id`s. Computed by the host from the list it last
+ * delivered, so a coalesced burst reports the net change across the whole
+ * burst (a worktree added and removed within one window appears in neither
+ * list). The first delivery compares against an empty set: every worktree is
+ * `added`.
+ *
+ * A worktree is `changed` when any field of its {@link PluginWorktreeSnapshot}
+ * differs — branch, current/main flags, ahead/behind counts, mood, activity
+ * and creation times, the linked issue/PR projection, or its status (the
+ * per-state counts and the path + state of every changed file). A delivery
+ * whose three lists are all empty re-sends an unchanged set; a plugin that
+ * only cares about changes can return early on it.
+ */
+interface PluginWorktreesChange {
+    readonly added: readonly string[];
+    readonly removed: readonly string[];
+    readonly changed: readonly string[];
 }
 /**
  * Persistent, plugin-scoped key/value settings exposed on
@@ -3201,8 +3230,16 @@ interface PluginDatabase extends PluginDatabaseStatements {
     transaction<T>(fn: (tx: PluginDatabaseStatements) => Promise<T> | T): Promise<T>;
     /**
      * Fire after the database changes, including commits by other processes —
-     * the usual case being an agent writing with the `sqlite3` CLI. Coalesced:
-     * a burst of external commits delivers one event. Returns a disposer.
+     * the usual case being an agent writing with the `sqlite3` CLI. Returns a
+     * disposer.
+     *
+     * Coalesced: every change within a 50ms window — this handle's own commits
+     * and external ones alike — is delivered as one event at the end of the
+     * window, so 200 inserts awaited one after another cost a handful of
+     * refetches rather than 200. The last change is always delivered, including
+     * one whose window is still open when the handle closes. A window
+     * that saw any external change reports `origin: "external"`; one that saw
+     * only this handle's commits reports `"self"`.
      */
     onDidChange(callback: (event: PluginDatabaseChangeEvent) => void): () => void;
     /**
@@ -4032,6 +4069,51 @@ interface PluginFsReadWithRevisionResult {
      */
     revision: string;
 }
+/**
+ * Options for {@link PluginFsApi.readFiles}. `encoding` picks the content type:
+ * `"utf-8"` (the default) decodes each file as {@link PluginFsApi.readFile}
+ * does, `"bytes"` returns raw bytes as {@link PluginFsApi.readFileBytes} does.
+ */
+interface PluginFsReadFilesOptions<E extends PluginFsReadFilesEncoding = PluginFsReadFilesEncoding> extends PluginHostCallOptions {
+    encoding?: E;
+    /**
+     * Per-file ceiling in bytes. A larger file is not read past the ceiling and
+     * comes back as `{ ok: false, error: { code: "TOO_LARGE" } }`. Must be a
+     * non-negative integer; omitted means only the call's total budget applies.
+     */
+    maxBytesPerFile?: number;
+}
+/** Content type of a {@link PluginFsApi.readFiles} call. */
+type PluginFsReadFilesEncoding = "utf-8" | "bytes";
+/**
+ * Why one path in a {@link PluginFsApi.readFiles} call was not read.
+ *
+ * - `PATH_NOT_ALLOWED` / `PERMISSION_REQUIRED` — the same refusals
+ *   {@link PluginFsApi.readFile} rejects with (outside every allowed root, or
+ *   the root's read capability is not declared)
+ * - `NOT_FOUND` — nothing at the path
+ * - `NOT_A_FILE` — a directory, FIFO, device or other non-regular file
+ * - `TARGET_IS_SYMLINK` / `TARGET_UNAVAILABLE` — the verified-open refusals
+ *   {@link PluginFsApi.readFile} documents
+ * - `TOO_LARGE` — bigger than `maxBytesPerFile`
+ * - `RESULT_TOO_LARGE` — the call's total byte budget was spent on earlier
+ *   entries; read this path in a later call
+ * - `READ_FAILED` — anything else (the `message` says what)
+ */
+type PluginFsReadFilesErrorCode = "PATH_NOT_ALLOWED" | "PERMISSION_REQUIRED" | "NOT_FOUND" | "NOT_A_FILE" | "TARGET_IS_SYMLINK" | "TARGET_UNAVAILABLE" | "TOO_LARGE" | "RESULT_TOO_LARGE" | "READ_FAILED";
+/** One entry of a {@link PluginFsApi.readFiles} result, in request order. */
+type PluginFsReadFilesEntry<C = string> = {
+    readonly path: string;
+    readonly ok: true;
+    readonly content: C;
+} | {
+    readonly path: string;
+    readonly ok: false;
+    readonly error: {
+        readonly code: PluginFsReadFilesErrorCode;
+        readonly message: string;
+    };
+};
 /** Options for {@link PluginFsApi.watch}. */
 interface PluginFsWatchOptions extends PluginHostCallOptions {
     /**
@@ -4122,6 +4204,33 @@ interface PluginFsApi {
      * containment, verified open and cancellation as {@link readFile}.
      */
     readFileWithRevision(filePath: string, options?: PluginHostCallOptions): Promise<PluginFsReadWithRevisionResult>;
+    /**
+     * Read many files in one host round trip — the bulk counterpart to
+     * {@link readFile} for a search, an index build, or a tree of small config
+     * files, where one call per file costs a round trip each.
+     *
+     * Every path gets exactly the checks {@link readFile} applies — containment
+     * against `scopes.fs.allowedPaths`, the root's read capability, and the
+     * verified open — but a refusal fails only that entry: the result has one
+     * {@link PluginFsReadFilesEntry} per path, in request order, each either
+     * `{ ok: true, content }` or `{ ok: false, error: { code, message } }`.
+     *
+     * Bounded so the result always fits one host reply: at most 1024 paths per
+     * call (more rejects the call), and at most 8 MiB of content in total,
+     * measured as returned (decoded UTF-8 text, or bytes) and spent in request
+     * order — entries past the budget come back `RESULT_TOO_LARGE` for a
+     * follow-up call, and the same request always defers the same entries.
+     * The whole call rejects only on a missing read capability for every root,
+     * an unloaded plugin, invalid arguments, or `options.signal` aborting.
+     *
+     * Optional in the type so existing hand-written {@link PluginFsApi} fakes
+     * keep compiling; Daintree's host, the worker host and `createMockHost`
+     * always provide it.
+     */
+    readFiles?: {
+        (paths: readonly string[], options?: PluginFsReadFilesOptions<"utf-8">): Promise<PluginFsReadFilesEntry<string>[]>;
+        (paths: readonly string[], options: PluginFsReadFilesOptions<"bytes">): Promise<PluginFsReadFilesEntry<Uint8Array>[]>;
+    };
     /**
      * Create a directory and any missing ancestors. Creating a directory that
      * already exists is a no-op; a non-directory at the path rejects. Gated and
@@ -4564,6 +4673,10 @@ interface PluginActivationApi {
      * calling it more than once is a no-op. All subscriptions are automatically
      * disposed when the plugin is unloaded.
      *
+     * Coalesced by default: a burst of activations becomes one callback with
+     * the worktree active at the end of it. Pass `{ debounceMs: 0 }` to receive
+     * every activation — see {@link PluginHostSubscriptionOptions}.
+     *
      * Subscribing is revoke-guarded — call it during `activate()`. The callback
      * itself fires for the plugin's whole lifetime; only the act of subscribing
      * is restricted to the activation window.
@@ -4571,16 +4684,19 @@ interface PluginActivationApi {
      * @throws {Error} If called after activation resolves or times out — the host
      *   is revoked and the subscription is rejected.
      */
-    onDidChangeActiveWorktree(callback: (snapshot: PluginWorktreeSnapshot | null) => void): Promise<() => void>;
+    onDidChangeActiveWorktree(callback: (snapshot: PluginWorktreeSnapshot | null) => void, options?: PluginHostSubscriptionOptions): Promise<() => void>;
     /**
      * Subscribe to the worktree set changing. The callback fires with the full
-     * current list on any worktree add/update/remove. Resolves to a disposer;
+     * current list on any worktree add/update/remove, and a second argument
+     * naming which worktrees were added, removed or changed since the previous
+     * delivery — see {@link PluginWorktreesChange}. Resolves to a disposer;
      * calling it more than once is a no-op. All subscriptions are automatically
      * disposed when the plugin is unloaded.
      *
-     * Pass `options.debounceMs` to coalesce bursts (the host re-emits on every
-     * git-status poll) into a single trailing callback — see
-     * {@link PluginHostSubscriptionOptions}. Omitted means fire on every change.
+     * Coalesced by default (the host re-emits on every git-status poll): a burst
+     * becomes one trailing callback carrying the latest list, and the change
+     * describes the whole burst. Pass `{ debounceMs: 0 }` to receive every
+     * event — see {@link PluginHostSubscriptionOptions}.
      *
      * Subscribing is revoke-guarded — call it during `activate()`. The callback
      * itself fires for the plugin's whole lifetime; only the act of subscribing
@@ -4589,15 +4705,24 @@ interface PluginActivationApi {
      * @throws {Error} If called after activation resolves or times out — the host
      *   is revoked and the subscription is rejected.
      */
-    onDidChangeWorktrees(callback: (snapshots: PluginWorktreeSnapshot[]) => void, options?: PluginHostSubscriptionOptions): Promise<() => void>;
+    onDidChangeWorktrees(callback: (snapshots: PluginWorktreeSnapshot[], change: PluginWorktreesChange) => void, options?: PluginHostSubscriptionOptions): Promise<() => void>;
     /**
      * Subscribe to agent-session state changes, gated on the `agent:read`
      * capability. The callback fires with a frozen {@link PluginAgentSnapshot}
-     * on every accepted agent state transition across all sessions (unscoped,
+     * for accepted agent state transitions across all sessions (unscoped,
      * like {@link onDidChangeWorktrees} — a plugin filters by `snapshot.agentId`
      * if it cares about one session). Resolves to a disposer; calling it more
      * than once is a no-op. All subscriptions are automatically disposed when the
      * plugin is unloaded.
+     *
+     * Coalesced by default, per terminal: within one window only each
+     * terminal's latest transition is delivered, one callback per terminal, in
+     * the order of those latest transitions. The final state of every terminal
+     * is always delivered; the transitions in between may be skipped, so a
+     * delivered snapshot's `previousState` is the state immediately before that
+     * last transition, not necessarily the state you were last told about. Pass
+     * `{ debounceMs: 0 }` to receive every transition — see
+     * {@link PluginHostSubscriptionOptions}.
      *
      * Observation only — there is no companion method to drive, pause, resume, or
      * inject into a session.
@@ -4610,7 +4735,7 @@ interface PluginActivationApi {
      *   `agent:read` capability, or if called after activation resolves or times
      *   out (the host is revoked).
      */
-    onDidChangeAgentState(callback: (snapshot: PluginAgentSnapshot) => void): Promise<() => void>;
+    onDidChangeAgentState(callback: (snapshot: PluginAgentSnapshot) => void, options?: PluginHostSubscriptionOptions): Promise<() => void>;
     /**
      * Subscribe to panel lifecycle transitions for this plugin's own contributed
      * panels (#11301). No capability is required — a plugin only ever sees events
@@ -5386,4 +5511,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDispatchOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData };
+export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDispatchOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData };

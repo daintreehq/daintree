@@ -887,3 +887,65 @@ describe("readPluginDatabaseRows", () => {
     expect(codeOf(() => readAll("SELECT 1"))).toBe("TARGET_IS_SYMLINK");
   });
 });
+
+describe("onDidChange coalescing", () => {
+  it("collapses 200 sequential awaited commits into a handful of events, the last always delivered", async () => {
+    const db = await open({ migrations: ["CREATE TABLE t (x INTEGER)"] });
+    const events: string[] = [];
+    const seenCounts: number[] = [];
+    db.onDidChange(async (event) => {
+      events.push(event.origin);
+      const row = await db.get<{ n: number }>("SELECT count(*) AS n FROM t");
+      seenCounts.push(Number(row?.n));
+    });
+    for (let i = 0; i < 200; i++) {
+      await db.run("INSERT INTO t VALUES (?)", [i]);
+    }
+    await waitFor(() => seenCounts.includes(200));
+    // Let any trailing window close before counting.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.length).toBeLessThan(20);
+    expect(events.every((origin) => origin === "self")).toBe(true);
+    expect(seenCounts.at(-1)).toBe(200);
+  });
+
+  it("reports external when a window mixes its own commits with someone else's", async () => {
+    const db = await open({
+      migrations: ["CREATE TABLE t (x INTEGER)"],
+      // Wide enough that the poll's detection lands inside the same window.
+      changeCoalesceMs: 300,
+    });
+    const events: string[] = [];
+    db.onDidChange((event) => events.push(event.origin));
+    await db.run("INSERT INTO t VALUES (1)");
+    const agent = new DatabaseSync(location.path);
+    agent.exec("INSERT INTO t VALUES (2)");
+    agent.close();
+    await waitFor(() => events.length > 0);
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(events).toEqual(["external"]);
+  });
+
+  it("delivers nothing after the last listener is disposed mid-window", async () => {
+    const db = await open({ migrations: ["CREATE TABLE t (x INTEGER)"] });
+    const events: string[] = [];
+    const dispose = db.onDidChange((event) => events.push(event.origin));
+    await db.run("INSERT INTO t VALUES (1)");
+    dispose();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(events).toEqual([]);
+  });
+
+  it("delivers a change still inside its window when the handle closes", async () => {
+    const db = await openPluginDatabase(location, {
+      migrations: ["CREATE TABLE t (x INTEGER)"],
+      changeCoalesceMs: 10_000,
+    });
+    const events: string[] = [];
+    db.onDidChange((event) => events.push(event.origin));
+    await db.run("INSERT INTO t VALUES (1)");
+    await db.close();
+    expect(events).toEqual(["self"]);
+  });
+});

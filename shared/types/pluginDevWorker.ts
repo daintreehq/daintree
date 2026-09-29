@@ -37,6 +37,9 @@ import type {
   PluginMcpJsonSchema,
   PluginMcpToolAnnotations,
   PluginSendToAgentOptions,
+  PluginFsReadFilesEncoding,
+  PluginWorktreeSnapshot,
+  PluginWorktreesChange,
 } from "./plugin.js";
 
 /** Async host methods the worker proxy relays to main and awaits a reply for. */
@@ -66,6 +69,7 @@ export type PluginHostCallMethod =
   | "fs.readFile"
   | "fs.readFileBytes"
   | "fs.readFileWithRevision"
+  | "fs.readFiles"
   | "fs.writeFile"
   | "fs.mkdir"
   | "fs.appendFile"
@@ -309,8 +313,10 @@ export type PluginWorkerToHostMessage =
       key?: string;
       scope?: PluginSettingsScope | PluginStorageScope;
       /**
-       * Opt-in debounce for the `worktrees` subscription (host-side coalescing).
-       * Ignored for other kinds. Mirrors `PluginHostSubscriptionOptions.debounceMs`.
+       * Coalescing window for the `worktrees`, `active-worktree` and
+       * `agent-state` subscriptions, applied host-side. Absent means the
+       * host's default window, exactly as for an in-process plugin; ignored
+       * for other kinds. Mirrors `PluginHostSubscriptionOptions.debounceMs`.
        */
       debounceMs?: number;
       /** Handle id for `process-exit` / `process-crash` / `process-data` subscriptions. */
@@ -551,6 +557,22 @@ export interface FsPathParams {
    * the cheap read, so an existing worker build keeps its current behaviour.
    */
   detail?: boolean;
+}
+
+/** Params for `fs.readFiles` (`host-call`); options are forwarded as given. */
+export interface FsReadFilesParams {
+  paths: readonly string[];
+  encoding?: PluginFsReadFilesEncoding;
+  maxBytesPerFile?: number;
+}
+
+/**
+ * Payload of a `worktrees` `subscription-event`: the list and the change set
+ * main computed against the previous delivery on this subscription.
+ */
+export interface PluginWorkerWorktreesEvent {
+  snapshots: PluginWorktreeSnapshot[];
+  change: PluginWorktreesChange;
 }
 
 /** Params for `fs.writeFile` (`host-call`). */

@@ -1389,3 +1389,57 @@ describe("PluginDevWorkerHostProxy invoke results", () => {
     });
   });
 });
+
+describe("PluginDevWorkerHostProxy coalesced subscriptions and readFiles", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("leaves debounceMs absent when the plugin passed none, so main applies its default", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.onDidChangeWorktrees(vi.fn());
+    await proxy.host.onDidChangeActiveWorktree(vi.fn());
+    await proxy.host.onDidChangeAgentState(vi.fn());
+    const subs = sent.filter((m) => m.type === "subscribe");
+    expect(subs.map((m) => m.kind)).toEqual(["worktrees", "active-worktree", "agent-state"]);
+    for (const sub of subs) expect(sub.debounceMs).toBeUndefined();
+  });
+
+  it("forwards an explicit debounceMs on every coalesced kind", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.onDidChangeWorktrees(vi.fn(), { debounceMs: 0 });
+    await proxy.host.onDidChangeActiveWorktree(vi.fn(), { debounceMs: 250 });
+    await proxy.host.onDidChangeAgentState(vi.fn(), { debounceMs: 0 });
+    const subs = sent.filter((m) => m.type === "subscribe");
+    expect(subs.map((m) => m.debounceMs)).toEqual([0, 250, 0]);
+  });
+
+  it("unpacks the worktrees event into the list and the change set", async () => {
+    const { proxy, sent } = makeProxy();
+    const callback = vi.fn();
+    await proxy.host.onDidChangeWorktrees(callback);
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "worktrees");
+    const change = { added: ["w1"], removed: [], changed: [] };
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { snapshots: [{ id: "w1" }], change },
+    });
+    expect(callback).toHaveBeenCalledWith([{ id: "w1" }], change);
+  });
+
+  it("relays readFiles in one host call, forwarding only the options that were set", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.fs.readFiles!(["/repo/a", "/repo/b"]);
+    void proxy.host.fs.readFiles!(["/repo/c"], { encoding: "bytes", maxBytesPerFile: 10 });
+    const calls = sent.filter((m) => m.type === "host-call" && m.method === "fs.readFiles");
+    expect(calls).toHaveLength(2);
+    expect(calls[0].params).toEqual({ paths: ["/repo/a", "/repo/b"] });
+    expect(calls[1].params).toEqual({ paths: ["/repo/c"], encoding: "bytes", maxBytesPerFile: 10 });
+    const result = [
+      { path: "/repo/a", ok: true, content: "a" },
+      { path: "/repo/b", ok: false, error: { code: "NOT_FOUND", message: "x" } },
+    ];
+    proxy.handleMessage({ type: "host-result", requestId: calls[0].requestId, ok: true, result });
+    await expect(promise).resolves.toEqual(result);
+  });
+});

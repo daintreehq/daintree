@@ -2434,3 +2434,81 @@ describe("PluginDevWorkerMainBridge handler invoke deadline", () => {
     });
   });
 });
+
+describe("PluginDevWorkerMainBridge coalesced subscriptions and readFiles", () => {
+  it("passes an absent debounceMs through as undefined so the host default applies", async () => {
+    const { host, workerHost } = makeBridge({ capabilities: ["agent:read"] });
+    (host as any).onDidChangeAgentState = vi.fn(async () => vi.fn());
+    for (const [id, kind] of [
+      ["s-w", "worktrees"],
+      ["s-a", "active-worktree"],
+      ["s-g", "agent-state"],
+    ]) {
+      workerHost.emit("worker-message", { type: "subscribe", subscriptionId: id, kind });
+    }
+    await flush();
+    expect(host.onDidChangeWorktrees).toHaveBeenCalledWith(expect.any(Function), {
+      debounceMs: undefined,
+    });
+    expect(host.onDidChangeActiveWorktree).toHaveBeenCalledWith(expect.any(Function), {
+      debounceMs: undefined,
+    });
+    expect((host as any).onDidChangeAgentState).toHaveBeenCalledWith(expect.any(Function), {
+      debounceMs: undefined,
+    });
+  });
+
+  it("forwards an explicit debounceMs: 0 opt-out", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "subscribe",
+      subscriptionId: "s-w0",
+      kind: "worktrees",
+      debounceMs: 0,
+    });
+    await flush();
+    expect(host.onDidChangeWorktrees).toHaveBeenCalledWith(expect.any(Function), {
+      debounceMs: 0,
+    });
+  });
+
+  it("pushes the worktree list together with its change set", async () => {
+    const { host, workerHost } = makeBridge();
+    let deliver: ((list: unknown[], change: unknown) => void) | undefined;
+    host.onDidChangeWorktrees.mockImplementation((cb: any) => {
+      deliver = cb;
+      return vi.fn();
+    });
+    workerHost.emit("worker-message", {
+      type: "subscribe",
+      subscriptionId: "s-d",
+      kind: "worktrees",
+    });
+    await flush();
+    const change = { added: ["w1"], removed: [], changed: [] };
+    deliver?.([{ id: "w1" }], change);
+    const evt = workerHost.sent.find(
+      (m: any) => m.type === "subscription-event" && m.subscriptionId === "s-d"
+    );
+    expect(evt.payload).toEqual({ snapshots: [{ id: "w1" }], change });
+  });
+
+  it("relays fs.readFiles with the call's signal and the worker's options", async () => {
+    const { host, workerHost } = makeBridge();
+    const result = [{ path: "/repo/a", ok: true, content: "a" }];
+    (host.fs as any).readFiles = vi.fn(async () => result);
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "rf1",
+      method: "fs.readFiles",
+      params: { paths: ["/repo/a"], encoding: "bytes" },
+    });
+    await flush();
+    expect((host.fs as any).readFiles).toHaveBeenCalledWith(
+      ["/repo/a"],
+      expect.objectContaining({ encoding: "bytes", signal: expect.anything() })
+    );
+    const res = workerHost.sent.find((m: any) => m.type === "host-result" && m.requestId === "rf1");
+    expect(res).toMatchObject({ ok: true, result });
+  });
+});

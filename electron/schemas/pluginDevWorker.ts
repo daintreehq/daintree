@@ -60,6 +60,7 @@ const HOST_CALL_METHODS = {
   "fs.readFile": true,
   "fs.readFileBytes": true,
   "fs.readFileWithRevision": true,
+  "fs.readFiles": true,
   "fs.writeFile": true,
   "fs.mkdir": true,
   "fs.appendFile": true,
@@ -139,7 +140,7 @@ const SubscriptionScopeSchema = z.enum(["user", "project", "local", "worktree"])
 
 /**
  * Any number, `NaN` and infinities included. Zod v4's `z.number()` rejects
- * those, but the host already normalizes a nonsense `debounceMs` to zero — so
+ * those, but the host already normalizes a nonsense `debounceMs` itself — so
  * treating one as a terminal violation would kill a plugin whose call the
  * pre-schema path served without complaint.
  */

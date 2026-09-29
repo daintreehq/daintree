@@ -438,10 +438,14 @@ const POLL_INTERVAL_MS = 1000;
 /** Host-owned bookkeeping inside a plugin database; created only when `definitions` is used. */
 const META_TABLE = "_daintree_meta";
 const WATCH_SETTLE_MS = 75;
+/** Window within which changes are delivered as one `onDidChange` event. */
+const CHANGE_COALESCE_MS = 50;
 
 export interface OpenPluginDatabaseOptions extends PluginDatabaseOpenOptions {
   /** Test seam: poll cadence for external-change detection. */
   pollIntervalMs?: number;
+  /** Test seam: the window `onDidChange` coalesces changes within. */
+  changeCoalesceMs?: number;
   /**
    * Re-prove the location before reopening a replaced file. The host passes
    * its resolver, so a checkout that swapped a directory on the path for a
@@ -829,16 +833,37 @@ export async function openPluginDatabase(
   let watcher: fs.FSWatcher | null = null;
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const emit = (origin: PluginDatabaseChangeEvent["origin"]): void => {
-    queueMicrotask(() => {
-      for (const listener of [...listeners]) {
-        try {
-          listener(Object.freeze({ origin }));
-        } catch (error) {
-          console.error(`[plugin-db:${location.id}] change listener threw:`, error);
-        }
+  // One event per window, not per commit: a plugin that refetches on change
+  // would otherwise refetch once per awaited insert. Fixed from the first
+  // change rather than trailing, so a steady stream of writes still reports
+  // within one window.
+  let pendingOrigin: PluginDatabaseChangeEvent["origin"] | null = null;
+  let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
+  const flushChanges = (): void => {
+    coalesceTimer = null;
+    const origin = pendingOrigin;
+    pendingOrigin = null;
+    if (origin === null || closed) return;
+    for (const listener of [...listeners]) {
+      try {
+        listener(Object.freeze({ origin }));
+      } catch (error) {
+        console.error(`[plugin-db:${location.id}] change listener threw:`, error);
       }
-    });
+    }
+  };
+  const emit = (origin: PluginDatabaseChangeEvent["origin"]): void => {
+    // An external change anywhere in the window wins: a listener that skips
+    // its own writes must still see what someone else wrote.
+    if (pendingOrigin !== "external") pendingOrigin = origin;
+    if (coalesceTimer) return;
+    coalesceTimer = setTimeout(flushChanges, options.changeCoalesceMs ?? CHANGE_COALESCE_MS);
+    coalesceTimer.unref?.();
+  };
+  const cancelPendingChanges = (): void => {
+    if (coalesceTimer) clearTimeout(coalesceTimer);
+    coalesceTimer = null;
+    pendingOrigin = null;
   };
 
   // ── serialisation ──
@@ -1048,7 +1073,10 @@ export async function openPluginDatabase(
         if (disposed) return;
         disposed = true;
         listeners.delete(callback);
-        if (listeners.size === 0) stopWatching();
+        if (listeners.size === 0) {
+          stopWatching();
+          cancelPendingChanges();
+        }
       };
     },
     backup: async (destPath: string) => {
@@ -1130,8 +1158,15 @@ export async function openPluginDatabase(
       if (closed) return;
       await queue;
       if (closed) return;
+      // The last change is always delivered, even when the handle closes
+      // inside its window.
+      if (coalesceTimer) {
+        clearTimeout(coalesceTimer);
+        flushChanges();
+      }
       closed = true;
       stopWatching();
+      cancelPendingChanges();
       listeners.clear();
       try {
         db.close();

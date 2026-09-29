@@ -22,6 +22,10 @@ import { join as joinPath } from "node:path";
 import { databaseError, openPluginDatabase } from "../utils/pluginDatabaseHandle.js";
 import { validateAgentContextPayload } from "../utils/agentContextDrag.js";
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
+import {
+  PLUGIN_INVOKE_MAX_RESULT_BYTES,
+  PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS,
+} from "../config/pluginBudgets.js";
 import type {
   ActionDispatchResult,
   ActionId,
@@ -64,6 +68,10 @@ import type {
   PluginTypedIpcHandler,
   PluginHandlerOptions,
   PluginWorktreeSnapshot,
+  PluginWorktreesChange,
+  PluginFsApi,
+  PluginFsReadFilesEntry,
+  PluginFsReadFilesOptions,
   PluginWorktreesResult,
   PluginAgentSnapshot,
   PluginAgentPane,
@@ -195,6 +203,13 @@ export interface FsWriteRecord {
   contents: string;
 }
 
+/** A coalesced host subscription, with the window the host resolves for it. */
+export interface MockSubscriptionRecord {
+  kind: "worktrees" | "active-worktree" | "agent-state";
+  /** Effective window in ms: the 100ms default, `0` for raw, else clamped to 50–60000. */
+  debounceMs: number;
+}
+
 /** Captured `host.git.commit(worktreePath, options)` calls. */
 export interface GitCommitRecord {
   worktreePath: string;
@@ -251,6 +266,15 @@ export interface MockHostState {
    * recorded; each one also leaves a placeholder PDF in the mock filesystem.
    */
   readonly documentsRenderPdfCalls: ReadonlyArray<PluginRenderPdfOptions>;
+
+  /**
+   * One entry per `onDidChangeWorktrees` / `onDidChangeActiveWorktree` /
+   * `onDidChangeAgentState` subscription, in order, with the coalescing
+   * window the host would apply — so a test can assert a plugin kept the
+   * default or opted out with `debounceMs: 0`. The mock itself always
+   * delivers synchronously.
+   */
+  readonly subscriptionOptions: ReadonlyArray<MockSubscriptionRecord>;
 
   /**
    * Replace the active worktree and notify every `onDidChangeActiveWorktree`
@@ -618,6 +642,81 @@ function isInvalidChannel(channel: unknown, allowEmpty: boolean): boolean {
  * the same shape the real host returns, so a plugin can hand it straight back
  * as `expectedRevision`.
  */
+/**
+ * The host's subscription-window rule (electron/services/plugin/
+ * pluginSubscriptionCoalescing.ts), duplicated rather than imported so the SDK
+ * bundle never pulls a main-process module. Pinned against it by a parity test.
+ */
+const MOCK_SUBSCRIPTION_MIN_DEBOUNCE_MS = 50;
+const MOCK_SUBSCRIPTION_MAX_DEBOUNCE_MS = 60_000;
+function mockResolveSubscriptionDebounceMs(value: unknown): number {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS;
+  }
+  if (value <= 0) return 0;
+  return Math.min(
+    Math.max(value, MOCK_SUBSCRIPTION_MIN_DEBOUNCE_MS),
+    MOCK_SUBSCRIPTION_MAX_DEBOUNCE_MS
+  );
+}
+
+/** The host's worktree fingerprint, duplicated for the same reason and pinned the same way. */
+function mockWorktreeFingerprint(snapshot: PluginWorktreeSnapshot): string {
+  const status = snapshot.status;
+  return JSON.stringify([
+    snapshot.worktreeId,
+    snapshot.path,
+    snapshot.name,
+    snapshot.isCurrent,
+    snapshot.branch ?? null,
+    snapshot.isMainWorktree ?? null,
+    snapshot.aheadCount ?? null,
+    snapshot.behindCount ?? null,
+    snapshot.mood ?? null,
+    snapshot.lastActivityTimestamp ?? null,
+    snapshot.createdAt ?? null,
+    snapshot.linked,
+    status === null
+      ? null
+      : [
+          status.changedFileCount,
+          status.counts,
+          status.files.map((file) => `${file.state}\u0000${file.path}`),
+        ],
+  ]);
+}
+
+/** One subscriber's view of the worktree set: what it was last handed. */
+function mockWorktreeChange(
+  previous: Map<string, string>,
+  snapshots: readonly PluginWorktreeSnapshot[]
+): { change: PluginWorktreesChange; current: Map<string, string> } {
+  const current = new Map<string, string>();
+  const added: string[] = [];
+  const changed: string[] = [];
+  for (const snapshot of snapshots) {
+    if (current.has(snapshot.id)) continue;
+    const fingerprint = mockWorktreeFingerprint(snapshot);
+    current.set(snapshot.id, fingerprint);
+    const before = previous.get(snapshot.id);
+    if (before === undefined) added.push(snapshot.id);
+    else if (before !== fingerprint) changed.push(snapshot.id);
+  }
+  const removed = [...previous.keys()].filter((id) => !current.has(id));
+  return {
+    change: Object.freeze({
+      added: Object.freeze(added),
+      removed: Object.freeze(removed),
+      changed: Object.freeze(changed),
+    }),
+    current,
+  };
+}
+
+/** The host's `fs.readFiles` bounds (electron/services/plugin/pluginFsReadFiles.ts). */
+const MOCK_READ_FILES_MAX_PATHS = 1024;
+const MOCK_READ_FILES_MAX_TOTAL_BYTES = PLUGIN_INVOKE_MAX_RESULT_BYTES / 2;
+
 function mockRevision(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
@@ -672,7 +771,13 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   let clipboardText = "";
 
   const activeWorktreeSubs = new Set<(snapshot: PluginWorktreeSnapshot | null) => void>();
-  const worktreesSubs = new Set<(snapshots: PluginWorktreeSnapshot[]) => void>();
+  // Each subscriber keeps the fingerprints it was last handed, so its change
+  // argument is computed against its own history, as the host does.
+  const worktreesSubs = new Map<
+    (snapshots: PluginWorktreeSnapshot[], change: PluginWorktreesChange) => void,
+    { previous: Map<string, string> }
+  >();
+  const subscriptionOptions: MockSubscriptionRecord[] = [];
 
   let lastAgentSnapshot: PluginAgentSnapshot | null = null;
   const agentStateSubs = new Set<(snapshot: PluginAgentSnapshot) => void>();
@@ -1258,7 +1363,11 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         (activeWorktree?.path === path ? activeWorktree : null);
       return match?.status ?? null;
     },
-    onDidChangeActiveWorktree(callback) {
+    onDidChangeActiveWorktree(callback, subscribeOptions) {
+      subscriptionOptions.push({
+        kind: "active-worktree",
+        debounceMs: mockResolveSubscriptionDebounceMs(subscribeOptions?.debounceMs),
+      });
       activeWorktreeSubs.add(callback);
       let disposed = false;
       const dispose = () => {
@@ -1268,11 +1377,16 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       };
       return Promise.resolve(dispose);
     },
-    onDidChangeWorktrees(callback, _options) {
-      // The mock ignores `debounceMs` — coalescing is a host-side concern and is
-      // unit-tested against PluginService directly; activation tests just need
-      // the subscription wired.
-      worktreesSubs.add(callback);
+    onDidChangeWorktrees(callback, subscribeOptions) {
+      // The window is resolved and recorded exactly as the host resolves it,
+      // but delivery stays synchronous: timing is a host concern, unit-tested
+      // there, and a test driving `simulateWorktreesChange` wants the callback
+      // now. The change argument is real.
+      subscriptionOptions.push({
+        kind: "worktrees",
+        debounceMs: mockResolveSubscriptionDebounceMs(subscribeOptions?.debounceMs),
+      });
+      worktreesSubs.set(callback, { previous: new Map() });
       let disposed = false;
       const dispose = () => {
         if (disposed) return;
@@ -1371,7 +1485,11 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       sentToAgentCalls.push({ text, options, result });
       return result;
     },
-    onDidChangeAgentState(callback) {
+    onDidChangeAgentState(callback, subscribeOptions) {
+      subscriptionOptions.push({
+        kind: "agent-state",
+        debounceMs: mockResolveSubscriptionDebounceMs(subscribeOptions?.debounceMs),
+      });
       agentStateSubs.add(callback);
       let disposed = false;
       const dispose = () => {
@@ -1731,6 +1849,63 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         }
         return { contents: v, revision: mockRevision(v) };
       },
+      // Same validation, bounds and per-entry results as the host; a path the
+      // mock fs does not hold is `NOT_FOUND`.
+      readFiles: (async (
+        paths: readonly string[],
+        readOptions?: PluginFsReadFilesOptions
+      ): Promise<PluginFsReadFilesEntry<string | Uint8Array>[]> => {
+        const fail = (why: string): never => {
+          throw new Error(`VALIDATION: plugin "${pluginId}" fs.readFiles: ${why}`);
+        };
+        if (!Array.isArray(paths)) fail("paths must be an array of strings");
+        if (paths.length > MOCK_READ_FILES_MAX_PATHS) {
+          fail(`at most ${MOCK_READ_FILES_MAX_PATHS} paths per call (got ${paths.length})`);
+        }
+        if (paths.some((p) => typeof p !== "string" || p.length === 0)) {
+          fail("every path must be a non-empty string");
+        }
+        const encoding = readOptions?.encoding ?? "utf-8";
+        if (encoding !== "utf-8" && encoding !== "bytes") {
+          fail('encoding must be "utf-8" or "bytes"');
+        }
+        const max = readOptions?.maxBytesPerFile;
+        if (max !== undefined && (!Number.isSafeInteger(max) || max < 0)) {
+          fail("maxBytesPerFile must be a non-negative integer");
+        }
+        readOptions?.signal?.throwIfAborted();
+        let remaining = MOCK_READ_FILES_MAX_TOTAL_BYTES;
+        return paths.map((filePath): PluginFsReadFilesEntry<string | Uint8Array> => {
+          const v = fsFiles.get(filePath);
+          if (v === undefined) {
+            return {
+              path: filePath,
+              ok: false,
+              error: { code: "NOT_FOUND", message: `ENOENT: mock fs has no file "${filePath}"` },
+            };
+          }
+          const bytes = new TextEncoder().encode(v);
+          if (max !== undefined && max <= remaining && bytes.length > max) {
+            return {
+              path: filePath,
+              ok: false,
+              error: { code: "TOO_LARGE", message: `larger than maxBytesPerFile (${max})` },
+            };
+          }
+          if (bytes.length > remaining) {
+            return {
+              path: filePath,
+              ok: false,
+              error: {
+                code: "RESULT_TOO_LARGE",
+                message: "the call's content budget is spent; read this path in another call",
+              },
+            };
+          }
+          remaining -= bytes.length;
+          return { path: filePath, ok: true, content: encoding === "bytes" ? bytes : v };
+        });
+      }) as NonNullable<PluginFsApi["readFiles"]>,
       async mkdir(dirPath) {
         if (typeof dirPath !== "string" || dirPath.length === 0) {
           throw new Error(`Plugin "${pluginId}" fs.mkdir: path must be a non-empty string`);
@@ -2030,6 +2205,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     systemOpenPathCalls,
     systemShowItemCalls,
     documentsRenderPdfCalls,
+    subscriptionOptions,
 
     simulateActiveWorktreeChange(snapshot) {
       activeWorktree = snapshot;
@@ -2037,7 +2213,12 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     },
     simulateWorktreesChange(snapshots) {
       worktrees = snapshots;
-      for (const cb of worktreesSubs) cb(snapshots);
+      for (const [cb, sub] of [...worktreesSubs]) {
+        if (!worktreesSubs.has(cb)) continue;
+        const { change, current } = mockWorktreeChange(sub.previous, snapshots);
+        sub.previous = current;
+        cb(snapshots, change);
+      }
     },
     simulateWorktreesResult(result) {
       worktreesResult = result;

@@ -60,6 +60,8 @@ import type {
   UnregisterFileDecorationProviderParams,
   UnregisterMcpToolsParams,
   FsPathParams,
+  FsReadFilesParams,
+  PluginWorkerWorktreesEvent,
   FsWriteFileParams,
   FsAppendFileParams,
   FsWatchParams,
@@ -886,6 +888,22 @@ export class PluginDevWorkerMainBridge {
         return this.host.fs.readFileBytes((params as FsPathParams).path, { signal });
       case "fs.readFileWithRevision":
         return this.host.fs.readFileWithRevision((params as FsPathParams).path, { signal });
+      case "fs.readFiles": {
+        const p = params as FsReadFilesParams;
+        const fsApi = this.host.fs;
+        if (!fsApi.readFiles) throw new Error("fs.readFiles is not available on this host");
+        // Forwarded as given so the host validates exactly what the worker
+        // sent; the overloads only exist to type a literal `encoding`.
+        const readFiles = fsApi.readFiles as (
+          paths: readonly string[],
+          options: unknown
+        ) => Promise<unknown>;
+        return readFiles.call(fsApi, p.paths, {
+          signal,
+          ...(p.encoding !== undefined && { encoding: p.encoding }),
+          ...(p.maxBytesPerFile !== undefined && { maxBytesPerFile: p.maxBytesPerFile }),
+        });
+      }
       case "fs.mkdir":
         await this.host.fs.mkdir((params as FsPathParams).path);
         return undefined;
@@ -1369,14 +1387,21 @@ export class PluginDevWorkerMainBridge {
     };
     try {
       let dispose: () => void;
+      // An absent `debounceMs` is passed through as undefined, which the host
+      // reads as "use the default window" — the same as an in-process plugin.
       if (kind === "active-worktree") {
-        dispose = await this.host.onDidChangeActiveWorktree((snapshot) => push(snapshot));
-      } else if (kind === "worktrees") {
-        dispose = await this.host.onDidChangeWorktrees((snapshots) => push(snapshots), {
+        dispose = await this.host.onDidChangeActiveWorktree((snapshot) => push(snapshot), {
           debounceMs: msg.debounceMs,
         });
+      } else if (kind === "worktrees") {
+        dispose = await this.host.onDidChangeWorktrees(
+          (snapshots, change) => push({ snapshots, change } satisfies PluginWorkerWorktreesEvent),
+          { debounceMs: msg.debounceMs }
+        );
       } else if (kind === "agent-state") {
-        dispose = await this.host.onDidChangeAgentState((snapshot) => push(snapshot));
+        dispose = await this.host.onDidChangeAgentState((snapshot) => push(snapshot), {
+          debounceMs: msg.debounceMs,
+        });
       } else if (kind === "panel-lifecycle") {
         dispose = await this.host.onDidChangePanelLifecycle((event) => push(event));
       } else if (kind === "system-wake") {
