@@ -284,7 +284,7 @@ export function ContentGridDefault({
                         <ContentGridEmptyState
                           hasLaunchTarget={ctx.hasActiveWorktree}
                           hasProjectContext={ctx.projectName !== null}
-                          hasWorktrees={ctx.worktreeMap.size > 0}
+                          hasWorktrees={ctx.hasWorktrees}
                           isWorktreeInitialized={ctx.isWorktreeInitialized}
                           activeWorktreeName={ctx.activeWorktreeName}
                           activeWorktreeId={ctx.activeWorktreeId}
