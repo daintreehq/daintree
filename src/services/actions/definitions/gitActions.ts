@@ -255,7 +255,7 @@ function reportGitFailure(
     type: "error",
     title,
     message: body,
-    context: { eventKind: "git" },
+    context: { worktreeId, eventKind: "git" },
     // One recovery action, and the one that actually helps: every failure here
     // is something the user resolves by looking at the worktree's changes.
     action: {
@@ -846,8 +846,10 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       // palette to stand its own toast down — so anything that escapes
       // un-notified is silently swallowed, and "no worktree in context" is
       // exactly the failure a user most needs told about.
+      let worktreeId: string | null = null;
       try {
         const { prune, ...location } = (args ?? {}) as WorktreeLocationArgs & { prune?: boolean };
+        worktreeId = resolveWorktreeIdOrNull(location, ctx);
         const resolvedCwd = requireWorktreePath(location, ctx);
         // No confirm, unlike its push/pull-rebase neighbours: a fetch writes
         // only remote-tracking refs, so there is no local work it can destroy
@@ -879,7 +881,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
           // `git`, not `uiFeedback`: the latter is a silencing kind and would
           // suppress this toast entirely, which is the one outcome a failed
           // fetch must not have.
-          context: { eventKind: "git" },
+          context: { worktreeId: worktreeId ?? undefined, eventKind: "git" },
         });
         throw err;
       }

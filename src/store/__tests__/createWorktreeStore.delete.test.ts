@@ -650,16 +650,15 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
       title: string;
       message: string;
       context: { worktreeId?: string };
+      suppressWhenOriginVisible?: boolean;
     };
     expect(payload.type).toBe("error");
     expect(payload.title).toContain("branch");
     expect(payload.message).toContain("Couldn't delete branch");
-    // No `worktreeId` context on this path: `notify`'s origin-surface gate
-    // treats a matching active worktree as "already visible inline" and drops
-    // the toast to inbox-only. This branch runs because the card is gone, and
-    // a ghost row keeping terminals alive still answers to the id — so the id
-    // would suppress the only surface reporting the outcome.
-    expect(payload.context.worktreeId).toBeUndefined();
+    // The deleted worktree's id still files the outcome under it in the inbox;
+    // the address no longer gates delivery, so the toast still surfaces.
+    expect(payload.context.worktreeId).toBe("wt-1");
+    expect(payload.suppressWhenOriginVisible).toBeUndefined();
   });
 
   it("partial-success path: a branch the backend deliberately kept is a warning, not a failed delete", async () => {

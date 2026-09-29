@@ -63,6 +63,7 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
   const currentCount = countPanelsTowardLimit(store.panelsById, store.panelIds);
   const { allowed, declined } = await preflightSpawnBatchLimit(currentCount, terminals.length, {
     source: options.source,
+    worktreeId,
   });
   if (signal?.aborted) return;
 

@@ -453,7 +453,8 @@ export function registerWorktreeContextActions(
                 format,
               }),
             },
-            "worktree.copyTree"
+            "worktree.copyTree",
+            targetWorktreeId
           );
         }
 

@@ -13,6 +13,7 @@ import {
 import { z } from "zod";
 import { notify } from "@/lib/notify";
 import { announceCopyTreeCopy } from "@/lib/copyTreeFeedback";
+import { panelNotificationAddress } from "@/lib/notificationAddress";
 import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 import { formatCopyResultMessage } from "@/lib/formatCopyResult";
 import { resolveCopyTreeRunSource } from "@/lib/copyTreeRunSource";
@@ -497,8 +498,9 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         // human route at all, so the in-flight signal belongs where the work is
         // visible — the assistant panel that started it — and only the
         // COMPLETION comes back to the button below.
+        const worktreeId = requireWorktreeId(args, ctx);
         const result = await copyTreeClient.generate(
-          requireWorktreeId(args, ctx),
+          worktreeId,
           args?.options,
           args?.includeContent,
           resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource),
@@ -561,7 +563,8 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
               "temporary-file"
             ),
           },
-          "copyTree.generate"
+          "copyTree.generate",
+          worktreeId
         );
         // Projected explicitly rather than passed through. Dispatch does parse
         // results against `resultSchema` now (#11539), but building the result
@@ -628,6 +631,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       mcpOutputSchema: true,
       run: async (args, ctx: ActionContext) => {
         requireExplicitWorktreeForAgentDispatch("copyTree.generateAndCopyFile", args, ctx);
+        const worktreeId = requireWorktreeId(args, ctx);
         // Bracketed for the toolbar's Copy context spinner — this is the action
         // MCP clipboard copies and the recents replay land on, and both should
         // spin the button exactly like a direct click (the other clipboard
@@ -639,7 +643,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         let result: CopyTreeResult;
         try {
           result = await copyTreeClient.generateAndCopyFile(
-            requireWorktreeId(args, ctx),
+            worktreeId,
             args?.options,
             resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource),
             args?.name
@@ -670,7 +674,8 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
               format: args?.options?.format,
             }),
           },
-          "copyTree.generateAndCopyFile"
+          "copyTree.generateAndCopyFile",
+          worktreeId
         );
         return {
           filePath,
@@ -708,6 +713,10 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       run: async ({ terminalId, worktreeId, options, name }, ctx: ActionContext) => {
         const resolvedWorktreeId = worktreeId ?? ctx.activeWorktreeId;
         if (!resolvedWorktreeId) throw new Error("No active worktree");
+        const notifyAddress = {
+          worktreeId: resolvedWorktreeId,
+          ...panelNotificationAddress(terminalId),
+        };
         const result = await copyTreeClient.injectToTerminal(
           terminalId,
           resolvedWorktreeId,
@@ -719,7 +728,6 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         throwOnCopyTreeFailure(result);
         // "injected … into terminal", not "copied": the bundle streams into a
         // PTY and never reaches the clipboard. Ordered after the failure check.
-        // No `context.worktreeId` — see the note on generateAndCopyFile above.
         // The renderer's own injection path (`useContextInjection`) calls the
         // client directly and carries its own key, so the two never stack
         // (#11735).
@@ -736,7 +744,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
             "terminal"
           ),
           rateLimitKey: "copyTree.injectToTerminal",
-          context: { eventKind: "agent" },
+          context: { eventKind: "agent", ...notifyAddress },
         });
         return {
           fileCount: result.fileCount,

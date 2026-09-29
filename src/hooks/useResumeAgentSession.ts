@@ -97,7 +97,10 @@ export function useResumeAgentSession() {
             "Couldn't resume this session — its agent may no longer support resuming."
           ),
           priority: "high",
-          context: { eventKind: "agent" },
+          context: {
+            eventKind: "agent",
+            ...(target.worktreeId ? { worktreeId: target.worktreeId } : {}),
+          },
         });
       }
     },

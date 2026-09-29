@@ -36,26 +36,27 @@ export function registerCopyTreeNoticePresenter(next: CopyTreeNoticePresenter): 
   };
 }
 
-export function announceCopyTreeCopy(notice: CopyTreeCompletionNotice, rateLimitKey: string): void {
+export function announceCopyTreeCopy(
+  notice: CopyTreeCompletionNotice,
+  rateLimitKey: string,
+  worktreeId?: string
+): void {
   if (presenter?.(notice)) return;
 
-  // The pre-tooltip toast, verbatim. No `context.worktreeId`, deliberately:
-  // notify() diverts a high-priority toast to the inbox when context names the
-  // worktree already on screen — the common case here — which would silence
-  // exactly this signal. A clipboard overwrite is invisible whichever worktree
-  // is displayed. "agent", not "completed": both route active → high, but
-  // "completed" owns the `completedEnabled` setting, which gates only
-  // main-process completion watches and never a renderer notify(). The
-  // rateLimitKey keeps each caller in its own bucket so an unrelated success
-  // burst can't swallow the one message saying what is now on the clipboard
-  // (#11735).
+  // The pre-tooltip toast, verbatim. "agent", not "completed": both route
+  // active → high, but "completed" owns the `completedEnabled` setting, which
+  // gates only main-process completion watches and never a renderer notify().
+  // The rateLimitKey keeps each caller in its own bucket so an unrelated
+  // success burst can't swallow the one message saying what is now on the
+  // clipboard (#11735). No suppression opt-in: a clipboard overwrite is
+  // invisible whichever worktree is displayed.
   // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
   notify({
     type: "success",
     title: notice.title,
     message: notice.message,
     rateLimitKey,
-    context: { eventKind: "agent" },
+    context: { eventKind: "agent", worktreeId },
   });
 }
 

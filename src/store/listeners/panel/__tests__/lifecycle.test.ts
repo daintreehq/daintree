@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { usePanelStore } from "@/store/panelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
@@ -289,6 +289,81 @@ describe("handleFallbackTriggered — exhausted chain", () => {
       { tab: "agents" },
       { source: "user" }
     );
+  });
+});
+
+describe("handleFallbackTriggered — activation failure", () => {
+  function setupChain(): void {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          testAgent: {
+            customPresets: [
+              { id: "preset-1", name: "Primary", fallbacks: ["preset-2"] },
+              { id: "preset-2", name: "Fallback" },
+            ],
+          },
+        },
+      },
+    });
+    setupPanel({ agentPresetId: "preset-1", fallbackChainIndex: 0, worktreeId: "/repo/wt-a" });
+  }
+
+  const original = usePanelStore.getState().activateFallbackPreset;
+  afterEach(() => {
+    usePanelStore.setState({ activateFallbackPreset: original });
+  });
+
+  it("opts into origin suppression when the spawn failure is shown on the pane", async () => {
+    setupChain();
+    usePanelStore.setState({
+      activateFallbackPreset: vi.fn(async () => {
+        const panel = usePanelStore.getState().panelsById["term-1"]!;
+        usePanelStore.setState({
+          panelsById: {
+            "term-1": { ...panel, restartError: { message: "spawn failed" } } as typeof panel,
+          },
+        });
+        return { success: false, error: "spawn failed" };
+      }),
+    });
+
+    await handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId: "preset-1",
+      reason: "connection",
+    });
+
+    const payload = vi.mocked(notify).mock.lastCall![0];
+    expect(payload.title).toBe("Fallback activation failed");
+    expect(payload.context).toEqual({
+      eventKind: "agent",
+      panelId: "term-1",
+      worktreeId: "/repo/wt-a",
+    });
+    expect(payload.suppressWhenOriginVisible).toBe(true);
+  });
+
+  it("does not suppress a refusal that leaves nothing on the pane", async () => {
+    setupChain();
+    usePanelStore.setState({
+      activateFallbackPreset: vi.fn(async () => ({
+        success: false,
+        error: "already restarting",
+      })),
+    });
+
+    await handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId: "preset-1",
+      reason: "connection",
+    });
+
+    const payload = vi.mocked(notify).mock.lastCall![0];
+    expect(payload.title).toBe("Fallback activation failed");
+    expect(payload.suppressWhenOriginVisible).toBe(false);
   });
 });
 

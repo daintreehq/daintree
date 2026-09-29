@@ -483,6 +483,28 @@ describe("per-source rate-limit", () => {
     ).toBe("warning reported 1 more event — open inbox");
   });
 
+  it("keeps a worktree's severities in separate buckets so successes can't starve a failure", () => {
+    for (let i = 0; i < 3; i++) {
+      notify({ type: "info", message: `i${i}`, context: { worktreeId: "/repo/wt-1" } });
+    }
+    notify({ type: "error", message: "boom", context: { worktreeId: "/repo/wt-1" } });
+
+    expect(useNotificationStore.getState().notifications.map((n) => n.message)).toContain("boom");
+    const entries = useNotificationHistoryStore.getState().entries;
+    expect(entries.some((e) => e.message.includes("more event"))).toBe(false);
+  });
+
+  it("files a worktree bucket's overflow summary under that worktree, named by its folder", () => {
+    for (let i = 0; i < 4; i++) {
+      notify({ type: "error", message: `w${i}`, context: { worktreeId: "/repo/wt-1" } });
+    }
+    const summary = useNotificationHistoryStore
+      .getState()
+      .entries.find((e) => e.message.includes("more event"));
+    expect(summary?.message).toBe("wt-1 reported 1 more event — open inbox");
+    expect(summary?.context).toEqual({ worktreeId: "/repo/wt-1" });
+  });
+
   it("does not double-record overflowed events (no original row + summary)", () => {
     for (let i = 0; i < 5; i++) {
       notify({ type: "error", message: `Original ${i}`, rateLimitKey: "noisy" });

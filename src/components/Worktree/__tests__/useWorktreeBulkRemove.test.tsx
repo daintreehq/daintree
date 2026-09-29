@@ -184,7 +184,11 @@ describe("useWorktreeBulkRemove — confirm derivation", () => {
 
     expect(hook.result.current.isConfirmOpen).toBe(false);
     expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "info", title: "Nothing to delete" })
+      expect.objectContaining({
+        type: "info",
+        title: "Nothing to delete",
+        context: expect.objectContaining({ worktreeId: "main" }),
+      })
     );
     expect(clearSelection).toHaveBeenCalled();
   });
@@ -610,8 +614,14 @@ describe("useWorktreeBulkRemove — execution", () => {
       (c) => (c[0] as { type: string }).type === "warning"
     );
     expect(warning).toBeDefined();
-    const payload = warning![0] as { title: string; message: string };
+    const payload = warning![0] as {
+      title: string;
+      message: string;
+      context?: { worktreeId?: string };
+    };
     expect(payload.title).toBe("Deleted 1 of 2 worktrees");
+    // Spans two worktrees, so it files under neither.
+    expect(payload.context?.worktreeId).toBeUndefined();
     expect(payload.message).toContain("feature/b");
     // Selection is cleared regardless of partial failure — selection is
     // not a retry surface (the modal itself is).
@@ -629,9 +639,14 @@ describe("useWorktreeBulkRemove — execution", () => {
 
     const error = notifyMock.mock.calls.find((c) => (c[0] as { type: string }).type === "error");
     expect(error).toBeDefined();
-    const payload = error![0] as { title: string; message: string };
+    const payload = error![0] as {
+      title: string;
+      message: string;
+      context?: { worktreeId?: string };
+    };
     expect(payload.title).toBe("Couldn't delete worktree");
     expect(payload.message).toBe("Disk read-only");
+    expect(payload.context?.worktreeId).toBe("a");
   });
 
   it("stops dev previews before each delete and folds counts into the success toast (#9084)", async () => {

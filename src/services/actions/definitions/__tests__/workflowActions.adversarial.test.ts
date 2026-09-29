@@ -768,6 +768,7 @@ describe("worktree.createWithRecipe", () => {
     expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, {
       recipeName: "Recipe",
       projectId: "p1",
+      worktreeId: "wt-new",
     });
   });
 
@@ -1362,6 +1363,7 @@ describe("workflow.startWorkOnIssue", () => {
     expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, {
       recipeName: "Recipe",
       projectId: "p1",
+      worktreeId: "wt-new",
     });
   });
 

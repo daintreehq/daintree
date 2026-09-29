@@ -3,6 +3,7 @@ import { useEffectEvent } from "react";
 import type { TerminalReliabilityMetricPayload } from "@shared/types/pty-host";
 import { terminalClient } from "@/clients";
 import { notify } from "@/lib/notify";
+import { panelNotificationAddress } from "@/lib/notificationAddress";
 import { logWarn } from "@/utils/logger";
 
 /**
@@ -74,7 +75,7 @@ export function useForceResumeCycleWatchdog(id: string): ForceResumeCycleWatchdo
         title: "Terminal output stalled",
         message: "Reset the queue from the terminal banner to recover.",
         supersedeKey: `terminal-force-resume-stalled:${id}`,
-        context: { eventKind: "recovery", panelId: id },
+        context: { eventKind: "recovery", ...panelNotificationAddress(id) },
       });
     } else {
       // Confirmed natural drain — the renderer caught up on its own. Re-arm.

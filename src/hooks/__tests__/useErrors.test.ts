@@ -130,6 +130,37 @@ describe("useErrors — onError path", () => {
     unmount();
   });
 
+  it("addresses the toast to the error's terminal and worktree", async () => {
+    const { useErrors } = await import("../useErrors");
+    const { unmount } = renderHook(() => useErrors());
+
+    const error = makeError({
+      id: "err-addressed",
+      type: "process",
+      retryability: "none",
+      context: { worktreeId: "/repo/wt-a", terminalId: "term-1" },
+    });
+    act(() => capturedOnError(error));
+
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ context: { panelId: "term-1", worktreeId: "/repo/wt-a" } })
+    );
+    expect(notifyMock.mock.lastCall![0].suppressWhenOriginVisible).toBeUndefined();
+    unmount();
+  });
+
+  it("sends no address for an error without a worktree or terminal", async () => {
+    const { useErrors } = await import("../useErrors");
+    const { unmount } = renderHook(() => useErrors());
+
+    act(() =>
+      capturedOnError(makeError({ id: "err-unaddressed", type: "process", retryability: "none" }))
+    );
+
+    expect(notifyMock.mock.lastCall![0].context).toBeUndefined();
+    unmount();
+  });
+
   it("calls notify with 'low' priority for retryability='auto' error", async () => {
     const { useErrors } = await import("../useErrors");
     const { unmount } = renderHook(() => useErrors());

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { notify } from "@/lib/notify";
+import { panelNotificationAddress } from "@/lib/notificationAddress";
 
 interface CrashDetails {
   reason: string;
@@ -56,7 +57,9 @@ export function useDevPreviewCrashRecovery({
           message: `The dev preview crashed (${details.reason}) twice within 60 seconds. Auto-recovery stopped. Use Reload or Hard restart to recover.`,
           priority: "high",
           duration: 0,
-          context: { eventKind: "recovery", panelId: id },
+          context: { eventKind: "recovery", ...panelNotificationAddress(id) },
+          // The pane's own crash banner already says this while it's focused.
+          suppressWhenOriginVisible: true,
           supersedeKey: `dev-preview-crash-loop:${id}`,
           correlationId: id,
         });

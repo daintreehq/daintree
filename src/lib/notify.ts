@@ -18,6 +18,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isScheduledQuietNow, nextOccurrenceTimestamp } from "@shared/utils/quietHours";
 import { normalizeForDedup } from "@shared/utils/normalizeErrorMessage";
 import { UNDO_ACTION_LABEL } from "@/lib/undoToast";
+import { worktreeNameFromId } from "@/lib/notificationSourceLabel";
 import type { ErrorRetryability, ErrorType } from "@/store/errorStore";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 
@@ -293,8 +294,8 @@ interface NotifyPayloadBase {
    * a single updating toast over a short window (~2s); `rateLimitKey` drops
    * the would-be toast entirely and aggregates the missed signal into an
    * inbox summary, catching slow-dripping noisy producers that sit outside
-   * the coalesce window. Falls back to `correlationId ?? context.projectId ??
-   * context.worktreeId ?? type` when omitted.
+   * the coalesce window. Falls back to `correlationId`, then
+   * `context.projectId`, then `<context.worktreeId>:<type>`, then `type`.
    */
   rateLimitKey?: string;
   /** When false, the history entry exists but does not increment the unread badge. Defaults to true. */
@@ -314,12 +315,24 @@ interface NotifyPayloadBase {
    * back until quiet hours end would expire unseen. Pass `false` to opt out.
    */
   urgent?: boolean;
+  /**
+   * Opt in to active-context suppression: when the `context.panelId` (or, with
+   * no panel, `context.worktreeId`) is on screen in a focused window, a
+   * high-priority toast is held back and recorded as seen, then promoted if the
+   * user navigates away within the grace window. Only for events the origin
+   * surface already shows inline (agent state, a crash banner) — never for the
+   * result of something the user just did. Ignored for `transient` payloads,
+   * which have no inbox entry to fall back to.
+   */
+  suppressWhenOriginVisible?: boolean;
   /** Fires exactly once when the user explicitly dismisses the toast via the close or action button */
   onDismiss?: () => void;
   /**
-   * Origin context — when set, contextual affordances (e.g. "Mute project
-   * notifications") are surfaced on the toast and in the notification center.
-   * Propagated to both the active notification and the history entry.
+   * Origin context — the address of what the notification is about. Surfaces
+   * contextual affordances (e.g. "Mute project notifications", "Go to source")
+   * and groups the inbox row under its worktree. Propagated to both the active
+   * notification and the history entry. An address never changes delivery on
+   * its own; see `suppressWhenOriginVisible`.
    */
   context?: {
     projectId?: string;
@@ -401,10 +414,10 @@ function pruneCoalesceMap(now: number, protectKey?: string): void {
 
 // ── active-context suppression ──────────────────────────────────────────────
 //
-// When a focused, high-priority notification originates from a surface the
-// user is already looking at (matching `context.worktreeId` or
-// `context.panelId`), the toast is suppressed and the event is recorded
-// only in the inbox. A 500ms grace window catches navigate-away races: if
+// When a focused, high-priority notification that opted in with
+// `suppressWhenOriginVisible` originates from a surface the user is already
+// looking at (its `context.panelId`, else its `context.worktreeId`), the
+// toast is suppressed and the event is recorded only in the inbox. A 500ms grace window catches navigate-away races: if
 // the user moves to a different surface before the timer expires, the
 // suppressed event is promoted to a real toast so the missed signal still
 // reaches them.
@@ -448,11 +461,13 @@ function isOriginSurfaceVisible(context: NotifyPayload["context"]): boolean {
   if (!_activeContextAccessors) return false;
   if (typeof document !== "undefined" && !document.hasFocus()) return false;
 
-  if (context.worktreeId) {
-    if (_activeContextAccessors.getActiveWorktreeId() === context.worktreeId) return true;
-  }
+  // A panel address is the narrower surface: its worktree being active doesn't
+  // put that panel on screen, so the worktree only decides when no panel is named.
   if (context.panelId) {
-    if (_activeContextAccessors.getFocusedPanelId() === context.panelId) return true;
+    return _activeContextAccessors.getFocusedPanelId() === context.panelId;
+  }
+  if (context.worktreeId) {
+    return _activeContextAccessors.getActiveWorktreeId() === context.worktreeId;
   }
   // `projectId` alone is not a surface — a project can have many worktrees.
   return false;
@@ -650,14 +665,28 @@ function pruneRateLimitBuckets(): void {
   }
 }
 
-function getRateLimitKey(payload: NotifyPayload): string {
-  return (
-    payload.rateLimitKey ??
-    payload.correlationId ??
-    payload.context?.projectId ??
-    payload.context?.worktreeId ??
-    payload.type
-  );
+interface RateLimitBucketId {
+  key: string;
+  /** How the overflow summary names the source. */
+  label: string;
+  /** Set when every event in the bucket is about this one worktree. */
+  worktreeId?: string;
+}
+
+function getRateLimitBucketId(payload: NotifyPayload): RateLimitBucketId {
+  const explicit = payload.rateLimitKey ?? payload.correlationId ?? payload.context?.projectId;
+  if (explicit) return { key: explicit, label: explicit };
+  const worktreeId = payload.context?.worktreeId;
+  if (worktreeId) {
+    // Keyed by severity too: a burst of routine successes in one worktree
+    // must not spend the tokens its next failure needs.
+    return {
+      key: `${worktreeId}:${payload.type}`,
+      label: worktreeNameFromId(worktreeId),
+      worktreeId,
+    };
+  }
+  return { key: payload.type, label: payload.type };
 }
 
 function buildOverflowSummary(source: string, count: number): string {
@@ -672,7 +701,7 @@ function buildOverflowSummary(source: string, count: number): string {
  * low-priority summary inbox row keyed by the bucket.
  */
 function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
-  const key = getRateLimitKey(payload);
+  const { key, label, worktreeId } = getRateLimitBucketId(payload);
   const now = Date.now();
   let bucket = _rateLimitBuckets.get(key);
 
@@ -722,7 +751,7 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
   if (bucket.overflowEntryId) {
     const updated = historyStore.updateEntryMessage(
       bucket.overflowEntryId,
-      buildOverflowSummary(key, bucket.overflowCount)
+      buildOverflowSummary(label, bucket.overflowCount)
     );
     if (!updated) {
       bucket.overflowEntryId = null;
@@ -730,18 +759,20 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
     }
   }
   if (!bucket.overflowEntryId) {
-    // No context on the summary row: a bucket can span multiple projects
-    // when its key isn't context-derived (explicit `rateLimitKey`, falls
-    // back to `correlationId` or `type`), so a contextual affordance like
-    // "Mute project X" would dispatch against the first overflow's project
-    // and silently mute the wrong target on later events.
+    // No project context on the summary row: a bucket can span multiple
+    // projects when its key isn't context-derived (explicit `rateLimitKey`,
+    // falls back to `correlationId` or `type`), so a contextual affordance
+    // like "Mute project X" would dispatch against the first overflow's
+    // project and silently mute the wrong target on later events. A
+    // worktree-keyed bucket is about one worktree, so the row files under it.
     bucket.overflowEntryId = historyStore.addEntry({
       type: payload.type,
       title: payload.title,
-      message: buildOverflowSummary(key, bucket.overflowCount),
+      message: buildOverflowSummary(label, bucket.overflowCount),
       correlationId: payload.correlationId,
       seenAsToast: false,
       countable: payload.countable,
+      ...(worktreeId ? { context: { worktreeId } } : {}),
     });
   }
 
@@ -831,9 +862,8 @@ export function isScheduledQuietHours(now: Date = new Date()): boolean {
  * false`, which still writes the entry but suppresses the badge. Constraints:
  * combine with `priority: "high"` (or default) only — `priority: "low"` is a
  * no-op (no toast and no inbox), and `priority: "watch"` still fires the OS
- * native banner with no inbox fallback. Don't pair with `context` either:
- * the active-context suppression-grace path needs an inbox entry to fall
- * back to and silently drops the event when one isn't written.
+ * native banner with no inbox fallback. A transient payload may carry
+ * `context` as an address, but never enters active-context suppression.
  *
  * Only call for events the user could not otherwise observe: completion, failure,
  * or required action. Don't duplicate in-place UI state changes — those are
@@ -858,10 +888,9 @@ export function notify(payload: NotifyPayload): string {
   const { placement, correlationId, type, title, message, inboxMessage, context } = payload;
 
   if (import.meta.env.DEV && payload.transient) {
-    // transient bypasses the inbox, so combinations that depend on the inbox
-    // as a fallback (priority="low" routes only to inbox; context-suppression
-    // promotes the inbox entry on navigate-away) collapse to a silent drop.
-    // Surface here so the contradictory shape is caught at write-time.
+    // transient bypasses the inbox, so priority="low" (which routes only to
+    // the inbox) collapses to a silent drop. Surface here so the
+    // contradictory shape is caught at write-time.
     if (priority === "low") {
       if (hadExplicitPriority) {
         console.warn(
@@ -873,9 +902,15 @@ export function notify(payload: NotifyPayload): string {
         );
       }
     }
-    if (context) {
+  }
+  if (import.meta.env.DEV && payload.suppressWhenOriginVisible) {
+    if (payload.transient) {
       console.warn(
-        "[notify] transient: true with context drops the event when the origin surface is visible — the suppression-grace path needs an inbox entry to fall back to."
+        "[notify] suppressWhenOriginVisible is ignored with transient: true — the suppression-grace path needs an inbox entry to fall back to."
+      );
+    } else if (!context?.panelId && !context?.worktreeId) {
+      console.warn(
+        "[notify] suppressWhenOriginVisible has no effect without context.panelId or context.worktreeId."
       );
     }
   }
@@ -963,7 +998,13 @@ export function notify(payload: NotifyPayload): string {
 
   const isFocused = typeof document !== "undefined" ? document.hasFocus() : true;
 
-  const originVisible = priority === "high" && isFocused && isOriginSurfaceVisible(context);
+  const originVisible =
+    payload.suppressWhenOriginVisible === true &&
+    !payload.transient &&
+    historyMessage !== undefined &&
+    priority === "high" &&
+    isFocused &&
+    isOriginSurfaceVisible(context);
   const shouldToast = priority === "watch" || (priority === "high" && isFocused && !originVisible);
   const shouldNative = priority === "watch";
 
@@ -1095,11 +1136,19 @@ export function notify(payload: NotifyPayload): string {
           patch.actions = undefined;
         }
         // Clear context on coalesce: the combined toast now represents multiple
-        // events which may originate from different projects. A contextual
-        // affordance like "Mute project notifications" would otherwise dispatch
-        // with the first project's ID and silently mute the wrong target.
-        if (notification.context?.projectId !== context?.projectId) {
-          patch.context = undefined;
+        // events which may originate from different subjects. A contextual
+        // affordance like "Mute project notifications" or "Go to source" would
+        // otherwise act on the first event's address and hit the wrong target.
+        if (
+          notification.context?.projectId !== context?.projectId ||
+          notification.context?.worktreeId !== context?.worktreeId ||
+          notification.context?.panelId !== context?.panelId
+        ) {
+          // A kind both events share still names the combined toast, so its
+          // "Silence …" affordance stays; only the address is ambiguous.
+          const sharedKind =
+            notification.context?.eventKind === context?.eventKind ? context?.eventKind : undefined;
+          patch.context = sharedKind ? { eventKind: sharedKind } : undefined;
         }
         // Mirror the create-path rule: when the updated toast will be
         // action-bearing, promote it to sticky so the user has time to act.

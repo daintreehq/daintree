@@ -700,10 +700,14 @@ Performance:
         title: "Couldn't copy diagnostics",
         message: "The clipboard refused the write. Selecting the values by hand still works.",
         action: { label: "Try again", onClick: () => void copy(payload) },
-        context: { eventKind: "settings" },
+        context: {
+          eventKind: "settings",
+          panelId: terminalId,
+          ...(worktreeId ? { worktreeId } : {}),
+        },
       });
     });
-  }, [buildDiagnostics, copy]);
+  }, [buildDiagnostics, copy, terminalId, worktreeId]);
 
   // Arrive on the overview's heading rather than the first control: every
   // control here sits below the overview, and focusing one scrolls the body

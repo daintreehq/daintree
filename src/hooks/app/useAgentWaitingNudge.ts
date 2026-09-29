@@ -5,6 +5,7 @@ import { useNotificationStore } from "@/store/notificationStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { getOnboardingState } from "@/clients/onboardingClient";
 import { notify } from "@/lib/notify";
+import { panelNotificationAddress } from "@/lib/notificationAddress";
 import { isElectronAvailable } from "../useElectron";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
@@ -48,7 +49,7 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
       inboxMessage:
         "Your agent is waiting for input. Enable notifications to get alerted when this happens.",
       duration: 0,
-      context: { eventKind: "waiting", panelId },
+      context: { eventKind: "waiting", ...panelNotificationAddress(panelId) },
       actions: [
         {
           label: "Enable notifications",

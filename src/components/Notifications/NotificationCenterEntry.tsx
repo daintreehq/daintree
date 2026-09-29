@@ -614,6 +614,14 @@ async function reportNotificationOnGitHub(
 ): Promise<void> {
   const correlationId = entry.correlationId;
   if (!correlationId) return;
+  // Only the reported entry's address carries over — its eventKind and
+  // correlation identity describe that entry, not this feedback.
+  const { projectId, worktreeId, panelId } = entry.context ?? {};
+  const feedbackAddress = {
+    ...(projectId ? { projectId } : {}),
+    ...(worktreeId ? { worktreeId } : {}),
+    ...(panelId ? { panelId } : {}),
+  };
   try {
     // Lazy-load the report-flow dependencies so they stay off the boot
     // path — appClient + buildNotificationReportUrl + logger together push
@@ -669,7 +677,7 @@ async function reportNotificationOnGitHub(
             "The full notification report was copied to your clipboard — paste it into the issue body.",
           transient: true,
           priority: "high",
-          context: { eventKind: "uiFeedback" },
+          context: { eventKind: "uiFeedback", ...feedbackAddress },
         });
       } else {
         notify({
@@ -678,7 +686,7 @@ async function reportNotificationOnGitHub(
           message: "Couldn't copy the full report. Quote the correlation ID when filing the issue.",
           inboxMessage: "Couldn't copy notification report to clipboard.",
           priority: "high",
-          context: { eventKind: "uiFeedback" },
+          context: { eventKind: "uiFeedback", ...feedbackAddress },
         });
       }
     }

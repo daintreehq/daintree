@@ -228,6 +228,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
                       type: "warning",
                       title: "Couldn't undo assignment",
                       message: `${formatErrorMessage(unassignResult.error, "Failed to unassign issue")} — you can unassign manually on the forge`,
+                      context: { worktreeId: createdWorktreeId },
                     });
                   }
                 }
@@ -240,7 +241,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
                 title: "Could not assign issue",
                 message: `${assignmentError} — you can assign it manually on the forge`,
                 priority: "high",
-                context: { eventKind: "uiFeedback" },
+                context: { worktreeId: createdWorktreeId, eventKind: "uiFeedback" },
               });
             }
 
@@ -251,6 +252,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
               inboxMessage: worktreeMsg,
               priority: "high",
               countable: false,
+              context: { worktreeId: createdWorktreeId },
               // Threads the success into a per-worktree group so subsequent
               // worktree-lifecycle events (e.g. teardown) supersede this row
               // cleanly instead of stacking unrelated entries.

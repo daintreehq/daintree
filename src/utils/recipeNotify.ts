@@ -5,21 +5,16 @@ import type { RecipeSpawnResults } from "@/store/recipeStore";
 export interface RecipeSpawnNotifyContext {
   recipeName?: string;
   projectId?: string;
+  worktreeId?: string;
 }
 
 // Surfaces partial or full recipe spawn failures for launch paths with no
 // panel-owned banner (dock menu, recipe.run action, workflow creation). The
 // RecipeRunner panel renders SpawnErrorBanner inline instead — callers that
 // own a banner must not also call this, or the user sees both.
-//
-// Deliberately no worktreeId in the notify context: notify()'s origin-surface
-// suppression drops the toast when the failing worktree is the active one —
-// the common case for these launch paths — and none of them render an inline
-// fallback, so the toast must always fire. projectId alone is not a surface
-// and never triggers suppression.
 export function notifyRecipeSpawnFailures(
   results: RecipeSpawnResults,
-  { recipeName, projectId }: RecipeSpawnNotifyContext = {}
+  { recipeName, projectId, worktreeId }: RecipeSpawnNotifyContext = {}
 ): void {
   if (results.failed.length === 0) return;
   // Every missing terminal is one the user chose not to open at the panel-limit
@@ -39,7 +34,7 @@ export function notifyRecipeSpawnFailures(
       type: "error",
       title: "Recipe launch failed",
       message: `Couldn't start any terminals from ${name}.${reason}`,
-      context: { eventKind: "agent", projectId },
+      context: { eventKind: "agent", projectId, worktreeId },
     });
     return;
   }
@@ -48,6 +43,6 @@ export function notifyRecipeSpawnFailures(
     type: "warning",
     title: "Recipe partially launched",
     message: `${results.failed.length} of ${total} terminals from ${name} couldn't start.${reason}`,
-    context: { eventKind: "agent", projectId },
+    context: { eventKind: "agent", projectId, worktreeId },
   });
 }

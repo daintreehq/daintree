@@ -18,7 +18,12 @@ import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas"
  * Error` outside its own guard, so a hostile/exotic rejection value (a Proxy
  * with a throwing trap) can throw here.
  */
-function notifyWorktreeResourceError(err: unknown, title: string, fallbackMessage: string): void {
+function notifyWorktreeResourceError(
+  err: unknown,
+  title: string,
+  fallbackMessage: string,
+  worktreeId: string | undefined
+): void {
   try {
     const message = formatErrorMessage(err, fallbackMessage) || fallbackMessage;
     notify({
@@ -26,6 +31,7 @@ function notifyWorktreeResourceError(err: unknown, title: string, fallbackMessag
       priority: "high",
       title,
       message,
+      context: { worktreeId },
       action: {
         label: "Copy details",
         successLabel: "Copied",
@@ -42,7 +48,13 @@ function notifyWorktreeResourceError(err: unknown, title: string, fallbackMessag
     // Last resort: a bare toast still beats a silently swallowed failure.
     try {
       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-      notify({ type: "error", priority: "high", title, message: fallbackMessage });
+      notify({
+        type: "error",
+        priority: "high",
+        title,
+        message: fallbackMessage,
+        context: { worktreeId },
+      });
     } catch {
       // The notification layer itself is broken; the rethrow below is all
       // that's left to carry the failure.
@@ -104,13 +116,17 @@ export function registerWorktreeResourceActions(
       },
       selfNotifiesOnExecutionError: true,
       run: async (args, ctx: ActionContext) => {
+        const targetWorktreeId = args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         try {
-          const worktreeId = args?.worktreeId;
-          const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
           if (!targetWorktreeId) throw new Error("No worktree selected");
           await worktreeClient.resourceAction(targetWorktreeId, "provision");
         } catch (err) {
-          notifyWorktreeResourceError(err, "Provision failed", "Resource provisioning failed");
+          notifyWorktreeResourceError(
+            err,
+            "Provision failed",
+            "Resource provisioning failed",
+            targetWorktreeId
+          );
           throw err;
         }
       },
@@ -145,13 +161,17 @@ export function registerWorktreeResourceActions(
       },
       selfNotifiesOnExecutionError: true,
       run: async (args, ctx: ActionContext) => {
+        const targetWorktreeId = args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         try {
-          const worktreeId = args?.worktreeId;
-          const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
           if (!targetWorktreeId) throw new Error("No worktree selected");
           await worktreeClient.resourceAction(targetWorktreeId, "teardown");
         } catch (err) {
-          notifyWorktreeResourceError(err, "Teardown failed", "Resource teardown failed");
+          notifyWorktreeResourceError(
+            err,
+            "Teardown failed",
+            "Resource teardown failed",
+            targetWorktreeId
+          );
           throw err;
         }
       },
@@ -184,13 +204,17 @@ export function registerWorktreeResourceActions(
       },
       selfNotifiesOnExecutionError: true,
       run: async (args, ctx: ActionContext) => {
+        const targetWorktreeId = args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         try {
-          const worktreeId = args?.worktreeId;
-          const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
           if (!targetWorktreeId) throw new Error("No worktree selected");
           await worktreeClient.resourceAction(targetWorktreeId, "resume");
         } catch (err) {
-          notifyWorktreeResourceError(err, "Resume failed", "Resource resume failed");
+          notifyWorktreeResourceError(
+            err,
+            "Resume failed",
+            "Resource resume failed",
+            targetWorktreeId
+          );
           throw err;
         }
       },
@@ -223,13 +247,17 @@ export function registerWorktreeResourceActions(
       },
       selfNotifiesOnExecutionError: true,
       run: async (args, ctx: ActionContext) => {
+        const targetWorktreeId = args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         try {
-          const worktreeId = args?.worktreeId;
-          const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
           if (!targetWorktreeId) throw new Error("No worktree selected");
           await worktreeClient.resourceAction(targetWorktreeId, "pause");
         } catch (err) {
-          notifyWorktreeResourceError(err, "Pause failed", "Resource pause failed");
+          notifyWorktreeResourceError(
+            err,
+            "Pause failed",
+            "Resource pause failed",
+            targetWorktreeId
+          );
           throw err;
         }
       },
@@ -264,9 +292,8 @@ export function registerWorktreeResourceActions(
       // *previous* check's cached value, which a caller can't distinguish from
       // a fresh one. Failure now rejects instead (#11533).
       run: async (args, ctx: ActionContext) => {
+        const targetWorktreeId = args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         try {
-          const worktreeId = args?.worktreeId;
-          const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
           if (!targetWorktreeId) throw new Error("No worktree selected");
           const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
           if (!worktree) throw new Error("Worktree not found");
@@ -277,7 +304,12 @@ export function registerWorktreeResourceActions(
           const updated = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
           return { configured: true, status: updated?.resourceStatus ?? null } as const;
         } catch (err) {
-          notifyWorktreeResourceError(err, "Status check failed", "Resource status check failed");
+          notifyWorktreeResourceError(
+            err,
+            "Status check failed",
+            "Resource status check failed",
+            targetWorktreeId
+          );
           throw err;
         }
       },

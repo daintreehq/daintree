@@ -312,7 +312,11 @@ describe("copyContextWithFeedback", () => {
     await copyContextWithFeedback("wt-1", "context-menu");
 
     expect(addNotificationMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "info", message: "Copying context…" })
+      expect.objectContaining({
+        type: "info",
+        message: "Copying context…",
+        context: { worktreeId: "wt-1" },
+      })
     );
     expect(updateNotificationMock).toHaveBeenCalledWith(
       "toast-123",

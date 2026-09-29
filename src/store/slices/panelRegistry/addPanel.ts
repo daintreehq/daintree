@@ -345,6 +345,7 @@ export const createAddPanelActions = (
           title: "Panel limit reached",
           message: `Maximum of ${hardLimit} panels reached. Close some panels before adding new ones.`,
           duration: 5000,
+          context: { worktreeId: options.worktreeId ?? undefined },
         });
         return null;
       }

@@ -823,7 +823,7 @@ export function WorktreeCard({
       if (actionId === "git.push" && captured) {
         notify({
           type: "error",
-          context: { eventKind: "git" },
+          context: { worktreeId: worktree.id, eventKind: "git" },
           title: "Push failed",
           message: `${captured.branchName} has commits on the remote you don't have locally. Force pushing discards them; pulling keeps them.`,
           action: {
@@ -862,7 +862,7 @@ export function WorktreeCard({
             : { cwd: worktree.path });
         notify({
           type: "error",
-          context: { eventKind: "git" },
+          context: { worktreeId: worktree.id, eventKind: "git" },
           title: humanized.title,
           message: humanized.body,
           action: {
@@ -876,7 +876,7 @@ export function WorktreeCard({
       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok. `RECOVERY_ACTIONS` in gitOperationErrors.ts is the repo's map of which git failures have a route; the ones that reach here are the ones it deliberately leaves unrouted, and inventing an action for them would send the user somewhere unrelated to what failed.
       notify({
         type: "error",
-        context: { eventKind: "git" },
+        context: { worktreeId: worktree.id, eventKind: "git" },
         title: humanized.title,
         message: humanized.body,
       });

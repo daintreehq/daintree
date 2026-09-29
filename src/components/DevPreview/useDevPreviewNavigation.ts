@@ -14,6 +14,7 @@ import { actionService } from "@/services/ActionService";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
+import { panelNotificationAddress } from "@/lib/notificationAddress";
 import type { WebviewLoadError } from "./useDevPreviewLoadLifecycle";
 
 interface UseDevPreviewNavigationParams {
@@ -243,6 +244,7 @@ export function useDevPreviewNavigation({
     if (!url || url === "about:blank") return false;
     if (screenshotInFlightRef.current) return false;
     screenshotInFlightRef.current = true;
+    const address = panelNotificationAddress(id);
     try {
       const image = await webview.capturePage();
       const pngData = new Uint8Array(image.toPNG());
@@ -255,12 +257,13 @@ export function useDevPreviewNavigation({
         type: "error",
         title: "Screenshot failed",
         message: "Couldn't copy the screenshot to clipboard",
+        context: address,
       });
       return false;
     } finally {
       screenshotInFlightRef.current = false;
     }
-  }, [isWebviewReady, webviewRef]);
+  }, [isWebviewReady, webviewRef, id]);
 
   const handleToggleDevTools = useCallback(() => {
     const webview = webviewRef.current;

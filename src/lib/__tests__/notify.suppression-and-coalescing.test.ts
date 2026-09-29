@@ -287,6 +287,37 @@ describe("notify()", () => {
       expect(notification!.title).toBe("Agent tasks completed");
     });
 
+    it("clears the combined toast's address when coalescing events from different panels", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ ...makeCoalescePayload(), context: { worktreeId: "wt-1", panelId: "p-1" } });
+      notify({ ...makeCoalescePayload(), context: { worktreeId: "wt-1", panelId: "p-2" } });
+
+      expect(useNotificationStore.getState().notifications[0]!.context).toBeUndefined();
+      const entries = useNotificationHistoryStore.getState().entries;
+      expect(entries.map((e) => e.context?.panelId)).toEqual(["p-2", "p-1"]);
+    });
+
+    it("keeps a shared event kind when clearing the combined toast's address", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ ...makeCoalescePayload(), context: { eventKind: "completed", panelId: "p-1" } });
+      notify({ ...makeCoalescePayload(), context: { eventKind: "completed", panelId: "p-2" } });
+
+      expect(useNotificationStore.getState().notifications[0]!.context).toEqual({
+        eventKind: "completed",
+      });
+    });
+
+    it("keeps the address when coalescing events from the same subject", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ ...makeCoalescePayload(), context: { worktreeId: "wt-1", panelId: "p-1" } });
+      notify({ ...makeCoalescePayload(), context: { worktreeId: "wt-1", panelId: "p-1" } });
+
+      expect(useNotificationStore.getState().notifications[0]!.context).toEqual({
+        worktreeId: "wt-1",
+        panelId: "p-1",
+      });
+    });
+
     it("updates action to multi-agent on coalesce", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify(makeCoalescePayload());

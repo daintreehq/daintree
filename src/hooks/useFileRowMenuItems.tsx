@@ -87,6 +87,7 @@ function runRowAction<Result>(
   actionId: BuiltInRuntimeActionId,
   args: Record<string, string>,
   errorTitle: string,
+  worktreeId: string | null,
   onSuccess?: (result: Result) => void
 ): void {
   const run = async () => {
@@ -98,6 +99,7 @@ function runRowAction<Result>(
         type: "error",
         title: errorTitle,
         message: result.error.message,
+        context: worktreeId ? { worktreeId } : undefined,
         action: { label: "Retry", onClick: () => void run() },
       });
       return;
@@ -280,18 +282,19 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
         "file.read",
         { path: absolutePath },
         "Couldn't copy file contents",
+        worktreeId,
         // Written straight off the read: clipboard writes want a fresh
         // transient activation, and parking the text in state first would put a
         // render between the gesture and the write for no gain.
         (result) => copyWithToast("File contents", result.content, { message: name })
       ),
-    []
+    [worktreeId]
   );
 
   const handleReveal = useCallback(
     (absolutePath: string) =>
-      runRowAction("file.showItemInFolder", { path: absolutePath }, reveal.errorTitle),
-    [reveal]
+      runRowAction("file.showItemInFolder", { path: absolutePath }, reveal.errorTitle, worktreeId),
+    [reveal, worktreeId]
   );
 
   const handleCopyContext = useCallback(
