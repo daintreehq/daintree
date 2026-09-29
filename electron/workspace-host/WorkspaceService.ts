@@ -9,7 +9,7 @@ import {
   findNestedWorktreePaths,
   nestedWorktreeDeleteMessage,
 } from "../../shared/utils/nestedWorktrees.js";
-import { sliceUtf8Window } from "../../shared/utils/boundedOutput.js";
+import { sliceUtf8Bytes } from "../../shared/utils/boundedOutput.js";
 import {
   GIT_FILE_DIFF_MAX_BYTES,
   GIT_FILE_DIFF_MAX_SOURCE_BYTES,
@@ -20,6 +20,7 @@ import { createHardenedGit, createAuthenticatedGit } from "../utils/hardenedGit.
 import { readRemotesWithStatus } from "../utils/baseCompareRef.js";
 import { createRemoteInventoryReader } from "./remoteInventory.js";
 import { copyWorktreeIncludeFiles } from "./worktreeInclude.js";
+import { FileDiffCache } from "./fileDiffCache.js";
 import {
   classifyGitError,
   extractGitErrorMessage,
@@ -588,6 +589,7 @@ export class WorkspaceService {
   // approval arriving meanwhile does not run it again once the first settles.
   private resumingApprovedSetup = new WeakSet<WorktreeMonitor>();
   private listService = new WorktreeListService();
+  private readonly fileDiffCache = new FileDiffCache();
   private prService: PRIntegrationService;
   private fetchCoordinator: RepoFetchCoordinator;
   private _shutdownController = new AbortController();
@@ -5349,12 +5351,9 @@ export class WorkspaceService {
       });
     };
 
-    const sendWindow = (diff: string): void => {
-      const window = sliceUtf8Window(
-        diff,
-        offset ?? 0,
-        Math.min(maxBytes ?? GIT_FILE_DIFF_MAX_BYTES, GIT_FILE_DIFF_MAX_BYTES)
-      );
+    const windowBytes = Math.min(maxBytes ?? GIT_FILE_DIFF_MAX_BYTES, GIT_FILE_DIFF_MAX_BYTES);
+    const sendWindow = (bytes: Uint8Array): void => {
+      const window = sliceUtf8Bytes(bytes, offset ?? 0, windowBytes);
       this.sendEvent({
         type: "get-file-diff-result",
         requestId,
@@ -5384,6 +5383,28 @@ export class WorkspaceService {
 
       const absolutePath = resolve(cwd, normalizedPath);
 
+      // Only a continuation read consults the cache: a first read is usually
+      // the only one (the diff panes never page), and the freshness probe
+      // costs a git spawn of its own. Paging thus computes the diff twice —
+      // once for the first window, once to fill the cache — instead of once
+      // per window.
+      const continuation = (offset ?? 0) > 0;
+      const cacheKeyFor = (source: "file" | "git"): string =>
+        FileDiffCache.key(source, cwd, gitPath, status, ignoreWhitespace === true);
+      const serveFromCache = (key: string, freshness: string | null): boolean => {
+        const cached = freshness === null ? null : this.fileDiffCache.get(key, freshness);
+        if (cached === null) return false;
+        sendWindow(cached);
+        return true;
+      };
+      const serve = (diff: string, key: string, freshness: string | null): void => {
+        const bytes = Buffer.from(diff, "utf-8");
+        if (freshness !== null && bytes.byteLength > windowBytes) {
+          this.fileDiffCache.set(key, freshness, bytes);
+        }
+        sendWindow(bytes);
+      };
+
       // Bounds peak memory: both branches materialize a full result before
       // windowing — the untracked one inlines the file, and git buffers a
       // tracked file's entire diff. The ceiling is 16x the 1MB cliff it
@@ -5406,6 +5427,11 @@ export class WorkspaceService {
 
       if (status === "untracked" || status === "added") {
         const { readFile } = await import("fs/promises");
+        // Taken before the read: a write that lands after it changes the key,
+        // so the next window recomputes instead of serving what this read saw.
+        const fileKey = cacheKeyFor("file");
+        const freshness = continuation ? await FileDiffCache.fileFreshness(absolutePath) : null;
+        if (serveFromCache(fileKey, freshness)) return;
         // A newly added submodule is `added` with a path that is the
         // submodule's own checkout, so there is no file to inline. Git already
         // knows how to describe it (`new file mode 160000`), so fall through to
@@ -5447,10 +5473,16 @@ new file mode 100644
 @@ -0,0 +1,${lines.length} @@
 ${lines.map((l) => "+" + l).join("\n")}`;
 
-          sendWindow(diff);
+          serve(diff, fileKey, freshness);
           return;
         }
       }
+
+      const gitKey = cacheKeyFor("git");
+      const freshness = continuation
+        ? await FileDiffCache.gitFreshness(git, cwd, gitPath, absolutePath)
+        : null;
+      if (serveFromCache(gitKey, freshness?.key ?? null)) return;
 
       // `--no-textconv` blocks user-defined diff drivers that would otherwise
       // execute arbitrary binaries via `.gitattributes` textconv mappings.
@@ -5460,7 +5492,10 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       // under their own paths — neither of which this pane can render or
       // recognise as a gitlink (#12309).
       const diff = await git.diff([
-        "HEAD",
+        // Pinned to the commit the freshness key was taken against, so a HEAD
+        // that moves away and back mid-diff cannot pass off a patch against
+        // the other commit as fresh.
+        freshness?.head ?? "HEAD",
         "--no-ext-diff",
         "--no-textconv",
         "--no-color",
@@ -5480,7 +5515,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         return;
       }
 
-      sendWindow(diff);
+      serve(diff, gitKey, freshness?.key ?? null);
     } catch (error) {
       this.sendEvent({
         type: "get-file-diff-result",
@@ -6120,5 +6155,6 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.pollQueue.clear();
     this.stopForgeRemoteDetection();
     this.listService.invalidateCache();
+    this.fileDiffCache.dispose();
   }
 }
