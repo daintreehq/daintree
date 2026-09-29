@@ -1374,6 +1374,56 @@ describe("project plugin load errors", () => {
     return bridge as unknown as { deps: { onActivationResult?: (r: unknown) => void } };
   }
 
+  it("publishes no view URL before the plugin:// resolver is live (#12996)", async () => {
+    // A background-restored project view reaches `onProjectOpened` through
+    // `notifyProjectPluginsOpened`, which never waits on the deferred
+    // `plugin-service` task that installs the live resolver. A panel published
+    // in that window is imported against the placeholder, 404s, and stays
+    // failed for that specifier. The load must hold until the resolver is live.
+    const projectRoot = await writeProjectPlugin("export function activate() {}");
+    let releaseProtocol!: () => void;
+    const protocolReady = new Promise<void>((resolve) => {
+      releaseProtocol = resolve;
+    });
+    let protocolLive = false;
+    const service = new PluginService(tmpDir, "0.0.0", {
+      whenProtocolReady: () => protocolReady,
+    });
+    openedServices.push(service);
+    const published: Array<{ id: string; componentPath: string; live: boolean }> = [];
+    vi.mocked(registerPanelKind).mockImplementation((config) => {
+      if (config.componentPath) {
+        published.push({ id: config.id, componentPath: config.componentPath, live: protocolLive });
+      }
+    });
+
+    try {
+      // Fire-and-forget, the way the restore path calls it — nothing from the
+      // deferred startup queue has run.
+      const opening = service.onProjectOpened(PROJECT_ID, projectRoot);
+      // Long enough for discovery, trust and the directory scan to reach the
+      // gate; a single microtask would prove nothing about a disk-bound load.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(published).toEqual([]);
+
+      protocolLive = true;
+      releaseProtocol();
+      await opening;
+    } finally {
+      releaseProtocol();
+      vi.mocked(registerPanelKind).mockReset();
+    }
+
+    const panel = published.find((entry) => entry.id === PANEL_KIND_ID);
+    expect(panel).toBeDefined();
+    expect(published.every((entry) => entry.live)).toBe(true);
+    // And the URL it did publish is one the live resolver serves.
+    const pluginDir = await fs.realpath(path.join(projectRoot, ".daintree", "plugins", PLUGIN_ID));
+    expect(service.getPluginRootByAuthority(new URL(panel!.componentPath).hostname)).toBe(
+      pluginDir
+    );
+  });
+
   it("returns the real cause from activatePluginForView instead of a clean result", async () => {
     const service = await openWithPlugin(
       "export function activate() { throw new Error('project-boom'); }"

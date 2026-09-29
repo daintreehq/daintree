@@ -4541,3 +4541,102 @@ describe("applyDaintreeAppCspToSession — preview response pass-through", () =>
     expect(mergeCspHeaders).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("plugin:// resolver readiness and 404 diagnostics (#12996)", () => {
+  const PLUGIN_ROOT = path.resolve("/plugins/project/acme");
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("text/javascript");
+  });
+
+  async function notFoundLogs(): Promise<Array<Record<string, unknown>>> {
+    const { logWarn } = await import("../../utils/logger.js");
+    return vi
+      .mocked(logWarn)
+      .mock.calls.filter(([event]) => event === "plugin.protocol.not-found")
+      .map(([, fields]) => fields as Record<string, unknown>);
+  }
+
+  it("stays not-live on the placeholder and goes live only when the real resolver is installed", async () => {
+    vi.resetModules();
+    const protocols = await import("../protocols.js");
+    const readiness = await import("../pluginProtocolReadiness.js");
+    let settled = false;
+    void readiness.whenPluginDirResolverLive().then(() => {
+      settled = true;
+    });
+
+    protocols.registerPluginProtocol(() => undefined);
+    await Promise.resolve();
+    expect(readiness.isPluginDirResolverLive()).toBe(false);
+    expect(settled).toBe(false);
+
+    protocols.setPluginDirResolver((authority) => (authority === "acme" ? PLUGIN_ROOT : undefined));
+    await readiness.whenPluginDirResolverLive();
+    expect(readiness.isPluginDirResolverLive()).toBe(true);
+    expect(settled).toBe(true);
+  });
+
+  it("logs a placeholder-served miss with the authority, path and a not-live resolver", async () => {
+    vi.resetModules();
+    const protocols = await import("../protocols.js");
+    const handler = protocols.createPluginProtocolHandler(() => undefined);
+
+    const response = await handler(
+      new Request("plugin://pi-abc/__dtv-1/dist/panel.js") as GlobalRequest
+    );
+
+    expect(response.status).toBe(404);
+    expect(await notFoundLogs()).toEqual([
+      {
+        stage: "unknown-authority",
+        authority: "pi-abc",
+        pathname: "/__dtv-1/dist/panel.js",
+        resolverLive: false,
+      },
+    ]);
+  });
+
+  it("names the stage of each disk-side miss once the resolver is live", async () => {
+    vi.resetModules();
+    const fs = await import("fs/promises");
+    const protocols = await import("../protocols.js");
+    const resolve = (authority: string) => (authority === "acme" ? PLUGIN_ROOT : undefined);
+    protocols.setPluginDirResolver(resolve);
+    const handler = protocols.createPluginProtocolHandler(resolve);
+
+    vi.mocked(fs.realpath).mockRejectedValueOnce(
+      Object.assign(new Error("ENOENT"), { code: "ENOENT", syscall: "realpath" })
+    );
+    await handler(new Request("plugin://acme/dist/missing.js") as GlobalRequest);
+    await handler(new Request("plugin://acme/__dtv-x/dist/panel.js") as GlobalRequest);
+    vi.mocked(fs.open).mockRejectedValueOnce(
+      Object.assign(new Error("ENOENT"), { code: "ENOENT", syscall: "open" })
+    );
+    await handler(new Request("plugin://acme/dist/gone.js") as GlobalRequest);
+    const dirHandle = {
+      readFile: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+      stat: vi.fn().mockResolvedValue({ isFile: () => false, mtime: new Date(0) }),
+    };
+    vi.mocked(fs.open).mockResolvedValueOnce(
+      dirHandle as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+    await handler(new Request("plugin://acme/dist") as GlobalRequest);
+
+    const logs = await notFoundLogs();
+    expect(logs.map((l) => l.stage)).toEqual([
+      "realpath",
+      "malformed-generation",
+      "open",
+      "not-a-file",
+    ]);
+    expect(logs.every((l) => l.authority === "acme" && l.resolverLive === true)).toBe(true);
+    expect(logs[0]).toMatchObject({ pathname: "/dist/missing.js", code: "ENOENT" });
+    expect(logs[2]).toMatchObject({ pathname: "/dist/gone.js", syscall: "open" });
+  });
+});
