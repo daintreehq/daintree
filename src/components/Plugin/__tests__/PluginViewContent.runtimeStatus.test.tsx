@@ -5,6 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntimeStatus, PluginWorkerStatus } from "@shared/types/plugin";
 import { PLUGIN_WORKER_STALL_MS } from "../pluginWorkerPresentation";
 import type { PluginViewContentConfig } from "../PluginViewContent";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 /**
  * Host-owned backend health on a mounted plugin panel (#12278).

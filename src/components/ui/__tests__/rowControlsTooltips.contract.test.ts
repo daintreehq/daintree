@@ -115,7 +115,9 @@ const sources = SCAN_ROOTS.flatMap((root) => tsxFiles(root)).map((file) =>
   )
 );
 
-const rel = (source: ts.SourceFile) => path.relative(REPO_ROOT, source.fileName);
+// Forward slashes on every platform, to match the allowlists.
+const rel = (source: ts.SourceFile) =>
+  path.relative(REPO_ROOT, source.fileName).split(path.sep).join("/");
 function where(source: ts.SourceFile, node: ts.Node): string {
   const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
   return `${rel(source)}:${line + 1}`;

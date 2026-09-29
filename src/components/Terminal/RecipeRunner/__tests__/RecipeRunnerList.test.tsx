@@ -4,6 +4,16 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { RecipeRunnerList } from "../RecipeRunnerList";
 import { buildRecipeSections } from "../recipeRunnerUtils";
 import type { TerminalRecipe } from "@/types";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 function makeRecipe(id: string, name: string, pinned = false): TerminalRecipe {
   return {

@@ -75,7 +75,8 @@ describe("ScrollbackRestoreErrorBanner", () => {
 
   it("includes the message text in the description for the error type", () => {
     renderBanner("error", { message: "boom from disk" });
-    expect(screen.getByText(/boom from disk/i)).toBeTruthy();
+    // The context line's TruncatedTooltip content renders inline under the mock.
+    expect(screen.getAllByText(/boom from disk/i).length).toBeGreaterThan(0);
   });
 
   it("does not include the raw message in the description for timeout type", () => {

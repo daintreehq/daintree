@@ -43,6 +43,16 @@ import type { PtyPanelData } from "@shared/types/panel";
 import type { WorktreeSnapshot } from "@shared/types";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 function makeTerminal(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {

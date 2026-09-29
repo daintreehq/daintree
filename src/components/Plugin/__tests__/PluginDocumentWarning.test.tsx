@@ -4,6 +4,16 @@ import { expect, it, vi } from "vitest";
 import { PluginDocumentWarning } from "../PluginDocumentWarning";
 import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
 import { actionService } from "@/services/ActionService";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() } }));
 

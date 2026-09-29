@@ -94,6 +94,16 @@ function renderBanner(
   );
 }
 
+// The full text is disclosed by TruncatedTooltip, not `title`, so the context
+// line is found by its own text.
+function contextLine(text: RegExp): HTMLParagraphElement {
+  const line = Array.from(document.querySelectorAll("p")).find((p) =>
+    text.test(p.textContent ?? "")
+  );
+  if (!line) throw new Error(`No context line matching ${text}`);
+  return line;
+}
+
 describe("TerminalErrorBanner", () => {
   it("renders the restart-failed title", () => {
     renderBanner({
@@ -143,7 +153,7 @@ describe("TerminalErrorBanner", () => {
       timestamp: 1,
       context: { failedCwd: "/missing/dir" },
     });
-    const line = screen.getByTitle("Directory: /missing/dir");
+    const line = contextLine(/^Directory: \/missing\/dir$/);
     expect(line.textContent).toBe("Directory: /missing/dir");
   });
 
@@ -155,7 +165,7 @@ describe("TerminalErrorBanner", () => {
       timestamp: 1,
       context: { failedCwd: "/Users/someone/Projects/a/very/deep/tree/packages/runtime" },
     });
-    const line = screen.getByTitle(/Directory: .*\/runtime$/);
+    const line = contextLine(/^Directory: .*\/runtime$/);
     // The head gives way first; the tail — the part that names the directory —
     // is a separate span, so middle truncation never eats it.
     expect(line.lastElementChild?.textContent).toBe("/runtime");

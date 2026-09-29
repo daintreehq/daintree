@@ -158,8 +158,11 @@ describe("PluginInstallProgressBanner (#11302)", () => {
     });
     settle();
     // Clipping is CSS's job at render time; nothing is thrown away up front, so
-    // the full path stays recoverable from the hover title.
-    expect(banner()!.querySelector(`[title$="${entry}"]`)).not.toBeNull();
+    // the full path stays whole in the line, which TruncatedTooltip discloses.
+    const line = Array.from(banner()!.querySelectorAll("p")).find((el) =>
+      el.textContent?.endsWith(entry)
+    );
+    expect(line).toBeDefined();
     expect(banner()!.textContent).not.toContain("…");
   });
 
