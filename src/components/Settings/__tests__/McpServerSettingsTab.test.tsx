@@ -235,7 +235,7 @@ describe("McpServerSettingsTab", () => {
     });
   });
 
-  it("copy button shows Copied! feedback", async () => {
+  it("copy button shows Copied feedback", async () => {
     const { container } = render(
       <SettingsValidationProvider>
         <McpServerSettingsTab />
@@ -246,7 +246,7 @@ describe("McpServerSettingsTab", () => {
     fireEvent.click(screen.getByLabelText("Copy API key"));
 
     await waitFor(() => {
-      expect(screen.getByText("Copied!")).toBeTruthy();
+      expect(screen.getByText("Copied")).toBeTruthy();
     });
     expect(writeText).toHaveBeenCalledWith("dnt-key-abc123");
   });
@@ -846,7 +846,7 @@ describe("McpServerSettingsTab", () => {
     expect(mockedLogError).toHaveBeenCalledWith("Failed to clear MCP audit log", expect.any(Error));
   });
 
-  it("shows Copied! pill on audit copy instead of notifying", async () => {
+  it("confirms an audit copy on its button instead of notifying", async () => {
     installMcpApi({
       getLogRecords: vi.fn().mockResolvedValue([
         {
@@ -870,7 +870,7 @@ describe("McpServerSettingsTab", () => {
     fireEvent.click(screen.getByRole("button", { name: /copy all as json/i }));
 
     await waitFor(() => {
-      expect(screen.getByText("Copied!")).toBeTruthy();
+      expect(screen.getByText("Copied")).toBeTruthy();
     });
     expect(writeText).toHaveBeenCalledTimes(1);
     const jsonArg = String(writeText.mock.calls[0]![0]);
@@ -885,7 +885,7 @@ describe("McpServerSettingsTab", () => {
     expect(mockedNotify).not.toHaveBeenCalled();
   });
 
-  it("shows inline error and logs audit copy failure without notifying", async () => {
+  it("reports an audit copy failure on its button without notifying", async () => {
     const writeTextReject = vi.fn().mockRejectedValue(new Error("clipboard denied"));
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText: writeTextReject },
@@ -912,11 +912,12 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForContent(container, "files.read");
 
-    fireEvent.click(screen.getByRole("button", { name: /copy all as json/i }));
+    const copy = screen.getByRole("button", { name: /copy all as json/i });
+    fireEvent.click(copy);
 
-    await waitForContent(container, "clipboard denied");
+    // The button is the copy's whole feedback channel, failure included.
+    await waitFor(() => expect(copy.textContent).toBe("Couldn't copy"));
     expect(mockedNotify).not.toHaveBeenCalled();
-    expect(mockedLogError).toHaveBeenCalledWith("Failed to copy MCP audit log", expect.any(Error));
   });
 
   it("shows filtered count when a result filter is active", async () => {
@@ -1384,7 +1385,7 @@ describe("McpServerSettingsTab", () => {
     expect(mockedNotify).not.toHaveBeenCalled();
   });
 
-  it("copy config and copy API key have independent Copied! timeouts", async () => {
+  it("copy config and copy API key confirm independently", async () => {
     const { container } = render(
       <SettingsValidationProvider>
         <McpServerSettingsTab />
@@ -1394,13 +1395,13 @@ describe("McpServerSettingsTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /copy mcp config/i }));
     await waitFor(() => {
-      expect(screen.getByText("Copied!")).toBeTruthy();
+      expect(screen.getByText("Copied")).toBeTruthy();
     });
 
-    // Copy API key — both buttons show Copied! independently
+    // Copy API key — both buttons show Copied independently
     fireEvent.click(screen.getByLabelText("Copy API key"));
     await waitFor(() => {
-      const copiedEls = screen.getAllByText("Copied!");
+      const copiedEls = screen.getAllByText("Copied");
       expect(copiedEls.length).toBeGreaterThanOrEqual(2);
     });
   });
@@ -1756,11 +1757,13 @@ describe("McpServerSettingsTab", () => {
 
       fireEvent.click(screen.getByRole("button", { name: /copy mcp config/i }));
       await waitFor(() => {
-        expect(screen.getByRole("button", { name: /copied/i })).toBeTruthy();
+        expect(screen.getByRole("button", { name: /copy mcp config/i }).textContent).toBe("Copied");
       });
 
       fireEvent.click(screen.getByRole("radio", { name: /codex/i }));
-      expect(screen.queryByRole("button", { name: /copied/i })).toBeNull();
+      expect(screen.getByRole("button", { name: /copy mcp config/i }).textContent).toBe(
+        "Copy MCP config"
+      );
     });
 
     it("uses the runtime snapshot port when it diverges from the slower getStatus refetch", async () => {

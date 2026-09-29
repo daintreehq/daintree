@@ -1,8 +1,6 @@
 import {
   AlertTriangle,
-  Check,
   ChevronDown,
-  Copy,
   Download,
   Eraser,
   ExternalLink,
@@ -11,6 +9,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -31,11 +30,12 @@ import type { FindInPageState } from "@/hooks/useFindInPage";
 import { WebviewDialog, type WebviewDialogRequest } from "../Browser/WebviewDialog";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 
+// The main-process clipboard: the guest page may hold focus.
+const writeMainClipboard = (text: string) => window.electron.clipboard.writeText(text);
+
 interface DevPreviewWebviewOverlaysProps {
   reconnectAttempt: number;
   webviewLoadError: WebviewLoadError | null;
-  certCopied: boolean;
-  onCopyMkcert: () => void;
   isRestarting: boolean;
   onRestartDevServer: () => void;
   onHardReload: () => void;
@@ -77,8 +77,6 @@ interface DevPreviewWebviewOverlaysProps {
 export function DevPreviewWebviewOverlays({
   reconnectAttempt,
   webviewLoadError,
-  certCopied,
-  onCopyMkcert,
   isRestarting,
   onRestartDevServer,
   onHardReload,
@@ -126,10 +124,13 @@ export function DevPreviewWebviewOverlays({
         >
           <PaneStateActions>
             {webviewLoadError.code === "cert" && (
-              <Button onClick={onCopyMkcert} variant="ghost" size="sm">
-                {certCopied ? <Check /> : <Copy />}
-                {certCopied ? "Copied" : "Copy `mkcert -install`"}
-              </Button>
+              <CopyButton
+                label="Copy `mkcert -install`"
+                variant="ghost"
+                size="sm"
+                text="mkcert -install"
+                write={writeMainClipboard}
+              />
             )}
             {webviewLoadError.code === "connection_refused" ||
             webviewLoadError.code === "proxy_error" ? (

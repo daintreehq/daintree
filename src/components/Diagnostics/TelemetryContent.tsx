@@ -1,8 +1,8 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Check, Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useTelemetryPreviewStore } from "@/store/telemetryPreviewStore";
@@ -86,23 +86,6 @@ interface DetailProps {
 }
 
 function TelemetryDetail({ event }: DetailProps) {
-  const [copied, setCopied] = useState(false);
-  const copyTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  useEffect(() => {
-    setCopied(false);
-    if (copyTimerRef.current) {
-      clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = null;
-    }
-  }, [event?.id]);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-    };
-  }, []);
-
   const payloadJson = useMemo(() => {
     if (!event) return "";
     try {
@@ -111,18 +94,6 @@ function TelemetryDetail({ event }: DetailProps) {
       return "(payload could not be serialised)";
     }
   }, [event]);
-
-  const handleCopy = useCallback(async () => {
-    if (!event) return;
-    try {
-      await navigator.clipboard.writeText(payloadJson);
-      setCopied(true);
-      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      logError("Failed to copy telemetry payload", err);
-    }
-  }, [event, payloadJson]);
 
   if (!event) {
     return (
@@ -153,10 +124,14 @@ function TelemetryDetail({ event }: DetailProps) {
               <span>ID {event.id.slice(0, 8)}</span>
             </div>
           </div>
-          <Button variant="subtle" size="xs" onClick={handleCopy} aria-label="Copy payload JSON">
-            {copied ? <Check /> : <Copy />}
-            {copied ? "Copied" : "Copy JSON"}
-          </Button>
+          {/* Keyed by event: two events can carry identical payloads, and the
+              next one selected should not arrive already confirmed. */}
+          <CopyButton
+            key={event.id}
+            label="Copy JSON"
+            aria-label="Copy payload JSON"
+            text={payloadJson}
+          />
         </div>
       </div>
       <div className="flex-1 overflow-auto">

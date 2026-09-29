@@ -8,7 +8,7 @@ import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentit
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { shortSha } from "@/utils/textParsing";
 import { Toaster } from "@/components/ui/toaster";
-import { copyPathWithFeedback } from "@/lib/copyPathFeedback";
+import { copyWithToast } from "@/lib/copyWithToast";
 import { ToolbarProjectPill, ToolbarProjectPillTooltipBody } from "../ToolbarProjectPill";
 import "@/index.css";
 
@@ -186,7 +186,7 @@ function App() {
 
   useEffect(() => {
     if (!ready || copyResult === null) return;
-    copyPathWithFeedback(async () => copyResult === "ok", COPY_PATH);
+    copyWithToast("Path", COPY_PATH, { write: async () => copyResult === "ok" });
   }, [ready]);
 
   if (!ready) return null;

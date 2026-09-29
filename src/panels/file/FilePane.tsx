@@ -45,11 +45,7 @@ import {
   FILE_METADATA_RUN_CLASS,
   FILE_METADATA_STRIP_CLASS,
 } from "@/components/FileViewer/fileMetadataStrip";
-import {
-  FileViewerToolbar,
-  TOOLBAR_ICON_CLASS,
-  useMenuCopy,
-} from "@/components/FileViewer/FileViewerToolbar";
+import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy, type RevealCopy } from "@/components/FileViewer/revealCopy";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
@@ -85,7 +81,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useFileChangeCount } from "@/hooks/useFileChangeCount";
 import { NO_WATCHED_PATHS, useExternalChangeTick } from "@/hooks/useExternalChangeTick";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { copyWithToast } from "@/lib/copyWithToast";
 import { isClientAppError } from "@/utils/clientAppError";
 import { logError } from "@/utils/logger";
 import { useHeightHold } from "./useHeightHold";
@@ -242,7 +238,6 @@ function externalTargetCopy(
 }
 
 const SEARCH_DEBOUNCE_MS = 150;
-const COPY_FEEDBACK_MS = 2000;
 
 interface PickerResult {
   relativePath: string;
@@ -619,7 +614,6 @@ export function FilePane({
   // describes (a readable file whose SVG content the sanitizer rejects).
   // Mirrors FileViewerModal's `displayErrorMessage`.
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [pathCopied, setPathCopied] = useState(false);
   // Sandboxed-iframe preview URL for HTML files (#11191), minted by files:read.
   const [htmlPreviewUrl, setHtmlPreviewUrl] = useState<string | null>(null);
   // Reload generation for every surface whose content lives behind a URL rather
@@ -651,7 +645,6 @@ export function FilePane({
     };
   }, [loadState, content]);
   const requestRef = useRef(0);
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const markdownViewerRef = useRef<MarkdownViewerHandle>(null);
   const codeViewerRef = useRef<CodeViewerHandle>(null);
   // The state the last good view of the *current* file settled into, or null if
@@ -673,12 +666,6 @@ export function FilePane({
     lastGoodStateRef.current = null;
     lastContentRef.current = null;
   }, [filePath, effectiveRootPath]);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-    };
-  }, []);
 
   const loadFile = useCallback(
     (intent: FileLoadIntent) => {
@@ -1073,19 +1060,6 @@ export function FilePane({
     return () => window.removeEventListener("daintree:find-in-panel", handleFindInPanel);
   }, [isFocused]);
 
-  const handleCopyPath = useCallback(() => {
-    if (!filePath) return;
-    navigator.clipboard
-      .writeText(filePath)
-      .then(() => {
-        useAnnouncerStore.getState().announce("Path copied");
-        setPathCopied(true);
-        if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-        copyTimeoutRef.current = setTimeout(() => setPathCopied(false), COPY_FEEDBACK_MS);
-      })
-      .catch((err) => logError("[FilePane] copy path failed", err));
-  }, [filePath]);
-
   // Rendered HTML opens in the browser; every other view opens in the editor.
   // Reveal is a third, always-present target that sits alongside this one.
   const openTarget: "browser" | "editor" = isHtml && viewMode === "rendered" ? "browser" : "editor";
@@ -1238,7 +1212,6 @@ export function FilePane({
 
   const showMarkdownWrap = (isMarkdown && viewMode === "source") || viewMode === "edit";
   const copyableContents = loadState === "loaded" ? content : null;
-  const menuCopy = useMenuCopy();
   const toolbar = filePath ? (
     <>
       <FileViewerToolbar.Root
@@ -1262,8 +1235,7 @@ export function FilePane({
         <FileViewerToolbar.Path
           path={displayPath}
           icon={getFileTypeIcon(fileName ?? filePath).Icon}
-          copied={pathCopied}
-          onCopy={handleCopyPath}
+          copyText={filePath || null}
         />
         <FileViewerToolbar.Actions>
           <FileViewerToolbar.Responsive
@@ -1358,10 +1330,7 @@ export function FilePane({
                     className={TOOLBAR_ICON_CLASS}
                   />
                 </FileViewerToolbar.IconButton>
-                <FileViewerToolbar.MoreActions
-                  data-testid="file-pane-more-actions"
-                  confirmed={menuCopy.copied}
-                >
+                <FileViewerToolbar.MoreActions data-testid="file-pane-more-actions">
                   {isMarkdown && viewMode === "rendered" && (
                     <>
                       <MarkdownTextSizeMenuItems
@@ -1387,7 +1356,13 @@ export function FilePane({
                     </>
                   )}
                   {copyableContents !== null && (
-                    <DropdownMenuItem onSelect={() => menuCopy.copy(copyableContents)}>
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        copyWithToast("File contents", copyableContents, {
+                          message: fileName ?? filePath,
+                        })
+                      }
+                    >
                       <Copy className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
                       Copy file contents
                     </DropdownMenuItem>

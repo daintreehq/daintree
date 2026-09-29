@@ -190,8 +190,6 @@ function DevOverlays({
     <DevPreviewWebviewOverlays
       reconnectAttempt={reconnectAttempt}
       webviewLoadError={webviewLoadError}
-      certCopied={false}
-      onCopyMkcert={noop}
       isRestarting={false}
       onRestartDevServer={noop}
       onHardReload={noop}

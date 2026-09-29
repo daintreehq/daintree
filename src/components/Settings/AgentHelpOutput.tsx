@@ -3,7 +3,8 @@ import type { ReactNode } from "react";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { Button } from "@/components/ui/button";
-import { Copy, RefreshCw, TriangleAlert } from "lucide-react";
+import { CopyButton } from "@/components/ui/CopyButton";
+import { RefreshCw, TriangleAlert } from "lucide-react";
 import { agentHelpClient } from "@/clients";
 
 import type { AgentHelpResult } from "@shared/types/ipc/agent";
@@ -11,7 +12,6 @@ import type { AgentAvailabilityState } from "@shared/types";
 import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { sanitizeErrorText } from "@/utils/errorText";
-import { logError } from "@/utils/logger";
 
 interface AgentHelpOutputProps {
   agentId: string;
@@ -23,28 +23,14 @@ export function AgentHelpOutput({ agentId, agentName, availability }: AgentHelpO
   const [helpResult, setHelpResult] = useState<AgentHelpResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isCopied, setIsCopied] = useState(false);
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isMountedRef = useRef(true);
   const loadGenRef = useRef(0);
 
   useEffect(() => {
     loadGenRef.current += 1;
     setHelpResult(null);
     setError(null);
-    setIsCopied(false);
     setIsLoading(false);
   }, [agentId, availability]);
-
-  useEffect(() => {
-    isMountedRef.current = true;
-    return () => {
-      isMountedRef.current = false;
-      if (copyTimeoutRef.current) {
-        clearTimeout(copyTimeoutRef.current);
-      }
-    };
-  }, []);
 
   const loadHelp = async (refresh = false) => {
     const gen = ++loadGenRef.current;
@@ -65,35 +51,6 @@ export function AgentHelpOutput({ agentId, agentName, availability }: AgentHelpO
       setError(formatErrorMessage(err, "Failed to load help output"));
     } finally {
       if (loadGenRef.current === gen) setIsLoading(false);
-    }
-  };
-
-  const handleCopy = async () => {
-    if (!helpResult) return;
-
-    const textToCopy = sanitizeErrorText(
-      [helpResult.stdout, helpResult.stderr].filter(Boolean).join("\n\n")
-    );
-
-    try {
-      await navigator.clipboard.writeText(textToCopy);
-
-      if (!isMountedRef.current) return;
-
-      setIsCopied(true);
-
-      if (copyTimeoutRef.current) {
-        clearTimeout(copyTimeoutRef.current);
-      }
-
-      copyTimeoutRef.current = setTimeout(() => {
-        if (isMountedRef.current) {
-          setIsCopied(false);
-        }
-        copyTimeoutRef.current = null;
-      }, 2000);
-    } catch (err) {
-      logError("Failed to copy to clipboard", err);
     }
   };
 
@@ -219,15 +176,16 @@ export function AgentHelpOutput({ agentId, agentName, availability }: AgentHelpO
           <>
             {loadButton}
             {helpResult && (
-              <Button
+              <CopyButton
+                label="Copy"
+                aria-label="Copy help output"
                 size="sm"
                 variant="outline"
-                onClick={() => void handleCopy()}
+                text={sanitizeErrorText(
+                  [helpResult.stdout, helpResult.stderr].filter(Boolean).join("\n\n")
+                )}
                 disabled={isLoading}
-              >
-                <Copy aria-hidden="true" />
-                {isCopied ? "Copied" : "Copy"}
-              </Button>
+              />
             )}
           </>
         ) : undefined

@@ -22,6 +22,7 @@ Check `src/components/ui/` before you hand-roll anything. A surface built from t
 | `card`, `badge` | A bounded content block and its status pill. |
 | `SurfaceHeader` | A panel or dialog header, at either density. |
 | `Kbd`, `ShortcutHint`, `HighlightedText`, `TruncatedTooltip` | Chrome details that already exist and are easy to reinvent slightly differently. |
+| `CopyButton`, `copyWithToast` | Anything that puts text on the clipboard. See [Copy feedback](#copy-feedback) for which one. |
 
 New primitives belong in `src/components/ui/` only when a second caller appears. One-off composition stays with its feature.
 
@@ -141,6 +142,28 @@ Use `outline-hidden`, never `outline-none`: v4 changed `outline-none` to emit a 
 Enforced twice, deliberately. `src/config/__tests__/focusRingFallback.contract.test.ts` is the hard gate: it fails the build, scans `src/**` plus the GitHub plugin renderer, keeps a 44-entry allowlist of the elements that legitimately delegate focus to a wrapper, and owns a second invariant the lint rule does not — `--tw-outline-style` does not inherit, so `outline-hidden` and `focus-visible:outline-2` on the same element resolve to nothing painted at all. `component-contract/no-unpaired-outline-suppression` is the editor-time mirror: same contract, reported on the line as you type, opted out with a comment rather than a central array. `src/config/__tests__/outlineHidden.contract.test.ts` bans `outline-none` across `src/**`.
 
 The cost of running both is that a genuinely new exception has to be recorded in two places — an inline disable and an allowlist entry. Consolidating them onto one shared predicate is worth doing; it is not done yet.
+
+## Copy feedback
+
+Every copy is confirmed, in the word "Copied" (never "Copied!"), and a refused write is never silent: the user's next paste would be the old value. Which primitive depends on what is left on screen once the copy settles.
+
+| Where the copy lives | Use | Success | Refusal |
+| --- | --- | --- | --- |
+| A menu row, a banner's overflow item — anything that closes on select | `copyWithToast(label, value)` in `src/lib/copyWithToast.ts` | Transient toast, `"{Label} copied"`, the value (or a stand-in such as the file name) as its body | Error toast `"Couldn't copy {label}"` with Retry, coalesced per value |
+| An icon-only button | `CopyButton` with `aria-label` | Copy glyph swaps to a neutral check for `UI_ACTION_SUCCESS_DWELL_MS` | Announced assertively |
+| A labelled button | `CopyButton` with `label` | The label reads "Copied" for the dwell | The label reads "Couldn't copy", announced assertively — or `onCopyError` when the surface already has an error line for it (a settings row's `error`), so the failure is stated once |
+| A control that cannot be a button (a path pill, a banner action) | `useCopyWithFeedback` | The control's own swap, gated on `copiedText` | The control's own |
+
+Rules that hold across all four:
+
+- **One dwell.** `UI_ACTION_SUCCESS_DWELL_MS`, owned by the hook. Never a local timer or a literal.
+- **One announcement.** The hook announces through the polite live region, or the toast's own region does. The accessible name stays constant — a name that flips to "Copied" under focus is announced a second time — and no surface keeps its own `role="status"` copy message beside it.
+- **The confirmation belongs to the value.** A string payload is confirmed only while it is still the current one, so a re-pointed control never arrives confirmed. Where two items can carry identical text (two telemetry events), key the button by item.
+- **A menu confirms with the toast, not its trigger.** Flipping a "More actions" glyph to a check was three surfaces' private channel for this and is retired.
+- **Variant.** A labelled copy takes its context's grammar: `outline` `sm` on a settings row or rail, the group's variant inside a button group, and otherwise `ghost` `xs` beside the payload it copies. The label slot reserves the wider of the label and "Copied", so the button holds its width through the dwell.
+- **Main-process clipboard.** Panes hosting a guest webview pass `write={(t) => window.electron.clipboard.writeText(t)}`, since the guest may hold focus.
+
+`src/components/ui/__tests__/copyFeedback.contract.test.ts` bans "Copied!" and holds direct `clipboard.writeText` calls in UI code to a shrinking allowlist (terminal selection, actions, toast actions and a few reducer-owned surfaces). `iconActionButtons.contract.test.ts` holds icon-only copies to `CopyButton`.
 
 ## Opting out
 

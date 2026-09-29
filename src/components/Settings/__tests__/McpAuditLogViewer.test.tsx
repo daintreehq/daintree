@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { McpAuditLogViewer } from "../McpAuditLogViewer";
 import type { AssistantTurnRecord, McpLogRecord } from "@shared/types";
@@ -27,7 +27,6 @@ function renderViewer(records: McpLogRecord[], turnRecords?: AssistantTurnRecord
       turnRecords={turnRecords}
       loading={false}
       onRefresh={vi.fn()}
-      onCopy={vi.fn()}
       onClear={vi.fn()}
       maxRecords={500}
     />
@@ -63,7 +62,6 @@ describe("McpAuditLogViewer", () => {
         records={[]}
         loading={false}
         onRefresh={vi.fn()}
-        onCopy={vi.fn()}
         onClear={vi.fn()}
         emptyLabel="Audit log cleared"
       />
@@ -83,21 +81,22 @@ describe("McpAuditLogViewer", () => {
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("keeps the count and copy feedback in a polite live region", () => {
-    const { rerender } = renderViewer([dispatch("1", "worktree.list")]);
+  it("keeps the count in a polite live region and confirms a copy on its button", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    renderViewer([dispatch("1", "worktree.list")]);
     const live = document.querySelector('[aria-live="polite"]');
     expect(live?.textContent).toContain("1 of 500");
-    rerender(
-      <McpAuditLogViewer
-        records={[dispatch("1", "worktree.list")]}
-        loading={false}
-        onRefresh={vi.fn()}
-        onCopy={vi.fn()}
-        maxRecords={500}
-        copyFlashActive
-      />
-    );
-    expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe("Copied!");
+
+    const copy = screen.getByRole("button", { name: /copy all as json/i });
+    await act(async () => {
+      fireEvent.click(copy);
+    });
+
+    expect(copy.textContent).toBe("Copied");
+    // The button and the announcer carry the confirmation; the count's live
+    // region saying it too would announce the copy twice.
+    expect(live?.textContent).toContain("1 of 500");
   });
 
   it("narrows to every unsuccessful call under Problems", () => {

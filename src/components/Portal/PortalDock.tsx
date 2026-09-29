@@ -4,6 +4,7 @@ import { ListX, PanelRight, Plus, Ruler, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { usePortalStore } from "@/store";
 import { cn } from "@/lib/utils";
+import { copyWithToast } from "@/lib/copyWithToast";
 import { PortalToolbar } from "./PortalToolbar";
 import { PORTAL_TAB_PANEL_ID, portalTabDomId } from "./portalTabIds";
 import { PortalDefaultNewTabSubmenu } from "./PortalDefaultNewTabSubmenu";
@@ -212,12 +213,16 @@ export function PortalDock() {
     }
   }, []);
 
-  const handleCopyUrl = useCallback(async () => {
-    const result = await actionService.dispatch("portal.copyUrl", undefined, { source: "user" });
-    if (!result.ok) {
-      logError("Failed to copy URL", undefined, { error: result.error });
-    }
+  // The toolbar button and the tab menu row both leave nothing on screen to
+  // confirm the copy, so it is confirmed like any menu row: a toast naming the
+  // URL, and a Retry that writes that same URL even if the tab has moved on.
+  const copyPortalUrl = useCallback((tabId?: string) => {
+    const state = usePortalStore.getState();
+    const url = state.tabs.find((t) => t.id === (tabId ?? state.activeTabId))?.url;
+    if (url) copyWithToast("URL", url);
   }, []);
+
+  const handleCopyUrl = useCallback(() => copyPortalUrl(), [copyPortalUrl]);
 
   const handleDuplicateTab = useCallback(
     async (tabId: string) => {
@@ -264,12 +269,7 @@ export function PortalDock() {
     [isSwitching]
   );
 
-  const handleCopyTabUrl = useCallback(async (tabId: string) => {
-    const result = await actionService.dispatch("portal.copyTabUrl", { tabId }, { source: "user" });
-    if (!result.ok) {
-      logError("Failed to copy tab URL", undefined, { error: result.error });
-    }
-  }, []);
+  const handleCopyTabUrl = useCallback((tabId: string) => copyPortalUrl(tabId), [copyPortalUrl]);
 
   const handleOpenTabExternal = useCallback(async (tabId: string) => {
     const result = await actionService.dispatch(

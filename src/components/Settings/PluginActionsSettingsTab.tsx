@@ -9,7 +9,7 @@ import { InlineErrorRow, ErrorRetryRow } from "@/components/Settings/auditLogPar
 import { logError } from "@/utils/logger";
 import { type PluginActionAuditRecord, PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "@shared/types";
 
-const COPY_FEEDBACK_MS = 2000;
+const EXPORT_FEEDBACK_MS = 2000;
 
 export function PluginActionsSettingsTab() {
   const [records, setRecords] = useState<PluginActionAuditRecord[]>([]);
@@ -21,12 +21,10 @@ export function PluginActionsSettingsTab() {
   const [recordsFailed, setRecordsFailed] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [toggleError, setToggleError] = useState<string | null>(null);
-  const [copiedFlash, setCopiedFlash] = useState(false);
   const [exportedFlash, setExportedFlash] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
 
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const exportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadConfig = useCallback(async (): Promise<void> => {
@@ -83,7 +81,6 @@ export function PluginActionsSettingsTab() {
 
   useEffect(() => {
     return () => {
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
       if (exportTimeoutRef.current) clearTimeout(exportTimeoutRef.current);
     };
   }, []);
@@ -100,19 +97,6 @@ export function PluginActionsSettingsTab() {
     }
   }, [auditEnabled]);
 
-  const handleCopy = useCallback(async (toCopy: PluginActionAuditRecord[]) => {
-    setActionError(null);
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(toCopy, null, 2));
-      setCopiedFlash(true);
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-      copyTimeoutRef.current = setTimeout(() => setCopiedFlash(false), COPY_FEEDBACK_MS);
-    } catch (err) {
-      setActionError("The audit log couldn't be copied. Try again.");
-      logError("Failed to copy plugin audit log", err);
-    }
-  }, []);
-
   const handleExport = useCallback(async (toExport: PluginActionAuditRecord[]) => {
     setActionError(null);
     try {
@@ -120,7 +104,7 @@ export function PluginActionsSettingsTab() {
       if (saved) {
         setExportedFlash(true);
         if (exportTimeoutRef.current) clearTimeout(exportTimeoutRef.current);
-        exportTimeoutRef.current = setTimeout(() => setExportedFlash(false), COPY_FEEDBACK_MS);
+        exportTimeoutRef.current = setTimeout(() => setExportedFlash(false), EXPORT_FEEDBACK_MS);
       }
     } catch (err) {
       setActionError("The audit log couldn't be exported. Try again.");
@@ -171,10 +155,8 @@ export function PluginActionsSettingsTab() {
           loading={loading}
           maxRecords={maxRecords}
           onRefresh={refreshRecords}
-          onCopy={handleCopy}
           onExport={handleExport}
           onClear={() => setShowClearConfirm(true)}
-          copyFlashActive={copiedFlash}
           exportFlashActive={exportedFlash}
           actionError={actionError}
           loadError={

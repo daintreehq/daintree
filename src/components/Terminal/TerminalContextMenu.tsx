@@ -138,6 +138,7 @@ import {
   getRegisteredPluginActionsSnapshot,
   subscribeToRegisteredPluginActions,
 } from "@/services/plugin/registeredPluginActions";
+import { copyWithToast } from "@/lib/copyWithToast";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
@@ -887,11 +888,12 @@ function TerminalContextMenuBody({
           break;
         case "copy-url":
           if (terminalBrowser?.browserUrl && isValidBrowserUrl(terminalBrowser.browserUrl)) {
-            void actionService.dispatch(
-              "browser.copyUrl",
-              { url: terminalBrowser.browserUrl },
-              { source: sourceRef.current }
-            );
+            const url = terminalBrowser.browserUrl;
+            const source = sourceRef.current;
+            copyWithToast("URL", url, {
+              write: async () =>
+                (await actionService.dispatch("browser.copyUrl", { url }, { source })).ok,
+            });
           }
           break;
       }

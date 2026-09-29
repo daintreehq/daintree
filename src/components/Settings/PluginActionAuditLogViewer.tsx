@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
-import { Check, Copy, Download, RefreshCw } from "lucide-react";
+import { Check, Download, RefreshCw } from "lucide-react";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import {
@@ -72,14 +73,12 @@ interface PluginActionAuditLogViewerProps {
   loading: boolean;
   maxRecords: number;
   onRefresh: () => Promise<void> | void;
-  onCopy: (records: PluginActionAuditRecord[]) => Promise<void> | void;
   onExport: (records: PluginActionAuditRecord[]) => Promise<void> | void;
   onClear: () => void;
-  copyFlashActive?: boolean;
   exportFlashActive?: boolean;
   /** Shown in place of the list when the records couldn't be read. */
   loadError?: React.ReactNode;
-  /** A copy, export or clear that failed, shown beside the actions. */
+  /** An export or clear that failed, shown beside the actions. */
   actionError?: string | null;
 }
 
@@ -88,10 +87,8 @@ export function PluginActionAuditLogViewer({
   loading,
   maxRecords,
   onRefresh,
-  onCopy,
   onExport,
   onClear,
-  copyFlashActive,
   exportFlashActive,
   loadError,
   actionError,
@@ -154,13 +151,15 @@ export function PluginActionAuditLogViewer({
     setTimeRange("all");
   };
 
-  const status = copyFlashActive
-    ? "Copied!"
-    : exportFlashActive
-      ? "Exported!"
-      : filteredRecords.length === records.length
-        ? `${records.length} of ${maxRecords}`
-        : `Showing ${filteredRecords.length} of ${records.length}`;
+  // A string, not a thunk: the check then belongs to the records it copied,
+  // and a filter change during the dwell retires it.
+  const recordsJson = useMemo(() => JSON.stringify(filteredRecords, null, 2), [filteredRecords]);
+
+  const status = exportFlashActive
+    ? "Exported!"
+    : filteredRecords.length === records.length
+      ? `${records.length} of ${maxRecords}`
+      : `Showing ${filteredRecords.length} of ${records.length}`;
 
   return (
     <SettingsGroup>
@@ -291,19 +290,13 @@ export function PluginActionAuditLogViewer({
           <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
           Refresh
         </Button>
-        <Button
+        <CopyButton
+          label={`Copy ${showCopyAll ? "all" : "shown"} as JSON`}
           variant="outline"
           size="sm"
-          onClick={() => void onCopy(filteredRecords)}
+          text={recordsJson}
           disabled={filteredRecords.length === 0}
-        >
-          {copyFlashActive ? (
-            <Check className="w-3.5 h-3.5" aria-hidden="true" />
-          ) : (
-            <Copy className="w-3.5 h-3.5" aria-hidden="true" />
-          )}
-          {`Copy ${showCopyAll ? "all" : "shown"} as JSON`}
-        </Button>
+        />
         <Button
           variant="outline"
           size="sm"

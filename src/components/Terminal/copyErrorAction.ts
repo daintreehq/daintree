@@ -1,5 +1,6 @@
 import { Copy } from "lucide-react";
 import { sanitizeErrorText } from "@/utils/errorText";
+import { copyWithToast } from "@/lib/copyWithToast";
 import type { BannerAction } from "./InlineStatusBanner";
 
 /**
@@ -15,8 +16,8 @@ export function createCopyErrorAction(message: string): BannerAction | null {
     label: "Copy error",
     icon: Copy,
     variant: "dismiss",
-    onClick: () => {
-      void navigator.clipboard?.writeText(fullMessage).catch(() => undefined);
-    },
+    // The overflow menu has closed by the time the copy settles, so it confirms
+    // like every menu copy: a toast, and a Retry when the clipboard refuses.
+    onClick: () => copyWithToast("Error", fullMessage),
   };
 }

@@ -11,6 +11,12 @@ export interface UseCopyWithFeedbackOptions {
    * copy is not announced twice.
    */
   announcement?: string | false;
+  /**
+   * The clipboard write. Defaults to `navigator.clipboard.writeText`; panes
+   * hosting a guest webview pass the main-process clipboard, which does not
+   * need the renderer document to hold focus.
+   */
+  write?: (text: string) => Promise<unknown>;
 }
 
 export interface UseCopyWithFeedbackResult {
@@ -34,7 +40,7 @@ export interface UseCopyWithFeedbackResult {
 export function useCopyWithFeedback(
   options: UseCopyWithFeedbackOptions = {}
 ): UseCopyWithFeedbackResult {
-  const { dwellMs = UI_ACTION_SUCCESS_DWELL_MS, announcement = "Copied" } = options;
+  const { dwellMs = UI_ACTION_SUCCESS_DWELL_MS, announcement = "Copied", write } = options;
   // One state, not a flag beside a value: `announce` below can drive a
   // synchronous external-store commit, which would otherwise let a render
   // observe the raised flag while the text still names the previous copy.
@@ -56,7 +62,7 @@ export function useCopyWithFeedback(
   const copy = useCallback(
     async (text: string): Promise<boolean> => {
       try {
-        await navigator.clipboard.writeText(text);
+        await (write ? write(text) : navigator.clipboard.writeText(text));
       } catch {
         return false;
       }
@@ -74,7 +80,7 @@ export function useCopyWithFeedback(
 
       return true;
     },
-    [announcement, dwellMs]
+    [announcement, dwellMs, write]
   );
 
   return { copied: copiedText !== null, copiedText, copy };

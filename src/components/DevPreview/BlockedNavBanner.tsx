@@ -3,6 +3,10 @@ import { Check, Copy, ExternalLink, RefreshCw } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "../Terminal/InlineStatusBanner";
 import { BannerOverflowMenu } from "../Terminal/BannerOverflowMenu";
 import { Spinner } from "@/components/ui/Spinner";
+import { COPIED_LABEL, COPY_FAILED_LABEL } from "@/components/ui/CopyButton";
+import { copyWithToast } from "@/lib/copyWithToast";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 import { formatDialogOrigin, looksLikeOAuthUrl } from "@shared/utils/urlUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { SessionStorageEntry } from "./useDevPreviewLoadLifecycle";
@@ -74,7 +78,6 @@ type BlockedNavAction =
 
 // How long "Copied" lingers. A failed copy has no timer: when copying is the
 // way forward, the failure has to stay readable until the user acts on it.
-const COPY_FEEDBACK_MS = 2000;
 // "Signed in" is a confirmation, not a state: the banner says the round trip
 // through the browser landed and then gets out of the way. Longer than the copy
 // flash because the user is coming back from another app and has to catch it,
@@ -203,7 +206,7 @@ export function BlockedNavBanner({
     if (copyFeedback !== "copied" || !notice) return;
     const timer = setTimeout(
       () => onDispatch({ type: "COPY_RESULT", notice, result: null }),
-      COPY_FEEDBACK_MS
+      UI_ACTION_SUCCESS_DWELL_MS
     );
     return () => clearTimeout(timer);
   }, [copyFeedback, notice, onDispatch]);
@@ -288,8 +291,12 @@ export function BlockedNavBanner({
     try {
       await window.electron.clipboard.writeText(url);
       onDispatch({ type: "COPY_RESULT", notice: from, result: "copied" });
+      // Announced here rather than by the band's own text, which a menu copy
+      // and an inline one would otherwise speak differently.
+      useAnnouncerStore.getState().announce("URL copied", "polite");
     } catch {
       onDispatch({ type: "COPY_RESULT", notice: from, result: "copy-failed" });
+      useAnnouncerStore.getState().announce("Couldn't copy the URL", "assertive");
     }
   };
 
@@ -311,12 +318,24 @@ export function BlockedNavBanner({
     id: "copy-url",
     label:
       copyFeedback === "copied"
-        ? "Copied"
+        ? COPIED_LABEL
         : copyFeedback === "copy-failed"
-          ? "Couldn't copy"
+          ? COPY_FAILED_LABEL
           : "Copy URL",
+    // Constant, so the confirmation is announced once, above.
+    ariaLabel: "Copy URL",
     icon: copyFeedback === "copied" ? Check : Copy,
     onClick: handleCopyUrl,
+    variant: "dismiss",
+  };
+  const overflowCopyAction: BannerAction = {
+    id: "copy-url",
+    label: "Copy URL",
+    icon: Copy,
+    onClick: () =>
+      copyWithToast("URL", state.url, {
+        write: (text) => window.electron.clipboard.writeText(text).then(() => true),
+      }),
     variant: "dismiss",
   };
   const retryAction: BannerAction = {
@@ -462,14 +481,9 @@ export function BlockedNavBanner({
           action={retryAction}
           trailingSlot={
             <>
-              <BannerOverflowMenu actions={[copyAction]} />
-              {/* The menu closes before the copy settles, so its result is
-                  reported on the band, where it stays in view. */}
-              {copyFeedback && (
-                <span role="status" className="text-xs text-text-secondary">
-                  {copyFeedback === "copied" ? "URL copied" : "Couldn't copy the URL"}
-                </span>
-              )}
+              {/* The menu closes before the copy settles, so it confirms like
+                  every menu copy: a toast, and a Retry when refused. */}
+              <BannerOverflowMenu actions={[overflowCopyAction]} />
             </>
           }
           onClose={handleDismiss}

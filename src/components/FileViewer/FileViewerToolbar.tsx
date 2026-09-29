@@ -1,16 +1,9 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { createContext, useContext, useLayoutEffect, useRef, useState } from "react";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { Check, ChevronDown, Copy, Ellipsis, FileText, type LucideIcon } from "lucide-react";
-import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { COPIED_LABEL, COPY_FAILED_LABEL } from "@/components/ui/CopyButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -268,21 +261,24 @@ function Root({
 }
 
 /**
- * Path pill — mirrors the browser toolbar's address field. Click copies the
- * absolute path; the middle collapses to fit the available width while the
- * file name always survives. `path` is what's shown (root-relative where the
+ * Path pill — mirrors the browser toolbar's address field. Click copies
+ * `copyText`; the middle collapses to fit the available width while the file
+ * name always survives. `path` is what's shown (root-relative where the
  * surface can compute it); what gets copied is the caller's business.
+ *
+ * The copy is the shared gesture: the dwell and the announcement come from
+ * `useCopyWithFeedback`, and the check belongs to the value it copied, so a
+ * pill that re-points at another file never arrives confirmed.
  */
 function Path({
   path,
-  copied,
-  onCopy,
+  copyText,
   icon: Icon = FileText,
   copyLabel = "Copy file path",
 }: {
   path?: string;
-  copied: boolean;
-  onCopy: () => void;
+  /** What lands on the clipboard. Absent, the pill is inert. */
+  copyText?: string | null;
   /**
    * The glyph for what the path names — the same type icon the tree shows on
    * that row, so the pill and the highlighted row read as one object. Defaults
@@ -294,6 +290,17 @@ function Path({
 }) {
   const { spanRef, display } = useFittedPath(path);
   const truncated = display !== undefined && display !== path;
+  const { copiedText, copy } = useCopyWithFeedback({ announcement: "Path copied" });
+  const [failedText, setFailedText] = useState<string | null>(null);
+  const copied = copyText != null && copiedText === copyText;
+  const failed = copyText != null && failedText === copyText;
+  const onCopy = () => {
+    if (copyText == null) return;
+    void copy(copyText).then((ok) => {
+      setFailedText(ok ? null : copyText);
+      if (!ok) useAnnouncerStore.getState().announce(COPY_FAILED_LABEL, "assertive");
+    });
+  };
 
   return (
     <Tooltip>
@@ -329,7 +336,7 @@ function Path({
       <TooltipContent side="bottom" className="break-words">
         {truncated && <span className="block">{path}</span>}
         <span className={truncated ? "block text-text-secondary" : undefined}>
-          {copied ? "Copied!" : "Click to copy"}
+          {copied ? COPIED_LABEL : failed ? COPY_FAILED_LABEL : "Click to copy"}
         </span>
       </TooltipContent>
     </Tooltip>
@@ -412,43 +419,6 @@ function IconButton({
 }
 
 /**
- * Copy text from a menu row, with the same confirmation window the copy button
- * keeps. Returns the flag for `MoreActions`' `confirmed` and the handler to
- * put on the row. Silent on a refused write, like the button.
- */
-export function useMenuCopy(): { copied: boolean; copy: (text: string) => void } {
-  const [copied, setCopied] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    },
-    []
-  );
-  const copy = useCallback((text: string) => {
-    if (!navigator.clipboard?.writeText) return;
-    void navigator.clipboard.writeText(text).then(
-      () => {
-        useAnnouncerStore.getState().announce("Copied", "polite");
-        if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        setCopied(true);
-        timeoutRef.current = setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
-      },
-      () => {}
-    );
-  }, []);
-  return { copied, copy };
-}
-
-/**
- * How long a copy confirmation stays on screen. One value for the one shared
- * button, rather than a prop: the two panes' own path pills already flash for
- * different durations, and handing this control the same seam is how the next
- * divergence would get in.
- */
-const COPY_FEEDBACK_MS = UI_ACTION_SUCCESS_DWELL_MS;
-
-/**
  * Copies the file's raw text — the bytes the source view shows, whichever view
  * mode is on screen, so rendered markdown and rendered HTML copy their source
  * rather than the DOM they produced.
@@ -466,51 +436,21 @@ const COPY_FEEDBACK_MS = UI_ACTION_SUCCESS_DWELL_MS;
  * gate is a null check and never a truthiness one.
  */
 function CopyContentsButton({ contents }: { contents: string | null }) {
-  // The text the clipboard was last confirmed to hold, not a boolean. The
-  // checkmark then belongs to a value rather than to a moment: new contents
-  // retire it in the very commit that paints them instead of a frame later via
-  // an effect, and a write that resolves late can only ever confirm the text it
-  // actually wrote. That is one piece of state doing what a flag plus a reset
-  // effect plus a generation counter were doing before.
-  const [copiedContents, setCopiedContents] = useState<string | null>(null);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Only unmount needs a ref: a resolution arriving after teardown would
-  // otherwise schedule a timer nothing is left to clear.
-  const mountedRef = useRef(true);
+  // Keyed to the text it copied, so new contents retire the check in the very
+  // commit that paints them, and a write that resolves late can only confirm
+  // the text it actually wrote.
+  const { copiedText, copy } = useCopyWithFeedback();
 
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    };
-  }, []);
-
-  const handleClick = useCallback(() => {
+  const handleClick = () => {
     if (contents === null) return;
-    if (!navigator.clipboard?.writeText) return;
-    void navigator.clipboard.writeText(contents).then(
-      () => {
-        if (!mountedRef.current) return;
-        useAnnouncerStore.getState().announce("Copied", "polite");
-        if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        setCopiedContents(contents);
-        timeoutRef.current = setTimeout(() => {
-          setCopiedContents(null);
-          timeoutRef.current = null;
-        }, COPY_FEEDBACK_MS);
-      },
-      () => {
-        // Clipboard unavailable or refused. Silent, exactly like the path pill
-        // above: the checkmark simply never appears, and a toast for a gesture
-        // whose whole feedback is on the button would be the louder tier.
-      }
-    );
-  }, [contents]);
+    void copy(contents).then((ok) => {
+      if (!ok) useAnnouncerStore.getState().announce(COPY_FAILED_LABEL, "assertive");
+    });
+  };
 
   if (contents === null) return null;
 
-  const copied = copiedContents === contents;
+  const copied = copiedText === contents;
 
   return (
     <IconButton label="Copy file contents" onClick={handleClick}>
@@ -529,16 +469,9 @@ function CopyContentsButton({ contents }: { contents: string | null }) {
  */
 function MoreActions({
   children,
-  confirmed = false,
   "data-testid": testId,
 }: {
   children: React.ReactNode;
-  /**
-   * A menu action just succeeded with nothing else left on screen to say so —
-   * Copy, whose own button would have flashed a check. The trigger carries the
-   * check instead, for the same flash, since it is what the menu closed back to.
-   */
-  confirmed?: boolean;
   "data-testid"?: string;
 }) {
   const label = "More actions";
@@ -553,11 +486,7 @@ function MoreActions({
               data-testid={testId}
               className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
             >
-              {confirmed ? (
-                <Check className={TOOLBAR_ICON_CLASS} aria-hidden="true" />
-              ) : (
-                <Ellipsis className={TOOLBAR_ICON_CLASS} aria-hidden="true" />
-              )}
+              <Ellipsis className={TOOLBAR_ICON_CLASS} aria-hidden="true" />
             </button>
           </DropdownMenuTrigger>
         </TooltipTrigger>

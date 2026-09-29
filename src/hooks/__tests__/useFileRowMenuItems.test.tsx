@@ -535,6 +535,22 @@ describe("useFileRowMenuItems — path semantics", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("pkg/a.ts"));
   });
 
+  it.each([
+    ["Copy path", "Path copied", "/repo/src/index.ts"],
+    ["Copy relative path", "Relative path copied", "src/index.ts"],
+    ["Copy file name", "File name copied", "index.ts"],
+  ] as const)("confirms %s with a toast naming the value", async (label, title, value) => {
+    const menu = await openMenu();
+    const copy = await openSubmenu(menu, "Copy");
+
+    fireEvent.click(within(copy).getByRole("menuitem", { name: label }));
+
+    // The row closes on select, so nothing on screen is left to confirm it.
+    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    const [payload] = notifyMock.mock.calls[0]!;
+    expect(payload).toMatchObject({ type: "info", title, message: value });
+  });
+
   it("raises a retryable toast when the clipboard rejects, and Retry rewrites the same path", async () => {
     const writeText = navigator.clipboard.writeText as ReturnType<typeof vi.fn>;
     writeText.mockRejectedValueOnce(new Error("nope"));
@@ -577,7 +593,13 @@ describe("useFileRowMenuItems — Copy file contents", () => {
       expect(call![2]).toEqual({ source: "context-menu" });
     });
     await waitFor(() => expect(writeTextMock).toHaveBeenCalledWith("raw\nsource\n"));
-    expect(notifyMock).not.toHaveBeenCalled();
+    // The menu has closed, so the toast is the confirmation. It names the file
+    // rather than echoing the whole contents back.
+    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    const [payload] = notifyMock.mock.calls[0]!;
+    expect(payload.type).toBe("info");
+    expect(payload.title).toBe("File contents copied");
+    expect(payload.message).toBe("index.ts");
   });
 
   it("raises a retryable toast when the read fails, and writes nothing", async () => {
@@ -663,7 +685,8 @@ describe("useFileRowMenuItems — Copy file contents", () => {
 
     // A truthiness gate on the read result would silently write nothing here.
     await waitFor(() => expect(writeTextMock).toHaveBeenCalledWith(""));
-    expect(notifyMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    expect(notifyMock.mock.calls[0]![0].type).toBe("info");
   });
 
   it("keeps the item for an extension it doesn't recognise", async () => {

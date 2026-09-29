@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type { ReactNode } from "react";
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -9,12 +10,7 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 
-import {
-  FileViewerToolbar,
-  fitFileName,
-  useFileViewerToolbarCompact,
-  useMenuCopy,
-} from "../FileViewerToolbar";
+import { FileViewerToolbar, fitFileName, useFileViewerToolbarCompact } from "../FileViewerToolbar";
 
 // The fit is pure measurement, and jsdom measures nothing: clientWidth is 0 and
 // there is no canvas. Stub both with a monospace model — every glyph CHAR_PX
@@ -96,8 +92,8 @@ describe("FileViewerToolbar.Path", () => {
   /** The directory part, which is what the fit is allowed to elide. */
   const HEAD = LONG_PATH.slice(0, LONG_PATH.length - BASENAME.length);
 
-  function renderPath(path: string, { copied = false, onCopy = vi.fn() } = {}) {
-    render(<FileViewerToolbar.Path path={path} copied={copied} onCopy={onCopy} />);
+  function renderPath(path: string) {
+    render(<FileViewerToolbar.Path path={path} copyText={path} />);
     return screen.getByRole("button", { name: /^Copy file path/ });
   }
 
@@ -186,27 +182,42 @@ describe("FileViewerToolbar.Path", () => {
     expect(fittedText()).toBe(LONG_PATH);
   });
 
-  it("keeps a stable accessible name while showing copied feedback", () => {
+  it("copies on click, announcing once while its name stays put", async () => {
     containerWidth = 400;
-    const { rerender } = render(
-      <FileViewerToolbar.Path path={LONG_PATH} copied={false} onCopy={vi.fn()} />
-    );
-    expect(screen.getByRole("button", { name: /^Copy file path/ })).toBeTruthy();
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+    const pill = renderPath(LONG_PATH);
+    const glyphBefore = pill.querySelector("svg")?.getAttribute("class");
 
-    rerender(<FileViewerToolbar.Path path={LONG_PATH} copied onCopy={vi.fn()} />);
+    fireEvent.click(pill);
+    await act(async () => {});
 
+    expect(writeText).toHaveBeenCalledWith(LONG_PATH);
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Path copied");
+    expect(pill.querySelector("svg")?.getAttribute("class")).not.toBe(glyphBefore);
     // The feedback rides the tooltip and the icon, never the accessible name —
-    // a name that flips to "Copied!" would make the control unfindable exactly
+    // a name that flips to "Copied" would make the control unfindable exactly
     // when a test or a screen-reader user goes looking for it.
-    expect(screen.getByRole("button", { name: /^Copy file path/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Copy file path/ })).toBe(pill);
   });
 
-  it("copies on click", () => {
+  it("never carries a confirmation onto another file", async () => {
     containerWidth = 400;
-    const onCopy = vi.fn();
-    fireEvent.click(renderPath(LONG_PATH, { onCopy }));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: () => Promise.resolve() },
+    });
+    const { rerender } = render(<FileViewerToolbar.Path path="a.ts" copyText="/r/a.ts" />);
+    const pill = screen.getByRole("button", { name: /^Copy file path/ });
+    const glyphBefore = pill.querySelector("svg")?.getAttribute("class");
+    fireEvent.click(pill);
+    await act(async () => {});
+    expect(pill.querySelector("svg")?.getAttribute("class")).not.toBe(glyphBefore);
 
-    expect(onCopy).toHaveBeenCalledTimes(1);
+    rerender(<FileViewerToolbar.Path path="b.ts" copyText="/r/b.ts" />);
+
+    expect(pill.querySelector("svg")?.getAttribute("class")).toBe(glyphBefore);
   });
 });
 
@@ -419,16 +430,18 @@ describe("FileViewerToolbar.CopyContentsButton", () => {
     expect(checkIcon()).toBeNull();
   });
 
-  it("stays silent when the clipboard rejects", async () => {
+  it("announces a refused write without a toast or a checkmark", async () => {
     writeText.mockRejectedValueOnce(new Error("denied"));
+    useAnnouncerStore.setState({ polite: null, assertive: null });
     render(<FileViewerToolbar.CopyContentsButton contents="x" />);
 
     await clickCopy();
 
-    // No toast and no checkmark: matching the path controls, a copy whose whole
-    // feedback lives on the button says nothing when it didn't happen.
+    // The button is the whole feedback channel, so a toast would be the louder
+    // tier; but the next paste would be the old value, so it is not silent.
     expect(checkIcon()).toBeNull();
     expect(copyIcon()).not.toBeNull();
+    expect(useAnnouncerStore.getState().assertive?.msg).toBe("Couldn't copy");
   });
 
   it("does nothing when the clipboard API is unavailable", () => {
@@ -534,7 +547,7 @@ describe("fitFileName", () => {
 
   it("names the subject in the accessible name at every width", () => {
     containerWidth = 2000;
-    render(<FileViewerToolbar.Path path="src/a/b.ts" copied={false} onCopy={vi.fn()} />);
+    render(<FileViewerToolbar.Path path="src/a/b.ts" copyText="src/a/b.ts" />);
     expect(screen.getByRole("button", { name: "Copy file path: src/a/b.ts" })).toBeTruthy();
   });
 
@@ -577,29 +590,5 @@ describe("FileViewerToolbar compact mode", () => {
 
   it("is never compact for a caller that set no threshold", () => {
     expect(renderAtWidth(10)).toBe("false");
-  });
-});
-
-describe("useMenuCopy", () => {
-  it("confirms a copy for the flash window, then clears", async () => {
-    vi.useFakeTimers();
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    let api: ReturnType<typeof useMenuCopy> | null = null;
-    function Probe() {
-      api = useMenuCopy();
-      return <span data-testid="copied">{String(api.copied)}</span>;
-    }
-    render(<Probe />);
-    await act(async () => {
-      api!.copy("hello");
-    });
-    expect(writeText).toHaveBeenCalledWith("hello");
-    expect(screen.getByTestId("copied").textContent).toBe("true");
-    act(() => {
-      vi.advanceTimersByTime(5000);
-    });
-    expect(screen.getByTestId("copied").textContent).toBe("false");
-    vi.useRealTimers();
   });
 });

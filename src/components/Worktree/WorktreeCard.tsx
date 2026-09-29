@@ -60,7 +60,7 @@ import {
 import { useInputReceiptKey } from "./WorktreeCard/hooks/useInputReceiptKey";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
-import { copyWorktreeValue } from "./WorktreeCard/copyWorktreeValue";
+import { copyWithToast } from "@/lib/copyWithToast";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import {
   CONTEXT_COMPONENTS,
@@ -532,13 +532,13 @@ export function WorktreeCard({
   };
 
   const handleCopyPath = () => {
-    copyWorktreeValue("Path", worktree.path);
+    copyWithToast("Path", worktree.path);
   };
 
   const handleCopyBranchName = () => {
     const branch = copyableBranchName(worktree);
     if (!branch) return;
-    copyWorktreeValue("Branch name", branch);
+    copyWithToast("Branch name", branch);
   };
 
   const [showIssuePicker, setShowIssuePicker] = useState(false);

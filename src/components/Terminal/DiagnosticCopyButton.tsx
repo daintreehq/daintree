@@ -1,10 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { sanitizeErrorText } from "@/utils/errorText";
-
-const COPIED_RESET_MS = 2000;
 
 export interface SpawnDiagnostics {
   errno?: number;
@@ -42,46 +38,6 @@ export function DiagnosticCopyButton({
   const payload = formatDiagnostics(diagnostics);
   const fullMessage = message ? flattenWhitespace(message) : "";
   const clipboardText = fullMessage ? `${payload}\n${fullMessage}` : payload;
-  const [copied, setCopied] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const generationRef = useRef(0);
-
-  useEffect(() => {
-    generationRef.current += 1;
-    setCopied(false);
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
-  }, [payload]);
-
-  useEffect(() => {
-    return () => {
-      generationRef.current += 1;
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    };
-  }, []);
-
-  const handleClick = useCallback(() => {
-    if (!payload) return;
-    if (!navigator.clipboard?.writeText) return;
-    const gen = generationRef.current;
-    void navigator.clipboard.writeText(clipboardText).then(
-      () => {
-        if (gen !== generationRef.current) return;
-        if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        setCopied(true);
-        timeoutRef.current = setTimeout(() => {
-          setCopied(false);
-          timeoutRef.current = null;
-        }, COPIED_RESET_MS);
-      },
-      () => {
-        // Clipboard rejected — stay silent.
-      }
-    );
-  }, [payload, clipboardText]);
-
   if (!payload) return null;
 
   return (
@@ -93,16 +49,12 @@ export function DiagnosticCopyButton({
       >
         {payload}
       </span>
-      <Button
-        variant="ghost"
-        size="xs"
-        onClick={handleClick}
-        aria-label={copied ? "Diagnostics copied" : "Copy diagnostics"}
-        className="shrink-0"
-      >
-        <Copy aria-hidden="true" />
-        {copied ? "Copied" : "Copy"}
-      </Button>
+      <CopyButton
+        label="Copy"
+        aria-label="Copy diagnostics"
+        text={clipboardText}
+        announcement="Diagnostics copied"
+      />
     </div>
   );
 }

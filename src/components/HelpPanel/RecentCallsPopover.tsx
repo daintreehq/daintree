@@ -1,11 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Check, ChevronRight, Copy } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { cn } from "@/lib/utils";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
-import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import type { HelpAssistantTier, McpAuditRecord, McpAuditResult } from "@shared/types";
 
@@ -343,23 +343,17 @@ function RecentCallRow({ record, now }: { record: McpAuditRecord; now: number })
 
 /** A labelled, copyable block of redacted JSON or output. */
 function Payload({ label, text }: { label: string; text: string }) {
-  const { copied, copy } = useCopyWithFeedback();
   return (
     <div>
       <div className="flex items-center justify-between gap-2">
         <span className="text-text-secondary">{label}</span>
-        {/* Labelled, like the other copy controls that sit beside a payload.
-            The name stays put; the hook announces the copy. */}
-        <Button
-          variant="ghost"
-          size="xs"
-          className="-my-1"
-          onClick={() => void copy(text)}
+        {/* Labelled, like the other copy controls that sit beside a payload. */}
+        <CopyButton
+          label="Copy"
           aria-label={`Copy ${label.toLowerCase()}`}
-        >
-          {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
-          Copy
-        </Button>
+          className="-my-1"
+          text={text}
+        />
       </div>
       <pre className={PAYLOAD_CLASS}>{text}</pre>
     </div>
