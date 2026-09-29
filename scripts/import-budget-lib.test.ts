@@ -175,6 +175,18 @@ describe("scanSyncViolations", () => {
     expect(result).toEqual([]);
   });
 
+  it("skips plugin-namespaced virtual modules without reading them", () => {
+    const readFile = vi.fn(() => {
+      throw new Error("not found");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = scanSyncViolations(["daintree-conf-ajv:ajv/dist/2020.js"], "/root", readFile);
+    expect(result).toEqual([]);
+    expect(readFile).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it("skips non-source extensions", () => {
     const files = {
       "electron/data.json": "fs.readFileSync('/tmp/x');\n",

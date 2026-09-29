@@ -109,6 +109,12 @@ function baseFiles() {
     // folded to "" in production builds. Excluding the dir keeps shipped
     // binaries from carrying dead test fixtures.
     "!dist-electron/plugins/sample/**",
+    // Build-report sidecars read only by the budget scripts. `dist/importmap-meta.json`
+    // is NOT one of these — protocols.ts reads it at runtime.
+    "!dist/chunk-modules.json",
+    "!dist/renderer-bundle-size-report.json",
+    "!dist/*.md",
+    "!dist-electron/eager-import-meta.json",
     // Drop node_modules packages that are already bundled into dist/
     // dist-electron and never require()d at runtime (#10395).
     ...buildBundledNodeModuleExcludes(),

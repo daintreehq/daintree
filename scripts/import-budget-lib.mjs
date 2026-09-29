@@ -130,6 +130,8 @@ export function scanSyncViolations(files, root, readFile) {
   const violations = [];
   for (const file of files) {
     if (file.startsWith("node_modules/") || file.includes("/node_modules/")) continue;
+    // Plugin-generated modules (`namespace:path`) have no file on disk.
+    if (/^[\w-]+:/.test(file)) continue;
     if (!/\.(?:ts|mts|cts|js|mjs|cjs|tsx|jsx)$/.test(file)) continue;
     let source;
     try {
