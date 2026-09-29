@@ -69,13 +69,21 @@ vi.mock("@/store/fleetSnapshotStore", () => ({
     selector({ snapshot: null }),
 }));
 
-vi.mock("@/store/worktreeStore", () => ({
-  useWorktreeSelectionStore: (selector: (s: { activeWorktreeId: string }) => unknown) =>
-    selector({ activeWorktreeId: "wt-1" }),
-}));
+const selectWorktree = vi.hoisted(() => vi.fn());
+const trackTerminalFocus = vi.hoisted(() => vi.fn());
+
+vi.mock("@/store/worktreeStore", () => {
+  const state = () => ({ activeWorktreeId: "wt-1", selectWorktree, trackTerminalFocus });
+  const useWorktreeSelectionStore = (selector: (s: ReturnType<typeof state>) => unknown) =>
+    selector(state());
+  useWorktreeSelectionStore.getState = state;
+  return { useWorktreeSelectionStore };
+});
 
 const panelsById = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 const restoreBackgroundTerminal = vi.hoisted(() => vi.fn());
+const activateTerminal = vi.hoisted(() => vi.fn());
+const pingTerminal = vi.hoisted(() => vi.fn());
 
 vi.mock("@/store", () => {
   const state = () => ({
@@ -84,6 +92,8 @@ vi.mock("@/store", () => {
     getPanelGroup: () => undefined,
     watchedPanels: new Set<string>(),
     restoreBackgroundTerminal,
+    activateTerminal,
+    pingTerminal,
   });
   const usePanelStore = (selector: (s: ReturnType<typeof state>) => unknown) => selector(state());
   usePanelStore.getState = state;
@@ -113,6 +123,10 @@ afterEach(() => {
   cleanup();
   dispatch.mockReset();
   restoreBackgroundTerminal.mockReset();
+  activateTerminal.mockReset();
+  pingTerminal.mockReset();
+  selectWorktree.mockReset();
+  trackTerminalFocus.mockReset();
 });
 
 describe("TerminalContextMenu — a backgrounded panel", () => {
@@ -131,6 +145,15 @@ describe("TerminalContextMenu — a backgrounded panel", () => {
       expect.anything(),
       expect.anything()
     );
+  });
+
+  it("restores like the row's own Restore: to the pane's worktree, focused", () => {
+    renderMenu({ ...terminal, location: "background", worktreeId: "wt-2" });
+    fireEvent.click(screen.getByText("Restore from background"));
+    expect(selectWorktree).toHaveBeenCalledWith("wt-2");
+    expect(trackTerminalFocus).toHaveBeenCalledWith("wt-2", "panel-1");
+    expect(restoreBackgroundTerminal).toHaveBeenCalledWith("panel-1");
+    expect(activateTerminal).toHaveBeenCalledWith("panel-1");
   });
 
   it("keeps the ordinary layout items for a panel that is not backgrounded", () => {

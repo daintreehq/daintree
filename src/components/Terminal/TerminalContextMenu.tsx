@@ -791,9 +791,21 @@ function TerminalContextMenuBody({
             { source: sourceRef.current }
           );
           break;
-        case "restore-from-background":
-          usePanelStore.getState().restoreBackgroundTerminal(terminalId);
+        case "restore-from-background": {
+          // What the Background popover row's own Restore does: bring the
+          // pane back and take the user to it, worktree switch included.
+          const worktreeId = terminal?.worktreeId?.trim();
+          const selection = useWorktreeSelectionStore.getState();
+          if (worktreeId && worktreeId !== selection.activeWorktreeId) {
+            selection.trackTerminalFocus(worktreeId, terminalId);
+            selection.selectWorktree(worktreeId);
+          }
+          const panels = usePanelStore.getState();
+          panels.restoreBackgroundTerminal(terminalId);
+          panels.activateTerminal(terminalId);
+          panels.pingTerminal(terminalId);
           break;
+        }
         case "background":
           void actionService.dispatch(
             "terminal.background",
