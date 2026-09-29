@@ -217,9 +217,11 @@ code.hljs {
      custom-property cycle. Omission keeps these exact values. */
   --dock-item-bg: var(--theme-overlay-subtle);
   --dock-item-bg-hover: var(--theme-overlay-medium);
-  --dock-item-bg-active: color-mix(in oklab, var(--theme-accent-primary) 12%, transparent);
+  /* Open is the neutral lift the status pills use (bg-overlay-emphasis), never
+     accent: accent is the focus ring's. */
+  --dock-item-bg-active: var(--theme-overlay-emphasis);
   --dock-item-border: var(--theme-border-subtle);
-  --dock-item-border-active: rgb(from var(--theme-accent-primary) r g b / 0.32);
+  --dock-item-border-active: var(--theme-border-default);
   --dock-item-bg-waiting: color-mix(in oklab, var(--color-activity-waiting) 10%, transparent);
   --dock-item-border-waiting: rgb(from var(--color-activity-waiting) r g b / 0.3);
   --state-chip-bg-opacity: var(--theme-state-chip-bg-opacity, 0.15);

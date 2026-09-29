@@ -10,6 +10,7 @@ import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { useDockPanelPortal } from "./dockPanelPortalContext";
+import { DOCK_CHIP_CLASS, DOCK_CHIP_OPEN_CLASS } from "./dockChipStyles";
 import { useDockPopoverResize } from "./useDockPopoverResize";
 import { DockPopoverResizeHandle } from "./DockPopoverResizeHandle";
 import {
@@ -129,15 +130,7 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
               <button
                 {...dragPointerListeners}
                 data-dock-item=""
-                className={cn(
-                  "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
-                  "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-text-secondary",
-                  "hover:text-text-primary hover:bg-[var(--dock-item-bg-hover)]",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
-                  "cursor-grab active:cursor-grabbing",
-                  isOpen &&
-                    "bg-[var(--dock-item-bg-active)] text-text-primary border-[var(--dock-item-border-active)] ring-1 ring-inset ring-daintree-accent/30"
-                )}
+                className={cn(DOCK_CHIP_CLASS, isOpen && DOCK_CHIP_OPEN_CLASS)}
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();

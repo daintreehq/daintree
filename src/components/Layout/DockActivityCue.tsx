@@ -9,6 +9,7 @@ import {
   UI_EXIT_EASING,
 } from "@/lib/animationUtils";
 import { getDockFinishedCueDwellMs } from "./useDockActivityState";
+import { DOCK_STATE_GLYPH_CLASS } from "./dockChipStyles";
 
 /**
  * The finished check's whole life is set on mount: it eases in from
@@ -47,10 +48,15 @@ export function DockActivityCue({ state }: DockActivityCueProps) {
       aria-hidden="true"
     >
       {working ? (
-        <SpinnerCircle className="w-3.5 h-3.5 animate-spin-slow motion-reduce:animate-none" />
+        <SpinnerCircle
+          className={cn(DOCK_STATE_GLYPH_CLASS, "animate-spin-slow motion-reduce:animate-none")}
+        />
       ) : (
         <CheckCircle2
-          className="w-3.5 h-3.5 transition-[opacity,scale] starting:opacity-0 starting:scale-50 motion-reduce:transition-opacity motion-reduce:scale-none"
+          className={cn(
+            DOCK_STATE_GLYPH_CLASS,
+            "transition-[opacity,scale] starting:opacity-0 starting:scale-50 motion-reduce:transition-opacity motion-reduce:scale-none"
+          )}
           style={getFinishedCheckMotion(getDockFinishedCueDwellMs())}
         />
       )}

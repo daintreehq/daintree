@@ -146,9 +146,10 @@ export const EXTENSION_KEY_REGISTRY = {
   "dock-input-bg": OPTIONAL,
   // Dock item fills/borders. These shadow same-named :root declarations in
   // src/index.css; the theme's inline var on <html> wins the cascade, and the
-  // :root values (idle overlay-subtle, accent@12% active fill, accent@0.32
-  // active border) are the fallbacks when a theme omits the keys. Light themes
-  // can replace the accent-tinted active fill with a lift-toward-white plane.
+  // :root values (idle overlay-subtle, overlay-emphasis active fill,
+  // border-default active border) are the fallbacks when a theme omits the
+  // keys. Light themes lift the active fill toward white. Never accent: the
+  // open chip is a neutral lift, like the status pills beside it.
   "dock-item-bg": OPTIONAL,
   "dock-item-bg-active": OPTIONAL,
   "dock-item-border-active": OPTIONAL,
