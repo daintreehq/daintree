@@ -92,7 +92,7 @@ const choiceCardVariants = cva(
     "press-scale relative flex text-left cursor-pointer select-none rounded-[var(--radius-lg)] border",
     // `scale` stays out of the transition list, so the press snaps both ways
     // rather than easing back over 150ms.
-    "transition-[background-color,border-color,color] duration-150 ease-out",
+    "transition-[background-color,border-color,color,box-shadow] duration-150 ease-out",
     "active:scale-[0.98] active:duration-[1ms]",
     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary",
     "disabled:cursor-not-allowed disabled:opacity-50",
@@ -103,8 +103,9 @@ const choiceCardVariants = cva(
        * `elevated` lifts one recommended card off the set — a raised surface and
        * the stronger edge, never accent. On light the `/95` alpha makes the lift
        * translucency-inert, so `.light` takes the opaque surface; its hover
-       * layers the same wash over that surface as an image, so the fill it
-       * already has is not what hover has to replace.
+       * lays the same wash over that surface as an inset shadow beside the
+       * ambient one, so it eases like every other hover and the fill it already
+       * has is not what hover has to replace.
        *
        * `row` is a card in a navigation list of equivalent destinations (the
        * portal launchpad): borderless at rest, since seven outlines in a column
@@ -141,7 +142,7 @@ const choiceCardVariants = cva(
         tone: "elevated",
         selected: false,
         className:
-          "border-border-strong bg-surface-panel-elevated/95 [.light_&]:bg-surface-panel-elevated shadow-[var(--theme-shadow-ambient)] not-disabled:hover:bg-[linear-gradient(var(--color-overlay-subtle),var(--color-overlay-subtle))]",
+          "border-border-strong bg-surface-panel-elevated/95 [.light_&]:bg-surface-panel-elevated shadow-[var(--theme-shadow-ambient)] not-disabled:hover:shadow-[inset_0_0_0_100vmax_var(--color-overlay-subtle),var(--theme-shadow-ambient)]",
       },
     ],
     defaultVariants: {
