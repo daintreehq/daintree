@@ -84,6 +84,7 @@ import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { isClientAppError } from "@/utils/clientAppError";
 import { logError } from "@/utils/logger";
+import { lookupLocalChangeStatus } from "./localChangeStatus";
 import { useHeightHold } from "./useHeightHold";
 import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 import { useFileEditor } from "@/registry/fileEditorRegistry";
@@ -440,13 +441,11 @@ export function FilePane({
         if (!diffWorktreePath || !relativeFilePath) return undefined;
         for (const worktree of state.worktrees.values()) {
           if (normalize(worktree.path) !== normalize(diffWorktreePath)) continue;
-          // Stored change paths are absolute today (electron/utils/git.ts keys
-          // changesMap by absolutePath) though the type says relative — fold
-          // both shapes to the same relative form before comparing.
-          return worktree.worktreeChanges?.changes?.find(
-            (change) =>
-              normalize(toWorktreeRelative(change.path, worktree.path)) === relativeFilePath
-          )?.status;
+          return lookupLocalChangeStatus(
+            worktree.worktreeChanges?.changes,
+            worktree.path,
+            relativeFilePath
+          );
         }
         return undefined;
       },
@@ -642,9 +641,9 @@ export function FilePane({
     if (loadState !== "loaded" || content === null) return null;
     return {
       lineCount: content.split("\n").length,
-      sizeLabel: formatBytes(new TextEncoder().encode(content).byteLength),
+      sizeLabel: formatBytes(contentBytes),
     };
-  }, [loadState, content]);
+  }, [loadState, content, contentBytes]);
   const requestRef = useRef(0);
   const markdownViewerRef = useRef<MarkdownViewerHandle>(null);
   const codeViewerRef = useRef<CodeViewerHandle>(null);
