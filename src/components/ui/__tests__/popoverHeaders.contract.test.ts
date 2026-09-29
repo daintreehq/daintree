@@ -53,6 +53,7 @@ const HEADER_CHIP_TRIGGER_FILES = [
 
 /** Surfaces whose small icon buttons were hand-rolled 24px boxes. */
 const ICON_BUTTON_FILES = [
+  "src/components/Fleet/FleetCountChip.tsx",
   "src/components/Terminal/SubagentChip.tsx",
   "src/components/Terminal/FindCodexSessionAction.tsx",
   "src/components/Notifications/NotificationCenterEntry.tsx",
@@ -93,6 +94,14 @@ describe("popover header contract", () => {
         !/className=\{(cn\()?POPOVER_HEADER_CLASS\b/.test(src) ||
         !/className=\{POPOVER_TITLE_CLASS\}/.test(src)
       );
+    });
+    expect(offenders).toEqual([]);
+  });
+
+  it("a titled popover is named by its title", () => {
+    const offenders = TITLED_POPOVER_FILES.filter((rel) => {
+      const src = read(rel);
+      return /<PopoverContent\b/.test(src) && !/<PopoverContent\b[^>]*aria-labelledby=/s.test(src);
     });
     expect(offenders).toEqual([]);
   });
@@ -146,6 +155,8 @@ describe("popover header contract", () => {
         .filter((cls) => /\bh-6\b/.test(cls) && /\bw-6\b/.test(cls));
       expect(handRolled, rel).toEqual([]);
       expect(src, rel).not.toMatch(/\bw-6 h-6\b|\bh-6 w-6\b/);
+      // The fleet ribbon's own 24px class belongs to the ribbon, not to a popover row.
+      expect(src, rel).not.toContain("FLEET_RIBBON_ICON_BUTTON_CLASS");
     }
   });
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactElement } from "react";
 import { XCircle, ArrowLeft, ChevronDown, Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
@@ -20,7 +20,6 @@ import { useFleetWorktreeScope } from "./useFleetWorktreeScope";
 import { FleetWorktreeDots } from "./FleetWorktreeDots";
 import { renderPaneStateBadge } from "./renderPaneStateBadge";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
-import { FLEET_RIBBON_ICON_BUTTON_CLASS } from "./fleetRibbonStyles";
 import { Badge } from "@/components/ui/badge";
 import {
   POPOVER_HEADER_CLASS,
@@ -52,6 +51,7 @@ export function FleetCountChip({
   // broadcast write carries an inline "Send failed" marker next to its live
   // agent-state badge.
   const run = useFleetRunStore((s) => s.run);
+  const headingId = useId();
 
   // Internal mode toggle for the popover content. "list" shows the armed
   // terminals (default). "picker" swaps to FleetPickerContent for adding new
@@ -223,6 +223,7 @@ export function FleetCountChip({
         side="bottom"
         align="start"
         data-testid="fleet-armed-list"
+        aria-labelledby={headingId}
         className={cn(
           "flex flex-col overflow-hidden p-1",
           popoverMode === "list" ? "max-h-[320px] w-[320px]" : "max-h-[420px] w-[380px]"
@@ -232,7 +233,9 @@ export function FleetCountChip({
           <>
             {/* -mx-1 -mt-1: the strip spans the popover's own p-1 inset, edge to edge. */}
             <div className={cn(POPOVER_HEADER_CLASS, "-mx-1 -mt-1 mb-1 shrink-0")}>
-              <span className={POPOVER_TITLE_CLASS}>Fleet terminals</span>
+              <span id={headingId} className={POPOVER_TITLE_CLASS}>
+                Fleet terminals
+              </span>
             </div>
             <ul className="flex flex-col overflow-y-auto">
               {armOrder.length === 0 ? (
@@ -314,14 +317,16 @@ export function FleetCountChip({
                         </span>
                       )}
                       {renderPaneStateBadge(id, agentStatesByPane[id], waitingReasonsByPane[id])}
-                      <button
-                        type="button"
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
                         onClick={() => disarmId(id)}
                         aria-label={`Disarm ${title}`}
-                        className={cn(FLEET_RIBBON_ICON_BUTTON_CLASS, "mr-0.5")}
+                        // Ringed inside: the list scrolls and clips anything outside it.
+                        className="mr-0.5 shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2"
                       >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
+                        <X aria-hidden="true" />
+                      </Button>
                     </li>
                   );
                 })
@@ -356,7 +361,9 @@ export function FleetCountChip({
                 <ArrowLeft aria-hidden="true" />
                 <span>Back</span>
               </Button>
-              <span className={POPOVER_TITLE_CLASS}>Add panes</span>
+              <span id={headingId} className={POPOVER_TITLE_CLASS}>
+                Add panes
+              </span>
             </div>
             <FleetPickerContent picker={picker} testIdPrefix="fleet-picker-add" autoFocusSearch />
             <div className="mt-1 flex items-center justify-between gap-2 border-t border-divider px-1 pt-2">
