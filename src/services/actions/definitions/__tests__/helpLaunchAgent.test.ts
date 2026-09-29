@@ -197,7 +197,7 @@ describe("help.launchAgent", () => {
     );
   });
 
-  it("launches with the assistant's recommended model and custom args", async () => {
+  it("launches with the CLI default model and custom args", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
@@ -212,7 +212,7 @@ describe("help.launchAgent", () => {
       "agent.launch",
       expect.objectContaining({
         agentId: "codex",
-        agentLaunchFlags: ["--model", "gpt-6-luna", "--verbose"],
+        agentLaunchFlags: ["--verbose"],
       }),
       { source: "user" }
     );
@@ -252,14 +252,9 @@ describe("help.launchAgent", () => {
 
     await action.run({ agentId: "codex" }, stubCtx);
 
-    expect(mockDispatch).toHaveBeenCalledWith(
-      "agent.launch",
-      expect.objectContaining({
-        agentId: "codex",
-        agentLaunchFlags: ["--model", "gpt-6-luna"],
-      }),
-      { source: "user" }
-    );
+    const [, dispatchArg] = mockDispatch.mock.calls[0] ?? [];
+    expect(dispatchArg).toMatchObject({ agentId: "codex" });
+    expect(dispatchArg).not.toHaveProperty("agentLaunchFlags");
   });
 
   it("uses the user's preferred default agent when available", async () => {

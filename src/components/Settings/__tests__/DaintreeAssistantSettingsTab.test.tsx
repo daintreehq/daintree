@@ -764,7 +764,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(options).toEqual(["Default (CLI default)", "Opus", "Sonnet"]);
   });
 
-  describe("recommended model default", () => {
+  describe("assistant model default", () => {
     function mockClaudeCatalog() {
       window.electron.agentCapabilities.getResolvedModelList = vi.fn().mockResolvedValue({
         agentId: "claude",
@@ -799,39 +799,9 @@ describe("DaintreeAssistantSettingsTab", () => {
       return (await screen.findByLabelText("Model")) as HTMLSelectElement;
     }
 
-    it("shows the agent's recommended model when nothing is saved", async () => {
+    it("shows the CLI default when nothing is saved", async () => {
       const select = await renderModelSelect(null);
-      await waitFor(() => expect(select.value).toBe("sonnet"));
-    });
-
-    it("shows the CLI default when the installed CLI doesn't offer the recommendation", async () => {
-      helpPanelState.preferredAgentId = "codex";
-      installApi({
-        getSettings: vi.fn().mockResolvedValue({
-          docSearch: true,
-          daintreeControl: true,
-          tier: "core" as const,
-          bypassPermissions: false,
-          auditRetention: 7,
-          modelIds: {},
-          customArgs: "",
-        }),
-      });
-      window.electron.agentCapabilities.getResolvedModelList = vi.fn().mockResolvedValue({
-        agentId: "codex",
-        models: [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", shortLabel: "Sol" }],
-        contextWindow: null,
-        source: "merged",
-      });
-      render(
-        <SettingsValidationProvider>
-          <DaintreeAssistantSettingsTab />
-        </SettingsValidationProvider>
-      );
-      const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
       await waitFor(() => expect(select.value).toBe("__default__"));
-      const values = Array.from(select.querySelectorAll("option")).map((o) => o.value);
-      expect(values).not.toContain("gpt-6-luna");
     });
 
     it("keeps an explicit CLI-default choice", async () => {
@@ -839,7 +809,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       await waitFor(() => expect(select.value).toBe("__default__"));
     });
 
-    it("stores CLI default as an empty string and the recommended model as no choice", async () => {
+    it("stores CLI default as an empty string and a picked model as that model", async () => {
       const select = await renderModelSelect("opus");
       await waitFor(() => expect(select.value).toBe("opus"));
 
@@ -853,7 +823,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       fireEvent.change(select, { target: { value: "sonnet" } });
       await waitFor(() =>
         expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
-          modelIds: { claude: null },
+          modelIds: { claude: "sonnet" },
         })
       );
     });
@@ -921,7 +891,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       it("never shows another agent's saved model as selected or as an option", async () => {
         renderWith("codex", { claude: "opus" });
         const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
-        await waitFor(() => expect(select.value).toBe("gpt-6-luna"));
+        await waitFor(() => expect(select.value).toBe("__default__"));
         expect(optionValues(select)).not.toContain("opus");
       });
 
@@ -943,7 +913,7 @@ describe("DaintreeAssistantSettingsTab", () => {
         });
         rerenderTree();
         select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
-        await waitFor(() => expect(select.value).toBe("gpt-6-luna"));
+        await waitFor(() => expect(select.value).toBe("__default__"));
 
         fireEvent.change(screen.getByRole("combobox", { name: "Agent" }), {
           target: { value: "claude" },
@@ -958,7 +928,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       it("writes a model change to the selected agent's entry only", async () => {
         renderWith("codex", { claude: "opus" });
         const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
-        await waitFor(() => expect(select.value).toBe("gpt-6-luna"));
+        await waitFor(() => expect(select.value).toBe("__default__"));
 
         fireEvent.change(select, { target: { value: "gpt-6-astra" } });
 

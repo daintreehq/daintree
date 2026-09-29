@@ -99,7 +99,6 @@ export const config: AgentConfig = {
     { id: "sonnet", name: "Sonnet", shortLabel: "Sonnet" },
   ],
   curatedModels: true,
-  assistantDefaultModel: "sonnet",
   contextWindow: 200_000,
   capabilities: {
     scrollback: 10000,

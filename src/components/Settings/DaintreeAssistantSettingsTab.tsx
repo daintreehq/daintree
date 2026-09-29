@@ -531,9 +531,8 @@ export function DaintreeAssistantSettingsTab() {
     };
   }, [preferredAgentId, modelCatalogAttempt]);
 
-  // Nothing saved means the agent's recommended model, shown as that model —
-  // or as the CLI default when the installed CLI doesn't offer it, matching
-  // what the launch path resolves.
+  // Nothing saved means the CLI's own default model, matching what the launch
+  // path resolves.
   // Only the selected agent's own entry — another agent's model never shows as
   // selected here.
   const savedModelId = preferredAgentId

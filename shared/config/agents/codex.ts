@@ -79,7 +79,6 @@ export const config: AgentConfig = {
     { id: "gpt-6-luna", name: "GPT-6 Luna", shortLabel: "Luna" },
   ],
   curatedModels: true,
-  assistantDefaultModel: "gpt-6-luna",
   contextWindow: 128_000,
   capabilities: {
     scrollback: 10000,

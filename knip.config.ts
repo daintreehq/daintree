@@ -89,6 +89,7 @@ const baseConfig: KnipConfig = {
     "src/components/HelpPanel/__preview__/figureRailPreview.tsx",
     "src/components/HelpPanel/__preview__/launchingPreview.tsx",
     "src/components/HelpPanel/__preview__/recentCallsPreview.tsx",
+    "src/components/HelpPanel/__preview__/resizeHandlePreview.tsx",
     "src/components/Layout/__preview__/preview.tsx",
     "src/components/Layout/__preview__/dockPreview.tsx",
     "src/components/Layout/__preview__/forgeStats.tsx",
@@ -98,6 +99,7 @@ const baseConfig: KnipConfig = {
     "src/components/Layout/__preview__/sidebarFooter.tsx",
     "src/components/Layout/__preview__/commandHud.tsx",
     "src/components/Layout/__preview__/rateLimitDetails.tsx",
+    "src/components/Layout/__preview__/toolbarToggles.tsx",
     "src/components/Onboarding/__preview__/preview.tsx",
     "src/components/Portal/__preview__/preview.tsx",
     "src/components/Plugin/__preview__/preview.tsx",
@@ -106,6 +108,7 @@ const baseConfig: KnipConfig = {
     "src/components/Panel/__preview__/transitionPreview.tsx",
     "src/components/Sidebar/__preview__/worktreeLoadError.tsx",
     "src/components/Sidebar/__preview__/deletedWorktreeGroup.tsx",
+    "src/components/Sidebar/__preview__/sidebarHeaderRefresh.tsx",
     "src/components/Terminal/__preview__/preview.tsx",
     "src/components/Terminal/__preview__/autocompleteMenu.tsx",
     "src/components/Terminal/__preview__/sendToAgent.tsx",
@@ -266,6 +269,7 @@ const baseConfig: KnipConfig = {
     "pgrep",
     "pkill",
     "reg",
+    "sips",
     "top",
     "where",
     "wsl.exe",
@@ -278,6 +282,11 @@ const baseConfig: KnipConfig = {
     // Vite resolves this browser-only absolute module URL in the screenshot harness.
     "e2e/screenshots/host-pause-indicator-review.spec.ts": ["unresolved"],
   },
+
+  // why: browser-only absolute module URLs that Vite resolves inside
+  // `page.evaluate` in the copy-context screenshot harness. Exact specifiers,
+  // so a misspelled import elsewhere in that spec is still flagged.
+  ignoreUnresolved: ["/src/store/copyTreeRunStore.ts", "/src/lib/copyTreeFeedback.ts"],
 
   // why: these packages are consumed via mechanisms Knip can't trace:
   //   - wait-on: invoked as a shell command from scripts/dev.mjs

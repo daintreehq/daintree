@@ -68,38 +68,21 @@ describe("loadCustomLaunchFlags — model + custom args composition", () => {
     expect(await loadCustomLaunchFlags("claude")).toEqual(["--verbose", "--foo", "bar"]);
   });
 
-  it("uses the agent's recommended model when no model is saved", async () => {
+  it("launches with the CLI default when no model is saved", async () => {
     getSettings.mockResolvedValue({ modelIds: {}, customArgs: "--verbose" });
-    expect(await loadCustomLaunchFlags("claude")).toEqual(["--model", "sonnet", "--verbose"]);
-    expect(await loadCustomLaunchFlags("codex")).toEqual(["--model", "gpt-6-luna", "--verbose"]);
+    expect(await loadCustomLaunchFlags("claude")).toEqual(["--verbose"]);
+    expect(await loadCustomLaunchFlags("codex")).toEqual(["--verbose"]);
   });
 
   it("treats absent modelIds like an unsaved model", async () => {
     getSettings.mockResolvedValue({ customArgs: "" });
-    expect(await loadCustomLaunchFlags("claude")).toEqual(["--model", "sonnet"]);
-  });
-
-  it("falls back to the CLI default when the installed CLI doesn't offer the recommendation", async () => {
-    getSettings.mockResolvedValue({ modelIds: {}, customArgs: "" });
-    getResolvedModelList.mockResolvedValue(catalog("codex", ["gpt-5.6-sol", "gpt-5.5"]));
-    expect(await loadCustomLaunchFlags("codex")).toEqual([]);
-  });
-
-  it("keeps the recommendation when the catalog can't be read", async () => {
-    getSettings.mockResolvedValue({ modelIds: {}, customArgs: "" });
-    getResolvedModelList.mockRejectedValue(new Error("ipc down"));
-    expect(await loadCustomLaunchFlags("codex")).toEqual(["--model", "gpt-6-luna"]);
+    expect(await loadCustomLaunchFlags("claude")).toEqual([]);
   });
 
   it("never gates an explicit choice on the catalog", async () => {
     getSettings.mockResolvedValue({ modelIds: { codex: "gpt-5.5" }, customArgs: "" });
     expect(await loadCustomLaunchFlags("codex")).toEqual(["--model", "gpt-5.5"]);
     expect(getResolvedModelList).not.toHaveBeenCalled();
-  });
-
-  it("injects no model for an agent without a recommended one", async () => {
-    getSettings.mockResolvedValue({ modelIds: {}, customArgs: "" });
-    expect(await loadCustomLaunchFlags("opencode")).toEqual([]);
   });
 
   it("reads only the launching agent's own entry", async () => {
@@ -113,13 +96,13 @@ describe("loadCustomLaunchFlags — model + custom args composition", () => {
 
   it("never passes another agent's model to this launch", async () => {
     getSettings.mockResolvedValue({ modelIds: { claude: "opus" }, customArgs: "" });
-    expect(await loadCustomLaunchFlags("codex")).toEqual(["--model", "gpt-6-luna"]);
+    expect(await loadCustomLaunchFlags("codex")).toEqual([]);
   });
 
   it("launches a custom model the catalog doesn't list for the agent it was set on", async () => {
     getSettings.mockResolvedValue({ modelIds: { codex: "my-fork-model" }, customArgs: "" });
     expect(await loadCustomLaunchFlags("codex")).toEqual(["--model", "my-fork-model"]);
-    expect(await loadCustomLaunchFlags("claude")).toEqual(["--model", "sonnet"]);
+    expect(await loadCustomLaunchFlags("claude")).toEqual([]);
   });
 
   it("ignores inherited object keys as agent entries", async () => {
