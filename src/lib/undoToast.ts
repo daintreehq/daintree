@@ -86,3 +86,21 @@ export function reinsert<T extends { id: string }>(
   next.splice(slot, 0, item);
   return next;
 }
+
+const latestUndo = new Map<string, symbol>();
+
+/**
+ * Registers an Undo for `key` (an entity id, or one per reset) and returns a
+ * guard that runs `restore` only while it is still the newest Undo for that
+ * key. Removing, restoring and removing an item again leaves two toasts up; the
+ * first must not bring back the snapshot the second one replaced.
+ */
+export function latestUndoOnly<R>(key: string, restore: () => R): () => R | undefined {
+  const token = Symbol(key);
+  latestUndo.set(key, token);
+  return () => {
+    if (latestUndo.get(key) !== token) return undefined;
+    latestUndo.delete(key);
+    return restore();
+  };
+}

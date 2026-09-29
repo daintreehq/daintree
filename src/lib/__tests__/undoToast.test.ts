@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { positionOf, reinsert, type RemovedPosition } from "../undoToast";
+import { vi } from "vitest";
+import { latestUndoOnly, positionOf, reinsert, type RemovedPosition } from "../undoToast";
 
 type Item = { id: string };
 const items = (ids: string) => ids.split("").map((id) => ({ id }));
@@ -38,5 +39,30 @@ describe("reinsert", () => {
 
   it("is a no-op when the item is already back", () => {
     expect(ids(reinsert(items("abc"), { id: "b" }, positionOf(items("abc"), "b")))).toBe("abc");
+  });
+});
+
+describe("latestUndoOnly", () => {
+  it("lets only the newest Undo for a key restore, and only once", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const undoFirst = latestUndoOnly("link:a", first);
+    const undoSecond = latestUndoOnly("link:a", second);
+
+    undoFirst();
+    expect(first).not.toHaveBeenCalled();
+    undoSecond();
+    undoSecond();
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps separate keys independent", () => {
+    const a = vi.fn();
+    const b = vi.fn();
+    const undoA = latestUndoOnly("link:a", a);
+    latestUndoOnly("link:b", b)();
+    undoA();
+    expect(a).toHaveBeenCalledTimes(1);
+    expect(b).toHaveBeenCalledTimes(1);
   });
 });

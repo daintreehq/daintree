@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DEFAULT_SYSTEM_LINKS, type PortalLink } from "@shared/types";
 import { notify } from "@/lib/notify";
-import { positionOf, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
+import { latestUndoOnly, positionOf, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { SettingsActions, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
@@ -220,7 +220,9 @@ export function PortalSettingsTab() {
       duration: UNDO_TOAST_DURATION_MS,
       action: {
         label: "Undo",
-        onClick: () => usePortalStore.getState().restoreLink(link, position),
+        onClick: latestUndoOnly(`portal-link:${link.id}`, () =>
+          usePortalStore.getState().restoreLink(link, position)
+        ),
       },
     });
   };

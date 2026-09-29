@@ -37,6 +37,7 @@ A D0 change that the app can put back **exactly** — same id, same position, no
 - `notify()` makes a toast whose action is labelled `Undo` **urgent by default**, so scheduled quiet hours, the startup quiet period and the per-source rate limit never swallow it — an Undo held back until quiet hours end would expire unseen. Pass `urgent: false` only with a reason.
 - Undo restores the captured prior state and yields to anything changed since the reset. A removed list entry goes back beside the neighbours it had (`positionOf` / `reinsert` in `src/lib/undoToast.ts`), not at a stored index, so several removals undone in any order land where they were.
 - A restore whose save fails takes back only its own change and offers `Retry`.
+- Only the newest Undo for an entity (or for a given reset) acts: wrap the restore in `latestUndoOnly(key, restore)`, so an older toast still on screen cannot bring back a snapshot a later removal replaced.
 - No Undo is offered when the change did not happen (the dispatch failed or the entity is still there).
 - When the control the user clicked leaves with its row, focus moves to the same control on the neighbouring row, else the next stable control.
 

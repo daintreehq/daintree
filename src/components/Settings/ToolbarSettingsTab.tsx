@@ -79,7 +79,7 @@ import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { buildPluginToolbarMeta } from "@/components/Layout/pluginToolbarMeta";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
-import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
+import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { DRAG_GHOST_OPACITY, EASE_OUT_EXPO, UI_ANIMATION_DURATION } from "@/lib/animationUtils";
 import {
   isToolbarButtonOnToolbar,
@@ -485,7 +485,7 @@ export function ToolbarSettingsTab() {
         label: "Undo",
         // Anything changed again since the reset keeps that change. The two
         // sides are one unit: a button moved across changes both lists.
-        onClick: () => {
+        onClick: latestUndoOnly("toolbar-reset", () => {
           const now = useToolbarPreferencesStore.getState();
           const sidesUntouched =
             now.layout.leftButtons === resetLayout.leftButtons &&
@@ -504,7 +504,7 @@ export function ToolbarSettingsTab() {
             },
             launcher: restoreUntouched(launcher, resetLauncher, now.launcher),
           });
-        },
+        }),
       },
     });
   };

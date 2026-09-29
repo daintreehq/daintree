@@ -3,6 +3,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { projectClient } from "@/clients";
 import { notify } from "@/lib/notify";
 import {
+  latestUndoOnly,
   positionOf,
   reinsert,
   UNDO_TOAST_DURATION_MS,
@@ -102,7 +103,9 @@ export async function deleteSavedFleetWithUndo(scope: FleetSavedScope): Promise<
     duration: UNDO_TOAST_DURATION_MS,
     action: {
       label: "Undo",
-      onClick: () => restoreSavedFleet(projectId, scope, position),
+      onClick: latestUndoOnly(`saved-fleet:${scope.id}`, () =>
+        restoreSavedFleet(projectId, scope, position)
+      ),
     },
   });
 }

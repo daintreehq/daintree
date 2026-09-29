@@ -2,7 +2,7 @@ import { Fragment, useState, useMemo, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
-import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
+import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
@@ -166,11 +166,11 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
       action: {
         label: "Undo",
         // A ratio dragged since the reset is newer than the one it replaced.
-        onClick: () => {
+        onClick: latestUndoOnly("split-ratio-reset", () => {
           useTwoPaneSplitStore.setState((state) => ({
             ratioByWorktreeId: { ...cleared, ...state.ratioByWorktreeId },
           }));
-        },
+        }),
       },
     });
   };
