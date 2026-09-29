@@ -213,7 +213,7 @@ export function SettingsPresetGroup<T extends string | number>({
                     // chip would otherwise look exactly like its siblings. An outline is
                     // the one treatment that survives there.
                     "bg-overlay-selected border border-border-strong text-text-primary forced-colors:outline forced-colors:outline-2"
-                  : "border border-border-default text-text-secondary hover:bg-tint/5 hover:text-text-primary"
+                  : "border border-border-default text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
               )}
             >
               {option.label}

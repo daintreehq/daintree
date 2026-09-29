@@ -108,8 +108,10 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       // Accent belongs to the cursor alone in this arrow-key domain. The fill
       // step is far below SC 1.4.11's 3:1, so the checked box is the actual
       // non-text indicator and must show whenever the row is selected.
-      const fill = rowSource.match(/isSelected\s*\?\s*"([^"]+)"/)?.[1] ?? "";
-      expect(fill).toMatch(/\bbg-overlay-\w+/);
+      // Keyed on the cell's own `aria-selected`, so the fill and what AT hears
+      // cannot disagree.
+      const fill = rowSource.match(/"aria-selected:(bg-[^"\s]+)"/)?.[1] ?? "";
+      expect(fill).toMatch(/^bg-overlay-\w+$/);
       expect(fill).not.toMatch(/accent/);
       expect(rowSource).toMatch(/isSelecting\s*\|\|\s*isSelected\s*\|\|\s*!TypeIcon\s*\?\s*"flex"/);
     });

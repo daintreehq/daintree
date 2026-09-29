@@ -5,6 +5,8 @@ import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { useRovingRows, type UseRovingRowsResult } from "@/hooks/useRovingRows";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useSkeletonFloor, useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -92,14 +94,21 @@ interface CrossWorktreeFileRowProps {
   /** The directory band above is shortened or clipped, so the path is not on screen. */
   directoryHidden: boolean;
   onClick: () => void;
+  roving: RowRoving;
 }
+
+type RowRoving = Pick<UseRovingRowsResult, "tabStopKey" | "onRowFocus" | "rowRef">;
+
+const fileKey = (file: CrossWorktreeFile) => `${file.status}:${file.path}`;
 
 function CrossWorktreeFileRow({
   file,
   isSelected,
   directoryHidden,
   onClick,
+  roving,
 }: CrossWorktreeFileRowProps) {
+  const key = fileKey(file);
   const { ref, isTruncated } = useTruncationDetection();
   const status = statusDisplay(file.status);
   const insertions = file.insertions ?? 0;
@@ -110,15 +119,22 @@ function CrossWorktreeFileRow({
       <button
         type="button"
         onClick={onClick}
+        ref={roving.rowRef(key)}
+        data-roving-row=""
+        // One tab stop for the shelf; the arrow keys move it.
+        tabIndex={roving.tabStopKey === key ? 0 : -1}
+        onFocus={() => roving.onRowFocus(key)}
         aria-current={isSelected || undefined}
+        // A list-detail row, not a listbox option: `aria-current` for AT and
+        // `data-selected` for the shared selected-row fill (and its forced-colors
+        // outline, which `.palette-row` carries).
+        data-selected={isSelected ? "true" : undefined}
         aria-label={fileRowLabel(file)}
         data-file-path={file.path}
         className={cn(
-          "flex w-full items-center rounded-[var(--radius-lg)] px-1.5 py-1 text-left text-xs font-mono transition-colors duration-150 ease-out",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-          isSelected
-            ? "bg-overlay-subtle forced-colors:outline forced-colors:outline-1 forced-colors:-outline-offset-1 forced-colors:outline-[Highlight]"
-            : "hover:bg-tint/5"
+          LIST_DETAIL_ROW_CLASS,
+          "flex w-full items-center rounded-[var(--radius-md)] px-1.5 py-1 text-left text-xs font-mono",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         )}
       >
         <span className={cn("w-4 shrink-0 font-bold", status.color)} aria-hidden="true">
@@ -146,10 +162,12 @@ function FileGroupSection({
   group,
   selectedFile,
   onOpen,
+  roving,
 }: {
   group: FileGroup;
   selectedFile: CrossWorktreeFile | null;
   onOpen: (file: CrossWorktreeFile) => void;
+  roving: RowRoving;
 }) {
   const { ref, isTruncated } = useTruncationDetection();
   const label = formatDiffDir(group.dir);
@@ -165,7 +183,8 @@ function FileGroupSection({
       <div className="flex flex-col gap-px">
         {group.files.map((file) => (
           <CrossWorktreeFileRow
-            key={`${file.status}:${file.path}`}
+            key={fileKey(file)}
+            roving={roving}
             file={file}
             isSelected={selectedFile !== null && isSameFile(selectedFile, file)}
             directoryHidden={directoryHidden}
@@ -331,6 +350,14 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   // File stepping through the comparison set, mirroring the diff modals:
   // `[` / `]` keys plus a footer stepper in the diff panel.
   const groups = useMemo(() => (result ? groupComparisonFiles(result.files) : null), [result]);
+  const rovingKeys = useMemo(
+    () => groups?.flatMap((group) => group.files.map(fileKey)) ?? [],
+    [groups]
+  );
+  const roving = useRovingRows({
+    keys: rovingKeys,
+    preferredKey: selectedFile ? fileKey(selectedFile) : null,
+  });
   // Stepping walks the list in the order it is drawn, not git's output order.
   const files = useMemo(() => groups?.flatMap((group) => group.files) ?? null, [groups]);
   // `null` means auto — prose wraps, code doesn't. Derived from the file on
@@ -525,6 +552,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           )}
           <div
             ref={listRef}
+            onKeyDown={roving.onKeyDown}
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-1.5"
           >
             {showListSkeleton && (
@@ -544,6 +572,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                   group={group}
                   selectedFile={selectedFile}
                   onOpen={(file) => void fetchFileDiff(file)}
+                  roving={roving}
                 />
               ))}
           </div>

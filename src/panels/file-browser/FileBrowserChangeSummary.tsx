@@ -72,14 +72,14 @@ export function FileBrowserChangeSummary({ changes, onSelect }: FileBrowserChang
                     : undefined
                 }
                 className={cn(
-                  "flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-xs",
+                  "flex w-full items-center gap-2 rounded-[var(--radius-md)] px-2 py-1 text-left text-xs",
                   "transition-colors duration-150 ease-out",
                   // Unconditional: a deleted file's row stays in the tab order
                   // (aria-disabled, so the explanation can be read), and a
                   // focusable row without a ring takes the browser's default.
                   PALETTE_ROW_FOCUS_CLASS,
                   isReadable
-                    ? "cursor-pointer text-text-secondary hover:bg-tint/5 hover:text-text-primary"
+                    ? "cursor-pointer text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
                     : // Struck through rather than faded: the row stays readable
                       // at full strength while still saying there is nothing
                       // left to open — the convention source-control lists use

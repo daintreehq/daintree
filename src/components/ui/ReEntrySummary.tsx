@@ -183,7 +183,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
                   className={cn(
                     "flex items-center gap-1.5 w-full text-left text-xs",
                     "rounded-[var(--radius-xs)] px-0.5 py-0.5 -mx-0.5",
-                    "hover:bg-tint/5 transition-colors duration-150",
+                    "hover:bg-overlay-subtle transition-colors duration-150",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                     row.worstType === "error" || row.worstType === "warning"
                       ? "text-text-primary"

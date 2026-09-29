@@ -40,15 +40,15 @@ export function BaseBranchFileRow({
     <TruncatedTooltip content={file.path}>
       <div
         className={cn(
-          "group/baserow w-full flex items-center text-xs rounded px-1.5 py-1.5",
-          "hover:bg-tint/5 transition-colors"
+          "group/baserow w-full flex items-center text-xs rounded-[var(--radius-md)] px-1.5 py-1.5",
+          "hover:bg-overlay-subtle transition-colors"
         )}
       >
         <button
           type="button"
           onClick={onClick}
           className={cn(
-            "relative -mx-1 flex min-w-0 flex-1 items-baseline rounded px-1 text-left",
+            "relative -mx-1 flex min-w-0 flex-1 items-baseline rounded-[var(--radius-sm)] px-1 text-left",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
           )}
         >

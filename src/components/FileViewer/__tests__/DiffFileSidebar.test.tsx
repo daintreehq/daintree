@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
-import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
+import { act, render, screen, cleanup, fireEvent, within } from "@testing-library/react";
 import type { DiffChangeSetEntry } from "@shared/types/git";
 import type { PluginContextMenuItemEntry } from "@/hooks/usePluginContextMenuItems";
 
@@ -68,9 +68,13 @@ vi.mock("react-virtuoso", async (importOriginal) => {
   };
 });
 
+const { toggleViewedMock } = vi.hoisted(() => ({
+  toggleViewedMock: vi.fn<(worktreePath: string, viewedKey: string) => void>(),
+}));
+
 vi.mock("@/store/diffViewedStore", () => ({
   useDiffViewedStore: (selector?: (state: unknown) => unknown) => {
-    const state = { toggleViewed: () => {} };
+    const state = { toggleViewed: toggleViewedMock };
     return selector ? selector(state) : state;
   },
   selectViewedSet: () => new Set<string>(),
@@ -134,6 +138,7 @@ beforeAll(async () => {
 beforeEach(() => {
   dispatchMock.mockClear();
   scrollIntoViewMock.mockClear();
+  toggleViewedMock.mockClear();
   itemsRef.current = [];
 });
 
@@ -399,5 +404,91 @@ describe("DiffFileSidebar — windowed file shelf (#12241)", () => {
     });
 
     expect(scrollIntoViewMock).toHaveBeenLastCalledWith(expect.objectContaining({ index: 61 }));
+  });
+});
+
+describe("DiffFileSidebar — one tab stop, arrows move it", () => {
+  const FILES = [entry("src/b.ts"), entry("README.md"), entry("src/a.ts"), entry("lib/c.ts")];
+  const tabbable = () =>
+    Array.from(document.querySelectorAll<HTMLElement>("button, [role='checkbox']")).filter(
+      (el) => el.closest("[data-roving-row]") && el.tabIndex >= 0
+    );
+
+  it("rests the only tab stop on the open file, and takes the viewed boxes out of the order", () => {
+    renderSidebar({ files: FILES, currentIndex: 2 });
+    const stops = tabbable();
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.getAttribute("aria-current")).toBe("true");
+    for (const box of screen.getAllByTestId("diff-sidebar-viewed-toggle")) {
+      expect(box.tabIndex).toBe(-1);
+    }
+  });
+
+  it("walks the shelf in its displayed, grouped order and stops at the ends", () => {
+    const { onSelect } = renderSidebar({ files: FILES, currentIndex: 1 });
+    const buttons = screen.getAllByTestId("diff-sidebar-file");
+    const focused = () => buttons.findIndex((button) => button === document.activeElement);
+    tabbable()[0]!.focus();
+    expect(focused()).toBe(0);
+
+    for (let i = 1; i < buttons.length; i++) {
+      fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+      expect(focused()).toBe(i);
+    }
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(focused()).toBe(buttons.length - 1);
+    fireEvent.keyDown(document.activeElement!, { key: "Home" });
+    expect(focused()).toBe(0);
+    fireEvent.keyDown(document.activeElement!, { key: "End" });
+    expect(focused()).toBe(buttons.length - 1);
+
+    // Moving the cursor is navigation; only Enter/Space (the button) opens.
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(tabbable()).toEqual([document.activeElement]);
+  });
+
+  it("moves the cursor to a row whose viewed box took focus, so arrows continue from there", () => {
+    renderSidebar({ files: FILES, currentIndex: 0 });
+    const buttons = screen.getAllByTestId("diff-sidebar-file");
+    const boxes = screen.getAllByTestId("diff-sidebar-viewed-toggle");
+    act(() => boxes[1]!.focus());
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(buttons[2]);
+  });
+
+  it("toggles the focused file's viewed mark with V", () => {
+    renderSidebar({ files: FILES, currentIndex: 0 });
+    const button = tabbable()[0]!;
+    button.focus();
+    fireEvent.keyDown(button, { key: "v" });
+    expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE, "modified:src/b.ts");
+
+    toggleViewedMock.mockClear();
+    fireEvent.keyDown(button, { key: "v", metaKey: true });
+    expect(toggleViewedMock).not.toHaveBeenCalled();
+  });
+
+  it("asks the virtualizer for a row an arrow lands on that is not mounted", () => {
+    const files = Array.from({ length: 400 }, (_, i) =>
+      entry(`src/file-${String(i).padStart(3, "0")}.ts`)
+    );
+    render(
+      <TooltipProvider>
+        <VirtuosoMockContext.Provider value={{ itemHeight: 32, viewportHeight: 320 }}>
+          <DiffFileSidebar
+            files={files}
+            currentIndex={0}
+            worktreePath={WORKTREE}
+            worktreeId="wt-1"
+            onSelect={vi.fn()}
+          />
+        </VirtuosoMockContext.Provider>
+      </TooltipProvider>
+    );
+    tabbable()[0]!.focus();
+    scrollIntoViewMock.mockClear();
+    fireEvent.keyDown(document.activeElement!, { key: "End" });
+    // One group header ahead of every file, so the last file sits at slot 400.
+    expect(scrollIntoViewMock).toHaveBeenCalledWith(expect.objectContaining({ index: 400 }));
   });
 });

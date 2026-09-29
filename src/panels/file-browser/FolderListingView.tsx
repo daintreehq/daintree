@@ -8,7 +8,11 @@ import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { FILE_DRAG_MIME, encodeFileDragPaths } from "@/lib/fileDragPayload";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
-import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
+import {
+  LIST_ROW_HOVER_CLASS,
+  PALETTE_ROW_FOCUS_CLASS,
+  ROW_MENU_TARGET_CLASS,
+} from "@/components/ui/paletteRowStyles";
 import type { FileEntryLike, FolderListingRow } from "./fileBrowserTree";
 import { FILE_TREE_ICON_CLASS, FILE_TREE_ICON_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
 
@@ -232,13 +236,14 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
       onDragStart={handleDragStart}
       onClick={handleClick}
       className={cn(
-        "flex h-7 w-full cursor-default select-none items-center gap-3 rounded-lg px-2 text-xs",
+        "flex h-7 w-full cursor-default select-none items-center gap-3 rounded-[var(--radius-md)] px-2 text-xs",
         PALETTE_ROW_FOCUS_CLASS,
         // Neutral hover, no selected state: clicking a row always replaces what
         // this listing is showing, so no row is ever the standing selection —
         // a highlight would only ever paint for the frame before it unmounts.
-        "text-text-secondary transition-colors duration-150 ease-out hover:bg-tint/5",
-        "data-[state=open]:bg-overlay-raised data-[state=open]:text-text-primary"
+        "text-text-secondary transition-colors duration-150 ease-out",
+        LIST_ROW_HOVER_CLASS,
+        ROW_MENU_TARGET_CLASS
       )}
     >
       <span className="flex min-w-0 flex-1 items-center gap-1.5">

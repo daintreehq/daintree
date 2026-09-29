@@ -609,7 +609,7 @@ export function ConflictPanel({
                     if (el) rowRefs.current.set(file.path, el);
                     else rowRefs.current.delete(file.path);
                   }}
-                  className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-sm text-xs hover:bg-tint/5 transition-colors"
+                  className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-sm text-xs hover:bg-overlay-subtle transition-colors"
                 >
                   <CircleAlert className="w-3 h-3 shrink-0 text-status-error" aria-hidden />
                   <TruncatedTooltip

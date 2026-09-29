@@ -40,13 +40,31 @@ This document maps each interactive component role to its canonical Tailwind cla
 
 ### List Row Hover
 
-**Role:** Rows in a list-detail browser that are not a roving cursor — the plugin manager, telemetry and event lists, the theme browser — where a click picks the record the detail pane shows.
+**Role:** Rows in a list-detail browser that are not a roving cursor — the plugin manager, telemetry and event lists, the theme browser, and every file list (the file browser tree and folder listing, the diff file shelf, the cross-worktree diff, the worktree change list and overview, the Review Hub rows) — where a click picks the record the detail pane shows, or opens it.
 
 ```tsx
-"hover:bg-overlay-subtle";
+LIST_DETAIL_ROW_CLASS; // src/components/ui/paletteRowStyles.ts — selected, hover and menu target in one
+LIST_ROW_HOVER_CLASS; // "not-aria-selected:not-data-[selected=true]:hover:bg-overlay-subtle"
+("hover:bg-overlay-subtle"); // a row with no selection state at all
 ```
 
 **Usage:** Only where hover and selection are genuinely two states. In a palette, picker, autocomplete or menu the pointer moves the cursor instead — see [Highlighted Row](#highlighted-row) — and a row there must never paint its own `hover:bg-*`, or the resting pointer lights a second row beside the one Enter acts on.
+
+A row with a selection takes `LIST_DETAIL_ROW_CLASS` and marks itself with `aria-selected` (a tree item, a listbox option) or `data-selected="true"` (a plain row carrying its own controls, with `aria-current` on its button). The hover keys off those same attributes, so it can never paint on the selected row and can never be picked by a JS ternary that drifts — the file lists had each grown `isSelected ? "bg-overlay-subtle" : "hover:bg-tint/5"`, a 5% hover over a 2% selection. Hover is always `overlay-subtle`, never a raw `tint/N`, which is off the ladder the selection is measured against. A row whose border is spoken for (the worktree overview's divider) takes `aria-selected:bg-overlay-highlight` plus `LIST_ROW_HOVER_CLASS` instead. Pinned by `src/config/__tests__/fileListRows.contract.test.ts`.
+
+**Keyboard:** a persistent file list is one tab stop, with Up/Down stepping and Home/End jumping, no wrap (`useRovingRows`, `src/hooks/useRovingRows.ts`). The rows carry their own controls, so they stay buttons that rove real focus rather than becoming listbox options; Enter/Space stay with the row's button, Shift+F10 still opens the row menu (`data-row-menu`), and a control taken out of the tab order gets a key on the row (the diff shelf's viewed box is `V`). The Review Hub file list, which is a true listbox, keeps `aria-activedescendant`.
+
+---
+
+### Row Menu Target
+
+**Role:** The row a right-click (or Shift+F10) context menu is open on, in any list of rows.
+
+```tsx
+ROW_MENU_TARGET_CLASS; // data-[state=open]: a 1px inset border-strong outline, primary text
+```
+
+**Usage:** An outline, never a fill. The targeted row is usually also the hovered row and often the selected one, so a fill tier has to find a free rung between them — and on light themes there is none: `overlay-raised`, which this tier used to be, resolves to the same colour as `overlay-highlight`, so the menu target was indistinguishable from the selection. A ring composes with whichever fill is under it (Finder marks its context-menu target the same way). Neutral, because the accent in a list is keyboard focus. Radix writes `data-state="open"` onto the row through the `asChild` `ContextMenuTrigger`; when a `TooltipTrigger` shares the node, the context-menu trigger must be the outer one so its `data-state` wins.
 
 ---
 
