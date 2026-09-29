@@ -39,7 +39,9 @@ export const PANE_TOOLBAR_TEXT_BUTTON_CLASS =
  * image footer at narrow widths) grow instead of clipping.
  *
  * A strip whose items carry their own hover chip (`px-1.5`) insets by that much
- * less (`px-1.5`), so the ink still lands on the 12px line.
+ * less (`px-1.5`), so the ink still lands on the 12px line. A strip carrying
+ * pane toolbar buttons (26px) drops its `py`, so the buttons set the height
+ * rather than adding to it.
  */
 export const PANE_STATUS_FOOTER_CLASS =
   "flex min-h-6 shrink-0 items-center gap-2 border-t border-divider px-3 py-1 text-2xs text-text-secondary";

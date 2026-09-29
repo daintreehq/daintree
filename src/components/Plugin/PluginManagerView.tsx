@@ -17,6 +17,7 @@ import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -706,15 +707,20 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               )}
             />
           )}
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={close}
-            aria-label="Back"
-            className="app-no-drag shrink-0"
-          >
-            <ChevronLeft />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={close}
+                aria-label="Back"
+                className="app-no-drag shrink-0"
+              >
+                <ChevronLeft />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Back</TooltipContent>
+          </Tooltip>
           <Package className="w-5 h-5 text-text-secondary shrink-0" aria-hidden="true" />
           <h2 className="text-sm font-medium text-text-primary truncate">Plugins</h2>
         </div>
@@ -755,12 +761,17 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <SurfaceHeaderCloseButton
-            ref={closeButtonRef}
-            onClick={close}
-            aria-label="Close plugin manager"
-            className="app-no-drag"
-          />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <SurfaceHeaderCloseButton
+                ref={closeButtonRef}
+                onClick={close}
+                aria-label="Close plugin manager"
+                className="app-no-drag"
+              />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Close plugin manager</TooltipContent>
+          </Tooltip>
           {isWindows() && (
             <div
               aria-hidden="true"

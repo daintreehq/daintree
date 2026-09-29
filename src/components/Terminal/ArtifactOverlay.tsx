@@ -1006,7 +1006,12 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
               >
                 Clear
               </Button>
-              <SurfaceHeaderCloseButton onClick={closePanel} aria-label="Close artifacts" />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <SurfaceHeaderCloseButton onClick={closePanel} aria-label="Close artifacts" />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Close artifacts</TooltipContent>
+              </Tooltip>
             </SurfaceHeader>
 
             {showBulkBar && (

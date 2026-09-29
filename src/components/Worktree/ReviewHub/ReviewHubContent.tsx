@@ -84,6 +84,7 @@ import {
 // rendered) until a diff is actually opened.
 import { Button } from "@/components/ui/button";
 import { SurfaceHeader, SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { debounce } from "@/utils/debounce";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useFileDecorations } from "@/hooks/useFileDecorations";
@@ -1930,31 +1931,41 @@ export function ReviewHubContent({
             />
 
             {diffMode === "working-tree" && (
-              <button
-                onClick={() => {
-                  if (!loading) void refresh();
-                }}
-                // Not `disabled`: pressing it would drop keyboard focus to the page.
-                aria-disabled={loading || undefined}
-                aria-busy={loading || isBackgroundRefreshing || undefined}
-                className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
-                aria-label="Refresh"
-              >
-                <SpinningIcon
-                  icon={RefreshCw}
-                  active={loading || isBackgroundRefreshing}
-                  className={PANE_TOOLBAR_ICON_CLASS}
-                />
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => {
+                      if (!loading) void refresh();
+                    }}
+                    // Not `disabled`: pressing it would drop keyboard focus to the page.
+                    aria-disabled={loading || undefined}
+                    aria-busy={loading || isBackgroundRefreshing || undefined}
+                    className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
+                    aria-label="Refresh"
+                  >
+                    <SpinningIcon
+                      icon={RefreshCw}
+                      active={loading || isBackgroundRefreshing}
+                      className={PANE_TOOLBAR_ICON_CLASS}
+                    />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Refresh</TooltipContent>
+              </Tooltip>
             )}
             {/* Same reason as the title: AppDialog.Header supplies the close
                 control at this location. */}
             {!isDialog && (
-              <SurfaceHeaderCloseButton
-                onClick={onClose}
-                aria-label="Close"
-                data-testid="review-hub-close"
-              />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <SurfaceHeaderCloseButton
+                    onClick={onClose}
+                    aria-label="Close review & commit"
+                    data-testid="review-hub-close"
+                  />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Close review & commit</TooltipContent>
+              </Tooltip>
             )}
           </div>
         </SurfaceHeader>
