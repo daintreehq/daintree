@@ -1925,6 +1925,41 @@ describe("host.fs.watch allowMissing", () => {
     }
   });
 
+  it("polls a missing target every tick but an attached quiet one only as a backstop", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const present = join(allowed, "present");
+    await fs.mkdir(present);
+    const realAllowed = await fs.realpath(allowed);
+    const realPresent = join(realAllowed, "present");
+    const realMissing = join(realAllowed, "missing");
+    // Creation events for the fixture must not count as activity on the watch.
+    await new Promise((r) => setTimeout(r, 200));
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    const disposers: Array<() => void> = [];
+    const statSpy = vi.spyOn(fs, "stat");
+    try {
+      disposers.push(
+        await host.fs.watch([present], () => undefined, { allowMissing: true }),
+        await host.fs.watch([join(allowed, "missing")], () => undefined, { allowMissing: true })
+      );
+      statSpy.mockClear();
+      // One tick at a time: a tick is skipped while the previous check's stat
+      // is still in flight, and real I/O does not advance with the fake clock.
+      for (let tick = 0; tick < 20; tick++) {
+        await vi.advanceTimersByTimeAsync(1000);
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      const statsOf = (p: string) => statSpy.mock.calls.filter(([arg]) => arg === p).length;
+      expect(statsOf(realMissing)).toBe(20);
+      expect(statsOf(realPresent)).toBeGreaterThan(0);
+      expect(statsOf(realPresent)).toBeLessThan(statsOf(realMissing) / 2);
+    } finally {
+      statSpy.mockRestore();
+      for (const dispose of disposers) dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("leaves no watcher or poll behind when cancelled during the first presence check", async () => {
     const host = registerPlugin(["fs:project-read"], [allowed]);
     const board = join(allowed, "board");

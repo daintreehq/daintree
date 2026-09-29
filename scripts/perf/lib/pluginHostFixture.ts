@@ -1207,7 +1207,10 @@ function runServiceChild(): void {
       globalConfigDir: join(home, "plugin-config"),
       // Injected so the scan never awaits the real kill-switch fetch. A
       // benchmark that reaches the network is not a benchmark.
-      blocklistService: { getBlocklist: async () => null },
+      blocklistService: {
+        getBlocklist: async () => null,
+        getStartupBlocklist: async () => ({ blocklist: null, refreshed: null }),
+      },
     });
 
     const initStart = performance.now();

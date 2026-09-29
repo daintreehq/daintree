@@ -215,6 +215,7 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 import { PluginService } from "../PluginService.js";
 import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { PLUGIN_BLOCKLIST_TTL_MS } from "../../../shared/config/pluginBlocklist.js";
 import {
   PluginBlocklistService,
   type ParsedPluginBlocklist,
@@ -371,6 +372,153 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
 
     // A single fetch backs the whole multi-plugin scan.
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  describe("stale cached list at startup", () => {
+    const cachePath = () => path.join(tmpDir, "blocklist-cache.json");
+
+    async function writeStaleCache(entries: ParsedPluginBlocklist["entries"]): Promise<void> {
+      await fs.writeFile(
+        cachePath(),
+        JSON.stringify({
+          fetchedAt: Date.now() - PLUGIN_BLOCKLIST_TTL_MS - 60_000,
+          raw: { entries },
+        })
+      );
+    }
+
+    function gatedBlocklist(entries: ParsedPluginBlocklist["entries"]) {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const fetchImpl = vi.fn(async () => {
+        await gate;
+        return { ok: true, status: 200, json: async () => ({ entries }) };
+      });
+      const svc = new PluginBlocklistService({ fetchImpl, cachePath: cachePath() });
+      return { svc, release, fetchImpl };
+    }
+
+    const isBlocked = (service: PluginService, name: string) =>
+      service.listPlugins().some((p) => p.manifest.name === name && p.blocklisted);
+
+    it("enforces the stale list without waiting for the fetch", async () => {
+      await writePlugin("bad", { name: "acme.bad", version: "1.0.0" });
+      await writePlugin("ok", { name: "acme.ok", version: "1.0.0" });
+      await writeStaleCache([{ name: "acme.bad", ranges: ["*"], reason: "malware" }]);
+      const { svc, release, fetchImpl } = gatedBlocklist([]);
+
+      const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+      // Resolves while the fetch is still held open.
+      await service.initialize();
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(service.hasPlugin("acme.bad")).toBe(false);
+      expect(isBlocked(service, "acme.bad")).toBe(true);
+      expect(service.hasPlugin("acme.ok")).toBe(true);
+      release();
+      // Let the background refresh settle before the fixture dir is removed. An
+      // entry the fresh list drops stays blocked until the next launch.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(isBlocked(service, "acme.bad")).toBe(true);
+    });
+
+    it("adopts a refresh that lands while the scan is still running", async () => {
+      for (let i = 0; i < 12; i++) {
+        await writePlugin(`p${i}`, { name: `acme.p${i}`, version: "1.0.0" });
+      }
+      await writeStaleCache([]);
+      const fetchImpl = vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ entries: [{ name: "acme.p0", ranges: ["*"], reason: "malware" }] }),
+      }));
+      const svc = new PluginBlocklistService({ fetchImpl, cachePath: cachePath() });
+
+      const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+      await service.initialize();
+      await vi.waitFor(() => expect(isBlocked(service, "acme.p0")).toBe(true));
+      expect(service.hasPlugin("acme.p0")).toBe(false);
+      expect(service.hasPlugin("acme.p1")).toBe(true);
+    });
+
+    it("unloads a plugin the revalidated list newly blocks", async () => {
+      await writePlugin("bad", { name: "acme.bad", version: "1.0.0", displayName: "Bad" });
+      await writePlugin("ok", { name: "acme.ok", version: "1.0.0" });
+      await writeStaleCache([]);
+      const { svc, release } = gatedBlocklist([
+        { name: "acme.bad", ranges: ["*"], reason: "malware", message: "Revoked" },
+      ]);
+
+      const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+      await service.initialize();
+      expect(service.hasPlugin("acme.bad")).toBe(true);
+
+      release();
+      await vi.waitFor(() => expect(isBlocked(service, "acme.bad")).toBe(true));
+      expect(service.hasPlugin("acme.bad")).toBe(false);
+      expect(service.hasPlugin("acme.ok")).toBe(true);
+      expect(
+        service.listPlugins().find((p) => p.manifest.name === "acme.bad")?.blocklistReason
+      ).toBe("Revoked");
+      expect(broadcastToRendererMock).toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
+        expect.objectContaining({
+          title: "Plugin blocked",
+          message: expect.stringContaining("Bad"),
+        })
+      );
+    });
+
+    it("moves a disabled plugin the revalidated list blocks into the blocked set", async () => {
+      storeMock._state.set("plugins", { disabled: ["acme.bad"] });
+      await writePlugin("bad", { name: "acme.bad", version: "1.0.0" });
+      await writeStaleCache([]);
+      const { svc, release } = gatedBlocklist([
+        { name: "acme.bad", ranges: ["*"], reason: "malware" },
+      ]);
+
+      const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+      await service.initialize();
+      expect(isBlocked(service, "acme.bad")).toBe(false);
+
+      release();
+      await vi.waitFor(() => expect(isBlocked(service, "acme.bad")).toBe(true));
+      expect(service.listPlugins()).toHaveLength(1);
+    });
+
+    it("keeps the stale list when the revalidation fails", async () => {
+      await writePlugin("bad", { name: "acme.bad", version: "1.0.0" });
+      await writeStaleCache([{ name: "acme.bad", ranges: ["*"], reason: "malware" }]);
+      const fetchImpl = vi.fn(async () => {
+        throw new Error("offline");
+      });
+      const svc = new PluginBlocklistService({ fetchImpl, cachePath: cachePath() });
+
+      const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+      await service.initialize();
+      await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+      await new Promise((r) => setTimeout(r, 20));
+      expect(isBlocked(service, "acme.bad")).toBe(true);
+      expect(service.hasPlugin("acme.bad")).toBe(false);
+    });
+
+    it("refuses to activate a registered plugin the current list blocks", async () => {
+      // A load that passed the gate against the older list can commit after the
+      // revalidated list swept; activation must still refuse it.
+      await writePlugin("late", { name: "acme.late", version: "1.0.0" });
+      const { svc } = blocklistService([]);
+      const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+      await service.initialize();
+      expect(service.hasPlugin("acme.late")).toBe(true);
+
+      (service as unknown as { startupBlocklist: ParsedPluginBlocklist }).startupBlocklist = {
+        entries: [{ name: "acme.late", ranges: ["*"], reason: "malware" }],
+      };
+      await service.activatePlugin("acme.late");
+      expect(service.hasPlugin("acme.late")).toBe(false);
+      expect(isBlocked(service, "acme.late")).toBe(true);
+    });
   });
 });
 

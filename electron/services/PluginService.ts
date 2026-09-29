@@ -158,6 +158,7 @@ import {
   PluginBlocklistService,
   findPluginBlocklistMatch,
   type ParsedPluginBlocklist,
+  type PluginBlocklistMatch,
 } from "./plugin/PluginBlocklistService.js";
 import { PluginInstaller } from "./plugin/PluginInstaller.js";
 import { checkPluginEngineRange, type PluginEngineMismatch } from "./plugin/pluginEngineCompat.js";
@@ -1387,12 +1388,22 @@ export class PluginService {
       console.error("[PluginService] Failed to read plugin recipe metadata:", err);
     }
 
-    // Resolve the kill-switch blocklist once, before any scan, so the
-    // per-plugin load gate below reads a single immutable snapshot and the
-    // Promise.allSettled fan-out never awaits a network call (#9428). Fails
-    // open: getBlocklist() returns null on any fetch/parse failure with no
-    // cached list, and plugins then load normally.
-    this.startupBlocklist = await this.blocklistService.getBlocklist();
+    // Resolve the kill-switch blocklist before any scan, so the per-plugin load
+    // gate reads one snapshot and the Promise.allSettled fan-out never awaits a
+    // network call (#9428). A cached list is enforced as-is even when stale, so
+    // startup never waits on the network while one exists; the revalidated list
+    // is adopted the moment it arrives, unloading anything it newly blocks. With
+    // no cache at all this still waits for the fetch. Fails open: null on any
+    // fetch/parse failure with no cached list.
+    const { blocklist, refreshed } = await this.blocklistService.getStartupBlocklist();
+    this.startupBlocklist = blocklist;
+    if (refreshed) {
+      void refreshed
+        .then((fresh) => this.applyRefreshedBlocklist(fresh))
+        .catch((err) =>
+          console.error("[PluginService] Failed to apply the refreshed blocklist:", err)
+        );
+    }
 
     // Built-ins load first so user plugins with a colliding manifest.name are
     // rejected by the duplicate guard in loadPlugin() — built-in wins.
@@ -1429,7 +1440,86 @@ export class PluginService {
       // registries.
       releaseBroadcasts();
       this.initialized = true;
+      // A refresh that landed mid-scan swept only what had committed by then;
+      // sweep again for loads that were in flight across it.
+      if (this.startupBlocklist !== blocklist) {
+        this.applyRefreshedBlocklist(this.startupBlocklist);
+      }
     }
+  }
+
+  /**
+   * Adopt a revalidated blocklist mid-session. Plugins that loaded against the
+   * stale cached list and are now blocked get the full `unloadPlugin()`
+   * teardown and move into `blockedPlugins`, exactly as if the load gate had
+   * refused them. A null result is the fail-open signal and never drops the
+   * list already enforced.
+   */
+  private applyRefreshedBlocklist(fresh: ParsedPluginBlocklist | null): void {
+    if (!fresh || this.disposed) return;
+    this.startupBlocklist = fresh;
+    let changed = false;
+    for (const [pluginId, plugin] of [...this.plugins]) {
+      if (this.blockLoadedPluginIfListed(pluginId, plugin)) changed = true;
+    }
+    for (const [pluginId, entry] of [...this.disabledPlugins]) {
+      const match = findPluginBlocklistMatch(fresh, {
+        name: entry.manifest.name,
+        version: entry.manifest.version,
+      });
+      if (!match) continue;
+      this.disabledPlugins.delete(pluginId);
+      this.recordBlockedPlugin(entry, match.message);
+      changed = true;
+    }
+    if (changed) this.broadcaster.broadcastProvenanceChanged();
+  }
+
+  /**
+   * Unload a registered plugin the current blocklist covers. Returns whether it
+   * did. Also the activation gate: a load that passed the check against an
+   * older list can commit after {@link applyRefreshedBlocklist} swept, and must
+   * still never run code.
+   */
+  private blockLoadedPluginIfListed(pluginId: string, plugin: LoadedPlugin): boolean {
+    const match = this.blocklistMatchFor(plugin);
+    if (!match) return false;
+    console.warn(
+      `[PluginService] Plugin "${plugin.manifest.name}" v${plugin.manifest.version} is blocklisted (${match.reason}) — unloading`
+    );
+    this.unloadPlugin(pluginId);
+    // Project instances never claim the global namespace; see loadPlugin().
+    if (plugin.origin !== "project") this.recordBlockedPlugin(plugin, match.message);
+    return true;
+  }
+
+  private blocklistMatchFor(plugin: LoadedPlugin): PluginBlocklistMatch | null {
+    return findPluginBlocklistMatch(this.startupBlocklist, {
+      name: plugin.manifest.name,
+      version: plugin.manifest.version,
+    });
+  }
+
+  private recordBlockedPlugin(
+    entry: { manifest: Readonly<PluginManifest>; dir: string; isBuiltin: boolean },
+    reason: string
+  ): void {
+    const { manifest } = entry;
+    this.reservedNames.add(manifest.name);
+    if (this.blockedPlugins.has(manifest.name)) return;
+    this.blockedPlugins.set(manifest.name, {
+      manifest: manifest as PluginManifest,
+      dir: entry.dir,
+      isBuiltin: entry.isBuiltin,
+      reason,
+    });
+    broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      type: "warning",
+      priority: "low",
+      title: "Plugin blocked",
+      message: `"${manifest.displayName ?? manifest.name}" was blocked: ${reason}`,
+      rateLimitKey: `plugin-blocklist:${manifest.name}`,
+    });
   }
 
   /**
@@ -2543,6 +2633,10 @@ export class PluginService {
       return this.buildWorkerCommandHandler(pluginId, channel, resolvedPath);
     }
     const mod = (await this.runImport(pluginId, resolvedPath)) as { default?: unknown };
+    const owner = this.plugins.get(pluginId);
+    if (!owner || this.blocklistMatchFor(owner)) {
+      throw new Error(`Plugin "${pluginId}" is no longer loaded; cannot run command "${channel}"`);
+    }
     if (typeof mod.default !== "function") {
       throw new Error(
         `Command "${channel}" handler module "${resolvedPath}" has no callable default export`
@@ -2670,6 +2764,9 @@ export class PluginService {
       const mod = (await this.runImport(pluginId, plugin.resolvedMain)) as {
         activate?: unknown;
       };
+      // The import is a suspension point: an unload, or a refreshed blocklist
+      // naming this plugin, may have landed while it resolved.
+      if (this.plugins.get(pluginId) !== plugin || this.blocklistMatchFor(plugin)) return;
       if (typeof mod.activate === "function") {
         const activate = mod.activate as PluginActivate;
         // A built-in gets the built-in host: the same object plus the
@@ -3088,6 +3185,10 @@ export class PluginService {
     if (existing) return existing;
     const plugin = this.plugins.get(pluginId);
     if (!plugin) return;
+    if (this.blockLoadedPluginIfListed(pluginId, plugin)) {
+      this.broadcaster.broadcastProvenanceChanged();
+      return;
+    }
     // A project plugin can activate while the startup scan still holds
     // contribution broadcasts; what it dispatches must find them published.
     this.broadcaster.interruptHolds();
