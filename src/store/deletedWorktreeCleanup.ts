@@ -11,6 +11,7 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { notify } from "@/lib/notify";
+import { pluralize } from "@/lib/pluralize";
 
 export const DELETED_WORKTREE_SWEEP_INTERVAL_MS = 1000;
 
@@ -220,10 +221,12 @@ function clampRemaining(remainingMs: number, ttlMs: number): number {
 
 /**
  * The sweep is the one path that closes terminals with nobody watching: the
- * row vanishes and the trash TTL kills the PTYs shortly after, so a user who
- * stepped away would otherwise have no record it happened and no chance at the
- * only inverse (restore from trash). Inbox-only — the event is unattended by
- * definition, so a toast would interrupt whatever the user moved on to.
+ * row vanishes and the trash TTL kills the PTYs seconds later, so a user who
+ * stepped away would otherwise have no record it happened. The entry is only a
+ * record — the inbox is usually read long after the trash window closes, so it
+ * carries no restore action and its copy is past tense. Inbox-only — the event
+ * is unattended by definition, so a toast would interrupt whatever the user
+ * moved on to.
  */
 interface SweptRow {
   worktreeId: string;
@@ -241,16 +244,9 @@ interface SweptRow {
 function notifySweepTrashed(swept: readonly SweptRow[]): void {
   if (swept.length === 0) return;
   const terminalCount = swept.reduce((n, row) => n + row.count, 0);
-  const terminalNoun = terminalCount === 1 ? "terminal" : "terminals";
   const single = swept.length === 1 ? swept[0]! : null;
-  let message: string;
-  if (single === null) {
-    message = `${swept.length} deleted worktrees still had ${terminalCount} ${terminalNoun} open — they moved to trash and close shortly.`;
-  } else if (single.count === 1) {
-    message = `${single.title} still had 1 terminal open — it moved to trash and closes shortly.`;
-  } else {
-    message = `${single.title} still had ${single.count} terminals open — they moved to trash and close shortly.`;
-  }
+  const where = single ? single.title : pluralize(swept.length, "worktree");
+  const message = `Closed ${pluralize(terminalCount, "terminal")} left open in ${where}.`;
   notify({
     type: "info",
     title: single ? "Deleted worktree cleaned up" : "Deleted worktrees cleaned up",

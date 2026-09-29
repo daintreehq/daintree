@@ -326,9 +326,14 @@ describe("sweepDeletedWorktreeCleanup", () => {
     const payload = call![0];
     // Inbox-only: the sweep fires unattended, so it must never toast.
     expect(payload.priority).toBe("low");
-    expect(payload.message).toContain("2 terminals");
-    expect(payload.message).toContain("feature/x");
-    expect(payload.context?.worktreeId).toBe("wt-1");
+    expect(payload.type).toBe("info");
+    expect(payload.title).toBe("Deleted worktree cleaned up");
+    // Past tense: the inbox is usually read long after the trash TTL has killed the PTYs.
+    expect(payload.message).toBe("Closed 2 terminals left open in feature/x.");
+    expect(payload.context).toEqual({ worktreeId: "wt-1", eventKind: "agent" });
+    // No restore/undo — the trash window is far shorter than inbox dwell time.
+    expect(payload.action).toBeUndefined();
+    expect(payload.actions).toBeUndefined();
   });
 
   it("uses singular phrasing for a single surviving terminal", () => {
@@ -338,9 +343,7 @@ describe("sweepDeletedWorktreeCleanup", () => {
     expect(notify).toHaveBeenCalledTimes(1);
     const call = vi.mocked(notify).mock.calls[0];
     expect(call).toBeDefined();
-    const message = call![0].message;
-    expect(message).toContain("1 terminal ");
-    expect(message).not.toContain("terminals");
+    expect(call![0].message).toBe("Closed 1 terminal left open in feature/x.");
   });
 
   it("stays silent when the sweep had no surviving terminals to trash", () => {
@@ -378,8 +381,11 @@ describe("sweepDeletedWorktreeCleanup", () => {
     expect(notify).toHaveBeenCalledTimes(1);
     const payload = vi.mocked(notify).mock.calls[0]![0];
     expect(payload.priority).toBe("low");
-    expect(payload.message).toContain("3 deleted worktrees");
-    expect(payload.message).toContain("4 terminals");
+    expect(payload.title).toBe("Deleted worktrees cleaned up");
+    expect(payload.message).toBe("Closed 4 terminals left open in 3 worktrees.");
+    expect(payload.context?.eventKind).toBe("agent");
+    expect(payload.action).toBeUndefined();
+    expect(payload.actions).toBeUndefined();
     // No single worktree owns a multi-row sweep, so the entry must not pin one.
     expect(payload.context?.worktreeId).toBeUndefined();
   });
