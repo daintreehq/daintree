@@ -1,8 +1,8 @@
 import * as React from "react";
 import { cva } from "class-variance-authority";
-import { CircleAlert } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 
 /**
  * Label / description / error wiring for a single control.
@@ -365,6 +365,8 @@ export interface InlineErrorProps extends React.HTMLAttributes<HTMLParagraphElem
  * The glyph carries the severity and the words stay neutral: severity-coloured
  * text has no contrast floor across the themes.
  */
+const ErrorGlyph = SEVERITY_GLYPH.error;
+
 function InlineError({ className, children, action, as: Tag = "p", ...props }: InlineErrorProps) {
   return (
     <Tag
@@ -372,7 +374,7 @@ function InlineError({ className, children, action, as: Tag = "p", ...props }: I
       data-slot="inline-error"
       {...props}
     >
-      <CircleAlert className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
+      <ErrorGlyph className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
       <span className="min-w-0 flex-1">{children}</span>
       {action}
     </Tag>

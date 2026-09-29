@@ -81,7 +81,9 @@ describe("pane and inline busy states", () => {
       const source = FILES.find((f) => f.file === file)?.source ?? "";
       // Not yet viewed, and evicted.
       expect(source.match(/<PanePlaceholder>/g)?.length ?? 0, file).toBe(2);
-      expect(source, file).toMatch(/<PaneState\b[\s\S]*?live="alert"/);
+      // A failure is an alert; a load the user cancelled may drop to a polite
+      // status, so the alert can sit behind that one condition.
+      expect(source, file).toMatch(/<PaneState\b[\s\S]*?live=(?:"alert"|\{[^}]*"alert"\})/);
     }
     const overlays =
       FILES.find((f) => f.file === "src/components/DevPreview/DevPreviewWebviewOverlays.tsx")

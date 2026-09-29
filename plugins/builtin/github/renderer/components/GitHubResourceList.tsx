@@ -10,7 +10,7 @@ import {
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import {
-  AlertCircle,
+  XCircle,
   ExternalLink,
   RefreshCw,
   WifiOff,
@@ -1493,7 +1493,7 @@ export function GitHubResourceList({
                 ) : isTransientNetworkError(error) ? (
                   <WifiOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 ) : (
-                  <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <XCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 )}
                 <p className="min-w-0 flex-1 text-xs">
                   {isTransientNetworkError(error)
@@ -1589,7 +1589,7 @@ export function GitHubResourceList({
             <EmptyState
               variant="zero-data"
               scale="canvas"
-              icon={isTransientNetworkError(error) ? <WifiOff /> : <AlertCircle />}
+              icon={isTransientNetworkError(error) ? <WifiOff /> : <XCircle />}
               title={
                 isTransientNetworkError(error)
                   ? "Couldn't reach GitHub"

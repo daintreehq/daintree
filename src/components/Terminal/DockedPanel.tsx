@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
-import { AlertTriangle } from "lucide-react";
+import { XCircle } from "lucide-react";
 import { PaneState } from "@/components/ui/PaneState";
 import { usePanelStore } from "@/store";
 import type { PanelInstance } from "@shared/types/panel";
@@ -126,7 +126,7 @@ export function DockedPanel({
         ) : (
           <div className="relative flex-1 min-h-0">
             <PaneState
-              icon={<AlertTriangle className="text-status-warning" />}
+              icon={<XCircle className="text-status-error" />}
               title="Unknown panel type"
               description={`No component is registered for the "${kind}" panel kind.`}
             />

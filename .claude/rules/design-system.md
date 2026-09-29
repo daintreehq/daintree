@@ -64,6 +64,8 @@ Lucide only (`lucide-react`) — no bespoke glyphs for app concepts. A new conce
 
 Recurring actions wear one glyph each: `RefreshCw` retry/refresh, `RotateCw` reload/restart, `RotateCcw` only restore/reset/revert/undo; `Copy` for copying (`Link` means linking), `Pencil` edit, `Settings` project settings, `FolderGit2` worktree. Table: `docs/themes/component-contract.md` → Action glyphs.
 
+Severity glyphs come from `SEVERITY_GLYPH` (`src/lib/statusSeverity.tsx`): error `XCircle`, warning `AlertTriangle`, info `Info`, success `CheckCircle2`. `OctagonAlert` is a severe caution, never a failure; `CircleAlert` is not a severity glyph. Status boxes are `Callout` (error, warning, danger, success, info, neutral), never hand-rolled. Table: `docs/themes/component-contract.md` → Severity glyphs.
+
 Agent-state glyphs (green spinner / amber circle / blue check) are app-wide vocabulary — never swap in a foreign glyph. Never render `SpinnerCircle` static.
 
 ## High contrast

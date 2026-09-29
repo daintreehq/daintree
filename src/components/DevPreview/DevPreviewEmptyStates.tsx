@@ -1,6 +1,5 @@
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import {
-  AlertTriangle,
   ChevronDown,
   ExternalLink,
   Play,
@@ -199,7 +198,7 @@ export function DevPreviewEmptyStates({
     return (
       <PaneState
         live="alert"
-        icon={<AlertTriangle className="text-status-warning" />}
+        icon={<XCircle className="text-status-error" />}
         title={ERROR_TITLES[error.type]}
         description={error.message}
       >

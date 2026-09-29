@@ -5,11 +5,10 @@ import type { ForgeProjectHealthPayload } from "@shared/types/ipc/forge";
 import { usePulseStore, useProjectStore, PULSE_MAX_RETRIES } from "@/store";
 import { cn } from "@/lib/utils";
 import {
-  AlertCircle,
+  XCircle,
   RefreshCw,
   GitBranch,
   CheckCircle2,
-  XCircle,
   Clock,
   CircleMinus,
   Tag,
@@ -545,7 +544,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       >
         <div className="flex flex-col gap-2 w-full">
           <div className="flex items-center gap-2 text-text-primary" role="alert">
-            <AlertCircle className="w-4 h-4 text-status-error" aria-hidden="true" />
+            <XCircle className="w-4 h-4 text-status-error" aria-hidden="true" />
             <span className="text-xs">{error}</span>
             <Button
               variant="ghost"

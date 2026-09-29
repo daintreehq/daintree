@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useSyncExternalStore } from "react";
-import { AlertTriangle } from "lucide-react";
+import { XCircle } from "lucide-react";
 import { PaneState } from "@/components/ui/PaneState";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store";
@@ -218,7 +218,7 @@ export const GridPanel = React.memo(function GridPanel({
         ) : (
           <div className="relative flex-1 min-h-0">
             <PaneState
-              icon={<AlertTriangle className="text-status-warning" />}
+              icon={<XCircle className="text-status-error" />}
               title="Unknown panel type"
               description={`No component is registered for the "${kind}" panel kind.`}
             />

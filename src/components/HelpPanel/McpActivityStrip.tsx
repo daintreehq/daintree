@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/ui/Spinner";
-import { Check, CircleSlash, TriangleAlert, X } from "lucide-react";
+import { CircleSlash, TriangleAlert, XCircle, CheckCircle2 } from "lucide-react";
 import { Activity } from "@/components/icons";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -271,7 +271,7 @@ function ActivityGlyph({
     return <Spinner size="xs" />;
   }
   if (activity.isError) {
-    return <X aria-hidden className="w-3 h-3 shrink-0" />;
+    return <XCircle aria-hidden className="w-3 h-3 shrink-0" />;
   }
   if (activity.result === "unauthorized" || activity.result === "rate_limited") {
     return <CircleSlash aria-hidden className="w-3 h-3 shrink-0" />;
@@ -279,7 +279,7 @@ function ActivityGlyph({
   if (activity.severity === "warning" || activity.severity === "notice") {
     return <TriangleAlert aria-hidden className="w-3 h-3 shrink-0" />;
   }
-  return <Check aria-hidden className="w-3 h-3 shrink-0" />;
+  return <CheckCircle2 aria-hidden className="w-3 h-3 shrink-0" />;
 }
 
 function buildTitle(activity: McpToolActivityState): string {

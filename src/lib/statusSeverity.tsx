@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, CircleAlert, Info } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, XCircle, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -12,19 +12,36 @@ import { cn } from "@/lib/utils";
  * `currentColor`, which the UA repaints rather than erases, so the shape keeps
  * the levels apart where the palette can no longer tell them apart.
  *
- * The four shapes are the ones `ReadinessRail` settled on in #11983 plus
- * `worktreeCIStatus`'s `Check`, so the app speaks one severity language.
+ * `SEVERITY_GLYPH` is the one table of those shapes. Toasts, pane banners,
+ * callouts, inline errors, the inbox, the re-entry summary and the readiness
+ * rail all read it, so an event keeps its glyph as it moves between them.
  */
 export type StatusSeverity = "success" | "error" | "warning" | "info";
 
-export const SEVERITY_VISUAL: Record<StatusSeverity, { Icon: typeof Check; toneClass: string }> = {
-  success: { Icon: Check, toneClass: "text-status-success" },
-  error: { Icon: CircleAlert, toneClass: "text-status-danger" },
-  warning: { Icon: AlertTriangle, toneClass: "text-status-warning" },
+/**
+ * The glyph for each severity, everywhere a severity is drawn. Three are circles
+ * told apart by the mark inside them, and the fourth is the triangle, so no two
+ * levels share a silhouette-and-mark pair under forced colours.
+ *
+ * `XCircle` means *this failed*. A caution about something severe that has not
+ * failed — a destructive consequence, a reading in its red band — is
+ * `OctagonAlert`, never this; and `CircleAlert` is not a severity glyph at all.
+ */
+export const SEVERITY_GLYPH: Record<StatusSeverity, LucideIcon> = {
+  success: CheckCircle2,
+  error: XCircle,
+  warning: AlertTriangle,
+  info: Info,
+};
+
+export const SEVERITY_VISUAL: Record<StatusSeverity, { Icon: LucideIcon; toneClass: string }> = {
+  success: { Icon: SEVERITY_GLYPH.success, toneClass: "text-status-success" },
+  error: { Icon: SEVERITY_GLYPH.error, toneClass: "text-status-danger" },
+  warning: { Icon: SEVERITY_GLYPH.warning, toneClass: "text-status-warning" },
   // `text-secondary`, not `text-muted`, for the reason ReadinessRail gives: as
   // the only visual carrier the glyph owes the 3:1 non-text floor, and
   // `text-muted` only clears that on light themes (`shared/theme/contrast.ts`).
-  info: { Icon: Info, toneClass: "text-text-secondary" },
+  info: { Icon: SEVERITY_GLYPH.info, toneClass: "text-text-secondary" },
 };
 
 /**
@@ -56,7 +73,7 @@ export function SeverityMark({
       title={label}
       className={cn("inline-flex shrink-0", className)}
     >
-      <Icon aria-hidden="true" className={cn("h-full w-full", toneClass)} />
+      <Icon aria-hidden="true" data-severity-glyph="" className={cn("h-full w-full", toneClass)} />
     </span>
   );
 }

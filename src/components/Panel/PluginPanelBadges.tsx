@@ -5,6 +5,7 @@ import { usePanelBadges, usePluginPanelBadgeStore } from "@/store/pluginPanelBad
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { cn } from "@/lib/utils";
+import { SEVERITY_VISUAL } from "@/lib/statusSeverity";
 import { HEADER_CHIP_CLASS } from "@/components/Terminal/terminalHeaderChip";
 
 /**
@@ -49,8 +50,23 @@ function BadgeIndicator({ pluginId, badge }: { pluginId: string; badge: PluginPa
   const pluginName = usePluginRuntimeStore(
     (s) => s.pluginMetaById.get(pluginId)?.displayName ?? pluginManifestIdFromInstanceKey(pluginId)
   );
+  // Warning and error dots draw their severity glyph: two same-size discs told
+  // apart only by hue are one mark under forced colours.
+  const DotGlyph = color === "warning" || color === "error" ? SEVERITY_VISUAL[color] : null;
   const indicator =
-    badge.kind === "dot" ? (
+    badge.kind === "dot" && DotGlyph ? (
+      <span
+        role="status"
+        aria-label={badge.tooltip ?? `${pluginName} status`}
+        className="inline-flex w-3 h-3 shrink-0"
+      >
+        <DotGlyph.Icon
+          aria-hidden="true"
+          data-severity-glyph=""
+          className={cn("h-full w-full", DotGlyph.toneClass)}
+        />
+      </span>
+    ) : badge.kind === "dot" ? (
       <span
         role="status"
         aria-label={badge.tooltip ?? `${pluginName} status`}

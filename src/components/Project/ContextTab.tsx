@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Callout } from "@/components/ui/Callout";
-import { AlertTriangle, Play, Check } from "lucide-react";
+import { AlertTriangle, Play, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
@@ -426,7 +426,7 @@ export function ContextTab({
                     </p>
                   ) : (
                     <div className="flex items-center gap-2 flex-wrap">
-                      <Check className="h-4 w-4 text-status-success" />
+                      <CheckCircle2 className="h-4 w-4 text-status-success" />
                       <span className="text-sm font-medium text-text-primary">
                         {testConfigResult.includedFiles} files would be included
                       </span>

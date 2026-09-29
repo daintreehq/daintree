@@ -1,6 +1,5 @@
 import { memo, useMemo, useState } from "react";
 import { Check, Download, Layers, RefreshCw, ShieldOff } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { Button } from "@/components/ui/button";
@@ -111,14 +110,17 @@ const ANOMALY_SEVERITY_RANK: Record<McpAnomalySeverity, number> = {
 
 /**
  * The severity lives in the mark; the words stay in neutral text, since
- * severity-coloured text fails 4.5:1 on most themes.
+ * severity-coloured text fails 4.5:1 on most themes. The marks are the app's
+ * severity glyphs, so forced colours keep info, warning and a failure cluster
+ * apart by shape.
  */
-const ANOMALY_SEVERITY_VISUAL: Record<McpAnomalySeverity, { label: string; mark: string }> = {
-  // Info is drawn hollow: forced-colors paints every `.status-mark` fill the
-  // same CanvasText, but a border-only diamond stays distinct from a filled one.
-  info: { label: "Anomaly (info)", mark: "border border-text-secondary" },
-  warning: { label: "Anomaly (warning)", mark: "status-mark bg-status-warning" },
-  danger: { label: "Anomaly (error)", mark: "status-mark bg-status-danger" },
+const ANOMALY_SEVERITY_VISUAL: Record<
+  McpAnomalySeverity,
+  { label: string; level: StatusSeverity }
+> = {
+  info: { label: "Anomaly (info)", level: "info" },
+  warning: { label: "Anomaly (warning)", level: "warning" },
+  danger: { label: "Anomaly (error)", level: "error" },
 };
 
 function higherSeverity(a: McpAnomalySeverity, b: McpAnomalySeverity): McpAnomalySeverity {
@@ -133,15 +135,9 @@ function AnomalyMark({
   decorative?: boolean;
 }) {
   if (!severity) return null;
-  const { label, mark } = ANOMALY_SEVERITY_VISUAL[severity];
+  const { label, level } = ANOMALY_SEVERITY_VISUAL[severity];
   return (
-    <span
-      role={decorative ? undefined : "img"}
-      aria-hidden={decorative || undefined}
-      aria-label={decorative ? undefined : label}
-      title={label}
-      className={cn("h-2 w-2 rounded-sm rotate-45 shrink-0", mark)}
-    />
+    <SeverityMark severity={level} label={label} decorative={decorative} className="h-3 w-3" />
   );
 }
 

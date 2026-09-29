@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo, useReducer } from "react";
-import { OctagonAlert, RefreshCw, RotateCw } from "lucide-react";
+import { RefreshCw, RotateCw } from "lucide-react";
 import { DevPreviewDestructiveConfirmDialog } from "./DevPreviewDestructiveConfirmDialog";
 import { usePanelStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
@@ -977,7 +977,6 @@ export function DevPreviewPane({
 
         {promoteToPortalError && (
           <InlineStatusBanner
-            icon={OctagonAlert}
             title="Couldn't open in Portal"
             description={promoteToPortalError}
             severity="error"
@@ -1175,7 +1174,6 @@ export function DevPreviewPane({
 
         {forceKilled && status === "stopped" && !forceKillBannerDismissed && (
           <InlineStatusBanner
-            icon={OctagonAlert}
             title="Dev server was force-quit"
             description="The server did not exit within 5 seconds and was terminated."
             severity="warning"
@@ -1185,21 +1183,18 @@ export function DevPreviewPane({
         )}
         {crashLoopStopped && status === "stopped" && !crashLoopBannerDismissed && (
           <InlineStatusBanner
-            icon={OctagonAlert}
             title="Dev server stopped"
             description="The server crashed and restarted several times in a row. Check your dev server config, then restart once it's fixed."
-            severity="warning"
+            severity="error"
             onClose={() => setCrashLoopBannerDismissed(true)}
-            actions={[
-              {
-                id: "crash-loop-restart",
-                label: "Restart dev server",
-                icon: RotateCw,
-                variant: "danger",
-                onClick: handleRestartDevServer,
-                ariaLabel: "Restart dev server",
-              },
-            ]}
+            action={{
+              id: "crash-loop-restart",
+              label: "Restart dev server",
+              icon: RotateCw,
+              variant: "danger",
+              onClick: handleRestartDevServer,
+              ariaLabel: "Restart dev server",
+            }}
           />
         )}
         {consoleTerminalId && (

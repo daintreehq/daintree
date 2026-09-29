@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Info, AlertTriangle, XCircle, CheckCircle2, Pin } from "lucide-react";
+import { Pin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { cn } from "@/lib/utils";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { useUIStore } from "@/store/uiStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
@@ -19,15 +20,6 @@ import type { ReEntrySummaryState } from "@/hooks/useReEntrySummary";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 
 export const AUTO_DISMISS_MS = 8000;
-
-// The toaster's and the inbox's vocabulary, so an entry keeps its glyph as it
-// moves between the three surfaces that show it.
-const SEVERITY_ICON: Record<NotificationHistoryEntry["type"], typeof XCircle> = {
-  error: XCircle,
-  warning: AlertTriangle,
-  info: Info,
-  success: CheckCircle2,
-};
 
 const SEVERITY_CLASS: Record<NotificationHistoryEntry["type"], string> = {
   error: "text-status-error",
@@ -174,7 +166,9 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
 
         <ul className="mt-1.5 space-y-0.5">
           {displayRows.map((row) => {
-            const Icon = SEVERITY_ICON[row.worstType];
+            // The toaster's and the inbox's glyphs, so an entry keeps its shape as it
+            // moves between the three surfaces that show it.
+            const Icon = SEVERITY_GLYPH[row.worstType];
             return (
               <li key={row.worktreeId}>
                 <button

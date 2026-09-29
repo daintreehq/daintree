@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { AlertTriangle, FileDown, Pencil, Pin, Plus, Trash2 } from "lucide-react";
+import { FileDown, Pencil, Pin, Plus, Trash2 } from "lucide-react";
+import { Callout } from "@/components/ui/Callout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -163,14 +164,9 @@ export function RecipesTab({
             !recipes.find(
               (r) => r.id === defaultWorktreeRecipeId && !r.worktreeId && !r.shadowedBy
             ) && (
-              <div
-                className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20"
-                role="alert"
-              >
-                <AlertTriangle className="h-4 w-4 text-status-warning mt-0.5 shrink-0" />
+              <Callout severity="warning" title="Default recipe unavailable" role="alert">
                 <div>
-                  <p className="text-sm text-status-warning">Default recipe unavailable</p>
-                  <p className="text-xs text-text-secondary mt-1">
+                  <p>
                     The pinned recipe was deleted or is no longer eligible. Pin another recipe with
                     its pin button, or clear the default.
                   </p>
@@ -186,7 +182,7 @@ export function RecipesTab({
                     Clear default
                   </Button>
                 </div>
-              </div>
+              </Callout>
             )}
           {recipesLoading ? (
             <SettingsGroup>

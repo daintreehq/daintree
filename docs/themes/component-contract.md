@@ -137,6 +137,26 @@ The other concepts that had split:
 
 `src/config/__tests__/actionGlyphs.contract.test.ts` ties each of these icons to the label beside it (the holder's text or aria-label, an action object's `label`, or a row's `label` prop) and fails when the pair disagrees. A new concept takes the closest Lucide icon and joins the alias list in `src/components/icons/index.ts`.
 
+## Severity glyphs
+
+A severity wears one glyph wherever it is drawn: toasts, pane banners, callouts, inline errors, the notification inbox, the re-entry summary, the readiness rail and audit-log marks. The table is `SEVERITY_GLYPH` in `src/lib/statusSeverity.tsx`, and every one of those surfaces reads it rather than keeping a copy.
+
+| Severity | Glyph | Means |
+| --- | --- | --- |
+| error | `XCircle` (`CircleX`) | This failed. |
+| warning | `AlertTriangle` (`TriangleAlert`) | This needs attention before it goes wrong. |
+| info | `Info` | Worth knowing; asks nothing. Neutral banners and callouts share it. |
+| success | `CheckCircle2` (`CircleCheck`) | This finished and you can carry on. |
+
+Forced colours repaint every glyph in one ink, so shape is the only channel left: three circles told apart by their inner mark, and the triangle. Two further rules keep that true:
+
+- `OctagonAlert` is a severe caution about something that has not failed: a destructive consequence (`Callout`'s `danger` tone), a dangerous plugin capability, a reading in its red band. It is never a failure, and a warning never borrows it.
+- `CircleAlert` and `CircleCheckBig` are not severity glyphs. `CircleAlert` read as a failure beside `XCircle` and as a caution beside the triangle; `CircleCheckBig` is a second success mark. The only holders left are the Problems toolbar button and the GitHub "Changes requested" verdict, each its own concept.
+
+Glyph and ink agree: a severity glyph painted in error or danger ink is `XCircle` or `OctagonAlert`, in warning ink the triangle, in success ink `CheckCircle2`. A pane that could not load, a terminal that could not start and a failed environment are failures, so they take `XCircle` in error ink rather than an amber triangle. A bare `Check` is not a result mark: it stays the copy-feedback and selection tick, and a finished operation or a passed test shows `CheckCircle2`.
+
+A banner or callout may swap in a domain glyph (a key for a sign-in state, a folder, a spinner), but never another severity's shape; a callout takes one only in its `neutral` tone. `Callout` covers error, warning, danger, success, info and neutral, so no surface hand-draws the tinted box. `src/config/__tests__/severityGlyphs.contract.test.ts` enforces all of this.
+
 ## Scales
 
 **Type.** Tailwind's stock `--text-*` steps; this repo overrides none of them. Arbitrary sizes (`text-[11px]`) are off the scale, invisible to it, and do not move when it moves — and because the values sit a pixel apart, 9px through 13px are all in use where the scale offers two steps. When a design genuinely needs a step the scale lacks, add a named step to the `@theme` block in `src/index.css` and use that — `--text-2xs` (11px), `--text-3xs` (10px) and `--text-4xs` (9px) are exactly that, added for the label sizes the stock scale skips, and `button`'s `xs` size now spells itself `text-3xs`. One list of legal sizes beats an open set of brackets. Enforced by `component-contract/no-arbitrary-text-size`; arbitrary _colours_ share the `text-[…]` spelling and are not flagged.

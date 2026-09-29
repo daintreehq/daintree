@@ -1,9 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type Ref } from "react";
 import {
-  CheckCircle2,
-  XCircle,
-  Info,
-  AlertTriangle,
   Clock,
   MoreHorizontal,
   X,
@@ -17,6 +13,7 @@ import {
   BellOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
@@ -101,10 +98,10 @@ const ROW_CONTROL_CLASS = cn(
 );
 
 const TYPE_CONFIG = {
-  success: { icon: CheckCircle2, className: "text-status-success" },
-  error: { icon: XCircle, className: "text-status-error" },
-  info: { icon: Info, className: "text-status-info" },
-  warning: { icon: AlertTriangle, className: "text-status-warning" },
+  success: { icon: SEVERITY_GLYPH.success, className: "text-status-success" },
+  error: { icon: SEVERITY_GLYPH.error, className: "text-status-error" },
+  info: { icon: SEVERITY_GLYPH.info, className: "text-status-info" },
+  warning: { icon: SEVERITY_GLYPH.warning, className: "text-status-warning" },
 };
 
 const yesterdayTimeFormatter = new Intl.DateTimeFormat(undefined, {

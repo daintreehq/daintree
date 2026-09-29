@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import PQueue from "p-queue";
-import { Check, AlertTriangle, UserPlus, RefreshCw } from "lucide-react";
+import { Check, AlertTriangle, UserPlus, RefreshCw, CheckCircle2, XCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { FolderGit2 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -1138,10 +1138,12 @@ export function BulkCreateWorktreeDialog({
             isExecuting ? (
               <Spinner size="lg" className="text-activity-working" />
             ) : isDone ? (
-              failedCount > 0 ? (
+              succeededCount === 0 && failedCount > 0 ? (
+                <XCircle className="w-5 h-5 text-status-error" />
+              ) : failedCount > 0 ? (
                 <AlertTriangle className="w-5 h-5 text-status-warning" />
               ) : (
-                <Check className="w-5 h-5 text-status-success" />
+                <CheckCircle2 className="w-5 h-5 text-status-success" />
               )
             ) : (
               <FolderGit2 className="w-5 h-5 text-text-muted" />
@@ -1151,7 +1153,9 @@ export function BulkCreateWorktreeDialog({
           {isExecuting
             ? "Creating worktrees\u2026"
             : isDone
-              ? "Creation complete"
+              ? succeededCount === 0 && failedCount > 0
+                ? "Couldn't create worktrees"
+                : "Creation complete"
               : `Create ${creatableCount} worktree${creatableCount !== 1 ? "s" : ""}`}
         </AppDialog.Title>
         <AppDialog.CloseButton />
@@ -1300,9 +1304,9 @@ export function BulkCreateWorktreeDialog({
                         {isInProgress ? (
                           <Spinner size="md" className="text-activity-working" />
                         ) : itemStatus?.stage === "succeeded" ? (
-                          <Check className="w-4 h-4 text-status-success" />
+                          <CheckCircle2 className="w-4 h-4 text-status-success" />
                         ) : itemStatus?.stage === "failed" ? (
-                          <AlertTriangle className="w-4 h-4 text-status-warning" />
+                          <XCircle className="w-4 h-4 text-status-error" />
                         ) : (
                           <div className="w-4 h-4 rounded-full border border-border-default" />
                         )}

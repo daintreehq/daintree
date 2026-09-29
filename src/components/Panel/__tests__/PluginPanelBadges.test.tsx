@@ -171,4 +171,23 @@ describe("PluginPanelBadges", () => {
     expect(container.textContent).toBe("");
     expect(screen.queryByRole("status")).toBeNull();
   });
+
+  it("tells a warning dot from an error dot by shape, not only by hue", () => {
+    // Forced colours paint both in one ink, so the outline is all that is left.
+    const shapeOf = (color: "warning" | "error") => {
+      usePluginPanelBadgeStore.setState({
+        badgesByPanelId: { [PANEL_ID]: { [INSTANCE_ID]: { kind: "dot", color } } },
+      });
+      const { container, unmount } = render(<PluginPanelBadges panelId={PANEL_ID} />);
+      const svg = container.querySelector("svg");
+      const shape = svg?.innerHTML ?? "";
+      unmount();
+      return shape;
+    };
+    const warning = shapeOf("warning");
+    const error = shapeOf("error");
+    expect(warning).not.toBe("");
+    expect(error).not.toBe("");
+    expect(warning).not.toBe(error);
+  });
 });

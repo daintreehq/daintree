@@ -3,7 +3,7 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { Callout } from "@/components/ui/Callout";
 import type { ReactNode } from "react";
-import { AlertCircle, AlertTriangle, ChevronRight, FolderOpen } from "lucide-react";
+import { XCircle, AlertTriangle, ChevronRight, FolderOpen } from "lucide-react";
 import * as semver from "semver";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -1640,7 +1640,7 @@ function StatusLine({
   return (
     <span role={live ? "status" : undefined} className="flex items-start gap-2">
       {tone === "error" ? (
-        <AlertCircle className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
+        <XCircle className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
       ) : (
         <span
           className={cn(

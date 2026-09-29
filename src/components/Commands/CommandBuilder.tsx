@@ -12,7 +12,7 @@ import type {
   BuilderStep,
   BuilderField,
 } from "@shared/types/commands";
-import { Check, ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, CheckCircle2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
@@ -524,7 +524,7 @@ export function CommandBuilder({
             aria-atomic="true"
           >
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-status-success/15">
-              <Check className="h-6 w-6 text-status-success" aria-hidden="true" />
+              <CheckCircle2 className="h-6 w-6 text-status-success" aria-hidden="true" />
             </div>
             <div className="max-w-full space-y-1">
               <h3 className="text-base font-semibold text-text-primary break-words">

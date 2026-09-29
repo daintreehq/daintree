@@ -118,7 +118,7 @@ export function DevPreviewWebviewOverlays({
         <PaneState
           live="alert"
           className="z-20"
-          icon={<AlertTriangle className="text-status-warning" />}
+          icon={<XCircle className="text-status-error" />}
           title={webviewLoadErrorHeading(webviewLoadError.code)}
           description={webviewLoadError.message}
         >

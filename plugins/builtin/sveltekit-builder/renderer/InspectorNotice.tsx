@@ -1,20 +1,23 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, Info, X, XCircle } from "lucide-react";
+import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import {
+  CALLOUT_ICON,
+  CALLOUT_ICON_TONE,
+  calloutVariants,
+  type CalloutSeverity,
+} from "@/components/ui/Callout";
 
 export type NoticeTone = "info" | "warning" | "error";
 
-const TONE_CLASS: Record<NoticeTone, string> = {
-  info: "border-border-subtle bg-surface-elevated",
-  warning: "border-status-warning/20 bg-status-warning/10",
-  error: "border-status-error/20 bg-status-error/10",
-};
-
-const ICON_CLASS: Record<NoticeTone, string> = {
-  info: "text-text-secondary",
-  warning: "text-status-warning",
-  error: "text-status-error",
+// Callout's tones, so the notice's tint, glyph and glyph ink are the primitive's
+// own; only the dismiss-in-the-title-row layout is local. `info` asks nothing
+// of the user, which is Callout's neutral tone.
+const CALLOUT_TONE: Record<NoticeTone, CalloutSeverity> = {
+  info: "neutral",
+  warning: "warning",
+  error: "error",
 };
 
 /**
@@ -48,19 +51,23 @@ export function InspectorNotice({
    */
   density?: "default" | "compact";
 }) {
-  const Icon = tone === "error" ? XCircle : tone === "warning" ? AlertTriangle : Info;
+  const callout = CALLOUT_TONE[tone];
+  const Icon = CALLOUT_ICON[callout];
   return (
     <div
       role={role}
       data-tone={tone}
       className={cn(
-        "flex gap-2 rounded-[var(--radius-md)] border text-xs",
-        density === "compact" ? "px-2.5 py-1.5" : "px-3 py-2",
-        TONE_CLASS[tone],
+        calloutVariants({ severity: callout }),
+        density === "compact" && "px-2.5 py-1.5",
         className
       )}
     >
-      <Icon className={cn("mt-px h-3.5 w-3.5 shrink-0", ICON_CLASS[tone])} aria-hidden="true" />
+      <Icon
+        className={cn("mt-px h-3.5 w-3.5 shrink-0", CALLOUT_ICON_TONE[callout])}
+        aria-hidden="true"
+        data-severity-glyph=""
+      />
       <div
         className={cn("flex min-w-0 flex-1 flex-col", density === "compact" ? "gap-0.5" : "gap-1")}
       >

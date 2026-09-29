@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { CircleAlert, Gauge, Info, RefreshCw, TriangleAlert } from "lucide-react";
+import { OctagonAlert, Gauge, Info, RefreshCw, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
@@ -813,7 +813,7 @@ function FindingsList({ findings }: { findings: SlowdownFinding[] }) {
 
 function FindingRow({ finding }: { finding: SlowdownFinding }) {
   const Glyph =
-    finding.tone === "alert" ? CircleAlert : finding.tone === "warn" ? TriangleAlert : Info;
+    finding.tone === "alert" ? OctagonAlert : finding.tone === "warn" ? TriangleAlert : Info;
   return (
     <li className="flex items-start gap-2" data-finding={finding.id}>
       <Glyph

@@ -1,24 +1,48 @@
 // @vitest-environment jsdom
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { KeyRound } from "lucide-react";
 
 import { Callout, CALLOUT_ICON, type CalloutSeverity } from "../Callout";
 import { InlineError } from "../field";
 import { InlineStatusBanner, SEVERITY_ICON } from "@/components/Terminal/InlineStatusBanner";
 import { InsetSurface } from "../insetSurface";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 
-const SEVERITIES: CalloutSeverity[] = ["error", "warning", "danger"];
+const SEVERITIES: CalloutSeverity[] = ["error", "warning", "danger", "success", "info", "neutral"];
 
 describe("Callout", () => {
-  it("draws each severity with the glyph the pane banners use for it", () => {
-    expect(CALLOUT_ICON.error).toBe(SEVERITY_ICON.error);
-    expect(CALLOUT_ICON.warning).toBe(SEVERITY_ICON.warning);
+  it("draws each shared severity with the glyph the pane banners and toasts use for it", () => {
+    for (const level of ["error", "warning", "success", "info"] as const) {
+      expect(CALLOUT_ICON[level]).toBe(SEVERITY_GLYPH[level]);
+      expect(CALLOUT_ICON[level]).toBe(SEVERITY_ICON[level]);
+    }
+    expect(CALLOUT_ICON.neutral).toBe(SEVERITY_ICON.neutral);
   });
 
-  it("tells a failure from a caution by shape, not only by ink", () => {
-    // `danger` shares the error's ink, so its glyph is the only non-colour
-    // channel separating "this failed" from "this will destroy something".
-    expect(CALLOUT_ICON.danger).not.toBe(CALLOUT_ICON.error);
+  it("gives every tone with a severity a shape of its own", () => {
+    // Under forced colours the ink is gone and the shape is all that separates
+    // "this failed" from "this will destroy something" from "watch out". Only
+    // neutral, which has no severity, shares info's mark.
+    const graded = SEVERITIES.filter((s) => s !== "neutral").map((s) => CALLOUT_ICON[s]);
+    expect(new Set(graded).size).toBe(graded.length);
+  });
+
+  it("lets a neutral callout carry a domain glyph and ignores one on any other tone", () => {
+    const { container: neutral } = render(
+      <Callout severity="neutral" icon={KeyRound}>
+        Sign-in not detected
+      </Callout>
+    );
+    expect(neutral.querySelector("svg.lucide-key-round")).not.toBeNull();
+
+    const { container: error } = render(
+      <Callout severity="error" icon={KeyRound}>
+        Failed
+      </Callout>
+    );
+    expect(error.querySelector("svg.lucide-key-round")).toBeNull();
+    expect(error.querySelector("svg.lucide-circle-x")).not.toBeNull();
   });
 
   it.each(SEVERITIES)("keeps the %s callout's words on the neutral ramp", (severity) => {

@@ -1,4 +1,4 @@
-import { AlertCircle, AlertTriangle } from "lucide-react";
+import { OctagonAlert, AlertTriangle } from "lucide-react";
 import type { BuiltInPluginCapability } from "@shared/types/plugin";
 
 /**
@@ -146,7 +146,7 @@ export function CapabilityRow({
   return (
     <li className="flex items-start gap-2">
       {meta.severity === "danger" ? (
-        <AlertCircle className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${SEVERITY_TEXT_CLASS.danger}`} />
+        <OctagonAlert className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${SEVERITY_TEXT_CLASS.danger}`} />
       ) : meta.severity === "warning" ? (
         <AlertTriangle className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${SEVERITY_TEXT_CLASS.warning}`} />
       ) : (

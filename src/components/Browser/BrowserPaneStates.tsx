@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, Check, Copy, ExternalLink, Globe, RefreshCw } from "lucide-react";
+import { Check, Copy, ExternalLink, Globe, Info, RefreshCw, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { COPIED_LABEL, COPY_FAILED_LABEL } from "@/components/ui/CopyButton";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
@@ -95,9 +95,16 @@ export function BrowserLoadErrorOverlay({
 }) {
   return (
     <PaneState
-      live="alert"
+      live={loadError.kind === "cancelled" ? "status" : "alert"}
       className="z-30"
-      icon={<AlertTriangle className="text-status-warning" />}
+      icon={
+        // A load the user stopped is not a failure: it keeps the neutral mark.
+        loadError.kind === "cancelled" ? (
+          <Info className="text-text-secondary" />
+        ) : (
+          <XCircle className="text-status-error" />
+        )
+      }
       title={loadErrorTitle(loadError.kind)}
       description={loadError.message}
     >

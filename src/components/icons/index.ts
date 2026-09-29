@@ -27,7 +27,7 @@ export {
   CircleHelp, // workspace whose metadata is missing (removed while its agents ran)
   CirclePause, // run the user parked — shelved on purpose (Pilot's parked band)
   CircleSlash, // agent stopped on an error, distinct in shape from a waiting one (Pilot's blocked band)
-  CircleX, // CI that failed — the cross the PR badge already uses, enclosed so a glyph standing alone reads as a verdict rather than a dismiss control
+  CircleX, // anything that failed: CI, an environment, a pane that could not load — the cross the PR badge already uses, enclosed so a glyph standing alone reads as a verdict rather than a dismiss control
   Clock, // recency sort order (most recently opened first)
   CloudOff, // a remote or forge that could not be reached — the same glyph the PR and issue badges show when detection is paused
   Coffee, // Daintree keeping the machine from idle-sleeping while agents work — the long-standing keep-awake metaphor
@@ -54,7 +54,7 @@ export {
   Moon, // sleep a project — shut it down the way quitting does, restored on reopen
   Network, // Subagent tree — a parent session's spawned child sessions
   NotebookPen, // a terminal's Scratchpad — throwaway notes kept beside that one pane
-  OctagonAlert, // a pane's CPU or memory in its red band — beside the neutral reading, so the number keeps its contrast and the band survives forced colors
+  OctagonAlert, // a severe caution that has not failed: a pane's CPU or memory in its red band, a Why slow? alert, a dangerous plugin capability, a destructive consequence — never a failure (that is XCircle), so the band survives forced colors as its own shape
   Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
   PanelTop, // the app toolbar — the strip along the top of the window
   Paperclip, // attach files to a composer draft — the same references a drop or a paste inserts
@@ -63,6 +63,6 @@ export {
   Radar, // an agent pane waiting to hear about other terminals, which Daintree may type a notice into — distinct from BellDot, the user's own watch alert
   ServerCog, // a worktree's runtime — dev-server and remote-environment lifecycle
   Sprout, // origin / first step (main worktree, first agent launch)
-  TriangleAlert, // a setting failing validation, an environment reporting a failure, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors
+  TriangleAlert, // a setting failing validation, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors
   Workflow, // terminal recipe / scripted command sequence
 } from "lucide-react";

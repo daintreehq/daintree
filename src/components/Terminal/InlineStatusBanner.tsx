@@ -1,7 +1,8 @@
 import React, { use, useState, useEffect, useRef, type CSSProperties } from "react";
 import { InsetSurfaceContext } from "@/components/ui/insetSurface";
-import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { Button, type ButtonProps } from "@/components/ui/button";
 import { ARIA_DISABLED_INERT_CLASSES } from "@/components/ui/ariaDisabled";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -200,16 +201,13 @@ const SEVERITY_VAR: Record<Exclude<InlineStatusBannerSeverity, "neutral">, strin
 };
 
 /**
- * One glyph per severity, matching `NotificationCenterEntry` so a banner and
- * the inbox row it may also produce read as the same event. Shape, not hue,
- * is what tells a red banner from an amber one under forced colours.
+ * One glyph per severity, from the app-wide `SEVERITY_GLYPH`, so a banner and
+ * the toast or inbox row it may also produce read as the same event. Shape, not
+ * hue, is what tells a red banner from an amber one under forced colours.
  */
 export const SEVERITY_ICON: Record<InlineStatusBannerSeverity, BannerIcon> = {
-  error: XCircle,
-  warning: AlertTriangle,
-  info: Info,
-  success: CheckCircle2,
-  neutral: Info,
+  ...SEVERITY_GLYPH,
+  neutral: SEVERITY_GLYPH.info,
 };
 
 /**

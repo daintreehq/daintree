@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useId, useRef, type ReactNode } from 
 import {
   Check,
   ChevronRight,
-  CircleAlert,
+  CircleX,
   CircleCheck,
   Copy,
   Download,
@@ -569,7 +569,7 @@ function ArtifactItem({
             {applyResult?.kind === "failed" && (
               <OutcomeLine
                 tone="error"
-                icon={CircleAlert}
+                icon={CircleX}
                 onDismiss={() => onApplyResult(artifact.id, null)}
               >
                 Patch didn't apply. {describeApplyFailure(applyResult.message)}
@@ -579,19 +579,19 @@ function ArtifactItem({
               </OutcomeLine>
             )}
             {feedback?.kind === "saved" && (
-              <OutcomeLine tone="neutral" icon={Check}>
+              <OutcomeLine tone="neutral" icon={CircleCheck}>
                 Saved to{" "}
                 <span className="break-all font-mono text-text-secondary">{feedback.filePath}</span>
               </OutcomeLine>
             )}
             {feedback?.kind === "save-failed" && (
-              <OutcomeLine tone="error" icon={CircleAlert} onDismiss={() => setFeedback(null)}>
+              <OutcomeLine tone="error" icon={CircleX} onDismiss={() => setFeedback(null)}>
                 Couldn't save. Try again, or copy it instead.
                 <span className="block text-text-secondary">{feedback.message}</span>
               </OutcomeLine>
             )}
             {feedback?.kind === "copy-failed" && (
-              <OutcomeLine tone="error" icon={CircleAlert} onDismiss={() => setFeedback(null)}>
+              <OutcomeLine tone="error" icon={CircleX} onDismiss={() => setFeedback(null)}>
                 Couldn't copy to the clipboard. Save it as a file instead.
               </OutcomeLine>
             )}
@@ -1106,7 +1106,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                           className="size-3.5 shrink-0 mt-px text-status-success"
                         />
                       ) : (
-                        <CircleAlert
+                        <CircleX
                           aria-hidden="true"
                           className="size-3.5 shrink-0 mt-px text-status-error"
                         />

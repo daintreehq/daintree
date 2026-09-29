@@ -10,7 +10,7 @@ import {
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import {
   RefreshCw,
-  AlertCircle,
+  XCircle,
   ArrowUp,
   GitCommitHorizontal,
   Check,
@@ -1057,7 +1057,7 @@ export function LocalCommitsDropdown({
                 role="alert"
                 className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-text-secondary bg-overlay-soft shrink-0"
               >
-                <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <XCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 {/* Wraps rather than clipping the cause, like the forge lists'
                     saved-results banners. */}
                 <p className="min-w-0 flex-1 text-xs">
@@ -1117,7 +1117,7 @@ export function LocalCommitsDropdown({
                         {loadMoreError ? (
                           // One way out, not two: Retry takes Load more's place.
                           <div className="flex items-center gap-2 px-1">
-                            <AlertCircle
+                            <XCircle
                               className="h-3.5 w-3.5 shrink-0 text-text-secondary"
                               aria-hidden="true"
                             />
@@ -1180,7 +1180,7 @@ export function LocalCommitsDropdown({
             <EmptyState
               variant="zero-data"
               scale="canvas"
-              icon={<AlertCircle />}
+              icon={<XCircle />}
               title="Couldn't load commits"
               description={error}
               action={

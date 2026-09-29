@@ -6,7 +6,7 @@ import {
   ExternalLink,
   ChevronRight,
   Download,
-  AlertCircle,
+  CircleX,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AGENT_REGISTRY, getAgentConfig } from "@/config/agents";
@@ -322,7 +322,7 @@ export function AgentCliStep({
                     </span>
                   ) : isError ? (
                     <span className="inline-flex items-center gap-1 text-2xs text-status-error font-medium">
-                      <AlertCircle className="w-3 h-3" />
+                      <CircleX className="w-3 h-3" />
                       Failed
                     </span>
                   ) : isManual ? (

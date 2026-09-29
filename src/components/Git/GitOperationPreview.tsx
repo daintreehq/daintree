@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge, COUNT_BADGE_CLASS } from "@/components/ui/badge";
 
@@ -222,6 +223,7 @@ export function PreviewNotice({
   testId?: string;
 }) {
   const isError = tone === "error";
+  const Glyph = isError ? SEVERITY_GLYPH.error : SEVERITY_GLYPH.warning;
   return (
     <div
       // No rule under a notice that closes the frame: the frame's own border is
@@ -230,7 +232,7 @@ export function PreviewNotice({
       role={isError ? "alert" : "status"}
       data-preview-notice=""
     >
-      <AlertTriangle
+      <Glyph
         aria-hidden="true"
         className={cn(
           "w-3.5 h-3.5 mt-0.5 shrink-0",
