@@ -23,6 +23,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { FLOATING_CARD_SURFACE_CLASS } from "@/components/ui/floatingSurface";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -1537,8 +1538,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               // Opaque, like ScrollPill: it floats over notification rows, and
               // `overlay-raised` is ~4% alpha on dark themes, so the rows read
               // through it. The hover tint layers as an image over the fill.
-              "bg-surface-panel-elevated border border-border-default",
-              "shadow-[var(--theme-shadow-floating)]",
+              FLOATING_CARD_SURFACE_CLASS,
               "text-2xs font-medium text-text-secondary",
               "hover:text-text-primary hover:border-border-strong",
               "hover:bg-[linear-gradient(var(--color-overlay-hover),var(--color-overlay-hover))]",

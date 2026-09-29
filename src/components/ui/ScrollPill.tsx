@@ -1,5 +1,6 @@
 import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
+import { FLOATING_CARD_SURFACE_CLASS } from "@/components/ui/floatingSurface";
 import {
   UI_ENTER_DURATION,
   UI_ENTER_EASING,
@@ -51,7 +52,8 @@ export const ScrollPill = forwardRef<HTMLButtonElement, ScrollPillProps>(
           // and the 10% let the text through. The covered glyphs stayed
           // legible under it, so a card headline read as its own text
           // interleaved with the pill's chevron and count.
-          "bg-surface-panel-elevated border border-border-default text-text-primary shadow-[var(--theme-shadow-floating)]",
+          FLOATING_CARD_SURFACE_CLASS,
+          "text-text-primary",
           "text-xs font-medium cursor-pointer",
           // The hover tint is layered as a background IMAGE over the opaque
           // fill. The overlay ladder is alpha-only, so as a background-color

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { cn } from "@/lib/utils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
+import { FLOATING_CARD_RADIUS_CLASS } from "@/components/ui/floatingSurface";
 import { useUIStore } from "@/store/uiStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
@@ -108,7 +109,8 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
           "relative flex flex-col w-full max-w-[360px]",
           // The severity edge must follow `border`: cn() resolves conflicts
           // last-wins, and a later `border` erases a left width set before it.
-          "rounded-[var(--radius-sm)] border border-tint/[0.08] border-l-[3px]",
+          FLOATING_CARD_RADIUS_CLASS,
+          "border border-tint/[0.08] border-l-[3px]",
           "bg-surface-panel/85 backdrop-blur-xl",
           "px-3 py-2.5 pr-2",
           "text-sm text-text-primary",

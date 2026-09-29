@@ -54,9 +54,9 @@ const buttonVariants = cva(
           "text-status-error hover:bg-status-error/10 focus-visible:outline-status-error",
         "ghost-info": "text-status-info hover:bg-status-info/10",
         info: "bg-status-info text-text-inverse [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-tint/20 shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 active:brightness-95 active:inset-shadow-none",
-        glow: "bg-primary text-primary-foreground shadow-[0_0_15px_rgb(from_var(--theme-accent-primary)_r_g_b/0.3)] ring-1 ring-tint/25 hover:shadow-[0_0_25px_rgb(from_var(--theme-accent-primary)_r_g_b/0.45)] hover:brightness-110 active:shadow-inner active:brightness-95",
+        glow: "bg-primary text-primary-foreground shadow-[0_0_15px_rgb(from_var(--theme-accent-primary)_r_g_b/0.3)] ring-1 ring-tint/25 hover:shadow-[0_0_25px_rgb(from_var(--theme-accent-primary)_r_g_b/0.45)] hover:brightness-110 active:shadow-[var(--shadow-inset)] active:brightness-95",
         vibrant:
-          "bg-gradient-to-b from-primary to-primary/80 text-primary-foreground shadow-[var(--theme-shadow-floating)] ring-1 ring-tint/25 hover:brightness-110 active:brightness-90 active:shadow-inner",
+          "bg-gradient-to-b from-primary to-primary/80 text-primary-foreground shadow-[var(--theme-shadow-floating)] ring-1 ring-tint/25 hover:brightness-110 active:brightness-90 active:shadow-[var(--shadow-inset)]",
       },
       size: {
         default: "h-8 px-4 py-1.5 gap-2 text-sm [&_svg]:size-4",

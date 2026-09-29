@@ -47,7 +47,7 @@ const switchVariants = cva(
 // Faster than the track and on a different curve: the thumb's travel is what the
 // eye follows, the track's tint is what settles behind it.
 const switchThumbVariants = cva(
-  "block rounded-full bg-text-secondary shadow-sm transition-transform duration-100 ease-[var(--ease-out-expo)] data-[state=checked]:bg-text-inverse",
+  "block rounded-full bg-text-secondary shadow-[var(--theme-shadow-ambient)] transition-transform duration-100 ease-[var(--ease-out-expo)] data-[state=checked]:bg-text-inverse",
   {
     variants: {
       size: {

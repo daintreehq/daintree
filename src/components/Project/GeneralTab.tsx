@@ -427,7 +427,7 @@ export function GeneralTab({
                           <button
                             type="button"
                             aria-label="Change project emoji"
-                            className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-lg)] shadow-inner shrink-0 border border-border-strong cursor-pointer group"
+                            className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-lg)] shadow-[var(--shadow-inset)] shrink-0 border border-border-strong cursor-pointer group"
                             style={{
                               background: getProjectGradient(color),
                             }}
@@ -485,7 +485,7 @@ export function GeneralTab({
                             className={cn(
                               "h-7 w-7 rounded-full transition-[border-color,scale,box-shadow] border-2 shrink-0",
                               color === hex
-                                ? "border-text-primary scale-110 shadow-sm"
+                                ? "border-text-primary scale-110 shadow-[var(--theme-shadow-ambient)]"
                                 : "border-transparent hover:border-border-default hover:scale-105"
                             )}
                             style={{ backgroundColor: hex }}

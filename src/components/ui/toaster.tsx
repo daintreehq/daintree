@@ -10,6 +10,7 @@ import { createPortal } from "react-dom";
 import { BellMinus, BellOff, Check, type LucideIcon, MoreHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
+import { FLOATING_CARD_RADIUS_CLASS } from "@/components/ui/floatingSurface";
 import { logError } from "@/utils/logger";
 import {
   DURATION_150,
@@ -460,7 +461,8 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
           "flex w-full items-start gap-3",
           // The severity edge must follow `border`: cn() resolves conflicts
           // last-wins, and a later `border` erases a left width set before it.
-          "rounded-[var(--radius-sm)] border border-tint/[0.08] border-l-[3px]",
+          FLOATING_CARD_RADIUS_CLASS,
+          "border border-tint/[0.08] border-l-[3px]",
           "bg-surface-panel/85 backdrop-blur-xl",
           "px-3 py-2.5 pr-2",
           "text-sm text-text-primary",

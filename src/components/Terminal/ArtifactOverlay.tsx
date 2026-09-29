@@ -15,6 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { FLOATING_CARD_CLASS } from "@/components/ui/floatingSurface";
 import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { SurfaceHeader, SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
@@ -987,7 +988,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
               ? "bottom-10 max-h-[min(34rem,calc(100%-3.25rem))]"
               : "bottom-3 max-h-[min(34rem,calc(100%-1.5rem))]",
             "w-[26rem] max-w-[calc(100%-1.5rem)]",
-            "rounded-[var(--radius-lg)] border border-border-default bg-surface-sidebar shadow-[var(--theme-shadow-floating)]",
+            FLOATING_CARD_CLASS,
             className
           )}
         >

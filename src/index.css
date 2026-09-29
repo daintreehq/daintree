@@ -156,27 +156,36 @@ code.hljs {
    * Establishes a clear stacking hierarchy for UI layers.
    * Higher tiers always appear above lower tiers.
    *
+   * Tier 30: The scrim behind a panel-tier sheet (the Theme Browser shield)
    * Tier 40: Fixed panels (dock, sidebars)
    * Tier 50: Portal overlay
    * Tier 55: Maximized content (terminals)
    * Tier 56: Ambient overlays — the window visual bell (the all-clear flash)
    *          and the panel move ghost — so they stay under every modal scrim,
    *          popover and toast
+   * Tier 58: The top toolbar. Above the Portal and Theme Browser sheets,
+   *          which start below it, and under every modal scrim; it used to
+   *          share 60 with modals, which left DOM order to decide
    * Tier 60: Modal dialogs (full-screen overlays)
    * Tier 70: Popovers, dropdowns, tooltips (can appear above modals)
    * Tier 75: Nested dialogs (dialogs triggered from within popovers)
    * Tier 80: Toast notifications (always visible)
    * Tier 85: Menus opened from a toast (must clear the toast that owns them)
+   * Tier 90: Drag shields — a transparent full-window cover while a divider
+   *          drags, so iframes and webviews cannot swallow the pointer
    */
+  --z-panel-scrim: 30;
   --z-panel: 40;
   --z-portal: 50;
   --z-maximized: 55;
   --z-visual-bell: 56;
+  --z-toolbar: 58;
   --z-modal: 60;
   --z-popover: 70;
   --z-nested-dialog: 75;
   --z-toast: 80;
   --z-toast-overlay: 85;
+  --z-drag-shield: 90;
 
   /* Legacy floating-chrome shadow stack. The :root values are the ORIGINAL
    * black-derived stack and remain the dark-mode source of truth (byte-for-byte
@@ -201,6 +210,11 @@ code.hljs {
     0 10px 40px -10px color-mix(in srgb, var(--theme-shadow-color) 78%, transparent),
     0 20px 60px -15px color-mix(in srgb, var(--theme-shadow-color) 56%, transparent),
     0 30px 80px -20px color-mix(in srgb, var(--theme-shadow-color) 75%, transparent);
+  /* A pressed or recessed well. Tailwind's `shadow-inner` geometry, drawn in
+   * the theme's shadow colour rather than stock black. The alpha is set, not
+   * mixed: the shadow colour is itself translucent on light themes, and a 5%
+   * mix of it would all but vanish. */
+  --shadow-inset: inset 0 2px 4px 0 rgb(from var(--theme-shadow-color) r g b / 0.05);
   --border-overlay: var(--theme-border-strong);
   --border-dock-popup: color-mix(
     in oklab,

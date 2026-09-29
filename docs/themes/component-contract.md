@@ -171,6 +171,22 @@ Three spellings are not. An arbitrary radius that hardcodes a value — `rounded
 
 **Spacing.** Tailwind's stock scale, unmodified, so `p-2` and `gap-1.5` behave exactly as documented. `--height-xs|sm|md|lg` tokens exist in `src/index.css` for control heights, but nothing uses them yet — `button` still spells its sizes `h-6` through `h-9`. Treat them as available, not as an established convention.
 
+## Elevation
+
+Anything that floats over app content is one of three shapes, and each takes its whole treatment from a shared source. `src/config/__tests__/floatingElevation.contract.test.ts` holds the family together.
+
+| Shape | Examples | Chrome |
+| --- | --- | --- |
+| Popover | menus, dropdowns, pickers | `rounded-[var(--radius-lg)] surface-overlay shadow-overlay` (`popover.tsx`, `fixed-dropdown.tsx`) |
+| Floating card | toasts, re-entry summary, find bars, scroll pills (terminal, notification center), typing locator, artifact overlay, getting-started checklist | `FLOATING_CARD_CLASS` from `src/components/ui/floatingSurface.ts`: `radius-lg`, `bg-surface-panel-elevated`, `border-border-default`, `shadow-[var(--theme-shadow-floating)]` |
+| Overlay sheet | Portal, Theme Browser | a `border-l` edge plus `OVERLAY_SHEET_SHADOW_CLASS` (`--theme-shadow-dialog`) |
+
+A floating card takes the popover's radius, so a toast and the menu opened from it have the same corners. Pills keep `rounded-full` as a shape decision and take `FLOATING_CARD_SURFACE_CLASS`. Toasts and the re-entry summary keep their translucent glass fill and severity edge, and take `FLOATING_CARD_RADIUS_CLASS` only. A panel that docks and pushes content aside, like the assistant, does not float: it has a border and no shadow.
+
+**Shadows come from theme tokens, never Tailwind's stock scale.** `shadow-sm` through `shadow-2xl` and `shadow-inner` are fixed black, so on a light theme they land as a grey smudge rather than the cool-slate shadow the theme defines. The tokens are `--theme-shadow-ambient` (resting lift: a selected choice card, a switch thumb), `--theme-shadow-floating`, `--theme-shadow-dialog`, the `shadow-overlay` / `shadow-modal` stacks, and `--shadow-inset` for a pressed or recessed well. Enforced by `component-contract/no-raw-shadow`, which ships as an error.
+
+**App-level layers stack on the `--z-*` scale** in `src/index.css`, never a raw number. The toolbar is `--z-toolbar` (58): above the Portal and Theme Browser sheets that start below it, and under every modal scrim. It used to share 60 with `--z-modal`, which left DOM order to decide. A full-window drag cover takes `--z-drag-shield` (90), above everything. Local stacking inside one component (`z-10` on a toolbar cluster) is not an app layer and stays a plain utility.
+
 ## The focus ring
 
 The split matters, because "it's wired globally" is true of one half and false of the other.

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { FLOATING_CARD_SURFACE_CLASS } from "@/components/ui/floatingSurface";
 import { TriangleAlert } from "@/components/icons";
 import {
   UI_ENTER_EASING,
@@ -68,7 +69,7 @@ export function TypingLocator() {
         data-typing-locator={message.kind}
         className={cn(
           "flex h-7 min-w-0 max-w-md items-center gap-1.5 rounded-full px-3",
-          "border border-border-default bg-surface-panel-elevated shadow-[var(--theme-shadow-floating)]",
+          FLOATING_CARD_SURFACE_CLASS,
           "text-xs text-text-secondary",
           // `starting:` paints the first frame hidden so the entry actually
           // animates; Tailwind v4 `translate-*` sets `translate`, not `transform`.

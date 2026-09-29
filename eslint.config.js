@@ -1175,9 +1175,10 @@ export default tseslint.config(
 
   // Component contract — the enforced half of docs/themes/component-contract.md:
   // the current colour vocabulary, solid text tokens, the type and radius
-  // scales, and a replacement wherever a focus outline is suppressed. All five
-  // are `warn` because each has thousands of pre-existing uses; lint-ratchet.mjs
-  // grandfathers today's counts per rule and fails any increase. Builtin plugin
+  // scales, theme-sourced shadows, and a replacement wherever a focus outline
+  // is suppressed. Five are `warn` because each has thousands of pre-existing
+  // uses; lint-ratchet.mjs grandfathers today's counts per rule and fails any
+  // increase. Builtin plugin
   // renderers are in scope: they paint real product UI out of the same tokens.
   // Test files are excluded — the class strings in
   // src/config/__tests__/*.contract.test.ts are deliberate violations used as
@@ -1195,6 +1196,8 @@ export default tseslint.config(
       "component-contract/no-text-color-slash-alpha": "warn",
       "component-contract/no-arbitrary-text-size": "warn",
       "component-contract/no-raw-radius": "warn",
+      // Zero uses, so an error: nothing to grandfather.
+      "component-contract/no-raw-shadow": "error",
       "component-contract/no-unpaired-outline-suppression": "warn",
     },
   },
