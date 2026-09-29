@@ -5,6 +5,7 @@ import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/p
 import {
   getPanelKindConfig,
   isProjectQualifiedPanelKindId,
+  type PanelKindConfig,
 } from "@shared/config/panelKindRegistry";
 import { persistedKindKey, toPersistedKindFields } from "@shared/utils/panelKindPersistence";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
@@ -63,6 +64,32 @@ export function panelToSnapshot(
   t: TerminalInstance,
   previousSnapshot?: PanelSnapshot
 ): PanelSnapshot {
+  return buildPanelSnapshot(
+    t,
+    previousSnapshot,
+    t.worktreeId ? getWorktreeGitDirById(t.worktreeId) : undefined,
+    getPanelKindConfig(t.kind ?? "terminal")
+  );
+}
+
+// Every input `panelToSnapshot` reads besides the panel itself, so a cached
+// snapshot is reused only when rebuilding it would produce the same value.
+interface CachedPanelSnapshot {
+  snapshot: PanelSnapshot;
+  previousSnapshot: PanelSnapshot | undefined;
+  liveGitDir: string | undefined;
+  config: ReturnType<typeof getPanelKindConfig>;
+  // Built-in kinds get their serializer assigned onto the existing config
+  // object (`initBuiltInPanelKinds`), so config identity alone can't see it.
+  serialize: PanelKindConfig["serialize"];
+}
+
+function buildPanelSnapshot(
+  t: TerminalInstance,
+  previousSnapshot: PanelSnapshot | undefined,
+  liveGitDir: string | undefined,
+  config: ReturnType<typeof getPanelKindConfig>
+): PanelSnapshot {
   // Capture the worktree's stable admin-dir handle alongside the (path-derived,
   // move-fragile) worktreeId so restore can survive a `git worktree move`
   // (#11388). When the live worktree store can't answer — e.g. the #11234
@@ -72,12 +99,9 @@ export function panelToSnapshot(
   // preserved while the panel is still bound to the SAME worktree, so a genuine
   // move to a different worktree never carries a stale handle forward. Absent
   // when nothing is known — restore then re-homes as before.
-  const liveGitDir = t.worktreeId ? getWorktreeGitDirById(t.worktreeId) : undefined;
   const worktreeGitDir =
     liveGitDir ??
     (previousSnapshot?.worktreeId === t.worktreeId ? previousSnapshot?.worktreeGitDir : undefined);
-
-  const config = getPanelKindConfig(t.kind ?? "terminal");
 
   // A project-local plugin's runtime kind embeds THIS machine's project id, so
   // storing it verbatim pins the layout to the identity that wrote it (#12280).
@@ -266,6 +290,15 @@ export class PanelPersistence {
   private readonly tabGroupWriteTailByProject = new Map<string, Promise<void>>();
   private pendingPersist: Promise<void> | null = null;
   private pendingTabGroupPersist: Promise<void> | null = null;
+  // Panels are immutable in the store, so every save re-snapshotting all of
+  // them is wasted work for the ones that didn't change. Reusing the previous
+  // snapshot object also lets the equality checks below short-circuit on
+  // identity instead of deep-walking each unchanged panel.
+  private readonly snapshotCache = new WeakMap<TerminalInstance, CachedPanelSnapshot>();
+  private readonly previousSnapshotMaps = new WeakMap<
+    PanelSnapshot[],
+    Map<string, PanelSnapshot>
+  >();
 
   constructor(client: ProjectClientType, options: PanelPersistenceOptions = {}) {
     this.client = client;
@@ -439,8 +472,8 @@ export class PanelPersistence {
     // output entirely and bypass preservation.
     let transformed: PanelSnapshot[];
     if (this.options.transform === panelToSnapshot) {
-      const prevById = this.getPreviousSnapshotMap(resolvedProjectId);
-      transformed = filtered.map((t) => panelToSnapshot(t, prevById?.get(t.id)));
+      const prevById = this.getCachedPreviousSnapshotMap(resolvedProjectId);
+      transformed = filtered.map((t) => this.snapshotPanel(t, prevById?.get(t.id)));
     } else {
       transformed = filtered.map(this.options.transform);
     }
@@ -456,6 +489,48 @@ export class PanelPersistence {
 
     this.queuedTerminalsByProject.set(resolvedProjectId, transformed);
     this.debouncedSave(resolvedProjectId, transformed);
+  }
+
+  private snapshotPanel(t: TerminalInstance, previousSnapshot: PanelSnapshot | undefined) {
+    const liveGitDir = t.worktreeId ? getWorktreeGitDirById(t.worktreeId) : undefined;
+    const config = getPanelKindConfig(t.kind ?? "terminal");
+    const cached = this.snapshotCache.get(t);
+    // `previousSnapshot` is only read when the live gitDir is unknown or the
+    // kind has no serializer. Even then, rebuilding from the cached snapshot
+    // itself (the usual case: it is what the last save queued) is idempotent.
+    if (
+      cached &&
+      cached.liveGitDir === liveGitDir &&
+      cached.config === config &&
+      cached.serialize === config?.serialize &&
+      ((liveGitDir !== undefined && config?.serialize !== undefined) ||
+        previousSnapshot === cached.previousSnapshot ||
+        previousSnapshot === cached.snapshot)
+    ) {
+      return cached.snapshot;
+    }
+    const snapshot = buildPanelSnapshot(t, previousSnapshot, liveGitDir, config);
+    this.snapshotCache.set(t, {
+      snapshot,
+      previousSnapshot,
+      liveGitDir,
+      config,
+      serialize: config?.serialize,
+    });
+    return snapshot;
+  }
+
+  private getCachedPreviousSnapshotMap(projectId: string): Map<string, PanelSnapshot> | undefined {
+    const snapshots =
+      this.queuedTerminalsByProject.get(projectId) ??
+      this.persistedTerminalsByProject.get(projectId);
+    if (!snapshots) return undefined;
+    let byId = this.previousSnapshotMaps.get(snapshots);
+    if (!byId) {
+      byId = new Map(snapshots.map((s) => [s.id, s]));
+      this.previousSnapshotMaps.set(snapshots, byId);
+    }
+    return byId;
   }
 
   saveTabGroups(tabGroups: Map<string, TabGroup>, projectId?: string): void {

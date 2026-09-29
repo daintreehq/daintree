@@ -322,8 +322,11 @@ function parseBackup<T>(raw: string | null): StorageValue<T> | null {
  * and the pre-write disk read that feeds the opt-in write merger, so both paths
  * get identical corruption/backup handling.
  */
-function readPersistedValue<T>(raw: ResilientStorage, name: string): StorageValue<T> | null {
-  const value = raw.getItem(name);
+function readPersistedValue<T>(
+  raw: ResilientStorage,
+  name: string,
+  value: string | null | Promise<string | null> = raw.getItem(name)
+): StorageValue<T> | null {
   if (value instanceof Promise) return null;
   if (value === null) return null;
   try {
@@ -355,25 +358,53 @@ export function createSafeJSONStorage<T>(options?: SafeJSONStorageOptions<T>): P
   // write. Feeds the three-way merge so a stale snapshot can't clobber a
   // sibling view (issue #11351). Only tracked when a merger is configured.
   const baselines = new Map<string, StorageValue<T> | null>();
+  // The last merge write this writer landed, per key: its serialized incoming
+  // snapshot, the exact bytes it wrote, whether those bytes were backed up, and
+  // whether that write was a verified fixed point (see setItem). Only tracked
+  // with a merger.
+  const lastMergeWrite = new Map<
+    string,
+    { incoming: string; written: string; backedUp: boolean; settled: boolean }
+  >();
 
   return {
     getItem: (name) => {
       const parsed = readPersistedValue<T>(raw, name);
-      if (mergeOnWrite) baselines.set(name, parsed);
+      if (mergeOnWrite) {
+        baselines.set(name, parsed);
+        lastMergeWrite.delete(name);
+      }
       return parsed;
     },
     setItem: (name, value) => {
       if (mergeOnWrite) {
-        // Merge against the freshest disk value every time. We must NOT dedup on
-        // the serialized output here: two writes with identical `value` can merge
-        // to different results as the shared disk changes between them, and — the
-        // inverse — two writes can merge to the SAME bytes against different disk
-        // states, so a merged-output dedup would skip a write that still needs to
-        // land (e.g. re-applying a deletion the disk resurrected). These stores
-        // write infrequently, so an unconditional read-merge-write is cheap.
+        // Zustand calls setItem after every set(), including no-op and
+        // transient-field sets, so most calls repeat the last snapshot. We must
+        // NOT dedup on the incoming value or the merged output alone: identical
+        // `value`s can merge differently as the shared disk changes, and
+        // different disk states can merge to the same bytes (e.g. re-applying a
+        // deletion the disk resurrected). Nor is one write enough to reach a
+        // fixed point — a merger may resolve a baseline version mismatch by
+        // deferring to disk, then apply the writer's own values on the next,
+        // identical write. So a repeat is skipped only once a full merge has
+        // already shown that merging this exact snapshot (as both baseline and
+        // incoming) against these exact disk bytes reproduces them, and the
+        // primary and backup still hold those bytes. Mergers are pure, so the
+        // skipped write would have rewritten identical bytes.
+        const incoming = JSON.stringify(value);
+        const onDiskRaw = raw.getItem(name);
+        const last = lastMergeWrite.get(name);
+        if (
+          last?.settled &&
+          last.incoming === incoming &&
+          last.written === onDiskRaw &&
+          (!last.backedUp || raw.readBackup(name) === last.written)
+        ) {
+          return;
+        }
         const merged = mergeOnWrite({
           baseline: baselines.get(name) ?? null,
-          onDisk: readPersistedValue<T>(raw, name),
+          onDisk: readPersistedValue<T>(raw, name, onDiskRaw),
           incoming: value,
         });
         const serialized = JSON.stringify(merged);
@@ -385,7 +416,19 @@ export function createSafeJSONStorage<T>(options?: SafeJSONStorageOptions<T>): P
         // result, which may hold sibling-only keys this view never took into
         // memory). A transient quota failure keeps the old baseline so the next
         // retry still merges correctly.
-        if (result !== "quota") baselines.set(name, value);
+        if (result !== "quota") {
+          baselines.set(name, value);
+          lastMergeWrite.set(name, {
+            incoming,
+            written: serialized,
+            backedUp: result === "durable",
+            // The baseline was already this snapshot and the merge left the
+            // disk bytes unchanged: repeating it is a no-op.
+            settled: last?.incoming === incoming && serialized === onDiskRaw,
+          });
+        } else {
+          lastMergeWrite.delete(name);
+        }
         return;
       }
       const serialized = JSON.stringify(value);
@@ -404,6 +447,7 @@ export function createSafeJSONStorage<T>(options?: SafeJSONStorageOptions<T>): P
     removeItem: (name) => {
       lastWritten.delete(name);
       baselines.delete(name);
+      lastMergeWrite.delete(name);
       raw.removeItem(name);
       raw.removeBackup(name);
     },

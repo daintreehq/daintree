@@ -631,6 +631,48 @@ describe("PanelPersistence", () => {
     });
   });
 
+  describe("snapshot reuse", () => {
+    it("reuses snapshots for unchanged panels and rebuilds only the changed one", () => {
+      const persistence = new PanelPersistence(createMockProjectClient(), { debounceMs: 100 });
+      const a = createMockTerminal({ id: "a" });
+      const b = createMockTerminal({ id: "b" });
+      persistence.save([a, b], projectId);
+      const first = persistence.getPreviousSnapshotMap(projectId)!;
+
+      const renamed = { ...b, title: "Renamed" };
+      persistence.save([a, renamed], projectId);
+      const second = persistence.getPreviousSnapshotMap(projectId)!;
+
+      expect(second.get("a")).toBe(first.get("a"));
+      expect(second.get("b")).not.toBe(first.get("b"));
+      expect(second.get("b")?.title).toBe("Renamed");
+    });
+
+    it("re-snapshots an unchanged panel once its worktree gitDir becomes known (#11388)", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+      const panel = createMockTerminal({ id: "p1", worktreeId: "wt-1" });
+      try {
+        setWorktreeGitDirAccessor(() => undefined);
+        persistence.save([panel], projectId);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(client.setTerminals.mock.calls[0]![1][0]).not.toHaveProperty("worktreeGitDir");
+
+        setWorktreeGitDirAccessor((id) =>
+          id === "wt-1" ? "/repo/.git/worktrees/wt-1" : undefined
+        );
+        persistence.save([panel], projectId);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(client.setTerminals).toHaveBeenCalledTimes(2);
+        expect(client.setTerminals.mock.calls[1]![1][0].worktreeGitDir).toBe(
+          "/repo/.git/worktrees/wt-1"
+        );
+      } finally {
+        setWorktreeGitDirAccessor(() => undefined);
+      }
+    });
+  });
+
   describe("browser panels", () => {
     it("preserves browserUrl for browser panels", async () => {
       const client = createMockProjectClient();
