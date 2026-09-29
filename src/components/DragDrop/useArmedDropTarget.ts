@@ -26,8 +26,8 @@ interface ArmedDropTargetOptions {
  * Whether a container should draw DROP_TARGET_FRAME: the drop would land in it
  * and move something in from elsewhere. A reorder inside the container arms
  * nothing, because the insertion line or slot already says where it lands.
- * Monitor-driven so the host re-renders only when the answer flips, not on
- * every change of `over`.
+ * Monitor-driven, so it adds a render to its host only when the answer flips,
+ * not on every change of `over`.
  */
 export function useArmedDropTarget({
   accepts,

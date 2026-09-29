@@ -1,3 +1,6 @@
+import type { MouseEvent as ReactMouseEvent } from "react";
+import { MouseSensor, type MouseSensorOptions } from "@dnd-kit/core";
+
 // Every drag surface that is also a click target (a tab, a panel header, a dock
 // chip, a worktree card) waits for the same travel before it picks up, so a
 // click never turns into a drag at a different jitter from its neighbour. 8px
@@ -18,3 +21,23 @@ export const MOUSE_SENSOR_OPTIONS = {
 export const TOUCH_SENSOR_OPTIONS = {
   activationConstraint: { delay: 150, tolerance: 5 },
 };
+
+// Primary button only. The stock MouseSensor refuses a right-click but takes a
+// middle-button drag, which the tab strips' old PointerSensor never did.
+const MOUSE_PRIMARY_BUTTON = 0;
+
+export class PrimaryMouseSensor extends MouseSensor {
+  static activators: {
+    eventName: "onMouseDown";
+    handler: (event: ReactMouseEvent, options: MouseSensorOptions) => boolean;
+  }[] = [
+    {
+      eventName: "onMouseDown",
+      handler: ({ nativeEvent: event }, { onActivation }) => {
+        if (event.button !== MOUSE_PRIMARY_BUTTON) return false;
+        onActivation?.({ event });
+        return true;
+      },
+    },
+  ];
+}
