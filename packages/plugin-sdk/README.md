@@ -13,7 +13,7 @@ npm install --save-dev @daintreehq/plugin-sdk
 | Import | What it gives you |
 | --- | --- |
 | `@daintreehq/plugin-sdk` | Types: `PluginHostApi`, `PluginManifest`, `PanelViewProps`, the forge and file-decoration provider contracts, and the handful of runtime constants (`PLUGIN_PROCESS_STREAM_CHANNEL`, `PLUGIN_STYLE_ROOT_ATTRIBUTE`, `localAuthStubs`) |
-| `@daintreehq/plugin-sdk/react` | `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent`, `loadDocumentPackage` and `createViewScope` (listeners, timers, observers, workers and WebGL contexts released with the view) for views bundled with `@daintreehq/plugin-vite` |
+| `@daintreehq/plugin-sdk/react` | `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent`, `loadDocumentPackage`, `createViewScope` (listeners, timers, observers, workers and WebGL contexts released with the view) and the performance hooks below, for views bundled with `@daintreehq/plugin-vite` |
 | `@daintreehq/plugin-sdk/files` | The pure file-tree model — lazy children, expansion, flattening to rows, git-status roll-up, filename classification — fed from `host.fs.readdir(dir, { detail: true })` |
 | `@daintreehq/plugin-sdk/data` | Helpers for data kept as files: `parseFrontmatter`, `stringifyFrontmatter` and `updateFrontmatter` (changes only the named keys, every other byte preserved), `parseJsonl` / `stringifyJsonlLine`, `contentRevision`, and `editFile` — the conflict-checked read → transform → `host.fs.writeFile({ expectedRevision })` loop with retry |
 | `@daintreehq/plugin-sdk/testing` | `createMockHost`, a recording `PluginHostApi` for exercising `activate()` and handlers without Electron |
@@ -22,6 +22,19 @@ npm install --save-dev @daintreehq/plugin-sdk
 A plugin worker that is not bundled — a hand-written `dist/index.mjs` with no `node_modules` — can still import `@daintreehq/plugin-sdk`, `/files` and `/data`: Daintree resolves them to a copy of this package that ships with the app whenever the plugin has no copy of its own. An installed or bundled copy always takes precedence. `/react` and `/testing` are not served that way.
 
 `./data` is newer than the 0.1.0 release on npm. Code you bundle against 0.1.0 cannot import it; build against this repository's package or a later release.
+
+### Performance hooks
+
+The patterns behind Daintree's own fast panels, packaged so the fast way is the easy way in a plugin view. All are dependency-free and take `react` from the view's bundle.
+
+| Hook | Use it when |
+| --- | --- |
+| `lazyWithPreload(load, pick?)` + `usePreloadOnIntent(Component)` | A dialog, tab or heavy editor is split into its own chunk. Preload it on hover or focus and it renders in the first frame instead of flashing a Suspense fallback for 300ms. |
+| `useProgressiveList(items, { initial, step, resetKey, minIndex })` | A list of up to a few hundred rows: the first screenful paints at once, the rest arrives in transitions that never block input. |
+| `useVirtualList({ count, estimateSize, overscan, getScrollElement })` | Thousands of rows: only the rows in view are mounted. Heights are fixed or known per index; they are not measured from the DOM. |
+| `usePluginEventSelector(pluginId, channel, selector, { initial, isEqual, panelId })` | A channel pushes a large snapshot and this component shows one part of it. It re-renders only when `selector(payload)` changes. `useHostStore(subscribe, getSnapshot, selector, isEqual)` is the same idea for any store, and `shallowEqual` pairs with selectors that build objects. |
+| `useCachedHostChannel(pluginId, channel, args, { staleMs, cacheKey, signal, enabled })` | A read the view repeats on every open. The cached result paints first and is revalidated in the background; concurrent mounts share one request, and the cache is bounded (least recently used entries beyond 50 are dropped). |
+| `useThrottledCallback(callback, { ms })` | Pushes arrive faster than a frame (progress, streamed lines). Wrap the state setter so React commits at most once per frame, or once per `ms`. |
 
 ## Usage
 
