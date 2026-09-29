@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import type { EditorView } from "@codemirror/view";
 import { EditorView as EditorViewFacet } from "@codemirror/view";
-import type { Compartment } from "@codemirror/state";
+import type { Compartment, Extension, StateEffect } from "@codemirror/state";
 import {
   buildInputBarTheme,
   createPlaceholder,
@@ -16,13 +16,22 @@ import {
 } from "../inputEditorExtensions";
 import type { SlashCommand } from "@shared/types";
 
-function reconfigure(
-  view: EditorView | null,
-  compartmentRef: React.RefObject<Compartment>,
-  extension: ReturnType<Compartment["of"]>
-) {
-  if (!view) return;
-  view.dispatch({ effects: compartmentRef.current.reconfigure(extension) });
+export interface CompartmentConfig {
+  effectiveTheme: import("@xterm/xterm").ITheme;
+  placeholder: string;
+  disabled: boolean;
+  commandMap: Map<string, SlashCommand>;
+  isAutocompleteOpen: boolean;
+}
+
+// The config each view's compartments were last built or reconfigured from.
+// useEditorFactory records what it built, so the driver's first run after a
+// view is created (mount, StrictMode replay, terminalId change) diffs against
+// that instead of rebuilding every compartment.
+const appliedConfigs = new WeakMap<EditorView, CompartmentConfig>();
+
+export function recordBuiltCompartmentConfig(view: EditorView, config: CompartmentConfig): void {
+  appliedConfigs.set(view, config);
 }
 
 interface UseCompartmentDriverParams {
@@ -64,86 +73,82 @@ export function useCompartmentDriver({
   selectionChipTooltipCompartmentRef,
   isAutocompleteOpen,
 }: UseCompartmentDriverParams) {
+  // Each compartment is reconfigured on exactly the prop changes its own
+  // effect used to depend on, but all of them land in a single transaction.
   useEffect(() => {
-    reconfigure(editorViewRef.current, themeCompartmentRef, buildInputBarTheme(effectiveTheme));
-  }, [effectiveTheme, themeCompartmentRef]);
+    const view = editorViewRef.current;
+    if (!view) return;
+    const prev = appliedConfigs.get(view);
+    appliedConfigs.set(view, {
+      effectiveTheme,
+      placeholder,
+      disabled,
+      commandMap,
+      isAutocompleteOpen,
+    });
+    const changed = <K extends keyof CompartmentConfig>(key: K, next: CompartmentConfig[K]) =>
+      !prev || prev[key] !== next;
+    const themeChanged = changed("effectiveTheme", effectiveTheme);
+    const placeholderChanged = changed("placeholder", placeholder);
+    const disabledChanged = changed("disabled", disabled);
+    const commandMapChanged = changed("commandMap", commandMap);
+    const autocompleteChanged = changed("isAutocompleteOpen", isAutocompleteOpen);
+    const tooltipsSuppressed = disabled || isAutocompleteOpen;
 
-  useEffect(() => {
-    reconfigure(editorViewRef.current, placeholderCompartmentRef, createPlaceholder(placeholder));
-  }, [placeholder, placeholderCompartmentRef]);
-
-  useEffect(() => {
-    reconfigure(
-      editorViewRef.current,
-      editableCompartmentRef,
-      EditorViewFacet.editable.of(!disabled)
-    );
-  }, [disabled, editableCompartmentRef]);
-
-  useEffect(() => {
-    reconfigure(editorViewRef.current, chipCompartmentRef, createSlashChipField({ commandMap }));
-  }, [commandMap, chipCompartmentRef]);
-
-  useEffect(() => {
-    const suppress = disabled || isAutocompleteOpen;
-    reconfigure(
-      editorViewRef.current,
-      tooltipCompartmentRef,
-      suppress ? [] : createSlashTooltip(commandMap)
-    );
-  }, [commandMap, disabled, isAutocompleteOpen, tooltipCompartmentRef]);
-
-  useEffect(() => {
-    const suppress = disabled || isAutocompleteOpen;
-    reconfigure(
-      editorViewRef.current,
-      fileChipTooltipCompartmentRef,
-      suppress ? [] : createFileChipTooltip()
-    );
-  }, [disabled, isAutocompleteOpen, fileChipTooltipCompartmentRef]);
-
-  useEffect(() => {
-    const suppress = disabled || isAutocompleteOpen;
-    reconfigure(
-      editorViewRef.current,
-      imageChipTooltipCompartmentRef,
-      suppress ? [] : createImageChipTooltip()
-    );
-  }, [disabled, isAutocompleteOpen, imageChipTooltipCompartmentRef]);
-
-  useEffect(() => {
-    const suppress = disabled || isAutocompleteOpen;
-    reconfigure(
-      editorViewRef.current,
-      fileDropChipTooltipCompartmentRef,
-      suppress ? [] : createFileDropChipTooltip()
-    );
-  }, [disabled, isAutocompleteOpen, fileDropChipTooltipCompartmentRef]);
-
-  useEffect(() => {
-    const suppress = disabled || isAutocompleteOpen;
-    reconfigure(
-      editorViewRef.current,
-      diffChipTooltipCompartmentRef,
-      suppress ? [] : createDiffChipTooltip()
-    );
-  }, [disabled, isAutocompleteOpen, diffChipTooltipCompartmentRef]);
-
-  useEffect(() => {
-    const suppress = disabled || isAutocompleteOpen;
-    reconfigure(
-      editorViewRef.current,
-      terminalChipTooltipCompartmentRef,
-      suppress ? [] : createTerminalChipTooltip()
-    );
-  }, [disabled, isAutocompleteOpen, terminalChipTooltipCompartmentRef]);
-
-  useEffect(() => {
-    const suppress = disabled || isAutocompleteOpen;
-    reconfigure(
-      editorViewRef.current,
-      selectionChipTooltipCompartmentRef,
-      suppress ? [] : createSelectionChipTooltip()
-    );
-  }, [disabled, isAutocompleteOpen, selectionChipTooltipCompartmentRef]);
+    const effects: StateEffect<unknown>[] = [];
+    if (themeChanged) {
+      effects.push(themeCompartmentRef.current.reconfigure(buildInputBarTheme(effectiveTheme)));
+    }
+    if (placeholderChanged) {
+      effects.push(placeholderCompartmentRef.current.reconfigure(createPlaceholder(placeholder)));
+    }
+    if (disabledChanged) {
+      effects.push(
+        editableCompartmentRef.current.reconfigure(EditorViewFacet.editable.of(!disabled))
+      );
+    }
+    if (commandMapChanged) {
+      effects.push(chipCompartmentRef.current.reconfigure(createSlashChipField({ commandMap })));
+    }
+    const tooltipGateChanged = disabledChanged || autocompleteChanged;
+    if (tooltipGateChanged || commandMapChanged) {
+      effects.push(
+        tooltipCompartmentRef.current.reconfigure(
+          tooltipsSuppressed ? [] : createSlashTooltip(commandMap)
+        )
+      );
+    }
+    if (tooltipGateChanged) {
+      const chipTooltips: Array<[React.RefObject<Compartment>, () => Extension]> = [
+        [fileChipTooltipCompartmentRef, createFileChipTooltip],
+        [imageChipTooltipCompartmentRef, createImageChipTooltip],
+        [fileDropChipTooltipCompartmentRef, createFileDropChipTooltip],
+        [diffChipTooltipCompartmentRef, createDiffChipTooltip],
+        [terminalChipTooltipCompartmentRef, createTerminalChipTooltip],
+        [selectionChipTooltipCompartmentRef, createSelectionChipTooltip],
+      ];
+      for (const [ref, create] of chipTooltips) {
+        effects.push(ref.current.reconfigure(tooltipsSuppressed ? [] : create()));
+      }
+    }
+    if (effects.length > 0) view.dispatch({ effects });
+  }, [
+    editorViewRef,
+    effectiveTheme,
+    placeholder,
+    disabled,
+    commandMap,
+    isAutocompleteOpen,
+    themeCompartmentRef,
+    placeholderCompartmentRef,
+    editableCompartmentRef,
+    chipCompartmentRef,
+    tooltipCompartmentRef,
+    fileChipTooltipCompartmentRef,
+    imageChipTooltipCompartmentRef,
+    fileDropChipTooltipCompartmentRef,
+    diffChipTooltipCompartmentRef,
+    terminalChipTooltipCompartmentRef,
+    selectionChipTooltipCompartmentRef,
+  ]);
 }
