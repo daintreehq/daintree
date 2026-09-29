@@ -1138,7 +1138,9 @@ export function BulkCreateWorktreeDialog({
             isExecuting ? (
               <Spinner size="lg" className="text-activity-working" />
             ) : isDone ? (
-              failedCount > 0 ? (
+              succeededCount === 0 && failedCount > 0 ? (
+                <XCircle className="w-5 h-5 text-status-error" />
+              ) : failedCount > 0 ? (
                 <AlertTriangle className="w-5 h-5 text-status-warning" />
               ) : (
                 <CheckCircle2 className="w-5 h-5 text-status-success" />
@@ -1151,7 +1153,9 @@ export function BulkCreateWorktreeDialog({
           {isExecuting
             ? "Creating worktrees\u2026"
             : isDone
-              ? "Creation complete"
+              ? succeededCount === 0 && failedCount > 0
+                ? "Couldn't create worktrees"
+                : "Creation complete"
               : `Create ${creatableCount} worktree${creatableCount !== 1 ? "s" : ""}`}
         </AppDialog.Title>
         <AppDialog.CloseButton />
