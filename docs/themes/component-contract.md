@@ -178,10 +178,10 @@ Anything that floats over app content is one of three shapes, and each takes its
 | Shape | Examples | Chrome |
 | --- | --- | --- |
 | Popover | menus, dropdowns, pickers | `rounded-[var(--radius-lg)] surface-overlay shadow-overlay` (`popover.tsx`, `fixed-dropdown.tsx`) |
-| Floating card | toasts, re-entry summary, find bars, scroll pill, artifact overlay, getting-started checklist | `FLOATING_CARD_CLASS` from `src/components/ui/floatingSurface.ts`: `radius-lg`, `bg-surface-panel-elevated`, `border-border-default`, `shadow-[var(--theme-shadow-floating)]` |
+| Floating card | toasts, re-entry summary, find bars, scroll pills (terminal, notification center), typing locator, artifact overlay, getting-started checklist | `FLOATING_CARD_CLASS` from `src/components/ui/floatingSurface.ts`: `radius-lg`, `bg-surface-panel-elevated`, `border-border-default`, `shadow-[var(--theme-shadow-floating)]` |
 | Overlay sheet | Portal, Theme Browser | a `border-l` edge plus `OVERLAY_SHEET_SHADOW_CLASS` (`--theme-shadow-dialog`) |
 
-A floating card takes the popover's radius, so a toast and the menu opened from it have the same corners. The scroll pill keeps `rounded-full` as a shape decision and takes `FLOATING_CARD_SURFACE_CLASS`. Toasts and the re-entry summary keep their translucent glass fill and severity edge, and take `FLOATING_CARD_RADIUS_CLASS` only. A panel that docks and pushes content aside, like the assistant, does not float: it has a border and no shadow.
+A floating card takes the popover's radius, so a toast and the menu opened from it have the same corners. Pills keep `rounded-full` as a shape decision and take `FLOATING_CARD_SURFACE_CLASS`. Toasts and the re-entry summary keep their translucent glass fill and severity edge, and take `FLOATING_CARD_RADIUS_CLASS` only. A panel that docks and pushes content aside, like the assistant, does not float: it has a border and no shadow.
 
 **Shadows come from theme tokens, never Tailwind's stock scale.** `shadow-sm` through `shadow-2xl` and `shadow-inner` are fixed black, so on a light theme they land as a grey smudge rather than the cool-slate shadow the theme defines. The tokens are `--theme-shadow-ambient` (resting lift: a selected choice card, a switch thumb), `--theme-shadow-floating`, `--theme-shadow-dialog`, the `shadow-overlay` / `shadow-modal` stacks, and `--shadow-inset` for a pressed or recessed well. Enforced by `component-contract/no-raw-shadow`, which ships as an error.
 

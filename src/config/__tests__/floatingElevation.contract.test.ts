@@ -27,6 +27,8 @@ const FLOATING_CARD_HOSTS: Record<string, string> = {
   "src/components/ui/ReEntrySummary.tsx": "FLOATING_CARD_RADIUS_CLASS",
   "src/components/ui/FindBarControls.tsx": "FLOATING_CARD_CLASS",
   "src/components/ui/ScrollPill.tsx": "FLOATING_CARD_SURFACE_CLASS",
+  "src/components/Terminal/TypingLocator.tsx": "FLOATING_CARD_SURFACE_CLASS",
+  "src/components/Notifications/NotificationCenter.tsx": "FLOATING_CARD_SURFACE_CLASS",
   "src/components/Terminal/ArtifactOverlay.tsx": "FLOATING_CARD_CLASS",
   "src/components/Onboarding/GettingStartedChecklist.tsx": "FLOATING_CARD_CLASS",
 };
