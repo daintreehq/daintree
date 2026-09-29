@@ -10145,19 +10145,22 @@ describe("session-scoped resource ownership (#11909)", () => {
         ["help", "terminal.interruptOwned"],
         ["help", "terminal.readLastMessageOwned"],
         ["assistant-pane", "terminal.interruptOwned"],
-      ])("is not given to Daintree's own assistant (%s origin, %s)", async (origin, name) => {
-        const store = makeStore();
-        const server = orchestratorSession(store, "s-help", listingDispatch());
-        store.sessionOriginMap.set("s-help", origin);
+      ] as const)(
+        "is not given to Daintree's own assistant (%s origin, %s)",
+        async (origin, name) => {
+          const store = makeStore();
+          const server = orchestratorSession(store, "s-help", listingDispatch());
+          store.sessionOriginMap.set("s-help", origin);
 
-        const payload = refusalPayload(
-          await callTool(server, { name, arguments: { terminalId: "terminal-users-own" } })
-        );
+          const payload = refusalPayload(
+            await callTool(server, { name, arguments: { terminalId: "terminal-users-own" } })
+          );
 
-        expect(payload.code).toBe("RESOURCE_NOT_OWNED");
-        expect(payload.message).not.toContain("Hand to orchestrator");
-        expect(payload.details).toBeUndefined();
-      });
+          expect(payload.code).toBe("RESOURCE_NOT_OWNED");
+          expect(payload.message).not.toContain("Hand to orchestrator");
+          expect(payload.details).toBeUndefined();
+        }
+      );
     });
 
     it("lists handed-over terminals as ones the pane can drive", async () => {
