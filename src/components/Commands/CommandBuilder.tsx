@@ -14,13 +14,20 @@ import type {
 } from "@shared/types/commands";
 import { ChevronLeft, ChevronRight, CheckCircle2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 import {
-  FIELD_FOCUS,
+  FIELD_CONTROL_SIZE,
   FIELD_INPUT,
-  FIELD_SURFACE,
   FormGrid,
   FormRow,
 } from "@/components/Worktree/views/WorktreeFormLayout";
@@ -183,27 +190,25 @@ function BuilderTextareaField({
       labelClassName={cn(BUILDER_LABEL, "self-start pt-2")}
       hint={builderFieldHint({ error, helpText: field.helpText, errorId, helpId })}
     >
-      <textarea
+      <Textarea
         id={inputId}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={field.placeholder}
         rows={4}
+        density="compact"
+        invalid={!!error}
         aria-describedby={error ? errorId : field.helpText ? helpId : undefined}
-        aria-invalid={error ? "true" : undefined}
-        className={cn(
-          FIELD_SURFACE,
-          FIELD_FOCUS,
-          // `block`: an inline textarea sits on the text baseline and leaves a
-          // descender gap beneath it, pushing its hint further off than an input's.
-          "block w-full px-2.5 py-2 text-sm resize-y min-h-[100px]",
-          "text-text-primary placeholder:text-text-placeholder",
-          error && "border-status-error"
-        )}
+        // `block`: an inline textarea sits on the text baseline and leaves a
+        // descender gap beneath it, pushing its hint further off than an input's.
+        className="block min-h-[100px]"
       />
     </FormRow>
   );
 }
+
+/** Radix refuses `""` as an item value, so clearing an optional choice goes through this. */
+const CLEAR_CHOICE = "__daintree-clear-choice__";
 
 function BuilderSelectField({
   field,
@@ -219,6 +224,7 @@ function BuilderSelectField({
   const inputId = `field-${field.name}`;
   const errorId = `${inputId}-error`;
   const helpId = `${inputId}-help`;
+  const placeholder = field.placeholder ?? "Choose an option";
 
   return (
     <FormRow
@@ -227,28 +233,32 @@ function BuilderSelectField({
       labelClassName={BUILDER_LABEL}
       hint={builderFieldHint({ error, helpText: field.helpText, errorId, helpId })}
     >
-      <select
-        id={inputId}
+      <Select
+        // An empty value shows the placeholder; the trigger owns its ink.
         value={value}
-        onChange={(e) => onChange(e.target.value)}
-        aria-describedby={error ? errorId : field.helpText ? helpId : undefined}
-        aria-invalid={error ? "true" : undefined}
-        className={cn(
-          FIELD_INPUT,
-          "pr-8",
-          // The empty option is a prompt, not a choice: it reads as placeholder
-          // ink until something is picked.
-          value === "" && "text-text-placeholder",
-          error && "border-status-error"
-        )}
+        onValueChange={(next) => onChange(next === CLEAR_CHOICE ? "" : next)}
       >
-        <option value="">{field.placeholder ?? "Choose an option"}</option>
-        {field.options?.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
+        <SelectTrigger
+          id={inputId}
+          aria-describedby={error ? errorId : field.helpText ? helpId : undefined}
+          aria-invalid={error ? true : undefined}
+          className={cn(FIELD_CONTROL_SIZE, error && "border-status-error")}
+        >
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {/* An optional field can be emptied again, the way the native
+              select's blank option allowed; Radix reserves "" for "unset". */}
+          {!field.required && value !== "" && (
+            <SelectItem value={CLEAR_CHOICE}>{placeholder}</SelectItem>
+          )}
+          {field.options?.map((opt) => (
+            <SelectItem key={opt.value} value={opt.value}>
+              {opt.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </FormRow>
   );
 }

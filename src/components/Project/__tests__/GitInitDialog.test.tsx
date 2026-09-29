@@ -16,6 +16,8 @@ const { initGitGuidedMock, onInitGitProgressMock } = vi.hoisted(() => ({
   onInitGitProgressMock: vi.fn(),
 }));
 
+vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
+
 vi.mock("@/clients", () => ({
   projectClient: {
     initGitGuided: initGitGuidedMock,

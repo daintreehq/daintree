@@ -16,9 +16,21 @@ import { basename } from "@shared/utils/path";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import { ProjectEmojiButton } from "./ProjectEmojiButton";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
-import { FormGrid, FormRow, FIELD_INPUT } from "@/components/Worktree/views/WorktreeFormLayout";
+import {
+  FormGrid,
+  FormRow,
+  FIELD_CONTROL_SIZE,
+  FIELD_INPUT,
+} from "@/components/Worktree/views/WorktreeFormLayout";
 import { EMOJI_SLOT_CLASS, SlottedInputField, PathCaption } from "./projectDialogFields";
 import {
   GITIGNORE_TEMPLATE_OPTIONS,
@@ -659,21 +671,24 @@ export function GitInitDialog({
               </FormRow>
 
               <FormRow label="Gitignore" htmlFor="git-init-template">
-                <select
-                  id="git-init-template"
+                <Select
                   value={gitignoreTemplate}
-                  onChange={(e) => {
-                    if (isGitignoreTemplateId(e.target.value)) setGitignoreTemplate(e.target.value);
+                  onValueChange={(value) => {
+                    if (isGitignoreTemplateId(value)) setGitignoreTemplate(value);
                   }}
                   disabled={configDisabled}
-                  className={FIELD_INPUT}
                 >
-                  {GITIGNORE_TEMPLATE_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label} — {opt.description}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger id="git-init-template" className={FIELD_CONTROL_SIZE}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {GITIGNORE_TEMPLATE_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value} description={opt.description}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </FormRow>
 
               <FormRow label="Commit">

@@ -80,7 +80,7 @@ describe("RecipeEditor", () => {
   it("draws every field in the family chrome, cards included", () => {
     renderEditor(RECIPE);
     const fields = document.querySelectorAll(
-      '[role="dialog"] input[type="text"], [role="dialog"] textarea, [role="dialog"] select'
+      '[role="dialog"] input[type="text"], [role="dialog"] textarea, [role="dialog"] [role="combobox"]'
     );
     expect(fields.length).toBeGreaterThan(8);
     // The recipe's own auto-assign row is the reference: whatever the family's
@@ -171,8 +171,12 @@ describe("RecipeEditor", () => {
   it("starts a new recipe on a scope it can save to when no project is open", async () => {
     useProjectStore.setState({ currentProject: null });
     renderEditor();
-    const scope = document.getElementById("recipe-scope");
-    expect(scope?.querySelector('option[value="project"]')?.hasAttribute("disabled")).toBe(true);
+    const scope = document.getElementById("recipe-scope")!;
+    expect(scope.textContent).toMatch(/^Global/);
+    fireEvent.keyDown(scope, { key: "ArrowDown" });
+    const project = await screen.findByRole("option", { name: /^Project/ });
+    expect(project.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.keyDown(project, { key: "Escape" });
 
     fireEvent.change(document.getElementById("recipe-name")!, { target: { value: "Build" } });
     await act(async () => {

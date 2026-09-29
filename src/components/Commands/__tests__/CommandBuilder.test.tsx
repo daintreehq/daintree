@@ -4,6 +4,8 @@ import { act, render, screen, fireEvent } from "@testing-library/react";
 import { CommandBuilder } from "../CommandBuilder";
 import type { BuilderStep, CommandManifestEntry } from "@shared/types/commands";
 
+vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
+
 const command: CommandManifestEntry = {
   id: "test:build",
   label: "Test command",
@@ -59,7 +61,7 @@ describe("CommandBuilder field rendering", () => {
     // dropped the association would leave them anonymous.
     expect(screen.getByLabelText("Issue title").tagName).toBe("INPUT");
     expect(screen.getByLabelText("Description").tagName).toBe("TEXTAREA");
-    expect(screen.getByLabelText("Priority").tagName).toBe("SELECT");
+    expect(screen.getByRole("combobox", { name: "Priority" })).toBeTruthy();
     expect(screen.getByLabelText("Open as draft").getAttribute("role")).toBe("checkbox");
   });
 
@@ -109,6 +111,22 @@ describe("CommandBuilder field rendering", () => {
     expect(error?.getAttribute("role")).toBeNull();
     expect(screen.getByLabelText("Issue title").getAttribute("aria-describedby")).toBe(error?.id);
     expect(onExecute).not.toHaveBeenCalled();
+  });
+
+  it("lets an optional choice be emptied again once something is picked", async () => {
+    const { onExecute } = renderBuilder();
+    const priority = screen.getByLabelText<HTMLSelectElement>("Priority");
+
+    fireEvent.change(priority, { target: { value: "high" } });
+    const clear = [...priority.options].find(
+      (o) => !o.disabled && o.value !== "low" && o.value !== "high"
+    );
+    expect(clear).toBeTruthy();
+    fireEvent.change(priority, { target: { value: clear!.value } });
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await screen.findByText("Done");
+
+    expect(onExecute.mock.calls[0]?.[0]?.priority ?? "").toBe("");
   });
 
   it("carries each field's value through to execution", async () => {

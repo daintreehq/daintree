@@ -7,6 +7,13 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -18,6 +25,7 @@ import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
+  FIELD_CONTROL_SIZE,
   FIELD_INPUT,
   FIELD_SURFACE,
   FormGrid,
@@ -363,25 +371,23 @@ export function RecipeEditor({
     ];
     return (
       <FormRow label="After exit" htmlFor={id} hint={hint(helpId, FAILURE_PRESERVE_CAPTION)}>
-        <select
-          id={id}
+        <Select
           value={terminal.exitBehavior || defaultValue}
-          onChange={(e) =>
-            handleTerminalChange(
-              index,
-              "exitBehavior",
-              e.target.value === defaultValue ? "" : e.target.value
-            )
+          onValueChange={(value) =>
+            handleTerminalChange(index, "exitBehavior", value === defaultValue ? "" : value)
           }
-          aria-describedby={helpId}
-          className={cn(FIELD_INPUT, "pr-8")}
         >
-          {ordered.map(([value, label]) => (
-            <option key={value} value={value}>
-              {value === defaultValue ? `${label} (default)` : label}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger id={id} aria-describedby={helpId} className={FIELD_CONTROL_SIZE}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ordered.map(([value, label]) => (
+              <SelectItem key={value} value={value}>
+                {value === defaultValue ? `${label} (default)` : label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </FormRow>
     );
   };
@@ -413,7 +419,7 @@ export function RecipeEditor({
                   onChange={(e) => setRecipeName(e.target.value)}
                   onKeyDown={submitOnEnter}
                   placeholder="e.g., Full Stack Dev"
-                  className="h-8 px-2.5 py-0"
+                  className={FIELD_CONTROL_SIZE}
                 />
                 {nameMissing && <FieldError>Name the recipe to save it</FieldError>}
               </Field>
@@ -435,17 +441,20 @@ export function RecipeEditor({
                     : "Global (all projects)"}
                 </div>
               ) : (
-                <select
-                  id="recipe-scope"
+                <Select
                   value={scope}
-                  onChange={(e) => setScope(e.target.value as "global" | "project")}
-                  className={cn(FIELD_INPUT, "pr-8")}
+                  onValueChange={(value) => setScope(value as "global" | "project")}
                 >
-                  <option value="project" disabled={!hasProject}>
-                    Project (current project only)
-                  </option>
-                  <option value="global">Global (all projects)</option>
-                </select>
+                  <SelectTrigger id="recipe-scope" className={FIELD_CONTROL_SIZE}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="project" disabled={!hasProject}>
+                      Project (current project only)
+                    </SelectItem>
+                    <SelectItem value="global">Global (all projects)</SelectItem>
+                  </SelectContent>
+                </Select>
               )}
             </FormRow>
 
@@ -473,17 +482,23 @@ export function RecipeEditor({
                 "Controls whether the linked GitHub issue is automatically assigned to you during quick worktree creation"
               )}
             >
-              <select
-                id="auto-assign"
+              <Select
                 value={autoAssign}
-                onChange={(e) => setAutoAssign(e.target.value as "always" | "never" | "prompt")}
-                aria-describedby="auto-assign-help"
-                className={cn(FIELD_INPUT, "pr-8")}
+                onValueChange={(value) => setAutoAssign(value as "always" | "never" | "prompt")}
               >
-                <option value="always">Always assign to me</option>
-                <option value="prompt">Ask before assigning</option>
-                <option value="never">Never assign</option>
-              </select>
+                <SelectTrigger
+                  id="auto-assign"
+                  aria-describedby="auto-assign-help"
+                  className={FIELD_CONTROL_SIZE}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="always">Always assign to me</SelectItem>
+                  <SelectItem value="prompt">Ask before assigning</SelectItem>
+                  <SelectItem value="never">Never assign</SelectItem>
+                </SelectContent>
+              </Select>
             </FormRow>
 
             <FormSection
@@ -535,20 +550,26 @@ export function RecipeEditor({
                       </div>
 
                       <FormRow label="Type" htmlFor={`terminal-type-${index}`}>
-                        <select
-                          id={`terminal-type-${index}`}
+                        <Select
                           value={terminal.type}
-                          onChange={(e) =>
-                            handleTypeChange(index, e.target.value as RecipeTerminalType)
+                          onValueChange={(value) =>
+                            handleTypeChange(index, value as RecipeTerminalType)
                           }
-                          className={cn(FIELD_INPUT, "pr-8")}
                         >
-                          {TERMINAL_TYPES.map((type) => (
-                            <option key={type} value={type}>
-                              {TYPE_LABELS[type]}
-                            </option>
-                          ))}
-                        </select>
+                          <SelectTrigger
+                            id={`terminal-type-${index}`}
+                            className={FIELD_CONTROL_SIZE}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {TERMINAL_TYPES.map((type) => (
+                              <SelectItem key={type} value={type}>
+                                {TYPE_LABELS[type]}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </FormRow>
 
                       <FormRow label="Title" htmlFor={`terminal-title-${index}`}>

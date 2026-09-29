@@ -8,6 +8,8 @@ interface MockAction {
   onClick: () => void;
 }
 
+vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
+
 vi.mock("@/components/ui/AppDialog", () => {
   const Dialog = ({ children, isOpen }: { children: ReactNode; isOpen: boolean }) =>
     isOpen ? <div role="dialog">{children}</div> : null;

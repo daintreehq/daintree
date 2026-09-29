@@ -18,5 +18,6 @@ export {
   FIELD_SURFACE,
   FIELD_FOCUS,
   FIELD_INPUT,
+  FIELD_CONTROL_SIZE,
   FIELD_TRIGGER,
 } from "./WorktreeFormLayout";
