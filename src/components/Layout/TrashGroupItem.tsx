@@ -64,12 +64,13 @@ export function TrashGroupItem({
   const countdown = useTrashCountdown(earliestExpiry);
 
   const handleRestoreGroup = useCallback(() => {
+    if (!canRestore) return;
     if (isOrphan && activeWorktreeId) {
       restoreTrashedGroup(groupRestoreId, activeWorktreeId);
     } else {
       restoreTrashedGroup(groupRestoreId);
     }
-  }, [restoreTrashedGroup, groupRestoreId, isOrphan, activeWorktreeId]);
+  }, [canRestore, restoreTrashedGroup, groupRestoreId, isOrphan, activeWorktreeId]);
 
   const tabCount = terminals.length;
 
@@ -190,7 +191,9 @@ export function TrashGroupItem({
                   variant="ghost"
                   size="icon-sm"
                   onClick={handleRestoreGroup}
-                  disabled={!canRestore}
+                  // Focusable while unavailable, so it stays the row's keyboard
+                  // target instead of Remove all.
+                  aria-disabled={!canRestore || undefined}
                   aria-label={
                     isOrphan
                       ? canRestore
@@ -278,13 +281,14 @@ export function TrashGroupItem({
                             size="icon-xs"
                             className="-my-1"
                             onClick={() => {
+                              if (!canRestore) return;
                               if (isOrphan && activeWorktreeId) {
                                 restoreTerminal(terminal.id, activeWorktreeId);
                               } else {
                                 restoreTerminal(terminal.id);
                               }
                             }}
-                            disabled={!canRestore}
+                            aria-disabled={!canRestore || undefined}
                             aria-label={`Restore ${terminalName} only`}
                           >
                             <RotateCcw aria-hidden="true" />

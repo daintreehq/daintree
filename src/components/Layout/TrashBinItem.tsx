@@ -55,12 +55,13 @@ export function TrashBinItem({
   const canRestore = !isOrphan || !!activeWorktreeId;
 
   const handleRestore = useCallback(() => {
+    if (!canRestore) return;
     if (isOrphan && activeWorktreeId) {
       restoreTerminal(terminal.id, activeWorktreeId);
     } else {
       restoreTerminal(terminal.id);
     }
-  }, [restoreTerminal, terminal.id, isOrphan, activeWorktreeId]);
+  }, [canRestore, restoreTerminal, terminal.id, isOrphan, activeWorktreeId]);
 
   const terminalName = (() => {
     if (isPtyPanel(terminal)) {
@@ -143,7 +144,11 @@ export function TrashBinItem({
                 variant="ghost"
                 size="icon-sm"
                 onClick={handleRestore}
-                disabled={!canRestore}
+                // Unavailable but still focusable, so the row's keyboard target
+                // stays Restore (its tooltip says why) rather than falling
+                // through to permanent removal.
+                aria-disabled={!canRestore || undefined}
+                data-dock-row-target=""
                 aria-label={
                   isOrphan
                     ? canRestore

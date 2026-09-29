@@ -507,5 +507,27 @@ describe("BackgroundContainer", () => {
       expect(screen.getByRole("button", { name: "Collapse group" })).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Expand group" })).toBeNull();
     });
+
+    it("gives every member its own Restore, the row's keyboard target", () => {
+      const groupMetadata: TrashedTerminalGroupMetadata = {
+        panelIds: ["t1", "t2"],
+        activeTabId: "t1",
+        location: "dock",
+        worktreeId: "wt-1",
+      };
+      mockTerminals = [
+        makeTerminal({ id: "t1", title: "claude" }),
+        makeTerminal({ id: "t2", title: "gemini" }),
+      ];
+      mockBackgroundedTerminals = new Map([
+        ["t1", { groupRestoreId: "g1", groupMetadata }],
+        ["t2", { groupRestoreId: "g1", groupMetadata }],
+      ]);
+      render(<BackgroundContainer />);
+      for (const row of screen.getAllByTestId("background-single-item")) {
+        const target = row.querySelector("[data-dock-row-target]");
+        expect(target?.getAttribute("aria-label")).toMatch(/^Restore /);
+      }
+    });
   });
 });

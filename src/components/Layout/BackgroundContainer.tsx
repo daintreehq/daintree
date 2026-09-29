@@ -518,26 +518,26 @@ function BackgroundSingleItem({
             <TooltipContent side="bottom">Watch for completion</TooltipContent>
           </Tooltip>
 
-          {!compact && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRestore(terminal);
-                  }}
-                  aria-label={`Restore ${title}`}
-                  data-testid="bg-restore-button"
-                  data-dock-row-target=""
-                >
-                  <RotateCcw aria-hidden="true" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{`Restore ${title}`}</TooltipContent>
-            </Tooltip>
-          )}
+          {/* A group member restores on its own too: Restore is every row's
+              keyboard target, so a member without one would land on Watch. */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRestore(terminal);
+                }}
+                aria-label={`Restore ${title}`}
+                data-testid="bg-restore-button"
+                data-dock-row-target=""
+              >
+                <RotateCcw aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{`Restore ${title}`}</TooltipContent>
+          </Tooltip>
 
           <Tooltip>
             <TooltipTrigger asChild>
