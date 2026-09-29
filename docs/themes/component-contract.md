@@ -253,6 +253,21 @@ Numbers, ages and paths go through one formatter each, so the same value never r
 
 `src/components/ui/__tests__/formatting.contract.test.ts` fails on a private copy of any of these formatters, a bare `{formatTimeAgo(…)}` JSX child, hand-rolled churn spans, a `role="progressbar"` outside the primitive, and `middleTruncate` on a path.
 
+## Truncated text
+
+Text that clips reveals its full form through `TruncatedTooltip`, never a native `title`. The OS tooltip opens late, cannot be reached from the keyboard and ignores the theme, so one row revealed itself one way and its neighbour the other.
+
+- **`TruncatedTooltip`** when the tooltip is the clipped text itself. It opens only while the text overflows and takes a tab stop only then. Text shortened in code (`middleTruncatePath`, a sliced digest) passes `isTruncated` so the tooltip does not depend on CSS overflow alone.
+- **`focusable={false}`** inside anything that already owns the keyboard: a button (an expandable call row, an artifact header), an `option` or `menuitem`, or a roving toolbar (the Site Builder strip). The tooltip is then a pointer disclosure, and the row carries the keyboard route: expanding it, or a drawer that names the same thing.
+- **The shared `Tooltip`** when the tooltip adds something the text does not say — a symlink target, a caller's user agent, a dev server's last log line, the prompt behind a suggestion chip.
+- **Neither** inside a surface that is already the disclosure. The commit hover card wraps its co-author byline and names everyone rather than hiding the rest behind "and 2 others".
+
+A Radix `SelectItem` keeps its `title`: a styled tooltip inside a listbox fights the popup's own pointer and focus handling. `src/components/ui/__tests__/truncatedTextTitle.contract.test.ts` fails on any DOM element that is both `truncate` and titled.
+
+## Bundled plugins
+
+Builtin plugins load in-process and import `@/components/ui/*` directly, so they draw with the host kit exactly as the app does: `Checkbox` for an option committed with a form (Bulk Create's "Assign to me" matches New Worktree's), `Badge` for a status pill, `Button variant="ghost" size="icon"` for a toolbar icon, `Spinner` for indeterminate work and `SpinningIcon` for a refresh glyph, `DismissButton` for a close, `CopyButton` for a copy, `KbdChord` for a shortcut, `Input` for a text field, and `Tooltip` rather than `title`. A refresh button stays focusable while busy (`aria-disabled`, press vetoed in the handler) and is not dimmed or tinted, as in the sidebar and Pulse. `src/components/ui/__tests__/bundledPluginPrimitives.contract.test.ts` scans every builtin renderer for a hand-applied `animate-spin`, a hand-tinted status wash, the `overlay-medium` hover, a raw `input` or `textarea`, and a native `title` on a DOM element or `Button`.
+
 ## Opting out
 
 Every rule takes the same escape hatch, with a reason:
