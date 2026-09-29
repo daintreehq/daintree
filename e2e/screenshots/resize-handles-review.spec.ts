@@ -80,7 +80,7 @@ test.afterAll(async () => {
 });
 
 async function openScene(page: Page, scene: string, theme: string): Promise<void> {
-  await page.setViewportSize({ width: 480, height: 480 });
+  await page.setViewportSize({ width: 480, height: 720 });
   const url = `${server!.baseURL}/resize-handles-preview.html?scene=${scene}&theme=${theme}`;
   const frame = page.locator("[data-preview-scene]");
   // A cold dev server re-optimises deps the dynamic imports discover, answering 504
@@ -123,6 +123,25 @@ async function enter(page: Page, state: State): Promise<void> {
     await page.waitForTimeout(400);
     if (!(await separator.evaluate((el) => el.matches(":hover")))) {
       throw new Error("hover: handle is not hovered — refusing to write");
+    }
+    // Both outer portions of the 12px target must reach the handle, not a clipping
+    // host or a neighbour painted over it.
+    const box = (await separator.boundingBox())!;
+    const probes = vertical
+      ? [
+          [box.x + box.width / 2 - 5, y],
+          [box.x + box.width / 2 + 5, y],
+        ]
+      : [
+          [x, box.y + box.height / 2 - 5],
+          [x, box.y + box.height / 2 + 5],
+        ];
+    for (const [px, py] of probes) {
+      const hit = await separator.evaluate(
+        (el, [cx, cy]) => el.contains(document.elementFromPoint(cx!, cy!)),
+        [px, py]
+      );
+      if (!hit) throw new Error(`hover: target misses the handle at (${px}, ${py})`);
     }
   } else if (state === "focus") {
     await separator.evaluate((el) => (el as HTMLElement).blur());

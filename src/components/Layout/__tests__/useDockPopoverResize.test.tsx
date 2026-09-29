@@ -235,6 +235,18 @@ describe("useDockPopoverResize", () => {
     expect(result.current.handleProps.value).toBe(POPOVER_DEFAULT_HEIGHT);
   });
 
+  it("jumps End to the viewport ceiling as it is at keypress, not at render", () => {
+    const { result } = renderHook(() => useDockPopoverResize());
+    Object.defineProperty(window, "innerHeight", { value: 1400, configurable: true });
+    act(() => {
+      result.current.handleProps.onKeyDown({
+        key: "End",
+        preventDefault: vi.fn(),
+      } as unknown as React.KeyboardEvent);
+    });
+    expect(useDockStore.getState().popoverHeight).toBe(1400 * POPOVER_MAX_HEIGHT_RATIO);
+  });
+
   it("names the panel and leaves the reset hint to the shared handle", () => {
     const { result } = renderHook(() => useDockPopoverResize());
     expect(result.current.handleProps.label).toBe("Resize docked panel");

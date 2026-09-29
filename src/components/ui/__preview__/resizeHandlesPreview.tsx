@@ -15,6 +15,7 @@ import { DockPopoverResizeHandle } from "@/components/Layout/DockPopoverResizeHa
 import { TwoPaneSplitDivider, DIVIDER_WIDTH_PX } from "@/components/Terminal/TwoPaneSplitDivider";
 import { DevPreviewToolDrawerChrome } from "@/components/DevPreview/DevPreviewToolDrawerChrome";
 import { cn } from "@/lib/utils";
+import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 import "@/index.css";
 
 /**
@@ -44,10 +45,11 @@ function Frame({ children }: { children: React.ReactNode }) {
   return (
     <div
       data-preview-scene={scene}
-      // The dock caps itself at half its container, so it needs room to grow.
+      // The dock and the popovers cap themselves against their container and the
+      // viewport, so they need room to grow.
       className={cn(
         "relative m-6 w-[420px] overflow-hidden",
-        scene === "diagnostics" ? "h-[420px]" : "h-[240px]"
+        scene === "dock-popover" ? "h-[620px]" : scene === "diagnostics" ? "h-[420px]" : "h-[240px]"
       )}
     >
       {children}
@@ -57,6 +59,16 @@ function Frame({ children }: { children: React.ReactNode }) {
 
 function Assistant() {
   const [width, setWidth] = useState(HELP_PANEL_DEFAULT_WIDTH - 180);
+  const onKeyDown = useSplitterKeys({
+    growKey: "ArrowLeft",
+    value: width,
+    min: 120,
+    max: 400,
+    step: 10,
+    largeStep: 50,
+    onChange: setWidth,
+    onReset: () => setWidth(HELP_PANEL_DEFAULT_WIDTH),
+  });
   const [isResizing, setIsResizing] = useState(false);
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -82,7 +94,8 @@ function Assistant() {
       </div>
       <aside
         id="assistant-panel"
-        className="relative flex h-full shrink-0 flex-col border-l border-border-default bg-surface-canvas"
+        // The real panel clips at its border, like the wrapper that slides it.
+        className="relative flex h-full shrink-0 flex-col overflow-hidden border-l border-border-default bg-surface-canvas"
         style={{ width }}
       >
         <HelpPanelResizeHandle
@@ -91,7 +104,7 @@ function Assistant() {
           isVisible
           controlsId="assistant-panel"
           onMouseDown={onMouseDown}
-          onKeyDown={() => {}}
+          onKeyDown={onKeyDown}
           onReset={() => setWidth(HELP_PANEL_DEFAULT_WIDTH)}
         />
       </aside>
@@ -105,7 +118,7 @@ function DockPopover() {
     <div className="flex h-full flex-col justify-end bg-surface-grid p-2">
       <div
         className="relative w-full overflow-hidden rounded-[var(--radius-md)] border border-border-default bg-surface-panel-elevated"
-        style={{ height: Math.min(height, 200) * 0.9 }}
+        style={{ height }}
       >
         <DockPopoverResizeHandle handleProps={handleProps} isResizing={isResizing} />
         <div className="mt-3 px-3 text-xs text-text-secondary">Docked terminal</div>

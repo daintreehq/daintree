@@ -6,6 +6,7 @@ import type { SplitterGrowKey } from "@/hooks/useSplitterKeys";
 
 const PLACEMENTS: Array<{ edge: ResizeHandleEdge; growKey: SplitterGrowKey }> = [
   { edge: "left", growKey: "ArrowLeft" },
+  { edge: "left-inset", growKey: "ArrowLeft" },
   { edge: "right", growKey: "ArrowRight" },
   { edge: "top", growKey: "ArrowUp" },
   { edge: "inline", growKey: "ArrowUp" },

@@ -240,3 +240,17 @@ describe("Sidebar background context menu — workspace kind (#11499)", () => {
     }
   });
 });
+
+describe("Sidebar resize handle", () => {
+  it("straddles an edge the sidebar does not clip, so the whole 12px target survives", () => {
+    workspaceRoot.mockReturnValue(PLAIN_FOLDER);
+    renderSidebar();
+    const handle = screen.getByRole("separator", { name: /^Resize sidebar/ });
+    const aside = handle.parentElement!;
+    // A straddling handle hangs half outside its host; a host that hides overflow
+    // (or clips with no margin) cuts that half off.
+    expect(handle.className).toMatch(/(^|\s)-right-1\.5(\s|$)/);
+    expect(aside.className).not.toMatch(/(^|\s)overflow-(hidden|auto|scroll)(\s|$)/);
+    expect(aside.className).toMatch(/\[overflow-clip-margin:6px\]/);
+  });
+});

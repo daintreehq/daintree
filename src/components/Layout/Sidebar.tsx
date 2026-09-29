@@ -168,7 +168,10 @@ export function Sidebar({
           data-macro-focus={isMacroFocused ? "true" : undefined}
           className={cn(
             "sidebar-root",
-            "relative w-full h-full flex flex-col outline-hidden overflow-hidden",
+            // Clip, not hidden: the resize handle straddles the right edge, and a
+            // clip margin lets its outer half through to the wrapper's own 6px
+            // margin (#9864) instead of halving the 12px target.
+            "relative w-full h-full flex flex-col outline-hidden overflow-clip [overflow-clip-margin:6px]",
             "surface-chrome",
             "border-r border-divider",
             "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-border-default data-[macro-focus=true]:ring-inset",

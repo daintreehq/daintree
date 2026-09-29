@@ -12,7 +12,10 @@ interface HelpPanelResizeHandleProps {
   onReset: () => void;
 }
 
-/** The assistant's left-edge splitter: the shared `ResizeHandle`, straddling the panel's left border. */
+/**
+ * The assistant's left-edge splitter. Inset rather than straddling: the panel and the
+ * wrapper that slides it both clip at the left border, which would halve the target.
+ */
 export function HelpPanelResizeHandle({
   width,
   isResizing,
@@ -25,7 +28,7 @@ export function HelpPanelResizeHandle({
   return (
     <ResizeHandle
       growKey="ArrowLeft"
-      edge="left"
+      edge="left-inset"
       label="Resize Daintree Assistant panel"
       value={width}
       min={HELP_PANEL_MIN_WIDTH}

@@ -5,14 +5,16 @@ import { splitterKeyShortcuts, type SplitterGrowKey } from "@/hooks/useSplitterK
 /**
  * Where the handle sits relative to the pane it sizes. `left`/`right` straddle a
  * vertical edge and `top` lines the inside of a top edge, all as a 12px absolute
- * target. `inline` is in flow: a 12px row for a horizontal splitter, and for a
+ * target. `left-inset` lines the inside of a left edge whose host clips anything
+ * outside it, with the grip on the border so it still reads as the edge. `inline` is in flow: a 12px row for a horizontal splitter, and for a
  * vertical one a 6px track (the width layout math reserves between two panes)
  * whose hit area reaches 3px past each side, so the target is still 12px.
  */
-export type ResizeHandleEdge = "left" | "right" | "top" | "inline";
+export type ResizeHandleEdge = "left" | "left-inset" | "right" | "top" | "inline";
 
 const EDGE_CLASS: Record<Exclude<ResizeHandleEdge, "inline">, string> = {
   left: "absolute inset-y-0 -left-1.5 w-3",
+  "left-inset": "absolute inset-y-0 left-0 w-3 justify-start",
   right: "absolute inset-y-0 -right-1.5 w-3",
   top: "absolute inset-x-0 top-0 h-3",
 };

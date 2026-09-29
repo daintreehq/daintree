@@ -5,7 +5,7 @@ import {
   POPOVER_MIN_HEIGHT,
   POPOVER_MAX_HEIGHT_RATIO,
 } from "@/store/dockStore";
-import { useSplitterKeys } from "@/hooks/useSplitterKeys";
+import { resolveSplitterKey } from "@/hooks/useSplitterKeys";
 
 const RESIZE_STEP = 10;
 const RESIZE_STEP_LARGE = 50;
@@ -142,16 +142,25 @@ export function useDockPopoverResize(onCommit?: () => void): UseDockPopoverResiz
     commit(POPOVER_DEFAULT_HEIGHT);
   }, [commit]);
 
-  const handleKeyDown = useSplitterKeys({
-    growKey: "ArrowUp",
-    value: popoverHeight,
-    min: POPOVER_MIN_HEIGHT,
-    max: window.innerHeight * POPOVER_MAX_HEIGHT_RATIO,
-    step: RESIZE_STEP,
-    largeStep: RESIZE_STEP_LARGE,
-    onChange: commit,
-    onReset: handleReset,
-  });
+  // The ceiling is read at keypress, not render: the viewport can grow without
+  // re-rendering the popover, and a stale ceiling would pin End below the real one.
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const result = resolveSplitterKey(e, {
+        growKey: "ArrowUp",
+        value: popoverHeight,
+        min: POPOVER_MIN_HEIGHT,
+        max: window.innerHeight * POPOVER_MAX_HEIGHT_RATIO,
+        step: RESIZE_STEP,
+        largeStep: RESIZE_STEP_LARGE,
+      });
+      if (!result) return;
+      e.preventDefault();
+      if (result.kind === "reset") handleReset();
+      else commit(result.value);
+    },
+    [popoverHeight, commit, handleReset]
+  );
 
   const height = draftHeight ?? popoverHeight;
 
