@@ -10040,6 +10040,129 @@ describe("session-scoped resource ownership (#11909)", () => {
       );
     });
 
+    // #12980 — a pane refused by a tool that takes a hand-over is told how the
+    // user grants one, in words that never depend on the refused id.
+    describe("the hand-over hint on a refusal (#12980)", () => {
+      const HINT = "right-click it, choose 'Hand to orchestrator', and select this agent's pane";
+      const GRANT_PATH = { grantPath: "context-menu:hand-to-orchestrator" };
+
+      function refusalPayload(result: { content: unknown }) {
+        return payloadOf<{ code: string; message: string; details?: unknown }>(result);
+      }
+
+      it.each([
+        ["terminal.sendCommandOwned", { command: "1" }],
+        ["terminal.interruptOwned", {}],
+        ["terminal.injectOwned", {}],
+        ["terminal.revealOwned", {}],
+        ["terminal.readLastMessageOwned", {}],
+      ])("names the grant path when %s refuses a pane", async (name, extra) => {
+        const store = makeStore();
+        const dispatchAction = listingDispatch();
+        const server = orchestratorSession(store, "s-orch", dispatchAction);
+
+        const result = await callTool(server, {
+          name,
+          arguments: { terminalId: "terminal-users-own", ...extra },
+        });
+
+        expect(result.isError).toBe(true);
+        const payload = refusalPayload(result);
+        expect(payload.code).toBe("RESOURCE_NOT_OWNED");
+        expect(payload.message).toContain(HINT);
+        expect(payload.details).toEqual(GRANT_PATH);
+        expect(dispatchAction).not.toHaveBeenCalled();
+      });
+
+      it("reads byte-for-byte the same for an unknown id, another pane's and another session's", async () => {
+        const store = makeStore();
+        const dispatchAction = listingDispatch();
+        const server = orchestratorSession(store, "s-orch", dispatchAction);
+        orchestratorSession(store, "s-other", dispatchAction, "principal-other");
+        seedLiveSession(store, "s-api", "full");
+        // One id throughout: the message names it, so only its state may vary.
+        const refusalFor = async () =>
+          errorText(
+            await callTool(server, {
+              name: "terminal.sendCommandOwned",
+              arguments: { terminalId: "terminal-x", command: "1" },
+            })
+          );
+
+        const unknown = await refusalFor();
+        handOver(store, "terminal-x", "principal-other");
+        const otherPanes = await refusalFor();
+        store.terminalAdoption.revokePrincipal("principal-other");
+        store.resourceOwnership.record("s-api", [{ kind: "terminal", id: "terminal-x" }]);
+        const otherSessions = await refusalFor();
+
+        expect(otherPanes).toBe(unknown);
+        expect(otherSessions).toBe(unknown);
+        expect(unknown).toContain("context-menu:hand-to-orchestrator");
+      });
+
+      it("is not given to a session no pane bearer bound", async () => {
+        const store = makeStore();
+        seedLiveSession(store, "s-api", "full");
+        store.sessionOriginMap.set("s-api", "external");
+        const server = createSessionServer(
+          "s-api",
+          fakeDeps({
+            sessionStore: store,
+            dispatchAction: listingDispatch(),
+            requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+            getCachedManifest: vi.fn(() => ownedManifest()),
+          })
+        );
+
+        const payload = refusalPayload(
+          await callTool(server, {
+            name: "terminal.sendCommandOwned",
+            arguments: { terminalId: "terminal-users-own", command: "1" },
+          })
+        );
+
+        expect(payload.code).toBe("RESOURCE_NOT_OWNED");
+        expect(payload.message).not.toContain("Hand to orchestrator");
+        expect(payload.details).toBeUndefined();
+      });
+
+      it.each([
+        ["terminal.closeOwned", { terminalId: "terminal-users-own" }],
+        ["worktree.deleteOwned", { worktreeId: "/repo/worktrees/users-own" }],
+      ])("is not given by %s, which a hand-over never satisfies", async (name, args) => {
+        const store = makeStore();
+        const server = orchestratorSession(store, "s-orch", listingDispatch());
+
+        const payload = refusalPayload(await callTool(server, { name, arguments: args }));
+
+        expect(payload.code).toBe("RESOURCE_NOT_OWNED");
+        expect(payload.message).not.toContain("Hand to orchestrator");
+        expect(payload.details).toBeUndefined();
+      });
+
+      it.each([
+        ["help", "terminal.interruptOwned"],
+        ["help", "terminal.readLastMessageOwned"],
+        ["assistant-pane", "terminal.interruptOwned"],
+      ] as const)(
+        "is not given to Daintree's own assistant (%s origin, %s)",
+        async (origin, name) => {
+          const store = makeStore();
+          const server = orchestratorSession(store, "s-help", listingDispatch());
+          store.sessionOriginMap.set("s-help", origin);
+
+          const payload = refusalPayload(
+            await callTool(server, { name, arguments: { terminalId: "terminal-users-own" } })
+          );
+
+          expect(payload.code).toBe("RESOURCE_NOT_OWNED");
+          expect(payload.message).not.toContain("Hand to orchestrator");
+          expect(payload.details).toBeUndefined();
+        }
+      );
+    });
+
     it("lists handed-over terminals as ones the pane can drive", async () => {
       const store = makeStore();
       const server = orchestratorSession(store, "s-orch", listingDispatch());

@@ -1680,7 +1680,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Write the active worktree's prepared context into a terminal this connection created or was handed, to give its agent a large codebase context. Any other panel is refused. Target an idle terminal.",
+      "Write the active worktree's prepared context into a terminal this connection created or was handed (right-click > Hand to orchestrator), to give its agent a large codebase context. Any other panel is refused. Target an idle terminal.",
     enabled: true,
     id: "terminal.injectOwned",
     inputSchema: {
@@ -1707,7 +1707,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Interrupt the turn an agent is running in a panel this connection created or was handed, keeping the panel and conversation. Sends cancel keystrokes, not prompt text. An idle agent, or one binding a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
+      "Interrupt the turn an agent is running in a panel this connection created or was handed (right-click > Hand to orchestrator), keeping the panel and conversation. Sends cancel keystrokes, not prompt text. An idle agent, or one binding a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
     enabled: true,
     id: "terminal.interruptOwned",
     inputSchema: {
@@ -1925,7 +1925,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Read an agent's last transcript reply and unanswered tool calls, e.g. a question and its options. Agents this connection launched or was handed; Daintree's assistant: any in its project. Claude Code only. Not proof the agent is waiting; permission prompts are screen-only.",
+      "Read an agent's last transcript reply and unanswered tool calls, e.g. a question and its options. Agents this connection launched or was handed (right-click > Hand to orchestrator); Daintree's assistant: any in its project. Claude Code only. Not proof the agent is waiting; permission prompts are screen-only.",
     enabled: true,
     examples: [
       {
@@ -2114,7 +2114,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Bring the user to a panel this session created or was handed, switching workspace and raising the window if needed. No other panel can be revealed. Use it when the user asked to be taken there, not to report progress.",
+      "Bring the user to a panel this session created or was handed (right-click > Hand to orchestrator), switching workspace and raising the window if needed. No other panel can be revealed. Use it when the user asked to be taken there, not to report progress.",
     enabled: true,
     id: "terminal.revealOwned",
     inputSchema: {
@@ -2140,7 +2140,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Queue text as one submission to a terminal this connection created or was handed: a shell runs it, an agent pane takes it as its next prompt. Any other panel is refused. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check.",
+      "Queue text as one submission to a terminal this connection created or was handed (right-click > Hand to orchestrator): a shell runs it, an agent pane takes it as its next prompt. Any other panel is refused. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check.",
     enabled: true,
     id: "terminal.sendCommandOwned",
     inputSchema: {

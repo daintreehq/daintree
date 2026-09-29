@@ -803,7 +803,7 @@ export function registerTerminalQueryActions(
     id: "terminal.readLastMessageOwned",
     title: "Read owned agent's last message",
     description:
-      "Read an agent's last transcript reply and unanswered tool calls, e.g. a question and its options. Agents this connection launched or was handed; Daintree's assistant: any in its project. Claude Code only. Not proof the agent is waiting; permission prompts are screen-only.",
+      "Read an agent's last transcript reply and unanswered tool calls, e.g. a question and its options. Agents this connection launched or was handed (right-click > Hand to orchestrator); Daintree's assistant: any in its project. Claude Code only. Not proof the agent is waiting; permission prompts are screen-only.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -991,7 +991,7 @@ export function registerTerminalQueryActions(
     id: "terminal.sendCommandOwned",
     title: "Submit text to owned terminal",
     description:
-      "Queue text as one submission to a terminal this connection created or was handed: a shell runs it, an agent pane takes it as its next prompt. Any other panel is refused. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check.",
+      "Queue text as one submission to a terminal this connection created or was handed (right-click > Hand to orchestrator): a shell runs it, an agent pane takes it as its next prompt. Any other panel is refused. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check.",
     category: "terminal",
     kind: "command",
     danger: "safe",

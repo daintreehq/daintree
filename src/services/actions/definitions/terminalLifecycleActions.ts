@@ -296,7 +296,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.revealOwned",
     title: "Reveal owned terminal",
     description:
-      "Bring the user to a panel this session created or was handed, switching workspace and raising the window if needed. No other panel can be revealed. Use it when the user asked to be taken there, not to report progress.",
+      "Bring the user to a panel this session created or was handed (right-click > Hand to orchestrator), switching workspace and raising the window if needed. No other panel can be revealed. Use it when the user asked to be taken there, not to report progress.",
     category: "terminal",
     kind: "command",
     // Reversible navigation: nothing is destroyed and the user can switch back.

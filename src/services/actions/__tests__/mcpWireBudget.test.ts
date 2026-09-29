@@ -530,7 +530,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 53_100 → 53_150: `agent.launch`'s `reply` is nullable and always emitted,
   // like its other fields, so a strict client never sees a missing key
   // (measured at 53_119 B).
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 53_150;
+  // 53_150 → 53_300 for #12980, measured at 53_292 B: the external hand-over
+  // tools name the context-menu path a user hands a terminal over by.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 53_300;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -684,7 +686,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 113_400 → 113_900 for #12882's `diagnostics.openReview` on core, measured
   // at 113_882 B: its description and the `sections` field note that an
   // unlisted section starts unchecked, which a caller guessing keys needs.
-  const MAX_COHORT_PAYLOAD_BYTES = 113_900;
+  // 113_900 → 114_150 for #12980, measured at 114_105 B: the six hand-over
+  // tools name the context-menu path a user hands a terminal over by.
+  const MAX_COHORT_PAYLOAD_BYTES = 114_150;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

@@ -166,7 +166,7 @@ export function registerTerminalInputActions(
     id: "terminal.injectOwned",
     title: "Inject context to owned terminal",
     description:
-      "Write the active worktree's prepared context into a terminal this connection created or was handed, to give its agent a large codebase context. Any other panel is refused. Target an idle terminal.",
+      "Write the active worktree's prepared context into a terminal this connection created or was handed (right-click > Hand to orchestrator), to give its agent a large codebase context. Any other panel is refused. Target an idle terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -327,7 +327,7 @@ export function registerTerminalInputActions(
     id: "terminal.interruptOwned",
     title: "Interrupt owned agent",
     description:
-      "Interrupt the turn an agent is running in a panel this connection created or was handed, keeping the panel and conversation. Sends cancel keystrokes, not prompt text. An idle agent, or one binding a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
+      "Interrupt the turn an agent is running in a panel this connection created or was handed (right-click > Hand to orchestrator), keeping the panel and conversation. Sends cancel keystrokes, not prompt text. An idle agent, or one binding a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -418,7 +418,7 @@ export function registerTerminalInputActions(
     id: "terminal.sendKeysOwned",
     title: "Press keys in owned terminal",
     description:
-      "Answer a CLI's own dialog (trust, permission, a list) by option label or named keys, in a terminal this connection created or was handed.",
+      "Answer a CLI's own dialog (trust, permission, a list) by option label or named keys, in a terminal this connection created or was handed (right-click > Hand to orchestrator).",
     category: "terminal",
     kind: "command",
     danger: "safe",
