@@ -40,8 +40,10 @@ function WorktreeListItem({
           // Was a hand-rolled copy of the shared row and drifted out of step
           // with it; takes the selected treatment from the family now.
           PALETTE_ROW_CLASS,
-          "group w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex flex-col gap-0.5",
-          "bg-surface-canvas"
+          // No resting fill: a backplate on every row read as stacked cards, and
+          // the cursor had to out-shout its neighbours instead of being the only
+          // lit row. Same shape as every full-screen palette's two-line row.
+          "group w-full text-left px-3 py-2 rounded-[var(--radius-md)] flex flex-col gap-0.5"
         )}
         // The cursor is aria-selected; the worktree you are in is aria-current
         // and says "Current" in words. A check is the mark for a chosen value,
@@ -73,7 +75,7 @@ function WorktreeListItem({
         </div>
         <div
           ref={ref}
-          className="text-2xs text-text-secondary truncate transition-colors group-aria-selected:text-text-primary"
+          className="font-mono text-2xs text-text-secondary truncate transition-colors group-aria-selected:text-text-primary"
         >
           {worktree.path}
         </div>

@@ -166,6 +166,7 @@ The language, in full:
 - **One cursor** — the pointer and the arrow keys move the same highlight. Rows call the palette's hover callback on `pointermove` (never `pointerenter`, so rows scrolling under a resting pointer don't steal it) and carry no `hover:bg-*` of their own. Two lit rows is a defect.
 - **Committed value inside a picker** — the current project, the settings page a subject picker is on, the saved theme — is a check mark or a label with `aria-current`, never a competing fill, because the fill belongs to the cursor there.
 - **Selected in a list-detail or navigation list** — the selected record, or the page a nav list is showing, takes the highlight fill itself, and hover is a lighter step in the same direction (`overlay-subtle` on dark; on light, the settings sidebar's white lift and a half-strength white hover). The pointer does not move that selection — pointing at a settings page must not open it. Where the list is keyboard-navigable (the settings nav is a roving-focus tablist with manual activation), keyboard focus is its own focus ring on top, never a second fill. No accent tint and no edge marker — the settings nav's sliding accent bar and its per-theme accent-tinted fills were removed for this.
+- **No other mark lights a row.** A transient "you arrived here" flash (a deep link, a scroll-to) selects its target and lets the highlight do the work; a separate bordered fill outlives the selection when it moves and leaves two rows lit.
 - **Destructive** — the highlighted fill swaps to `status-danger/10` with danger text; that is a semantic, not a second selection mechanism.
 - **DOM focus** — rows that hold real focus (Radix items) add their inset `selection-outline` ring on keyboard focus, as every focused control does.
 - **Increased contrast / forced colours** — `prefers-contrast: more` outlines the highlighted row in `selection-outline`; `forced-colors` outlines it in `Highlight`. Both live in `src/index.css`, in their separate blocks.
@@ -175,6 +176,15 @@ The language, in full:
 A leading rail is not part of this language anywhere. It was removed from highlighted rows because it made the pointer and the keyboard draw different rows differently and read as heavier than every shipping palette's fill-only highlight (VS Code, Linear, Raycast, macOS menus, Radix).
 
 `palette-row` is a hook for the two high-contrast blocks, not styling. The forced-colours outline is deliberately an outline and not a `SelectedItem` fill: these rows carry independently surfaced children (theme "Active" badges, action category chips, panel-kind icons with inline colour), and a fill would leave them painting on a pair with no contrast guarantee. The marker scopes those rules to palette rows, since `[role="option"]` is also used by the file pane, the settings selectors and the agent/forge dropdowns. Forge and commit rows, which spend `aria-selected` on membership, key the same fill off `data-active` and the same outlines off `.forge-row`.
+
+**Row shape.** The highlight is shared; the box is written at each site, and it comes in two families. `src/config/__tests__/paletteRowShape.contract.test.ts` pins both, and bans a card radius (`radius-lg` and up), a resting `bg-*` fill and a border colour on any row composing `PALETTE_ROW_CLASS`:
+
+| Family | Surfaces | Radius | Inset | Height |
+| --- | --- | --- | --- | --- |
+| Full-screen palette | `SearchablePalette` / `AppPaletteDialog` rows: action palette, quick switcher, worktree palette, quick create, new terminal, theme, prompt history, resume sessions | `rounded-[var(--radius-md)]` | `px-3` | `py-1.5` single line, `py-2` two lines |
+| Popover picker | Anchored dropdowns whose rows sit beside menu rows: branch, agent and recipe pickers, subject picker, move-to-worktree, preset selector, env var editor, dock launch popover, project switcher | `rounded-[var(--radius-sm)]`, the menu row's radius | `px-2` | `py-1.5` (the switcher's dense scratch browse rows keep `py-1`) |
+
+No row carries a resting fill: a backplate on every row reads as stacked cards, and the cursor then has to out-shout its neighbours instead of being the only lit row. A row whose second line is a path or a branch sets both in `font-mono`, so the two identifiers read as the same kind of thing.
 
 ---
 

@@ -198,6 +198,12 @@ Copy follows `.claude/rules/user-signals.md`; these are the rules the consistenc
 
 `src/components/ui/__tests__/wording.contract.test.ts` scans `src`, `shared` and the main-process services for three-dot ellipses in copy (log calls excluded), local `plural*` helpers, the hand-rolled singular/plural conditional, Title Case menu group headings, and "Open in browser" inside the in-app browser surfaces.
 
+## Palette and picker rows
+
+A highlighted-row list is one of two shapes: a full-screen palette row (`radius-md`, `px-3`, `py-1.5` or `py-2`) or a popover picker row that matches the menu row beside it (`radius-sm`, `px-2 py-1.5`). Neither has a resting fill, and the highlight is always `PALETTE_ROW_CLASS`. The table, and which surface belongs to which family, is under "Highlighted Row" in `interaction-state-recipes.md`; `src/config/__tests__/paletteRowShape.contract.test.ts` enforces it. Dividers inside these surfaces use `border-divider`, never an alpha of `daintree-border` or a `border-[var(...)]` spelling.
+
+Keyboard hints name the key the platform has. A footer or hint string that cannot use `KbdChord` builds its modifier with `formatChordText("Cmd", isMac)` rather than a literal `⌘`, and copy that names a rebindable action's shortcut resolves it (`useEffectiveCombo`) or leaves it out.
+
 ## Opting out
 
 Every rule takes the same escape hatch, with a reason:
