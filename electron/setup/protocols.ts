@@ -1303,14 +1303,15 @@ type PluginNotFoundStage =
   | "realpath"
   | "outside-root"
   | "open"
-  | "not-a-file";
+  | "not-a-file"
+  | "media";
 
-function pluginNotFound(
+function logPluginNotFound(
   stage: PluginNotFoundStage,
   authority: string,
   pathname: string,
   cause?: unknown
-): Response {
+): void {
   const errno = cause as NodeJS.ErrnoException | undefined;
   logWarn("plugin.protocol.not-found", {
     stage,
@@ -1320,6 +1321,15 @@ function pluginNotFound(
     ...(errno?.code ? { code: errno.code } : {}),
     ...(errno?.syscall !== undefined ? { syscall: errno.syscall } : {}),
   });
+}
+
+function pluginNotFound(
+  stage: PluginNotFoundStage,
+  authority: string,
+  pathname: string,
+  cause?: unknown
+): Response {
+  logPluginNotFound(stage, authority, pathname, cause);
   return new Response("Not Found", {
     status: 404,
     headers: buildPluginErrorHeaders(),
@@ -1488,6 +1498,8 @@ export function createPluginProtocolHandler(
       // contained path with the same O_NOFOLLOW discipline.
       if (isMediaMimeType(mimeType)) {
         const streamed = await streamContainedMediaFile(candidatePath, mimeType, request);
+        // The streamer reopens the file, so it can still miss after the checks above.
+        if (streamed.status === 404) logPluginNotFound("media", authority, url.pathname);
         // Keep the trusted-document read a view's own fetch() of its bundled
         // media had before narration was streamed (WebAudio, blob playback).
         const mediaCorsOrigin = trustedAppCorsOrigin(request);

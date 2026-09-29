@@ -5501,7 +5501,16 @@ export class PluginService {
     dir: string;
     dirName: string;
     manifest: Readonly<PluginManifest>;
+    isCurrent?: () => boolean;
   }): Promise<boolean> {
+    // `loadPlugin` waits on the same gate, but a project load can sit there for
+    // seconds on a relaunch (#12996) — long enough for its project to close or
+    // lose trust. Waiting here first lets it stop before it publishes or
+    // activates, which the controller's after-the-fact unload cannot undo.
+    if (this.whenProtocolReady) {
+      await this.whenProtocolReady();
+      if (this.disposed || args.isCurrent?.() === false) return false;
+    }
     const instanceKey = makeProjectPluginInstanceKey(args.projectId, args.manifest.name);
     // Re-derive the parent from the realpath-resolved directory discovery
     // returned, so the load reads through the same resolved path the symlink

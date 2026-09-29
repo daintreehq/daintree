@@ -31,6 +31,12 @@ export interface ProjectPluginControllerDeps {
     dir: string;
     dirName: string;
     manifest: Readonly<PluginManifest>;
+    /**
+     * False once a close or revoke has overtaken this load. Consulted after
+     * any wait that precedes publication, so a stale load stops before it
+     * publishes or activates anything rather than being undone afterwards.
+     */
+    isCurrent?: () => boolean;
   }) => Promise<boolean>;
   /**
    * Full unload cascade + contribution-scope clear + authority invalidation.
@@ -973,6 +979,7 @@ export class ProjectPluginController {
         dir: d.dir,
         dirName: d.dirName,
         manifest: d.manifest,
+        isCurrent: () => this.stillCurrent(projectId, entry, generation),
       });
       if (!ok) return;
       if (!this.stillCurrent(projectId, entry, generation)) {

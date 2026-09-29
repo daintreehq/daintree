@@ -1374,6 +1374,34 @@ describe("project plugin load errors", () => {
     return bridge as unknown as { deps: { onActivationResult?: (r: unknown) => void } };
   }
 
+  /**
+   * A service whose loads wait on a protocol gate the test controls, the way
+   * the singleton waits on `whenPluginDirResolverLive()` (#12996). `reached`
+   * settles the first time a load arrives at the gate.
+   */
+  function gatedService(): {
+    service: PluginService;
+    reached: Promise<void>;
+    release: () => void;
+  } {
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let arrive!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      arrive = resolve;
+    });
+    const service = new PluginService(tmpDir, "0.0.0", {
+      whenProtocolReady: () => {
+        arrive();
+        return ready;
+      },
+    });
+    openedServices.push(service);
+    return { service, reached, release };
+  }
+
   it("publishes no view URL before the plugin:// resolver is live (#12996)", async () => {
     // A background-restored project view reaches `onProjectOpened` through
     // `notifyProjectPluginsOpened`, which never waits on the deferred
@@ -1381,15 +1409,8 @@ describe("project plugin load errors", () => {
     // in that window is imported against the placeholder, 404s, and stays
     // failed for that specifier. The load must hold until the resolver is live.
     const projectRoot = await writeProjectPlugin("export function activate() {}");
-    let releaseProtocol!: () => void;
-    const protocolReady = new Promise<void>((resolve) => {
-      releaseProtocol = resolve;
-    });
+    const { service, reached, release } = gatedService();
     let protocolLive = false;
-    const service = new PluginService(tmpDir, "0.0.0", {
-      whenProtocolReady: () => protocolReady,
-    });
-    openedServices.push(service);
     const published: Array<{ id: string; componentPath: string; live: boolean }> = [];
     vi.mocked(registerPanelKind).mockImplementation((config) => {
       if (config.componentPath) {
@@ -1397,20 +1418,19 @@ describe("project plugin load errors", () => {
       }
     });
 
+    // Fire-and-forget, the way the restore path calls it — nothing from the
+    // deferred startup queue has run.
+    const opening = service.onProjectOpened(PROJECT_ID, projectRoot);
     try {
-      // Fire-and-forget, the way the restore path calls it — nothing from the
-      // deferred startup queue has run.
-      const opening = service.onProjectOpened(PROJECT_ID, projectRoot);
-      // Long enough for discovery, trust and the directory scan to reach the
-      // gate; a single microtask would prove nothing about a disk-bound load.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await reached;
       expect(published).toEqual([]);
 
       protocolLive = true;
-      releaseProtocol();
+      release();
       await opening;
     } finally {
-      releaseProtocol();
+      release();
+      await opening.catch(() => {});
       vi.mocked(registerPanelKind).mockReset();
     }
 
@@ -1422,6 +1442,32 @@ describe("project plugin load errors", () => {
     expect(service.getPluginRootByAuthority(new URL(panel!.componentPath).hostname)).toBe(
       pluginDir
     );
+  });
+
+  it("drops a gated project load whose project closed while it waited (#12996)", async () => {
+    // The controller's own staleness check runs only after a load returns, by
+    // which point the plugin would already be published and, for a startup
+    // plugin, activated — and unloading cannot take an activation back.
+    const projectRoot = await writeProjectPlugin("export function activate() {}");
+    const { service, reached, release } = gatedService();
+    const opening = service.onProjectOpened(PROJECT_ID, projectRoot);
+    let closing: Promise<void> | undefined;
+    try {
+      await reached;
+      // Not awaited: the close invalidates in-flight work synchronously, but its
+      // teardown queues behind the open, which is parked at the gate.
+      closing = service.onProjectClosed(PROJECT_ID);
+      release();
+      await opening;
+      await closing;
+    } finally {
+      release();
+      await opening.catch(() => {});
+      await closing?.catch(() => {});
+    }
+
+    expect(vi.mocked(registerPanelKind)).not.toHaveBeenCalled();
+    expect(service.getPluginRootByAuthority(INSTANCE_KEY)).toBeUndefined();
   });
 
   it("returns the real cause from activatePluginForView instead of a clean result", async () => {
