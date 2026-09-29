@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventBuffer } from "../EventBuffer.js";
 import { events } from "../events.js";
+import type { WorktreeState } from "../../../shared/types/index.js";
 
 describe("EventBuffer", () => {
   let buffer: EventBuffer;
@@ -16,6 +17,25 @@ describe("EventBuffer", () => {
 
   afterEach(() => {
     buffer.stop();
+  });
+
+  describe("by-reference snapshot events", () => {
+    it("hands readers isolated copies of sys:worktree:update payloads", () => {
+      const snapshot = {
+        worktreeId: "wt-1",
+        branch: "a",
+        timestamp: 1,
+      } as unknown as WorktreeState;
+      events.emit("sys:worktree:update", snapshot);
+
+      const first = buffer.getAll()[0];
+      expect(first.payload).toEqual(snapshot);
+      expect(first.payload).not.toBe(snapshot);
+      first.payload.branch = "mutated";
+
+      expect(buffer.getAll()[0].payload.branch).toBe("a");
+      expect(buffer.getFiltered({ worktreeId: "wt-1" })[0].payload).not.toBe(snapshot);
+    });
   });
 
   describe("basic operations", () => {
