@@ -11362,20 +11362,81 @@ describe("assistant skip preference (#12874)", () => {
     help.sessionStore.grantCache.dispose();
   });
 
-  it("does not stamp a close that would never have asked", async () => {
+  it("does not stamp a close of the session's own idle panel, which would never have asked", async () => {
     const help = skipServer({
       origin: "help",
       skipped: true,
       entries: [makeManifestEntry("terminal.close")],
       extraDeps: { readTerminalAgentState: vi.fn(async () => null) },
     });
+    help.sessionStore.resourceOwnership.record("s", [{ kind: "terminal", id: "t-own" }]);
     await help.server.connect(makeMockTransport());
 
-    await callTool(help.server, { name: "terminal.close", arguments: {} });
+    await callTool(help.server, { name: "terminal.close", arguments: { terminalId: "t-own" } });
 
     expect(help.dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([false]);
     expect(lastAudit(help.appendAuditRecord).authorization).toBeUndefined();
     help.sessionStore.grantCache.dispose();
+  });
+
+  it("stamps only the items of a mixed closeMany that would have asked", async () => {
+    const requestCloseApproval = vi.fn();
+    const help = skipServer({
+      origin: "help",
+      skipped: true,
+      entries: [makeManifestEntry("terminal.close"), makeManifestEntry("terminal.closeMany")],
+      extraDeps: {
+        requestCloseApproval,
+        readTerminalAgentState: vi.fn(async () => null),
+      },
+    });
+    help.sessionStore.resourceOwnership.record("s", [{ kind: "terminal", id: "t-own" }]);
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, {
+      name: "terminal.closeMany",
+      arguments: { terminalIds: ["t-own", "t-user"] },
+    });
+
+    expect(requestCloseApproval).not.toHaveBeenCalled();
+    expect(help.dispatchAction.mock.calls.map((c) => [c[1], ...c.slice(2)])).toEqual([
+      [{ terminalId: "t-own" }, false],
+      [{ terminalId: "t-user" }, true, "skip-preference"],
+    ]);
+    expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "terminal.closeMany", danger: false })
+    );
+    for (const call of help.notifyToolCallStarted.mock.calls) {
+      expect(call[0]).toMatchObject({ danger: false });
+    }
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("still asks before an assistant-pane session's closeMany, whatever the preference says", async () => {
+    const requestCloseApproval = vi.fn().mockResolvedValue({
+      result: { ok: false, error: { code: "USER_REJECTED", message: "declined" } },
+      confirmationDecision: "rejected",
+    });
+    const pane = skipServer({
+      origin: "assistant-pane",
+      skipped: true,
+      entries: [makeManifestEntry("terminal.close"), makeManifestEntry("terminal.closeMany")],
+      extraDeps: {
+        requestCloseApproval,
+        readTerminalAgentState: vi.fn(async () => null),
+      },
+    });
+    await pane.server.connect(makeMockTransport());
+
+    await callTool(pane.server, {
+      name: "terminal.closeMany",
+      arguments: { terminalIds: ["t-user"] },
+    });
+
+    expect(pane.readAssistantConfirmationsSkipped).not.toHaveBeenCalled();
+    expect(requestCloseApproval).toHaveBeenCalledTimes(1);
+    expect(pane.dispatchAction).not.toHaveBeenCalled();
+    pane.sessionStore.grantCache.dispose();
   });
 
   it("still asks before a protected close while the preference resolves to ask", async () => {

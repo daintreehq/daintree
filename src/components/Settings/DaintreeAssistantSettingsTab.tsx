@@ -309,11 +309,10 @@ const tierBoundsNewSessions = (tier: HelpAssistantTier, confirmationsSkipped: bo
       : "Actions that need confirmation still open Daintree's own prompt unless an automation grant covers them."
   }`;
 
-const daintreeConfirmationOptions = (globalSkipPermissions: boolean) => [
-  {
-    value: "inherit",
-    label: `Follow Skip permission prompts (currently: ${globalSkipPermissions ? "on" : "off"})`,
-  },
+// The live value lives in the row's description, where the select's narrow
+// rail cannot clip it.
+const DAINTREE_CONFIRMATION_OPTIONS = [
+  { value: "inherit", label: "Follow Skip permission prompts" },
   { value: "always-ask", label: "Always ask" },
   { value: "never-ask", label: "Never ask" },
 ];
@@ -1320,7 +1319,7 @@ export function DaintreeAssistantSettingsTab() {
             }
             value={settings.daintreeConfirmations}
             onValueChange={setDaintreeConfirmations}
-            options={daintreeConfirmationOptions(globalSkipPermissions)}
+            options={DAINTREE_CONFIRMATION_OPTIONS}
             disabled={settingsUnavailable}
             isModified={settings.daintreeConfirmations !== DEFAULT_SETTINGS.daintreeConfirmations}
             onReset={() => setDaintreeConfirmations(DEFAULT_SETTINGS.daintreeConfirmations)}

@@ -82,10 +82,10 @@ describe("buildConfirmationsAddendum (#12874)", () => {
     expect(note).toContain("Refusals still apply");
   });
 
-  it("covers closes and bulk close/kill without dropping the close-only-what-was-asked guidance (#12989)", () => {
+  it("covers protected and bulk closes without dropping the close-only-what-was-asked guidance (#12989)", () => {
     const note = buildConfirmationsAddendum();
     expect(note).toContain("closing a panel you didn't open");
-    expect(note).toContain("closing or killing terminals in bulk");
+    expect(note).toContain("closing panels in bulk");
     expect(note).toContain("close and remove only what the user asked for");
     expect(note).toContain("a tool outside your tool set");
   });
