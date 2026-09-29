@@ -68,6 +68,18 @@ describe("surface header contract", () => {
     expect(spelled).toEqual(["src/components/ui/SurfaceHeader.tsx"]);
   });
 
+  it("no compact header recolours its divider with an arbitrary border utility", () => {
+    // The frame's `.border-divider` is a custom rule in index.css that outranks
+    // `border-b-[…]`, so an arbitrary divider colour never paints. The lifted
+    // divider is spelled `border-overlay`, the matching custom rule.
+    const offenders = [
+      ...COMPACT_HEADER_FILES,
+      "src/components/DragDrop/GridPlaceholder.tsx",
+      "src/components/DragDrop/TerminalDragPreview.tsx",
+    ].filter((rel) => /border-b-\[var\(--border-/.test(read(rel)));
+    expect(offenders).toEqual([]);
+  });
+
   it("the assistant header lifts with the grid pane's token, not surface-highlight", () => {
     const src = read("src/components/HelpPanel/HelpPanelHeader.tsx");
     expect(src).toContain("SURFACE_HEADER_FOCUS_LIFT_CLASS");

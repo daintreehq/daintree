@@ -90,11 +90,13 @@ export function HelpPanelHeader({
         // The same lift a focused grid pane's title bar takes, so the assistant
         // and the pane beside it read as one family when either has the
         // keyboard. The divider steps up to `--border-overlay` to match the
-        // `.terminal-selected` header rule in index.css. Scoped to the header
+        // `.terminal-selected` header rule in index.css — through the
+        // `border-overlay` class, because the frame's `.border-divider` is a
+        // custom rule that outranks an arbitrary `border-b-[…]` colour. Scoped to the header
         // (not the aside) so the launching skeleton, the empty state and any
         // no-terminal content stay on `bg-surface-canvas`. Neutral lift, no
         // accent, per the single-anchor-per-region rule.
-        isFocused && [SURFACE_HEADER_FOCUS_LIFT_CLASS, "border-b-[var(--border-overlay)]"]
+        isFocused && [SURFACE_HEADER_FOCUS_LIFT_CLASS, "border-overlay"]
       )}
     >
       <div className="flex items-center min-w-0 flex-1">

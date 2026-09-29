@@ -58,7 +58,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
           className={cn(
             surfaceHeaderVariants({ density: "compact" }),
             SURFACE_HEADER_FOCUS_LIFT_CLASS,
-            "justify-start gap-2 border-b-[var(--border-overlay)] text-xs",
+            "justify-start gap-2 border-overlay text-xs",
             // Clear the badge so it never covers the state glyph.
             isGroupDrag && "pr-7"
           )}

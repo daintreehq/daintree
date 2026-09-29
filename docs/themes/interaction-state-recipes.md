@@ -267,7 +267,7 @@ import { SURFACE_HEADER_FOCUS_LIFT_CLASS } from "@/components/ui/SurfaceHeader";
 <SurfaceHeader density="compact" className={cn(isFocused && SURFACE_HEADER_FOCUS_LIFT_CLASS)} />;
 ```
 
-**Usage:** Import the constant; never respell the string, and never reach for `surface-highlight` (the assistant did, and read as a different family from the pane beside it). The divider under a lifted bar steps up to `--border-overlay`, which `index.css` already does for `.terminal-selected` headers and the assistant does in its own class list. The fill stays on the bar, not the whole surface, so skeletons and empty states below keep their own background. The full pane-chrome contract (height, inset, status strip) is in [component-contract.md](./component-contract.md#pane-chrome).
+**Usage:** Import the constant; never respell the string, and never reach for `surface-highlight` (the assistant did, and read as a different family from the pane beside it). The divider under a lifted bar steps up to `--border-overlay`, which `index.css` already does for `.terminal-selected` headers and the assistant does in its own class list. Spell it `border-overlay`, never `border-b-[var(--border-overlay)]`: the frame carries `.border-divider`, a custom rule in `index.css` that outranks an arbitrary border colour utility, so the arbitrary one silently never paints. The fill stays on the bar, not the whole surface, so skeletons and empty states below keep their own background. The full pane-chrome contract (height, inset, status strip) is in [component-contract.md](./component-contract.md#pane-chrome).
 
 ---
 

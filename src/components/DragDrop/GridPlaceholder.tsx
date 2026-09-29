@@ -42,7 +42,7 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
         className={cn(
           surfaceHeaderVariants({ density: "compact" }),
           SURFACE_HEADER_FOCUS_LIFT_CLASS,
-          "justify-start gap-2 border-b-[var(--border-overlay)] text-xs"
+          "justify-start gap-2 border-overlay text-xs"
         )}
       >
         {activeTerminal && chrome && (
