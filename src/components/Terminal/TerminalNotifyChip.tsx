@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { Radar } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -8,7 +8,9 @@ import {
   HEADER_CHIP_CLASS,
   HEADER_CHIP_FOCUS_CLASS,
   HEADER_CHIP_SURFACE,
+  HEADER_CHIP_TRIGGER_CLASS,
 } from "./terminalHeaderChip";
+import { POPOVER_HEADER_CLASS, POPOVER_TITLE_CLASS } from "@/components/ui/popoverHeader";
 import { logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { PaneNotifyState, TerminalNotifyDelivery } from "@shared/types/terminalNotify";
@@ -110,6 +112,7 @@ function describeDelivery(delivery: TerminalNotifyDelivery): { text: string; ton
 export function TerminalNotifyChip({ terminalId }: { terminalId: string }) {
   const state = usePaneNotifyState(terminalId);
   const [stopping, setStopping] = useState(false);
+  const headingId = useId();
 
   const stop = useCallback(() => {
     setStopping(true);
@@ -137,8 +140,10 @@ export function TerminalNotifyChip({ terminalId }: { terminalId: string }) {
           className={cn(
             HEADER_CHIP_CLASS,
             HEADER_CHIP_SURFACE,
-            "hover:text-text-primary transition-colors",
-            tone === "warning" ? "text-status-warning" : "text-text-secondary",
+            HEADER_CHIP_TRIGGER_CLASS,
+            tone === "warning"
+              ? "text-status-warning"
+              : "text-text-secondary hover:text-text-primary",
             HEADER_CHIP_FOCUS_CLASS
           )}
           aria-label={`${heading}; Daintree may type a notice into this pane`}
@@ -148,9 +153,13 @@ export function TerminalNotifyChip({ terminalId }: { terminalId: string }) {
           <span className="tabular-nums">{pending > 0 ? pending : state.readyCount}</span>
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-72 p-3">
-        <div className="flex flex-col gap-2">
-          <span className="text-xs font-medium text-text-primary">{heading}</span>
+      <PopoverContent align="end" className="w-72 p-0" aria-labelledby={headingId}>
+        <div className={POPOVER_HEADER_CLASS}>
+          <span id={headingId} className={POPOVER_TITLE_CLASS}>
+            {heading}
+          </span>
+        </div>
+        <div className="flex flex-col gap-2 p-3">
           <p className="text-xs text-text-secondary">
             The agent asked to be told when they stop working. Daintree types one line into this
             pane's prompt while it sits idle.

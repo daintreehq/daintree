@@ -230,7 +230,7 @@ export function ProjectIdentityEditor({
         }}
       >
         <div className="flex flex-col">
-          <div className="flex flex-col gap-1.5 border-b border-border-default p-3">
+          <div className="flex flex-col gap-1.5 border-b border-divider p-3">
             <div className="flex items-baseline justify-between gap-3">
               <label
                 htmlFor="project-identity-name"

@@ -1,6 +1,7 @@
 import { useCallback, useMemo, type ReactElement } from "react";
 import { Checkbox, CheckboxGlyph } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
+import { POPOVER_ROW_HOVER_CLASS } from "@/components/ui/popoverHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
@@ -437,7 +438,7 @@ function WorktreeGroupSection({
             // overhang the content by 20px.
             className={cn(
               "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left",
-              "bg-overlay-subtle hover:bg-tint/[0.08] transition-colors duration-150",
+              "bg-overlay-subtle hover:bg-overlay-hover transition-colors duration-150",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
             )}
           >
@@ -540,7 +541,7 @@ function TerminalRow({
           // the 20–24px band where two-level nesting actually reads. It was
           // 12px — barely more than the checkbox's own width.
           "flex flex-1 items-start gap-2 pl-8 pr-2 py-1.5 rounded-sm text-sm leading-[inherit] text-text-primary cursor-pointer outline-hidden",
-          "hover:bg-tint/[0.06]",
+          POPOVER_ROW_HOVER_CLASS,
           "focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
         )}
         onMouseDown={suppressShiftClickTextSelection}

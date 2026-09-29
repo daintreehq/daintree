@@ -22,6 +22,7 @@ Check `src/components/ui/` before you hand-roll anything. A surface built from t
 | `field`, `input`, `textarea`, `checkbox`, `switch` | Any form control. `field` owns the label/description/error wiring and the `aria-describedby` and `aria-invalid` plumbing that hand-rolled forms get wrong. |
 | `card`, `badge` | A bounded content block and its status pill. `Card` is the frame (`interactive` for one that holds controls); `ChoiceCard` / `choiceCardVariants` is a card that is itself the control — quick actions, recovery choices, agent pickers, radio cards. See [Choice Cards](./interaction-state-recipes.md#choice-cards). |
 | `SurfaceHeader` | A panel or dialog header, at either density. |
+| `popoverHeader` constants | A popover's title strip, its header icon button and its row hover. A strip that holds a field keeps `p-3` and shares only the divider. See [Popover Header](./interaction-state-recipes.md#popover-header). |
 | `Kbd`, `ShortcutHint`, `HighlightedText`, `TruncatedTooltip` | Chrome details that already exist and are easy to reinvent slightly differently. |
 | `ROW_CONTROL_CLASS`, `RowControlTooltip` (`RowControl.tsx`) | An inline control inside a list, palette or menu row (pin, hide, launch in dock, set default). See [Row Controls](./interaction-state-recipes.md#row-controls). |
 | `CopyButton`, `copyWithToast` | Anything that puts text on the clipboard. See [Copy feedback](#copy-feedback) for which one. |

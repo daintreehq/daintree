@@ -3,6 +3,12 @@ import { ChevronRight } from "lucide-react";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
+import { EmptyState } from "@/components/ui/EmptyState";
+import {
+  POPOVER_HEADER_CLASS,
+  POPOVER_ROW_HOVER_CLASS,
+  POPOVER_TITLE_CLASS,
+} from "@/components/ui/popoverHeader";
 import { cn } from "@/lib/utils";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
@@ -92,6 +98,8 @@ interface RecentCallsPopoverProps {
   busy: boolean;
   onRetry: () => void;
   onOpenAuditLog: () => void;
+  /** The id the host's `PopoverContent` points `aria-labelledby` at. */
+  titleId?: string;
 }
 
 export function RecentCallsPopover({
@@ -101,6 +109,7 @@ export function RecentCallsPopover({
   busy,
   onRetry,
   onOpenAuditLog,
+  titleId,
 }: RecentCallsPopoverProps) {
   const groups = useMemo(() => groupCallsByTurn(records), [records]);
   // Ages stay honest while the popover sits open; the ticker only runs while
@@ -151,11 +160,13 @@ export function RecentCallsPopover({
       ref={containerRef}
       className="flex max-h-[min(440px,var(--radix-popover-content-available-height,440px))] flex-col text-2xs text-text-primary"
     >
-      <div className="shrink-0 px-3 pt-2.5 pb-1.5 text-text-secondary font-medium">
-        Recent tool calls
+      <div className={cn(POPOVER_HEADER_CLASS, "shrink-0")}>
+        <span id={titleId} className={POPOVER_TITLE_CLASS}>
+          Recent tool calls
+        </span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-1">
+      <div className="min-h-0 flex-1 overflow-y-auto p-1">
         {error && records.length === 0 ? (
           // Checked before `loading` so a retry in flight keeps its button.
           <div
@@ -176,9 +187,12 @@ export function RecentCallsPopover({
             <SkeletonHint firstThreshold={5000} className="px-2" />
           </>
         ) : records.length === 0 ? (
-          <p className="px-2 py-1.5 text-text-secondary">
-            Ask the assistant to work on your project to see its tool calls here
-          </p>
+          <EmptyState
+            variant="zero-data"
+            scale="popover"
+            title="Ask the assistant to work on your project to see its tool calls here"
+            className="py-6"
+          />
         ) : (
           <>
             {/* A failed refresh keeps what was already read on screen. */}
@@ -192,7 +206,7 @@ export function RecentCallsPopover({
                 {retry}
               </div>
             )}
-            <ul className="divide-y divide-border-subtle">
+            <ul className="divide-y divide-divider">
               {groups.map((group, index) => {
                 const headingId = `${baseId}-group-${index}`;
                 return (
@@ -215,11 +229,14 @@ export function RecentCallsPopover({
 
       {/* The popover is five calls by design; the rest of the history is one
           step away rather than something the user has to know to look for. */}
-      <div className="shrink-0 border-t border-border-subtle px-1 py-1">
+      <div className="shrink-0 border-t border-divider px-1 py-1">
         <button
           type="button"
           onClick={onOpenAuditLog}
-          className="w-full rounded-[var(--radius-md)] px-2 py-1 text-left text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+          className={cn(
+            "w-full rounded-[var(--radius-md)] px-2 py-1 text-left text-text-secondary hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
+            POPOVER_ROW_HOVER_CLASS
+          )}
         >
           Open full audit log
         </button>
@@ -276,7 +293,10 @@ function RecentCallRow({ record, now }: { record: McpAuditRecord; now: number })
         aria-expanded={expanded}
         aria-controls={panelId}
         onClick={() => setExpanded((v) => !v)}
-        className="grid w-full grid-cols-[auto_auto_1fr_auto] items-start gap-2 rounded-[var(--radius-md)] px-2 py-1 text-left hover:bg-overlay-soft transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+        className={cn(
+          "grid w-full grid-cols-[auto_auto_1fr_auto] items-start gap-2 rounded-[var(--radius-md)] px-2 py-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
+          POPOVER_ROW_HOVER_CLASS
+        )}
       >
         <ChevronRight
           data-animated-chevron

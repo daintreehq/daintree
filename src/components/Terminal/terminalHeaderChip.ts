@@ -25,3 +25,14 @@ export const HEADER_CHIP_CLASS =
 
 /** The neutral surface most header chips sit on. */
 export const HEADER_CHIP_SURFACE = "border-divider bg-overlay-soft text-text-secondary";
+
+/**
+ * A header chip that opens a popover (subagents, notices). Hover and open lift
+ * the fill one step, the same on every such chip, so a chip that answers the
+ * pointer reads as a control rather than a label. Ink stays with the caller: a
+ * neutral chip adds `hover:text-text-primary`, a toned one keeps its tone.
+ * `aria-expanded` rather than `data-[state=open]`: a chip that is also a
+ * tooltip trigger carries the tooltip's `data-state`, not the popover's.
+ */
+export const HEADER_CHIP_TRIGGER_CLASS =
+  "transition-colors duration-150 ease-out hover:bg-overlay-medium aria-expanded:bg-overlay-medium";

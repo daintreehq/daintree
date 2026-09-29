@@ -1,6 +1,7 @@
 import { forwardRef, useCallback, useEffect, useRef, type ReactNode } from "react";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { POPOVER_HEADER_CLASS, POPOVER_ROW_HOVER_CLASS } from "@/components/ui/popoverHeader";
 import { cn } from "@/lib/utils";
 
 /**
@@ -20,16 +21,11 @@ export const DOCK_STATUS_PILL_CLASS =
 export const DOCK_STATUS_PILL_OPEN_CLASS =
   "bg-overlay-emphasis hover:bg-overlay-emphasis text-text-primary";
 
-/** The title strip above a status popover's list. No fill of its own: the popover is the surface. */
-export const DOCK_POPOVER_HEADER_CLASS =
-  "flex items-center justify-between gap-2 border-b border-divider px-3 py-2";
+/** The title strip above a status popover's list: the app-wide popover header. */
+export const DOCK_POPOVER_HEADER_CLASS = POPOVER_HEADER_CLASS;
 
-/**
- * Hover on a status popover row. The neutral ladder's first step, the same in
- * all four popovers; keyboard focus is the focus ring on top, never a second fill.
- */
-export const DOCK_POPOVER_ROW_HOVER_CLASS =
-  "transition-colors duration-150 ease-out hover:bg-overlay-subtle";
+/** Hover on a status popover row, the same in all four popovers and every other popover list. */
+export const DOCK_POPOVER_ROW_HOVER_CLASS = POPOVER_ROW_HOVER_CLASS;
 
 interface DockStatusPillLabelProps {
   icon: ReactNode;

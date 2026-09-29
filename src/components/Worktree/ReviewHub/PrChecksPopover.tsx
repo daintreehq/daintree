@@ -233,7 +233,7 @@ export function PrChecksPopover({
               className="flex flex-col"
             >
               {/* `immediate`: the Doherty gate already absorbed the anti-flicker delay. */}
-              <div className="flex flex-col gap-1.5 px-3 pt-2.5 pb-2 border-b border-divider">
+              <div className="flex flex-col gap-1.5 px-3 py-2 border-b border-divider">
                 <SkeletonBone immediate className="h-3.5 w-24 rounded-sm" />
                 <SkeletonBone immediate className="h-3 w-48 rounded-sm" />
               </div>
@@ -379,7 +379,7 @@ function ChecksList({
 
   return (
     <>
-      <div data-testid="pr-checks-summary" className="px-3 pt-2.5 pb-2 border-b border-divider">
+      <div data-testid="pr-checks-summary" className="px-3 py-2 border-b border-divider">
         <p className="font-medium text-text-primary">{summary.headline}</p>
         {summary.detail && <p className="mt-0.5 text-2xs text-text-secondary">{summary.detail}</p>}
       </div>
@@ -485,7 +485,7 @@ function CheckRows({
                 size="icon-xs"
                 onClick={() => onOpenExternal(detailsUrl)}
                 aria-label={labels.get(row.key)}
-                className="-my-1 transition-colors"
+                className="-my-1 [&_svg]:size-3.5"
               >
                 <ExternalLink aria-hidden="true" />
               </Button>

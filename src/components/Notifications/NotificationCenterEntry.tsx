@@ -2,7 +2,6 @@ import { Fragment, useEffect, useRef, useState, type Ref } from "react";
 import {
   Clock,
   MoreHorizontal,
-  X,
   Copy,
   Bug,
   ArrowRight,
@@ -16,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
@@ -85,18 +85,11 @@ function rowLabel(entry: NotificationHistoryEntry): string {
 }
 
 /**
- * The row's two management controls. 24x24 rather than the previous 16x16:
- * WCAG 2.2 SC 2.5.8 wants 24 CSS px, and the old pair sat 22px apart, so it
- * cleared neither the size rule nor the spacing exemption. It is also the size
- * the toast uses for this same notification content, and the dominant size for
- * row controls across the app. They had no focus ring at all before.
+ * The options trigger beside the row's dismiss: the same ghost `icon-xs` box
+ * and 14px glyph as `DismissButton`, ringed inside the row because the
+ * popover's scroller clips anything drawn outside it.
  */
-const ROW_CONTROL_CLASS = cn(
-  "h-6 w-6 shrink-0 flex items-center justify-center rounded-[var(--radius-sm)]",
-  "text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary",
-  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2",
-  "focus-visible:outline-accent-primary focus-visible:text-text-primary"
-);
+const ROW_CONTROL_CLASS = "shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2";
 
 const TYPE_CONFIG = {
   success: { icon: SEVERITY_GLYPH.success, className: "text-status-success" },
@@ -539,17 +532,14 @@ export function NotificationCenterEntry({
             source={entry.context?.projectId || entry.context?.worktreeId ? source : undefined}
           />
           {onDismiss && (
-            <button
-              type="button"
+            <DismissButton
               aria-label={`Dismiss ${label}`}
               onClick={(e) => {
                 e.stopPropagation();
                 onDismiss();
               }}
-              className={ROW_CONTROL_CLASS}
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
+              className="focus-visible:-outline-offset-2"
+            />
           )}
         </div>
       </div>
@@ -815,9 +805,10 @@ function RowOptionsMenu({
   return (
     <DropdownMenu open={open} onOpenChange={handleOpenChange}>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
+        <Button
           ref={triggerRef}
+          variant="ghost"
+          size="icon-xs"
           aria-label={`Options for ${rowLabel}`}
           onClick={(e) => e.stopPropagation()}
           // `data-[state=open]` so the trigger reads as pressed while its menu
@@ -825,8 +816,8 @@ function RowOptionsMenu({
           // which of the two controls opened the menu.
           className={cn(ROW_CONTROL_CLASS, "data-[state=open]:bg-overlay-raised")}
         >
-          <MoreHorizontal className="h-3.5 w-3.5" />
-        </button>
+          <MoreHorizontal />
+        </Button>
       </DropdownMenuTrigger>
       {/* Bounded on both sides, matching the panel-header and docked-tab menus:
           a floor so short items do not collapse it, and a ceiling so it cannot

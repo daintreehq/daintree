@@ -5,6 +5,7 @@ import { Network } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Spinner } from "@/components/ui/Spinner";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
@@ -37,9 +38,18 @@ import {
   HEADER_CHIP_CLASS,
   HEADER_CHIP_FOCUS_CLASS as CHIP_FOCUS_CLASS,
   HEADER_CHIP_SURFACE,
+  HEADER_CHIP_TRIGGER_CLASS,
 } from "./terminalHeaderChip";
+import { EmptyState } from "@/components/ui/EmptyState";
+import {
+  POPOVER_HEADER_ACTION_CLASS,
+  POPOVER_HEADER_CLASS,
+  POPOVER_TITLE_CLASS,
+} from "@/components/ui/popoverHeader";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { pluralize } from "@/lib/pluralize";
+
+const TRANSCRIPT_SKELETON_WIDTHS = ["w-4/5", "w-3/5"] as const;
 
 const TONE_CLASSES: Record<"error" | "waiting" | "muted", string> = {
   error: "text-status-error",
@@ -85,7 +95,15 @@ function TranscriptBody({
     );
   }
   if (transcript.messages.length === 0) {
-    return <p className="text-xs text-text-secondary">No messages recorded yet</p>;
+    return (
+      <EmptyState
+        variant="zero-data"
+        scale="popover"
+        title="No messages recorded yet"
+        // In flow with the transcript it stands in for, not centred under the row.
+        className="items-start px-0 py-1 text-left"
+      />
+    );
   }
   return (
     <div className="flex flex-col gap-2">
@@ -218,15 +236,28 @@ function SubagentRow({
       <div id={panelId} hidden={!isOpen} className="px-3 pb-3 pl-8">
         {isOpen && (
           <>
-            {showSpinner && (
-              <span
-                className="mb-2 flex items-center gap-2 text-xs text-text-secondary"
-                role="status"
-              >
-                <Spinner size="sm" />
-                {transcript === null ? "Loading transcript" : "Loading newer messages"}
-              </span>
-            )}
+            {showSpinner &&
+              (transcript === null ? (
+                // The first read has nothing to show yet, so it holds the
+                // messages' own shape: a label over a line or two of text.
+                <Skeleton label="Loading transcript" className="flex flex-col gap-2">
+                  {TRANSCRIPT_SKELETON_WIDTHS.map((width) => (
+                    <div key={width} className="flex flex-col gap-1">
+                      <SkeletonBone immediate className="h-2.5 w-10" />
+                      <SkeletonBone immediate className={cn("h-3", width)} />
+                    </div>
+                  ))}
+                </Skeleton>
+              ) : (
+                // A refresh keeps the messages already read and says so beside them.
+                <span
+                  className="mb-2 flex items-center gap-2 text-xs text-text-secondary"
+                  role="status"
+                >
+                  <Spinner size="sm" />
+                  Loading newer messages
+                </span>
+              ))}
             {transcript !== null && (
               <TranscriptBody transcript={transcript} provider={provider} onRetry={retry} />
             )}
@@ -332,7 +363,7 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
               className={cn(
                 HEADER_CHIP_CLASS,
                 HEADER_CHIP_SURFACE,
-                "hover:bg-overlay-medium transition-colors",
+                HEADER_CHIP_TRIGGER_CLASS,
                 // The chip borrows the waiting hue only while a child is
                 // blocked on the user — the one thing worth seeing from the
                 // header without opening anything — and keeps it under the
@@ -355,30 +386,28 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
         </TooltipContent>
       </Tooltip>
       <PopoverContent align="end" className="w-80 p-0" aria-labelledby={headingId}>
-        <div className="flex items-center justify-between gap-2 pl-3 pr-1.5 py-1.5 border-b border-divider">
-          <span id={headingId} className="text-xs font-medium text-text-primary">
+        <div className={POPOVER_HEADER_CLASS}>
+          <span id={headingId} className={POPOVER_TITLE_CLASS}>
             {label} subagents
           </span>
-          <button
+          <Button
             ref={refreshButtonRef}
-            type="button"
+            variant="ghost"
+            size="icon-xs"
             onClick={requestRefresh}
             // Not `disabled`: that would drop keyboard focus to the page the
             // moment the button is pressed. The spin is the busy state.
             aria-disabled={isLoading}
-            className={cn(
-              "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors",
-              CHIP_FOCUS_CLASS
-            )}
+            className={POPOVER_HEADER_ACTION_CLASS}
             aria-label="Refresh subagents"
           >
             <SpinningIcon
               icon={RefreshCw}
               active={isLoading}
-              className={cn("w-3.5 h-3.5", isLoading && skipMotion && "text-text-muted")}
+              className={cn(isLoading && skipMotion && "text-text-muted")}
               aria-hidden
             />
-          </button>
+          </Button>
         </div>
         {/* Always mounted, so each outcome is announced when it lands. The
             visible notice sits outside it, with its Retry. */}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactElement } from "react";
 import { XCircle, ArrowLeft, ChevronDown, Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
@@ -20,9 +20,13 @@ import { useFleetWorktreeScope } from "./useFleetWorktreeScope";
 import { FleetWorktreeDots } from "./FleetWorktreeDots";
 import { renderPaneStateBadge } from "./renderPaneStateBadge";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
-import { FLEET_RIBBON_ICON_BUTTON_CLASS } from "./fleetRibbonStyles";
-import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge } from "@/components/ui/badge";
+import {
+  POPOVER_HEADER_CLASS,
+  POPOVER_ROW_HOVER_CLASS,
+  POPOVER_TITLE_CLASS,
+} from "@/components/ui/popoverHeader";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 interface FleetCountChipProps {
   armedCount: number;
@@ -47,6 +51,7 @@ export function FleetCountChip({
   // broadcast write carries an inline "Send failed" marker next to its live
   // agent-state badge.
   const run = useFleetRunStore((s) => s.run);
+  const headingId = useId();
 
   // Internal mode toggle for the popover content. "list" shows the armed
   // terminals (default). "picker" swaps to FleetPickerContent for adding new
@@ -218,6 +223,7 @@ export function FleetCountChip({
         side="bottom"
         align="start"
         data-testid="fleet-armed-list"
+        aria-labelledby={headingId}
         className={cn(
           "flex flex-col overflow-hidden p-1",
           popoverMode === "list" ? "max-h-[320px] w-[320px]" : "max-h-[420px] w-[380px]"
@@ -225,10 +231,22 @@ export function FleetCountChip({
       >
         {popoverMode === "list" ? (
           <>
-            <div className={cn(LIST_LABEL_CLASS, "px-2 py-1")}>Fleet terminals</div>
+            {/* -mx-1 -mt-1: the strip spans the popover's own p-1 inset, edge to edge. */}
+            <div className={cn(POPOVER_HEADER_CLASS, "-mx-1 -mt-1 mb-1 shrink-0")}>
+              <span id={headingId} className={POPOVER_TITLE_CLASS}>
+                Fleet terminals
+              </span>
+            </div>
             <ul className="flex flex-col overflow-y-auto">
               {armOrder.length === 0 ? (
-                <li className="px-2 py-1 text-xs leading-[inherit] text-text-secondary">None</li>
+                <li>
+                  <EmptyState
+                    variant="zero-data"
+                    scale="popover"
+                    title="Add panes to the fleet"
+                    className="py-4"
+                  />
+                </li>
               ) : (
                 armOrder.map((id) => {
                   const title = titlesByPane[id] ?? id;
@@ -248,7 +266,10 @@ export function FleetCountChip({
                     // mousedown and mouseup.
                     <li
                       key={id}
-                      className="flex items-center gap-2 rounded-[var(--radius-md)] hover:bg-tint/[0.08]"
+                      className={cn(
+                        "flex items-center gap-2 rounded-[var(--radius-md)]",
+                        POPOVER_ROW_HOVER_CLASS
+                      )}
                     >
                       <button
                         type="button"
@@ -296,20 +317,22 @@ export function FleetCountChip({
                         </span>
                       )}
                       {renderPaneStateBadge(id, agentStatesByPane[id], waitingReasonsByPane[id])}
-                      <button
-                        type="button"
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
                         onClick={() => disarmId(id)}
                         aria-label={`Disarm ${title}`}
-                        className={cn(FLEET_RIBBON_ICON_BUTTON_CLASS, "mr-0.5")}
+                        // Ringed inside: the list scrolls and clips anything outside it.
+                        className="mr-0.5 shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2"
                       >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
+                        <X aria-hidden="true" />
+                      </Button>
                     </li>
                   );
                 })
               )}
             </ul>
-            <div className="mt-1 border-t border-border-default/50 pt-1">
+            <div className="mt-1 border-t border-divider pt-1">
               <Button
                 variant="ghost"
                 size="sm"
@@ -324,22 +347,26 @@ export function FleetCountChip({
           </>
         ) : picker.acquired ? (
           <>
-            <div className="flex items-center gap-2 px-1 pb-1">
+            <div
+              className={cn(POPOVER_HEADER_CLASS, "-mx-1 -mt-1 mb-1 shrink-0 justify-start pl-1.5")}
+            >
               <Button
                 variant="ghost"
                 size="xs"
                 onClick={() => setPopoverMode("list")}
                 aria-label="Back to fleet list"
                 data-testid="fleet-picker-back"
-                className="px-1.5 text-xs [&_svg]:size-3.5"
+                className="-my-1 px-1.5 text-xs [&_svg]:size-3.5"
               >
                 <ArrowLeft aria-hidden="true" />
                 <span>Back</span>
               </Button>
-              <span className={LIST_LABEL_CLASS}>Add panes</span>
+              <span id={headingId} className={POPOVER_TITLE_CLASS}>
+                Add panes
+              </span>
             </div>
             <FleetPickerContent picker={picker} testIdPrefix="fleet-picker-add" autoFocusSearch />
-            <div className="mt-1 flex items-center justify-between gap-2 border-t border-daintree-border/50 px-1 pt-2">
+            <div className="mt-1 flex items-center justify-between gap-2 border-t border-divider px-1 pt-2">
               <span className="text-2xs tabular-nums text-text-secondary">
                 {picker.confirmedIds.length === 0
                   ? "Select panes to add"

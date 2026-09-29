@@ -1286,8 +1286,9 @@ function PanelHeaderComponent({
             {isFleetFailed && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
                     onClick={(e) => {
                       e.stopPropagation();
                       dismissFleetFailure(id);
@@ -1297,13 +1298,14 @@ function PanelHeaderComponent({
                     data-testid="panel-fleet-failure-dot"
                     // The mark stays an 8px dot; the button around it is the
                     // 24px target. -mx-1 keeps its footprint in the row at 16px.
-                    className="-mx-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                    // Ringed inside: the title group clips anything outside it.
+                    className="-mx-1 shrink-0 focus-visible:-outline-offset-2"
                   >
                     <span
                       className="status-mark h-2 w-2 rounded-full bg-status-error"
                       aria-hidden="true"
                     />
-                  </button>
+                  </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
                   Last fleet broadcast failed here — click to dismiss. Run "Fleet: Retry failed
