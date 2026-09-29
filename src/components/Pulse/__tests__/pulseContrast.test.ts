@@ -4,6 +4,7 @@ import { resolve } from "path";
 
 const CARD_PATH = resolve(__dirname, "../ProjectPulseCard.tsx");
 const SUMMARY_PATH = resolve(__dirname, "../PulseSummary.tsx");
+const DIFF_STAT_PATH = resolve(__dirname, "../../ui/DiffStat.tsx");
 const HEATMAP_PATH = resolve(__dirname, "../PulseHeatmap.tsx");
 const INDEX_CSS_PATH = resolve(__dirname, "../../../index.css");
 const DESIGN_CONTRACT_CSS_PATH = resolve(__dirname, "../../../styles/design-contract.css");
@@ -117,10 +118,15 @@ describe("PulseSummary — visual contrast (issue #2645)", () => {
   it("delta insertions/deletions use their solid semantic colour, never a slash-alpha text colour", async () => {
     // Slash-alpha on a text colour bakes into color-mix() and the contrast
     // cannot be recovered (design-system rule); the counts read at full token.
+    // PulseSummary renders its churn through the shared DiffStat, so the
+    // colour contract is held there.
     const content = await readFile(SUMMARY_PATH, "utf-8");
-    expect(content).toContain("text-status-success");
-    expect(content).toContain("text-status-error");
+    expect(content).toContain("<DiffStat");
     expect(content).not.toMatch(/text-status-(success|error)\/\d+/);
+    const diffStat = await readFile(DIFF_STAT_PATH, "utf-8");
+    expect(diffStat).toContain("text-status-success");
+    expect(diffStat).toContain("text-status-error");
+    expect(diffStat).not.toMatch(/text-status-(success|error)\/\d+/);
   });
 });
 

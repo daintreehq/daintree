@@ -127,22 +127,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Copy-all-messages confirmation; resets when the copy flash times out",
     },
   ],
-  "src/components/FileViewer/DiffFileSidebar.tsx": [
-    {
-      category: "domain",
-      signature: "text-status-success",
-      anchor: "+{summary.insertions}",
-      expectedOccurrences: 1,
-      rationale: "Diff insertion count for the whole change set",
-    },
-    {
-      category: "domain",
-      signature: "text-status-success",
-      anchor: "+{file.insertions}",
-      expectedOccurrences: 1,
-      rationale: "Per-file diff insertion count",
-    },
-  ],
   "src/components/FileViewer/diffChangeSet.ts": [
     {
       category: "domain",
@@ -258,13 +242,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       expectedOccurrences: 1,
       rationale: "Ahead-arrow count against the base branch",
     },
-    {
-      category: "domain",
-      signature: "text-status-success",
-      anchor: "deltaToMain!.insertions",
-      expectedOccurrences: 1,
-      rationale: "Diff insertion count against the base branch",
-    },
   ],
   "src/components/Settings/VoiceInputSettingsTab.tsx": [
     {
@@ -354,46 +331,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Recorded result carried by a success notification on the grid bar",
     },
   ],
-  "src/components/Worktree/CrossWorktreeDiff.tsx": [
-    {
-      category: "domain",
-      signature: "text-status-success",
-      anchor: "+{insertions}",
-      expectedOccurrences: 1,
-      rationale: "Per-file diff insertion count",
-    },
-    {
-      category: "domain",
-      signature: "text-status-success",
-      anchor: "+{totalInsertions}",
-      expectedOccurrences: 1,
-      rationale: "Diff insertion count for the whole comparison",
-    },
-  ],
-  "src/components/Worktree/DiffViewer.tsx": [
-    {
-      category: "domain",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Diff addition count in the viewer toolbar",
-    },
-  ],
-  "src/components/Worktree/FileChangeList.tsx": [
-    {
-      category: "domain",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Per-file diff insertion count",
-    },
-  ],
-  "src/components/Worktree/ReviewHub/BaseBranchFileRow.tsx": [
-    {
-      category: "domain",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Per-file diff insertion count",
-    },
-  ],
   "src/components/Worktree/ReviewHub/FileSection.tsx": [
     {
       category: "domain",
@@ -430,21 +367,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       anchor: 'label: "?"',
       expectedOccurrences: 1,
       rationale: "Git status letter ?, the notation git itself paints green",
-    },
-    {
-      category: "domain",
-      signature: "text-status-success",
-      anchor: "+{insertions}",
-      expectedOccurrences: 1,
-      rationale: "Per-file diff insertion count",
-    },
-  ],
-  "src/components/Worktree/ReviewHub/ReviewHubContent.tsx": [
-    {
-      category: "domain",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Base-branch diff insertion count",
     },
   ],
   "src/components/Worktree/ReviewHub/prChecks.ts": [
@@ -493,23 +415,7 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Ahead-arrow count against the base branch",
     },
   ],
-  "src/components/Worktree/WorktreeCard/WorktreeDetailsSection.tsx": [
-    {
-      category: "domain",
-      signature: "text-status-success",
-      anchor: "+{worktree.worktreeChanges.insertions}",
-      expectedOccurrences: 1,
-      rationale: "Worktree diff insertion count",
-    },
-  ],
   "src/components/Worktree/WorktreeOverviewRow.tsx": [
-    {
-      category: "domain",
-      signature: "text-status-success",
-      anchor: "+{insertions}",
-      expectedOccurrences: 1,
-      rationale: "Worktree diff insertion count, as the sidebar card paints it",
-    },
     {
       category: "domain",
       signature: "text-status-success",
@@ -595,12 +501,22 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Recorded result of the last CI run",
     },
   ],
-  "src/panels/file-browser/FileBrowserChangeSummary.tsx": [
+  "src/components/ui/DiffStat.tsx": [
     {
       category: "domain",
       signature: "text-status-success",
       expectedOccurrences: 1,
-      rationale: "Per-file diff insertion count",
+      rationale:
+        "The one line-churn stat: the insertion count every diff row, summary and card renders through",
+    },
+  ],
+  "src/components/Tour/scenes/ReviewScene.tsx": [
+    {
+      category: "domain",
+      signature: "text-status-success",
+      expectedOccurrences: 1,
+      rationale:
+        "The tour's Review Hub mock spells DiffStat's insertion count inline (tour scenes can't import host components)",
     },
   ],
 } as const satisfies StatusSuccessInventory;
@@ -610,5 +526,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 69;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 71;
+export const EXPECTED_STATUS_SUCCESS_SITES = 58;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 60;

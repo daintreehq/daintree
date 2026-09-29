@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useMemo, type ReactNode } from "react";
+import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { ChevronRight, Coffee, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { projectClient, systemClient } from "@/clients";
@@ -38,13 +39,6 @@ const FRESHNESS_TICK_MS = 1_000;
 const STALE_AFTER_SEC = 10;
 /** Three badge polls: past this, the fallback app-memory reading has stalled. */
 const APP_MEMORY_FRESH_MS = BADGE_POLL_MS * 3;
-
-function formatUptime(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
 
 /**
  * The footer mark, in the app's existing activity vocabulary: filled means work
@@ -370,7 +364,11 @@ function DiagnosticsSection({
             />
             <MemoryRow
               label="Uptime"
-              value={diagnosticsInfo ? formatUptime(diagnosticsInfo.uptimeSeconds) : "Unavailable"}
+              value={
+                diagnosticsInfo
+                  ? formatElapsedDuration(diagnosticsInfo.uptimeSeconds * 1000)
+                  : "Unavailable"
+              }
             />
             {diagnosticsInfo && diagnosticsInfo.eventLoopP99Ms > 50 && (
               <MemoryRow

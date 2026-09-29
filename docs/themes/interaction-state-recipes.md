@@ -517,6 +517,7 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 | Settings Switch Row | `SettingsSwitchCard.tsx` + `ui/switch.tsx` | Neutral row, neutral switch track (accent only on focus) |
 | Portal Drag Handle | `PortalToolbar.tsx` (`isDragging`) | Drag state with elevation + scale, no accent |
 | Inline Rename Input | `TabButton.tsx` (rename input) | Neutral `bg-overlay-soft`, transparent border |
+| Progress Bar | `ui/ProgressBar.tsx` | Neutral `text-secondary` fill on an `overlay-medium` track, no accent; quota meters (`role="meter"`) keep their own heavier track |
 
 ---
 

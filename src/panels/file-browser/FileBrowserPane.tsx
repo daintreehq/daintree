@@ -1238,7 +1238,7 @@ export function FileBrowserPane({
                       onClick={handleCopyRootPath}
                       aria-label={`Copy folder path: ${rootAbsolutePath}`}
                       className={cn(
-                        "min-w-0 flex-1 cursor-pointer truncate text-left text-2xs transition-colors duration-150 ease-out",
+                        "min-w-0 flex-1 cursor-pointer truncate text-left font-mono text-2xs transition-colors duration-150 ease-out",
                         showRootPathCopied
                           ? "text-text-primary"
                           : "text-text-secondary hover:text-text-primary"

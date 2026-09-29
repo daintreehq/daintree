@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useId } from "react";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Callout } from "@/components/ui/Callout";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
 import type { GitPushDestination } from "@shared/types/git";
@@ -638,19 +639,7 @@ export function CommitPanel({
             return (
               <div key={e.stage} className="contents">
                 <span className="whitespace-nowrap">{label}</span>
-                <div
-                  role="progressbar"
-                  aria-label={label}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={value}
-                  className="h-1 rounded-full bg-overlay-soft overflow-hidden"
-                >
-                  <div
-                    className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
-                    style={{ width: `${value}%` }}
-                  />
-                </div>
+                <ProgressBar label={label} value={value} />
                 <span className="tabular-nums text-right min-w-[4ch]" aria-hidden="true">
                   {value}%
                 </span>

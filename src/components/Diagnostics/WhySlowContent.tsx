@@ -14,6 +14,8 @@ import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { MetricTile, type MetricTone } from "./MetricTile";
 import { DiagnosticsNotice } from "./DiagnosticsNotice";
 import { pluralize } from "@/lib/pluralize";
+import { formatBytes } from "@/lib/formatBytes";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 
 export interface WhySlowContentProps {
   className?: string;
@@ -24,20 +26,6 @@ export interface WhySlowContentProps {
 // app-metrics cache TTL (~5s) so polling doesn't force redundant metric scans —
 // avoiding adding the very overhead this panel exists to diagnose.
 const REFRESH_INTERVAL_MS = 5_000;
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatSnapshotAge(ageMs: number): string {
-  if (ageMs < 10_000) return "just now";
-  if (ageMs < 60_000) return `${Math.floor(ageMs / 1000)}s ago`;
-  const minutes = Math.floor(ageMs / 60_000);
-  if (minutes < 60) return `${minutes}m ago`;
-  return `${Math.floor(minutes / 60)}h ago`;
-}
 
 // Shared by the PTY-lag tile tone, the findings and isAllClear so the calm
 // summary can never disagree with a warn-toned tile over the same number.
@@ -415,7 +403,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
 
   const renderer = snapshot ? aggregateRenderer(snapshot) : null;
   const resource = snapshot?.resource ?? null;
-  const snapshotAgeMs = snapshot ? Math.max(0, Date.now() - snapshot.timestamp) : 0;
+  const now = snapshot ? Math.max(Date.now(), snapshot.timestamp) : Date.now();
   const sortedReasons = resource ? sortReasonsByContribution(resource.reasons) : [];
   const findings = snapshot ? describeSlowdowns(snapshot, hostMemory) : [];
   const allClear = snapshot ? isAllClear(snapshot, hostMemory) : false;
@@ -460,7 +448,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
               data-testid="why-slow-updated-note"
               className="text-2xs tabular-nums text-text-secondary"
             >
-              Updated {formatSnapshotAge(snapshotAgeMs)}
+              <TimeAgo timestamp={snapshot.timestamp} now={now} prefix="Updated " />
             </span>
           ) : null}
           {/* While a read is failing, the notice's Retry is the one action. */}
@@ -496,7 +484,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
           title="Showing older data"
           description={
             <span data-testid="why-slow-stale-note">
-              Refresh failed · data from {formatSnapshotAge(snapshotAgeMs)}
+              Refresh failed · last updated <TimeAgo timestamp={snapshot.timestamp} now={now} />
             </span>
           }
           onRetry={() => void refresh()}

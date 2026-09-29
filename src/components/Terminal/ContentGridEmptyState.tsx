@@ -13,7 +13,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { useRecipeStore } from "@/store/recipeStore";
-import { formatPath, middleTruncate, shortSha } from "@/utils/textParsing";
+import { formatPath, middleTruncatePath, shortSha } from "@/utils/textParsing";
 import { RotatingTip } from "./contentGridTips";
 import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
 import { ResumeSessionLine } from "./ResumeSessionLine";
@@ -236,7 +236,7 @@ export function ContentGridEmptyState({
     : activeWorktreeBranch || null;
   const BranchGlyph = isDetachedLabel ? GitCommitHorizontal : GitBranch;
   const pathLabel = activeWorktreePath
-    ? middleTruncate(formatPath(activeWorktreePath, homeDir), PATH_TRUNCATE_LENGTH)
+    ? middleTruncatePath(formatPath(activeWorktreePath, homeDir), PATH_TRUNCATE_LENGTH)
     : null;
   const hasWorkspaceIdentity = Boolean(workspaceName);
 

@@ -26,6 +26,7 @@ Check `src/components/ui/` before you hand-roll anything. A surface built from t
 | `Kbd`, `ShortcutHint`, `HighlightedText`, `TruncatedTooltip` | Chrome details that already exist and are easy to reinvent slightly differently. |
 | `ROW_CONTROL_CLASS`, `RowControlTooltip` (`RowControl.tsx`) | An inline control inside a list, palette or menu row (pin, hide, launch in dock, set default). See [Row Controls](./interaction-state-recipes.md#row-controls). |
 | `CopyButton`, `copyWithToast` | Anything that puts text on the clipboard. See [Copy feedback](#copy-feedback) for which one. |
+| `TimeAgo`, `DiffStat`, `ProgressBar` | An age, a line-churn stat, a task progress bar. See [Formatting](#formatting). |
 | `ResizeHandle` + `useSplitterKeys` | Any draggable edge between two regions. The primitive owns the 12px target, the grip, the focus outline, the ARIA and the "(double-click to reset)" label suffix; the hook owns the keyboard contract. You own the drag. `src/config/__tests__/resizeHandle.contract.test.ts` fails on any `role="separator"` rendered anywhere else. |
 
 New primitives belong in `src/components/ui/` only when a second caller appears. One-off composition stays with its feature.
@@ -225,6 +226,32 @@ Copy follows `.claude/rules/user-signals.md`; these are the rules the consistenc
 A highlighted-row list is one of two shapes: a full-screen palette row (`radius-md`, `px-3`, `py-1.5` or `py-2`) or a popover picker row that matches the menu row beside it (`radius-sm`, `px-2 py-1.5`). Neither has a resting fill, and the highlight is always `PALETTE_ROW_CLASS`. The table, and which surface belongs to which family, is under "Highlighted Row" in `interaction-state-recipes.md`; `src/config/__tests__/paletteRowShape.contract.test.ts` enforces it. Dividers inside these surfaces use `border-divider`, never an alpha of `daintree-border` or a `border-[var(...)]` spelling.
 
 Keyboard hints name the key the platform has. A footer or hint string that cannot use `KbdChord` builds its modifier with `formatChordText("Cmd", isMac)` rather than a literal `⌘`, and copy that names a rebindable action's shortcut resolves it (`useEffectiveCombo`) or leaves it out.
+
+## Formatting
+
+Numbers, ages and paths go through one formatter each, so the same value never reads two ways on two surfaces. The audit found nine private copies that disagreed ("1.0 KB" beside "1 KB", "moments ago" beside "just now", "+4/-2" beside "+4 -2").
+
+| Value | Use | Reads |
+| --- | --- | --- |
+| Age in a row | `formatTimeAgo` (`src/utils/timeAgo.ts`), rendered through `TimeAgo` | "just now", "5m ago", "11d ago" |
+| Age in a settings table or log | `formatRelativeTime` (`src/lib/formatRelativeTime.ts`), `TimeAgo verbose` | "5 minutes ago" |
+| Age that ticks on its own | `LiveTimeAgo` | "5m", with the full label and date in its tooltip |
+| Past 30 days, all three | `formatAbsoluteDate` | "Sep 1", or "Sep 1, 2025" outside the current year. Never a numeric date. |
+| When we last looked | `formatLastChecked` | "Last checked 5m ago", no trailing period |
+| Elapsed time | `formatElapsedDuration` | "42s", "5m", "2h 3m", "1d 2h" |
+| Time remaining | `formatCountdown` + " left" | "4m 59s left" — not a clock face |
+| Size | `formatBytes` (`src/lib/formatBytes.ts`) | "512 B", "1.5 KB", "3 MB" |
+| Tokens | `formatTokenCount` | "842", "4.2k", "45k", "1.2M" — never "1000k", never a lower-case m |
+| Line churn | `DiffStat` | "+12 -3": success and error inks, space-separated, ASCII minus, nothing when both are zero |
+| Task progress | `ProgressBar` | One track, one fill, `size="thin"` under a line of text; indeterminate pulses the empty track |
+| Path | `formatPath` then `middleTruncatePath`, in `font-mono` | "~/Projects/app/…/index.ts" |
+| Branch | `truncateBranchName` when it must be cut, in `font-mono` | "feature/125-…dock-drop" |
+
+- **Every age has its exact time one hover away.** `TimeAgo` puts it in a native `title` and `dateTime` — native rather than a `Tooltip` because ages sit inside options and buttons, where a nested trigger would steal the row's pointer and focus handling. A string label (a chip, an `aria-label`) that embeds an age carries the date in its own tooltip instead.
+- **Memory readings are not file sizes.** `formatMemory` in `ProjectResourceBadge.utils.ts` rounds to whole megabytes on purpose, since fractional working-set sums printed false precision; the compact per-terminal chip keeps its unit-letter form ("512M").
+- **Quota and usage meters** (`role="meter"`) are a different instrument from task progress and keep their heavier track.
+
+`src/components/ui/__tests__/formatting.contract.test.ts` fails on a private copy of any of these formatters, a bare `{formatTimeAgo(…)}` JSX child, hand-rolled churn spans, a `role="progressbar"` outside the primitive, and `middleTruncate` on a path.
 
 ## Opting out
 

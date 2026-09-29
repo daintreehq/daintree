@@ -52,10 +52,10 @@ describe("ContentGrid richer project identity (issue #7472)", () => {
   it("ContentGridEmptyState formats path via shared utilities and useHomeDir", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     expect(content).toContain('from "@/hooks/app/useHomeDir"');
-    expect(content).toMatch(/formatPath, middleTruncate[^}]*\} from "@\/utils\/textParsing"/);
+    expect(content).toMatch(/formatPath, middleTruncatePath[^}]*\} from "@\/utils\/textParsing"/);
     expect(content).toContain("useHomeDir()");
     expect(content).toContain("formatPath(activeWorktreePath, homeDir)");
-    expect(content).toContain("middleTruncate(");
+    expect(content).toContain("middleTruncatePath(");
   });
 
   it("ContentGridEmptyState handles detached HEAD with the commit glyph the toolbar pill uses", async () => {

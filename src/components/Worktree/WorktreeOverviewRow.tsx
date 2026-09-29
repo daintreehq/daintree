@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
 import {
   AlertTriangle,
   ChevronRight,
@@ -595,18 +596,14 @@ export function WorktreeOverviewRow({
               )}
             </div>
 
-            {/* Changes, in the sidebar's own words and colours: +added/-removed
+            {/* Changes, in the sidebar's own words and colours: "+added -removed"
                 in the success and error inks, then the file count and drift. */}
             <div className="min-w-0 text-right tabular-nums">
               <div className="text-xs leading-5 text-text-secondary">
                 {changes === null ? (
                   "—"
                 ) : fileCount > 0 && (insertions > 0 || deletions > 0) ? (
-                  <span className="inline-flex items-center gap-0.5">
-                    {insertions > 0 && <span className="text-status-success">+{insertions}</span>}
-                    {insertions > 0 && deletions > 0 && <span className="text-text-muted">/</span>}
-                    {deletions > 0 && <span className="text-status-error">-{deletions}</span>}
-                  </span>
+                  <DiffStat insertions={insertions} deletions={deletions} />
                 ) : fileCount > 0 ? (
                   `${pluralize(fileCount, "file")}`
                 ) : (

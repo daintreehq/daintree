@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { DiffStat } from "@/components/ui/DiffStat";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PathTail } from "@/components/ui/PathTail";
 import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
@@ -105,13 +106,12 @@ export function FileBrowserChangeSummary({ changes, onSelect }: FileBrowserChang
                         {base}
                       </span>
                     </span>
-                    <span
-                      className="flex shrink-0 items-center gap-1.5 text-2xs tabular-nums"
+                    <DiffStat
+                      insertions={insertions}
+                      deletions={deletions}
+                      className="shrink-0 text-2xs"
                       aria-hidden="true"
-                    >
-                      {insertions > 0 && <span className="text-status-success">+{insertions}</span>}
-                      {deletions > 0 && <span className="text-status-error">-{deletions}</span>}
-                    </span>
+                    />
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="top">

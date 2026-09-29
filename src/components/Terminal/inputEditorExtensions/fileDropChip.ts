@@ -1,7 +1,8 @@
 import { EditorView, Decoration, WidgetType, hoverTooltip } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import { StateField, StateEffect } from "@codemirror/state";
-import { formatFileSize, removeChipRange } from "./base";
+import { removeChipRange } from "./base";
+import { formatBytes } from "@/lib/formatBytes";
 import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
 import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
 
@@ -168,7 +169,7 @@ export function createFileDropChipTooltip() {
           const sizeEl = document.createElement("p");
           sizeEl.style.cssText =
             "font-size: var(--text-3xs); color: var(--theme-text-muted); margin-top: 2px;";
-          sizeEl.textContent = formatFileSize(entry.fileSize);
+          sizeEl.textContent = formatBytes(entry.fileSize);
           dom.appendChild(sizeEl);
         }
 

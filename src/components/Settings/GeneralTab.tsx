@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { formatLastChecked } from "@/utils/timeAgo";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -39,7 +40,6 @@ import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { getBuildChannelLabel } from "@shared/config/distribution";
 import { logError } from "@/utils/logger";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { useDistributionStore } from "@/store/distributionStore";
 import { pluralize } from "@/lib/pluralize";
 
@@ -128,7 +128,7 @@ function describeUpdateChannel(
       ? "Nightly builds may contain unstable features. You can switch back to stable at any time."
       : "Stable releases, or nightly builds with the newest changes";
   if (!lastCheck) return base;
-  const checked = `Last checked ${formatRelativeTime(lastCheck)}.`;
+  const checked = formatLastChecked(lastCheck);
   return base.endsWith(".") ? `${base} ${checked}` : `${base}. ${checked}`;
 }
 

@@ -1,4 +1,5 @@
 import { PopoverContent } from "@/components/ui/popover";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
@@ -8,7 +9,6 @@ import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
 import { clearSearchBeforeDismiss } from "@/components/ui/SearchField";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatTimeAgo } from "@/utils/timeAgo";
 import type { BranchPickerRow } from "../branchPickerUtils";
 import type { UseBranchPickerResult } from "../hooks/useBranchPicker";
 
@@ -199,8 +199,6 @@ function BranchPickerRowItem({
   onActivate,
   onSelect,
 }: BranchPickerRowItemProps) {
-  const lastCommit = row.committerDate ? formatTimeAgo(row.committerDate) : null;
-
   return (
     <div
       id={optionId}
@@ -239,7 +237,7 @@ function BranchPickerRowItem({
       >
         {showCurrentBadge && row.isCurrent && <span>current</span>}
         {row.isRemote && row.remoteName && <span>{row.remoteName}</span>}
-        {lastCommit && <span>{lastCommit}</span>}
+        {row.committerDate && <TimeAgo timestamp={row.committerDate} />}
         {row.inUseWorktree && (
           // Inline rather than a tooltip: the cursor row is never DOM-focused, so
           // a keyboard user could not reach one. A linked worktree is usually

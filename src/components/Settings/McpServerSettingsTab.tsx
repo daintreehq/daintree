@@ -1,4 +1,5 @@
 import { useState, useEffect, useReducer, useRef } from "react";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -22,7 +23,6 @@ import { useSettingsTabValidation } from "@/components/Settings/SettingsValidati
 import { McpAuditLogViewer } from "@/components/Settings/McpAuditLogViewer";
 import { ErrorRetryRow, InlineErrorRow } from "@/components/Settings/auditLogParts";
 import { TurnOutcomeDiagnostics } from "@/components/Settings/TurnOutcomeDiagnostics";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import {
@@ -671,10 +671,9 @@ export function McpServerSettingsTab() {
                       <div className="text-2xs text-text-secondary">
                         <span className="font-mono">…{bearer.token4LastChars}</span>
                         {" · "}
-                        {bearer.requestsSinceLaunch}{" "}
-                        {bearer.requestsSinceLaunch === 1 ? "request" : "requests"}
-                        {" · active "}
-                        {formatRelativeTime(bearer.lastActiveAt)}
+                        {pluralize(bearer.requestsSinceLaunch, "request")}
+                        {" · "}
+                        <TimeAgo timestamp={bearer.lastActiveAt} verbose prefix="active " />
                       </div>
                     </div>
                     <Button
@@ -724,10 +723,9 @@ export function McpServerSettingsTab() {
                       <div className="text-2xs text-text-secondary">
                         {pluralize(bearer.sessionCount, "session")}
                         {" · "}
-                        {bearer.requestsSinceLaunch}{" "}
-                        {bearer.requestsSinceLaunch === 1 ? "request" : "requests"}
-                        {" · active "}
-                        {formatRelativeTime(bearer.lastActiveAt)}
+                        {pluralize(bearer.requestsSinceLaunch, "request")}
+                        {" · "}
+                        <TimeAgo timestamp={bearer.lastActiveAt} verbose prefix="active " />
                       </div>
                     </div>
                   </li>
@@ -1103,7 +1101,7 @@ export function McpServerSettingsTab() {
                 {client.userAgent ?? "Unknown client"}
               </span>
               <span className="text-2xs text-text-secondary shrink-0">
-                connected {formatRelativeTime(client.connectedAtMs)}
+                <TimeAgo timestamp={client.connectedAtMs} verbose prefix="connected " />
               </span>
             </li>
           ))}

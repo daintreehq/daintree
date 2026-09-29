@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { cn } from "@/lib/utils";
 import {
   Check,
@@ -25,7 +26,6 @@ import { Spinner } from "../../ui/Spinner";
 import { SpinningIcon } from "../../ui/SpinningIcon";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { systemClient } from "@/clients/systemClient";
-import { formatTimeAgo } from "@/utils/timeAgo";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 import { actionService } from "@/services/ActionService";
@@ -356,13 +356,12 @@ export function EnvironmentPopover({
         {(checkedAt || onCheckResourceStatus) && (
           <div className="flex items-center justify-between gap-2 border-t border-divider px-3 py-1.5">
             {checkedAt ? (
-              <time
-                dateTime={checkedAt.toISOString()}
-                title={checkedAt.toLocaleString()}
-                className="text-text-secondary tabular-nums"
-              >
-                Checked {formatTimeAgo(checkedAt.getTime(), Math.max(now, checkedAt.getTime()))}
-              </time>
+              <TimeAgo
+                timestamp={checkedAt.getTime()}
+                now={Math.max(now, checkedAt.getTime())}
+                prefix="Last checked "
+                className="text-text-secondary"
+              />
             ) : (
               <span className="text-text-secondary">Not checked yet</span>
             )}

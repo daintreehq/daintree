@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 import { InlineError } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
@@ -536,25 +537,11 @@ export function GitInitDialog({
                   the user submitted, so "2 of 4" is something this surface
                   actually knows. Before the first event there is no step to
                   count, so the track omits `aria-valuenow` and pulses instead. */}
-              <div
-                role="progressbar"
-                aria-label={currentPhase?.live ?? "Starting"}
-                {...(currentPhase ? { "aria-valuenow": completedCount } : {})}
-                aria-valuemin={0}
-                aria-valuemax={plannedSteps.length}
-                className={`h-1 w-full overflow-hidden rounded-full bg-daintree-border/50 ${
-                  currentPhase ? "" : "animate-pulse-immediate"
-                }`}
-              >
-                {currentPhase && (
-                  <div
-                    className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
-                    style={{
-                      width: `${(completedCount / Math.max(plannedSteps.length, 1)) * 100}%`,
-                    }}
-                  />
-                )}
-              </div>
+              <ProgressBar
+                label={currentPhase?.live ?? "Starting"}
+                value={currentPhase ? completedCount : null}
+                max={Math.max(plannedSteps.length, 1)}
+              />
               {/* Only while nothing has been reported yet — once steps are
                   ticking, "Still working…" would be telling the user something
                   the counter already says. */}

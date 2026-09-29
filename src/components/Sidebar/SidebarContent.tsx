@@ -301,7 +301,7 @@ function renderSidebarFlatItem(
     return (
       <div role="row" aria-rowindex={item.ariaRowIndex}>
         <div role="gridcell">
-          <DeletedWorktreeCard worktree={item.worktree} />
+          <DeletedWorktreeCard worktree={item.worktree} homeDir={context.homeDir} />
         </div>
       </div>
     );
@@ -313,7 +313,7 @@ function renderSidebarFlatItem(
     return (
       <div role="row" aria-rowindex={item.ariaRowIndex}>
         <div role="gridcell">
-          <DeletedWorktreeGroup worktrees={item.worktrees} />
+          <DeletedWorktreeGroup worktrees={item.worktrees} homeDir={context.homeDir} />
         </div>
       </div>
     );

@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { ChevronRight } from "lucide-react";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { Button } from "@/components/ui/button";
@@ -12,7 +13,6 @@ import {
 import { cn } from "@/lib/utils";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
-import { formatTimeAgo } from "@/utils/timeAgo";
 import type { HelpAssistantTier, McpAuditRecord, McpAuditResult } from "@shared/types";
 
 // Local mirror of the Settings audit viewer's outcome→severity mapping. The
@@ -284,7 +284,6 @@ function RecentCallRow({ record, now }: { record: McpAuditRecord; now: number })
   const panelId = useId();
   const hasArgs = record.argsSummary !== "" && record.argsSummary !== "{}";
   const detail = outcomeDetail(record);
-  const date = new Date(record.timestamp);
 
   return (
     <li>
@@ -324,13 +323,11 @@ function RecentCallRow({ record, now }: { record: McpAuditRecord; now: number })
         </span>
         {/* Recency, not duration — calls are almost always sub-100ms, so
             "when did this run" is the metric worth a column. */}
-        <time
-          dateTime={date.toISOString()}
-          title={date.toLocaleString()}
-          className="text-text-secondary whitespace-nowrap tabular-nums"
-        >
-          {formatTimeAgo(record.timestamp, now)}
-        </time>
+        <TimeAgo
+          timestamp={record.timestamp}
+          now={now}
+          className="text-text-secondary whitespace-nowrap"
+        />
       </button>
       <div id={panelId} hidden={!expanded}>
         {expanded && (

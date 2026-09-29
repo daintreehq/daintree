@@ -22,28 +22,8 @@ import type {
 import { logError } from "@/utils/logger";
 import { pluralize } from "@/lib/pluralize";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
-}
-
-/**
- * Token counts are a ±20% heuristic, so they read better rounded than exact.
- * Thresholds are picked off the *rounded* value so it can never print "1000k",
- * and so the one-decimal form stops before it would round up to two digits.
- */
-function formatTokenEstimate(tokens: number): string {
-  if (tokens < 1000) return String(Math.round(tokens));
-  if (tokens < 999_500) {
-    const thousands = tokens / 1000;
-    return thousands < 9.95 ? `${thousands.toFixed(1)}k` : `${Math.round(thousands)}k`;
-  }
-  return `${(tokens / 1_000_000).toFixed(1)}M`;
-}
+import { formatBytes } from "@/lib/formatBytes";
+import { formatTokenCount } from "@/utils/formatTokenCount";
 
 // Keyed loosely on purpose: exclusion reasons are additive upstream, and an
 // unrecognized one falls back to showing its own key rather than nothing.
@@ -436,7 +416,7 @@ export function ContextTab({
                       </span>
                       {testConfigResult.estimatedTokens !== undefined && (
                         <span className="text-xs text-text-secondary">
-                          ~{formatTokenEstimate(testConfigResult.estimatedTokens)} tokens
+                          ~{formatTokenCount(testConfigResult.estimatedTokens)} tokens
                         </span>
                       )}
                     </div>

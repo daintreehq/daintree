@@ -9,18 +9,7 @@ import { logError } from "@/utils/logger";
 import { SAFE_MODE_BANNER_COPY } from "./recoveryCopy";
 import type { QuarantinedPanelSummary } from "@shared/types/ipc/crashRecovery";
 import { pluralize } from "@/lib/pluralize";
-
-function formatRelativeTime(timestamp: number): string {
-  const diff = Date.now() - timestamp;
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 1) return "moments ago";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(timestamp).toLocaleDateString();
-}
+import { formatTimeAgo } from "@/utils/timeAgo";
 
 interface QuarantinedPanelRowProps {
   panel: QuarantinedPanelSummary;
@@ -126,11 +115,11 @@ export function SafeModeBanner() {
 
   let crashMetaText: string | null = null;
   if (crashes > 0 && crashTimestamp !== null) {
-    crashMetaText = `${pluralize(crashes, "crash", "crashes")} detected, last ${formatRelativeTime(crashTimestamp)}`;
+    crashMetaText = `${pluralize(crashes, "crash", "crashes")} detected, last ${formatTimeAgo(crashTimestamp)}`;
   } else if (crashes > 0) {
     crashMetaText = `${pluralize(crashes, "crash", "crashes")} detected`;
   } else if (crashTimestamp !== null) {
-    crashMetaText = `Last crash ${formatRelativeTime(crashTimestamp)}`;
+    crashMetaText = `Last crash ${formatTimeAgo(crashTimestamp)}`;
   }
 
   const detailsPopover = hasDetails ? (
@@ -141,7 +130,14 @@ export function SafeModeBanner() {
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="p-3 text-xs max-w-sm space-y-2 text-text-primary">
-        {crashMetaText && <p className="font-medium">{crashMetaText}</p>}
+        {crashMetaText && (
+          <p
+            className="font-medium"
+            title={crashTimestamp !== null ? new Date(crashTimestamp).toLocaleString() : undefined}
+          >
+            {crashMetaText}
+          </p>
+        )}
         {hasQuarantineList ? (
           <>
             <p className="text-text-secondary">

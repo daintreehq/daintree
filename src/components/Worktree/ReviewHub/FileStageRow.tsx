@@ -1,4 +1,5 @@
 import { memo, useCallback, useRef } from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
 import type React from "react";
 import type { RefObject } from "react";
 import type { StagingFileEntry } from "@shared/types";
@@ -269,8 +270,7 @@ function FileStageRowComponent({
             (generated || viewed) && "opacity-60"
           )}
         >
-          {insertions > 0 && <span className="text-status-success">+{insertions}</span>}
-          {deletions > 0 && <span className="text-status-error">-{deletions}</span>}
+          <DiffStat insertions={insertions} deletions={deletions} />
         </div>
       )}
 

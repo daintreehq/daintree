@@ -1,4 +1,8 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { useHomeDir } from "@/hooks/app/useHomeDir";
+import { formatPath } from "@/utils/textParsing";
+import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
+import { formatBytes } from "@/lib/formatBytes";
 import { InlineError } from "@/components/ui/field";
 import {
   AlertTriangle,
@@ -84,6 +88,7 @@ export function CrashRecoveryDialog({
   onUpdateConfig,
   initialError,
 }: CrashRecoveryDialogProps) {
+  const { homeDir } = useHomeDir();
   const panels = useMemo(() => crash.panels ?? [], [crash.panels]);
   const hasPanels = panels.length > 0;
   const isInCrashLoop = (crash.crashCount ?? 0) >= 2;
@@ -310,6 +315,7 @@ export function CrashRecoveryDialog({
                       panel={panel}
                       selected={selectedIds.has(panel.id)}
                       onToggle={togglePanel}
+                      homeDir={homeDir}
                     />
                   ))}
                 </div>
@@ -427,7 +433,7 @@ export function CrashRecoveryDialog({
                 {crash.entry.sessionDurationMs !== undefined && (
                   <DetailRow
                     label="Session duration"
-                    value={formatDuration(crash.entry.sessionDurationMs)}
+                    value={formatElapsedDuration(crash.entry.sessionDurationMs)}
                   />
                 )}
                 {crash.entry.electronVersion && (
@@ -436,7 +442,7 @@ export function CrashRecoveryDialog({
                 {crash.entry.totalMemory !== undefined && (
                   <DetailRow
                     label="Memory"
-                    value={`${formatBytesCompact(crash.entry.freeMemory ?? 0)} free / ${formatBytesCompact(crash.entry.totalMemory)} total`}
+                    value={`${formatBytes(crash.entry.freeMemory ?? 0)} free / ${formatBytes(crash.entry.totalMemory)} total`}
                   />
                 )}
                 {crash.entry.panelCount !== undefined && (
@@ -445,7 +451,7 @@ export function CrashRecoveryDialog({
                 {crash.entry.processUptime !== undefined && (
                   <DetailRow
                     label="Process uptime"
-                    value={formatDuration(crash.entry.processUptime * 1000)}
+                    value={formatElapsedDuration(crash.entry.processUptime * 1000)}
                   />
                 )}
                 {crash.entry.errorMessage && (
@@ -685,10 +691,12 @@ function PanelRow({
   panel,
   selected,
   onToggle,
+  homeDir,
 }: {
   panel: PanelSummary;
   selected: boolean;
   onToggle: (id: string) => void;
+  homeDir: string | undefined;
 }) {
   return (
     <label
@@ -703,7 +711,11 @@ function PanelRow({
       <span className="text-text-secondary shrink-0">{getPanelIcon(panel.kind)}</span>
       <div className="flex-1 min-w-0">
         <div className="text-sm text-text-primary truncate">{panel.title || panel.kind}</div>
-        {panel.cwd && <div className="text-xs text-text-secondary truncate">{panel.cwd}</div>}
+        {panel.cwd && (
+          <div className="font-mono text-xs text-text-secondary truncate" title={panel.cwd}>
+            {formatPath(panel.cwd, homeDir)}
+          </div>
+        )}
       </div>
       <div className="flex items-center gap-1.5 shrink-0">
         {panel.agentState && (
@@ -733,23 +745,6 @@ function DetailRow({ label, value }: { label: string; value: string }) {
       <span className="text-xs text-text-primary text-right font-mono">{value}</span>
     </div>
   );
-}
-
-function formatDuration(ms: number): string {
-  const secs = Math.floor(ms / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ${secs % 60}s`;
-  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
-}
-
-function formatBytesCompact(bytes: number): string {
-  if (bytes <= 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  let i = Math.floor(Math.log(bytes) / Math.log(k));
-  i = Math.max(0, Math.min(i, sizes.length - 1));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 }
 
 function formatActionArgs(args: Record<string, unknown> | undefined): string | null {

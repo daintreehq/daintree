@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 import { InlineError } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
@@ -678,23 +679,10 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                   with no measurable progress and gains it the moment git speaks,
                   and swapping the indicator in would shift everything under it.
                   Indeterminate omits `aria-valuenow` and pulses the empty track. */}
-              <div
-                role="progressbar"
-                aria-label={currentStage ? stageLabel(currentStage) : "Connecting"}
-                {...(currentStage ? { "aria-valuenow": stagePercent(currentStage) } : {})}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                className={`h-1 w-full overflow-hidden rounded-full bg-daintree-border/50 ${
-                  currentStage ? "" : "animate-pulse-immediate"
-                }`}
-              >
-                {currentStage && (
-                  <div
-                    className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
-                    style={{ width: `${stagePercent(currentStage)}%` }}
-                  />
-                )}
-              </div>
+              <ProgressBar
+                label={currentStage ? stageLabel(currentStage) : "Connecting"}
+                value={currentStage ? stagePercent(currentStage) : null}
+              />
               {/* Only while the phase is indeterminate — once a percentage is
                   moving, "Still working…" would be telling the user something
                   the number already says. Five seconds, per the house rule for

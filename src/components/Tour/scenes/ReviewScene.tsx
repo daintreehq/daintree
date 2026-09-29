@@ -122,10 +122,11 @@ function ReviewSurface({
               <span className="min-w-0 flex-1 truncate text-3xs text-text-primary">
                 {file.name}
               </span>
-              <span className="text-3xs tabular-nums text-text-secondary">+{file.added}</span>
-              {file.removed > 0 && (
-                <span className="text-3xs tabular-nums text-text-secondary">−{file.removed}</span>
-              )}
+              {/* DiffStat's spelling, inline: tour scenes can't import host components (#12769). */}
+              <span className="inline-flex items-center gap-1 text-3xs tabular-nums">
+                {file.added > 0 && <span className="text-status-success">+{file.added}</span>}
+                {file.removed > 0 && <span className="text-status-error">-{file.removed}</span>}
+              </span>
             </div>
           ))}
         </div>

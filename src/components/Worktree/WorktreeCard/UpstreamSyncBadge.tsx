@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { formatTimeAgo } from "@/utils/timeAgo";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { actionService } from "@/services/ActionService";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CloudOff, KeyRound } from "@/components/icons";
 import type { LucideIcon } from "lucide-react";
@@ -233,9 +233,7 @@ export function UpstreamSyncBadge({
         ? `Base (${compareLabel}): in sync`
         : null;
   const lastFetched =
-    lastFetchedAt != null
-      ? formatRelativeTime(lastFetchedAt, Math.max(nowMs, lastFetchedAt))
-      : null;
+    lastFetchedAt != null ? formatTimeAgo(lastFetchedAt, Math.max(nowMs, lastFetchedAt)) : null;
   // The actionable variant carries its own title, so only the passive auth
   // failure needs the sentence here.
   const statusSentence =
