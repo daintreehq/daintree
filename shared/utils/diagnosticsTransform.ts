@@ -86,17 +86,30 @@ export function applyReplacementsCounted(
     }
     counts[i] = matches.length;
     if (matches.length === 0) return;
-    const shiftAt = (pos: number) => {
-      let delta = 0;
-      for (const m of matches) {
-        if (m.end > pos) break;
-        delta += m.length - (m.end - m.start);
+    // Matches are sorted and disjoint, so cumulative length change and both
+    // lookups below are binary searches instead of scans over every match.
+    const shiftBefore: number[] = [0];
+    for (const m of matches) {
+      shiftBefore.push(shiftBefore[shiftBefore.length - 1]! + m.length - (m.end - m.start));
+    }
+    // First match whose end is past `pos`; all matches before it end at or before `pos`.
+    const firstEndingAfter = (pos: number) => {
+      let lo = 0;
+      let hi = matches.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (matches[mid]!.end > pos) hi = mid;
+        else lo = mid + 1;
       }
-      return pos + delta;
+      return lo;
     };
-    const moved = ranges
-      .filter(([s, e]) => !matches.some((m) => m.start <= e && s < m.end))
-      .map(([s, e]): [number, number] => [shiftAt(s), shiftAt(e + 1) - 1]);
+    const shiftAt = (pos: number) => pos + shiftBefore[firstEndingAfter(pos)]!;
+    const moved: [number, number][] = [];
+    for (const [s, e] of ranges) {
+      const next = matches[firstEndingAfter(s)];
+      if (next && next.start <= e) continue;
+      moved.push([shiftAt(s), shiftAt(e + 1) - 1]);
+    }
     const added = matches
       .filter((m) => m.length > 0)
       .map((m): [number, number] => {
