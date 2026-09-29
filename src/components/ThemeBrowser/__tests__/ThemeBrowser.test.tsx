@@ -17,11 +17,17 @@ vi.mock("@/clients/appThemeClient", () => ({
   },
 }));
 
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeBrowser } from "../ThemeBrowser";
 
 function Harness() {
   useGlobalEscapeDispatcher();
-  return <ThemeBrowser />;
+  // The app mounts the browser under App's TooltipProvider.
+  return (
+    <TooltipProvider>
+      <ThemeBrowser />
+    </TooltipProvider>
+  );
 }
 
 function otherDarkScheme() {

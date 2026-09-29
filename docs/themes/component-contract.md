@@ -28,6 +28,24 @@ Check `src/components/ui/` before you hand-roll anything. A surface built from t
 
 New primitives belong in `src/components/ui/` only when a second caller appears. One-off composition stays with its feature.
 
+## Pane chrome
+
+A pane's title bar and status strip are one frame, and every pane, side panel and floating surface draws it the same way, so a grid pane, the assistant and the Review Hub line up when they sit side by side.
+
+| Edge | Spelling | Rule |
+| --- | --- | --- |
+| Title bar | `SurfaceHeader density="compact"` | 32px (`h-8`), 12px inset (`px-3`), `border-b border-divider`. Title is `text-xs font-medium`. Actions are `Button ghost icon-xs` or `SurfaceHeaderCloseButton`, which both fit the 32px bar without negative margins. |
+| Focused lift | `SURFACE_HEADER_FOCUS_LIFT_CLASS` | The bar of the pane the keyboard is in steps up one neutral overlay (`--panel-header-focus-bg`, falling back to `overlay-medium`). Never accent, never `surface-highlight`. `PanelHeader` and the assistant share the one string. |
+| Status strip | `PANE_STATUS_FOOTER_CLASS` | `min-h-6`, `px-3`, `border-t border-divider`, `text-2xs text-text-secondary`. A strip whose items carry their own `px-1.5` hover chip insets by `px-1.5` instead, so the ink still lands on the 12px line. |
+
+Three families sit outside this on purpose:
+
+- **Dialog headers** use the comfortable density (`px-6 py-4 border-border-strong`), and a toolbar row directly under one keeps the dialog's `px-6` inset with a `border-divider` separator (Compare worktrees).
+- **Full-window views** that cover the main toolbar (the plugin manager) take the toolbar's own chrome: `h-12 px-4 border-b border-divider`, with room for the traffic lights.
+- **Bottom drawers** (the Dev Preview output drawer and the Diagnostics dock, #12948) keep their 32px strips on `border-overlay`, including the session-diagnostics strip inside the drawer.
+
+Enforced by `src/components/ui/__tests__/surfaceHeaders.contract.test.ts`, which also holds the Review Hub to the same 12px inset for its section bands (`REVIEW_HUB_SECTION_BAND`).
+
 ## The colour vocabulary
 
 Three vocabularies are live in the codebase. **The semantic tokens are the current one.** The other two are legacy and only shrink from here:

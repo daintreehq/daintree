@@ -30,6 +30,7 @@ import {
 import {
   REVIEW_HUB_COUNT_CHIP,
   REVIEW_HUB_DISABLED_CTA,
+  REVIEW_HUB_SECTION_BAND,
   REVIEW_HUB_STICKY_BAND,
 } from "./reviewHubUtils";
 import {
@@ -112,7 +113,7 @@ function RebaseSequenceRail({ entries }: { entries: RebaseEntry[] }) {
   return (
     <div className="border-b border-divider" data-testid="conflict-rebase-sequence">
       <div className={REVIEW_HUB_STICKY_BAND}>
-        <div className="px-4 py-2 bg-overlay-subtle flex items-center">
+        <div className={REVIEW_HUB_SECTION_BAND}>
           <span className={SECTION_LABEL_CLASS}>
             Rebase sequence
             <span className={REVIEW_HUB_COUNT_CHIP}>{display.length}</span>
@@ -524,7 +525,7 @@ export function ConflictPanel({
           needs the user; once nothing does, it steps down to a neutral band. */}
       <div
         className={cn(
-          "px-4 py-3 border-b border-divider",
+          "px-3 py-3 border-b border-divider",
           conflictCount > 0 ? "bg-status-warning/10" : "bg-overlay-subtle"
         )}
       >
@@ -588,7 +589,7 @@ export function ConflictPanel({
       {/* Region 2: Conflict worklist */}
       <div className="border-b border-divider">
         <div className={REVIEW_HUB_STICKY_BAND}>
-          <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle">
+          <div className={REVIEW_HUB_SECTION_BAND}>
             <span className={SECTION_LABEL_CLASS}>
               Conflicted
               <span className={REVIEW_HUB_COUNT_CHIP}>{conflictCount}</span>
@@ -705,7 +706,7 @@ export function ConflictPanel({
               onClick={() => setShowResolved((v) => !v)}
               className={cn(
                 SECTION_LABEL_CLASS,
-                "w-full flex items-center gap-1.5 px-4 py-1.5 hover:text-text-primary hover:bg-overlay-subtle transition-colors"
+                "w-full flex items-center gap-1.5 px-3 py-1.5 hover:text-text-primary hover:bg-overlay-subtle transition-colors"
               )}
               aria-expanded={showResolved}
               aria-controls={resolvedListId}

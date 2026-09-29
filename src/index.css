@@ -1727,8 +1727,8 @@ body[data-performance-mode="true"] .console-drawer-region {
 
 /* Daintree Assistant focus state — anchors the active-surface affordance on
    the aside edge (border-left + 1px rings) while the surface-lift fill lives
-   on the header only (`HelpPanelHeader` uses `bg-overlay-subtle` when
-   focused). Filling the whole aside floods the launching skeleton, the empty
+   on the header only (`HelpPanelHeader` takes `SURFACE_HEADER_FOCUS_LIFT_CLASS`,
+   the grid pane header's lift, when focused). Filling the whole aside floods the launching skeleton, the empty
    state, and any future no-terminal content with the lift, so the chrome is
    scoped here to edges only. */
 .assistant-focused {

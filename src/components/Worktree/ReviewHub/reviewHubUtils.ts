@@ -388,6 +388,16 @@ export function sortFiles(
 export const REVIEW_HUB_STICKY_BAND = "sticky top-0 z-10 bg-surface-canvas";
 
 /**
+ * The band itself: every section heading in the hub ("Staged", "Changed vs
+ * main", "Conflicted", the loading skeleton's stand-ins). On the hub's 12px
+ * inset — the compact `SurfaceHeader`'s — so a band label sits directly under
+ * the header's first item rather than a few pixels in from it. Dividers are the
+ * caller's: some bands close a list and some open one.
+ */
+export const REVIEW_HUB_SECTION_BAND =
+  "flex items-center justify-between gap-2 px-3 py-2 bg-overlay-subtle";
+
+/**
  * The count beside a section title ("Conflicted 4", "Staged 3 files"). One
  * wash for every section so a header never reads as more or less urgent than
  * its neighbour purely because its chip was tinted differently.

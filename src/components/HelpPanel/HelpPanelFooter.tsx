@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "@/lib/animationUtils";
 import { ArrowLeftRight, DaintreeIcon, FolderGit2 } from "@/components/icons";
+import { PANE_STATUS_FOOTER_CLASS } from "@/components/ui/paneToolbarStyles";
 import { TerminalNotifyChip } from "@/components/Terminal/TerminalNotifyChip";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { AgentConfig } from "@/config/agents";
@@ -202,7 +203,12 @@ export function HelpPanelFooter({
     >
       <div
         ref={rowRef}
-        className="flex items-center gap-1 border-t border-border-default shrink-0 px-1.5 py-0.5 text-2xs text-text-secondary whitespace-nowrap overflow-hidden"
+        // Items carry their own `px-1.5` hover chip, so the strip insets by
+        // that much less and the ink still sits on the 12px line.
+        className={cn(
+          PANE_STATUS_FOOTER_CLASS,
+          "gap-1 px-1.5 py-0 whitespace-nowrap overflow-hidden"
+        )}
       >
         <McpActivityStrip sessionId={sessionId} activity={activity} compact={density >= 3} />
         <TurnOutcomePip outcome={outcomeAlert} onDismiss={onDismissOutcome} />

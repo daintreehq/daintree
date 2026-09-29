@@ -23,6 +23,17 @@ const surfaceHeaderVariants = cva("", {
   },
 });
 
+/**
+ * The focused-pane lift for a compact header: the pane (or side panel) the
+ * keyboard is in lifts its title bar by one neutral step, never with accent.
+ * The var hook lets a theme repaint the lifted bar; the fallback is the
+ * strongest neutral overlay step, so on a theme without the hook the focused
+ * bar still reads as lifted. Every compact header with a focus state uses
+ * this exact string, so a grid pane and the assistant lift identically.
+ */
+const SURFACE_HEADER_FOCUS_LIFT_CLASS =
+  "bg-[var(--panel-header-focus-bg,var(--color-overlay-medium))]";
+
 export interface SurfaceHeaderProps
   extends React.HTMLAttributes<HTMLDivElement>, VariantProps<typeof surfaceHeaderVariants> {
   children: React.ReactNode;
@@ -114,4 +125,10 @@ const SurfaceHeaderCloseButton = React.forwardRef<HTMLButtonElement, SurfaceHead
 );
 SurfaceHeaderCloseButton.displayName = "SurfaceHeaderCloseButton";
 
-export { SurfaceHeader, SurfaceHeaderTitle, SurfaceHeaderCloseButton, surfaceHeaderVariants };
+export {
+  SurfaceHeader,
+  SurfaceHeaderTitle,
+  SurfaceHeaderCloseButton,
+  surfaceHeaderVariants,
+  SURFACE_HEADER_FOCUS_LIFT_CLASS,
+};

@@ -28,3 +28,20 @@ export const PANE_TOOLBAR_ICON_CLASS = "h-3.5 w-3.5";
  */
 export const PANE_TOOLBAR_TEXT_BUTTON_CLASS =
   "toolbar-icon-button inline-flex h-6.5 shrink-0 items-center gap-1.5 px-2 rounded-[var(--radius-md)] text-xs text-text-secondary whitespace-nowrap aria-pressed:text-text-primary aria-expanded:text-text-primary";
+
+/**
+ * The status strip along the bottom of a pane or side panel: what the view is
+ * showing (hidden dotfiles, image size and zoom, scratchpad lifecycle, the
+ * assistant's tool activity) and at most a control or two beside it. It is the
+ * compact `SurfaceHeader`'s counterpart on the other edge — the same 12px inset
+ * and the same `border-divider` separator — so a pane's top and bottom chrome
+ * read as one frame. `min-h-6` rather than `h-6` lets a strip that wraps (the
+ * image footer at narrow widths) grow instead of clipping.
+ *
+ * A strip whose items carry their own hover chip (`px-1.5`) insets by that much
+ * less (`px-1.5`), so the ink still lands on the 12px line. A strip carrying
+ * pane toolbar buttons (26px) drops its `py`, so the buttons set the height
+ * rather than adding to it.
+ */
+export const PANE_STATUS_FOOTER_CLASS =
+  "flex min-h-6 shrink-0 items-center gap-2 border-t border-divider px-3 py-1 text-2xs text-text-secondary";

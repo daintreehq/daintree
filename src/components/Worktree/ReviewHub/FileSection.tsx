@@ -22,6 +22,7 @@ import { FileStageRow, type FileStageRowSection } from "./FileStageRow";
 import { type MountedRange } from "@/lib/fileListWindowing";
 import { isGeneratedFile } from "../generatedFileClassifier";
 import {
+  REVIEW_HUB_SECTION_BAND,
   REVIEW_HUB_STICKY_BAND,
   type SectionViewState,
   applySortChange,
@@ -350,7 +351,7 @@ export function FileSection({
       {/* Sticky so identity, count and the scoped bulk action stay reachable
           while a long changeset scrolls. */}
       <div className={cn("@container/file-section", REVIEW_HUB_STICKY_BAND)}>
-        <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle gap-2">
+        <div className={REVIEW_HUB_SECTION_BAND}>
           <span className={cn(SECTION_LABEL_CLASS, "shrink-0 flex items-center")}>
             {title}
             <span

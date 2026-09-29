@@ -61,7 +61,7 @@ import { cn } from "@/lib/utils";
 import { formatShortcutForTooltip } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
+import { SurfaceHeader, SURFACE_HEADER_FOCUS_LIFT_CLASS } from "@/components/ui/SurfaceHeader";
 import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import { Button } from "@/components/ui/button";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
@@ -1050,10 +1050,7 @@ function PanelHeaderComponent({
           : location === "dock"
             ? "bg-surface"
             : isFocused || isSelected
-              ? // The var hook lets a theme repaint the lifted bar; the fallback
-                // is the strongest neutral overlay step, so on a theme without
-                // the hook the pane you type into still reads as lifted.
-                "bg-[var(--panel-header-focus-bg,var(--color-overlay-medium))]"
+              ? SURFACE_HEADER_FOCUS_LIFT_CLASS
               : // Preview tint sits between transparent and the focus lift so a
                 // previewed-but-unselected pane reads distinctly from both.
                 // Neutral surface, no accent — accent restraint per CLAUDE.md.

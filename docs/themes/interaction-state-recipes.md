@@ -257,6 +257,20 @@ Rest is a recessed well (`surface-canvas`, or the site's theme hook through `--s
 
 ---
 
+### Focused Pane Title Bar
+
+**Role:** The compact title bar of the pane or side panel the keyboard is in: a grid pane's `PanelHeader`, the Daintree Assistant's header. One neutral step up, never accent.
+
+```tsx
+import { SURFACE_HEADER_FOCUS_LIFT_CLASS } from "@/components/ui/SurfaceHeader";
+// "bg-[var(--panel-header-focus-bg,var(--color-overlay-medium))]"
+<SurfaceHeader density="compact" className={cn(isFocused && SURFACE_HEADER_FOCUS_LIFT_CLASS)} />;
+```
+
+**Usage:** Import the constant; never respell the string, and never reach for `surface-highlight` (the assistant did, and read as a different family from the pane beside it). The divider under a lifted bar steps up to `--border-overlay`, which `index.css` already does for `.terminal-selected` headers and the assistant does in its own class list. Spell it `border-overlay`, never `border-b-[var(--border-overlay)]`: the frame carries `.border-divider`, a custom rule in `index.css` that outranks an arbitrary border colour utility, so the arbitrary one silently never paints. The fill stays on the bar, not the whole surface, so skeletons and empty states below keep their own background. The full pane-chrome contract (height, inset, status strip) is in [component-contract.md](./component-contract.md#pane-chrome).
+
+---
+
 ### Segmented Toggle Group Active State
 
 **Role:** Active segment in a mutually exclusive toggle group (e.g., filter chips, tab-style selectors). Active state uses neutral overlay lift — never accent.
