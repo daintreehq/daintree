@@ -208,7 +208,9 @@ export interface ManagedTerminal {
   postCompleteMarker?: IMarker;
 
   // Project-switch resize suppression
-  resizeSuppressionTimer?: number;
+  // Which suppressResizesDuringProjectSwitch arm owns the pending clear; a
+  // re-arm or clearResizeSuppression supersedes it.
+  resizeSuppressionToken?: number;
   isResizeSuppressed?: boolean;
   resizeSuppressionEndTime?: number;
   // A background resize that arrived while the resize lock was held (e.g. during
