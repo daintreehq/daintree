@@ -39,11 +39,14 @@ function exactBytes(args: unknown[]): number | null {
   }
 }
 
-function referenceOutcome(channel: string, args: unknown[]): string {
+function referenceOutcome(
+  channel: string,
+  args: unknown[],
+  bytes: number | null = exactBytes(args)
+): string {
   const category = channelToCategory[channel];
   const budget = category !== undefined ? PAYLOAD_BUDGETS[category] : DEFAULT_PAYLOAD_BUDGET;
   if (args.length > 8) return "ARG_COUNT_EXCEEDED";
-  const bytes = exactBytes(args);
   return bytes !== null && bytes > budget ? `PAYLOAD_TOO_LARGE:${bytes}` : "ok";
 }
 
@@ -399,19 +402,16 @@ describe("isProvablyWithinPayloadBudget soundness", () => {
 });
 
 describe("validateIpcInvokeEnvelope parity with the exact-only gate", () => {
-  const channels = [
-    "any:channel",
-    "terminal:spawn",
-    "git:get-file-diff",
-    "artifact:save-to-file",
-    "copytree:get-file-tree",
+  // Each budget is paired with a channel that carries it, so the boundary
+  // payloads (up to 4 MiB) are only measured where they sit on the boundary.
+  const boundaries: Array<[channel: string, budget: number]> = [
+    ["any:channel", DEFAULT_PAYLOAD_BUDGET],
+    ["terminal:spawn", PAYLOAD_BUDGETS.terminalSpawn],
+    ["git:get-file-diff", PAYLOAD_BUDGETS.gitOps],
+    ["copytree:get-file-tree", PAYLOAD_BUDGETS.fileOps],
+    ["artifact:save-to-file", PAYLOAD_BUDGETS.artifactOps],
   ];
-  const budgets = [
-    DEFAULT_PAYLOAD_BUDGET,
-    PAYLOAD_BUDGETS.terminalSpawn,
-    PAYLOAD_BUDGETS.gitOps,
-    PAYLOAD_BUDGETS.fileOps,
-  ];
+  const channels = boundaries.map(([channel]) => channel);
 
   function payloadsAround(budget: number): unknown[][] {
     // Strings whose exact size lands on either side of the budget, for each
@@ -443,13 +443,27 @@ describe("validateIpcInvokeEnvelope parity with the exact-only gate", () => {
     return out;
   }
 
-  it("rejects exactly what the exact-only gate rejected, with the same byte count", () => {
-    for (const budget of budgets) {
+  it.each(boundaries)(
+    "rejects exactly what the exact-only gate rejected, with the same byte count (%s at %i bytes)",
+    (channel, budget) => {
       for (const args of payloadsAround(budget)) {
-        for (const channel of channels) {
-          expect(actualOutcome(channel, args)).toBe(referenceOutcome(channel, args));
-        }
+        expect(actualOutcome(channel, args)).toBe(referenceOutcome(channel, args));
       }
+    }
+  );
+
+  it("agrees with the exact-only gate on channels whose budget is not under test", () => {
+    // The smallest budget's boundary payloads must be accepted identically by
+    // every roomier channel, and a mid-size budget's boundary payloads must be
+    // rejected by a tighter channel with the same byte count.
+    for (const args of payloadsAround(PAYLOAD_BUDGETS.terminalSpawn)) {
+      const bytes = exactBytes(args);
+      for (const channel of channels) {
+        expect(actualOutcome(channel, args)).toBe(referenceOutcome(channel, args, bytes));
+      }
+    }
+    for (const args of payloadsAround(PAYLOAD_BUDGETS.gitOps)) {
+      expect(actualOutcome("terminal:spawn", args)).toBe(referenceOutcome("terminal:spawn", args));
     }
   });
 });
