@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { Check, Download, Layers, RefreshCw, ShieldOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
@@ -15,6 +15,7 @@ import {
   AuditFilterSelect,
   AuditRecordTime,
   AuditTimeRangeSelect,
+  formatAuditAge,
   type AuditTimeRange,
 } from "./auditLogParts";
 import {
@@ -405,21 +406,31 @@ function GrantRow({ record, now }: { record: McpGrantRecord; now: number }) {
   );
 }
 
-function LogRow({
-  record,
-  now,
-  anomaly,
-}: {
+interface LogRowProps {
   record: McpLogRecord;
   now: number;
   anomaly?: McpAnomalySeverity;
-}) {
+}
+
+// `now` only reaches a row through its age label, so a minute tick re-renders
+// just the rows whose label actually changed rather than every row in the log.
+function sameRowOutput(prev: LogRowProps, next: LogRowProps): boolean {
+  return (
+    prev.record === next.record &&
+    prev.anomaly === next.anomaly &&
+    (prev.now === next.now ||
+      formatAuditAge(prev.record.timestamp, prev.now) ===
+        formatAuditAge(next.record.timestamp, next.now))
+  );
+}
+
+const LogRow = memo(function LogRow({ record, now, anomaly }: LogRowProps) {
   return isAuditRecord(record) ? (
     <DispatchRow record={record} now={now} anomaly={anomaly} />
   ) : (
     <GrantRow record={record} now={now} />
   );
-}
+}, sameRowOutput);
 
 /** A turn's (or the leftover) records, under a one-line summary. */
 function RecordBlock({
@@ -485,6 +496,9 @@ export function McpAuditLogViewer({
     [visibleRecords]
   );
 
+  // Only a bounded range depends on the clock; under "All time" a tick must not
+  // re-filter (and re-serialize) the whole log.
+  const cutoffMs = timeRange !== "all" ? now - AUDIT_TIME_RANGE_MS[timeRange] : undefined;
   const filteredRecords = useMemo(() => {
     // Grants carry no result or arguments of their own. With no narrowing they
     // all show; once the view is narrowed, a grant stays only as context for a
@@ -492,7 +506,6 @@ export function McpAuditLogViewer({
     // so an unrelated session's grant never props up an otherwise empty result.
     const needle = toolFilter.trim().toLowerCase();
     const searchNeedle = searchQuery.trim().toLowerCase();
-    const cutoffMs = timeRange !== "all" ? now - AUDIT_TIME_RANGE_MS[timeRange] : undefined;
     const narrowed = needle.length > 0 || searchNeedle.length > 0 || resultFilter !== "all";
     const matchesDispatch = (record: McpAuditRecord) => {
       if (resultFilter === "problems" && record.result === "success") return false;
@@ -520,7 +533,7 @@ export function McpAuditLogViewer({
         ? matchesDispatch(record)
         : !narrowed || matchingSessions.has(record.sessionId)
     );
-  }, [visibleRecords, resultFilter, toolFilter, timeRange, searchQuery, now]);
+  }, [visibleRecords, resultFilter, toolFilter, searchQuery, cutoffMs]);
 
   const canGroup = !!turnRecords && turnRecords.length > 0;
   const turnGroups = useMemo(() => {
@@ -701,7 +714,7 @@ export function McpAuditLogViewer({
                 <LogRow key={record.id} record={record} now={now} />
               ))}
               {group.lifecycle.map((grant) => (
-                <GrantRow key={grant.id} record={grant} now={now} />
+                <LogRow key={grant.id} record={grant} now={now} />
               ))}
             </RecordBlock>
           ))}
@@ -721,7 +734,7 @@ export function McpAuditLogViewer({
               summary={plural(turnGroups.lifecycle.length, "event")}
             >
               {turnGroups.lifecycle.map((grant) => (
-                <GrantRow key={grant.id} record={grant} now={now} />
+                <LogRow key={grant.id} record={grant} now={now} />
               ))}
             </RecordBlock>
           )}

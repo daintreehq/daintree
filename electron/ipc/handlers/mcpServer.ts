@@ -15,6 +15,7 @@ import type {
   HelpSessionBearerRecord,
   McpActiveClientInfo,
   McpAuditRecord,
+  McpAuditRecordQuery,
   McpAuditStats,
   McpIssueGrantResult,
   McpIssueNativeGrantResult,
@@ -52,6 +53,22 @@ function assertPanelId(value: unknown, what: string): asserts value is string {
   if (typeof value !== "string" || value.length === 0 || value.length > 512) {
     throw new Error(`Invalid ${what}`);
   }
+}
+
+function sanitizeAuditRecordQuery(query: unknown): McpAuditRecordQuery | undefined {
+  if (query === undefined || query === null) return undefined;
+  if (typeof query !== "object" || Array.isArray(query)) throw new Error("Invalid audit query");
+  const { helpSessionId, limit } = query as Record<string, unknown>;
+  if (
+    helpSessionId !== undefined &&
+    (typeof helpSessionId !== "string" || helpSessionId.length === 0 || helpSessionId.length > 512)
+  ) {
+    throw new Error("Invalid helpSessionId");
+  }
+  if (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1)) {
+    throw new Error("Invalid limit");
+  }
+  return { helpSessionId, limit };
 }
 
 export const mcpServerNamespace = defineIpcNamespace({
@@ -104,9 +121,9 @@ export const mcpServerNamespace = defineIpcNamespace({
     ),
     getAuditRecords: op(
       MCP_SERVER_METHOD_CHANNELS.getAuditRecords,
-      async (): Promise<McpAuditRecord[]> => {
+      async (query?: McpAuditRecordQuery): Promise<McpAuditRecord[]> => {
         const svc = await getMcpServerService();
-        return svc.getAuditRecords();
+        return svc.getAuditRecords(sanitizeAuditRecordQuery(query));
       }
     ),
     // Sibling of getAuditRecords that returns the full McpLogRecord union

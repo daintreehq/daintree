@@ -236,6 +236,22 @@ describe("mcpServer IPC adversarial", () => {
     expect((result as unknown[]).length).toBe(1);
   });
 
+  it("getAuditRecords forwards a narrowing query and rejects malformed ones", async () => {
+    const handler = getHandler(CHANNELS.MCP_SERVER_GET_AUDIT_RECORDS);
+    await handler(fakeEvent(), { helpSessionId: "help-1", limit: 5 });
+    expect(serviceMock.getAuditRecords).toHaveBeenLastCalledWith({
+      helpSessionId: "help-1",
+      limit: 5,
+    });
+    await handler(fakeEvent());
+    expect(serviceMock.getAuditRecords).toHaveBeenLastCalledWith(undefined);
+    const callsBefore = serviceMock.getAuditRecords.mock.calls.length;
+    for (const bad of ["x", [], { limit: 0 }, { limit: 1.5 }, { helpSessionId: 3 }]) {
+      await expect(handler(fakeEvent(), bad)).rejects.toThrow();
+    }
+    expect(serviceMock.getAuditRecords.mock.calls.length).toBe(callsBefore);
+  });
+
   it("getLogRecords returns the full union (dispatch + grant) and does not call the dispatch variant (#10027)", async () => {
     const mixed = [
       {
