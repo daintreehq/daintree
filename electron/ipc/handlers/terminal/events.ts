@@ -7,6 +7,7 @@ import {
   broadcastToProjectRenderers,
   broadcastToProjectRenderersExcept,
   broadcastToRenderer,
+  broadcastSlicedToProjectRenderers,
 } from "../../utils.js";
 import { resolveLiveWebContents } from "../../../window/webContentsRegistry.js";
 import { logInfo, logWarn } from "../../../utils/logger.js";
@@ -23,6 +24,8 @@ import type {
   BroadcastWriteResultPayload,
   FdGrowthPayload,
   TerminalSubmitStatusPayload,
+  TerminalReliabilityMetricPayload,
+  TerminalResourceBatchPayload,
 } from "../../../../shared/types/pty-host.js";
 import type { PtyDataRouting } from "../../../services/pty/types.js";
 import {
@@ -219,9 +222,17 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   });
   handlers.push(unsubArtifactDetected);
 
-  // Resource metrics (batched from pty-host)
-  const handleResourceMetrics = (metrics: unknown, timestamp: unknown) => {
-    broadcastToRenderer(CHANNELS.TERMINAL_RESOURCE_METRICS, { metrics, timestamp });
+  // Resource metrics (batched from pty-host). The batch covers every terminal
+  // in every project; each project view gets only its own terminals. Cached
+  // views still get their slice: their memory-leak detector watches their
+  // terminals in the background.
+  const handleResourceMetrics = (metrics: TerminalResourceBatchPayload, timestamp: number) => {
+    broadcastSlicedToProjectRenderers(
+      CHANNELS.TERMINAL_RESOURCE_METRICS,
+      metrics,
+      (id) => ptyClient.getTerminalProjectId(id),
+      (slice) => ({ metrics: slice, timestamp })
+    );
   };
   ptyClient.on("resource-metrics", handleResourceMetrics);
   handlers.push(() => ptyClient.off("resource-metrics", handleResourceMetrics));
@@ -240,6 +251,20 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   };
   ptyClient.on("fd-growth", handleFdGrowth);
   handlers.push(() => ptyClient.off("fd-growth", handleFdGrowth));
+
+  // Backpressure/suspend transitions. The only consumer is the owning pane's
+  // stall watchdog, so it goes to that project's views like terminal:status.
+  const unsubReliabilityMetric = events.on(
+    "terminal:reliability-metric",
+    (payload: TerminalReliabilityMetricPayload) => {
+      broadcastToProjectRenderers(
+        ptyClient.getTerminalProjectId(payload.terminalId),
+        CHANNELS.EVENTS_PUSH,
+        { name: "terminal:reliability-metric", payload }
+      );
+    }
+  );
+  handlers.push(unsubReliabilityMetric);
 
   // Terminal activity — per-terminal headline updates, project-scoped like
   // the status pulses above.
