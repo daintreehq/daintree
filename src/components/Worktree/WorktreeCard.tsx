@@ -1220,7 +1220,7 @@ export function WorktreeCard({
                     <div
                       ref={dragHandleActivatorRef}
                       data-worktree-row-drag-handle=""
-                      className="shrink-0 w-4 flex items-center justify-center cursor-not-allowed opacity-30 touch-none select-none transition-colors motion-reduce:transition-none"
+                      className="shrink-0 w-4 flex items-center justify-center cursor-not-allowed opacity-50 touch-none select-none transition-colors motion-reduce:transition-none"
                       aria-hidden="true"
                     >
                       <GripVertical className="w-3 h-3" />

@@ -591,9 +591,9 @@ function OverflowMenu({
             ];
           }
           const Icon = meta.icon;
-          // Mirror the visible copy-tree button, which is aria-disabled both
-          // when no worktree is active ("Open a worktree first" tooltip) and
-          // while a copy is in flight — without this the overflow item would
+          // Mirror the visible copy-tree button, which declines both when no
+          // worktree is active ("Open a worktree first" tooltip) and while a
+          // copy is in flight — without this the overflow item would
           // look live yet silently close with no feedback, since its handler
           // guards on the same two conditions.
           const disabled = id === "copy-tree" && (!hasActiveWorktree || isCopyingTree);
@@ -1076,7 +1076,7 @@ export function Toolbar({
   );
 
   // The anchor stops being interactive without a worktree or while a copy is
-  // in flight (it renders aria-disabled for both), and the menu's entries
+  // in flight (aria-disabled for the first, busy for the second), and the menu's entries
   // decline in both states — leaving it open would strand a dead menu over the
   // toolbar. The in-flight half matters because copies start without the
   // trigger: MCP and assistant dispatches, Cmd+Shift+C, and the palette can
@@ -1522,11 +1522,14 @@ export function Toolbar({
                           variant="ghost"
                           size="icon"
                           data-toolbar-item=""
-                          aria-disabled={isCopyingTree || !activeWorktree || undefined}
+                          // Busy is the spinner, not a dim: a copy in flight keeps
+                          // the button at full strength and the handlers veto a
+                          // second run. Only "no worktree" is unavailable.
+                          aria-disabled={!activeWorktree || undefined}
+                          aria-busy={isCopyingTree || undefined}
                           className={cn(
                             "toolbar-icon-button relative",
                             "text-text-primary",
-                            isCopyingTree && "cursor-wait opacity-70",
                             "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                           )}
                           aria-label={isCopyingTree ? "Copying…" : "Copy context"}

@@ -15,7 +15,6 @@ import {
   type DockLaunchRecipeItem,
   type DockLaunchSurface,
 } from "./dockLaunchItems";
-import { unavailableAgentHint } from "@/utils/agentAvailabilityCopy";
 import { PANEL_KIND_ORIGIN_LABELS } from "@/utils/panelKindOriginCopy";
 
 export type { DockLaunchAgent } from "./dockLaunchItems";
@@ -89,8 +88,10 @@ export function DockLaunchMenuItems({
     return (
       <C.Item
         key={agent.id}
-        className={!isLaunchable ? "opacity-70" : undefined}
-        title={!isLaunchable ? unavailableAgentHint(agent.name, agent.availability) : undefined}
+        // The launcher's treatment for the same row: secondary text plus a
+        // stated reason, never a fade (which took the reason down with it) and
+        // never a `title` (the only place the reason used to live).
+        className={!isLaunchable ? "text-text-secondary" : undefined}
         onSelect={() =>
           activate({
             category: "agent",
@@ -111,10 +112,16 @@ export function DockLaunchMenuItems({
         <span className="truncate">{agent.name}</span>
         {/* The same trailing mark the launcher's row carries, so a recently
             launched agent is listed once rather than twice. */}
-        {isRecent && (
+        {!isLaunchable ? (
           <C.Meta aria-hidden={false} className="shrink-0">
-            Recent
+            Setup
           </C.Meta>
+        ) : (
+          isRecent && (
+            <C.Meta aria-hidden={false} className="shrink-0">
+              Recent
+            </C.Meta>
+          )
         )}
       </C.Item>
     );
@@ -142,7 +149,7 @@ export function DockLaunchMenuItems({
   const renderRecipeItem = (item: DockLaunchRecipeItem) => (
     <C.Item
       key={item.key}
-      className={item.isShadowed ? "opacity-70" : undefined}
+      className={item.isShadowed ? "text-text-secondary" : undefined}
       onSelect={() => activate(item)}
     >
       <Workflow className="w-3.5 h-3.5 mr-2 shrink-0" />

@@ -245,8 +245,8 @@ describe("WorktreeCard disabled drag handle (issue #8395)", () => {
     expect(cardSource).toMatch(/isDragHandleDisabled\s*=\s*false/);
   });
 
-  it("renders the disabled grip with cursor-not-allowed and opacity-30", () => {
-    expect(cardSource).toContain("cursor-not-allowed opacity-30");
+  it("renders the disabled grip at the one unavailable level: 50% and cursor-not-allowed", () => {
+    expect(cardSource).toContain("cursor-not-allowed opacity-50");
   });
 
   it("hides the pointer-only grips from assistive tech instead of dead aria-labels", () => {

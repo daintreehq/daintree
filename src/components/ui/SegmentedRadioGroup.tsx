@@ -259,7 +259,7 @@ export function SegmentedRadioGroup<T extends string>({
             "motion-reduce:transition-none",
             // Unavailable is not unselected: a disabled checked segment keeps its
             // thumb, dimmed with it.
-            thumbDimmed && "opacity-40"
+            thumbDimmed && "opacity-50"
           )}
           style={{ translate: `${thumb.left}px 0`, width: thumb.width }}
           aria-hidden="true"
@@ -298,7 +298,7 @@ export function SegmentedRadioGroup<T extends string>({
               isActive &&
                 !thumb &&
                 "bg-overlay-medium border border-text-secondary forced-colors:border-2 forced-colors:border-[ButtonText]",
-              isDisabled && "opacity-40"
+              isDisabled && "opacity-50"
             )}
           >
             {/* `block truncate`: an inline label has no width of its own to
