@@ -14,6 +14,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ProjectSwitcherPalette } from "../ProjectSwitcherPalette";
+import { WorktreePalette } from "@/components/Worktree/WorktreePalette";
+import { QuickCreatePalette } from "@/components/Worktree/QuickCreatePalette";
+import type { UseQuickCreatePaletteReturn, QuickCreateItem } from "@/hooks/useQuickCreatePalette";
+import type { WorktreeState } from "@shared/types";
+import { WorktreeStoreProvider } from "@/contexts/WorktreeStoreContext";
 import { NavGroup, NavItem } from "@/components/Settings/SettingsDialog";
 import type { SettingsTab } from "@/components/Settings/settingsTabIds";
 import { Bell, Bot, Keyboard, Palette, Plug, SlidersHorizontal } from "lucide-react";
@@ -34,7 +39,8 @@ import "@/index.css";
  *
  * Query parameters:
  *   ?theme=daintree|bondi|…        built-in theme id
- *   ?surface=project-switcher|menu|settings-nav which surface to mount
+ *   ?surface=project-switcher|worktree-palette|quick-create|menu|settings-nav
+ *                                           which surface to mount
  */
 
 const params = new URLSearchParams(window.location.search);
@@ -214,6 +220,97 @@ function SettingsNavSurface() {
   );
 }
 
+function worktree(id: string, name: string, branch: string): WorktreeState {
+  return {
+    id,
+    worktreeId: id,
+    name,
+    branch,
+    path: `/Users/dev/Projects/daintree-worktrees/${id}`,
+    isCurrent: false,
+    worktreeChanges: null,
+    lastActivityTimestamp: null,
+  } as unknown as WorktreeState;
+}
+
+const WORKTREES: WorktreeState[] = [
+  worktree("develop", "develop", "develop"),
+  worktree("feature-palette-rows", "palette-rows", "design/consistency-f10-palette-rows"),
+  worktree("fix-dock-launch", "dock-launch", "fix/12931-dock-launch-presets"),
+  worktree("perf-startup", "perf-startup", "perf/audit-startup-preload"),
+  worktree("docs-themes", "docs-themes", "docs/theme-component-contract"),
+];
+
+function WorktreePaletteSurface() {
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  return (
+    <WorktreePalette
+      isOpen
+      query=""
+      results={WORKTREES}
+      totalResults={WORKTREES.length}
+      activeWorktreeId="develop"
+      selectedIndex={selectedIndex}
+      onQueryChange={noop}
+      onSelectPrevious={() => setSelectedIndex((i) => Math.max(0, i - 1))}
+      onSelectNext={() => setSelectedIndex((i) => Math.min(WORKTREES.length - 1, i + 1))}
+      onSelect={noop}
+      onConfirm={noop}
+      onClose={noop}
+      onSelectIndex={setSelectedIndex}
+    />
+  );
+}
+
+const RECIPES: QuickCreateItem[] = [
+  {
+    _kind: "recipe",
+    id: "claude-dev",
+    name: "Claude + dev server",
+    terminals: [{ type: "claude" }, { type: "dev-preview" }],
+    createdAt: 0,
+  },
+  {
+    _kind: "recipe",
+    id: "codex-pair",
+    name: "Codex pair",
+    terminals: [{ type: "codex" }, { type: "terminal" }],
+    createdAt: 0,
+  },
+  {
+    _kind: "recipe",
+    id: "shell",
+    name: "Plain shell",
+    terminals: [{ type: "terminal" }],
+    createdAt: 0,
+  },
+  { _kind: "customize", id: "__customize__", name: "Customize…" },
+] as unknown as QuickCreateItem[];
+
+function QuickCreateSurface() {
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const selected = RECIPES[selectedIndex];
+  const palette = {
+    isOpen: true,
+    query: "",
+    results: RECIPES,
+    totalResults: RECIPES.length,
+    selectedIndex,
+    isPending: false,
+    assignToSelf: true,
+    selectedRecipe: selected?._kind === "recipe" ? selected : null,
+    setQuery: noop,
+    setAssignToSelf: noop,
+    setSelectedIndex,
+    selectPrevious: () => setSelectedIndex((i) => Math.max(0, i - 1)),
+    selectNext: () => setSelectedIndex((i) => Math.min(RECIPES.length - 1, i + 1)),
+    confirmSelection: noop,
+    confirmItem: noop,
+    close: noop,
+  } as unknown as UseQuickCreatePaletteReturn;
+  return <QuickCreatePalette palette={palette} />;
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <TooltipProvider>
@@ -221,6 +318,16 @@ createRoot(document.getElementById("root")!).render(
         <MenuSurface />
       ) : surface === "settings-nav" ? (
         <SettingsNavSurface />
+      ) : surface === "worktree-palette" ? (
+        <div data-preview-frame>
+          <WorktreePaletteSurface />
+        </div>
+      ) : surface === "quick-create" ? (
+        <div data-preview-frame>
+          <WorktreeStoreProvider>
+            <QuickCreateSurface />
+          </WorktreeStoreProvider>
+        </div>
       ) : (
         <div data-preview-frame>
           <ProjectSwitcherSurface />

@@ -1610,7 +1610,7 @@ function DockLaunchOption({
         onClick={() => onActivate(row)}
         className={cn(
           PALETTE_ROW_CLASS,
-          "group relative flex items-center px-2 py-1.5 rounded-[var(--radius-md)] text-left text-sm cursor-pointer select-none aria-disabled:cursor-default",
+          "group relative flex items-center px-2 py-1.5 rounded-[var(--radius-sm)] text-left text-sm cursor-pointer select-none aria-disabled:cursor-default",
           // Preset children are indented so the expansion reads as belonging to
           // the agent above it rather than as another top-level row.
           row.kind === "preset" && "pl-7",

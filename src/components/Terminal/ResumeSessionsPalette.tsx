@@ -44,7 +44,8 @@ function ResumeSessionRow({
       ref={itemRef}
       className={cn(
         PALETTE_ROW_CLASS,
-        "w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
+        "w-full flex items-start gap-3 px-3 rounded-[var(--radius-md)] text-left",
+        meta ? "py-2" : "py-1.5",
         "text-text-secondary",
         // A removed-worktree row is inert: it never takes the cursor, so the
         // pointer lights nothing Enter will not act on, and its title steps down

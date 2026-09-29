@@ -86,10 +86,20 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
       keys: "↵",
       label: "Switch",
     });
-    expect(getProjectSwitcherEnterHint(projectRow(), true, true)).toEqual({
+    expect(getProjectSwitcherEnterHint(projectRow(), true, true, true)).toEqual({
       keys: "⌘↵",
       label: "New window",
     });
+  });
+
+  it("names the modifier each platform actually has", () => {
+    const row = projectRow();
+    expect(getProjectSwitcherEnterHint(row, true, true, true)?.keys).toBe("⌘↵");
+    const other = getProjectSwitcherEnterHint(row, true, true, false)?.keys;
+    expect(other).toBe("Ctrl+↵");
+    expect(other).not.toContain("⌘");
+    const elsewhere = projectRow({ openInOtherWindow: "cached" });
+    expect(getProjectSwitcherEnterHint(elsewhere, true, true, false)?.keys).not.toContain("⌘");
   });
 
   it("says Go to window on either key for a project another window owns", () => {
@@ -98,7 +108,7 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
       keys: "↵",
       label: "Go to window",
     });
-    expect(getProjectSwitcherEnterHint(row, true, true)).toEqual({
+    expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
       keys: "⌘↵",
       label: "Go to window",
     });

@@ -108,8 +108,6 @@ interface PluginRowProps {
   onToggle: () => void;
   /** Attached to the row root so a deep-link `open` (#9559) can scroll it into view. */
   innerRef?: (el: HTMLLIElement | null) => void;
-  /** Transient neutral highlight when a deep-link `open` targets this row. */
-  highlighted?: boolean;
 }
 
 /**
@@ -144,15 +142,7 @@ interface PluginRowProps {
  * exempts the inner button from the high-contrast blanket button border, which
  * otherwise framed the text half of every row and left its switch outside.
  */
-function PluginRow({
-  plugin,
-  selected,
-  toggling,
-  onSelect,
-  onToggle,
-  innerRef,
-  highlighted,
-}: PluginRowProps) {
+function PluginRow({ plugin, selected, toggling, onSelect, onToggle, innerRef }: PluginRowProps) {
   const label = pluginLabel(plugin);
   const { ref: nameRef, isTruncated: isNameTruncated } = useTruncationDetection();
   const blocklisted = plugin.blocklisted === true;
@@ -175,8 +165,10 @@ function PluginRow({
       className={cn(
         PALETTE_ROW_CLASS,
         "flex items-center gap-2 rounded-[var(--radius-md)] text-text-primary",
-        !selected && highlighted && "border-daintree-text/40 bg-overlay-subtle",
-        !selected && !highlighted && "hover:bg-overlay-subtle"
+        // A deep-link `open` marks its target by selecting it, so the row takes
+        // the one highlight every other selection does. A separate bordered
+        // flash outlived the selection when it moved and left two rows lit.
+        !selected && "hover:bg-overlay-subtle"
       )}
     >
       <TruncatedTooltip
@@ -262,9 +254,6 @@ interface PluginManagerViewProps {
   /** Called once the intent has been applied so the source can clear it. */
   onDeepLinkConsumed?: () => void;
 }
-
-// How long the deep-link `open` target row stays highlighted before fading back.
-const DEEP_LINK_HIGHLIGHT_MS = 2000;
 
 /**
  * Dedicated plugin manager view (#9558) — the primary surface for plugin
@@ -356,7 +345,6 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   // Row elements keyed by plugin name, so a `daintree://plugin/open` (#9559) can
   // scroll its target into view.
   const rowRefs = useRef<Map<string, HTMLLIElement>>(new Map());
-  const [highlightedPluginId, setHighlightedPluginId] = useState<string | null>(null);
 
   // Free-text + operator filter (#9557). The input binds to the immediate
   // `query`; the expensive filter pass runs against the deferred value so typing
@@ -545,9 +533,8 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   }, [filteredProjectPlugins, selectedProjectPluginId]);
 
   // When the hook resolves a deep-link `open` target to an installed plugin
-  // (#9559), select it, scroll its row into view, and apply a transient neutral
-  // highlight, then clear the focus request so it doesn't re-trigger on the next
-  // render.
+  // (#9559), select it and scroll its row into view, then clear the focus
+  // request so it doesn't re-trigger on the next render.
   const focusPluginId = pm.focusPluginId;
   const clearFocusPluginId = pm.clearFocusPluginId;
   useEffect(() => {
@@ -556,6 +543,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     // Clear any active filter so the deep-link target row is actually rendered
     // and can be scrolled into view (#9557 + #9559).
     setQuery("");
+    // A project plugin left selected would stay lit beside the target and keep
+    // the detail pane, so the deep link would open the wrong plugin.
+    setSelectedProjectPluginId(null);
     setSelectedPluginId(focusPluginId);
     const row = rowRefs.current.get(focusPluginId);
     if (!row) return; // Row not rendered yet — leave focusPluginId set so a
@@ -563,7 +553,6 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     // Honour reduced motion: a deep link can land anywhere in the list, so the
     // smooth scroll is an arbitrarily long animation the user never asked for.
     row.scrollIntoView({ block: "center", behavior: skipMotion ? "auto" : "smooth" });
-    setHighlightedPluginId(focusPluginId);
     clearFocusPluginId();
   }, [focusPluginId, clearFocusPluginId, pm.plugins, skipMotion]);
 
@@ -583,17 +572,6 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     setSelectedProjectPluginId(null);
     setSelectedPluginId(settingsRequestPluginId);
   }, [isOpen, settingsRequestPluginId, settingsRequestNonce, pm.plugins]);
-
-  // Fade the deep-link highlight after a beat. Kept separate from the consume
-  // effect above: clearing focusPluginId there flips that effect's own
-  // dependency, so an inline timer would be torn down a render later before it
-  // ever fired. Keying this on `highlightedPluginId` lets the timer live until
-  // it actually clears the highlight (or the view unmounts).
-  useEffect(() => {
-    if (!highlightedPluginId) return;
-    const timer = setTimeout(() => setHighlightedPluginId(null), DEEP_LINK_HIGHLIGHT_MS);
-    return () => clearTimeout(timer);
-  }, [highlightedPluginId]);
 
   // Hand focus back when the control holding it disappears. Under a filter,
   // flipping a row's switch can remove that row (enable one under "Disabled"),
@@ -981,7 +959,6 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                         );
                       }}
                       onToggle={() => void pm.handleToggle(plugin)}
-                      highlighted={highlightedPluginId === plugin.manifest.name}
                       innerRef={(el) => {
                         if (el) rowRefs.current.set(plugin.manifest.name, el);
                         else rowRefs.current.delete(plugin.manifest.name);
@@ -1026,7 +1003,6 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                               );
                             }}
                             onToggle={() => void pm.handleToggle(plugin)}
-                            highlighted={highlightedPluginId === plugin.manifest.name}
                             innerRef={(el) => {
                               if (el) rowRefs.current.set(plugin.manifest.name, el);
                               else rowRefs.current.delete(plugin.manifest.name);

@@ -57,7 +57,7 @@ function RecipeListItem({
           // with it; takes the selected treatment from the family now.
           PALETTE_ROW_CLASS,
           // No resting fill and no hover fill — see the recipe row below.
-          "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex items-center gap-2"
+          "w-full text-left px-3 py-1.5 rounded-[var(--radius-md)] flex items-center gap-2"
         )}
         aria-selected={isSelected}
         role="option"
@@ -87,7 +87,7 @@ function RecipeListItem({
         // neighbours instead of being the only lit row. No hover fill either:
         // the pointer moves the cursor, so a hover fill would be a second lit
         // row beside the one Enter acts on.
-        "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex flex-col gap-0.5"
+        "w-full text-left px-3 py-2 rounded-[var(--radius-md)] flex flex-col gap-0.5"
       )}
       aria-selected={isSelected}
       role="option"
@@ -205,7 +205,7 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
       totalResults={palette.totalResults}
       afterList={
         showAssignToggle ? (
-          <div className="px-3 py-2 border-t border-daintree-border/40">
+          <div className="px-3 py-2 border-t border-divider">
             <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-text-primary">
               <Checkbox
                 checked={palette.assignToSelf}

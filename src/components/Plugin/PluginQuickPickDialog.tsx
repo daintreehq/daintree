@@ -158,7 +158,8 @@ export function PluginQuickPickDialog() {
           }}
           className={cn(
             PALETTE_ROW_CLASS,
-            "w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
+            "w-full flex items-start gap-3 px-3 rounded-[var(--radius-md)] text-left",
+            item.detail ? "py-2" : "py-1.5",
             "text-text-secondary"
           )}
         >
