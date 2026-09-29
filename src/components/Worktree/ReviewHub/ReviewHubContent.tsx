@@ -83,7 +83,11 @@ import {
 // think-time; useKeepMounted gates the first mount so nothing is fetched (or
 // rendered) until a diff is actually opened.
 import { Button } from "@/components/ui/button";
-import { SurfaceHeader, SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
+import {
+  SurfaceHeader,
+  SurfaceHeaderCloseButton,
+  SURFACE_HEADER_FOCUS_LIFT_CLASS,
+} from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { debounce } from "@/utils/debounce";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -154,6 +158,13 @@ export interface ReviewHubContentProps {
    */
   location?: PanelLocation;
   /**
+   * Whether the hosting pane has the keyboard. Review renders no PanelHeader,
+   * so its own title bar takes the focused-pane lift a PanelHeader would —
+   * in the grid only, as PanelHeader does (the dock keeps its flat bar and a
+   * dialog draws no bar of ours at all).
+   */
+  isFocused?: boolean;
+  /**
    * Where to attach the Escape-key listener. Defaults to `document` so the
    * modal shell continues to capture Escape globally. Non-modal callers can
    * pass a scoped element to confine Escape to their panel. `undefined`/`null`
@@ -193,6 +204,7 @@ export function ReviewHubContent({
   onClose,
   panelId,
   location = "grid",
+  isFocused = false,
   keyboardScope,
   initialCommitMessage,
   autoStageOnOpen,
@@ -1888,7 +1900,14 @@ export function ReviewHubContent({
       >
         {/* The pane's own title bar: review renders no PanelHeader, so this is
             the compact SurfaceHeader a grid pane would otherwise get. */}
-        <SurfaceHeader density="compact" className="gap-2">
+        <SurfaceHeader
+          density="compact"
+          data-testid="review-hub-header"
+          className={cn(
+            "gap-2 transition-colors",
+            location === "grid" && isFocused && [SURFACE_HEADER_FOCUS_LIFT_CLASS, "border-overlay"]
+          )}
+        >
           <div className="flex items-center gap-2 min-w-0">
             {/* The dialog host already draws the title in AppDialog.Header —
                 drawing it again would stack two "Review & Commit" headings. */}

@@ -124,6 +124,7 @@ export function ReviewPane({
         isOpen={true}
         panelId={id}
         location={location}
+        isFocused={isFocused}
         worktreePath={worktreePath}
         onClose={handleContentClose}
         keyboardScope={containerEl ?? undefined}
