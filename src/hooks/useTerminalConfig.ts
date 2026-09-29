@@ -3,7 +3,10 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { logError, logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useTerminalFontStore, useScreenReaderStore } from "@/store";
-import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
+import {
+  useTerminalColorSchemeStore,
+  selectEffectiveTheme,
+} from "@/store/terminalColorSchemeStore";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
 
@@ -99,7 +102,9 @@ export function useTerminalConfig() {
   const appPreviewSchemeId = useAppThemeStore((state) => state.previewSchemeId);
 
   useEffect(() => {
-    const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
+    // The cached selector returns the same object XtermAdapter already applied,
+    // so xterm dedups the set instead of recomputing the palette a second time.
+    const theme = selectEffectiveTheme(useTerminalColorSchemeStore.getState());
     terminalInstanceService.applyGlobalOptions({
       theme,
       fontSize,
