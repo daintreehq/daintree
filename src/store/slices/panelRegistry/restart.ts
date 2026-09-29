@@ -36,6 +36,10 @@ import { isPtyPanel, type PanelInstance, type PanelTitleMode } from "@shared/typ
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
+import {
+  appendCallerLaunchFlagsToCommand,
+  splitCallerLaunchFlags,
+} from "@shared/utils/callerLaunchFlags";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
 import { saveNormalized } from "./persistence";
 import { buildAgentLaunchContext } from "./agentLaunchContext";
@@ -422,7 +426,14 @@ export const createRestartActions = (
     const isDemotedAgent = !!effectiveAgentId && !isAgent;
     let loadedRuntimeSettings: LoadedAgentRuntimeSettings | undefined;
     let runtimeSettingsLoaded = false;
-    let nextAgentLaunchFlags = currentTerminal.agentLaunchFlags;
+    // The caller's verbatim flags (#13046) sit out every rebuild and reconcile
+    // below and are re-appended last, once the settings-derived part is final.
+    const { base: storedBaseFlags, caller: callerLaunchFlags } = splitCallerLaunchFlags(
+      currentTerminal.agentLaunchFlags,
+      currentTerminal.callerLaunchFlags
+    );
+    let nextAgentLaunchFlags =
+      currentTerminal.agentLaunchFlags === undefined ? undefined : storedBaseFlags;
     let nextAgentPresetId = currentTerminal.agentPresetId;
     let nextAgentPresetColor = currentTerminal.agentPresetColor;
     let nextOriginalPresetId = currentTerminal.originalPresetId;
@@ -486,10 +497,7 @@ export const createRestartActions = (
           modelId: currentTerminal.agentModelId,
           // Only the preset went stale; the caller's standing instruction still
           // applies and has no settings to be rebuilt from (#12431).
-          systemPromptArgs: extractSystemPromptArgs(
-            currentTerminal.agentLaunchFlags,
-            effectiveAgentId
-          ),
+          systemPromptArgs: extractSystemPromptArgs(storedBaseFlags, effectiveAgentId),
           globalSkipPermissions: runtimeForEnv.globalSkipPermissions,
           globalUseAltScreen: runtimeForEnv.globalUseAltScreen,
         }
@@ -500,7 +508,7 @@ export const createRestartActions = (
       const presetForLaunchFlags = runtimeForEnv?.settings.preset;
       if (presetForLaunchFlags) {
         nextAgentLaunchFlags = mergePresetArgsIntoLaunchFlags(
-          currentTerminal.agentLaunchFlags,
+          nextAgentLaunchFlags,
           presetForLaunchFlags
         );
       }
@@ -542,6 +550,10 @@ export const createRestartActions = (
           const injectedFromEmpty = reconcileFlags([]);
           if (injectedFromEmpty.length > 0) resumeFlags = injectedFromEmpty;
         }
+      }
+      if (callerLaunchFlags.length > 0) {
+        nextAgentLaunchFlags = [...(nextAgentLaunchFlags ?? []), ...callerLaunchFlags];
+        resumeFlags = [...(resumeFlags ?? []), ...callerLaunchFlags];
       }
       // Only the fresh-launch command (the no-resume outcome) can be derived
       // up front, while the settings IPCs are already loaded. Whether it
@@ -1344,23 +1356,34 @@ export const createRestartActions = (
       );
       const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
       const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
-      // A failover swaps the provider, not the caller's standing instruction.
-      const systemPromptArgs = extractSystemPromptArgs(terminal.agentLaunchFlags, effectiveAgentId);
-      const commandToRun = generateAgentCommand(baseCommand, effectiveEntry, effectiveAgentId, {
-        clipboardDirectory,
-        modelId: terminal.agentModelId,
-        systemPromptArgs,
-        presetArgs: nextPreset.args?.join(" "),
-        globalSkipPermissions,
-        globalUseAltScreen,
-      });
-      const nextLaunchFlags = buildAgentLaunchFlags(effectiveEntry, effectiveAgentId, {
-        modelId: terminal.agentModelId,
-        systemPromptArgs,
-        presetArgs: nextPreset.args,
-        globalSkipPermissions,
-        globalUseAltScreen,
-      });
+      // A failover swaps the provider, not the caller's standing instruction
+      // or its own verbatim flags (#13046).
+      const { base: storedBaseFlags, caller: callerLaunchFlags } = splitCallerLaunchFlags(
+        terminal.agentLaunchFlags,
+        terminal.callerLaunchFlags
+      );
+      const systemPromptArgs = extractSystemPromptArgs(storedBaseFlags, effectiveAgentId);
+      const commandToRun = appendCallerLaunchFlagsToCommand(
+        generateAgentCommand(baseCommand, effectiveEntry, effectiveAgentId, {
+          clipboardDirectory,
+          modelId: terminal.agentModelId,
+          systemPromptArgs,
+          presetArgs: nextPreset.args?.join(" "),
+          globalSkipPermissions,
+          globalUseAltScreen,
+        }),
+        callerLaunchFlags
+      );
+      const nextLaunchFlags = [
+        ...buildAgentLaunchFlags(effectiveEntry, effectiveAgentId, {
+          modelId: terminal.agentModelId,
+          systemPromptArgs,
+          presetArgs: nextPreset.args,
+          globalSkipPermissions,
+          globalUseAltScreen,
+        }),
+        ...callerLaunchFlags,
+      ];
 
       // Capture live terminal dimensions before teardown
       const managedInstance = terminalInstanceService.get(id);

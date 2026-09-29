@@ -35,6 +35,11 @@ import {
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
+import {
+  appendCallerLaunchFlagsToCommand,
+  readCallerLaunchFlags,
+  splitCallerLaunchFlags,
+} from "@shared/utils/callerLaunchFlags";
 // Re-exported rather than defined here: main counts the agent panels a project
 // would restore (#11801) and has to resolve identity by the same rule this
 // respawn path does, so the rule lives somewhere both processes can reach.
@@ -170,6 +175,7 @@ export interface SavedTerminalData {
   exitBehavior?: PanelExitBehavior;
   agentSessionId?: string;
   agentLaunchFlags?: string[];
+  callerLaunchFlags?: string[];
   agentModelId?: string;
   agentPresetId?: string;
   agentPresetColor?: string;
@@ -339,6 +345,19 @@ function sanitizeLastActiveAt(value: number | undefined): number | undefined {
   return value;
 }
 
+/**
+ * The snapshot's caller flags (#13046), kept only while the flag list a
+ * reconnect actually adopts still ends with them — Main doesn't track them, so
+ * a live list that diverged from the snapshot can't be trusted to carry them.
+ */
+function callerLaunchFlagsFor(
+  flags: string[] | undefined,
+  saved: SavedTerminalData
+): string[] | undefined {
+  const caller = readCallerLaunchFlags(flags, saved.callerLaunchFlags);
+  return caller.length > 0 ? caller : undefined;
+}
+
 export function buildArgsForBackendTerminal(
   backendTerminal: BackendTerminalData,
   saved: SavedTerminalData,
@@ -391,6 +410,10 @@ export function buildArgsForBackendTerminal(
     exitBehavior: saved.exitBehavior,
     agentSessionId: backendTerminal.agentSessionId ?? saved.agentSessionId,
     agentLaunchFlags: backendTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
+    callerLaunchFlags: callerLaunchFlagsFor(
+      backendTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
+      saved
+    ),
     agentModelId: backendTerminal.agentModelId ?? saved.agentModelId,
     // Snapshot-only: Main never tracks provenance, so there is no live value
     // to prefer here the way `agentModelId` does (#12419).
@@ -476,6 +499,10 @@ export function buildArgsForReconnectedFallback(
     exitBehavior: saved.exitBehavior,
     agentSessionId: reconnectedTerminal.agentSessionId ?? saved.agentSessionId,
     agentLaunchFlags: reconnectedTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
+    callerLaunchFlags: callerLaunchFlagsFor(
+      reconnectedTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
+      saved
+    ),
     agentModelId: reconnectedTerminal.agentModelId ?? saved.agentModelId,
     // Snapshot-only: Main never tracks provenance, so there is no live value
     // to prefer here the way `agentModelId` does (#12419).
@@ -609,6 +636,12 @@ export function buildArgsForRespawn(
   const savedPresetIdForRespawn = readPresetId(saved);
   const savedPresetColorForRespawn = readPresetColor(saved);
   let presetWasStale = false;
+  // The caller's verbatim flags (#13046) sit out every reconcile and rebuild
+  // below and are re-appended last to whatever flag set is kept.
+  const { base: savedBaseFlags, caller: callerLaunchFlags } = splitCallerLaunchFlags(
+    saved.agentLaunchFlags,
+    saved.callerLaunchFlags
+  );
 
   if (agentId) {
     const agentConfig = getAgentConfig(agentId);
@@ -641,9 +674,10 @@ export function buildArgsForRespawn(
     const rawPersistedFlags = presetWasStale ? undefined : saved.agentLaunchFlags;
     // A stale preset voids the captured flags, but not the caller's standing
     // instruction (#12431), which no setting can rebuild. It is carried into
-    // every command the settings-derived branches below build.
+    // every command the settings-derived branches below build, and so are the
+    // caller's verbatim flags.
     const staleSystemPromptArgs = presetWasStale
-      ? extractSystemPromptArgs(saved.agentLaunchFlags, agentId)
+      ? extractSystemPromptArgs(savedBaseFlags, agentId)
       : [];
     const hasPersistedFlags = Boolean(rawPersistedFlags && rawPersistedFlags.length > 0);
     // Reconcile the persisted snapshot against both live resolutions (#10432 the
@@ -664,28 +698,41 @@ export function buildArgsForRespawn(
     // snapshot and the from-flags rebuild, so it must NOT synthesize a flag set
     // out of nothing (that would mask the fresh-launch fallback).
     const persistedFlags = hasPersistedFlags
-      ? reconcileFlags(rawPersistedFlags as string[])
+      ? [...reconcileFlags(savedBaseFlags), ...callerLaunchFlags]
       : rawPersistedFlags;
     reconciledLaunchFlags = persistedFlags;
     // Stored in place of the voided snapshot so the next restart still has the
     // instruction to replay: the same settings-derived set the fresh command
     // below is built from.
-    if (staleSystemPromptArgs.length > 0) {
-      reconciledLaunchFlags = reconcileFlags(
-        buildAgentLaunchFlags(effectiveEntry, agentId, {
-          modelId: saved.agentModelId,
-          systemPromptArgs: staleSystemPromptArgs,
-          globalSkipPermissions,
-          globalUseAltScreen,
-        })
-      );
+    if (presetWasStale && (staleSystemPromptArgs.length > 0 || callerLaunchFlags.length > 0)) {
+      reconciledLaunchFlags = [
+        ...reconcileFlags(
+          buildAgentLaunchFlags(effectiveEntry, agentId, {
+            modelId: saved.agentModelId,
+            systemPromptArgs: staleSystemPromptArgs,
+            globalSkipPermissions,
+            globalUseAltScreen,
+          })
+        ),
+        ...callerLaunchFlags,
+      ];
     }
     // Resume commands prepend launch flags, so the bypass / inline tokens must be
     // injected even when no flags were captured — a session launched before
     // either feature existed should honour the current resolution (#10432, #10876).
     // Only diverges from persistedFlags in that inject-from-empty case, which is
     // also where a stale preset's standing instruction rides.
-    const injectedFromEmpty = reconcileFlags([...staleSystemPromptArgs]);
+    // A stale preset's resume keeps the pane's explicit model and the caller's
+    // flags too — the resumed CLI would otherwise fall back to its defaults.
+    const injectedFromEmpty = presetWasStale
+      ? [
+          ...reconcileFlags([
+            ...(saved.agentModelId ? ["--model", saved.agentModelId] : []),
+            ...staleSystemPromptArgs,
+          ]),
+          ...callerLaunchFlags,
+        ]
+      : reconcileFlags([]);
     const resumeFlags =
       !hasPersistedFlags && injectedFromEmpty.length > 0 ? injectedFromEmpty : persistedFlags;
 
@@ -714,14 +761,17 @@ export function buildArgsForRespawn(
       hasPersistedFlags
         ? buildFromPersistedFlags()
         : agentSettings
-          ? generateAgentCommand(baseCommand, effectiveEntry, agentId, {
-              clipboardDirectory,
-              modelId: saved.agentModelId,
-              systemPromptArgs: staleSystemPromptArgs,
-              presetArgs: preset?.args?.join(" "),
-              globalSkipPermissions,
-              globalUseAltScreen,
-            })
+          ? appendCallerLaunchFlagsToCommand(
+              generateAgentCommand(baseCommand, effectiveEntry, agentId, {
+                clipboardDirectory,
+                modelId: saved.agentModelId,
+                systemPromptArgs: staleSystemPromptArgs,
+                presetArgs: preset?.args?.join(" "),
+                globalSkipPermissions,
+                globalUseAltScreen,
+              }),
+              callerLaunchFlags
+            )
           : buildLaunchCommandFromFlags(baseCommand, agentId, injectedFromEmpty, {
               clipboardDirectory,
               shareClipboardDirectory,
@@ -758,15 +808,18 @@ export function buildArgsForRespawn(
         // that into a command — a config/build issue, not a collision.
         sessionLostOnRestore = "no-resume-command";
       } else if (agentSettings) {
-        command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
-          clipboardDirectory,
-          modelId: saved.agentModelId,
-          systemPromptArgs: staleSystemPromptArgs,
-          presetArgs: preset?.args?.join(" "),
-          globalSkipPermissions,
-          globalUseAltScreen,
-          sessionId: mintFreshSessionId(),
-        });
+        command = appendCallerLaunchFlagsToCommand(
+          generateAgentCommand(baseCommand, effectiveEntry, agentId, {
+            clipboardDirectory,
+            modelId: saved.agentModelId,
+            systemPromptArgs: staleSystemPromptArgs,
+            presetArgs: preset?.args?.join(" "),
+            globalSkipPermissions,
+            globalUseAltScreen,
+            sessionId: mintFreshSessionId(),
+          }),
+          callerLaunchFlags
+        );
         sessionLostOnRestore = "no-resume-command";
       }
     } else {
@@ -837,15 +890,18 @@ export function buildArgsForRespawn(
         command = buildFromPersistedFlags();
         sessionLostOnRestore = getElseReason();
       } else if (agentSettings) {
-        command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
-          clipboardDirectory,
-          modelId: saved.agentModelId,
-          systemPromptArgs: staleSystemPromptArgs,
-          presetArgs: preset?.args?.join(" "),
-          globalSkipPermissions,
-          globalUseAltScreen,
-          sessionId: mintFreshSessionId(),
-        });
+        command = appendCallerLaunchFlagsToCommand(
+          generateAgentCommand(baseCommand, effectiveEntry, agentId, {
+            clipboardDirectory,
+            modelId: saved.agentModelId,
+            systemPromptArgs: staleSystemPromptArgs,
+            presetArgs: preset?.args?.join(" "),
+            globalSkipPermissions,
+            globalUseAltScreen,
+            sessionId: mintFreshSessionId(),
+          }),
+          callerLaunchFlags
+        );
         sessionLostOnRestore = getElseReason();
       } else if (getElseReason() !== "no-resume-path") {
         // Nothing above rebuilt the command, so `command` still holds
@@ -916,6 +972,7 @@ export function buildArgsForRespawn(
     agentLaunchFlags: presetWasStale
       ? reconciledLaunchFlags
       : (reconciledLaunchFlags ?? saved.agentLaunchFlags),
+    callerLaunchFlags: isAgentPanel && callerLaunchFlags.length > 0 ? callerLaunchFlags : undefined,
     agentModelId: saved.agentModelId,
     spawnedBy: saved.spawnedBy,
     agentSessionId: respawnSessionId,

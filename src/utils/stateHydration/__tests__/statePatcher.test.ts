@@ -1645,6 +1645,124 @@ describe("buildArgsForRespawn", () => {
     expect(generateAgentCommandMock.mock.lastCall?.[3]).toMatchObject({ systemPromptArgs: [] });
   });
 
+  // #13046: the caller's own flags survive the stale-preset strip too, and the
+  // resume keeps the pane's explicit model instead of the CLI default.
+  it("keeps the caller's flags and the explicit model through a stale-preset resume", () => {
+    getMergedPresetMock.mockReturnValue(undefined);
+    const caller = ["--effort", "high"];
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-deleted",
+        agentSessionId: "sess-1",
+        agentModelId: "opus",
+        agentLaunchFlags: ["--model", "opus", "--provider", "gone", ...caller],
+        callerLaunchFlags: caller,
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(buildResumeCommandMock).toHaveBeenLastCalledWith("claude", "sess-1", [
+      "--model",
+      "opus",
+      ...caller,
+    ]);
+    expect(result.agentLaunchFlags).toEqual(["--model", "opus", ...caller]);
+    expect(result.callerLaunchFlags).toEqual(caller);
+  });
+
+  it("appends the caller's flags to a stale-preset pane's fresh settings-derived launch", () => {
+    getMergedPresetMock.mockReturnValue(undefined);
+    const caller = ["--effort", "high"];
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-deleted",
+        agentLaunchFlags: ["--provider", "gone", ...caller],
+        callerLaunchFlags: caller,
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined,
+      undefined,
+      { allowResumeLatest: false }
+    );
+    expect(result.command).toBe("claude --generated --effort high");
+    expect(result.agentLaunchFlags?.slice(-2)).toEqual(caller);
+    expect(result.agentLaunchFlags).not.toContain("gone");
+  });
+
+  it("does not trust a caller tail the saved flags no longer end with", () => {
+    getMergedPresetMock.mockReturnValue(undefined);
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-deleted",
+        agentLaunchFlags: ["--effort", "high", "--provider", "gone"],
+        callerLaunchFlags: ["--effort", "high"],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined,
+      undefined,
+      { allowResumeLatest: false }
+    );
+    expect(result.agentLaunchFlags).toBeUndefined();
+    expect(result.callerLaunchFlags).toBeUndefined();
+    expect(result.command).toBe("claude --generated");
+  });
+
+  // A custom `-c` bypass shares its `-c` with the caller's config override; the
+  // reconcile must neither strip nor orphan the caller's pair.
+  it("keeps a caller's `-c` override paired under a custom `-c` bypass", () => {
+    const caller = ["-c", "model_reasoning_effort=high"];
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "codex",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: ["-c", "approval_policy=never", ...caller],
+        callerLaunchFlags: caller,
+      },
+      "agent",
+      "/p",
+      {
+        globalSkipPermissions: false,
+        agents: { codex: { dangerousEnabled: false, dangerousArgs: "-c approval_policy=never" } },
+      },
+      false,
+      undefined
+    );
+    const flags = result.agentLaunchFlags ?? [];
+    expect(flags).not.toContain("approval_policy=never");
+    expect(flags.slice(-2)).toEqual(caller);
+    expect(flags[flags.indexOf("model_reasoning_effort=high") - 1]).toBe("-c");
+    expect(buildResumeCommandMock.mock.lastCall?.[2]?.slice(-2)).toEqual(caller);
+    expect(result.callerLaunchFlags).toEqual(caller);
+  });
+
   // Regression: the inverse — when the preset still resolves, everything is preserved.
   it("preserves agentPresetId/color/title when preset still resolves", () => {
     getMergedPresetMock.mockReturnValueOnce({

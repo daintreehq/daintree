@@ -616,6 +616,12 @@ export interface PtyPanelData extends BasePanelData {
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
   agentLaunchFlags?: string[];
+  /**
+   * The flags the `agent.launch` caller passed verbatim (#13046) — the tail of
+   * `agentLaunchFlags`, recorded so restart/restore/recovery can rebuild or
+   * reconcile the settings-derived part and re-append these untouched.
+   */
+  callerLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
   /** Preset ID used at launch time, for live color lookup */
@@ -1192,6 +1198,12 @@ export interface TerminalInstance {
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
   agentLaunchFlags?: string[];
+  /**
+   * The flags the `agent.launch` caller passed verbatim (#13046) — the tail of
+   * `agentLaunchFlags`, recorded so restart/restore/recovery can rebuild or
+   * reconcile the settings-derived part and re-append these untouched.
+   */
+  callerLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
   /** Preset ID used at launch time, for live color lookup */

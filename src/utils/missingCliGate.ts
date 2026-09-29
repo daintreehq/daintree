@@ -1,6 +1,7 @@
 import { stripAssignedSessionIdArgs, type AddPanelOptions } from "@shared/types";
 import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
+import { splitCallerLaunchFlags } from "@shared/utils/callerLaunchFlags";
 
 /**
  * Narrow the preset environment out of the panel's untyped extension bag.
@@ -57,6 +58,7 @@ export function buildMissingCliRelaunchOptions(panel: PtyPanelData): AddPanelOpt
     // gate itself is what they were looking at, so the dock is already open.
     activateDockOnCreate: panel.location === "dock" ? true : undefined,
     agentLaunchFlags: panel.agentLaunchFlags,
+    callerLaunchFlags: panel.callerLaunchFlags,
     agentModelId: panel.agentModelId,
     agentPresetId: panel.agentPresetId,
     // The fallback brand colour when the preset is later deleted — dropping it
@@ -87,7 +89,10 @@ export interface MissingCliContinueArgs {
   removeOnExit?: boolean;
   spawnedBy?: PtyPanelData["spawnedBy"];
   focusPolicy?: PtyPanelData["focusPolicy"];
-  /** Only the caller's standing-instruction pair, never the gate's full set. */
+  /**
+   * Only what the caller chose — its standing-instruction pair and its own
+   * verbatim flags — never the gate's full set.
+   */
   agentLaunchFlags?: string[];
 }
 
@@ -98,8 +103,9 @@ export interface MissingCliContinueArgs {
  * `agent.launch`, so the launcher rebuilds the command, the flag set and the
  * title against the freshly resolved path. Only what the original caller chose
  * is replayed — forwarding the gate's already-resolved `agentLaunchFlags` would
- * append them a second time on top of the set the launcher rebuilds, and its
- * title is recomposed from the same agent, preset and model.
+ * append the settings-derived part a second time on top of the set the
+ * launcher rebuilds, and its title is recomposed from the same agent, preset
+ * and model. The caller's own flags (#13046) are split off and replayed.
  *
  * Returns null when the panel carries no agent, which makes it unrelaunchable.
  */
@@ -108,10 +114,12 @@ export function buildMissingCliContinueArgs(panel: PtyPanelData): MissingCliCont
   if (!agentId) return null;
 
   const location = panel.location === "dock" ? "dock" : "grid";
-  // The caller's standing instruction (#12431) has no setting the launcher
-  // could rebuild it from, so it is the one piece of the gate's flag set that
-  // is replayed — as the exact pair, since that is what was validated.
-  const systemPromptArgs = extractSystemPromptArgs(panel.agentLaunchFlags, agentId);
+  // The caller's standing instruction (#12431) and verbatim flags (#13046)
+  // have no setting the launcher could rebuild them from, so they are the
+  // pieces of the gate's flag set that are replayed — the pair taken from the
+  // settings-derived part only, so a pair the caller passed isn't sent twice.
+  const { base, caller } = splitCallerLaunchFlags(panel.agentLaunchFlags, panel.callerLaunchFlags);
+  const callerChosenFlags = [...extractSystemPromptArgs(base, agentId), ...caller];
   return {
     agentId,
     location,
@@ -134,7 +142,7 @@ export function buildMissingCliContinueArgs(panel: PtyPanelData): MissingCliCont
     removeOnExit: panel.removeOnExit,
     focusPolicy: panel.focusPolicy,
     spawnedBy: panel.spawnedBy,
-    ...(systemPromptArgs.length > 0 ? { agentLaunchFlags: systemPromptArgs } : {}),
+    ...(callerChosenFlags.length > 0 ? { agentLaunchFlags: callerChosenFlags } : {}),
   };
 }
 

@@ -183,6 +183,7 @@ export const TerminalSnapshotSchema = z
     devPreviewConsoleOpen: z.boolean().optional(),
     agentSessionId: z.string().optional(),
     agentLaunchFlags: z.array(z.string()).optional(),
+    callerLaunchFlags: z.array(z.string()).optional(),
     agentModelId: z.string().optional(),
     spawnedBy: SpawnSourceSchema,
     agentPresetId: z.string().optional(),

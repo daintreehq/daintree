@@ -1597,3 +1597,113 @@ describe("restartTerminal keeps the launch's standing instruction", () => {
     expect(mockSpawn.mock.calls[0]![0].agentLaunchFlags).toEqual(["--rebuilt", ...pair]);
   });
 });
+
+/**
+ * Flags the `agent.launch` caller passed verbatim have no setting to be rebuilt
+ * from, so every restart path re-appends them after the settings-derived part
+ * (#13046).
+ */
+describe("restartTerminal keeps the caller's own launch flags", () => {
+  const caller = ["--effort", "high"];
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockImplementation(
+      (_entry: unknown, _agentId: unknown, options?: { systemPromptArgs?: string[] }) => [
+        "--rebuilt",
+        ...(options?.systemPromptArgs ?? []),
+      ]
+    );
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockReset();
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  afterAll(() => {
+    buildAgentLaunchFlagsMock.mockReset();
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+  });
+
+  it("re-appends them after the rebuild when the panel's preset has gone stale", async () => {
+    const pair = ["--append-system-prompt", "Be terse"];
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentPresetId: "deleted-preset",
+      agentLaunchFlags: ["--provider", "gone", ...pair, ...caller],
+      callerLaunchFlags: caller,
+    };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.agentLaunchFlags).toEqual(["--rebuilt", ...pair, ...caller]);
+    expect(usePanelStore.getState().panelsById["test-1"]).toMatchObject({
+      agentLaunchFlags: ["--rebuilt", ...pair, ...caller],
+      callerLaunchFlags: caller,
+    });
+  });
+
+  it("keeps them last when newly-added preset args are merged in", async () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "amber-provider",
+      name: "Amber Provider",
+      args: ["--provider", "amber"],
+    });
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentPresetId: "amber-provider",
+      agentLaunchFlags: ["--persisted-flag", ...caller],
+      callerLaunchFlags: caller,
+    };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].agentLaunchFlags).toEqual([
+      "--persisted-flag",
+      "--provider",
+      "amber",
+      ...caller,
+    ]);
+  });
+
+  it("carries them into both the command and the flags across a preset fallback hop", async () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "amber-provider",
+      name: "Amber Provider",
+      color: "#ffbb33",
+      args: ["--provider", "amber"],
+    });
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentPresetId: "blue-provider",
+      agentLaunchFlags: ["--provider", "blue", ...caller],
+      callerLaunchFlags: caller,
+    };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore
+      .getState()
+      .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.agentLaunchFlags).toEqual(["--rebuilt", ...caller]);
+    expect(payload.command).toBe("claude --effort high");
+  });
+});

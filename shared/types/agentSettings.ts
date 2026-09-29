@@ -473,9 +473,10 @@ export function resolveEffectiveBypass(
  * canonical token (no `DEFAULT_DANGEROUS_ARGS` entry and no `dangerousArgs`)
  * fall through the empty-strip-set guard below and are left untouched.
  *
- * All known bypass flags in {@link DEFAULT_DANGEROUS_ARGS} are single tokens;
- * the strip matches whole tokens so flag *values* are never collaterally
- * removed.
+ * Each bypass arg set is matched as a whole contiguous sequence, never token
+ * by token: a custom Codex bypass like `-c approval_policy=never` shares its
+ * `-c` with every other config override in the list, and stripping that `-c`
+ * alone would orphan the value that followed it (#13046).
  *
  * @param bypassArgs - The agent's currently-resolved dangerous args (e.g.
  *   `entry.dangerousArgs`); falls back to `DEFAULT_DANGEROUS_ARGS[agentId]`.
@@ -489,46 +490,57 @@ export function reconcileBypassFlags(
   const resolved = (bypassArgs?.trim() || DEFAULT_DANGEROUS_ARGS[agentId] || "").trim();
   // Strip both the resolved args and the registry default: a snapshot may have
   // been captured before the user customized `dangerousArgs`, so cleaning only
-  // the current value could leave a stale default token behind.
-  const stripTokens = new Set<string>();
+  // the current value could leave a stale default flag behind.
+  const sequences: string[][] = [];
   for (const source of [resolved, DEFAULT_DANGEROUS_ARGS[agentId]]) {
-    if (!source) continue;
-    for (const token of source.trim().split(/\s+/)) {
-      if (token) stripTokens.add(token);
+    const tokens = source?.trim().split(/\s+/).filter(Boolean) ?? [];
+    if (tokens.length > 0 && !sequences.some((seq) => seq.join(" ") === tokens.join(" "))) {
+      sequences.push(tokens);
     }
   }
-  if (stripTokens.size === 0) return [...flags];
+  if (sequences.length === 0) return [...flags];
+  // Longest first, so a multi-token custom sequence wins over a default that
+  // happens to be one of its tokens.
+  sequences.sort((a, b) => b.length - a.length);
   // A standing instruction is free text that can equal a bypass token, and
   // Codex's shares a `-c` with config-override bypass args (#12431). Stripping
   // either half would orphan the other — a lone value becomes the first-turn
   // prompt — so both are left alone.
   const instruction = systemPromptArgPositions(flags, agentId);
-  const isStripped = (flag: string, index: number) =>
-    !instruction.has(index) && stripTokens.has(flag);
-
-  if (!effectiveBypass || !resolved) {
-    // Bypass not wanted: drop every occurrence of the canonical token(s).
-    return flags.filter((flag, index) => !isStripped(flag, index));
-  }
+  const matchLengthAt = (index: number): number => {
+    for (const seq of sequences) {
+      if (
+        seq.every(
+          (token, offset) => flags[index + offset] === token && !instruction.has(index + offset)
+        )
+      ) {
+        return seq.length;
+      }
+    }
+    return 0;
+  };
 
   // Bypass wanted: replace the first canonical occurrence in place with the
   // currently-resolved args (preserving flag order so a snapshot that already
   // carries the right flag is left untouched), drop any duplicates, and append
-  // if the flag was absent.
-  const resolvedTokens = resolved.split(/\s+/).filter(Boolean);
+  // if the flag was absent. Bypass not wanted: drop every occurrence.
+  const wanted = effectiveBypass && resolved ? resolved.split(/\s+/).filter(Boolean) : undefined;
   const reconciled: string[] = [];
   let inserted = false;
-  for (const [index, flag] of flags.entries()) {
-    if (isStripped(flag, index)) {
-      if (!inserted) {
-        reconciled.push(...resolvedTokens);
+  for (let index = 0; index < flags.length;) {
+    const matched = matchLengthAt(index);
+    if (matched > 0) {
+      if (wanted && !inserted) {
+        reconciled.push(...wanted);
         inserted = true;
       }
+      index += matched;
     } else {
-      reconciled.push(flag);
+      reconciled.push(flags[index] as string);
+      index += 1;
     }
   }
-  if (!inserted) reconciled.push(...resolvedTokens);
+  if (wanted && !inserted) reconciled.push(...wanted);
   return reconciled;
 }
 

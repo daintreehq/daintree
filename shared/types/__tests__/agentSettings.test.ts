@@ -931,6 +931,55 @@ describe("reconcileBypassFlags", () => {
     const result = reconcileBypassFlags(["--model"], "gemini", true);
     expect(result).toContain(geminiFlag);
   });
+
+  describe("multi-token bypass args (#13046)", () => {
+    const customBypass = "-c approval_policy=never";
+
+    it("strips only the whole sequence, leaving other `-c` overrides paired", () => {
+      const flags = [
+        "-c",
+        "tui.whimsy=false",
+        "-c",
+        "approval_policy=never",
+        "-c",
+        "model_reasoning_effort=high",
+      ];
+      expect(reconcileBypassFlags(flags, "codex", false, customBypass)).toEqual([
+        "-c",
+        "tui.whimsy=false",
+        "-c",
+        "model_reasoning_effort=high",
+      ]);
+    });
+
+    it("keeps the sequence in place when bypass is on, without touching other pairs", () => {
+      const flags = ["-c", "approval_policy=never", "-c", "model_reasoning_effort=high"];
+      expect(reconcileBypassFlags(flags, "codex", true, customBypass)).toEqual(flags);
+    });
+
+    it("appends the sequence when absent and bypass is on", () => {
+      expect(
+        reconcileBypassFlags(["-c", "model_reasoning_effort=high"], "codex", true, customBypass)
+      ).toEqual(["-c", "model_reasoning_effort=high", "-c", "approval_policy=never"]);
+    });
+
+    it("swaps the registry default for the custom sequence in place", () => {
+      const codexDefault = DEFAULT_DANGEROUS_ARGS.codex as string;
+      expect(
+        reconcileBypassFlags(
+          [codexDefault, "-c", "model_reasoning_effort=high"],
+          "codex",
+          true,
+          customBypass
+        )
+      ).toEqual(["-c", "approval_policy=never", "-c", "model_reasoning_effort=high"]);
+    });
+
+    it("does not strip a lone token that is only part of the sequence", () => {
+      const flags = ["-c", "model_reasoning_effort=high", "approval_policy=never"];
+      expect(reconcileBypassFlags(flags, "codex", false, customBypass)).toEqual(flags);
+    });
+  });
 });
 
 describe("generateAgentFlags with globalSkipPermissions", () => {
