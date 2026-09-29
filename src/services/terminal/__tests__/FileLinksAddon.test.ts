@@ -1297,7 +1297,7 @@ describe("FileLinksAddon", () => {
       // OUTSIDE_ROOT offers Reveal (the file is real, just outside roots) — not
       // Copy path. The coalesce key is split so this action can't bleed into a
       // coalesced INVALID_PATH / generic "Copy path" toast.
-      expect(payload.action?.label).toBe("Reveal in File Manager");
+      expect(payload.action?.label).toBe("Reveal in file manager");
 
       // Clicking Reveal routes the resolved absolute path (line/col stripped)
       // through the unconfined IPC op — never auto, always user-initiated. The
@@ -1497,7 +1497,7 @@ describe("FileLinksAddon", () => {
         action?: { label: string };
       };
       expect(outsidePayload.coalesce?.key).toBe("filelink-activate-fail:outside-root");
-      expect(outsidePayload.action?.label).toBe("Reveal in File Manager");
+      expect(outsidePayload.action?.label).toBe("Reveal in file manager");
       expect(invalidPayload.coalesce?.key).toBe("filelink-activate-fail");
       expect(invalidPayload.action?.label).toBe("Copy path");
       expect(outsidePayload.coalesce?.key).not.toBe(invalidPayload.coalesce?.key);

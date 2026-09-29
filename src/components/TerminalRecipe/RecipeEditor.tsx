@@ -87,7 +87,7 @@ const TYPE_LABELS: Record<RecipeTerminalType, string> = {
   gemini: "Gemini",
   codex: "Codex",
   opencode: "OpenCode",
-  "dev-preview": "Dev Server",
+  "dev-preview": "Dev server",
 };
 
 const FAILURE_PRESERVE_CAPTION = "Failures always preserve terminal for debugging";

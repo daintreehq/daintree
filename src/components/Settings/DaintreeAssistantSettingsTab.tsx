@@ -68,6 +68,7 @@ import {
   HELP_TIER_INCREMENTAL,
   HIGH_BLAST_RADIUS_TOOLS,
 } from "@shared/config/helpAssistantTierAllowlists";
+import { pluralNoun } from "@/lib/pluralize";
 
 const EXPORT_FEEDBACK_MS = 2000;
 const CUSTOM_ARGS_DEBOUNCE_MS = 500;
@@ -1411,7 +1412,7 @@ export function DaintreeAssistantSettingsTab() {
             {auditStats && auditStats.auth401Count > 0 && (
               <p className="text-xs text-text-secondary select-text">
                 <span className="font-mono text-text-primary">{auditStats.auth401Count}</span>{" "}
-                bearer rejection{auditStats.auth401Count === 1 ? "" : "s"} since last launch — an
+                bearer {pluralNoun(auditStats.auth401Count, "rejection")} since last launch — an
                 external client is connecting with a stale or missing API key.
               </p>
             )}

@@ -5,6 +5,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import type { TourPlayer } from "@daintreehq/tour";
 import { useTourPlayerState, useTourTime } from "@daintreehq/tour/react";
+import { pluralize } from "@/lib/pluralize";
 
 function formatTime(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
@@ -82,7 +83,7 @@ function ChapterSegment({
 
 function spokenTime(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
-  return `${s} second${s === 1 ? "" : "s"}`;
+  return `${pluralize(s, "second")}`;
 }
 
 /**

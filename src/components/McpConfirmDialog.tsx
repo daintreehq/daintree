@@ -23,6 +23,7 @@ import {
 } from "@/store/mcpConfirmStore";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * Renderer-side timer that beats main's 30s `pendingDispatches` deadline by
@@ -774,7 +775,7 @@ function GateHint({
   // outcome as Cancel, so it is a nudge, not an error.
   if (emptySelection) parts.push("Nothing selected — cancel, or check something to destroy.");
   if (queueDepth > 0) {
-    parts.push(`${queueDepth} more request${queueDepth === 1 ? "" : "s"} waiting`);
+    parts.push(`${pluralize(queueDepth, "more request")} waiting`);
   }
   if (parts.length === 0) return null;
 

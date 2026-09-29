@@ -1,4 +1,5 @@
 import type { RepoState, StagingStatus } from "@shared/types";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * The single wording for a halted git operation and what aborting it costs.
@@ -73,7 +74,7 @@ export function buildAbortDescription(
   const parts: string[] = [];
 
   if (stagedCount > 0) {
-    parts.push(`Discards ${stagedCount} staged resolution${stagedCount === 1 ? "" : "s"}`);
+    parts.push(`Discards ${pluralize(stagedCount, "staged resolution")}`);
   }
 
   if (
@@ -86,9 +87,7 @@ export function buildAbortDescription(
     // already-replayed count is one less. Clamp to 0 to be safe.
     const replayed = Math.max(0, status.rebaseStep - 1);
     if (replayed > 0) {
-      const replayFragment = `reverts ${replayed} of ${status.rebaseTotalSteps} replayed commit${
-        replayed === 1 ? "" : "s"
-      }`;
+      const replayFragment = `reverts ${replayed} of ${pluralize(status.rebaseTotalSteps, "replayed commit")}`;
       if (parts.length > 0) {
         parts.push(`and ${replayFragment}`);
       } else {

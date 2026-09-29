@@ -20,6 +20,7 @@ import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSearchField } from "./SettingsSearchField";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsShortcutCapture } from "@/components/KeyboardShortcuts";
+import { pluralize } from "@/lib/pluralize";
 
 interface ShortcutBinding extends RegisteredKeybindingConfig {
   effectiveCombo: string;
@@ -524,7 +525,7 @@ export function KeyboardShortcutsTab() {
           />
         </div>
         <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-          {`${resultCount} ${resultCount === 1 ? "shortcut" : "shortcuts"}${isFiltered ? "" : " in total"}`}
+          {`${pluralize(resultCount, "shortcut")}${isFiltered ? "" : " in total"}`}
         </p>
 
         {Array.from(groupedBindings.entries()).map(([category, categoryBindings]) => (

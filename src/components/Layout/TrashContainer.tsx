@@ -33,6 +33,7 @@ import {
   useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { pluralize } from "@/lib/pluralize";
 
 const MOVED_HINT_MAX_SHOWS = 3;
 
@@ -524,7 +525,7 @@ export function TrashContainer({
                 aria-expanded={isOpen}
                 aria-controls={contentId}
                 onClick={focusHandoff.onTriggerClick}
-                aria-label={`Trash: ${count} terminal${count === 1 ? "" : "s"} ${dockStatusScopeDescription(count, hereCount)}, removed for good ${TRASH_TTL_SECONDS} seconds after closing`}
+                aria-label={`Trash: ${pluralize(count, "terminal")} ${dockStatusScopeDescription(count, hereCount)}, removed for good ${TRASH_TTL_SECONDS} seconds after closing`}
               >
                 <DockStatusPillLabel
                   icon={
@@ -699,7 +700,7 @@ export function TrashContainer({
             isExecutingRef.current = false;
           }}
           title="Empty trash?"
-          description={`${trashedTerminals.length} panel${trashedTerminals.length === 1 ? "" : "s"} will be permanently removed.`}
+          description={`${pluralize(trashedTerminals.length, "panel")} will be permanently removed.`}
           variant="destructive"
           // Scrollable list of the panels being destroyed — a dialog, not an
           // alertdialog, which APG reserves for a brief message read whole.

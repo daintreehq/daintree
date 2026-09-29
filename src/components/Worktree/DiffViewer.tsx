@@ -94,6 +94,7 @@ import {
   DiffNoteComposer,
   type DiffNoteCardPlacement,
 } from "./DiffNoteWidgets";
+import { pluralize } from "@/lib/pluralize";
 
 export { _resetLangStateForTests, _flushLangLoadsForTests } from "./diffRefractor";
 
@@ -704,7 +705,7 @@ function HunkHeader({ hunk, gapStart, hiddenCount, onExpand }: HunkHeaderProps) 
           {hiddenCount <= EXPAND_ALL_MAX ? (
             <button type="button" onClick={() => onExpand(gapStart, hunk.oldStart)}>
               <UnfoldVertical className="w-3 h-3" />
-              Expand {hiddenCount} {hiddenCount === 1 ? "line" : "lines"}
+              Expand {pluralize(hiddenCount, "line")}
             </button>
           ) : (
             <>
@@ -1392,7 +1393,7 @@ function FileDiff({
                   onClick={() => handleExpandContext(trailingGapStart, oldTotalLines + 1)}
                 >
                   <UnfoldVertical className="w-3 h-3" />
-                  Expand {trailingHiddenCount} {trailingHiddenCount === 1 ? "line" : "lines"}
+                  Expand {pluralize(trailingHiddenCount, "line")}
                 </button>
               ) : (
                 <>

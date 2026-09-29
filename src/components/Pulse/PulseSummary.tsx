@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { StreakFlame } from "./StreakFlame";
 import { cn } from "@/lib/utils";
+import { pluralize, pluralNoun } from "@/lib/pluralize";
 
 interface PulseSummaryProps {
   pulse: ProjectPulse;
@@ -89,7 +90,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
         <Stat
           icon={<GitCommit className="w-3.5 h-3.5" />}
           value={pulse.commitsInRange}
-          label={`commit${pulse.commitsInRange !== 1 ? "s" : ""}`}
+          label={pluralNoun(pulse.commitsInRange, "commit")}
           highlight
         />
         <Stat
@@ -109,7 +110,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
         {hasUncommitted && (
           <Stat
             icon={<FilePenLine className="w-3.5 h-3.5 text-status-info" />}
-            value={`${pulse.uncommitted!.changedFiles} files`}
+            value={pluralize(pulse.uncommitted!.changedFiles, "file")}
             label={`+${pulse.uncommitted!.insertions ?? 0}/-${pulse.uncommitted!.deletions ?? 0}`}
           />
         )}
@@ -141,8 +142,10 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
           {pulse.deltaToMain!.filesChanged !== undefined && pulse.deltaToMain!.filesChanged > 0 && (
             <div className="flex items-center gap-0.5 text-text-secondary">
               <FileCode className="w-3 h-3" />
-              <span className="font-mono">{pulse.deltaToMain!.filesChanged}</span>
-              <span className="text-text-secondary">files</span>
+              <span className="font-mono">{pulse.deltaToMain!.filesChanged.toLocaleString()}</span>
+              <span className="text-text-secondary">
+                {pluralNoun(pulse.deltaToMain!.filesChanged, "file")}
+              </span>
             </div>
           )}
 

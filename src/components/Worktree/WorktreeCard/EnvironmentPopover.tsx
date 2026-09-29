@@ -344,7 +344,7 @@ export function EnvironmentPopover({
                           <ExternalLink aria-hidden="true" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent side="top">Open in browser</TooltipContent>
+                      <TooltipContent side="top">Open endpoint in browser</TooltipContent>
                     </Tooltip>
                   )}
                 </div>

@@ -234,7 +234,7 @@ function SortableTab({
         </ContextMenuItem>
         <ContextMenuItem disabled={!hasUrl} onSelect={afterClose(() => onOpenExternal(tab.id))}>
           <Globe data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-          Open in browser
+          Open in external browser
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem disabled={tabIndex === 0} onSelect={afterClose(() => onMove(tab.id, -1))}>
@@ -761,7 +761,7 @@ export function PortalToolbar({
                       if (e.pointerType !== "mouse") e.stopPropagation();
                     }}
                     className={iconButtonClass}
-                    aria-label="New Tab"
+                    aria-label="New tab"
                     aria-keyshortcuts={newTabAriaShortcut}
                   >
                     <Plus className={PANE_TOOLBAR_ICON_CLASS} />
@@ -769,7 +769,7 @@ export function PortalToolbar({
                 </ContextMenuTrigger>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {createTooltipContent("New Tab", newTabShortcut)}
+                {createTooltipContent("New tab", newTabShortcut)}
               </TooltipContent>
             </Tooltip>
             <ContextMenuContent>

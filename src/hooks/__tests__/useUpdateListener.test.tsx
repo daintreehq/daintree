@@ -224,7 +224,7 @@ describe("useUpdateListener", () => {
       expect.objectContaining({
         type: "info",
         title: "Update available",
-        message: "Version 2.5.0 is downloading...",
+        message: "Version 2.5.0 is downloading…",
         duration: 0,
         priority: "high",
       })

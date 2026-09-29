@@ -185,8 +185,8 @@ export type DockLaunchCueId =
 /** Heading for each named provenance group, matching the old preset submenu. */
 export const DOCK_LAUNCH_PRESET_GROUP_LABELS: Record<DockLaunchPresetGroup, string> = {
   default: "",
-  ccr: "CCR Routes",
-  project: "Project Shared",
+  ccr: "CCR routes",
+  project: "Project shared",
   custom: "Custom",
 };
 
@@ -249,7 +249,7 @@ export function getDockLaunchRowItem(row: DockLaunchRow): DockLaunchItem | undef
  * with the synthetic Default first.
  *
  * Project membership beats the `ccr-` prefix so a project preset with a `ccr-*`
- * id still reads as Project Shared; everything neither project nor `ccr-` falls
+ * id still reads as Project shared; everything neither project nor `ccr-` falls
  * through to Custom, preserving display for presets whose origin can't be told
  * from the id alone.
  */

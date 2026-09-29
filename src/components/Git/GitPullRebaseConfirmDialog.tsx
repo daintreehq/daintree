@@ -26,6 +26,7 @@ import {
   formatGitPushDestination,
   type GitRemoteOperationPreview,
 } from "@/components/Git/gitRemoteOperationPreview";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * D1 confirm for the `git.pullRebase` action dispatched outside the ReviewHub
@@ -294,7 +295,7 @@ function GitPullRebaseConfirmDialogInner() {
   ) : hasConflicts ? (
     <PreviewNotice
       tone="error"
-      title={`${conflicts} unresolved conflict${conflicts === 1 ? "" : "s"}`}
+      title={`${pluralize(conflicts, "unresolved conflict")}`}
       onRetry={loadPreview}
       retryTestId="git-pull-rebase-conflicts-retry"
       testId="git-pull-rebase-conflicts"
@@ -305,7 +306,7 @@ function GitPullRebaseConfirmDialogInner() {
   ) : isDirty ? (
     <PreviewNotice
       tone="error"
-      title={`${trackedChanges} uncommitted change${trackedChanges === 1 ? "" : "s"}`}
+      title={`${pluralize(trackedChanges, "uncommitted change")}`}
       onRetry={loadPreview}
       retryTestId="git-pull-rebase-dirty-retry"
       testId="git-pull-rebase-dirty"

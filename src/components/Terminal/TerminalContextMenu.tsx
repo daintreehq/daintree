@@ -1213,7 +1213,7 @@ function TerminalContextMenuBody({
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("open-external")}>
             <Globe className={ICON_CLASS} aria-hidden="true" />
-            Open in browser
+            Open in external browser
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("copy-url")}>
             <Copy className={ICON_CLASS} aria-hidden="true" />
@@ -1280,7 +1280,7 @@ function TerminalContextMenuBody({
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("open-external")}>
             <Globe className={ICON_CLASS} aria-hidden="true" />
-            Open in browser
+            Open in external browser
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("copy-url")}>
             <Copy className={ICON_CLASS} aria-hidden="true" />

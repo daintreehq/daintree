@@ -104,7 +104,7 @@ export class NoteFileReader {
         const lastLine = lines[lines.length - 1].trim();
         result =
           lastLine.length > 500
-            ? { content: lastLine.slice(0, 497) + "...", timestamp }
+            ? { content: lastLine.slice(0, 499) + "…", timestamp }
             : { content: lastLine, timestamp };
       }
 

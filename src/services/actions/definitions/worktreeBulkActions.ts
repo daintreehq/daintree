@@ -38,14 +38,14 @@ export function registerWorktreeBulkActions(actions: ActionRegistry): void {
 
   actions.set("worktree.bulk.remove", () => ({
     id: "worktree.bulk.remove",
-    title: "Remove selected worktrees",
+    title: "Delete selected worktrees",
     description: "Delete every selected worktree from disk with a typed-name confirmation",
     category: "worktree",
     kind: "command",
     danger: "confirm",
     scope: "renderer",
     dangerRationale:
-      "Permanently removes every selected worktree directory. Untracked work is lost. Main worktrees are excluded inside the confirm step.",
+      "Permanently deletes every selected worktree directory. Untracked work is lost. Main worktrees are excluded inside the confirm step.",
     palette: { mode: "hidden" },
     argsSchema: z.object({}).optional(),
     run: async (_args: unknown, _ctx: ActionContext) => {

@@ -5,6 +5,7 @@ import { isClientGitError } from "@/utils/clientGitError";
 import { isGeneratedFile } from "../generatedFileClassifier";
 import { cn } from "@/lib/utils";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 export type DiffMode = "working-tree" | "base-branch";
 
@@ -220,7 +221,7 @@ export function getPushBannerConfig(
   if (state.reason === "push-rejected-outdated") {
     const remoteCount = behindCount && behindCount > 0 ? behindCount : null;
     const message = remoteCount
-      ? `The remote has ${remoteCount} new commit${remoteCount === 1 ? "" : "s"}. Pull and rebase before pushing.`
+      ? `The remote has ${pluralize(remoteCount, "new commit")}. Pull and rebase before pushing.`
       : "The remote has new commits. Pull and rebase before pushing.";
     return {
       ...base,

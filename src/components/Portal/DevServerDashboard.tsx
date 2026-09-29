@@ -275,7 +275,7 @@ export function DevServerDashboard({ onHide }: { onHide?: () => void }) {
         <p className="px-3 pb-3 text-xs text-text-secondary">
           {fetchError
             ? "Couldn't load dev servers"
-            : "Open a Dev Server panel in any worktree to start one"}
+            : "Open a Dev server panel in any worktree to start one"}
         </p>
       ) : (
         <ul className="flex flex-col min-h-0 overflow-y-auto pb-1">

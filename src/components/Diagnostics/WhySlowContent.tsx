@@ -12,6 +12,7 @@ import { HOST_MEMORY_PAUSE_COPY } from "@/lib/hostMemoryPauseCopy";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { MetricTile, type MetricTone } from "./MetricTile";
 import { DiagnosticsNotice } from "./DiagnosticsNotice";
+import { pluralize } from "@/lib/pluralize";
 
 export interface WhySlowContentProps {
   className?: string;
@@ -35,10 +36,6 @@ function formatSnapshotAge(ageMs: number): string {
   const minutes = Math.floor(ageMs / 60_000);
   if (minutes < 60) return `${minutes}m ago`;
   return `${Math.floor(minutes / 60)}h ago`;
-}
-
-function plural(count: number, one: string, many: string): string {
-  return `${count} ${count === 1 ? one : many}`;
 }
 
 // Shared by the PTY-lag tile tone, the findings and isAllClear so the calm
@@ -190,7 +187,7 @@ export function describeSlowdowns(
     findings.push({
       id: "webgl",
       tone: "warn",
-      text: `${plural(terminals, "terminal is", "terminals are")} drawn without GPU acceleration`,
+      text: `${pluralize(terminals, "terminal is", "terminals are")} drawn without GPU acceleration`,
       suggestion: "Closing some terminals may bring it back",
     });
   }
@@ -204,7 +201,7 @@ export function describeSlowdowns(
         tone: "warn",
         text:
           backlogPaused > 0
-            ? `${plural(backlogPaused, "terminal is", "terminals are")} paused because output arrives faster than it can be drawn (${formatBytes(p.totalPendingBytes)} waiting)`
+            ? `${pluralize(backlogPaused, "terminal is", "terminals are")} paused because output arrives faster than it can be drawn (${formatBytes(p.totalPendingBytes)} waiting)`
             : `${formatBytes(p.totalPendingBytes)} of terminal output is waiting to be drawn`,
       });
     }
@@ -220,7 +217,7 @@ export function describeSlowdowns(
     findings.push({
       id: "fetch",
       tone: "info",
-      text: `${plural(snapshot.worktrees.fetchInFlightCount, "git fetch is", "git fetches are")} running`,
+      text: `${pluralize(snapshot.worktrees.fetchInFlightCount, "git fetch is", "git fetches are")} running`,
     });
   }
   const w = snapshot.workers;
@@ -228,14 +225,14 @@ export function describeSlowdowns(
     findings.push({
       id: "queue",
       tone: "warn",
-      text: `${plural(w.totalQueueDepth, "background job is", "background jobs are")} waiting in the queue`,
+      text: `${pluralize(w.totalQueueDepth, "background job is", "background jobs are")} waiting in the queue`,
     });
   }
   if (w && w.degraded.length > 0) {
     findings.push({
       id: "degraded",
       tone: "warn",
-      text: `${plural(w.degraded.length, "background worker is", "background workers are")} running on a slower fallback`,
+      text: `${pluralize(w.degraded.length, "background worker is", "background workers are")} running on a slower fallback`,
     });
   }
   const order: Record<SlowdownFinding["tone"], number> = { alert: 0, warn: 1, info: 2 };
@@ -687,10 +684,11 @@ function Verdict({
   if (!snapshot) {
     text = error ? "Performance snapshot unavailable" : "Checking what's slowing Daintree down";
   } else if (problems > 0) {
-    text =
-      problems === 1
-        ? "1 thing may be slowing Daintree down"
-        : `${problems} things may be slowing Daintree down`;
+    text = pluralize(
+      problems,
+      "thing may be slowing Daintree down",
+      "things may be slowing Daintree down"
+    );
   } else if (error) {
     // Stale data must not claim "right now" — the notice below carries the age.
     text = incomplete
@@ -739,7 +737,7 @@ function FindingsList({ findings }: { findings: SlowdownFinding[] }) {
   const hiddenProblems = hidden - hiddenNotes;
   const moreLabel = [
     hiddenProblems > 0 ? `${hiddenProblems} more` : null,
-    hiddenNotes > 0 ? plural(hiddenNotes, "note", "notes") : null,
+    hiddenNotes > 0 ? pluralize(hiddenNotes, "note", "notes") : null,
   ]
     .filter(Boolean)
     .join(" and ");

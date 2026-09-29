@@ -59,6 +59,7 @@ import {
 import { ActivityLight } from "./ActivityLight";
 import { CollapsedSessionIndicators } from "./WorktreeCard/CollapsedSessionIndicators";
 import { Badge } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * Column tracks shared by the header and every row, so each section sits on
@@ -341,7 +342,7 @@ export function WorktreeOverviewRow({
   const setupFailed = lifecycleState === "failed" || lifecycleState === "timed-out";
   const exception =
     conflictCount > 0
-      ? `${conflictCount} conflict${conflictCount === 1 ? "" : "s"}`
+      ? `${pluralize(conflictCount, "conflict")}`
       : setupFailed
         ? worktree.lifecycleStatus?.phase === "setup"
           ? "Setup failed"
@@ -607,7 +608,7 @@ export function WorktreeOverviewRow({
                     {deletions > 0 && <span className="text-status-error">-{deletions}</span>}
                   </span>
                 ) : fileCount > 0 ? (
-                  `${fileCount} file${fileCount === 1 ? "" : "s"}`
+                  `${pluralize(fileCount, "file")}`
                 ) : (
                   "Clean"
                 )}
@@ -617,9 +618,7 @@ export function WorktreeOverviewRow({
                 behind > 0) && (
                 <div className="mt-1 flex items-center justify-end gap-1.5 text-2xs text-text-secondary">
                   {fileCount > 0 && (insertions > 0 || deletions > 0) && (
-                    <span>
-                      {fileCount} file{fileCount === 1 ? "" : "s"}
-                    </span>
+                    <span>{pluralize(fileCount, "file")}</span>
                   )}
                   {(ahead > 0 || behind > 0) && (
                     <span className="font-mono">

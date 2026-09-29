@@ -1,4 +1,5 @@
 import type { FleetSavedScope, PredicateFleetSavedScope } from "@shared/types";
+import { pluralize } from "@/lib/pluralize";
 
 const STATE_LABEL: Record<PredicateFleetSavedScope["stateFilter"], string> = {
   all: "All panes",
@@ -34,17 +35,13 @@ export function formatSavedFleetCount(scope: FleetSavedScope, count: number): st
   return count < stored ? `${count} of ${stored}` : String(count);
 }
 
-function panes(n: number): string {
-  return `${n} pane${n === 1 ? "" : "s"}`;
-}
-
 /** The row's accessible name: the fleet, what it selects, and what recall would arm. */
 export function savedFleetAccessibleName(scope: FleetSavedScope, count: number): string {
   if (scope.kind !== "snapshot") {
-    return `${scope.name}, ${describeRule(scope).replace(" · ", " in ")}, ${panes(count)}`;
+    return `${scope.name}, ${describeRule(scope).replace(" · ", " in ")}, ${pluralize(count, "pane")}`;
   }
   const stored = storedPaneCount(scope);
   if (count === 0) return `${scope.name}, none of its saved panes are open`;
-  if (count < stored) return `${scope.name}, ${count} of ${panes(stored)} open`;
-  return `${scope.name}, ${panes(count)}`;
+  if (count < stored) return `${scope.name}, ${count} of ${pluralize(stored, "pane")} open`;
+  return `${scope.name}, ${pluralize(count, "pane")}`;
 }

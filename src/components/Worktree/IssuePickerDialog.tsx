@@ -18,6 +18,7 @@ import type { WorktreeState } from "@/types";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { pluralize } from "@/lib/pluralize";
 
 interface IssuePickerDialogProps {
   isOpen: boolean;
@@ -51,8 +52,7 @@ function scopeNoun(state: StateFilter): string {
 }
 
 function countLabel(count: number, state: StateFilter): string {
-  const noun = state === "all" ? "issue" : `${state} issue`;
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+  return pluralize(count, state === "all" ? "issue" : `${state} issue`);
 }
 
 interface IssueOptionRowProps {
@@ -429,7 +429,7 @@ export function IssuePickerDialog({
           // "Clear search", and two buttons with one name are indistinguishable.
           clearLabel="Clear"
           onKeyDown={handleKeyDown}
-          placeholder="Search issues by title or number..."
+          placeholder="Search issues by title or number…"
           aria-label="Search issues"
           role="combobox"
           aria-autocomplete="list"

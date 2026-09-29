@@ -22,6 +22,7 @@ import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
 import { ErrorRetryRow } from "@/components/Settings/auditLogParts";
 import { logError } from "@/utils/logger";
+import { pluralize } from "@/lib/pluralize";
 
 const GENERAL_ID = "general";
 const CREDENTIAL_RESULT_DISPLAY_MS = 5000;
@@ -298,7 +299,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
         onConfirm={() => void handleAuditClear()}
         onClose={() => setShowAuditClearConfirm(false)}
         title="Clear forge audit log?"
-        description={`This permanently deletes ${auditRecords.length === 1 ? "1 recorded forge call" : `${auditRecords.length} recorded forge calls`} on this machine.${auditEnabled ? " New calls will still be recorded." : ""}`}
+        description={`This permanently deletes ${pluralize(auditRecords.length, "recorded forge call")} on this machine.${auditEnabled ? " New calls will still be recorded." : ""}`}
         confirmLabel="Clear audit log"
         zIndex="nested"
       />

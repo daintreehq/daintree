@@ -25,6 +25,7 @@ import {
 import type { DiagnosticsReviewPayload } from "@shared/types/ipc/system";
 import { safeStringify } from "@/lib/safeStringify";
 import type { DiagnosticsReviewScope } from "@/store/diagnosticsReviewStore";
+import { pluralize } from "@/lib/pluralize";
 
 type TimeWindowId = "5m" | "30m" | "launch" | "update" | "full";
 
@@ -71,7 +72,7 @@ const GROUP_HEADING_CLASS = "text-sm font-medium text-text-primary";
 
 function formatMatches(count: number): string {
   if (count === 0) return "No matches";
-  return count === 1 ? "1 match" : `${count} matches`;
+  return pluralize(count, "match", "matches");
 }
 
 /**
@@ -564,7 +565,7 @@ export function DiagnosticsReviewDialog({
                 aria-live="polite"
                 className="text-xs text-text-secondary tabular-nums"
               >
-                {previewLines.toLocaleString()} lines
+                {pluralize(previewLines, "line")}
                 {replacementCount > 0 &&
                   (activeReplacement === null
                     ? ` · ${replacementCount.toLocaleString()} replaced`

@@ -516,7 +516,7 @@ describe("useWorktreeStatus — lifecycle labels for resource phases", () => {
         startedAt: Date.now(),
       },
     });
-    expect(label).toBe("Tearing down resource...");
+    expect(label).toBe("Tearing down resource…");
   });
 
   it("shows 'Resuming resource' during resource-resume", () => {
@@ -539,7 +539,7 @@ describe("useWorktreeStatus — lifecycle labels for resource phases", () => {
         startedAt: Date.now(),
       },
     });
-    expect(label).toBe("Pausing resource...");
+    expect(label).toBe("Pausing resource…");
   });
 
   it("shows failure label for resource-provision failed", () => {

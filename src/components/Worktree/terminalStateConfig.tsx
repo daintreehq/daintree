@@ -1,6 +1,7 @@
 import { Circle, CheckCircle2 } from "lucide-react";
 import type { AgentState } from "@/types";
 import { SpinnerCircle, HollowCircle, InteractingCircle, ExitedCircle } from "@/components/icons";
+import { pluralize } from "@/lib/pluralize";
 
 export const STATE_ICONS = {
   working: SpinnerCircle,
@@ -123,6 +124,6 @@ export function summarizeSessionStates(
   }));
   if (total <= 0) return { visibleStates, label: "", breakdown: "" };
   const breakdown = visibleStates.map((v) => `${v.count} ${STATE_LABELS[v.state]}`).join(", ");
-  const sessions = `${total} session${total !== 1 ? "s" : ""}`;
+  const sessions = `${pluralize(total, "session")}`;
   return { visibleStates, label: breakdown ? `${sessions}: ${breakdown}` : sessions, breakdown };
 }

@@ -26,6 +26,7 @@ import {
 } from "./useWorktreeBulkRemove";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { CountBadge } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * When the long-wait hint appears. The design system puts a "still working"
@@ -51,10 +52,6 @@ const BULK_COMMIT_LIMIT = 3;
 
 /** The detail block under a target's name, aligned past the branch glyph. */
 const DETAIL = "ml-5.5 mt-1 space-y-1.5";
-
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
 
 /**
  * The teardown this row's delete runs first. A batch confirm is one consent
@@ -85,7 +82,7 @@ function TeardownBlock({
         return phase.approved ? (
           <div key={phase.phase}>
             <p className="text-xs text-text-secondary">
-              {noun} runs first — the removal continues if it fails
+              {noun} runs first — the delete continues if it fails
             </p>
             <ul
               aria-label={`${noun} commands for ${branch}`}
@@ -207,7 +204,7 @@ function EligibleBody({ target }: { target: BulkRemoveTarget }) {
   // unpushed commits are kept, not lost; a detached worktree has no branch to
   // keep them on, so there they are part of the loss.
   const commitsKept = ahead > 0 && target.branch !== null;
-  if (ahead > 0 && !commitsKept) losses.push(plural(ahead, "unpushed commit"));
+  if (ahead > 0 && !commitsKept) losses.push(pluralize(ahead, "unpushed commit"));
 
   const { files, submoduleRows, pointerDescriptions } = splitDisplayChanges(
     status.preview.changes,
@@ -266,7 +263,7 @@ function EligibleBody({ target }: { target: BulkRemoveTarget }) {
       />
       {commitsKept && (
         <p className="text-xs text-text-secondary" data-testid="bulk-remove-commits-kept">
-          {plural(ahead, "unpushed commit")} stay on the branch
+          {pluralize(ahead, "unpushed commit stays", "unpushed commits stay")} on the branch
         </p>
       )}
       {teardown}
@@ -275,7 +272,7 @@ function EligibleBody({ target }: { target: BulkRemoveTarget }) {
 }
 
 function exclusionReason(exclusion: BulkRemoveExclusion): string {
-  if (exclusion.kind === "gone") return "Already removed";
+  if (exclusion.kind === "gone") return "Already deleted";
   if (exclusion.kind === "verify-failed") return "Couldn't read this worktree's changes";
   return exclusion.block === "at-risk-commits"
     ? // What the check actually measures, so the sentence promises exactly what
@@ -343,7 +340,7 @@ function ExcludedBody({
             ) : (
               "the submodule"
             )}
-            , or fetch if they&apos;re already there, then remove it again
+            , or fetch if they&apos;re already there, then delete it again
           </>
         )}
       </p>
@@ -391,9 +388,7 @@ function Section({
         <span id={id} role="heading" aria-level={3} className={SECTION_LABEL_CLASS}>
           {label}
         </span>
-        <CountBadge label={`${count} ${count === 1 ? "worktree" : "worktrees"}`}>
-          {count}
-        </CountBadge>
+        <CountBadge label={`${pluralize(count, "worktree")}`}>{count}</CountBadge>
       </div>
       {children}
     </section>
@@ -467,17 +462,17 @@ export function WorktreeBulkRemoveDialog({
   // useful thing the title could say.
   const namedTarget = titleCount !== 1 ? undefined : isPreviewPending ? targets[0] : eligible[0];
   const title = namedTarget
-    ? `Remove '${targetLabel(namedTarget)}'?`
+    ? `Delete '${targetLabel(namedTarget)}'?`
     : titleCount === 0
-      ? "Nothing left to remove"
-      : `Remove ${titleCount} worktrees?`;
+      ? "Nothing left to delete"
+      : `Delete ${titleCount} worktrees?`;
 
   // States the consequence, not generic irreversibility copy: what leaves the
   // disk is the working tree, the dev server goes with it (the run stops it
   // first), and the branch is explicitly what does not.
   // Once nothing can run there is no deletion left to describe, only why.
   const description = nothingToRun
-    ? "None of the selected worktrees can be removed. Each one below says why."
+    ? "None of the selected worktrees can be deleted. Each one below says why."
     : `${
         titleCount === 1 ? "The worktree's directory is" : "Each worktree directory is"
       } deleted from disk. Uncommitted and untracked files are discarded, including files inside submodules, and a running dev server is stopped first. Branches are kept.`;
@@ -486,17 +481,17 @@ export function WorktreeBulkRemoveDialog({
   // previews have settled on it.
   const confirmLabel =
     settled && eligibleCount === 1
-      ? "Remove worktree"
+      ? "Delete worktree"
       : settled && eligibleCount > 1
-        ? `Remove ${eligibleCount} worktrees`
-        : "Remove worktrees";
+        ? `Delete ${eligibleCount} worktrees`
+        : "Delete worktrees";
 
   // Says what the primary is waiting on, in the place the user is looking when
   // they ask. The typed gate's own hint comes from `ConfirmDialog`.
   const hint = bulkRemove.isRechecking
-    ? "Checking current work before removing"
+    ? "Checking current work before deleting"
     : isExecuting
-      ? `Removing ${plural(eligibleCount, "worktree")}`
+      ? `Deleting ${pluralize(eligibleCount, "worktree")}`
       : isPreviewPending
         ? "Checking each worktree for uncommitted work"
         : nothingToRun && (targets.length > 0 || excludedMainCount > 0)
@@ -511,7 +506,7 @@ export function WorktreeBulkRemoveDialog({
       (target.branch === null && bulkRemoveAheadCount(target) > 0)
   );
   const preamble = discardsWork
-    ? `Removing ${eligibleCount === 1 ? "this worktree" : `these ${eligibleCount} worktrees`} permanently discards the uncommitted work listed above.`
+    ? `Deleting ${eligibleCount === 1 ? "this worktree" : `these ${eligibleCount} worktrees`} permanently discards the uncommitted work listed above.`
     : undefined;
 
   // One polite line for the whole batch as it settles, so the scope change is
@@ -520,8 +515,8 @@ export function WorktreeBulkRemoveDialog({
   // that is when the Excluded group can sit below the fold while the button
   // names a smaller number than the selection.
   const scopeStatus = isPreviewPending
-    ? `Checking ${plural(targets.length, "worktree")}`
-    : `${eligibleCount} will be removed · ${excludedTotal} excluded`;
+    ? `Checking ${pluralize(targets.length, "worktree")}`
+    : `${eligibleCount} will be deleted · ${excludedTotal} excluded`;
   const scopeVisible = settled && eligibleCount > 0 && excludedTotal > 0;
 
   return (
@@ -579,7 +574,7 @@ export function WorktreeBulkRemoveDialog({
             title={
               isRetryingPreviews
                 ? "Checking again"
-                : `Couldn't finish checking ${plural(retryableCount, "worktree")}`
+                : `Couldn't finish checking ${pluralize(retryableCount, "worktree")}`
             }
             action={{
               id: "retry-previews",
@@ -595,7 +590,7 @@ export function WorktreeBulkRemoveDialog({
         {eligible.length > 0 && (
           <Section
             id="bulk-remove-eligible-heading"
-            label="Will be removed"
+            label="Will be deleted"
             count={eligible.length}
             testId="bulk-remove-eligible"
           >
@@ -675,7 +670,7 @@ export function WorktreeBulkRemoveDialog({
                       </span>
                     </div>
                     <p className={cn(DETAIL, "text-xs text-text-secondary")}>
-                      The main worktree — only linked worktrees can be removed here
+                      The main worktree — only linked worktrees can be deleted here
                     </p>
                   </li>
                 ))}

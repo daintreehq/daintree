@@ -3,6 +3,7 @@ import type { FileChangeDetail, WorktreeChanges } from "@shared/types/git";
 import type { SubmoduleDeleteRisk, SubmoduleEntry } from "@shared/types/submodule";
 import type { WorktreeTeardownPreview } from "@shared/types/worktree";
 import { MCP_PREVIEW_CAUTION_PREFIX } from "@/lib/mcpPreviewLines";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * Canonical fresh preview for the worktree-delete confirm surfaces (#11343).
@@ -761,11 +762,6 @@ export function buildSubmoduleCommitRows(
   return rows;
 }
 
-/** `N commits` / `N files`, for a heading that must not overstate precision. */
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 /**
  * The submodule half of the MCP preview.
  *
@@ -781,7 +777,7 @@ export function formatSubmodulePreviewLines(state: WorktreeSubmoduleRiskState): 
   const commitRows = buildSubmoduleCommitRows(risk);
   if (fileRows.length > 0) {
     lines.push(
-      `Inside submodules — ${plural(submoduleFileCount(state), "file")} the parent's status shows as one entry:`
+      `Inside submodules — ${pluralize(submoduleFileCount(state), "file")} the parent's status shows as one entry:`
     );
     for (const row of fileRows) {
       lines.push(row.isOverflow ? `  ${row.label}` : `  ${row.glyph} ${row.label}`);
@@ -802,7 +798,7 @@ export function formatSubmodulePreviewLines(state: WorktreeSubmoduleRiskState): 
     // incomplete inventory, and naming the retained length as the total there
     // understates it by however many it stopped short of.
     const capped = submoduleCommitsAreCapped(state);
-    const measured = capped ? `at least ${plural(count, "commit")}` : plural(count, "commit");
+    const measured = capped ? `at least ${pluralize(count, "commit")}` : pluralize(count, "commit");
     lines.push(
       `${MCP_PREVIEW_CAUTION_PREFIX}${measured} inside submodules ${count === 1 && !capped ? "is" : "are"} on no remote this clone knows about — the worktree cannot be deleted until ${count === 1 && !capped ? "it is" : "they are"} pushed:`
     );
@@ -864,21 +860,17 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
   }
   const parts: string[] = [];
   if (trackedChangeCount > 0) {
-    parts.push(
-      `${trackedChangeCount} uncommitted tracked file${trackedChangeCount === 1 ? "" : "s"}`
-    );
+    parts.push(`${pluralize(trackedChangeCount, "uncommitted tracked file")}`);
   }
   if (untrackedFileCount > 0) {
-    parts.push(`${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`);
+    parts.push(`${pluralize(untrackedFileCount, "untracked file")}`);
   }
   if (pointerOnly.length > 0) {
-    parts.push(`${pointerOnly.length} submodule change${pointerOnly.length === 1 ? "" : "s"}`);
+    parts.push(`${pluralize(pointerOnly.length, "submodule change")}`);
   }
   const listedBelow = submoduleRows.length - pointerOnly.length;
   if (listedBelow > 0) {
-    parts.push(
-      `${listedBelow} submodule${listedBelow === 1 ? "" : "s"} with changes inside, listed below`
-    );
+    parts.push(`${pluralize(listedBelow, "submodule")} with changes inside, listed below`);
   }
   return [
     `${parts.join(" and ")}:`,

@@ -10,6 +10,7 @@ import { FIELD_TRIGGER } from "./WorktreeFormLayout";
 import type { TerminalRecipe } from "@/types";
 import { getRecipeScope } from "@/utils/recipeScope";
 import { CLONE_LAYOUT_ID } from "../hooks/useRecipePicker";
+import { pluralize } from "@/lib/pluralize";
 
 interface RecipePickerPopoverProps {
   recipes: TerminalRecipe[];
@@ -106,8 +107,7 @@ export function RecipePickerPopover({
                 <Play className="shrink-0 text-text-secondary" />
                 <span>{selectedRecipe.name}</span>
                 <span className="text-xs text-text-secondary">
-                  ({selectedRecipe.terminals.length} terminal
-                  {selectedRecipe.terminals.length !== 1 ? "s" : ""})
+                  ({pluralize(selectedRecipe.terminals.length, "terminal")})
                 </span>
               </>
             ) : (
@@ -218,8 +218,7 @@ function RecipeRow({
             {getRecipeScope(option.recipe).label}
           </span>
           <span className="text-xs text-text-secondary shrink-0">
-            {option.recipe.terminals.length} terminal
-            {option.recipe.terminals.length !== 1 ? "s" : ""}
+            {pluralize(option.recipe.terminals.length, "terminal")}
           </span>
           {option.recipe.shadowedBy && (
             <span className="text-xs text-text-secondary shrink-0">Overridden by Team</span>

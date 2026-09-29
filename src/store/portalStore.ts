@@ -163,7 +163,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       }
 
       const newTabId = `tab-${crypto.randomUUID()}`;
-      const newTab: PortalTab = { id: newTabId, url: null, title: "New Tab" };
+      const newTab: PortalTab = { id: newTabId, url: null, title: "New tab" };
       set((s) => ({
         tabs: [...s.tabs, newTab],
         activeTabId: newTabId,

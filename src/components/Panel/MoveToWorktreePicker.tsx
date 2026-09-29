@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { useWorktreeFilterStore, type OrderBy } from "@/store/worktreeFilterStore";
 import type { WorktreeState } from "@/types";
+import { pluralize } from "@/lib/pluralize";
 
 export interface MoveToWorktreePickerProps {
   panelId: string;
@@ -311,8 +312,7 @@ function MoveToWorktreePickerBody({
   }, [inputRef, onQueryChange]);
 
   const hasResults = rows.length > 0;
-  const announcement =
-    deferredQuery && hasResults ? `${rows.length} worktree${rows.length === 1 ? "" : "s"}` : "";
+  const announcement = deferredQuery && hasResults ? `${pluralize(rows.length, "worktree")}` : "";
 
   return (
     <>

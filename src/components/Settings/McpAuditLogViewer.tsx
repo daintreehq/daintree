@@ -30,6 +30,7 @@ import {
   type McpAnomalySeverity,
   type McpAnomalySignal,
 } from "@shared/types";
+import { pluralize } from "@/lib/pluralize";
 
 /** "problems" is every dispatch that didn't succeed. */
 type AuditResultFilter = "all" | "problems" | McpAuditResult;
@@ -264,10 +265,6 @@ export function groupRecordsByTurn(
   lifecycle.sort((a, b) => b.timestamp - a.timestamp);
 
   return { groups, unassociated, lifecycle };
-}
-
-function plural(count: number, one: string, many: string = `${one}s`): string {
-  return `${count} ${count === 1 ? one : many}`;
 }
 
 interface McpAuditLogViewerProps {
@@ -586,11 +583,11 @@ export function McpAuditLogViewer({
     ? "Exported!"
     : isFiltering
       ? relatedEventCount > 0
-        ? `Showing ${filteredRecords.length - relatedEventCount} of ${visibleRecords.length} · ${plural(relatedEventCount, "related event")}`
+        ? `Showing ${filteredRecords.length - relatedEventCount} of ${visibleRecords.length} · ${pluralize(relatedEventCount, "related event")}`
         : `Showing ${filteredRecords.length} of ${visibleRecords.length}`
       : maxRecords !== undefined
         ? `${visibleRecords.length} of ${maxRecords}`
-        : plural(visibleRecords.length, "record");
+        : pluralize(visibleRecords.length, "record");
 
   const hasQuickViews = (unauthorizedCount > 0 && resultFilter !== "unauthorized") || canGroup;
 
@@ -648,7 +645,7 @@ export function McpAuditLogViewer({
         >
           <AnomalyMark severity={bannerSeverity} decorative />
           <span>
-            {visibleSignals.length} anomaly signal{visibleSignals.length !== 1 ? "s" : ""}
+            {pluralize(visibleSignals.length, "anomaly signal")}
             {Object.entries(anomalyCountsByKind).length > 0 &&
               ` (${Object.entries(anomalyCountsByKind)
                 .map(([kind, count]) => `${count} ${kind}`)
@@ -690,9 +687,9 @@ export function McpAuditLogViewer({
               summary={
                 <>
                   <AuditRecordTime ts={group.turnRecord.timestamp} now={now} />
-                  {` · ${plural(group.callCount, "call")}`}
+                  {` · ${pluralize(group.callCount, "call")}`}
                   {group.unauthorizedCount > 0 && ` · ${group.unauthorizedCount} unauthorized`}
-                  {group.errorCount > 0 && ` · ${plural(group.errorCount, "error")}`}
+                  {group.errorCount > 0 && ` · ${pluralize(group.errorCount, "error")}`}
                   {` · ${group.totalDurationMs}ms`}
                 </>
               }
@@ -708,7 +705,7 @@ export function McpAuditLogViewer({
           {turnGroups.unassociated.length > 0 && (
             <RecordBlock
               heading="Outside any turn"
-              summary={plural(turnGroups.unassociated.length, "record")}
+              summary={pluralize(turnGroups.unassociated.length, "record")}
             >
               {turnGroups.unassociated.map((record) => (
                 <LogRow key={record.id} record={record} now={now} />
@@ -718,7 +715,7 @@ export function McpAuditLogViewer({
           {turnGroups.lifecycle.length > 0 && (
             <RecordBlock
               heading="Lifecycle events"
-              summary={plural(turnGroups.lifecycle.length, "event")}
+              summary={pluralize(turnGroups.lifecycle.length, "event")}
             >
               {turnGroups.lifecycle.map((grant) => (
                 <GrantRow key={grant.id} record={grant} now={now} />

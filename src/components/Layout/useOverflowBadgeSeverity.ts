@@ -12,6 +12,7 @@ import type { AgentState, PanelInstance } from "@shared/types";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isPtyPanel } from "@shared/types/panel";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
+import { pluralize } from "@/lib/pluralize";
 
 export type OverflowBadgeSeverity = "critical" | "warning" | "info" | null;
 
@@ -57,7 +58,7 @@ export function countOverflowAgentStates(
 export function formatAgentObservations(counts: ReadonlyMap<AgentState, number>): string[] {
   const out: string[] = [];
   for (const [state, count] of counts) {
-    out.push(`${count} ${count === 1 ? "agent" : "agents"} ${state}`);
+    out.push(`${pluralize(count, "agent")} ${state}`);
   }
   return out;
 }

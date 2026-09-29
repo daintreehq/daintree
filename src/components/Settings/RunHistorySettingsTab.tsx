@@ -17,10 +17,7 @@ import { SeverityMark } from "@/lib/statusSeverity";
 import { useRunHistoryStore } from "@/store/runHistoryStore";
 import type { RunHistoryRecord } from "@shared/types";
 import { Badge } from "@/components/ui/badge";
-
-function plural(count: number, one: string, many: string = `${one}s`): string {
-  return `${count} ${count === 1 ? one : many}`;
-}
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * A neutral count. Failures carry the error glyph rather than a red fill: severity
@@ -141,7 +138,7 @@ function FleetRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "fl
               <CountPill failed label={`${record.failureCount} failed`} />
             ) : null}
             {waitingCount > 0 ? <CountPill label={`${waitingCount} ended waiting`} /> : null}
-            <CountPill label={plural(record.targetCount, "target")} />
+            <CountPill label={pluralize(record.targetCount, "target")} />
           </div>
         </div>
         <RunTime timestamp={record.timestamp} />
@@ -216,7 +213,7 @@ export function RunHistorySettingsTab() {
             </ul>
           )}
           {!loading && records.length > 0 && (
-            <SettingsActions status={plural(records.length, "run")}>
+            <SettingsActions status={pluralize(records.length, "run")}>
               {/* Snapshots of what each run did, so a failed fleet send can be
                   reported without reconstructing it by hand. */}
               <CopyButton
@@ -256,7 +253,7 @@ export function RunHistorySettingsTab() {
         onClose={() => setShowClearConfirm(false)}
         isConfirmLoading={isClearing}
         title="Clear run history?"
-        description={`This permanently deletes ${plural(records.length, "recorded run")} on this machine. New runs will still be recorded.`}
+        description={`This permanently deletes ${pluralize(records.length, "recorded run")} on this machine. New runs will still be recorded.`}
         confirmLabel="Clear history"
       />
     </div>

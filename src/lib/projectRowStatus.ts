@@ -5,6 +5,7 @@ import type {
 } from "@/hooks/useProjectSwitcherPalette";
 import { classifyAssistantActivity, type AssistantActivity } from "@/lib/projectAssistantActivity";
 import { formatTimeAgo } from "@/utils/timeAgo";
+import { pluralize } from "@/lib/pluralize";
 
 /** Visual weight of a row's status line. Maps to status tokens, never the accent. */
 export type ProjectRowTone =
@@ -327,10 +328,6 @@ export function agoPhrase(age: string): string {
   return age === "just now" ? age : `${age} ago`;
 }
 
-function pluralAgents(count: number, singular: string, plural: string): string {
-  return count === 1 ? singular : `${count} ${plural}`;
-}
-
 /**
  * A snooze's wake time as a wall clock reading ("3:45 PM"), in the user's own
  * locale and hour convention.
@@ -464,7 +461,7 @@ function withLiveness(
     // Named, not just numbered. The noun grounds the row's most important
     // figure and keeps it apart from the process and assistant counts that use
     // the same shape of phrase.
-    livenessDetail: pluralAgents(running, "1 agent running", "agents running"),
+    livenessDetail: pluralize(running, "agent running", "agents running"),
   };
 }
 
@@ -550,7 +547,7 @@ function classifyWorkspaceActivity(
       // re-parsing a sentence. "1 needs input" rather than "Agent needs input"
       // for exactly that reason: a row where one figure is a numeral and the
       // other is a noun is a row you have to read rather than scan.
-      parts.push(needingInput === 1 ? "1 needs input" : `${needingInput} need input`);
+      parts.push(pluralize(needingInput, "needs input", "need input"));
       if (blocked > 0) parts.push(`${blocked} blocked`);
     } else {
       parts.push(`${blocked} blocked`);
@@ -711,7 +708,7 @@ function classifyWorkspaceActivity(
       // "running" explicitly: a bare "1 process" leaves the reader guessing
       // whether it is executing, idle or residue, and this row exists to say
       // that something is still alive in a project with no agents left in it.
-      text: pluralAgents(project.processCount, "1 process running", "processes running"),
+      text: pluralize(project.processCount, "process running", "processes running"),
       tone: "running",
     };
   }
@@ -829,12 +826,10 @@ export function formatFleetLiveness(counts: {
 }): string | null {
   const parts: string[] = [];
   if (counts.runningAgentCount > 0) {
-    parts.push(pluralAgents(counts.runningAgentCount, "1 running", "running"));
+    parts.push(`${counts.runningAgentCount.toLocaleString()} running`);
   }
   if (counts.workingAssistantCount > 0) {
-    parts.push(
-      pluralAgents(counts.workingAssistantCount, "1 assistant working", "assistants working")
-    );
+    parts.push(pluralize(counts.workingAssistantCount, "assistant working", "assistants working"));
   }
   return parts.length > 0 ? parts.join(" · ") : null;
 }

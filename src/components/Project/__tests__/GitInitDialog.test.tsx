@@ -980,7 +980,7 @@ describe("GitInitDialog", () => {
         progressHandler?.({
           step: "add",
           status: "start",
-          message: "Staging files for initial commit...",
+          message: "Staging files for initial commit…",
           timestamp: Date.now(),
         });
       });

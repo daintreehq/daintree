@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/paletteRowStyles";
 import type { FileEntryLike, FolderListingRow } from "./fileBrowserTree";
 import { FILE_TREE_ICON_CLASS, FILE_TREE_ICON_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
+import { pluralize } from "@/lib/pluralize";
 
 const ROW_HEIGHT_PX = 28;
 
@@ -323,7 +324,7 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
 function formatSize(row: FolderListingRow): string {
   if (row.isDirectory) {
     if (row.itemCount == null) return UNKNOWN;
-    return row.itemCount === 1 ? "1 item" : `${row.itemCount} items`;
+    return pluralize(row.itemCount, "item");
   }
   return row.size == null ? UNKNOWN : formatBytes(row.size);
 }

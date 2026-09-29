@@ -15,6 +15,7 @@ import { useProjectSwitcherPalette, useDohertyGate } from "@/hooks";
 import { actionService } from "@/services/ActionService";
 import { ProjectSwitcherPalette } from "./ProjectSwitcherPalette";
 import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
+import { pluralize } from "@/lib/pluralize";
 
 const renderIcon = (emoji: string, color?: string, sizeClass = "h-9 w-9 text-lg") => (
   <div
@@ -165,15 +166,11 @@ export function ProjectSwitcher() {
     // need me?", which stays legible when eight agents pile up in one repo. An
     // agent tally there would read as eight separate obligations.
     if (waitingAgentCount > 0) {
-      parts.push(
-        `${waitingProjectCount} project${waitingProjectCount === 1 ? "" : "s"} waiting for input`
-      );
+      parts.push(`${pluralize(waitingProjectCount, "project")} waiting for input`);
     }
     // Work in progress isn't an obligation, so it stays an agent count.
     if (activeAgentCount > 0) {
-      parts.push(
-        `${activeAgentCount} background agent${activeAgentCount === 1 ? "" : "s"} working`
-      );
+      parts.push(`${pluralize(activeAgentCount, "background agent")} working`);
     }
 
     return {

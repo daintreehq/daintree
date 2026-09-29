@@ -121,6 +121,7 @@ import { isGeneratedFile } from "../generatedFileClassifier";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { BranchBadge } from "@/components/ui/BranchBadge";
 import { Badge } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * Floor for the dialog-hosted body, so the pane stops resizing itself around
@@ -2159,8 +2160,7 @@ export function ReviewHubContent({
                           {mainBranch}
                         </span>
                         <span className={REVIEW_HUB_COUNT_CHIP}>
-                          {sortedBaseBranchFiles.length} file
-                          {sortedBaseBranchFiles.length !== 1 ? "s" : ""}
+                          {pluralize(sortedBaseBranchFiles.length, "file")}
                           {(baseBranchChurn.ins > 0 || baseBranchChurn.del > 0) && (
                             <>
                               {" "}
@@ -2272,10 +2272,10 @@ export function ReviewHubContent({
                         icon={<ArrowUpFromLine />}
                         title={
                           pushError
-                            ? `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} not pushed`
+                            ? `${pluralize(aheadCount ?? 0, "commit")} not pushed`
                             : isPushing
-                              ? `Pushing ${aheadCount} commit${aheadCount !== 1 ? "s" : ""}`
-                              : `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} ready to push`
+                              ? `Pushing ${pluralize(aheadCount ?? 0, "commit")}`
+                              : `${pluralize(aheadCount ?? 0, "commit")} ready to push`
                         }
                         // "Ready to push" is a readiness claim, so it must not
                         // survive a rejection: after a push fails, `pushReady`
@@ -2385,9 +2385,7 @@ export function ReviewHubContent({
                               role="status"
                               ariaLive="polite"
                               icon={AlertTriangle}
-                              title={`${status.conflicted.length} conflicted file${
-                                status.conflicted.length !== 1 ? "s" : ""
-                              }`}
+                              title={pluralize(status.conflicted.length, "conflicted file")}
                               description="Resolve these before committing."
                               animated={false}
                             />

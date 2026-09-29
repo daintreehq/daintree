@@ -499,11 +499,11 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
         ))}
         {remainingCount > 0 && (
           <div className="text-2xs text-text-secondary pl-4 pt-1">
-            ...and {remainingCount} more
+            …and {remainingCount} more
             {remainingFiles.length > 0 && (
               <span className="ml-1 opacity-75">
                 ({remainingFiles.map((f) => basename(f.relativePath)).join(", ")}
-                {sortedChanges.length > maxVisible + 2 && ", ..."})
+                {sortedChanges.length > maxVisible + 2 && ", …"})
               </span>
             )}
           </div>

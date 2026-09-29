@@ -388,10 +388,10 @@ const SHOTS: Shot[] = [
     slug: "portal-plus",
     url: "/portal-preview.html?fixture=page-active",
     viewport: { width: 1000, height: 700 },
-    ready: 'button[aria-label="New Tab"]',
-    path: "Right-click the + (New Tab) button in the Portal tab strip",
+    ready: 'button[aria-label="New tab"]',
+    path: "Right-click the + (New tab) button in the Portal tab strip",
     open: async (page) => {
-      const trigger = page.locator('button[aria-label="New Tab"]').first();
+      const trigger = page.locator('button[aria-label="New tab"]').first();
       const surface = page.locator(MENU).last();
       const point = await rightClick(page, trigger, surface);
       return { trigger, surface, point };

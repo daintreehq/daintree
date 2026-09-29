@@ -6290,14 +6290,14 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   {
     "category": "worktree",
     "danger": "confirm",
-    "dangerRationale": "Permanently removes every selected worktree directory. Untracked work is lost. Main worktrees are excluded inside the confirm step.",
+    "dangerRationale": "Permanently deletes every selected worktree directory. Untracked work is lost. Main worktrees are excluded inside the confirm step.",
     "description": "Delete every selected worktree from disk with a typed-name confirmation",
     "examples": undefined,
     "id": "worktree.bulk.remove",
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Remove selected worktrees",
+    "title": "Delete selected worktrees",
   },
   {
     "category": "worktree",

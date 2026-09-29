@@ -67,6 +67,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { pluralize } from "@/lib/pluralize";
 
 interface RunCountSegment {
   label: string;
@@ -270,7 +271,7 @@ export function FleetArmingRibbon(): ReactElement | null {
     if (armedCount === 0 && lastAnnouncedCount.current > 0) {
       announce("Fleet disarmed");
     } else if (armedCount > 0) {
-      announce(`${armedCount} ${armedCount === 1 ? "terminal" : "terminals"} in fleet`);
+      announce(`${pluralize(armedCount, "terminal")} in fleet`);
     }
     lastAnnouncedCount.current = armedCount;
   }, [armedCount]);

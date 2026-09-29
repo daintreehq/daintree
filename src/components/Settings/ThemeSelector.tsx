@@ -61,10 +61,10 @@ export function ThemeSelector<T extends { id: string }>({
   onPreviewEnd,
   previewAnnouncement,
   toolbar,
-  searchPlaceholder = "Filter themes...",
+  searchPlaceholder = "Filter themes…",
   searchLabel = "Filter themes",
   listLabel = "Theme list",
-  emptyMessage = "No themes match your search.",
+  emptyMessage = "No themes match your search",
   listLabelledBy,
 }: ThemeSelectorProps<T>) {
   const [query, setQuery] = useState("");

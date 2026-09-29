@@ -522,7 +522,7 @@ export function VoiceInputSettingsTab() {
                     value={settings.organizationId}
                     onChange={(e) => void update({ organizationId: e.target.value })}
                     onBlur={(e) => void update({ organizationId: e.target.value.trim() })}
-                    placeholder="org-..."
+                    placeholder="org-…"
                     layout="inline"
                     controlWidth="wide"
                     className="font-mono"
@@ -535,7 +535,7 @@ export function VoiceInputSettingsTab() {
                     value={settings.projectId}
                     onChange={(e) => void update({ projectId: e.target.value })}
                     onBlur={(e) => void update({ projectId: e.target.value.trim() })}
-                    placeholder="proj_..."
+                    placeholder="proj_…"
                     layout="inline"
                     controlWidth="wide"
                     className="font-mono"

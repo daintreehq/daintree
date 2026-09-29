@@ -54,7 +54,7 @@ describe("ThemeSelector", () => {
 
   it("filters items by search query (case-insensitive)", () => {
     render(<ThemeSelector {...defaultProps} />);
-    const input = screen.getByPlaceholderText("Filter themes...");
+    const input = screen.getByPlaceholderText("Filter themes…");
     fireEvent.change(input, { target: { value: "beta" } });
 
     expect(screen.queryByText("Alpha Theme")).toBeNull();
@@ -64,16 +64,16 @@ describe("ThemeSelector", () => {
 
   it("shows empty state when no items match search", () => {
     render(<ThemeSelector {...defaultProps} />);
-    const input = screen.getByPlaceholderText("Filter themes...");
+    const input = screen.getByPlaceholderText("Filter themes…");
     fireEvent.change(input, { target: { value: "nonexistent" } });
 
     // Shown in place of the list, and repeated in the live region so it is heard too.
-    expect(screen.getAllByText("No themes match your search.").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("No themes match your search").length).toBeGreaterThan(0);
   });
 
   it("clears search on Escape key", () => {
     render(<ThemeSelector {...defaultProps} />);
-    const input = screen.getByPlaceholderText("Filter themes...");
+    const input = screen.getByPlaceholderText("Filter themes…");
     fireEvent.change(input, { target: { value: "beta" } });
     expect(screen.queryByText("Alpha Theme")).toBeNull();
 
@@ -111,7 +111,7 @@ describe("ThemeSelector", () => {
         ]}
       />
     );
-    const input = screen.getByPlaceholderText("Filter themes...");
+    const input = screen.getByPlaceholderText("Filter themes…");
     fireEvent.change(input, { target: { value: "gamma" } });
 
     expect(screen.queryByText("Dark")).toBeNull();

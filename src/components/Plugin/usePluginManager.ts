@@ -12,6 +12,7 @@ import type {
   PluginInstallExpectation,
   PluginInstallProgressEvent,
 } from "@shared/types/plugin";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * Alphabetical by display name, regardless of enabled state. Disabled plugins
@@ -849,9 +850,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
               : `Couldn't check any of the ${failed} plugins for updates. Check your connection and try again.`
           );
         } else if (failed > 0) {
-          setNotice(
-            `No updates found. ${failed} ${failed === 1 ? "plugin" : "plugins"} couldn't be checked.`
-          );
+          setNotice(`No updates found. ${pluralize(failed, "plugin")} couldn't be checked.`);
         } else {
           setNotice("All plugins are up to date.");
         }
@@ -862,9 +861,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       // the next bulk check, so it is waiting in the column when the last
       // confirmation closes.
       if (failed > 0) {
-        setNotice(
-          `${failed} ${failed === 1 ? "plugin" : "plugins"} couldn't be checked for updates.`
-        );
+        setNotice(`${pluralize(failed, "plugin")} couldn't be checked for updates.`);
       }
       pendingQueueRef.current = rest;
       isBatchActiveRef.current = true;

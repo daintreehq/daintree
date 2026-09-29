@@ -46,6 +46,7 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
 import { useWorktreeIds } from "@/hooks/useTerminalSelectors";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
+import { pluralize } from "@/lib/pluralize";
 
 const LIST_ID = "worktree-overview-list";
 
@@ -642,7 +643,7 @@ export function WorktreeOverviewModal({
 
   const countLabel =
     filteredWorktrees.length === worktrees.length
-      ? `${worktrees.length} ${worktrees.length === 1 ? "worktree" : "worktrees"}`
+      ? `${pluralize(worktrees.length, "worktree")}`
       : `${filteredWorktrees.length} of ${worktrees.length}`;
 
   const renderRow = (worktree: WorktreeState, isLast: boolean) => (
@@ -822,7 +823,7 @@ export function WorktreeOverviewModal({
                     data-testid="worktree-bulk-remove"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
-                    Remove worktrees
+                    Delete worktrees
                   </Button>
                 </div>
               </FocusHandoffGuard>

@@ -378,14 +378,14 @@ function StderrView({ state }: { state: StderrState | undefined }) {
   }
   const result = state.result;
   if (!result || result.lines.length === 0) {
-    return <p className="text-2xs text-text-secondary">No output captured.</p>;
+    return <p className="text-2xs text-text-secondary">No output captured</p>;
   }
   const hidden = result.totalLines - result.lines.length;
   return (
     <div className="space-y-1.5">
       {hidden > 0 && (
         <p className="text-3xs text-text-secondary">
-          Showing the most recent {result.lines.length} of {result.totalLines} lines.
+          Showing the most recent {result.lines.length} of {result.totalLines} lines
         </p>
       )}
       <pre className="max-h-48 overflow-auto rounded-[var(--radius-md)] bg-surface-canvas border border-border-default p-2 font-mono text-2xs leading-relaxed text-text-primary whitespace-pre-wrap break-words select-text">

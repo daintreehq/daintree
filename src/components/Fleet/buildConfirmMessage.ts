@@ -1,4 +1,5 @@
 import type { FleetPendingActionKind } from "@/store/fleetPendingActionStore";
+import { pluralize } from "@/lib/pluralize";
 
 export type FleetConfirmActionId =
   "fleet.reject" | "fleet.interrupt" | "fleet.restart" | "fleet.kill" | "fleet.trash";
@@ -10,11 +11,11 @@ export function buildConfirmMessage(
 ): string {
   switch (kind) {
     case "reject":
-      return `Reject ${count} ${count === 1 ? "prompt" : "prompts"}?`;
+      return `Reject ${pluralize(count, "prompt")}?`;
     case "interrupt":
-      return `Interrupt ${count} ${count === 1 ? "agent" : "agents"}?`;
+      return `Interrupt ${pluralize(count, "agent")}?`;
     case "restart": {
-      const base = `Restart ${count} ${count === 1 ? "agent" : "agents"}?`;
+      const base = `Restart ${pluralize(count, "agent")}?`;
       if (sessionLoss > 0) {
         const noun = sessionLoss === 1 ? "agent will lose its" : "agents will lose their";
         return `${base} ${sessionLoss} ${noun} session.`;
@@ -22,8 +23,8 @@ export function buildConfirmMessage(
       return base;
     }
     case "kill":
-      return `Kill ${count} ${count === 1 ? "terminal" : "terminals"}?`;
+      return `Kill ${pluralize(count, "terminal")}?`;
     case "trash":
-      return `Trash ${count} ${count === 1 ? "terminal" : "terminals"}?`;
+      return `Trash ${pluralize(count, "terminal")}?`;
   }
 }

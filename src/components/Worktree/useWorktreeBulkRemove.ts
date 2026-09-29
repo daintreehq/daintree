@@ -21,6 +21,7 @@ import {
 } from "./worktreeDeletePreview";
 import type { WorktreeState } from "@/types";
 import type { WorktreeTeardownPreview } from "@shared/types/worktree";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * What the fresh per-target preview established, plus the `pending` state the
@@ -138,7 +139,7 @@ export function describeBulkRemoveRisks(target: BulkRemoveTarget): string[] {
   const risks = describeBulkRemoveLosses(target);
   const aheadCount = bulkRemoveAheadCount(target);
   if (aheadCount > 0) {
-    risks.push(`${aheadCount} unpushed commit${aheadCount === 1 ? "" : "s"}`);
+    risks.push(`${pluralize(aheadCount, "unpushed commit")}`);
   }
   return risks;
 }
@@ -169,20 +170,20 @@ export function describeBulkRemoveLosses(target: BulkRemoveTarget): string[] {
     const { files, pointerOnly } = splitDisplayChanges(changes, rootPath, submodules);
     const { trackedChangeCount, untrackedFileCount } = summarizeWorktreeChanges(files);
     if (trackedChangeCount > 0) {
-      risks.push(`${trackedChangeCount} uncommitted file${trackedChangeCount === 1 ? "" : "s"}`);
+      risks.push(`${pluralize(trackedChangeCount, "uncommitted file")}`);
     }
     if (untrackedFileCount > 0) {
-      risks.push(`${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`);
+      risks.push(`${pluralize(untrackedFileCount, "untracked file")}`);
     }
     // The parent's own status collapses every one of these into a single
     // ` M vendor/lib` row, and can be configured not to report it at all, so
     // the nested count cannot be derived from the two above it.
     const nested = submoduleFileCount(submodules);
     if (nested > 0) {
-      risks.push(`${nested} file${nested === 1 ? "" : "s"} inside submodules`);
+      risks.push(`${pluralize(nested, "file")} inside submodules`);
     }
     if (pointerOnly.length > 0) {
-      risks.push(`${pointerOnly.length} submodule change${pointerOnly.length === 1 ? "" : "s"}`);
+      risks.push(`${pluralize(pointerOnly.length, "submodule change")}`);
     }
   }
   return risks;
@@ -498,8 +499,8 @@ export function useWorktreeBulkRemove({
       if (excludedMainCount > 0) {
         notify({
           type: "info",
-          title: "Nothing to remove",
-          message: "The main worktree can't be removed from the overview.",
+          title: "Nothing to delete",
+          message: "The main worktree can't be deleted from the overview.",
           priority: "high",
           context: { eventKind: "uiFeedback" },
         });
@@ -653,7 +654,7 @@ export function useWorktreeBulkRemove({
               stoppedDevServer: hadDevPreview,
             };
           } catch (err) {
-            const reason = formatErrorMessage(err, "Removal failed");
+            const reason = formatErrorMessage(err, "Delete failed");
             logError(`Bulk remove failed for ${target.id}`, err);
             return {
               ok: false,
@@ -694,8 +695,8 @@ export function useWorktreeBulkRemove({
             name: target.branch ?? target.name,
             reason:
               kept.length === 1
-                ? `Kept because ${keptNames} inside it wasn't removed`
-                : `Kept because ${kept.length} worktrees inside it weren't removed: ${keptNames}`,
+                ? `Kept because ${keptNames} inside it wasn't deleted`
+                : `Kept because ${kept.length} worktrees inside it weren't deleted: ${keptNames}`,
             stoppedDevServer: false,
             keptForNested: true,
           };
@@ -726,7 +727,7 @@ export function useWorktreeBulkRemove({
           // and `addAll`'s Promise.all is what used to lose the others.
           failures.push({
             name: fallbackName,
-            reason: formatErrorMessage(entry.reason, "Removal failed"),
+            reason: formatErrorMessage(entry.reason, "Delete failed"),
           });
           logError(`Bulk remove never ran for ${target?.id ?? "unknown"}`, entry.reason);
           return;
@@ -741,7 +742,7 @@ export function useWorktreeBulkRemove({
         if (result.ok) {
           successCount++;
         } else {
-          const failure = { name: result.name, reason: result.reason ?? "Removal failed" };
+          const failure = { name: result.name, reason: result.reason ?? "Delete failed" };
           // An ancestor kept for its nested worktree only echoes that failure;
           // the nested one carries the cause, so it leads the summary.
           if (result.keptForNested) keptFailures.push(failure);
@@ -756,7 +757,7 @@ export function useWorktreeBulkRemove({
         // worktrees disappearing — the toast is a one-shot confirmation,
         // not something the user needs to revisit from the notification
         // inbox (#8249).
-        const successTitle = total === 1 ? "Removed 1 worktree" : `Removed ${total} worktrees`;
+        const successTitle = `Deleted ${pluralize(total, "worktree")}`;
         let successMessage =
           total === 1
             ? "The worktree directory was deleted from disk."
@@ -779,12 +780,12 @@ export function useWorktreeBulkRemove({
         // Total failure — no recovery action attached because the modal
         // itself is the retry surface (the user can re-select and retry).
         const firstFailure = failures[0];
-        const failureTitle = total === 1 ? "Couldn't remove worktree" : "Couldn't remove worktrees";
+        const failureTitle = total === 1 ? "Couldn't delete worktree" : "Couldn't delete worktrees";
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: failureTitle,
-          message: firstFailure ? firstFailure.reason : "All removals failed.",
+          message: firstFailure ? firstFailure.reason : "All deletes failed.",
         });
         announce(failureTitle, "assertive");
       } else {
@@ -797,7 +798,7 @@ export function useWorktreeBulkRemove({
           failures.length === 1 && firstFailure
             ? `${firstFailure.name} failed: ${firstFailure.reason}`
             : `${failures.length} failed.`;
-        const partialTitle = `Removed ${successCount} of ${total} worktrees`;
+        const partialTitle = `Deleted ${successCount} of ${total} worktrees`;
         notify({
           type: "warning",
           title: partialTitle,
@@ -831,7 +832,7 @@ export function useWorktreeBulkRemove({
     // typed against the skeleton does not carry into the evidence that
     // replaced it.
     consentKey: `${previewSession}:${isPreviewPending ? "pending" : "settled"}`,
-    typedNameTarget: eligibleCount === 1 ? "1 worktree" : `${eligibleCount} worktrees`,
+    typedNameTarget: pluralize(eligibleCount, "worktree"),
     canConfirm: !isPreviewPending && eligibleCount > 0,
     isExecuting,
     isRechecking,

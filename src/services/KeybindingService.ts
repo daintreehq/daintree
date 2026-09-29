@@ -806,7 +806,7 @@ class KeybindingService {
         secondKey: info.key,
         displayKey: this.formatComboForDisplay(info.key),
         actionId: "",
-        description: "...",
+        description: "…",
         category: info.category,
         isPrefix: true,
       });

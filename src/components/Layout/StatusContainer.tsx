@@ -26,6 +26,7 @@ import {
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
+import { pluralize } from "@/lib/pluralize";
 
 function getLocationIcon(location: PanelLocation | undefined) {
   if (location === "dock") return <PanelBottom className="w-3 h-3" />;
@@ -98,7 +99,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                 aria-expanded={isOpen}
                 aria-controls={config.contentId}
                 onClick={focusHandoff.onTriggerClick}
-                aria-label={`${config.buttonLabel}: ${displayCount} agent${displayCount === 1 ? "" : "s"} ${dockStatusScopeDescription(displayCount, hereCount)}`}
+                aria-label={`${config.buttonLabel}: ${pluralize(displayCount, "agent")} ${dockStatusScopeDescription(displayCount, hereCount)}`}
               >
                 <DockStatusPillLabel
                   icon={<Icon className={config.iconColor} aria-hidden="true" />}

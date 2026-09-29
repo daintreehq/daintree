@@ -48,6 +48,7 @@ import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { isPluginRecipe } from "@shared/types/project";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
+import { pluralize } from "@/lib/pluralize";
 
 const EMPTY_WORKTREES = new Map<string, WorktreeSnapshot>();
 
@@ -269,7 +270,7 @@ export function RecipeManager({
               </>
             )}
             <span className="min-w-0 truncate">
-              {recipe.terminals.length} terminal{recipe.terminals.length !== 1 ? "s" : ""}
+              {pluralize(recipe.terminals.length, "terminal")}
               {summary && summary !== recipe.name ? `: ${summary}` : ""}
             </span>
             <span aria-hidden>·</span>

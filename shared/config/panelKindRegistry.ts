@@ -288,7 +288,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
   },
   "dev-preview": {
     id: "dev-preview",
-    name: "Dev Preview",
+    name: "Dev preview",
     iconId: "monitor-play",
     color: PANEL_KIND_BRAND_COLORS["dev-preview"],
     hasPty: false,
@@ -333,7 +333,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
   },
   file: {
     id: "file",
-    name: "File Viewer",
+    name: "File viewer",
     iconId: "file-text",
     color: PANEL_KIND_BRAND_COLORS.file,
     hasPty: false,
@@ -353,7 +353,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
   },
   "file-browser": {
     id: "file-browser",
-    name: "File Browser",
+    name: "File browser",
     iconId: "folder-tree",
     color: PANEL_KIND_BRAND_COLORS["file-browser"],
     hasPty: false,
@@ -380,7 +380,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
   },
   diff: {
     id: "diff",
-    name: "Diff Viewer",
+    name: "Diff viewer",
     iconId: "file-diff",
     color: PANEL_KIND_BRAND_COLORS.diff,
     hasPty: false,

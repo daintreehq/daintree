@@ -8,6 +8,7 @@ import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { SAFE_MODE_BANNER_COPY } from "./recoveryCopy";
 import type { QuarantinedPanelSummary } from "@shared/types/ipc/crashRecovery";
+import { pluralize } from "@/lib/pluralize";
 
 function formatRelativeTime(timestamp: number): string {
   const diff = Date.now() - timestamp;
@@ -125,9 +126,9 @@ export function SafeModeBanner() {
 
   let crashMetaText: string | null = null;
   if (crashes > 0 && crashTimestamp !== null) {
-    crashMetaText = `${crashes} ${crashes === 1 ? "crash" : "crashes"} detected, last ${formatRelativeTime(crashTimestamp)}`;
+    crashMetaText = `${pluralize(crashes, "crash", "crashes")} detected, last ${formatRelativeTime(crashTimestamp)}`;
   } else if (crashes > 0) {
-    crashMetaText = `${crashes} ${crashes === 1 ? "crash" : "crashes"} detected`;
+    crashMetaText = `${pluralize(crashes, "crash", "crashes")} detected`;
   } else if (crashTimestamp !== null) {
     crashMetaText = `Last crash ${formatRelativeTime(crashTimestamp)}`;
   }
@@ -144,9 +145,11 @@ export function SafeModeBanner() {
         {hasQuarantineList ? (
           <>
             <p className="text-text-secondary">
-              {quarantined.length === 1
-                ? "1 panel was quarantined because it appeared to trigger repeated crashes."
-                : `${quarantined.length} panels were quarantined because they appeared to trigger repeated crashes.`}
+              {pluralize(
+                quarantined.length,
+                "panel was quarantined because it appeared to trigger repeated crashes.",
+                "panels were quarantined because they appeared to trigger repeated crashes."
+              )}
             </p>
             <ul
               role="list"
@@ -160,8 +163,8 @@ export function SafeModeBanner() {
         ) : (
           skipped > 0 && (
             <p className="text-text-secondary">
-              {skipped} {skipped === 1 ? "panel was" : "panels were"} skipped so you can recover the
-              app. Restart normally to reload them.
+              {pluralize(skipped, "panel was", "panels were")} skipped so you can recover the app.
+              Restart normally to reload them.
             </p>
           )
         )}

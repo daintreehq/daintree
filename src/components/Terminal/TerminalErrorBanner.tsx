@@ -48,7 +48,7 @@ export function TerminalErrorBanner({
   };
   const trashAction: BannerAction = {
     id: "trash",
-    label: "Remove terminal",
+    label: "Trash terminal",
     icon: Trash2,
     onClick: () => onTrash(terminalId),
     title: "Move to trash",

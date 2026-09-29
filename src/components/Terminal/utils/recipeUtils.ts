@@ -6,7 +6,7 @@ export function getRecipeTerminalSummary(terminals: RecipeTerminal[]): string {
 
   const labels = terminals.map((terminal) => {
     if (terminal.type === "dev-preview") {
-      return terminal.title || "Dev Server";
+      return terminal.title || "Dev server";
     }
     if (terminal.type === "terminal") {
       return terminal.title || "Terminal";

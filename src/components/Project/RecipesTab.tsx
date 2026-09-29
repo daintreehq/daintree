@@ -23,6 +23,7 @@ import { logError } from "@/utils/logger";
 import { getRecipeScope, worktreeDisplayName } from "@/utils/recipeScope";
 import { isPluginRecipe } from "@shared/types/project";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { pluralize } from "@/lib/pluralize";
 
 interface RecipesTabProps {
   projectId: string;
@@ -236,10 +237,7 @@ export function RecipesTab({
                             const scopeInfo = getRecipeScope(recipe, resolveWorktreeName);
                             return <Badge size="xs">{scopeInfo.label}</Badge>;
                           })()}
-                          <Badge size="xs">
-                            {recipe.terminals.length} terminal
-                            {recipe.terminals.length !== 1 ? "s" : ""}
-                          </Badge>
+                          <Badge size="xs">{pluralize(recipe.terminals.length, "terminal")}</Badge>
                           {isShadowed && <Badge size="xs">Overridden by team recipe</Badge>}
                           {isDefault && <Badge size="xs">Default</Badge>}
                           {recipe.showInEmptyState && <Badge size="xs">On empty grid</Badge>}

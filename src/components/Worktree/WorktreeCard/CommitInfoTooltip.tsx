@@ -3,6 +3,7 @@ import { isValidPastTimestamp } from "@/utils/timestamps";
 import { parseCommitBody } from "@/utils/commitMessage";
 import { useWallClock } from "@/hooks/useWallClock";
 import { CommitAuthorAvatar, type CommitAuthor } from "./CommitAuthorAvatar";
+import { pluralize } from "@/lib/pluralize";
 
 export interface CommitInfoTooltipProps {
   /** Timestamp of the last commit. */
@@ -38,12 +39,12 @@ export function relativeTimePhrase(diffMs: number, timestampMs?: number): string
   const h = Math.floor(m / 60);
   const d = Math.floor(h / 24);
   if (s < 60) return "just now";
-  if (m < 60) return `${m} minute${m !== 1 ? "s" : ""} ago`;
-  if (h < 24) return `${h} hour${h !== 1 ? "s" : ""} ago`;
-  if (d < 7) return `${d} day${d !== 1 ? "s" : ""} ago`;
+  if (m < 60) return `${pluralize(m, "minute")} ago`;
+  if (h < 24) return `${pluralize(h, "hour")} ago`;
+  if (d < 7) return `${pluralize(d, "day")} ago`;
   if (diffMs < ABSOLUTE_AFTER_MS || timestampMs === undefined) {
     const w = Math.floor(d / 7);
-    return `${w} week${w !== 1 ? "s" : ""} ago`;
+    return `${pluralize(w, "week")} ago`;
   }
   absoluteDateFormatter ??= new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
   return `on ${absoluteDateFormatter.format(new Date(timestampMs))}`;

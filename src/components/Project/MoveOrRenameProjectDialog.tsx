@@ -35,6 +35,7 @@ import {
 import { DirectoryPickerField, PathCaption } from "./projectDialogFields";
 import { PathSegments } from "@/components/ui/PathSegments";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
+import { pluralize } from "@/lib/pluralize";
 
 /** Typing pause before the preview is requested, so a folder name isn't checked per keystroke. */
 const PREVIEW_DEBOUNCE_MS = 250;
@@ -642,9 +643,11 @@ function RelocationPreviewSection({
             <FormRow label="Terminals" labelClassName="self-start">
               <p className="text-xs">
                 <span className="font-medium text-text-primary">
-                  {preview.runningTerminalCount === 1
-                    ? "1 terminal will be gracefully stopped"
-                    : `${preview.runningTerminalCount} terminals will be gracefully stopped`}
+                  {pluralize(
+                    preview.runningTerminalCount,
+                    "terminal will be gracefully stopped",
+                    "terminals will be gracefully stopped"
+                  )}
                 </span>
                 <span className="block text-text-secondary"> They restart at the new location</span>
               </p>
@@ -694,9 +697,11 @@ function RelocationPreviewSection({
             <FormRow label="Worktrees" labelClassName="self-start">
               <div className="space-y-1 text-xs">
                 <p className="text-text-primary">
-                  {preview.linkedWorktrees.length === 1
-                    ? "1 linked worktree will be repaired"
-                    : `${preview.linkedWorktrees.length} linked worktrees will be repaired`}
+                  {pluralize(
+                    preview.linkedWorktrees.length,
+                    "linked worktree will be repaired",
+                    "linked worktrees will be repaired"
+                  )}
                 </p>
                 {preview.linkedWorktrees.map((wt) => (
                   <WrappingPath key={wt} path={wt} className="text-text-secondary" />
@@ -707,9 +712,11 @@ function RelocationPreviewSection({
           {preview.affectedPanelCount > 0 && (
             <FormRow label="Panels">
               <p className="text-xs text-text-primary">
-                {preview.affectedPanelCount === 1
-                  ? "1 panel will have its paths updated"
-                  : `${preview.affectedPanelCount} panels will have their paths updated`}
+                {pluralize(
+                  preview.affectedPanelCount,
+                  "panel will have its paths updated",
+                  "panels will have their paths updated"
+                )}
               </p>
             </FormRow>
           )}

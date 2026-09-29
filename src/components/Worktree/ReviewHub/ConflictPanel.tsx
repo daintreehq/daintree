@@ -40,6 +40,7 @@ import {
   type RepoOperationState,
 } from "@/components/Git/repoOperationCopy";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { pluralize } from "@/lib/pluralize";
 
 const REBASE_ACTION_LABEL: Record<RebaseAction, string> = {
   pick: "pick",
@@ -514,7 +515,7 @@ export function ConflictPanel({
     status.rebaseStep < status.rebaseTotalSteps;
   const summary =
     conflictCount > 0
-      ? `${conflictCount} conflicted file${conflictCount !== 1 ? "s" : ""} — resolve each, then continue`
+      ? `${pluralize(conflictCount, "conflicted file")} — resolve each, then continue`
       : isRebaseMidSequence
         ? "Continue to replay the remaining commits"
         : `Continue to finish the ${operationNoun}`;
@@ -636,7 +637,7 @@ export function ConflictPanel({
                           className="shrink-0 whitespace-nowrap text-3xs tabular-nums text-text-secondary"
                           data-testid={`conflict-hunk-count-${file.path}`}
                         >
-                          {hunkCount} {hunkCount === 1 ? "region" : "regions"}
+                          {pluralize(hunkCount, "region")}
                         </span>
                       )}
                     </div>

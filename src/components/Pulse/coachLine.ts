@@ -1,5 +1,6 @@
 import type { ProjectPulse, PulseRangeDays } from "@shared/types";
 import type { ForgeProjectHealthPayload } from "@shared/types/ipc/forge";
+import { pluralize } from "@/lib/pluralize";
 
 const RECENT_WINDOW_DAYS = 7;
 const DAY_MS = 86_400_000;
@@ -87,7 +88,7 @@ export function getCoachLine(
       // "change" and "landed", not "pull request" or "shipped" — the forge layer
       // is provider-neutral, and a merge means it landed on the base branch, not
       // that it reached anyone's machine.
-      return `${signal.count} change${signal.count !== 1 ? "s" : ""} landed in the last ${signal.rangeDays} days.`;
+      return `${pluralize(signal.count, "change")} landed in the last ${signal.rangeDays} days.`;
     case "today":
       return "There's activity today.";
     case "recent":

@@ -37,6 +37,7 @@ import { DismissButton } from "@/components/ui/DismissButton";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
 import { SECTION_LABEL, CARD_DENSITY } from "./sectionChrome";
+import { pluralize } from "@/lib/pluralize";
 
 interface MarqueeBox {
   x: number;
@@ -284,12 +285,11 @@ export function WorktreeTerminalSection({
       counts.byState,
       counts.total
     );
-    const plural = counts.total !== 1 ? "s" : "";
     // The collapsed trigger names itself once. Left to name-from-content it
     // read "3 active 3 sessions: 2 working, …" — the visible summary, then
     // the cluster's own name repeating the total. Starts with the visible
     // "N active" so speech input can still target it by what is on screen.
-    const triggerLabel = `${counts.total} active session${plural}${breakdown ? `: ${breakdown}` : ""}`;
+    const triggerLabel = `${pluralize(counts.total, "active session")}${breakdown ? `: ${breakdown}` : ""}`;
     return {
       visibleTerminalStates: visibleStates,
       terminalSessionAriaLabel: label,

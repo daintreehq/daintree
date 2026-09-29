@@ -22,6 +22,7 @@ import type {
   ForgeAuditRecord,
   ForgeAuditResult,
 } from "@shared/types/ipc/forge";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * "problems" is the default: rare errors and not-found results would otherwise
@@ -228,7 +229,7 @@ export function ForgeAuditLogViewer({
             className="status-mark h-2 w-2 rounded-sm rotate-45 shrink-0 bg-status-danger"
           />
           <span>
-            {visibleSignals.length} anomaly signal{visibleSignals.length !== 1 ? "s" : ""}
+            {pluralize(visibleSignals.length, "anomaly signal")}
             {anomalyCountsByKind.size > 0 &&
               ` (${Array.from(anomalyCountsByKind.entries())
                 .map(([kind, count]) => `${count} ${ANOMALY_KIND_LABEL[kind]}`)

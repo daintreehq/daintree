@@ -186,15 +186,15 @@ describe("SpawnErrorBanner", () => {
     expect(screen.getByText(/simulated UNKNOWN error/i)).toBeTruthy();
   });
 
-  it("keeps a single inline action and moves Remove terminal into the overflow menu", () => {
+  it("keeps a single inline action and moves Trash terminal into the overflow menu", () => {
     renderBanner("ENOENT");
     // Generic error → Retry is the sole inline action (outside the overflow).
     const retry = screen.getByRole("button", { name: /retry starting terminal/i });
     expect(overflow().contains(retry)).toBe(false);
-    // Remove terminal is demoted into the overflow menu.
-    const trash = screen.getByRole("button", { name: /^remove terminal$/i });
+    // Trash terminal is demoted into the overflow menu.
+    const trash = screen.getByRole("button", { name: /^trash terminal$/i });
     expect(overflow().contains(trash)).toBe(true);
-    expect(trash.textContent).toContain("Remove terminal");
+    expect(trash.textContent).toContain("Trash terminal");
     // The overflow trigger keeps its accessible label.
     expect(screen.getByRole("button", { name: /more recovery options/i })).toBeTruthy();
   });
@@ -276,7 +276,7 @@ describe("SpawnErrorBanner", () => {
   it("invokes onTrash from the overflow menu", () => {
     const onTrash = vi.fn();
     renderBanner("ENOENT", { onTrash });
-    fireEvent.click(screen.getByRole("button", { name: /^remove terminal$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^trash terminal$/i }));
     expect(onTrash).toHaveBeenCalledWith("t-1");
   });
 

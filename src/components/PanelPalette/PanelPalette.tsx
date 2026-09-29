@@ -237,7 +237,7 @@ export function PanelPalette({
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Select a panel type..."
+          placeholder="Select a panel type…"
           role="combobox"
           // The listbox only exists while there are rows to put in it.
           aria-expanded={isOpen && results.length > 0}

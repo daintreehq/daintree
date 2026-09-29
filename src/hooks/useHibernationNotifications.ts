@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { isElectronAvailable } from "./useElectron";
 import { hibernationClient } from "@/clients/hibernationClient";
 import { notify } from "@/lib/notify";
+import { pluralize } from "@/lib/pluralize";
 
 // One-way latch: app-lifetime, notify-only singleton listener with no teardown.
 // Never reset this — resetting on unmount allowed a remount to re-subscribe and
@@ -19,18 +20,17 @@ export function useHibernationNotifications(): void {
       notify({
         type: "info",
         title: "Project hibernated",
-        message: `"${projectName}" — ${terminalsKilled} terminal${terminalsKilled === 1 ? "" : "s"} suspended${reasonLabel}`,
-        inboxMessage: `"${projectName}" — ${terminalsKilled} terminal${terminalsKilled === 1 ? "" : "s"} suspended${reasonLabel}`,
+        message: `"${projectName}" — ${pluralize(terminalsKilled, "terminal")} suspended${reasonLabel}`,
+        inboxMessage: `"${projectName}" — ${pluralize(terminalsKilled, "terminal")} suspended${reasonLabel}`,
         priority: "low",
         context: { projectId },
         coalesce: {
           key: "hibernation:project",
           windowMs: 10000,
-          buildMessage: (count) =>
-            `${count} project${count === 1 ? "" : "s"} hibernated to save resources`,
+          buildMessage: (count) => `${pluralize(count, "project")} hibernated to save resources`,
           buildTitle: () => "Projects hibernated",
           buildInboxMessage: (count) =>
-            `${count} project${count === 1 ? "" : "s"} hibernated to save resources`,
+            `${pluralize(count, "project")} hibernated to save resources`,
         },
       });
     });

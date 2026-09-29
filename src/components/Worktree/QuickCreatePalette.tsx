@@ -14,6 +14,7 @@ import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { pluralize } from "@/lib/pluralize";
 
 const TYPE_BADGES: Record<string, string> = {
   terminal: "Terminal",
@@ -21,7 +22,7 @@ const TYPE_BADGES: Record<string, string> = {
   gemini: "Gemini",
   codex: "Codex",
   opencode: "OpenCode",
-  "dev-preview": "Dev Server",
+  "dev-preview": "Dev server",
 };
 
 function RecipeListItem({
@@ -113,9 +114,7 @@ function RecipeListItem({
       <div className="flex items-center gap-2 text-2xs text-text-secondary">
         <span className="truncate">{getRecipeScope(recipe, () => worktreeName).label}</span>
         {recipe.shadowedBy && <span className="shrink-0">Overridden by Team</span>}
-        <span className="ml-auto shrink-0">
-          {recipe.terminals.length} terminal{recipe.terminals.length !== 1 ? "s" : ""}
-        </span>
+        <span className="ml-auto shrink-0">{pluralize(recipe.terminals.length, "terminal")}</span>
       </div>
     </button>
   );

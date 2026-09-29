@@ -5,7 +5,7 @@ import { notify } from "@/lib/notify";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useDistributionStore } from "@/store/distributionStore";
 
-const AVAILABLE_HINT = 'Use "Check for Updates..." to check again.';
+const AVAILABLE_HINT = 'Use "Check for Updates…" to check again.';
 const UPDATE_CORRELATION_ID = "app-update";
 const CHANGELOG_URL = "https://daintree.org/changelog";
 
@@ -85,7 +85,7 @@ function surfaceAvailable(version: string): void {
   notify({
     type: "info",
     title: "Update available",
-    message: `Version ${version} is downloading...`,
+    message: `Version ${version} is downloading…`,
     inboxMessage: `Version ${version} is downloading. ${AVAILABLE_HINT}`,
     priority: "high",
     duration: 0,

@@ -76,12 +76,12 @@ function planSteps(createGitignore: boolean, createInitialCommit: boolean): Work
 }
 
 /**
- * The main process narrates a start as `"Staging files for initial commit..."`.
- * The trailing dots are its own progress punctuation and this surface supplies
- * its own, so strip them rather than rendering an ellipsis followed by three more dots.
+ * The main process narrates a start as `"Staging files for initial commit…"`.
+ * The trailing ellipsis is its own progress punctuation and this surface supplies
+ * its own, so strip it rather than rendering two ellipses.
  */
 function liveLabel(message: string): string {
-  return message.replace(/\.{3}$/, "").trim();
+  return message.replace(/(?:\.{3}|…)$/, "").trim();
 }
 
 interface PhaseState {

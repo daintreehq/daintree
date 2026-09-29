@@ -2,6 +2,7 @@ import { cn } from "@/lib/utils";
 import { SECTION_TEXT_COLUMN } from "./sectionChrome";
 import { isValidPastTimestamp } from "@/utils/timestamps";
 import { LiveTimeAgo } from "../LiveTimeAgo";
+import { pluralize } from "@/lib/pluralize";
 
 export interface FocusedSubLineProps {
   open: boolean;
@@ -65,7 +66,7 @@ export function FocusedSubLine({
               )}
               {seg === "changes" && (
                 <span className="shrink-0 tabular-nums">
-                  {changedFileCount} file{changedFileCount !== 1 ? "s" : ""}
+                  {pluralize(changedFileCount ?? 0, "file")}
                 </span>
               )}
               {seg === "time" && (

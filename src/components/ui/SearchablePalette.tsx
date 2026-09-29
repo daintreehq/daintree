@@ -15,6 +15,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
+import { pluralize } from "@/lib/pluralize";
 
 const noopHoverIndex = () => {};
 
@@ -319,9 +320,7 @@ export function SearchablePalette<T>({
       countTimerRef.current = null;
       const count = resultCountRef.current;
       if (count === 0 && !hasCustomBodyRef.current) return;
-      useAnnouncerStore
-        .getState()
-        .announce(count === 1 ? "1 result" : `${count} results`, "polite");
+      useAnnouncerStore.getState().announce(pluralize(count, "result"), "polite");
     }, UI_DOHERTY_THRESHOLD);
   }, [cancelCount]);
   useEffect(() => cancelCount, [cancelCount]);
@@ -551,7 +550,7 @@ export function SearchablePalette<T>({
           aria-expanded={listRendered}
           aria-haspopup="listbox"
           aria-autocomplete="list"
-          aria-label={searchAriaLabel ?? searchPlaceholder.replace("...", "")}
+          aria-label={searchAriaLabel ?? searchPlaceholder.replace(/(?:\.{3}|…)$/, "")}
           aria-describedby={searchAriaDescribedBy}
           aria-controls={listRendered ? listId : undefined}
           aria-activedescendant={activeDescendant}

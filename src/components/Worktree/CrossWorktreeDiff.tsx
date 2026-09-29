@@ -23,6 +23,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { DIFF_STATUS_CONFIG, formatDiffDir } from "@/components/FileViewer/diffChangeSet";
 import { isProseFilePath } from "@/components/FileViewer/isProseFile";
+import { pluralize } from "@/lib/pluralize";
 
 interface CrossWorktreeDiffProps {
   isOpen: boolean;
@@ -207,9 +208,7 @@ function ChangeSetSummary({ files }: { files: CrossWorktreeFile[] }) {
 
   return (
     <div className="flex items-baseline justify-between gap-2 text-xs">
-      <span className="font-medium text-text-primary">
-        {files.length} {files.length === 1 ? "file" : "files"}
-      </span>
+      <span className="font-medium text-text-primary">{pluralize(files.length, "file")}</span>
       <span className="flex items-center gap-1.5 font-mono text-2xs tabular-nums">
         {totalInsertions > 0 && <span className="text-status-success">+{totalInsertions}</span>}
         {totalDeletions > 0 && <span className="text-status-error">-{totalDeletions}</span>}

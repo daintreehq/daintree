@@ -27,6 +27,7 @@ import { invalidateProjectSettingsCache } from "@/clients/projectClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
+import { pluralize } from "@/lib/pluralize";
 
 const EDITOR_LABELS: Record<KnownEditorId, string> = {
   vscode: "VS Code",
@@ -359,7 +360,7 @@ export function EditorIntegrationTab() {
                   />
                   {showDetected
                     ? "Hide other found editors"
-                    : `Show ${otherFoundEditors.length} other found editor${otherFoundEditors.length === 1 ? "" : "s"}`}
+                    : `Show ${pluralize(otherFoundEditors.length, "other found editor")}`}
                 </button>
                 <div id={detectedRegionId}>
                   {showDetected && (

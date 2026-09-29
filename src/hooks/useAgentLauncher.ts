@@ -437,7 +437,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             const devCommand = await readViewDevServerCommand();
             const terminalId = await addPanel({
               kind: "dev-preview",
-              title: "Dev Server",
+              title: "Dev server",
               devCommand,
               cwd,
               worktreeId: effectiveWorktreeId || undefined,

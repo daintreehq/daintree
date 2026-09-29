@@ -19,6 +19,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { ClearLogsConfirmDialog } from "@/components/Diagnostics/ClearLogsConfirmDialog";
 import { notify } from "@/lib/notify";
 import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
+import { pluralize } from "@/lib/pluralize";
 
 const PROFILE_UPDATE_INTERVAL_MS = 250;
 
@@ -427,7 +428,7 @@ export function TroubleshootingTab() {
       notify({
         type: "success",
         title: "Log overrides cleared",
-        message: `${count} ${count === 1 ? "module is" : "modules are"} back on the default level.`,
+        message: `${pluralize(count, "module is", "modules are")} back on the default level.`,
         priority: "high",
         transient: true,
         duration: UNDO_TOAST_DURATION_MS,

@@ -21,6 +21,7 @@ import { useRovingRows, type UseRovingRowsResult } from "@/hooks/useRovingRows";
 import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { DIFF_STATUS_CONFIG, formatDiffDir, summarizeChangeSet } from "./diffChangeSet";
 import type { DiffChangeSetEntry } from "./diffChangeSet";
+import { pluralize } from "@/lib/pluralize";
 
 export interface DiffFileSidebarProps {
   files: DiffChangeSetEntry[];
@@ -415,9 +416,7 @@ export function DiffFileSidebar({
     >
       <div className="shrink-0 border-b border-border-default px-3.5 py-2">
         <div className="flex items-baseline justify-between gap-2 text-xs">
-          <span className="font-medium text-text-primary">
-            {files.length} {files.length === 1 ? "file" : "files"}
-          </span>
+          <span className="font-medium text-text-primary">{pluralize(files.length, "file")}</span>
           <span className="flex items-center gap-1.5 font-mono text-2xs">
             {summary.insertions > 0 && (
               <span className="text-status-success">+{summary.insertions}</span>

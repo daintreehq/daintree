@@ -1208,7 +1208,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           if (terminal.type === "dev-preview") {
             return terminalStore.addPanel({
               kind: "dev-preview",
-              title: terminal.title || "Dev Server",
+              title: terminal.title || "Dev server",
               cwd: worktreePath,
               worktreeId: worktreeId,
               devCommand: terminal.devCommand?.trim() || undefined,
