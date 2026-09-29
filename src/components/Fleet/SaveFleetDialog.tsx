@@ -10,6 +10,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { PredicateFleetSavedScope } from "@shared/types";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
+import { pluralize } from "@/lib/pluralize";
 
 type SaveFleetKind = "snapshot" | "predicate";
 type RuleState = PredicateFleetSavedScope["stateFilter"];
@@ -20,10 +21,6 @@ interface SaveFleetDialogProps {
   onClose: () => void;
   armedCount: number;
   restoreFocusTo?: RestoreFocusTarget;
-}
-
-function panes(n: number): string {
-  return `${n} pane${n === 1 ? "" : "s"}`;
 }
 
 function savedIds(): Set<string> {
@@ -159,8 +156,8 @@ export function SaveFleetDialog({
             hint={
               <p id={kindHintId} className="text-xs text-text-secondary">
                 {kind === "snapshot"
-                  ? `The ${panes(armedCount)} armed now. Panes you close drop out of it.`
-                  : `Whichever panes match when you recall it. ${panes(ruleMatchCount)} ${ruleMatchCount === 1 ? "matches" : "match"} now.`}
+                  ? `The ${pluralize(armedCount, "pane")} armed now. Panes you close drop out of it.`
+                  : `Whichever panes match when you recall it. ${pluralize(ruleMatchCount, "pane matches", "panes match")} now.`}
               </p>
             }
           >

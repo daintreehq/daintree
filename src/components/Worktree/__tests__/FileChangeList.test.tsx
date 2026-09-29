@@ -341,7 +341,7 @@ describe("FileChangeList — folder grouping is an invariant (#12102)", () => {
       <FileChangeList changes={changes} rootPath={ROOT} maxVisible={1} />
     );
     expect(headers(container)).toEqual(["src"]);
-    expect(container.textContent).toContain("...and 1 more");
+    expect(container.textContent).toContain("…and 1 more");
     expect(container.textContent).toContain("b.ts");
   });
 });

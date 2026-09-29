@@ -575,7 +575,7 @@ export function getAutoAssign(recipe: TerminalRecipe): RecipeAutoAssign {
 export interface RunCommand {
   /** Unique identifier for this command */
   id: string;
-  /** Display name (e.g. "Dev Server" or "Run Tests") */
+  /** Display name (e.g. "Dev server" or "Run Tests") */
   name: string;
   /** Command to execute (e.g. "npm run dev" or "php artisan test") */
   command: string;

@@ -8,6 +8,7 @@ import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { SAFE_MODE_BANNER_COPY } from "./recoveryCopy";
 import type { QuarantinedPanelSummary } from "@shared/types/ipc/crashRecovery";
+import { pluralize } from "@/lib/pluralize";
 
 function formatRelativeTime(timestamp: number): string {
   const diff = Date.now() - timestamp;
@@ -144,9 +145,11 @@ export function SafeModeBanner() {
         {hasQuarantineList ? (
           <>
             <p className="text-text-secondary">
-              {quarantined.length === 1
-                ? "1 panel was quarantined because it appeared to trigger repeated crashes."
-                : `${quarantined.length} panels were quarantined because they appeared to trigger repeated crashes.`}
+              {pluralize(
+                quarantined.length,
+                "panel was quarantined because it appeared to trigger repeated crashes.",
+                "panels were quarantined because they appeared to trigger repeated crashes."
+              )}
             </p>
             <ul
               role="list"

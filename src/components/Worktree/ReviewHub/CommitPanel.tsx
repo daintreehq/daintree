@@ -14,6 +14,7 @@ import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { REVIEW_HUB_DISABLED_CTA } from "./reviewHubUtils";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { RefChip } from "@/components/Git/GitOperationPreview";
+import { pluralize } from "@/lib/pluralize";
 
 const MAX_SUBJECT_LENGTH = 72;
 const HISTORY_FETCH_POLL_INTERVAL_MS = 10;
@@ -45,10 +46,6 @@ const PUSH_STAGE_LABELS: Record<string, string> = {
 function pushStageLabel(stage: string): string {
   const key = stage.replace(/:$/, "").toLowerCase();
   return PUSH_STAGE_LABELS[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
-}
-
-function formatFileCount(count: number): string {
-  return `${count} file${count === 1 ? "" : "s"}`;
 }
 
 /**
@@ -456,7 +453,7 @@ export function CommitPanel({
   const primaryBusy = hasRemote ? pendingAction === "commit-push" || isPushing : isCommitting;
   const primaryKeyshortcuts = comboToAriaKeyshortcuts(PRIMARY_SHORTCUT, onMac);
   const pushTarget = pushTargetBranch ?? destinationLabel;
-  const stagedSummary = `${formatFileCount(stagedCount)} staged`;
+  const stagedSummary = `${pluralize(stagedCount, "file")} staged`;
 
   // One line under the message box answers "can I commit, and if so what happens".
   // It replaces a hover-only checklist: the buttons point at it with
@@ -474,7 +471,7 @@ export function CommitPanel({
     );
     statusTitle = pushTarget ? `Pushing to ${pushTarget}` : undefined;
   } else if (isCommitting) {
-    statusContent = `Committing ${formatFileCount(pendingCount)}…`;
+    statusContent = `Committing ${pluralize(pendingCount, "file")}…`;
   } else if (isBlocked) {
     statusTone = isDetachedHead || hasConflicts ? "warning" : "neutral";
     statusContent = describeBlockers({

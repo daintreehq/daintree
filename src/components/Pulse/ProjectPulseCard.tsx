@@ -564,7 +564,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             >
               <Spinner size="xs" />
               <span className="text-xs">
-                Retrying ({retryCount}/{PULSE_MAX_RETRIES})...
+                Retrying ({retryCount}/{PULSE_MAX_RETRIES})…
               </span>
             </div>
           )}

@@ -646,7 +646,7 @@ export async function runInstall<TSession extends TerminalControllerSession>(
     status: "installing",
     error: {
       type: "missing-dependencies",
-      message: `Running ${installCommand}...`,
+      message: `Running ${installCommand}…`,
     },
   });
 

@@ -43,6 +43,7 @@ import {
   type McpClientConfigId,
 } from "@shared/config/mcpClientConfigs";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { pluralize } from "@/lib/pluralize";
 
 interface McpServerStatus {
   enabled: boolean;
@@ -1127,7 +1128,7 @@ export function McpServerSettingsTab() {
         isOpen={showClearConfirm}
         onClose={handleCancelClear}
         title="Clear audit log?"
-        description={`This permanently deletes ${auditRecords.length === 1 ? "1 audit record" : `${auditRecords.length} audit records`} on this machine. Turn outcomes aren't affected.${auditEnabled ? " New tool calls will still be recorded." : ""}`}
+        description={`This permanently deletes ${pluralize(auditRecords.length, "audit record")} on this machine. Turn outcomes aren't affected.${auditEnabled ? " New tool calls will still be recorded." : ""}`}
         confirmLabel="Clear audit log"
         cancelLabel="Cancel"
         onConfirm={confirmClearAuditLog}

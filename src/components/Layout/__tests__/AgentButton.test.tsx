@@ -534,7 +534,7 @@ describe("AgentButton preset UX", () => {
       const { queryByText } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      expect(queryByText("CCR Routes")).toBeNull();
+      expect(queryByText("CCR routes")).toBeNull();
       expect(queryByText("Custom")).toBeNull();
     });
 
@@ -550,7 +550,7 @@ describe("AgentButton preset UX", () => {
       );
       const labels = queryAllByTestId("preset-menu-label");
       const texts = labels.map((el) => el.textContent);
-      expect(texts).toContain("CCR Routes");
+      expect(texts).toContain("CCR routes");
       expect(texts).toContain("Custom");
     });
   });
@@ -817,7 +817,7 @@ describe("AgentButton preset UX", () => {
       expect(dropdownOpenState).toBe(false);
     });
 
-    it("Project Shared group gutter persists and label launches (separate render path)", () => {
+    it("Project shared group gutter persists and label launches (separate render path)", () => {
       mockActiveWorktreeId = "wt-A";
       mockSettings = settingsWith({ claude: {} });
       mockProjectPresetsByAgent = { claude: [{ id: "proj-x", name: "Project X" }] };

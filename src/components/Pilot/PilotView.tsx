@@ -56,6 +56,7 @@ import { useEffectiveCombo } from "@/hooks/useKeybinding";
 // Leaf import, not the `@/hooks` barrel: palette suites routinely mock that
 // barrel and throw on an export they don't list.
 import { useOverlayClaim } from "@/hooks/useOverlayState";
+import { pluralize } from "@/lib/pluralize";
 const LIST_ID = "pilot-agent-list";
 
 /** Ages are minute-grained, so a 30s tick keeps them honest without churn. */
@@ -146,7 +147,7 @@ function demandPhrase(count: number): string {
 }
 
 function agentCount(count: number): string {
-  return count === 1 ? "1 agent" : `${count} agents`;
+  return pluralize(count, "agent");
 }
 
 /**

@@ -11,6 +11,7 @@ import {
   filterEligibleIds,
   type FleetExecutionResult,
 } from "./fleetExecution";
+import { pluralize } from "@/lib/pluralize";
 
 let activeBroadcastController: AbortController | null = null;
 
@@ -92,10 +93,6 @@ export async function runManagedFleetBroadcast(
   }
 }
 
-function plural(count: number, singular: string, pluralForm: string): string {
-  return `${count} ${count === 1 ? singular : pluralForm}`;
-}
-
 function describeFailureSplit(permanent: number, transient: number): string {
   // Both kinds present → call out the user-visible distinction (retryable vs
   // unreachable) so the user can tell the chip-recoverable cases apart from
@@ -113,13 +110,13 @@ function buildBroadcastAnnouncement(result: FleetExecutionResult): string {
   const transient = result.transientlyFailedIds.length;
   const skipped =
     result.skippedCount > 0
-      ? `, ${plural(result.skippedCount, "terminal", "terminals")} skipped`
+      ? `, ${pluralize(result.skippedCount, "terminal", "terminals")} skipped`
       : "";
 
   if (result.cancelled) {
     if (result.successCount === 0 && result.failureCount === 0) {
       if (result.skippedCount > 0) {
-        return `Broadcast cancelled — ${plural(result.skippedCount, "terminal", "terminals")} skipped`;
+        return `Broadcast cancelled — ${pluralize(result.skippedCount, "terminal", "terminals")} skipped`;
       }
       return "Broadcast cancelled";
     }
@@ -131,7 +128,7 @@ function buildBroadcastAnnouncement(result: FleetExecutionResult): string {
   if (result.failureCount > 0) {
     return `Broadcast sent to ${result.successCount} — ${describeFailureSplit(permanent, transient)}`;
   }
-  return `Broadcast sent to ${plural(result.successCount, "terminal", "terminals")}`;
+  return `Broadcast sent to ${pluralize(result.successCount, "terminal", "terminals")}`;
 }
 
 /**

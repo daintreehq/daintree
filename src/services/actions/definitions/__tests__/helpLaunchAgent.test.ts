@@ -440,7 +440,7 @@ describe("help.launchAgent", () => {
     expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "error",
-        title: "Help Agent",
+        title: "Help agent",
       })
     );
     expect(mockDispatch).not.toHaveBeenCalled();

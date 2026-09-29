@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { type McpLogRecord, isAuditRecord } from "@shared/types";
+import { pluralize } from "@/lib/pluralize";
 
 interface McpAuditLatencyTableProps {
   records: McpLogRecord[];
@@ -156,7 +157,7 @@ export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatency
           <span className="flex-1">Latency by tool</span>
           {hasRecords && (
             <span className="text-xs font-normal text-text-secondary">
-              {stats.length === 1 ? "1 tool" : `${stats.length} tools`}
+              {pluralize(stats.length, "tool")}
             </span>
           )}
         </button>

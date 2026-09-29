@@ -644,7 +644,7 @@ export function PluginDetailPane({
                 {plugin.manifest.description}
               </p>
             ) : (
-              <p className="text-xs text-text-secondary">No description provided.</p>
+              <p className="text-xs text-text-secondary">No description provided</p>
             )}
 
             {/* Where it actually came from. A "URL" badge names the KIND of

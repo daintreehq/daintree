@@ -57,7 +57,7 @@ afterEach(() => {
 });
 
 const worktree = { path: "/repo" } as WorktreeState;
-const PLACEHOLDER = "Search issues by title or number...";
+const PLACEHOLDER = "Search issues by title or number…";
 
 function renderDialog(
   props: Partial<React.ComponentProps<typeof IssuePickerDialog>> = {}

@@ -66,6 +66,7 @@ import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge, CountBadge } from "@/components/ui/badge";
 import { FilterChip } from "@/components/ui/FilterChip";
+import { pluralize } from "@/lib/pluralize";
 
 const SECTION_HEADER_CLASS = cn(LIST_LABEL_CLASS, "px-3");
 
@@ -454,11 +455,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
       return;
     }
     const message =
-      resultCount === 0
-        ? "No matching plugins"
-        : resultCount === 1
-          ? "1 matching plugin"
-          : `${resultCount} matching plugins`;
+      resultCount === 0 ? "No matching plugins" : pluralize(resultCount, "matching plugin");
     const timer = setTimeout(() => setSearchAnnouncement(message), SEARCH_ANNOUNCE_DELAY_MS);
     return () => clearTimeout(timer);
   }, [isSearchActive, resultCount, deferredQuery]);
@@ -880,9 +877,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                   aria-hidden="true"
                 />
                 <span className="text-2xs text-status-danger min-w-0 flex-1">
-                  {brokenCount === 1
-                    ? "1 plugin needs attention"
-                    : `${brokenCount} plugins need attention`}
+                  {pluralize(brokenCount, "plugin needs attention", "plugins need attention")}
                 </span>
                 <span className="text-2xs text-status-danger underline underline-offset-2 shrink-0">
                   Show

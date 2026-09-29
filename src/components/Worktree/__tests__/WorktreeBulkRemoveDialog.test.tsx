@@ -374,7 +374,7 @@ describe("WorktreeBulkRemoveDialog — gating", () => {
 
     const body = document.body.textContent ?? "";
     expect(body).not.toContain("Every selected worktree was excluded");
-    expect(body).not.toContain("Nothing left to remove");
+    expect(body).not.toContain("Nothing left to delete");
     // No count on the button until the previews have settled on one.
     expect(confirmButton()?.textContent ?? "").not.toMatch(/\d/);
   });
@@ -414,7 +414,7 @@ describe("WorktreeBulkRemoveDialog — gating", () => {
 
     // Three rows are listed, but the consent is for the one that will run.
     expect(document.querySelectorAll('[data-testid="bulk-remove-target"]')).toHaveLength(3);
-    expect(confirmButton()?.textContent).toContain("Remove worktree");
+    expect(confirmButton()?.textContent).toContain("Delete worktree");
     expect(scopeCounts()).toEqual({ eligible: 1, excluded: 2 });
 
     // Typing the SELECTED count must not open the gate — only the eligible
@@ -430,7 +430,7 @@ describe("WorktreeBulkRemoveDialog — exclusions state their reason", () => {
   it("says an already-removed worktree is excluded", () => {
     renderDialog({ targets: [target("a", { status: { state: "gone" } })] });
     expect(document.querySelector('[data-testid="bulk-remove-excluded"]')?.textContent).toContain(
-      "Already removed"
+      "Already deleted"
     );
   });
 
@@ -579,8 +579,8 @@ describe("WorktreeBulkRemoveDialog — the title and the button agree", () => {
       ],
     });
 
-    expect(document.body.textContent).toContain("Remove 'feature/a'?");
-    expect(confirmButton()?.textContent).toContain("Remove worktree");
+    expect(document.body.textContent).toContain("Delete 'feature/a'?");
+    expect(confirmButton()?.textContent).toContain("Delete worktree");
   });
 
   it("names the selection while previews are still pending", () => {
@@ -588,7 +588,7 @@ describe("WorktreeBulkRemoveDialog — the title and the button agree", () => {
     renderDialog({
       targets: [target("a", { status: { state: "pending" } }), target("b")],
     });
-    expect(document.body.textContent).toContain("Remove 2 worktrees?");
+    expect(document.body.textContent).toContain("Delete 2 worktrees?");
   });
 
   it("counts main-worktree exclusions in the exclusion total", () => {
@@ -769,7 +769,7 @@ describe("WorktreeBulkRemoveDialog — copy", () => {
       "trunk",
     ]);
     for (const row of main) {
-      expect(row.textContent).toContain("only linked worktrees can be removed here");
+      expect(row.textContent).toContain("only linked worktrees can be deleted here");
     }
   });
 
@@ -881,7 +881,7 @@ describe("WorktreeBulkRemoveDialog — outcome groups", () => {
   it("says the run is re-reading, not removing, while the pre-dispatch check runs", () => {
     renderDialog({ targets: [target("a")], isExecuting: true, isRechecking: true });
     expect(document.querySelector('[data-testid="app-dialog-hint"]')?.textContent).toBe(
-      "Checking current work before removing"
+      "Checking current work before deleting"
     );
   });
 
@@ -889,7 +889,7 @@ describe("WorktreeBulkRemoveDialog — outcome groups", () => {
     renderDialog({ targets: [target("a", { status: { state: "gone" } })] });
     const body = document.body.textContent ?? "";
     expect(body).not.toContain("deleted from disk");
-    expect(body).toContain("None of the selected worktrees can be removed");
+    expect(body).toContain("None of the selected worktrees can be deleted");
   });
 
   it("keeps Retry in one place through its own re-run", () => {
@@ -929,7 +929,7 @@ describe("WorktreeBulkRemoveDialog — outcome groups", () => {
       targets: [target("a"), target("b", { status: { state: "gone" } })],
     });
     expect(document.querySelector('[data-testid="bulk-remove-scope"]')!.textContent).toBe(
-      "1 will be removed · 2 excluded"
+      "1 will be deleted · 2 excluded"
     );
   });
 });

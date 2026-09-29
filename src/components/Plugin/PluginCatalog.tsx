@@ -8,6 +8,7 @@ import { pluginLabel } from "./PluginDetailPane";
 import { groupPluginsByCategory } from "./pluginGrouping";
 import { pluginSignalFor } from "./pluginStatus";
 import { Badge, CountBadge } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 const CARD_GRID_CLASS = "grid gap-3 grid-cols-[repeat(auto-fill,minmax(260px,1fr))]";
 
@@ -119,9 +120,7 @@ export function PluginCatalog({
           <p className="text-sm text-text-secondary mt-1">
             {plugins.length === 0
               ? "Only this project's plugins match. Pick one in the list."
-              : plugins.length === 1
-                ? "1 installed plugin matches"
-                : `${plugins.length} installed plugins match`}
+              : pluralize(plugins.length, "installed plugin matches", "installed plugins match")}
           </p>
         </div>
         {plugins.length > 0 && (

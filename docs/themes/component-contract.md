@@ -167,6 +167,19 @@ Rules that hold across all four:
 
 `src/components/ui/__tests__/copyFeedback.contract.test.ts` bans "Copied!" and holds direct `clipboard.writeText` calls in UI code to a shrinking allowlist (terminal selection, actions, toast actions and a few reducer-owned surfaces). `iconActionButtons.contract.test.ts` holds icon-only copies to `CopyButton`.
 
+## Wording
+
+Copy follows `.claude/rules/user-signals.md`; these are the rules the consistency audit found broken in more than one place, and the ones the contract test pins.
+
+- **Counts go through `pluralize`** (`src/lib/pluralize.ts`): `pluralize(n, "file")` is "1 file" or "1,204 files", with the locale's grouping. Irregular nouns and phrases whose verb agrees pass the plural form: `pluralize(n, "terminal is", "terminals are")`. `pluralNoun` returns the noun alone for a sentence that places the count itself. No local `plural()` copies and no hand-rolled `n === 1 ? "1 x" : \`${n} xs\`` — thirteen private copies had drifted, and a shared toast said "Copied 1 files".
+- **Ellipsis is "…"**, one character, in placeholders ("Filter themes…"), progress ("Retrying (1/3)…"), menu items that open a further step ("More agents…") and truncations. A main-process progress message follows the same rule; a renderer that supplies its own progress punctuation strips a trailing "…" (or a legacy "...") before rendering. `SearchablePalette` derives its default `aria-label` the same way.
+- **Sentence case** for titles, labels, group headings and pane titles: "Dev server", "CCR routes", "Set log level". An acronym stays upper case. The native OS menu bar is the one exception — it follows the platform's Title Case convention ("Check for Updates…"), and in-app text that quotes a menu item quotes it verbatim.
+- **Trash vs Remove vs Delete.** "Trash X" is the soft delete with a way back (a terminal to the trash); "Remove X" is permanent, taking an item out of a list or collection for good (a recipe row, a preset); "Delete X" is the permanent delete of a thing on disk. Worktrees are deleted, single or bulk: "Delete worktree", "Delete 3 worktrees", "Deleted 3 worktrees".
+- **"Open in external browser"** is the escape hatch from inside the in-app browser, dev preview and portal — toolbar button, pane context menu and tab menu alike — because "Open in browser" is ambiguous when you are already in one. An icon button's tooltip names the same thing as its `aria-label`.
+- **Empty and status fragments take no period**: "No output captured", "No themes match your search".
+
+`src/components/ui/__tests__/wording.contract.test.ts` scans `src`, `shared` and the main-process services for three-dot ellipses in copy (log calls excluded), local `plural*` helpers, the hand-rolled singular/plural conditional, Title Case menu group headings, and "Open in browser" inside the in-app browser surfaces.
+
 ## Opting out
 
 Every rule takes the same escape hatch, with a reason:

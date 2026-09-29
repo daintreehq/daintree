@@ -158,7 +158,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
-          title: "Help Agent",
+          title: "Help agent",
           message: "Help folder not available. Please ensure the help workspace is configured.",
         });
         return;

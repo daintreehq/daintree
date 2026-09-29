@@ -2993,7 +2993,7 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       const headings = Array.from(
         container.querySelectorAll('[data-testid="dock-launcher-preset-group"]')
       ).map((el) => el.textContent);
-      expect(headings).toEqual(["CCR Routes", "Custom"]);
+      expect(headings).toEqual(["CCR routes", "Custom"]);
     });
 
     it("omits provenance headings when every preset shares one group", () => {

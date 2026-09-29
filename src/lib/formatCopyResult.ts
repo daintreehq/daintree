@@ -1,4 +1,5 @@
 import { formatBytes } from "@/lib/formatBytes";
+import { pluralize } from "@/lib/pluralize";
 import type { CopyTreeBudgetStats, CopyTreeExclusionReason } from "@shared/types/ipc/copyTree";
 
 /**
@@ -45,7 +46,7 @@ export function formatCopyResultMessage(
   const sizeStr = stats?.totalSize ? formatBytes(stats.totalSize) : "";
   const formatStr = payload.format ? ` as ${payload.format.toUpperCase()}` : "";
   const { verb, suffix } = DESTINATION_WORDING[destination];
-  return `${verb} ${fileCount} files${sizeStr ? ` (${sizeStr})` : ""}${formatStr}${suffix}`;
+  return `${verb} ${pluralize(fileCount, "file")}${sizeStr ? ` (${sizeStr})` : ""}${formatStr}${suffix}`;
 }
 
 /**

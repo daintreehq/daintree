@@ -14,6 +14,7 @@ import {
   type TurnOutcomeClass,
   isAuditRecord,
 } from "@shared/types";
+import { pluralize } from "@/lib/pluralize";
 
 const OUTCOME_LABEL: Record<TurnOutcomeClass, string> = {
   answered: "Answered",
@@ -52,10 +53,6 @@ interface PerToolRollup {
 
 function formatRate(rate: number): string {
   return `${rate.toFixed(1)}%`;
-}
-
-function plural(count: number, one: string, many: string = `${one}s`): string {
-  return `${count} ${count === 1 ? one : many}`;
 }
 
 /**
@@ -382,7 +379,8 @@ export function TurnOutcomeDiagnostics({
       </>
     );
 
-  const summaryFor = (outcome: TurnOutcomeClass) => plural(outcomeCounts.get(outcome) ?? 0, "turn");
+  const summaryFor = (outcome: TurnOutcomeClass) =>
+    pluralize(outcomeCounts.get(outcome) ?? 0, "turn");
 
   return (
     <>
@@ -400,7 +398,7 @@ export function TurnOutcomeDiagnostics({
           </SettingsEmptyRow>
         ) : (
           <>
-            <DisclosureRow title="Outcomes by class" summary={plural(totalRecords, "turn")}>
+            <DisclosureRow title="Outcomes by class" summary={pluralize(totalRecords, "turn")}>
               <table className="w-full table-fixed text-xs">
                 <caption className="sr-only">Turn outcomes by class</caption>
                 <thead>
@@ -472,7 +470,7 @@ export function TurnOutcomeDiagnostics({
           </>
         )}
 
-        <SettingsActions status={loading ? null : plural(totalRecords, "turn")}>
+        <SettingsActions status={loading ? null : pluralize(totalRecords, "turn")}>
           <Button variant="outline" size="sm" onClick={handleRefresh} disabled={loading}>
             <RefreshCw aria-hidden="true" />
             Refresh
@@ -492,7 +490,7 @@ export function TurnOutcomeDiagnostics({
         isOpen={showClearConfirm}
         onClose={handleCancelClear}
         title="Clear turn outcomes?"
-        description={`This permanently deletes ${plural(totalRecords, "recorded turn outcome")}. The MCP audit log isn't affected.`}
+        description={`This permanently deletes ${pluralize(totalRecords, "recorded turn outcome")}. The MCP audit log isn't affected.`}
         confirmLabel="Clear turn outcomes"
         cancelLabel="Cancel"
         onConfirm={confirmClearTurnOutcomeLog}

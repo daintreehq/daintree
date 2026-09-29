@@ -157,7 +157,7 @@ export function PreviewScene() {
           {opened && (
             <MockPanel
               icon={<MonitorPlay />}
-              title="Dev Server"
+              title="Dev server"
               focused
               className="size-full"
               toolbar={

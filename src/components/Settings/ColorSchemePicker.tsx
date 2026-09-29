@@ -287,9 +287,9 @@ export function ColorSchemePicker({
           onPreviewEnd={handlePreviewEnd}
           previewAnnouncement={previewAnnouncement}
           listLabel="Terminal color schemes"
-          searchPlaceholder="Filter schemes..."
+          searchPlaceholder="Filter schemes…"
           searchLabel="Filter color schemes"
-          emptyMessage="No schemes match your search."
+          emptyMessage="No schemes match your search"
           toolbar={
             <SegmentedRadioGroup
               aria-label="Show dark or light schemes"

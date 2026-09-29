@@ -209,7 +209,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       ...agentDedup.values(),
       {
         id: MORE_AGENTS_PANEL_ID,
-        name: "More agents...",
+        name: "More agents…",
         iconId: "sparkles",
         color: "var(--color-text-primary)",
         description: "Set up additional AI agents",

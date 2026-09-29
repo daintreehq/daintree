@@ -822,7 +822,7 @@ export function WorktreeOverviewModal({
                     data-testid="worktree-bulk-remove"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
-                    Remove worktrees
+                    Delete worktrees
                   </Button>
                 </div>
               </FocusHandoffGuard>

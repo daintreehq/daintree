@@ -16,6 +16,7 @@ import {
   summarizePrChecks,
   type PrCheckRow,
 } from "./prChecks";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * Set on the trigger — which is always in the hub's own DOM — while the
@@ -324,7 +325,7 @@ export function PrChecksPopover({
                 className={FOOTER_BUTTON_MOTION}
               >
                 <Send aria-hidden="true" />
-                Send {failingCount === 1 ? "1 check" : `${failingCount} checks`} to agent
+                Send {pluralize(failingCount, "check")} to agent
               </Button>
             )}
             {cannotRead && (

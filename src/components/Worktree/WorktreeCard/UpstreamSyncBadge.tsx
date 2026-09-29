@@ -7,6 +7,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CloudOff, KeyRound } from "@/components/icons";
 import type { LucideIcon } from "lucide-react";
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
+import { pluralize } from "@/lib/pluralize";
 
 interface UpstreamSyncBadgeProps {
   aheadCount: number | undefined;
@@ -440,7 +441,7 @@ const STATUS_TONES: Record<SyncStatus, string> = {
 };
 
 function describeDrift(ahead: number, behind: number): string {
-  const commits = (n: number) => `${n} commit${n === 1 ? "" : "s"}`;
+  const commits = (n: number) => pluralize(n, "commit");
   if (ahead > 0 && behind > 0) return `${commits(ahead)} ahead, ${behind} behind`;
   if (ahead > 0) return `${commits(ahead)} ahead`;
   return `${commits(behind)} behind`;

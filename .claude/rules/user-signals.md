@@ -10,6 +10,8 @@ paths:
 
 Sentence case. No period on titles, buttons, labels, or single-clause subtitles. Use contractions; drop "we".
 
+Counts through `pluralize` (`src/lib/pluralize.ts`), never a local `plural()`. Ellipsis is always "…". "Trash X" is a soft delete, "Remove X" is permanent (it takes something out of a list for good), and a thing on disk is deleted — "Delete worktree", single or bulk. Inside the in-app browser, the escape hatch is "Open in external browser". Detail and the contract test: `docs/themes/component-contract.md` → Wording.
+
 - **Error toasts** — verb-noun title + 1-2 sentences of why/fix + exactly **one** contextual recovery action, never "Dismiss".
 - **Destructive buttons** — verb-noun ("Delete worktree").
 - **Toggle labels** never change with state.

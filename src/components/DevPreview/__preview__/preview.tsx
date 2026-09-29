@@ -59,7 +59,7 @@ function seedStores(): void {
   const row: DevPreviewPanelData = {
     id: PANEL_ID,
     kind: "dev-preview",
-    title: "Dev Server",
+    title: "Dev server",
     location: "grid",
     cwd: "/Users/you/code/orchid-studio",
   };
@@ -152,7 +152,7 @@ function Pane() {
     >
       <ContentPanel
         id={PANEL_ID}
-        title="Dev Server"
+        title="Dev server"
         kind="dev-preview"
         isFocused={fixture.isFocused ?? true}
         location="grid"

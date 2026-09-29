@@ -81,13 +81,13 @@ describe("DevServerDashboard", () => {
   it("shows the empty state when no active sessions", () => {
     mockSessions([]);
     render(<DevServerDashboard />);
-    expect(screen.getByText("Open a Dev Server panel in any worktree to start one")).toBeTruthy();
+    expect(screen.getByText("Open a Dev server panel in any worktree to start one")).toBeTruthy();
   });
 
   it("renders no body before the store hydrates", () => {
     mockSessions([], { hydrated: false });
     render(<DevServerDashboard />);
-    expect(screen.queryByText("Open a Dev Server panel in any worktree to start one")).toBeNull();
+    expect(screen.queryByText("Open a Dev server panel in any worktree to start one")).toBeNull();
     expect(screen.queryByText("Couldn't load dev servers")).toBeNull();
   });
 
@@ -95,7 +95,7 @@ describe("DevServerDashboard", () => {
     mockSessions([], { fetchError: true });
     render(<DevServerDashboard />);
     expect(screen.getByText("Couldn't load dev servers")).toBeTruthy();
-    expect(screen.queryByText("Open a Dev Server panel in any worktree to start one")).toBeNull();
+    expect(screen.queryByText("Open a Dev server panel in any worktree to start one")).toBeNull();
   });
 
   it("hides plain stopped sessions but keeps restored-stopped", () => {
@@ -104,7 +104,7 @@ describe("DevServerDashboard", () => {
       session({ panelId: "p-restored", status: "restored-stopped", worktreeId: "wt-1" }),
     ]);
     render(<DevServerDashboard />);
-    expect(screen.queryByText("Open a Dev Server panel in any worktree to start one")).toBeNull();
+    expect(screen.queryByText("Open a Dev server panel in any worktree to start one")).toBeNull();
     expect(screen.getByText("feature-foo")).toBeTruthy();
   });
 

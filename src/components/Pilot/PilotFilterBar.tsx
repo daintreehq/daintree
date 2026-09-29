@@ -11,6 +11,7 @@ import {
 } from "./pilotRows";
 import type { FleetBandCounts } from "@/lib/fleetAttention";
 import { EMPTY_BUCKET_GLYPH_CLASS } from "@/components/Worktree/quickStateGlyph";
+import { pluralize } from "@/lib/pluralize";
 
 /** The tone a segment falls back to when it holds no demand. */
 const NEUTRAL_TONE = "text-text-secondary";
@@ -145,13 +146,9 @@ function segmentQualifier(
 
 const SEGMENTS: readonly PilotBandFilter[] = ["all", ...PILOT_BAND_FILTERS];
 
-function agents(count: number): string {
-  return `${count} ${count === 1 ? "agent" : "agents"}`;
-}
-
 /** A segment's spoken name, carrying whatever its glyph choice encodes. */
 function segmentName(label: string, count: number, qualifier: string | null): string {
-  const base = `${label}, ${agents(count)}`;
+  const base = `${label}, ${pluralize(count, "agent")}`;
   return qualifier === null ? base : `${base}, ${qualifier}`;
 }
 

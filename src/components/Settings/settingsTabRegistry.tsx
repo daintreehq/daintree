@@ -1283,8 +1283,7 @@ export const SETTINGS_REGISTRY = [
     importer: LazyCodeForgeSettingsTab.preload,
     LazyComponent: LazyCodeForgeSettingsTab,
     needsSubtabs: true,
-    searchNavDescription:
-      "Configure forge providers (GitHub, GitLab, Gitea, ...) and authentication",
+    searchNavDescription: "Configure forge providers (GitHub, GitLab, Gitea, …) and authentication",
     searchNavKeywords: [
       "forge",
       "provider",

@@ -535,7 +535,7 @@ export function VoiceInputSettingsTab() {
                     value={settings.projectId}
                     onChange={(e) => void update({ projectId: e.target.value })}
                     onBlur={(e) => void update({ projectId: e.target.value.trim() })}
-                    placeholder="proj_..."
+                    placeholder="proj_…"
                     layout="inline"
                     controlWidth="wide"
                     className="font-mono"

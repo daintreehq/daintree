@@ -342,9 +342,9 @@ describe("BrowserToolbar ARIA semantics", () => {
     expect(button).toBeTruthy();
   });
 
-  it("Open in browser button is exposed by accessible name", () => {
+  it("Open in external browser button is exposed by accessible name", () => {
     const { getByRole } = renderToolbar();
-    const button = getByRole("button", { name: "Open in browser" });
+    const button = getByRole("button", { name: "Open in external browser" });
     expect(button).toBeTruthy();
     fireEvent.click(button);
     expect(defaultProps.onOpenExternal).toHaveBeenCalledOnce();
@@ -594,10 +594,10 @@ describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
     vi.clearAllMocks();
   });
 
-  it("disables Open in browser when there is no URL to open", () => {
+  it("disables Open in external browser when there is no URL to open", () => {
     const onOpenExternal = vi.fn();
     const { getByRole } = renderToolbar({ url: "", onOpenExternal, canOpenExternal: false });
-    const button = getByRole("button", { name: "Open in browser" });
+    const button = getByRole("button", { name: "Open in external browser" });
     expect(button).toHaveProperty("disabled", true);
     fireEvent.click(button);
     expect(onOpenExternal).not.toHaveBeenCalled();
@@ -613,10 +613,13 @@ describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
     fireEvent.change(getByTestId("browser-address-bar"), {
       target: { value: "http://localhost:5173/" },
     });
-    expect(getByRole("button", { name: "Open in browser" })).toHaveProperty("disabled", true);
+    expect(getByRole("button", { name: "Open in external browser" })).toHaveProperty(
+      "disabled",
+      true
+    );
   });
 
-  it("does not tie Open in browser to webview readiness or loading", () => {
+  it("does not tie Open in external browser to webview readiness or loading", () => {
     const onOpenExternal = vi.fn();
     const { getByRole } = renderToolbar({
       onOpenExternal,
@@ -624,13 +627,13 @@ describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
       isWebviewReady: false,
       isLoading: true,
     });
-    const button = getByRole("button", { name: "Open in browser" });
+    const button = getByRole("button", { name: "Open in external browser" });
     expect(button).toHaveProperty("disabled", false);
     fireEvent.click(button);
     expect(onOpenExternal).toHaveBeenCalledOnce();
   });
 
-  it("enables Open in browser once a URL arrives", () => {
+  it("enables Open in external browser once a URL arrives", () => {
     const onOpenExternal = vi.fn();
     const { getByRole, rerender } = render(
       <BrowserToolbar
@@ -640,7 +643,10 @@ describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
         canOpenExternal={false}
       />
     );
-    expect(getByRole("button", { name: "Open in browser" })).toHaveProperty("disabled", true);
+    expect(getByRole("button", { name: "Open in external browser" })).toHaveProperty(
+      "disabled",
+      true
+    );
 
     rerender(
       <BrowserToolbar
@@ -650,7 +656,7 @@ describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
         canOpenExternal={true}
       />
     );
-    const button = getByRole("button", { name: "Open in browser" });
+    const button = getByRole("button", { name: "Open in external browser" });
     expect(button).toHaveProperty("disabled", false);
     fireEvent.click(button);
     expect(onOpenExternal).toHaveBeenCalledOnce();
@@ -690,7 +696,9 @@ describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
         canToggleConsole={false}
       />
     );
-    expect(getByRole("button", { name: "Open in browser" }).parentElement?.tagName).toBe("SPAN");
+    expect(getByRole("button", { name: "Open in external browser" }).parentElement?.tagName).toBe(
+      "SPAN"
+    );
     expect(getByLabelText("Toggle console").parentElement?.tagName).toBe("SPAN");
 
     rerender(
@@ -701,9 +709,9 @@ describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
         canToggleConsole={true}
       />
     );
-    expect(getByRole("button", { name: "Open in browser" }).parentElement?.tagName).not.toBe(
-      "SPAN"
-    );
+    expect(
+      getByRole("button", { name: "Open in external browser" }).parentElement?.tagName
+    ).not.toBe("SPAN");
     expect(getByLabelText("Toggle console").parentElement?.tagName).not.toBe("SPAN");
   });
 

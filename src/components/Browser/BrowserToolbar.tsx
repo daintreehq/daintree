@@ -643,7 +643,7 @@ export function BrowserToolbar({
       onClick={onOpenExternal}
       disabled={!canOpenExternal}
       className={buttonClass}
-      aria-label="Open in browser"
+      aria-label="Open in external browser"
     >
       <ExternalLink className={PANE_TOOLBAR_ICON_CLASS} />
     </button>
@@ -1182,7 +1182,7 @@ export function BrowserToolbar({
                 <span className="inline-flex">{openExternalButton}</span>
               )}
             </TooltipTrigger>
-            <TooltipContent side="bottom">Open in browser</TooltipContent>
+            <TooltipContent side="bottom">Open in external browser</TooltipContent>
           </Tooltip>
 
           {hasMoreMenu && (

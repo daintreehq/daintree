@@ -300,7 +300,7 @@ export function AgentButton({
     : null;
   // Group by source. Project presets are identified by membership so that a
   // project preset whose id happens to start with "ccr-" still lands in
-  // "Project Shared" rather than being stolen by the CCR group. Everything
+  // "Project shared" rather than being stolen by the CCR group. Everything
   // that isn't CCR-prefixed or project-member falls through to the "Custom"
   // bucket — this preserves the historical rendering for user-authored
   // presets regardless of whether they're also in `entry.customPresets`.
@@ -805,14 +805,14 @@ export function AgentButton({
               {ccrPresetGroup.length > 0 && (
                 <>
                   {hasMultiplePresetGroups && <DropdownMenuSeparator />}
-                  {hasMultiplePresetGroups && <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>}
+                  {hasMultiplePresetGroups && <DropdownMenuLabel>CCR routes</DropdownMenuLabel>}
                   {ccrPresetGroup.map((preset) => renderPresetRow(preset))}
                 </>
               )}
               {projectPresetGroup.length > 0 && (
                 <>
                   {hasMultiplePresetGroups && <DropdownMenuSeparator />}
-                  {hasMultiplePresetGroups && <DropdownMenuLabel>Project Shared</DropdownMenuLabel>}
+                  {hasMultiplePresetGroups && <DropdownMenuLabel>Project shared</DropdownMenuLabel>}
                   {projectPresetGroup.map((preset) => renderPresetRow(preset))}
                 </>
               )}

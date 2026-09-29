@@ -21,7 +21,7 @@ const TYPE_BADGES: Record<string, string> = {
   gemini: "Gemini",
   codex: "Codex",
   opencode: "OpenCode",
-  "dev-preview": "Dev Server",
+  "dev-preview": "Dev server",
 };
 
 function RecipeListItem({

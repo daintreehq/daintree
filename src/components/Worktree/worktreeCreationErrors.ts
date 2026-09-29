@@ -22,7 +22,7 @@ export function mapCreationError(rawMessage: string, onClose?: () => void): Work
       const worktreePath = pathMatch?.[1];
       if (worktreePath) {
         recovery = {
-          label: "Open Worktree",
+          label: "Open worktree",
           onAction: () => {
             const worktrees = Array.from(getCurrentViewStore().getState().worktrees.values());
             const wt = worktrees.find((w) => w.path === worktreePath);

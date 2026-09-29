@@ -11,6 +11,7 @@ import { parseEnvPaste, type ParseEnvResult } from "@/utils/parseEnvPaste";
 import { isSecretEnvEntry, maskSecretValue } from "@/utils/secretDetection";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 type ConflictResolution = "keep" | "overwrite";
 type Step = "paste" | "conflicts";
@@ -41,8 +42,6 @@ const STEP_TITLE: Record<Step, string> = {
   conflicts: "Resolve conflicts",
 };
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-
 /**
  * The merge policy restated where the evidence is, as what the import will
  * actually do. Without it the conflict list shows the same old/new pair under
@@ -51,7 +50,7 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
  * the other half of the import in view at the point of commitment.
  */
 function outcomeLabel(mode: ConflictResolution, conflictCount: number, newCount: number): string {
-  const existing = `${mode === "keep" ? "keeps" : "replaces"} ${plural(conflictCount, "existing value")}`;
+  const existing = `${mode === "keep" ? "keeps" : "replaces"} ${pluralize(conflictCount, "existing value")}`;
   return newCount > 0 ? `Adds ${newCount} new · ${existing}` : `No new keys · ${existing}`;
 }
 
@@ -315,7 +314,7 @@ export function ImportEnvDialog({
         ? "Import"
         : conflicts.length > 0
           ? `Review ${conflicts.length} conflict${conflicts.length === 1 ? "" : "s"}`
-          : `Import ${plural(newCount, "variable")}`;
+          : `Import ${pluralize(newCount, "variable")}`;
 
   /** Why the primary action is dead. A disabled button that explains nothing is a dead end. */
   const blockedHint = keepIsNoOp
@@ -323,7 +322,7 @@ export function ImportEnvDialog({
     : step !== "paste" || canProceed
       ? null
       : hasErrors
-        ? `Fix ${plural(parsed.errors.length, "parse error")} to continue`
+        ? `Fix ${pluralize(parsed.errors.length, "parse error")} to continue`
         : incomingCount > 0
           ? "Every variable in that paste is already set"
           : pastedText.trim() !== ""
@@ -377,7 +376,7 @@ export function ImportEnvDialog({
               </span>
             ) : (
               <>
-                {plural(conflicts.length, "key")} already exist
+                {pluralize(conflicts.length, "key")} already exist
                 {conflicts.length === 1 ? "s" : ""} with a different value. Choose which one wins.
               </>
             )}
@@ -415,15 +414,16 @@ export function ImportEnvDialog({
                   silently dropped the duplicate. */}
               {incomingCount > 0 && (
                 <p className="text-xs text-text-secondary" data-testid="import-env-summary">
-                  {plural(incomingCount, "variable")} detected
+                  {pluralize(incomingCount, "variable")} detected
                   {newCount > 0 && newCount !== incomingCount ? ` · ${newCount} new` : ""}
-                  {conflicts.length > 0 ? ` · ${plural(conflicts.length, "conflict")}` : ""}
+                  {conflicts.length > 0 ? ` · ${pluralize(conflicts.length, "conflict")}` : ""}
                   {unchangedCount > 0 ? ` · ${unchangedCount} already set` : ""}
                   {conflicts.length === 0 && newCount > 0 ? " · existing values unchanged" : ""}
                   {duplicateInPasteCount > 0 ? (
                     <span className="text-text-primary">
                       {" "}
-                      · {plural(duplicateInPasteCount, "duplicate key")} in paste (last value kept)
+                      · {pluralize(duplicateInPasteCount, "duplicate key")} in paste (last value
+                      kept)
                     </span>
                   ) : null}
                 </p>
@@ -445,7 +445,7 @@ export function ImportEnvDialog({
                   className="sr-only"
                   data-testid="import-env-error-summary"
                 >
-                  {plural(parsed.errors.length, "parse error")}. Line {parsed.errors[0]!.line}:{" "}
+                  {pluralize(parsed.errors.length, "parse error")}. Line {parsed.errors[0]!.line}:{" "}
                   {parsed.errors[0]!.reason}.
                 </span>
                 <InlineStatusBanner
@@ -454,7 +454,7 @@ export function ImportEnvDialog({
                   ariaLive="off"
                   animated={false}
                   className="rounded-[var(--radius-md)]"
-                  title={`${plural(parsed.errors.length, "parse error")}`}
+                  title={`${pluralize(parsed.errors.length, "parse error")}`}
                   descriptionExtras={
                     <ul className="mt-1.5 space-y-1.5 text-xs">
                       {parsed.errors.map((e) => (

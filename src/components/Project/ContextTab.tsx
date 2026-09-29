@@ -20,6 +20,7 @@ import type {
   Worktree,
 } from "@/types";
 import { logError } from "@/utils/logger";
+import { pluralize } from "@/lib/pluralize";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -80,7 +81,7 @@ const EXCLUSION_REASON_PREVIEW_COUNT = 3;
  */
 function formatTruncationNotice(count?: number, by?: CopyTreeTruncatedBy): string {
   const subject =
-    count === undefined ? "Some files were" : count === 1 ? "1 file was" : `${count} files were`;
+    count === undefined ? "Some files were" : pluralize(count, "file was", "files were");
   const cause = by ? ` — ${TRUNCATION_LABELS[by]} was reached first` : "";
   return `${subject} truncated or left out${cause}`;
 }

@@ -188,7 +188,7 @@ describe("TerminalErrorBanner", () => {
       },
       { onTrash }
     );
-    fireEvent.click(screen.getByRole("button", { name: /^remove terminal$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^trash terminal$/i }));
     expect(onTrash).toHaveBeenCalledWith("t-1");
   });
 

@@ -234,7 +234,7 @@ function SortableTab({
         </ContextMenuItem>
         <ContextMenuItem disabled={!hasUrl} onSelect={afterClose(() => onOpenExternal(tab.id))}>
           <Globe data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-          Open in browser
+          Open in external browser
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem disabled={tabIndex === 0} onSelect={afterClose(() => onMove(tab.id, -1))}>

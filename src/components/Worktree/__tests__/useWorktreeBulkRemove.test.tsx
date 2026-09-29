@@ -184,7 +184,7 @@ describe("useWorktreeBulkRemove — confirm derivation", () => {
 
     expect(hook.result.current.isConfirmOpen).toBe(false);
     expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "info", title: "Nothing to remove" })
+      expect.objectContaining({ type: "info", title: "Nothing to delete" })
     );
     expect(clearSelection).toHaveBeenCalled();
   });
@@ -588,7 +588,7 @@ describe("useWorktreeBulkRemove — execution", () => {
     );
     expect(successCall).toBeDefined();
     const payload = successCall![0] as { title: string };
-    expect(payload.title).toBe("Removed 2 worktrees");
+    expect(payload.title).toBe("Deleted 2 worktrees");
     expect(payload.title).not.toMatch(/successfully/i);
   });
 
@@ -611,7 +611,7 @@ describe("useWorktreeBulkRemove — execution", () => {
     );
     expect(warning).toBeDefined();
     const payload = warning![0] as { title: string; message: string };
-    expect(payload.title).toBe("Removed 1 of 2 worktrees");
+    expect(payload.title).toBe("Deleted 1 of 2 worktrees");
     expect(payload.message).toContain("feature/b");
     // Selection is cleared regardless of partial failure — selection is
     // not a retry surface (the modal itself is).
@@ -630,7 +630,7 @@ describe("useWorktreeBulkRemove — execution", () => {
     const error = notifyMock.mock.calls.find((c) => (c[0] as { type: string }).type === "error");
     expect(error).toBeDefined();
     const payload = error![0] as { title: string; message: string };
-    expect(payload.title).toBe("Couldn't remove worktree");
+    expect(payload.title).toBe("Couldn't delete worktree");
     expect(payload.message).toBe("Disk read-only");
   });
 
@@ -860,7 +860,7 @@ describe("useWorktreeBulkRemove — the queue no longer guillotines the batch (#
       (c) => (c[0] as { type: string }).type === "success"
     );
     expect(successCall).toBeDefined();
-    expect((successCall![0] as { title: string }).title).toBe("Removed 2 worktrees");
+    expect((successCall![0] as { title: string }).title).toBe("Deleted 2 worktrees");
     // The old escape-hatch toast is gone along with the branch that raised it.
     expect(
       notifyMock.mock.calls.find((c) => (c[0] as { title: string }).title === "Bulk remove aborted")
@@ -918,7 +918,7 @@ describe("useWorktreeBulkRemove — the queue no longer guillotines the batch (#
       (c) => (c[0] as { type: string }).type === "warning"
     );
     expect(warning).toBeDefined();
-    expect((warning![0] as { title: string }).title).toBe("Removed 1 of 2 worktrees");
+    expect((warning![0] as { title: string }).title).toBe("Deleted 1 of 2 worktrees");
     expect((warning![0] as { message: string }).message).toContain("feature/a");
     // Never deleted behind a lock we could not confirm released (#9084).
     expect(worktreeClientMock.delete).toHaveBeenCalledTimes(1);
@@ -966,7 +966,7 @@ describe("useWorktreeBulkRemove — the queue no longer guillotines the batch (#
       );
       expect(warning).toBeDefined();
       // The sibling still ran, and both outcomes reached the one summary.
-      expect((warning![0] as { title: string }).title).toBe("Removed 1 of 2 worktrees");
+      expect((warning![0] as { title: string }).title).toBe("Deleted 1 of 2 worktrees");
       expect((warning![0] as { message: string }).message).toContain("feature/a");
       expect(worktreeClientMock.delete).toHaveBeenCalledTimes(1);
       expect(worktreeClientMock.delete).toHaveBeenCalledWith("b", {
@@ -1010,7 +1010,7 @@ describe("useWorktreeBulkRemove — nested worktrees (#12789)", () => {
     });
     expect(deletedIds()).toEqual(["child", "parent"]);
     expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "success", title: "Removed 2 worktrees" })
+      expect.objectContaining({ type: "success", title: "Deleted 2 worktrees" })
     );
   });
 
@@ -1030,7 +1030,7 @@ describe("useWorktreeBulkRemove — nested worktrees (#12789)", () => {
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "error",
-        title: "Couldn't remove worktrees",
+        title: "Couldn't delete worktrees",
         message: "Filesystem busy",
       })
     );
@@ -1059,7 +1059,7 @@ describe("useWorktreeBulkRemove — nested worktrees (#12789)", () => {
     expect(deleted).not.toContain("parent");
     expect(deleted).toContain("other");
     expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "warning", title: "Removed 2 of 4 worktrees" })
+      expect.objectContaining({ type: "warning", title: "Deleted 2 of 4 worktrees" })
     );
     expect(logErrorMock).toHaveBeenCalledWith("Bulk remove failed for child", expect.anything());
   });

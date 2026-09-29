@@ -90,6 +90,7 @@ import { useFileEditor } from "@/registry/fileEditorRegistry";
 import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
 import { useFileDocumentDraftText, useFileDocumentFlags } from "@/store/fileDocumentStore";
 import { cn } from "@/lib/utils";
+import { pluralize } from "@/lib/pluralize";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 
 export interface FilePaneProps extends BasePanelProps {
@@ -1698,7 +1699,7 @@ export function FilePane({
                       different item spacing the byte count still slides
                       sideways when the mode toggles. */}
                   <span className={FILE_METADATA_RUN_CLASS}>
-                    <span className="tabular-nums">{metadata.lineCount} lines</span>
+                    <span className="tabular-nums">{pluralize(metadata.lineCount, "line")}</span>
                     <span aria-hidden="true" className="text-text-muted">
                       ·
                     </span>

@@ -8,6 +8,7 @@ import { PluginActionAuditLogViewer } from "@/components/Settings/PluginActionAu
 import { InlineErrorRow, ErrorRetryRow } from "@/components/Settings/auditLogParts";
 import { logError } from "@/utils/logger";
 import { type PluginActionAuditRecord, PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "@shared/types";
+import { pluralize } from "@/lib/pluralize";
 
 const EXPORT_FEEDBACK_MS = 2000;
 
@@ -177,7 +178,7 @@ export function PluginActionsSettingsTab() {
         onClose={() => setShowClearConfirm(false)}
         isConfirmLoading={isClearing}
         title="Clear plugin audit log?"
-        description={`This permanently deletes ${records.length === 1 ? "1 recorded plugin action" : `${records.length} recorded plugin actions`} on this machine.${auditEnabled ? " New dispatches will still be recorded." : ""}`}
+        description={`This permanently deletes ${pluralize(records.length, "recorded plugin action")} on this machine.${auditEnabled ? " New dispatches will still be recorded." : ""}`}
         confirmLabel="Clear audit log"
       />
     </div>

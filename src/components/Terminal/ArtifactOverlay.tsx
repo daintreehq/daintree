@@ -23,6 +23,7 @@ import { orderPatchesForApply, useArtifacts, type SaveArtifactOutcome } from "@/
 import { useUnseenOutput } from "@/hooks/useUnseenOutput";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import type { Artifact } from "@shared/types";
+import { pluralize } from "@/lib/pluralize";
 
 type ApplyPatchOutcome =
   | { success: true; modifiedFiles: string[] }
@@ -325,10 +326,6 @@ function artifactName(artifact: Artifact): string {
   return splitPath(artifact.filename || ARTIFACT_TYPE_LABELS[artifact.type] || "Artifact").base;
 }
 
-function plural(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
-
 function OutcomeLine({
   tone,
   icon: Icon,
@@ -498,7 +495,7 @@ function ArtifactItem({
           <PatchStats content={artifact.content} />
         ) : (
           <span className="shrink-0 text-xs tabular-nums text-text-secondary">
-            {plural(lines, "line", "lines")}
+            {pluralize(lines, "line", "lines")}
           </span>
         )}
       </button>
@@ -561,7 +558,7 @@ function ArtifactItem({
             {copied && <span className="sr-only">Copied to clipboard</span>}
             {applyResult?.kind === "applied" && (
               <OutcomeLine tone="success" icon={CircleCheck}>
-                Applied to {plural(applyResult.files.length, "file", "files")}
+                Applied to {pluralize(applyResult.files.length, "file", "files")}
                 {applyResult.files.map((file) => (
                   <span key={file} className="block break-all font-mono text-text-secondary">
                     {file}
@@ -774,7 +771,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     const result = await copyAll(!codeOnly);
     if (result.succeeded > 0) {
       showBulkStatus({
-        text: `Copied ${plural(result.succeeded, "artifact", "artifacts")}`,
+        text: `Copied ${pluralize(result.succeeded, "artifact", "artifacts")}`,
         tone: "success",
         persistent: false,
       });
@@ -791,7 +788,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     const result = await saveAll();
     if (result.succeeded > 0 && result.failed === 0) {
       showBulkStatus({
-        text: `Saved ${plural(result.succeeded, "artifact", "artifacts")}`,
+        text: `Saved ${pluralize(result.succeeded, "artifact", "artifacts")}`,
         tone: "success",
         persistent: false,
       });
@@ -861,8 +858,8 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     if (result.succeeded > 0 && result.failed === 0) {
       const files = result.modifiedFiles?.length ?? 0;
       showBulkStatus({
-        text: `Applied ${plural(result.succeeded, "patch", "patches")}${
-          files ? ` to ${plural(files, "file", "files")}` : ""
+        text: `Applied ${pluralize(result.succeeded, "patch", "patches")}${
+          files ? ` to ${pluralize(files, "file", "files")}` : ""
         }`,
         tone: "success",
         persistent: true,
@@ -872,7 +869,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         text:
           result.succeeded > 0
             ? `Applied ${result.succeeded}, ${result.failed} didn't apply. Each row says why.`
-            : `${plural(result.failed, "patch", "patches")} didn't apply. Each row says why.`,
+            : `${pluralize(result.failed, "patch", "patches")} didn't apply. Each row says why.`,
         tone: "error",
         persistent: true,
       });
@@ -958,10 +955,10 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
           >
             <FileStack aria-hidden="true" />
             <span className="tabular-nums text-text-primary">
-              {plural(artifacts.length, "artifact", "artifacts")}
+              {pluralize(artifacts.length, "artifact", "artifacts")}
             </span>
             {patchCount > 0 && (
-              <span className="tabular-nums">· {plural(patchCount, "patch", "patches")}</span>
+              <span className="tabular-nums">· {pluralize(patchCount, "patch", "patches")}</span>
             )}
           </Button>
         </div>
@@ -1037,7 +1034,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
                       Copy all takes only the{" "}
-                      {plural(codeArtifactCount, "code block", "code blocks")}
+                      {pluralize(codeArtifactCount, "code block", "code blocks")}
                     </TooltipContent>
                   </Tooltip>
                 </div>
@@ -1072,7 +1069,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                           }
                           loading={bulkProgress?.action === "apply"}
                         >
-                          Apply {plural(unappliedPatchCount, "patch", "patches")}
+                          Apply {pluralize(unappliedPatchCount, "patch", "patches")}
                         </Button>
                       </span>
                     </TooltipTrigger>
@@ -1167,7 +1164,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
       <ConfirmDialog
         isOpen={pendingBulkPatches !== null}
         onClose={handleCancelApplyAllPatches}
-        title={`Apply ${plural(pendingBulkCount, "patch", "patches")} to this worktree?`}
+        title={`Apply ${pluralize(pendingBulkCount, "patch", "patches")} to this worktree?`}
         description={
           <span>
             Runs <span className="font-mono">git apply</span> on each patch below, in this order, in{" "}
@@ -1175,7 +1172,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
             one fails, the others still apply. There's no automatic undo.
           </span>
         }
-        confirmLabel={`Apply ${plural(pendingBulkCount, "patch", "patches")}`}
+        confirmLabel={`Apply ${pluralize(pendingBulkCount, "patch", "patches")}`}
         variant="destructive"
         size="lg"
         hasPreview={true}

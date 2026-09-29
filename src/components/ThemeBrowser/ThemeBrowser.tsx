@@ -621,7 +621,7 @@ export function ThemeBrowser() {
       >
         {isEmpty ? (
           <p className="text-xs text-text-secondary text-center py-4">
-            No themes match your search.
+            No themes match your search
           </p>
         ) : (
           filteredThemes.map((scheme) => (
