@@ -99,7 +99,10 @@ function makeService(pluginsRoot: string, builtinRoot?: string): PluginService {
   const service = new PluginService(pluginsRoot, "0.0.0", {
     builtinPluginsRoot: builtinRoot ?? path.join(tmpDir, "no-builtins"),
     globalConfigDir: path.join(tmpDir, "config"),
-    blocklistService: { getBlocklist: async () => null } as never,
+    blocklistService: {
+      getBlocklist: async () => null,
+      getStartupBlocklist: async () => ({ blocklist: null, refreshed: null }),
+    } as never,
   });
   services.push(service);
   return service;

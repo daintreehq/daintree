@@ -2670,6 +2670,15 @@ async function appendToContainedFile(
  */
 /** How often an `allowMissing` watch checks whether its paths exist. */
 const PLUGIN_FS_WATCH_PRESENCE_POLL_MS = 1000;
+/**
+ * An attached, quiet target is re-checked only every this many ticks. Its own
+ * watcher reports a deletion or replacement, which puts it back on the fast
+ * cadence (see `PLUGIN_FS_WATCH_PRESENCE_HOT_MS`); this backstop is for the
+ * notification a platform drops.
+ */
+const PLUGIN_FS_WATCH_PRESENCE_BACKSTOP_TICKS = 10;
+/** How long after attaching, or after its watcher last fired, a target is re-checked every tick. */
+const PLUGIN_FS_WATCH_PRESENCE_HOT_MS = 3000;
 
 function buildFsApi(
   deps: PluginHostFactoryDeps,
@@ -3341,11 +3350,18 @@ function buildFsApi(
             resolved: resolvedTargets[index]!,
             release: null as (() => void) | null,
             identity: null as string | null,
+            hotUntil: 0,
           }))
         : [];
+      let presenceTick = 0;
       const refreshPresence = async (announce: boolean): Promise<void> => {
+        const backstop = presenceTick++ % PLUGIN_FS_WATCH_PRESENCE_BACKSTOP_TICKS === 0;
+        const now = Date.now();
         for (const target of presence) {
           if (disposed || !deps.plugins.has(pluginId)) return;
+          // Only a missing target, or one whose watcher just fired, needs a stat
+          // every tick: an attached directory that goes quiet was not replaced.
+          if (target.identity !== null && !backstop && now >= target.hotUntil) continue;
           const stat = await fs.stat(target.resolved).catch(() => null);
           const identity = stat ? `${stat.dev}:${stat.ino}` : null;
           if (identity === target.identity) continue;
@@ -3369,11 +3385,19 @@ function buildFsApi(
               // The identity makes a replaced directory get its own watcher: a
               // shared one kept alive by another subscriber is still bound to
               // the old inode, and rejoining it would silently watch nothing.
-              target.release = watchShared(target.resolved, withinRootOf(target.resolved), {
-                recursive,
-                identity,
-              });
+              const forward = withinRootOf(target.resolved);
+              target.release = watchShared(
+                target.resolved,
+                (changed) => {
+                  target.hotUntil = Date.now() + PLUGIN_FS_WATCH_PRESENCE_HOT_MS;
+                  forward(changed);
+                },
+                { recursive, identity }
+              );
               target.identity = identity;
+              // A native watch can miss events for a moment after it opens
+              // (macOS FSEvents stream start), so a fresh attach stays hot.
+              target.hotUntil = Date.now() + PLUGIN_FS_WATCH_PRESENCE_HOT_MS;
             } catch {
               // Gone again between the stat and the watch; the next tick retries.
               continue;

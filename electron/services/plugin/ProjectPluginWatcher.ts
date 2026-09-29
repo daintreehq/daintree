@@ -62,6 +62,8 @@ const REARM_HEALTHY_MS = 60_000;
 export interface ProjectPluginWatcherTimings {
   debounceMs: number;
   sentinelPollMs: number;
+  /** Backstop cadence while a native sentinel watch is live. */
+  sentinelWatchedPollMs: number;
   gitLockPollMs: number;
   gitLockMaxDeferMs: number;
   invalidManifestRetryMs: number;
@@ -74,6 +76,7 @@ export interface ProjectPluginWatcherTimings {
 const DEFAULT_TIMINGS: ProjectPluginWatcherTimings = {
   debounceMs: RELOAD_DEBOUNCE_MS,
   sentinelPollMs: 5_000,
+  sentinelWatchedPollMs: 30_000,
   gitLockPollMs: GIT_LOCK_POLL_MS,
   gitLockMaxDeferMs: GIT_LOCK_MAX_DEFER_MS,
   invalidManifestRetryMs: INVALID_MANIFEST_RETRY_MS,
@@ -130,6 +133,7 @@ interface WatchState {
    */
   sentinelPath: string | null;
   sentinelTimer: ReturnType<typeof setInterval> | null;
+  sentinelTimerMs: number;
   /**
    * Reconcile on the next settle even when no fingerprint moved.
    *
@@ -263,6 +267,7 @@ export class ProjectPluginWatcher {
       sentinel: null,
       sentinelPath: null,
       sentinelTimer: null,
+      sentinelTimerMs: 0,
       forceReconcile: false,
       rearmAttempts: 0,
       armedAt: null,
@@ -472,7 +477,6 @@ export class ProjectPluginWatcher {
     // non-recursive watch on the project root will never report
     // `.daintree/plugins` being created inside it. Migrate inward.
     if (state.sentinel) this.disarmSentinel(state);
-    this.startSentinelPoll(state, generation);
     try {
       const sentinel = fsWatch(parent, { persistent: false }, () => {
         this.checkSentinel(state, generation);
@@ -480,23 +484,33 @@ export class ProjectPluginWatcher {
       sentinel.on("error", () => {
         if (state.sentinel !== sentinel) return;
         this.disarmSentinel(state);
-        if (!this.isStale(state, generation)) this.startSentinelPoll(state, generation);
+        if (!this.isStale(state, generation)) {
+          this.startSentinelPoll(state, generation, this.timings.sentinelPollMs);
+        }
       });
       state.sentinel = sentinel;
       state.sentinelPath = parent;
+      this.startSentinelPoll(state, generation, this.timings.sentinelWatchedPollMs);
     } catch {
       // The existence poll also recovers from unavailable native watches.
+      this.startSentinelPoll(state, generation, this.timings.sentinelPollMs);
     }
   }
 
-  private startSentinelPoll(state: WatchState, generation: number): void {
-    if (state.sentinelTimer) return;
-    // Native directory notifications can be missed under load. Only poll
-    // while waiting for the plugins root, and stop once its watcher is live.
-    state.sentinelTimer = setInterval(
-      () => this.checkSentinel(state, generation),
-      this.timings.sentinelPollMs
-    );
+  /**
+   * Native directory notifications can be missed under load, so the plugins
+   * root is also polled while it is missing, and never once its watcher is
+   * live. With a native sentinel up the poll is only a backstop and runs at the
+   * slow cadence: most projects never create the folder, and each tick costs
+   * two synchronous stats on the main thread for as long as the project is open.
+   */
+  private startSentinelPoll(state: WatchState, generation: number, intervalMs: number): void {
+    if (state.sentinelTimer) {
+      if (state.sentinelTimerMs === intervalMs) return;
+      clearInterval(state.sentinelTimer);
+    }
+    state.sentinelTimerMs = intervalMs;
+    state.sentinelTimer = setInterval(() => this.checkSentinel(state, generation), intervalMs);
     state.sentinelTimer.unref?.();
   }
 

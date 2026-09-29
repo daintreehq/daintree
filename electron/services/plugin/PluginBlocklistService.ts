@@ -113,10 +113,7 @@ export class PluginBlocklistService {
 
     // Network failed — fall back to disk if memCache was never warmed.
     const disk = await this.readDisk();
-    if (disk) {
-      this.memCache = { data: disk.data, fetchedAt: disk.fetchedAt };
-      return disk.data;
-    }
+    if (disk) return this.adoptIfNewer(disk);
 
     // Disk is also gone/corrupt. If we ever validated a list this session,
     // keep enforcing it (stale) rather than dropping to no-blocklist — a
@@ -125,11 +122,48 @@ export class PluginBlocklistService {
     return this.memCache?.data ?? null;
   }
 
+  /**
+   * Startup variant of {@link getBlocklist}: never waits on the network when a
+   * validated list is already on disk. A stale disk list is returned at once
+   * (it is still enforced — a kill-switch must not forget a known-bad plugin
+   * just because the TTL lapsed) and `refreshed` settles with the revalidated
+   * list, which the caller must re-apply to anything it loaded meanwhile.
+   * With no usable disk cache at all this waits for the fetch exactly as
+   * `getBlocklist()` does, so a first run never loads against an empty list
+   * that a fetch was about to fill.
+   */
+  async getStartupBlocklist(): Promise<{
+    blocklist: ParsedPluginBlocklist | null;
+    refreshed: Promise<ParsedPluginBlocklist | null> | null;
+  }> {
+    if (this.memCache && this.now() - this.memCache.fetchedAt < PLUGIN_BLOCKLIST_TTL_MS) {
+      return { blocklist: this.memCache.data, refreshed: null };
+    }
+    const disk = await this.readDisk();
+    if (disk) this.adoptIfNewer(disk);
+    const known = this.memCache;
+    if (!known) return { blocklist: await this.getBlocklist(), refreshed: null };
+    if (this.now() - known.fetchedAt < PLUGIN_BLOCKLIST_TTL_MS) {
+      return { blocklist: known.data, refreshed: null };
+    }
+    return { blocklist: known.data, refreshed: this.getBlocklist() };
+  }
+
+  /**
+   * Keep whichever validated list is newest: a fetch this session whose persist
+   * failed must not be forgotten in favour of an older file on disk.
+   */
+  private adoptIfNewer(disk: CachedBlocklist): ParsedPluginBlocklist {
+    if (!this.memCache || this.memCache.fetchedAt < disk.fetchedAt) {
+      this.memCache = { data: disk.data, fetchedAt: disk.fetchedAt };
+    }
+    return this.memCache.data;
+  }
+
   private async refresh(): Promise<ParsedPluginBlocklist | null> {
     const disk = await this.readDisk();
     if (disk && this.now() - disk.fetchedAt < PLUGIN_BLOCKLIST_TTL_MS) {
-      this.memCache = { data: disk.data, fetchedAt: disk.fetchedAt };
-      return disk.data;
+      return this.adoptIfNewer(disk);
     }
 
     const fetched = await this.fetchRemote();
@@ -143,10 +177,7 @@ export class PluginBlocklistService {
     }
 
     // Network failed but a stale cache exists — enforce the last-known list.
-    if (disk) {
-      this.memCache = { data: disk.data, fetchedAt: disk.fetchedAt };
-      return disk.data;
-    }
+    if (disk) return this.adoptIfNewer(disk);
 
     return null;
   }
