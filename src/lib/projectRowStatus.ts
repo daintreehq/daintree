@@ -538,16 +538,18 @@ function classifyWorkspaceActivity(
     // "3 waiting, 1 blocked" project to "Agent blocked" would hide two agents
     // that are asking for something.
     const blocked = Math.min(project.blockedAgentCount, project.waitingAgentCount);
-    const needingInput = project.waitingAgentCount - blocked;
+    const unblocked = project.waitingAgentCount - blocked;
 
     const parts: string[] = [];
-    if (needingInput > 0) {
+    if (unblocked > 0) {
       // Every state phrase on this line leads with its number, so the reader
       // can compare it against the running count in front of it without
-      // re-parsing a sentence. "1 needs input" rather than "Agent needs input"
-      // for exactly that reason: a row where one figure is a numeral and the
-      // other is a noun is a row you have to read rather than scan.
-      parts.push(pluralize(needingInput, "needs input", "need input"));
+      // re-parsing a sentence.
+      //
+      // "waiting", not "need input": an agent that finished its turn settles
+      // into `waiting` at its prompt the same as one that asked a question, so
+      // claiming it needs input overstated what was observed (#13047).
+      parts.push(`${unblocked} waiting`);
       if (blocked > 0) parts.push(`${blocked} blocked`);
     } else {
       parts.push(`${blocked} blocked`);
@@ -563,7 +565,7 @@ function classifyWorkspaceActivity(
           ? `oldest ${age}`
           : age === "just now"
             ? age
-            : `waiting ${age}`;
+            : `for ${age}`;
 
     return {
       text: parts.join(" · "),
