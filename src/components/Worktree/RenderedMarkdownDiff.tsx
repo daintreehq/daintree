@@ -4,7 +4,10 @@ import type { PluggableList } from "unified";
 import remarkGfm from "remark-gfm";
 import type { Nodes as HastNodes, RootContent as HastContent } from "hast";
 import type { GitStatus } from "@shared/types/git";
-import { useMarkdownRenderPolicy } from "@/components/Markdown/markdownRenderPolicy";
+import {
+  MarkdownImageCacheBust,
+  useMarkdownRenderPolicy,
+} from "@/components/Markdown/markdownRenderPolicy";
 import { MARKDOWN_FONT_SIZE_TOKEN } from "@/components/Markdown/MarkdownDocument";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useScopedSelectAll } from "@/hooks/useScopedSelectAll";
@@ -371,11 +374,7 @@ export function RenderedMarkdownDiff({
   // local image in a removed block shows its current bytes rather than the ones
   // that revision had — the protocol handler reads the working tree, and a
   // historical blob would need an IPC this view deliberately avoids.
-  const { components, urlTransform } = useMarkdownRenderPolicy({
-    filePath,
-    rootPath,
-    cacheBust,
-  });
+  const { components, urlTransform } = useMarkdownRenderPolicy({ filePath, rootPath });
 
   const fontStyle: MarkdownFontStyle | undefined =
     fontSize === undefined
@@ -406,33 +405,35 @@ export function RenderedMarkdownDiff({
       className="rendered-markdown-diff markdown-document prose px-6 py-5"
       style={fontStyle}
     >
-      {sections.map((section) =>
-        section.kind === "change" ? (
-          <div
-            key={`change-${section.index}`}
-            data-change-index={section.index}
-            className="rendered-markdown-diff__change"
-          >
-            <BlockChange
-              change={section.change}
-              oldDefinitions={result.model.oldDefinitions}
-              newDefinitions={result.model.newDefinitions}
+      <MarkdownImageCacheBust value={cacheBust}>
+        {sections.map((section) =>
+          section.kind === "change" ? (
+            <div
+              key={`change-${section.index}`}
+              data-change-index={section.index}
+              className="rendered-markdown-diff__change"
+            >
+              <BlockChange
+                change={section.change}
+                oldDefinitions={result.model.oldDefinitions}
+                newDefinitions={result.model.newDefinitions}
+                components={components}
+                urlTransform={urlTransform}
+              />
+            </div>
+          ) : (
+            <UnchangedRun
+              key={`unchanged-${section.id}`}
+              blocks={section.blocks}
+              definitions={result.model.newDefinitions}
+              expanded={expandedRuns.has(section.id)}
+              onExpand={() => expandRun(section.id)}
               components={components}
               urlTransform={urlTransform}
             />
-          </div>
-        ) : (
-          <UnchangedRun
-            key={`unchanged-${section.id}`}
-            blocks={section.blocks}
-            definitions={result.model.newDefinitions}
-            expanded={expandedRuns.has(section.id)}
-            onExpand={() => expandRun(section.id)}
-            components={components}
-            urlTransform={urlTransform}
-          />
-        )
-      )}
+          )
+        )}
+      </MarkdownImageCacheBust>
     </div>
   );
 }
