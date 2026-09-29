@@ -2,6 +2,10 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { m } from "framer-motion";
 import { cn } from "@/lib/utils";
+import {
+  SURFACE_HEADER_FOCUS_LIFT_CLASS,
+  surfaceHeaderVariants,
+} from "@/components/ui/SurfaceHeader";
 import { useDndPlaceholder, GRID_PLACEHOLDER_ID } from "./dndPlaceholderContext";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PlaceholderContent } from "./PlaceholderContent";
@@ -34,7 +38,13 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
           slot reads as the panel that is about to land in it. When the active
           panel is unknown the bar stays, empty: the destination boundary never
           depends on identity data. */}
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border-strong/30 bg-overlay-medium px-3 text-xs">
+      <div
+        className={cn(
+          surfaceHeaderVariants({ density: "compact" }),
+          SURFACE_HEADER_FOCUS_LIFT_CLASS,
+          "justify-start gap-2 border-b-[var(--border-overlay)] text-xs"
+        )}
+      >
         {activeTerminal && chrome && (
           <>
             <TerminalIcon
