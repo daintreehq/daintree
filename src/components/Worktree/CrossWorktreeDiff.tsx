@@ -516,7 +516,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
-      <div className="flex items-end gap-3 px-6 py-3 border-b border-border-default shrink-0">
+      <div className="flex items-end gap-3 px-6 py-3 border-b border-divider shrink-0">
         <div className="flex-1 min-w-0">
           <WorktreeSelector
             label="Base"

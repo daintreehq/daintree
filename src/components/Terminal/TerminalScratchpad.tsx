@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { ResizeHandle } from "@/components/ui/ResizeHandle";
 import { resolveSplitterKey } from "@/hooks/useSplitterKeys";
+import { PANE_STATUS_FOOTER_CLASS } from "@/components/ui/paneToolbarStyles";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
@@ -278,7 +279,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
       />
 
       <div
-        className="flex h-6 shrink-0 items-center justify-between gap-2 border-t border-divider px-3 text-2xs text-text-secondary"
+        className={cn(PANE_STATUS_FOOTER_CLASS, "justify-between")}
         data-testid="terminal-scratchpad-status"
       >
         {/* One calm word on screen; the full lifecycle is the tooltip and the

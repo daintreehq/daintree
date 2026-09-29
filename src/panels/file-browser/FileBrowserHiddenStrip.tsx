@@ -1,3 +1,4 @@
+import { PANE_STATUS_FOOTER_CLASS } from "@/components/ui/paneToolbarStyles";
 import type { HiddenRowCounts } from "./fileBrowserTree";
 
 export interface FileBrowserHiddenStripProps {
@@ -43,7 +44,7 @@ export function FileBrowserHiddenStrip({ counts, onShowDotfiles }: FileBrowserHi
       // view is doing, and `contentinfo` is reserved for a page-level footer.
       role="status"
       data-testid="file-browser-hidden-strip"
-      className="flex shrink-0 items-center gap-2 border-t border-border-default px-3 py-1 text-2xs text-text-secondary"
+      className={PANE_STATUS_FOOTER_CLASS}
     >
       <span className="min-w-0 flex-1 truncate">
         <span className="tabular-nums">{counts.dotfiles}</span>

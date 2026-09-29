@@ -181,7 +181,7 @@ export function PushErrorBanner({
         severity="error"
         role="status"
         ariaLive="off"
-        className="px-4"
+        className="px-3"
         title="Push failed"
         description={config.message}
         descriptionExtras={

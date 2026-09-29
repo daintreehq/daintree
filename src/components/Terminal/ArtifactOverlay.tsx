@@ -15,7 +15,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
-import { SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
+import { SurfaceHeader, SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FileStack } from "@/components/icons";
@@ -986,10 +986,13 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
             className
           )}
         >
-          <header className="shrink-0 border-b border-border-default bg-surface-canvas">
-            <div className="flex items-center gap-2 pl-3 pr-1.5 py-1.5">
+          {/* The divider belongs to the whole header block, not the title row:
+              the bulk bar and its status line sit under the title as part of
+              the same chrome, so the row's own compact divider is dropped. */}
+          <header className="shrink-0 border-b border-divider bg-surface-canvas">
+            <SurfaceHeader density="compact" className="gap-2 border-b-0">
               <FileStack aria-hidden="true" className="size-4 shrink-0 text-text-secondary" />
-              <h2 className="flex-1 text-sm font-medium text-text-primary">
+              <h2 className="flex-1 text-xs font-medium text-text-primary">
                 Artifacts{" "}
                 <span className="font-normal tabular-nums text-text-secondary">
                   {artifacts.length}
@@ -1004,7 +1007,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                 Clear
               </Button>
               <SurfaceHeaderCloseButton onClick={closePanel} aria-label="Close artifacts" />
-            </div>
+            </SurfaceHeader>
 
             {showBulkBar && (
               <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2.5">

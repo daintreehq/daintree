@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { basename, join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
+import { PANE_STATUS_FOOTER_CLASS } from "@/components/ui/paneToolbarStyles";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -1583,7 +1584,12 @@ export function FileBrowserPane({
             <button
               type="button"
               onClick={revealSelection}
-              className="shrink-0 truncate border-t border-border-default px-3 py-1 text-left text-2xs text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary"
+              className={cn(
+                PANE_STATUS_FOOTER_CLASS,
+                // `block`, not the strip's flex: `truncate` only ellipsizes a
+                // block container's own text.
+                "block truncate text-left transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary"
+              )}
             >
               Reveal {selectedFileName}
             </button>

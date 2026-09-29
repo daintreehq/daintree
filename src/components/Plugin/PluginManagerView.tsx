@@ -691,7 +691,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
       }}
     >
-      <header className="flex items-center justify-between gap-3 px-6 h-12 shrink-0 border-b border-border-default app-drag-region">
+      {/* A full-window view covers the main toolbar, so its title bar is window
+          chrome rather than a pane header: the toolbar's 48px height (room for
+          the traffic lights), its 16px inset and its divider. */}
+      <header className="flex items-center justify-between gap-3 px-4 h-12 shrink-0 border-b border-divider app-drag-region">
         <div className="flex items-center gap-2 min-w-0">
           {isMac() && (
             <div

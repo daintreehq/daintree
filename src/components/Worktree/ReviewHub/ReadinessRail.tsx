@@ -85,7 +85,7 @@ export function ReadinessRail({ summary, onCta }: ReadinessRailProps) {
       data-testid="review-readiness-rail"
       role="group"
       aria-label="Review readiness"
-      className="flex items-center gap-2 px-4 py-1.5 border-b border-divider text-2xs"
+      className="flex items-center gap-2 px-3 py-1.5 border-b border-divider text-2xs"
     >
       {/* The live region spans the verdict AND the condition: moving from one
           blocker to another keeps the verdict word, so a region holding only
