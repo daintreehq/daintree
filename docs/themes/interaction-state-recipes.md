@@ -416,15 +416,27 @@ isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft [.light_&]:hover:bg-ov
 
 ---
 
-### Drag Handle During Sort
+### Drag and Drop Feedback
 
-**Role:** Visual feedback on a drag handle during an active sort/drag operation. Uses neutral elevation and scale — never accent.
+**Role:** Every in-app drag: grid panels, dock chips and tab groups, the grid, dock and portal tab strips, worktree cards and their sessions, deleted-worktree rescues, the trash pill and the toolbar settings columns. One ink, one pickup, one ghost. Never accent: accent is the focus ring's, and a drop target can sit inside a region that already spends it.
 
 ```tsx
-"opacity-80 scale-105 shadow-[var(--theme-shadow-floating)] cursor-grabbing";
+// src/components/DragDrop/dropIndicator.ts — ink text-primary/60 (3:1 on every built-in theme's drop surfaces)
+DROP_INDICATOR_LINE; // 2px insertion line between chips, rows and tabs
+DROP_SLOT_FRAME; // "border border-text-primary/60 bg-overlay-subtle": a slot held open (grid and dock placeholders)
+DROP_TARGET_FRAME; // "outline-1 -outline-offset-1 outline-text-primary/60 bg-overlay-subtle": a container armed to take the drop
 ```
 
-**Usage:** Apply during `isDragging` state. The floating shadow and slight scale-up signal elevation without color changes. **Caution:** Sortable containers must NOT use `content-visibility: auto` — it virtualizes layout and causes dnd-kit drag coordinate desync. Set `contentVisibility: 'visible'` during drag operations. (See lesson #4438.) Used in `PortalToolbar.tsx` (`isDragging` branch).
+- **Target frame.** A container that accepts the drop as a whole (the grid, the dock rail, the trash pill, a toolbar settings column, a worktree card) draws `DROP_TARGET_FRAME` while the drop would land in it: the slot frame's ink and weight as an inset outline, so arming a target never shifts its layout. Not a ring: forced colours strip `box-shadow`, and the outline survives as dashed `CanvasText` (dashed because solid is the focus ring's shape there). The worktree card spells the same frame in `sidebar.css` as its `--card-edge`, because that file's unlayered base rules beat layered utilities; its selection-edge and focus rules exclude an armed card, since the active worktree is the likeliest target.
+- **When it arms.** For a container that holds sortable items (the grid, the dock, a toolbar column), "over it" means over the container or any item sorted inside it, and only for something coming in from elsewhere: `useArmedDropTarget` and `isOverContainer` (`src/components/DragDrop/useArmedDropTarget.ts`). dnd-kit's own `isOver` matches the container's id alone, so the frame went out the moment the pointer crossed a chip or a row. A reorder inside the container arms nothing; its insertion line, slot or sortable gap already says where the item lands.
+- **Cursor.** A drop moves or trashes, never duplicates, so an armed target never takes `cursor-copy`. The one drag state the cursor carries is rejection: `cursor-no-drop` on a dock that cannot take what is in hand.
+- **Ghost.** The item in hand, wherever it still renders in its list, dims to `DRAG_GHOST_OPACITY` (0.4, `src/lib/animationUtils.ts`) and takes no lift of its own: no shadow, no scale, no opacity class. The floating overlay (`TerminalDragPreview`, `WorktreeDragPreview`) is the lifted copy; a tab strip with no overlay moves the dimmed tab itself.
+- **Ghost headers.** `TerminalDragPreview` and `GridPlaceholder` wear the selected panel header's recipe: compact `SurfaceHeader`, `SURFACE_HEADER_FOCUS_LIFT_CLASS` and the stepped-up `border-overlay` divider that `.terminal-selected` paints, so the ghost reads as the focused panel in hand.
+- **Pickup.** Every drag surface that is also a click target pairs a `MouseSensor` on `MOUSE_SENSOR_OPTIONS` (8px) with a `TouchSensor` on `TOUCH_SENSOR_OPTIONS` (150ms long-press), from `src/components/DragDrop/dragActivation.ts`, so a click turns into a drag at the same travel on a tab as on the panel it sits on. Never a `PointerSensor` there: it also takes touch, and a finger scrolling a tab strip would pick a tab up after 8px. A dedicated grip may pick up on the first move.
+- **Keyboard.** Every sortable list takes `KeyboardSensor`. On a tab strip, Space and Enter select a background tab (manual activation) and pick up the tab that is already selected: split dnd-kit's `onKeyDown` out of the listeners and call it only for the selected tab (`TabButton.tsx`, `PortalToolbar.tsx`). While a keyboard drag is live the strip's own arrow-key handler stands down, since the sensor owns the arrows.
+- **Grip.** A drag grip is a 24px box around a 12px `GripVertical` via `DRAG_GRIP_CLASS` / `DRAG_GRIP_ICON_CLASS` (`src/components/ui/dragGripStyles.ts`): secondary ink to primary on hover and focus, an inset accent focus outline, the grab cursors. A row that cannot move keeps the 24px slot empty so its icons stay on one rail. The worktree card's full-height gutter grip is a different control.
+
+**Caution:** Sortable containers must NOT use `content-visibility: auto` — it virtualizes layout and causes dnd-kit drag coordinate desync. Set `contentVisibility: 'visible'` during drag operations. (See lesson #4438.) `src/config/__tests__/dragDropFeedback.contract.test.ts` pins the frame, cursor, threshold, grip and ghost rules.
 
 ---
 
@@ -520,7 +532,7 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 | Document Tab | `ui/document-tab.tsx` (`TabButton`, `PortalToolbar`, `HelpSessionTabs`) | Accent underline on a lifted fill, one close control, manual activation |
 | Worktree Card | `WorktreeCard.tsx` | Card hover with neutral overlay + ambient elevation |
 | Settings Switch Row | `SettingsSwitchCard.tsx` + `ui/switch.tsx` | Neutral row, neutral switch track (accent only on focus) |
-| Portal Drag Handle | `PortalToolbar.tsx` (`isDragging`) | Drag state with elevation + scale, no accent |
+| Drag and Drop Feedback | `dropIndicator.ts`, `dragActivation.ts`, `dragGripStyles.ts` | Neutral insertion line, slot and target frames; 0.4 ghost; one pickup threshold; no accent |
 | Inline Rename Input | `TabButton.tsx` (rename input) | Neutral `bg-overlay-soft`, transparent border |
 | Progress Bar | `ui/ProgressBar.tsx` | Neutral `text-secondary` fill on an `overlay-medium` track, no accent; quota meters (`role="meter"`) keep their own heavier track |
 

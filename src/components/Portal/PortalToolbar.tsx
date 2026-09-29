@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { LayoutGroup } from "framer-motion";
 import {
   ArrowLeft,
@@ -19,15 +19,27 @@ import {
 import {
   DndContext,
   closestCorners,
-  PointerSensor,
+  KeyboardSensor,
+  TouchSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
   type UniqueIdentifier,
 } from "@dnd-kit/core";
-import { SortableContext, useSortable, horizontalListSortingStrategy } from "@dnd-kit/sortable";
+import {
+  SortableContext,
+  useSortable,
+  horizontalListSortingStrategy,
+  sortableKeyboardCoordinates,
+} from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
+import {
+  MOUSE_SENSOR_OPTIONS,
+  PrimaryMouseSensor,
+  TOUCH_SENSOR_OPTIONS,
+} from "@/components/DragDrop/dragActivation";
+import { DRAG_GHOST_OPACITY } from "@/lib/animationUtils";
 import type { PortalTab, PortalLink } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
@@ -95,6 +107,13 @@ function useNativeViewMenu(claimId: string) {
 
 const OVERFLOW_FADE_PX = 24;
 
+const KEYBOARD_SENSOR_OPTIONS = { coordinateGetter: sortableKeyboardCoordinates };
+
+// dnd-kit types its listener map as bare `Function`s.
+function isKeyHandler(fn: unknown): fn is (e: KeyboardEvent) => void {
+  return typeof fn === "function";
+}
+
 const tabDomId = portalTabDomId;
 
 // The pane-toolbar icon button the dev-preview browser toolbar uses too, so both
@@ -136,7 +155,7 @@ function SortableTab({
   tabCount: number;
   tabIndex: number;
 }) {
-  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: tab.id,
     transition: {
       duration: 150,
@@ -144,11 +163,25 @@ function SortableTab({
     },
   });
 
+  // The tab in hand is the ghost every tab strip draws: the tab itself, dimmed
+  // where it travels, with no lift of its own.
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
     zIndex: isDragging ? 50 : "auto",
+    opacity: isDragging ? DRAG_GHOST_OPACITY : undefined,
   };
+
+  // As on the grid and dock strips, Space and Enter select a background tab
+  // (manual activation) and pick up the tab that is already selected, so the
+  // strip reorders from the keyboard without giving activation away. The
+  // sensor's keydown is split out of the listeners for that reason. Of the
+  // sortable's attributes only the pickup instructions come across: the role,
+  // tab stop and role description stay the tab's own.
+  const { onKeyDown: sortableKeyDownListener, ...pointerListeners } = listeners ?? {};
+  const sortableKeyDown = isKeyHandler(sortableKeyDownListener)
+    ? sortableKeyDownListener
+    : undefined;
 
   const hasUrl = !!tab.url;
   const hasTabsToRight = tabIndex < tabCount - 1;
@@ -172,7 +205,8 @@ function SortableTab({
             <div
               ref={setNodeRef}
               style={style}
-              {...listeners}
+              {...pointerListeners}
+              aria-describedby={attributes["aria-describedby"]}
               id={tabDomId(tab.id)}
               role="tab"
               aria-selected={isActive}
@@ -188,6 +222,10 @@ function SortableTab({
               onKeyDown={(e) => {
                 if (e.target !== e.currentTarget) return;
                 if (e.key === "Enter" || e.key === " ") {
+                  if (isActive && sortableKeyDown) {
+                    sortableKeyDown(e);
+                    return;
+                  }
                   e.preventDefault();
                   onClick(tab.id);
                 } else if (isTabCloseKey(e.key)) {
@@ -197,8 +235,7 @@ function SortableTab({
               }}
               className={cn(
                 documentTabClassName(isActive),
-                "shrink-0 h-8 pl-2.5 pr-1 min-w-[88px] max-w-[180px]",
-                isDragging && "opacity-80 shadow-[var(--theme-shadow-floating)] cursor-grabbing"
+                "shrink-0 h-8 pl-2.5 pr-1 min-w-[88px] max-w-[180px]"
               )}
             >
               {isActive && <DocumentTabIndicator />}
@@ -329,9 +366,17 @@ export function PortalToolbar({
   const openTabExternal = onOpenTabExternal ?? noopTabAction;
   const reloadTab = onReloadTab ?? noopTabAction;
 
-  // Pointer-only drag: Space and Enter belong to tab activation, so keyboard
-  // reordering goes through the tab's Move left / Move right menu items.
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  // Keyboard pickup is Space/Enter on the selected tab (see SortableTab); the
+  // Move left / Move right menu items stay as the one-step alternative.
+  const sensors = useSensors(
+    useSensor(PrimaryMouseSensor, MOUSE_SENSOR_OPTIONS),
+    useSensor(TouchSensor, TOUCH_SENSOR_OPTIONS),
+    useSensor(KeyboardSensor, KEYBOARD_SENSOR_OPTIONS)
+  );
+
+  // While a keyboard drag is live the sensor owns the arrow keys, so the
+  // tablist's own arrow handler must not also move focus.
+  const isTabDragActiveRef = useRef(false);
 
   const moveTab = (tabId: string, delta: -1 | 1) => {
     const from = tabs.findIndex((t) => t.id === tabId);
@@ -368,6 +413,7 @@ export function PortalToolbar({
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
+    isTabDragActiveRef.current = false;
     const { active, over } = event;
     if (over && active.id !== over.id) {
       const oldIndex = tabs.findIndex((t) => t.id === active.id);
@@ -380,17 +426,10 @@ export function PortalToolbar({
     (id: UniqueIdentifier) => tabs.find((t) => t.id === id)?.title,
     [tabs]
   );
-  const browserTabAnnouncements = useMemo(() => {
-    const base = makeSortableAnnouncements(getBrowserTabLabel, "browser tab");
-    // Drag is pointer-only here, so pickup mustn't promise arrow-key moves.
-    return {
-      ...base,
-      onDragStart: (event: Parameters<typeof base.onDragStart>[0]) => {
-        base.onDragStart(event);
-        return `Picked up ${getBrowserTabLabel(event.active.id) ?? "tab"}.`;
-      },
-    };
-  }, [getBrowserTabLabel]);
+  const browserTabAnnouncements = useMemo(
+    () => makeSortableAnnouncements(getBrowserTabLabel, "browser tab"),
+    [getBrowserTabLabel]
+  );
 
   const tablistRef = useRef<HTMLDivElement>(null);
   // The control row is a toolbar like every pane toolbar: one tab stop, arrow
@@ -630,6 +669,12 @@ export function PortalToolbar({
           <DndContext
             sensors={sensors}
             collisionDetection={closestCorners}
+            onDragStart={() => {
+              isTabDragActiveRef.current = true;
+            }}
+            onDragCancel={() => {
+              isTabDragActiveRef.current = false;
+            }}
             onDragEnd={handleDragEnd}
             accessibility={{ announcements: browserTabAnnouncements }}
           >
@@ -656,7 +701,7 @@ export function PortalToolbar({
                 onKeyDown={(e) => {
                   // Keys from a tab's context menu bubble here through the React
                   // tree; only act on keys that came from a tab in this strip.
-                  if (e.defaultPrevented) return;
+                  if (e.defaultPrevented || isTabDragActiveRef.current) return;
                   const fromTab =
                     e.target instanceof Element ? e.target.closest('[role="tab"]') : null;
                   if (!fromTab || !e.currentTarget.contains(fromTab)) return;

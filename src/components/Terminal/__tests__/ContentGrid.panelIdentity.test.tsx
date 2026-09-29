@@ -205,7 +205,7 @@ function setGrid({
     setGridScrollRoot: () => {},
     isMacroFocused: false,
     handleGridRegionKeyDown: () => {},
-    isOver: false,
+    isDropTarget: false,
   };
 }
 

@@ -34,8 +34,9 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
       )}
       aria-hidden="true"
     >
-      {/* Ghost header — the panel header's own recipe (h-8, sans, medium) so the
-          slot reads as the panel that is about to land in it. When the active
+      {/* Ghost header — the selected panel header's own recipe (h-8, sans,
+          medium, the focus lift and its border-overlay divider) so the slot
+          reads as the panel that is about to land in it. When the active
           panel is unknown the bar stays, empty: the destination boundary never
           depends on identity data. */}
       <div

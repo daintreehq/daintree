@@ -8,6 +8,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 import type { PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal } from "@/store/slices";
+import { DROP_TARGET_FRAME } from "@/components/DragDrop/dropIndicator";
 
 let emptyTrashSpy: (...args: unknown[]) => unknown;
 
@@ -252,14 +253,20 @@ describe("TrashContainer", () => {
     expect(ghost.textContent).not.toContain("Trash (drop to delete)");
   });
 
+  // Every token of the shared frame, and no cursor of its own: a drop here
+  // trashes the panel, it never copies it.
+  function expectDropTargetFrame(el: HTMLElement) {
+    const tokens = el.className.split(/\s+/);
+    for (const token of DROP_TARGET_FRAME.split(/\s+/)) expect(tokens).toContain(token);
+    expect(tokens).not.toContain("cursor-copy");
+  }
+
   it("applies armed isOver classes on ghost pill, not accent", () => {
     dndMocks.isDragging = true;
     dndMocks.isOver = true;
     const { getByTestId } = render(<TrashContainer trashedTerminals={[]} />);
     const ghost = getByTestId("trash-container-ghost");
-    expect(ghost.className).toContain("bg-overlay-soft");
-    expect(ghost.className).toContain("ring-border-default");
-    expect(ghost.className).toContain("cursor-copy");
+    expectDropTargetFrame(ghost);
     expect(ghost.className).not.toMatch(/(?:daintree-accent|accent-primary)(?![\w-])/);
   });
 
@@ -268,9 +275,7 @@ describe("TrashContainer", () => {
     dndMocks.isOver = true;
     const { getByTestId } = render(<TrashContainer trashedTerminals={[makeTrashedItem("1")]} />);
     const pill = getByTestId("trash-container");
-    expect(pill.className).toContain("bg-overlay-soft");
-    expect(pill.className).toContain("ring-border-default");
-    expect(pill.className).toContain("cursor-copy");
+    expectDropTargetFrame(pill);
     expect(pill.className).not.toMatch(/(?:daintree-accent|accent-primary)(?![\w-])/);
   });
 
@@ -290,9 +295,7 @@ describe("TrashContainer", () => {
     // Token-wise: the resting pill carries `hover:bg-overlay-soft`, which is not
     // the armed cue.
     const tokens = pill.className.split(/\s+/);
-    expect(tokens).not.toContain("cursor-copy");
-    expect(tokens).not.toContain("bg-overlay-soft");
-    expect(tokens).not.toContain("ring-border-default");
+    for (const token of DROP_TARGET_FRAME.split(/\s+/)) expect(tokens).not.toContain(token);
   });
 
   it("does not pulse on initial mount", () => {

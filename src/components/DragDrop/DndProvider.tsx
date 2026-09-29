@@ -113,6 +113,7 @@ import {
   type OverDropData,
 } from "./dropResolution";
 import { useDragRecovery } from "./useDragRecovery";
+import { MOUSE_SENSOR_OPTIONS, TOUCH_SENSOR_OPTIONS } from "./dragActivation";
 import {
   DURATION_100,
   DURATION_300,
@@ -142,20 +143,11 @@ export {
   GRID_PLACEHOLDER_ID,
 } from "./dndPlaceholderContext";
 
-// Minimum distance (px) pointer must move before drag starts
-// This allows clicks to work for popovers without triggering drag
-const DRAG_ACTIVATION_DISTANCE = 8;
-
 // Module-level so `useSensor`'s [sensor, options] memo holds across renders.
 // This provider is not compiled (see the compiler baseline), and fresh option
 // objects rebuilt dnd-kit's activators on every render — a new internal
-// context that re-rendered every draggable and sortable in the app.
-const MOUSE_SENSOR_OPTIONS = {
-  activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE },
-};
-const TOUCH_SENSOR_OPTIONS = {
-  activationConstraint: { delay: 150, tolerance: 5 },
-};
+// context that re-rendered every draggable and sortable in the app. The
+// pointer and touch options are shared with the tab strips' own contexts.
 const KEYBOARD_SENSOR_OPTIONS = {
   coordinateGetter: sameContainerKeyboardCoordinates,
 };
