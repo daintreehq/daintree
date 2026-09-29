@@ -167,7 +167,8 @@ export async function handleFallbackTriggered(data: {
     } else {
       // A spawn failure lands on the panel as `restartError`, which the pane
       // shows inline; a precondition refusal leaves nothing on screen.
-      const shownInline = Boolean(usePanelStore.getState().panelsById[terminalId]?.restartError);
+      const after = usePanelStore.getState().panelsById[terminalId];
+      const shownInline = Boolean(after && isPtyPanel(after) && after.restartError);
       notify({
         type: "error",
         priority: "high",
