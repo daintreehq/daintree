@@ -34,6 +34,7 @@ import {
   type AutoSizeConfig,
 } from "../inputEditorExtensions";
 import type { SlashCommand } from "@shared/types";
+import { recordBuiltCompartmentConfig } from "./useCompartmentDriver";
 
 interface UseEditorFactoryParams {
   terminalId: string;
@@ -182,6 +183,15 @@ export function useEditorFactory({
 
     const view = new EditorView({ state, parent: host });
     editorViewRef.current = view;
+    // Chip tooltips above are gated on `disabled` only, i.e. built as if
+    // autocomplete were closed.
+    recordBuiltCompartmentConfig(view, {
+      effectiveTheme,
+      placeholder,
+      disabled,
+      commandMap,
+      isAutocompleteOpen: false,
+    });
 
     return () => {
       view.destroy();

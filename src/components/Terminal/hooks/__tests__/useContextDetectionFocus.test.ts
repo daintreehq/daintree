@@ -2,9 +2,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { useRef } from "react";
+import { EditorState } from "@codemirror/state";
 import type { ViewUpdate } from "@codemirror/view";
 import type { CompletionTrigger } from "@shared/types";
 import { useContextDetection } from "../useContextDetection";
+import { getActiveCompletionContext } from "../../hybridInputParsing";
 
 interface LatestRefShape {
   isInHistoryMode: boolean;
@@ -34,10 +36,7 @@ function makeUpdate(opts: {
     docChanged: opts.docChanged ?? false,
     selectionSet: opts.selectionSet ?? false,
     transactions,
-    state: {
-      doc: { toString: () => text, length: text.length },
-      selection: { main: { head: opts.caret ?? 0 } },
-    },
+    state: EditorState.create({ doc: text, selection: { anchor: opts.caret ?? 0 } }),
     view: { hasFocus: opts.hasFocus },
   } as unknown as ViewUpdate;
 }
@@ -175,6 +174,82 @@ describe("useContextDetection trigger detection", () => {
     // Only the initial null (no context) may be emitted — never a $ context.
     for (const call of setActiveCompletionContext.mock.calls) {
       expect(call[0]).toBeNull();
+    }
+  });
+});
+
+describe("useContextDetection multi-line drafts", () => {
+  it("reports doc-absolute offsets for a token on a later line", () => {
+    const { result, setActiveCompletionContext } = setupHook(["/", "@"]);
+    const text = "first line\nsecond @src/Ap more\nthird";
+    const caret = text.indexOf("@src/Ap") + "@src/Ap".length;
+    result.current.handleUpdateRef.current(
+      makeUpdate({ focusChanged: false, hasFocus: true, selectionSet: true, text, caret })
+    );
+    expect(setActiveCompletionContext).toHaveBeenLastCalledWith({
+      triggerChar: "@",
+      start: text.indexOf("@"),
+      tokenEnd: caret,
+      query: "src/Ap",
+    });
+  });
+
+  it("does not extend a token across a line break", () => {
+    const { result, setActiveCompletionContext } = setupHook(["/", "@"]);
+    const text = "@foo\nbar";
+    result.current.handleUpdateRef.current(
+      makeUpdate({ focusChanged: false, hasFocus: true, selectionSet: true, text, caret: 4 })
+    );
+    expect(setActiveCompletionContext).toHaveBeenLastCalledWith({
+      triggerChar: "@",
+      start: 0,
+      tokenEnd: 4,
+      query: "foo",
+    });
+    result.current.handleUpdateRef.current(
+      makeUpdate({ focusChanged: false, hasFocus: true, selectionSet: true, text, caret: 7 })
+    );
+    expect(setActiveCompletionContext).toHaveBeenLastCalledWith(null);
+  });
+
+  it("rebases a token end that lies past the caret", () => {
+    const { result, setActiveCompletionContext } = setupHook(["/", "@"]);
+    const text = "intro\n@src/App.tsx tail";
+    const caret = text.indexOf("@") + "@src".length;
+    result.current.handleUpdateRef.current(
+      makeUpdate({ focusChanged: false, hasFocus: true, selectionSet: true, text, caret })
+    );
+    expect(setActiveCompletionContext).toHaveBeenLastCalledWith({
+      triggerChar: "@",
+      start: text.indexOf("@"),
+      tokenEnd: text.indexOf(" tail"),
+      query: "src",
+    });
+  });
+
+  it("matches the whole-document scan at every caret position", () => {
+    const triggers = ["/", "@", "$"] as CompletionTrigger[];
+    const docs = [
+      "",
+      "\n\n",
+      "/help me\n@src/App.tsx and $VAR\n\n  /compact",
+      "a\r\n@x\r\n/y z",
+      "email@x.com\n@@dup //no\n@diff:staged\ttab",
+      "trail @\n/\n$\u2028@after-ls",
+      "@a\n@b\n@c",
+    ];
+    for (const text of docs) {
+      const { result, setActiveCompletionContext } = setupHook(triggers);
+      const state = EditorState.create({ doc: text });
+      const flat = state.doc.toString();
+      for (let caret = 0; caret <= state.doc.length; caret++) {
+        result.current.handleUpdateRef.current(
+          makeUpdate({ focusChanged: false, hasFocus: true, selectionSet: true, text, caret })
+        );
+        // The hook emits only on change, so its latest emission is its current value.
+        const current = setActiveCompletionContext.mock.calls.at(-1)?.[0] ?? null;
+        expect(current).toEqual(getActiveCompletionContext(flat, caret, new Set(triggers)));
+      }
     }
   });
 });
