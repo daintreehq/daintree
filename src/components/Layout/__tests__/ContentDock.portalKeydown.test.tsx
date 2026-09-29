@@ -115,6 +115,7 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() 
 vi.mock("@dnd-kit/core", () => ({
   useDndContext: () => ({ active: null }),
   useDroppable: () => ({ setNodeRef: vi.fn(), isOver: false }),
+  useDndMonitor: () => {},
 }));
 vi.mock("@dnd-kit/sortable", () => ({
   SortableContext: fixture.passthrough,

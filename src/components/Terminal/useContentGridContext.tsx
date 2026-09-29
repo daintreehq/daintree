@@ -29,7 +29,17 @@ import { useProjectStore } from "@/store/projectStore";
 import { useOpenDockPopoverId } from "@/components/Layout/useOpenDockPopoverId";
 import { computeGridSelectedAgentIds } from "./contentGridAgentFilter";
 import { buildFleetPanels } from "./contentGridFleetPanels";
-import { useDndPlaceholder, useIsDragging, GRID_PLACEHOLDER_ID } from "@/components/DragDrop";
+import {
+  useDndPlaceholder,
+  useIsDragging,
+  useIsWorktreeSortDragging,
+  GRID_PLACEHOLDER_ID,
+} from "@/components/DragDrop";
+import {
+  isOverContainer,
+  panelDragOrigin,
+  useArmedDropTarget,
+} from "@/components/DragDrop/useArmedDropTarget";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import {
   subscribeOptimisticClose,
@@ -205,7 +215,8 @@ export interface ContentGridContext {
   isFleetScopeRender: boolean;
   fleetPanels: PanelInstance[];
   fleetNeedsWorktreePrefix: boolean;
-  isOver: boolean;
+  /** A panel from outside the grid would land in it: draws DROP_TARGET_FRAME. */
+  isDropTarget: boolean;
   isDragging: boolean;
   showPlaceholder: boolean;
   placeholderInGrid: boolean;
@@ -478,9 +489,15 @@ export function useContentGridContext({
   // the closing-panel fast path.
   void EMPTY_TAB_GROUPS;
 
-  const { setNodeRef, isOver } = useDroppable({
+  const { setNodeRef } = useDroppable({
     id: "grid-container",
     data: { container: "grid" },
+  });
+  const isWorktreeSortDragging = useIsWorktreeSortDragging();
+  const isDropTarget = useArmedDropTarget({
+    accepts: (over) => isOverContainer(over, "grid-container"),
+    isOrigin: (active) => panelDragOrigin(active) === "grid",
+    disabled: isWorktreeSortDragging,
   });
 
   const gridContainerRef = useRef<HTMLDivElement>(null);
@@ -1246,7 +1263,7 @@ export function useContentGridContext({
     isFleetScopeRender,
     fleetPanels,
     fleetNeedsWorktreePrefix,
-    isOver,
+    isDropTarget,
     isDragging,
     showPlaceholder,
     placeholderInGrid,

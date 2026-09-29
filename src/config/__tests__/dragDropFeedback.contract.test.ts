@@ -103,6 +103,30 @@ describe("drag and drop feedback contract", () => {
     expect(forced).toMatch(new RegExp(`outline-offset:\\s*-${forcedOffset}px`));
   });
 
+  it("lets an armed worktree card's frame beat the rules that out-rank it", () => {
+    // The drop rule is two selectors deep. Any card rule that paints the card
+    // edge, fill or outline from a more specific selector (a sidebar-root
+    // ancestor, a :has() focus state) would repaint an armed card, and the
+    // active worktree is the likeliest target, so each must exclude it.
+    const DROP_RULE = '.sidebar-worktree-card[data-drop-target="true"]';
+    const outranking = [...SIDEBAR_CSS.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .map(([, selector, body]) => ({
+        selector: selector!.replace(/\/\*[^]*?\*\//g, "").trim(),
+        body: body!,
+      }))
+      .filter(({ selector }) => selector.includes(".sidebar-worktree-card"))
+      .filter(({ selector }) => selector !== DROP_RULE)
+      .filter(({ body }) => /(--card-edge|background|outline)\s*:/.test(body))
+      .filter(({ selector }) => /\.sidebar-root|:has\(/.test(selector));
+    expect(outranking.length).toBeGreaterThan(0);
+    const offenders = outranking
+      .filter(({ selector }) =>
+        selector.split(",").some((part) => !part.includes(':not([data-drop-target="true"])'))
+      )
+      .map(({ selector }) => selector.replace(/\s+/g, " "));
+    expect(offenders).toEqual([]);
+  });
+
   it("never gives an armed target the copy cursor", () => {
     // Every drop in the app moves or trashes what it receives; none duplicates
     // it. (Copy-to-clipboard text elsewhere may still wear cursor-copy.)
@@ -121,8 +145,41 @@ describe("drag and drop feedback contract", () => {
       .map(({ rel }) => rel);
     expect(
       offenders,
-      "Use POINTER_SENSOR_OPTIONS / TOUCH_SENSOR_OPTIONS so a click turns into a drag at one travel everywhere."
+      "Use MOUSE_SENSOR_OPTIONS / TOUCH_SENSOR_OPTIONS so a click turns into a drag at one travel everywhere."
     ).toEqual([]);
+  });
+
+  it("pairs the shared mouse threshold with the long-press touch sensor, never a PointerSensor", () => {
+    // A PointerSensor also takes touch, so a finger scrolling a tab strip would
+    // pick a tab up on the mouse threshold instead of the long-press.
+    const users = SOURCES.filter(
+      ({ rel, code }) =>
+        rel !== "src/components/DragDrop/dragActivation.ts" && /\bMOUSE_SENSOR_OPTIONS\b/.test(code)
+    );
+    expect(users.length).toBeGreaterThan(0);
+    const offenders = users
+      .filter(
+        ({ code }) =>
+          /\bPointerSensor\b/.test(code) ||
+          !/\bTOUCH_SENSOR_OPTIONS\b/.test(code) ||
+          !/useSensor\(\s*\w*MouseSensor\s*,\s*MOUSE_SENSOR_OPTIONS/.test(code)
+      )
+      .map(({ rel }) => rel);
+    expect(offenders).toEqual([]);
+  });
+
+  it("arms sortable containers across their items, not on their own id alone", () => {
+    for (const rel of [
+      "src/components/Layout/ContentDock.tsx",
+      "src/components/Terminal/useContentGridContext.tsx",
+      "src/components/Settings/ToolbarSettingsTab.tsx",
+    ]) {
+      const code = codeOf(rel);
+      expect(code, rel).toMatch(/\buseArmedDropTarget\(/);
+      expect(code, `${rel} still reads dnd-kit's own isOver`).not.toMatch(
+        /\{[^}]*\bisOver\b[^}]*\}\s*=\s*useDroppable\(/
+      );
+    }
   });
 
   it("dims every sortable item in hand to DRAG_GHOST_OPACITY", () => {

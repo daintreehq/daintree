@@ -88,7 +88,8 @@
    when focus leaves the list (WAI-ARIA APG tree view; macOS HIG secondary
    highlight; VS Code `list.inactiveSelectionBackground`). Keep the neutral fill
    and a dimmed right-edge accent border rather than zeroing the box-shadow. */
-.sidebar-root:not(:focus-within) .sidebar-worktree-card[data-active="true"] {
+.sidebar-root:not(:focus-within)
+  .sidebar-worktree-card[data-active="true"]:not([data-drop-target="true"]) {
   background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.065));
   --card-edge: inset -2px 0 0 color-mix(in srgb, var(--theme-accent-primary) 65%, transparent);
 }
@@ -113,7 +114,8 @@
    `:has(:focus-visible)` and not `:focus-within`: the keyboard-cursor row
    draws no ring at all (#8094), so on that path there is no second accent to
    yield to and the edge must stay at full strength. */
-.sidebar-root .sidebar-worktree-card[data-active="true"]:has(:focus-visible) {
+.sidebar-root
+  .sidebar-worktree-card[data-active="true"]:not([data-drop-target="true"]):has(:focus-visible) {
   --card-edge: inset -2px 0 0 color-mix(in srgb, var(--theme-accent-primary) 65%, transparent);
 }
 
@@ -149,7 +151,10 @@ html[data-dragging="true"]
    stays reserved for the active row's right-edge marker. Spelled out here
    rather than as the utilities because this unlayered file's base
    `.sidebar-worktree-card` background/box-shadow declarations override layered
-   utilities on the same element. The contract test keeps the two in step. */
+   utilities on the same element. The contract test keeps the two in step.
+   The selection-edge and focus rules above and below out-rank this one, so
+   each excludes an armed card: the active worktree is the likeliest drop
+   target, and it has to show the frame, not its selection edge. */
 .sidebar-worktree-card[data-drop-target="true"] {
   background: var(--color-overlay-subtle);
   --card-edge: inset 0 0 0 1px color-mix(in oklab, var(--color-text-primary) 60%, transparent);
@@ -247,7 +252,7 @@ html[data-dragging="true"]
 
   .sidebar-root:focus-within
     [data-worktree-row][data-keyboard-cursor="true"]
-    .sidebar-worktree-card {
+    .sidebar-worktree-card:not([data-drop-target="true"]) {
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }
@@ -320,7 +325,7 @@ html[data-dragging="true"]
 }
 
 @media (forced-colors: active) {
-  .sidebar-worktree-card:has(> button:focus-visible) {
+  .sidebar-worktree-card:not([data-drop-target="true"]):has(> button:focus-visible) {
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }

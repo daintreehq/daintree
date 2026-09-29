@@ -20,7 +20,8 @@ import {
   DndContext,
   closestCorners,
   KeyboardSensor,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -34,7 +35,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
-import { POINTER_SENSOR_OPTIONS } from "@/components/DragDrop/dragActivation";
+import { MOUSE_SENSOR_OPTIONS, TOUCH_SENSOR_OPTIONS } from "@/components/DragDrop/dragActivation";
 import { DRAG_GHOST_OPACITY } from "@/lib/animationUtils";
 import type { PortalTab, PortalLink } from "@shared/types";
 import { cn } from "@/lib/utils";
@@ -365,7 +366,8 @@ export function PortalToolbar({
   // Keyboard pickup is Space/Enter on the selected tab (see SortableTab); the
   // Move left / Move right menu items stay as the one-step alternative.
   const sensors = useSensors(
-    useSensor(PointerSensor, POINTER_SENSOR_OPTIONS),
+    useSensor(MouseSensor, MOUSE_SENSOR_OPTIONS),
+    useSensor(TouchSensor, TOUCH_SENSOR_OPTIONS),
     useSensor(KeyboardSensor, KEYBOARD_SENSOR_OPTIONS)
   );
 

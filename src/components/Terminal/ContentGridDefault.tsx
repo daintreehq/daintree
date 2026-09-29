@@ -212,7 +212,7 @@ export function ContentGridDefault({
                   // divider's 6px track until the canonical close lands.
                   isSplit &&
                     "*:row-start-1 [&>:nth-child(1)]:col-start-1 [&>:nth-child(2)]:col-start-2 [&>:nth-child(3)]:col-start-3",
-                  ctx.isOver && DROP_TARGET_FRAME
+                  ctx.isDropTarget && DROP_TARGET_FRAME
                 )}
                 style={{
                   display: "grid",

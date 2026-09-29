@@ -81,7 +81,9 @@ describe("ContentDock regression test", () => {
     const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
 
     expect(content).not.toContain("ring-accent-primary");
-    expect(content).toMatch(/isOver\s*&&\s*!isDockDropRejected\s*&&\s*cn\(DROP_TARGET_FRAME/);
+    // Armed across the rail's own chips, and never for a refused drag.
+    expect(content).toMatch(/isDropTarget\s*&&\s*cn\(DROP_TARGET_FRAME/);
+    expect(content).toMatch(/useArmedDropTarget\(\{[^]*?disabled:\s*isDockDropRejected/);
   });
 
   // Issue #8162 — drop the ambient in-flight rail tint; the only drag-state cue

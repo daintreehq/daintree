@@ -79,6 +79,7 @@ import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { buildPluginToolbarMeta } from "@/components/Layout/pluginToolbarMeta";
 import { cn } from "@/lib/utils";
 import { DROP_TARGET_FRAME } from "@/components/DragDrop/dropIndicator";
+import { useArmedDropTarget } from "@/components/DragDrop/useArmedDropTarget";
 import { DRAG_GRIP_CLASS, DRAG_GRIP_ICON_CLASS } from "@/components/ui/dragGripStyles";
 import { notify } from "@/lib/notify";
 import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
@@ -385,7 +386,14 @@ function ToolbarSideColumn({
   // The column id doubles as a droppable target so an empty side still accepts
   // a cross-side drop (a `SortableContext` registers no droppable of its own
   // when it holds zero items).
-  const { setNodeRef, isOver } = useDroppable({ id: side });
+  const { setNodeRef } = useDroppable({ id: side });
+  // Armed while a button from the other column would land here, over this
+  // column's rows as well as its empty space; a reorder within the column has
+  // the sortable gap instead.
+  const isDropTarget = useArmedDropTarget({
+    accepts: (over) => over.id === side || buttonIds.some((id) => id === over.id),
+    isOrigin: (active) => buttonIds.some((id) => id === active.id),
+  });
   // Only what renders. An id with no live metadata — an uninstalled plugin's
   // button the user had dragged here, or a launcher item belonging to another
   // project (#12217) — draws nothing, and neither does a button that is off.
@@ -400,7 +408,7 @@ function ToolbarSideColumn({
       <SortableContext items={buttonIds} strategy={rectSortingStrategy}>
         <SettingsGroup
           label={`${label} · ${pluralize(onCount, "button")}`}
-          className={cn("min-h-12", isOver && DROP_TARGET_FRAME)}
+          className={cn("min-h-12", isDropTarget && DROP_TARGET_FRAME)}
         >
           {renderedIds.length === 0 ? (
             <SettingsEmptyRow>Drag a button here or use its menu</SettingsEmptyRow>

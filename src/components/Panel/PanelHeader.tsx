@@ -40,7 +40,7 @@ import {
   useSensor,
   useSensors,
   KeyboardSensor,
-  PointerSensor,
+  MouseSensor,
   TouchSensor,
   type DragEndEvent,
   type UniqueIdentifier,
@@ -52,7 +52,7 @@ import {
   sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
-import { POINTER_SENSOR_OPTIONS, TOUCH_SENSOR_OPTIONS } from "@/components/DragDrop/dragActivation";
+import { MOUSE_SENSOR_OPTIONS, TOUCH_SENSOR_OPTIONS } from "@/components/DragDrop/dragActivation";
 import { PanelTabList } from "./PanelTabList";
 import { inlineRenameFieldClassName, inlineRenameFieldInputProps } from "./inlineRenameField";
 import { focusPaneWhenStripCloses, revealTabInStrip } from "@/components/ui/document-tab";
@@ -789,7 +789,7 @@ function PanelHeaderComponent({
   // The app's one pickup threshold, so a tab and the panel it sits on start a
   // drag at the same travel.
   const tabSensors = useSensors(
-    useSensor(PointerSensor, POINTER_SENSOR_OPTIONS),
+    useSensor(MouseSensor, MOUSE_SENSOR_OPTIONS),
     useSensor(TouchSensor, TOUCH_SENSOR_OPTIONS),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );

@@ -7,7 +7,10 @@
 export const DRAG_ACTIVATION_DISTANCE = 8;
 
 // Module-level so `useSensor`'s [sensor, options] memo holds across renders.
-export const POINTER_SENSOR_OPTIONS = {
+// Paired with a MouseSensor, never a PointerSensor: a PointerSensor also takes
+// touch, which would then pick up on 8px of travel (a scroll) instead of the
+// long-press below.
+export const MOUSE_SENSOR_OPTIONS = {
   activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE },
 };
 

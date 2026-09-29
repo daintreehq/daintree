@@ -113,7 +113,7 @@ import {
   type OverDropData,
 } from "./dropResolution";
 import { useDragRecovery } from "./useDragRecovery";
-import { POINTER_SENSOR_OPTIONS, TOUCH_SENSOR_OPTIONS } from "./dragActivation";
+import { MOUSE_SENSOR_OPTIONS, TOUCH_SENSOR_OPTIONS } from "./dragActivation";
 import {
   DURATION_100,
   DURATION_300,
@@ -624,7 +624,7 @@ export function DndProvider({ children }: DndProviderProps) {
   // opt-out doesn't apply here because keyboard activation is explicit
   // (Space/Enter on a focused activator node, not bubbling pointer input).
   const sensors = useSensors(
-    useSensor(NoDndMouseSensor, POINTER_SENSOR_OPTIONS),
+    useSensor(NoDndMouseSensor, MOUSE_SENSOR_OPTIONS),
     useSensor(NoDndTouchSensor, TOUCH_SENSOR_OPTIONS),
     useSensor(KeyboardSensor, KEYBOARD_SENSOR_OPTIONS)
   );

@@ -618,7 +618,9 @@ function TargetsScene() {
       )}
       {pair(
         (armed) => (
-          <div className="flex w-[280px] flex-col bg-surface-sidebar py-1">
+          // Inside a real .sidebar-root without focus, so the inactive-selection
+          // rule that out-ranks the drop frame is in play, as it is mid-drag.
+          <div className="sidebar-root flex w-[280px] flex-col bg-surface-sidebar py-1">
             {SIDEBAR_ROWS.slice(0, 2).map((worktree, index) => (
               <div
                 key={worktree.id}
