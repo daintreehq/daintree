@@ -10,7 +10,7 @@ export const editorConfigNamespace = defineIpcNamespace({
   ops: {
     getConfig: op(EDITOR_CONFIG_METHOD_CHANNELS.getConfig, async (projectId?: string) => {
       const { discover } = await import("../../services/EditorService.js");
-      const discoveredEditors = discover();
+      const discoveredEditors = await discover();
 
       let preferredEditor = null;
       if (typeof projectId === "string" && projectId) {
