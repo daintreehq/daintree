@@ -24,7 +24,9 @@ import { TrashGroupItem } from "./TrashGroupItem";
 import {
   DOCK_STATUS_PILL_CLASS,
   DOCK_STATUS_PILL_OPEN_CLASS,
+  DOCK_POPOVER_HEADER_CLASS,
   DOCK_POPOVER_SECTIONS,
+  DockPopoverList,
   DockPopoverSection,
   DockStatusPillLabel,
   dockStatusScopeDescription,
@@ -521,6 +523,7 @@ export function TrashContainer({
                 aria-haspopup="dialog"
                 aria-expanded={isOpen}
                 aria-controls={contentId}
+                onClick={focusHandoff.onTriggerClick}
                 aria-label={`Trash: ${count} terminal${count === 1 ? "" : "s"} ${dockStatusScopeDescription(count, hereCount)}, removed for good ${TRASH_TTL_SECONDS} seconds after closing`}
               >
                 <DockStatusPillLabel
@@ -555,11 +558,12 @@ export function TrashContainer({
           side="top"
           align="end"
           onFocusCapture={noteFocusEntered}
-          onOpenAutoFocus={(e) => e.preventDefault()}
+          onOpenAutoFocus={focusHandoff.onOpenAutoFocus}
           onCloseAutoFocus={focusHandoff.onCloseAutoFocus}
+          onKeyDown={focusHandoff.onContentKeyDown}
         >
           <div className="flex flex-col">
-            <div className="px-3 py-2 border-b border-divider bg-surface-canvas/50 flex justify-between items-start gap-2">
+            <div className={cn(DOCK_POPOVER_HEADER_CLASS, "items-start")}>
               <div className="flex min-w-0 flex-col">
                 <span className="text-xs font-medium text-text-secondary">Recently closed</span>
                 {/* The list is a twenty-second undo buffer, not storage. Saying
@@ -589,16 +593,12 @@ export function TrashContainer({
               </Button>
             </div>
 
-            <div
-              ref={listRef}
-              onFocusCapture={handleListFocus}
-              // The rows carry `shrink-0`: a flex column compresses its
-              // children to fit before it will scroll, which squashed the
-              // metadata line under the row's own TTL meter and left
-              // scrollHeight === clientHeight, so the overflow footer below
-              // never knew there was anything out of sight.
-              className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto"
-            >
+            {/* The rows carry `shrink-0`: a flex column compresses its
+                children to fit before it will scroll, which squashed the
+                metadata line under the row's own TTL meter and left
+                scrollHeight === clientHeight, so the overflow footer below
+                never knew there was anything out of sight. */}
+            <DockPopoverList ref={listRef} onFocusCapture={handleListFocus}>
               {DOCK_POPOVER_SECTIONS.map((section) => {
                 const items = section.key === "here" ? hereItems : elsewhereItems;
                 if (items.length === 0) return null;
@@ -640,7 +640,7 @@ export function TrashContainer({
                   </DockPopoverSection>
                 );
               })}
-            </div>
+            </DockPopoverList>
 
             {/* LIFO puts the freshest pane on top, which is the one most likely
                 to be wanted back — but it also means the rows nearest their

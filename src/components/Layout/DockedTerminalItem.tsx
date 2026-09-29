@@ -24,6 +24,13 @@ import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { DockActivityCue } from "./DockActivityCue";
 import { useDockPanelPortal } from "./dockPanelPortalContext";
+import {
+  DOCK_CHIP_CLASS,
+  DOCK_CHIP_OPEN_CLASS,
+  DOCK_CHIP_WAITING_CLASS,
+  DOCK_CHIP_RULE_CLASS,
+  DOCK_STATE_GLYPH_CLASS,
+} from "./dockChipStyles";
 import { useDockPopoverResize } from "./useDockPopoverResize";
 import { DockPopoverResizeHandle } from "./DockPopoverResizeHandle";
 import {
@@ -351,17 +358,12 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                 {...dragPointerListeners}
                 data-dock-item=""
                 className={cn(
-                  "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
-                  "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-text-secondary",
-                  "hover:text-text-primary hover:bg-[var(--dock-item-bg-hover)]",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
-                  "cursor-grab active:cursor-grabbing",
-                  isOpen &&
-                    "bg-[var(--dock-item-bg-active)] text-text-primary border-[var(--dock-item-border-active)] ring-1 ring-inset ring-daintree-accent/30",
+                  DOCK_CHIP_CLASS,
+                  isOpen && DOCK_CHIP_OPEN_CLASS,
                   !isOpen &&
                     showDockAgentHighlights &&
                     blockedState === "waiting" &&
-                    "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
+                    DOCK_CHIP_WAITING_CLASS,
                   isDeprioritized && "border-transparent"
                 )}
                 onClick={(e) => {
@@ -391,7 +393,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
 
                 {(isActive || plainWorking) && commandText && (
                   <>
-                    <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
+                    <div className={DOCK_CHIP_RULE_CLASS} aria-hidden="true" />
                     <Tooltip open={commandTip.open} onOpenChange={commandTip.onOpenChange}>
                       <TooltipTrigger asChild onPointerEnter={commandTip.onPointerEnter}>
                         <span className="truncate flex-1 min-w-0 text-2xs text-text-secondary font-mono">
@@ -419,7 +421,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                       >
                         <StateIcon
                           className={cn(
-                            "w-3.5 h-3.5",
+                            DOCK_STATE_GLYPH_CLASS,
                             displayAgentState === "working" && "animate-spin-slow",
                             "motion-reduce:animate-none"
                           )}
