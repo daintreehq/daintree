@@ -13,7 +13,13 @@ import { app, BrowserWindow, crashReporter, protocol, webContents } from "electr
 nodeV8.setHeapSnapshotNearHeapLimit(2);
 import { registerGlobalErrorHandlers } from "./setup/globalErrorHandlers.js";
 import { startDevDiagnostics } from "./setup/devDiagnostics.js";
-import { isE2EFaultMode, isE2EMode, isIdleHarness } from "./setup/runtimeFlags.js";
+import {
+  isE2EBackgroundWindows,
+  isE2EFaultMode,
+  isE2EMode,
+  isIdleHarness,
+} from "./setup/runtimeFlags.js";
+import { installE2EBackgroundWindows } from "./setup/e2eBackgroundWindows.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -288,6 +294,10 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 // lever, not a boot win.)
 const disabledFeatures = ["BackForwardCache", "Translate"];
 app.commandLine.appendSwitch("disable-features", disabledFeatures.join(","));
+
+if (isE2EMode && isE2EBackgroundWindows && process.platform === "darwin") {
+  installE2EBackgroundWindows();
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
