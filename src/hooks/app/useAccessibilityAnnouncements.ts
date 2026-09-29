@@ -122,6 +122,8 @@ function getExitMessage(title: string, exitCode: number | undefined): string {
   return exitCode != null ? `${title}: exited with code ${exitCode}` : `${title}: exited`;
 }
 
+type PanelState = ReturnType<typeof usePanelStore.getState>;
+
 function basePanelId(debounceKey: string): string {
   const colon = debounceKey.indexOf(":");
   return colon === -1 ? debounceKey : debounceKey.slice(0, colon);
@@ -147,11 +149,7 @@ export function useAccessibilityAnnouncements() {
     // old undefined-sentinel first-render skip.
     const prevMaximizedIdRef = { current: usePanelStore.getState().maximizedId };
     const lastDiffInputsRef = {
-      current: null as null | {
-        panelsById: unknown;
-        panelIds: unknown;
-        commandQueueCountById: unknown;
-      },
+      current: null as null | Pick<PanelState, "panelsById" | "panelIds" | "commandQueueCountById">,
     };
 
     // Per-pane badge state announcements (#9204).
@@ -167,7 +165,171 @@ export function useAccessibilityAnnouncements() {
     // does not cancel its sibling. The unsuffixed `${id}` slot is reserved for
     // the agent-state announcer — leaving it untouched preserves the #8937
     // cancellation-on-removal guarantee.
-    const diffPanels = (state: ReturnType<typeof usePanelStore.getState>) => {
+    const diffPanel = (
+      terminal: PanelState["panelsById"][string],
+      prev: TerminalStateSnapshot | undefined,
+      commandQueueCountById: PanelState["commandQueueCountById"]
+    ): TerminalStateSnapshot => {
+      // `location` lives on every panel kind (it's on BasePanelData), so it is
+      // captured outside the PTY guard below — browser/dev-preview/review panes
+      // can be minimized and restored too.
+      const nextSnapshot: TerminalStateSnapshot = {
+        location: terminal.location,
+      };
+
+      // PTY-only badge state (agent state, flow, queue, exit, hibernation).
+      // Non-PTY panels have none of these fields, so the whole block is gated.
+      if (isPtyPanel(terminal)) {
+        nextSnapshot.agentState = terminal.agentState;
+        nextSnapshot.stateChangeConfidence = terminal.stateChangeConfidence;
+        nextSnapshot.flowStatus = terminal.flowStatus;
+        nextSnapshot.exitCode = terminal.exitCode;
+        nextSnapshot.hasExited = terminal.exitCode != null;
+        nextSnapshot.queueCount = commandQueueCountById[terminal.id] ?? 0;
+
+        // Agent-state transitions — original behavior preserved.
+        if (terminal.agentState && prev?.agentState !== terminal.agentState) {
+          const lowConfidence =
+            terminal.stateChangeConfidence !== undefined && terminal.stateChangeConfidence < 0.7;
+
+          // Skip low-confidence heuristic transitions — keep the previous state
+          // so a later high-confidence confirmation of this state will still trigger.
+          if (prev && lowConfidence) {
+            nextSnapshot.agentState = prev.agentState;
+            nextSnapshot.stateChangeConfidence = prev.stateChangeConfidence;
+          } else if (prev) {
+            // State changed with sufficient confidence — announce.
+            const announcement = getAgentStateMessage(
+              terminal.title,
+              terminal.agentState,
+              terminal.waitingReason
+            );
+            if (announcement) {
+              const { msg, priority } = announcement;
+              const key = terminal.id;
+              const existing = debounceTimersRef.current.get(key);
+              if (existing) clearTimeout(existing);
+              const timer = setTimeout(() => {
+                useAnnouncerStore.getState().announce(msg, priority);
+                debounceTimersRef.current.delete(key);
+              }, BADGE_DEBOUNCE_MS);
+              debounceTimersRef.current.set(key, timer);
+            }
+          }
+        }
+
+        if (prev) {
+          // Flow status transitions (paused/suspended/resumed).
+          const flowMsg = getFlowStatusMessage(
+            terminal.title,
+            prev.flowStatus,
+            terminal.flowStatus
+          );
+          if (flowMsg) {
+            const key = `${terminal.id}:flow`;
+            const existing = debounceTimersRef.current.get(key);
+            if (existing) clearTimeout(existing);
+            const timer = setTimeout(() => {
+              useAnnouncerStore.getState().announce(flowMsg, "polite");
+              debounceTimersRef.current.delete(key);
+            }, BADGE_DEBOUNCE_MS);
+            debounceTimersRef.current.set(key, timer);
+          } else if (
+            terminal.flowStatus === "paused-resource-governor" &&
+            prev.flowStatus !== "paused-resource-governor"
+          ) {
+            // A pane pause still waiting out its debounce is overtaken by the
+            // host-wide one. Announcing it would leave a "paused" that no
+            // per-pane "resumed" ever follows.
+            const key = `${terminal.id}:flow`;
+            const pending = debounceTimersRef.current.get(key);
+            if (pending) {
+              clearTimeout(pending);
+              debounceTimersRef.current.delete(key);
+            }
+          }
+
+          // Queue-count threshold transitions (0→N, N→0).
+          const queueMsg = getQueueCountMessage(
+            terminal.title,
+            prev.queueCount ?? 0,
+            nextSnapshot.queueCount ?? 0
+          );
+          if (queueMsg) {
+            const key = `${terminal.id}:queue`;
+            const existing = debounceTimersRef.current.get(key);
+            if (existing) clearTimeout(existing);
+            const timer = setTimeout(() => {
+              useAnnouncerStore.getState().announce(queueMsg, "polite");
+              debounceTimersRef.current.delete(key);
+            }, BADGE_DEBOUNCE_MS);
+            debounceTimersRef.current.set(key, timer);
+          }
+
+          // Exit code badge — fires when exitCode flips from undefined to a number.
+          if (!prev.hasExited && nextSnapshot.hasExited) {
+            const exitMsg = getExitMessage(terminal.title, terminal.exitCode);
+            const key = `${terminal.id}:exit`;
+            const existing = debounceTimersRef.current.get(key);
+            if (existing) clearTimeout(existing);
+            const timer = setTimeout(() => {
+              useAnnouncerStore.getState().announce(exitMsg, "polite");
+              debounceTimersRef.current.delete(key);
+            }, BADGE_DEBOUNCE_MS);
+            debounceTimersRef.current.set(key, timer);
+          }
+        }
+
+        // Hibernation: subscribe once per panel; the listener fires on
+        // hibernate/unhibernate. Snapshot is read inline so the cb sees the
+        // current value without closure staleness.
+        if (!hibernationUnsubsRef.current.has(terminal.id)) {
+          const panelId = terminal.id;
+          // Seed initial state so the first event reflects a true transition.
+          hibernationStateRef.current.set(panelId, terminalInstanceService.isHibernated(panelId));
+          const unsubscribe = terminalInstanceService.subscribeHibernation(panelId, () => {
+            const prevHib = hibernationStateRef.current.get(panelId) ?? false;
+            const nextHib = terminalInstanceService.isHibernated(panelId);
+            if (prevHib === nextHib) return;
+            hibernationStateRef.current.set(panelId, nextHib);
+            const current = usePanelStore.getState().panelsById[panelId];
+            const title = current?.title ?? "Terminal";
+            const msg = nextHib ? `${title}: hibernated` : `${title}: woke up`;
+            useAnnouncerStore.getState().announce(msg, "polite");
+          });
+          hibernationUnsubsRef.current.set(panelId, unsubscribe);
+        }
+      }
+
+      // Location transitions (grid ↔ dock) for all panel kinds. These are
+      // discrete user actions (minimize/restore), so they announce immediately
+      // — no debounce (WCAG 4.1.3). overlay/background/trash are internal moves
+      // that never warrant an announcement, so only grid↔dock is reported.
+      if (prev && prev.location !== terminal.location) {
+        if (prev.location === "grid" && terminal.location === "dock") {
+          useAnnouncerStore.getState().announce(`${terminal.title} minimized to dock`, "polite");
+        } else if (prev.location === "dock" && terminal.location === "grid") {
+          useAnnouncerStore.getState().announce(`${terminal.title} restored to grid`, "polite");
+        }
+      }
+
+      return nextSnapshot;
+    };
+
+    // Cancel pending debounce timers for panels that have left panelIds.
+    // Without this, a state-change timer scheduled just before removal would
+    // fire and announce for a panel that is no longer in the store. Keys are
+    // namespaced (`${id}`, `${id}:flow`, …), so we split off the base id.
+    const cancelOrphanedTimers = (present: Map<string, TerminalStateSnapshot>) => {
+      for (const [key, timer] of debounceTimersRef.current) {
+        if (!present.has(basePanelId(key))) {
+          clearTimeout(timer);
+          debounceTimersRef.current.delete(key);
+        }
+      }
+    };
+
+    const diffPanels = (state: PanelState) => {
       const { panelsById, panelIds, commandQueueCountById } = state;
       const last = lastDiffInputsRef.current;
       if (
@@ -181,169 +343,54 @@ export function useAccessibilityAnnouncements() {
       lastDiffInputsRef.current = { panelsById, panelIds, commandQueueCountById };
 
       const prevStates = previousStatesRef.current;
+
+      // Same membership and queue counts: only a replaced panel record can
+      // move a snapshot, and re-diffing an unchanged record is a no-op, so
+      // single-panel writes (headline, agent state) skip the other panes. A
+      // pane that vanished from panelsById needs the full pass's teardown.
+      if (
+        last &&
+        last.panelIds === panelIds &&
+        last.commandQueueCountById === commandQueueCountById
+      ) {
+        let changed: Array<PanelState["panelsById"][string]> | null = [];
+        for (const id of panelIds) {
+          const terminal = panelsById[id];
+          if (terminal === last.panelsById[id]) continue;
+          if (!terminal) {
+            changed = null;
+            break;
+          }
+          changed.push(terminal);
+        }
+        if (changed) {
+          // Every occurrence diffs against the pre-pass snapshot, as the full
+          // pass does, so staged writes land only after the loop.
+          const staged = changed.map(
+            (terminal) =>
+              [
+                terminal.id,
+                diffPanel(terminal, prevStates.get(terminal.id), commandQueueCountById),
+              ] as const
+          );
+          for (const [id, snapshot] of staged) prevStates.set(id, snapshot);
+          cancelOrphanedTimers(prevStates);
+          return;
+        }
+      }
+
       const newStates = new Map<string, TerminalStateSnapshot>();
 
       for (const id of panelIds) {
         const terminal = panelsById[id];
         if (!terminal) continue;
-
-        const prev = prevStates.get(terminal.id);
-        // `location` lives on every panel kind (it's on BasePanelData), so it is
-        // captured outside the PTY guard below — browser/dev-preview/review panes
-        // can be minimized and restored too.
-        const nextSnapshot: TerminalStateSnapshot = {
-          location: terminal.location,
-        };
-
-        // PTY-only badge state (agent state, flow, queue, exit, hibernation).
-        // Non-PTY panels have none of these fields, so the whole block is gated.
-        if (isPtyPanel(terminal)) {
-          nextSnapshot.agentState = terminal.agentState;
-          nextSnapshot.stateChangeConfidence = terminal.stateChangeConfidence;
-          nextSnapshot.flowStatus = terminal.flowStatus;
-          nextSnapshot.exitCode = terminal.exitCode;
-          nextSnapshot.hasExited = terminal.exitCode != null;
-          nextSnapshot.queueCount = commandQueueCountById[terminal.id] ?? 0;
-
-          // Agent-state transitions — original behavior preserved.
-          if (terminal.agentState && prev?.agentState !== terminal.agentState) {
-            const lowConfidence =
-              terminal.stateChangeConfidence !== undefined && terminal.stateChangeConfidence < 0.7;
-
-            // Skip low-confidence heuristic transitions — keep the previous state
-            // so a later high-confidence confirmation of this state will still trigger.
-            if (prev && lowConfidence) {
-              nextSnapshot.agentState = prev.agentState;
-              nextSnapshot.stateChangeConfidence = prev.stateChangeConfidence;
-            } else if (prev) {
-              // State changed with sufficient confidence — announce.
-              const announcement = getAgentStateMessage(
-                terminal.title,
-                terminal.agentState,
-                terminal.waitingReason
-              );
-              if (announcement) {
-                const { msg, priority } = announcement;
-                const key = terminal.id;
-                const existing = debounceTimersRef.current.get(key);
-                if (existing) clearTimeout(existing);
-                const timer = setTimeout(() => {
-                  useAnnouncerStore.getState().announce(msg, priority);
-                  debounceTimersRef.current.delete(key);
-                }, BADGE_DEBOUNCE_MS);
-                debounceTimersRef.current.set(key, timer);
-              }
-            }
-          }
-
-          if (prev) {
-            // Flow status transitions (paused/suspended/resumed).
-            const flowMsg = getFlowStatusMessage(
-              terminal.title,
-              prev.flowStatus,
-              terminal.flowStatus
-            );
-            if (flowMsg) {
-              const key = `${terminal.id}:flow`;
-              const existing = debounceTimersRef.current.get(key);
-              if (existing) clearTimeout(existing);
-              const timer = setTimeout(() => {
-                useAnnouncerStore.getState().announce(flowMsg, "polite");
-                debounceTimersRef.current.delete(key);
-              }, BADGE_DEBOUNCE_MS);
-              debounceTimersRef.current.set(key, timer);
-            } else if (
-              terminal.flowStatus === "paused-resource-governor" &&
-              prev.flowStatus !== "paused-resource-governor"
-            ) {
-              // A pane pause still waiting out its debounce is overtaken by the
-              // host-wide one. Announcing it would leave a "paused" that no
-              // per-pane "resumed" ever follows.
-              const key = `${terminal.id}:flow`;
-              const pending = debounceTimersRef.current.get(key);
-              if (pending) {
-                clearTimeout(pending);
-                debounceTimersRef.current.delete(key);
-              }
-            }
-
-            // Queue-count threshold transitions (0→N, N→0).
-            const queueMsg = getQueueCountMessage(
-              terminal.title,
-              prev.queueCount ?? 0,
-              nextSnapshot.queueCount ?? 0
-            );
-            if (queueMsg) {
-              const key = `${terminal.id}:queue`;
-              const existing = debounceTimersRef.current.get(key);
-              if (existing) clearTimeout(existing);
-              const timer = setTimeout(() => {
-                useAnnouncerStore.getState().announce(queueMsg, "polite");
-                debounceTimersRef.current.delete(key);
-              }, BADGE_DEBOUNCE_MS);
-              debounceTimersRef.current.set(key, timer);
-            }
-
-            // Exit code badge — fires when exitCode flips from undefined to a number.
-            if (!prev.hasExited && nextSnapshot.hasExited) {
-              const exitMsg = getExitMessage(terminal.title, terminal.exitCode);
-              const key = `${terminal.id}:exit`;
-              const existing = debounceTimersRef.current.get(key);
-              if (existing) clearTimeout(existing);
-              const timer = setTimeout(() => {
-                useAnnouncerStore.getState().announce(exitMsg, "polite");
-                debounceTimersRef.current.delete(key);
-              }, BADGE_DEBOUNCE_MS);
-              debounceTimersRef.current.set(key, timer);
-            }
-          }
-
-          // Hibernation: subscribe once per panel; the listener fires on
-          // hibernate/unhibernate. Snapshot is read inline so the cb sees the
-          // current value without closure staleness.
-          if (!hibernationUnsubsRef.current.has(terminal.id)) {
-            const panelId = terminal.id;
-            // Seed initial state so the first event reflects a true transition.
-            hibernationStateRef.current.set(panelId, terminalInstanceService.isHibernated(panelId));
-            const unsubscribe = terminalInstanceService.subscribeHibernation(panelId, () => {
-              const prevHib = hibernationStateRef.current.get(panelId) ?? false;
-              const nextHib = terminalInstanceService.isHibernated(panelId);
-              if (prevHib === nextHib) return;
-              hibernationStateRef.current.set(panelId, nextHib);
-              const current = usePanelStore.getState().panelsById[panelId];
-              const title = current?.title ?? "Terminal";
-              const msg = nextHib ? `${title}: hibernated` : `${title}: woke up`;
-              useAnnouncerStore.getState().announce(msg, "polite");
-            });
-            hibernationUnsubsRef.current.set(panelId, unsubscribe);
-          }
-        }
-
-        // Location transitions (grid ↔ dock) for all panel kinds. These are
-        // discrete user actions (minimize/restore), so they announce immediately
-        // — no debounce (WCAG 4.1.3). overlay/background/trash are internal moves
-        // that never warrant an announcement, so only grid↔dock is reported.
-        if (prev && prev.location !== terminal.location) {
-          if (prev.location === "grid" && terminal.location === "dock") {
-            useAnnouncerStore.getState().announce(`${terminal.title} minimized to dock`, "polite");
-          } else if (prev.location === "dock" && terminal.location === "grid") {
-            useAnnouncerStore.getState().announce(`${terminal.title} restored to grid`, "polite");
-          }
-        }
-
-        newStates.set(terminal.id, nextSnapshot);
+        newStates.set(
+          terminal.id,
+          diffPanel(terminal, prevStates.get(terminal.id), commandQueueCountById)
+        );
       }
 
-      // Cancel pending debounce timers for panels that have left panelIds.
-      // Without this, a state-change timer scheduled just before removal would
-      // fire and announce for a panel that is no longer in the store. Keys are
-      // namespaced (`${id}`, `${id}:flow`, …), so we split off the base id.
-      for (const [key, timer] of debounceTimersRef.current) {
-        if (!newStates.has(basePanelId(key))) {
-          clearTimeout(timer);
-          debounceTimersRef.current.delete(key);
-        }
-      }
+      cancelOrphanedTimers(newStates);
 
       // Tear down hibernation subscriptions for removed panels.
       for (const [id, unsubscribe] of hibernationUnsubsRef.current) {
@@ -358,7 +405,7 @@ export function useAccessibilityAnnouncements() {
     };
 
     // Panel focus announcements
-    const diffFocus = (state: ReturnType<typeof usePanelStore.getState>) => {
+    const diffFocus = (state: PanelState) => {
       const prev = prevFocusedIdRef.current;
       if (state.focusedId === prev) return;
       prevFocusedIdRef.current = state.focusedId;
@@ -372,7 +419,7 @@ export function useAccessibilityAnnouncements() {
     // focus slice (not on the panel record). It announces immediately
     // (discrete user action, no debounce). The baseline seeded above keeps a
     // panel that was already maximized at mount silent.
-    const diffMaximize = (state: ReturnType<typeof usePanelStore.getState>) => {
+    const diffMaximize = (state: PanelState) => {
       const prev = prevMaximizedIdRef.current;
       if (prev === state.maximizedId) return;
       prevMaximizedIdRef.current = state.maximizedId;

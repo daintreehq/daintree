@@ -13,22 +13,58 @@ const ACTIVATION_DEBOUNCE_MS = 250;
 // delayed by at most this settle.
 const DEACTIVATION_SETTLE_MS = 5_000;
 
-function computeBusyWorktreeIds(): string[] {
-  const state = usePanelStore.getState();
+type PanelState = ReturnType<typeof usePanelStore.getState>;
+
+function isBusyPanel(panel: PanelState["panelsById"][string] | undefined): boolean {
+  if (!panel || !isPtyPanel(panel)) return false;
+  if (panel.location === "trash") return false;
+  return panel.agentState === "working" || panel.agentState === "directing";
+}
+
+interface BusySnapshot {
+  panelsById: PanelState["panelsById"];
+  panelIdsByWorktreeId: PanelState["panelIdsByWorktreeId"];
+  // Every panel id the busy set can depend on, flattened once per index.
+  indexedIds: string[];
+  ids: string[];
+  key: string;
+}
+
+function computeBusySnapshot(state: PanelState): BusySnapshot {
   const busy: string[] = [];
+  const indexedIds: string[] = [];
   for (const [worktreeId, panelIds] of Object.entries(state.panelIdsByWorktreeId)) {
     if (worktreeId === NO_WORKTREE) continue;
+    let isBusy = false;
     for (const id of panelIds) {
-      const panel = state.panelsById[id];
-      if (!panel || !isPtyPanel(panel)) continue;
-      if (panel.location === "trash") continue;
-      if (panel.agentState === "working" || panel.agentState === "directing") {
-        busy.push(worktreeId);
-        break;
-      }
+      indexedIds.push(id);
+      if (!isBusy && isBusyPanel(state.panelsById[id])) isBusy = true;
     }
+    if (isBusy) busy.push(worktreeId);
   }
-  return busy.sort();
+  busy.sort();
+  return {
+    panelsById: state.panelsById,
+    panelIdsByWorktreeId: state.panelIdsByWorktreeId,
+    indexedIds,
+    ids: busy,
+    key: JSON.stringify(busy),
+  };
+}
+
+// The busy set depends only on the worktree index and each indexed panel's
+// busy bit, so a write that replaces panel records (headline, focus stamp)
+// without flipping a bit keeps the previous set — and its key.
+function busyInputsUnchanged(prev: BusySnapshot, state: PanelState): boolean {
+  if (prev.panelIdsByWorktreeId !== state.panelIdsByWorktreeId) return false;
+  const { panelsById } = state;
+  if (prev.panelsById === panelsById) return true;
+  for (const id of prev.indexedIds) {
+    const panel = panelsById[id];
+    const prevPanel = prev.panelsById[id];
+    if (panel !== prevPanel && isBusyPanel(panel) !== isBusyPanel(prevPanel)) return false;
+  }
+  return true;
 }
 
 /**
@@ -74,6 +110,17 @@ export function useAgentActivityBroadcast(): void {
     // deactivation's settle window and starve the send.
     let pendingKey: string | null = null;
     let disposed = false;
+    let busy: BusySnapshot | null = null;
+
+    const readBusy = (): BusySnapshot => {
+      const state = usePanelStore.getState();
+      if (busy && busyInputsUnchanged(busy, state)) {
+        busy.panelsById = state.panelsById;
+        return busy;
+      }
+      busy = computeBusySnapshot(state);
+      return busy;
+    };
 
     const clearTimer = () => {
       if (timer) {
@@ -87,8 +134,7 @@ export function useAgentActivityBroadcast(): void {
     const send = () => {
       clearTimer();
       if (disposed) return;
-      const ids = computeBusyWorktreeIds();
-      const key = JSON.stringify(ids);
+      const { ids, key } = readBusy();
       if (key === lastSentKey) return;
       lastSentKey = key;
       window.electron.worktreePort.request("set-agent-activity", { worktreeIds: ids }).catch(() => {
@@ -130,8 +176,7 @@ export function useAgentActivityBroadcast(): void {
         clearTimer();
         return;
       }
-      const ids = computeBusyWorktreeIds();
-      const key = JSON.stringify(ids);
+      const { ids, key } = readBusy();
       if (key === lastSentKey) {
         clearTimer();
         return;

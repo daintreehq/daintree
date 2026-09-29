@@ -711,6 +711,72 @@ describe("useGettingStartedChecklist", () => {
       expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("openedProject");
     });
   });
+
+  // Record writes that keep `panelIds` by reference re-examine only the
+  // replaced records against the previous scan.
+  describe("record writes with stable panel membership", () => {
+    const panelIds = ["t1", "t2"];
+
+    async function mount() {
+      renderHook(() => useGettingStartedChecklist(true));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    }
+
+    function fire(panelsById: Record<string, TerminalLike>) {
+      const prev = terminalState;
+      terminalState = { panelsById, panelIds, focusedId: null };
+      act(() => {
+        for (const sub of terminalSubscribers) sub(terminalState, prev);
+      });
+    }
+
+    it("marks launchedAgent when a replaced record gains an agent id", async () => {
+      await mount();
+      const t1 = { id: "t1", kind: "terminal" };
+      fire({ t1, t2: { id: "t2", kind: "terminal" } });
+      expect(onboardingMock.markChecklistItem).not.toHaveBeenCalledWith("launchedAgent");
+
+      fire({ t1, t2: { id: "t2", kind: "terminal", detectedAgentId: "claude" } });
+      expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("launchedAgent");
+    });
+
+    it("marks ranSecondParallelAgent once a second replaced record turns active", async () => {
+      await mount();
+      const idle = (id: string) => ({
+        id,
+        kind: "terminal",
+        launchAgentId: "claude",
+        agentState: "idle",
+      });
+      const working = (id: string) => ({ ...idle(id), agentState: "working" });
+
+      fire({ t1: idle("t1"), t2: idle("t2") });
+      const t1 = working("t1");
+      fire({ t1, t2: idle("t2") });
+      expect(onboardingMock.markChecklistItem).not.toHaveBeenCalledWith("ranSecondParallelAgent");
+
+      fire({ t1, t2: working("t2") });
+      expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("ranSecondParallelAgent");
+    });
+
+    it("drops an active record that left panelsById from the count", async () => {
+      await mount();
+      const idle = (id: string) => ({
+        id,
+        kind: "terminal",
+        launchAgentId: "claude",
+        agentState: "idle",
+      });
+      const working = (id: string) => ({ ...idle(id), agentState: "working" });
+
+      fire({ t1: working("t1"), t2: idle("t2") });
+      fire({ t2: working("t2") });
+
+      expect(onboardingMock.markChecklistItem).not.toHaveBeenCalledWith("ranSecondParallelAgent");
+    });
+  });
 });
 
 interface ChecklistStateLike {

@@ -50,6 +50,18 @@ function setPanels(
   storeListeners.forEach((cb) => cb());
 }
 
+// Replaces one record while keeping the worktree index by reference — the
+// shape of an agent-state or headline write in the real store.
+function replacePanel(id: string, patch: Partial<StubPanel>): void {
+  const panel = storeState.panelsById[id];
+  if (!panel) throw new Error(`no panel ${id}`);
+  storeState = {
+    ...storeState,
+    panelsById: { ...storeState.panelsById, [id]: { ...panel, ...patch } },
+  };
+  storeListeners.forEach((cb) => cb());
+}
+
 const requestMock = vi.fn(() => Promise.resolve({ ok: true as const }));
 let readyCallback: (() => void) | null = null;
 // Project-view lifecycle channels, driven through the real `viewCacheState`.
@@ -553,6 +565,71 @@ describe("useAgentActivityBroadcast", () => {
       });
 
       expect(requestMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("record writes with a stable worktree index", () => {
+    it("sends when a replaced record flips busy, after headline-only writes", async () => {
+      renderHook(() => useAgentActivityBroadcast());
+      act(() => {
+        setPanels([
+          { worktreeId: "/wt/a", agentState: "working" },
+          { worktreeId: "/wt/b", agentState: "idle" },
+          { worktreeId: "/wt/b", agentState: "idle" },
+        ]);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      expect(requestMock).toHaveBeenCalledTimes(1);
+
+      act(() => replacePanel("panel-1", { location: "grid" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(requestMock).toHaveBeenCalledTimes(1);
+
+      act(() => replacePanel("panel-2", { agentState: "working" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      expect(requestMock).toHaveBeenCalledTimes(2);
+      expect(requestMock).toHaveBeenLastCalledWith("set-agent-activity", {
+        worktreeIds: ["/wt/a", "/wt/b"],
+      });
+
+      act(() => replacePanel("panel-0", { agentState: "idle" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(requestMock).toHaveBeenLastCalledWith("set-agent-activity", {
+        worktreeIds: ["/wt/b"],
+      });
+    });
+
+    it("does not reset a pending deactivation settle on unrelated record writes", async () => {
+      renderHook(() => useAgentActivityBroadcast());
+      act(() => {
+        setPanels([
+          { worktreeId: "/wt/a", agentState: "working" },
+          { worktreeId: "/wt/b", agentState: "idle" },
+        ]);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250);
+      });
+
+      act(() => replacePanel("panel-0", { agentState: "idle" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4_000);
+      });
+      act(() => replacePanel("panel-1", { location: "grid" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+
+      expect(requestMock).toHaveBeenCalledTimes(2);
+      expect(requestMock).toHaveBeenLastCalledWith("set-agent-activity", { worktreeIds: [] });
     });
   });
 });
