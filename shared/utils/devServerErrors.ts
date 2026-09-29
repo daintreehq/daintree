@@ -61,6 +61,44 @@ const COMPILE_ERROR_PATTERNS = [
 
 const PERMISSION_ERROR_PATTERNS = [/EACCES/, /permission denied/i, /EPERM/];
 
+/** Every pattern detectDevServerError can report from, for the trigger contract below. */
+export const DEV_SERVER_ERROR_PATTERNS: readonly RegExp[] = [
+  ...PORT_ERROR_PATTERNS,
+  ...DEPENDENCY_ERROR_PATTERNS,
+  ...COMPILE_ERROR_PATTERNS,
+  ...PERMISSION_ERROR_PATTERNS,
+];
+
+/**
+ * Case-insensitive literals of which every pattern above contains at least one,
+ * so `detectDevServerError` returns null for text containing none of them.
+ * UrlDetector uses this to skip re-running the patterns over its whole buffer
+ * once the last trigger has scrolled out — add a literal for any new pattern.
+ * The auto-retry guard needs none: it only ever suppresses a port match.
+ */
+export const DEV_SERVER_ERROR_TRIGGERS = [
+  "eaddrinuse",
+  "already in use",
+  "already running",
+  "is in use",
+  "cannot find module",
+  "module_not_found",
+  "cannot find package",
+  "npm err! missing",
+  "the module '",
+  "enoent",
+  "build failed with",
+  "compilation failed",
+  "failed to compile",
+  "module build failed",
+  "unable to resolve module",
+  "could not resolve",
+  "error ts",
+  "eacces",
+  "permission denied",
+  "eperm",
+];
+
 export function detectDevServerError(output: string): DevServerError | null {
   // Check for port conflicts first (most specific)
   const autoRetryPortMessage = /port .* in use.*trying another/i.test(output);
