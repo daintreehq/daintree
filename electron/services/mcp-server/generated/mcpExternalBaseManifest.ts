@@ -262,7 +262,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         model: {
           description:
-            "Model name in the agent CLI's own terms; an unknown one fails when the CLI starts.",
+            "Model passed to the agent CLI for this launch, in its own names. No preset needed.",
           type: "string",
         },
         presetId: {
@@ -295,7 +295,8 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "boolean",
         },
         agentLaunchFlags: {
-          description: "Extra CLI flags passed verbatim; bad ones fail when the CLI starts.",
+          description:
+            'Extra CLI flags for this launch, verbatim, e.g. Codex effort ["-c", "model_reasoning_effort=high"]. Bad ones fail at CLI start.',
           type: "array",
           items: {
             type: "string",
@@ -330,7 +331,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       },
       required: ["agentId"],
     },
-    keywords: ["spawn", "start", "run", "new", "agents", "task"],
+    keywords: ["spawn", "start", "run", "new", "agents", "task", "model", "effort", "reasoning"],
     kind: "command",
     name: "agent.launch",
     outputSchema: {
@@ -511,7 +512,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "agent",
     danger: "safe",
     description:
-      "List one agent's launch presets, merged across user settings, repository preset files and CCR discovery as the launcher does, so every id is launchable. Identity only: no env or flags. A false completeness flag means a source is still loading.",
+      "List one agent's launchable presets, merged from user settings, repository preset files and CCR as the launcher does. Identity only, no env or flags; a launch can set model and flags without one. A false completeness flag means a source is loading.",
     enabled: true,
     examples: [
       {

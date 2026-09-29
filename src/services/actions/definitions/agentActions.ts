@@ -361,7 +361,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    keywords: ["spawn", "start", "run", "new", "agents", "task"],
+    keywords: ["spawn", "start", "run", "new", "agents", "task", "model", "effort", "reasoning"],
     argsSchema: z.object({
       agentId: AgentIdSchema,
       location: LaunchLocationSchema.optional(),
@@ -406,7 +406,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .string()
         .optional()
         .describe(
-          "Model name in the agent CLI's own terms; an unknown one fails when the CLI starts."
+          "Model passed to the agent CLI for this launch, in its own names. No preset needed."
         ),
       presetId: z
         .string()
@@ -438,7 +438,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       agentLaunchFlags: z
         .array(z.string())
         .optional()
-        .describe("Extra CLI flags passed verbatim; bad ones fail when the CLI starts."),
+        .describe(
+          'Extra CLI flags for this launch, verbatim, e.g. Codex effort ["-c", "model_reasoning_effort=high"]. Bad ones fail at CLI start.'
+        ),
       spawnedBy: TerminalSpawnSourceSchema.optional(),
       focusPolicy: AddPanelFocusPolicySchema.optional(),
       requestedId: z
@@ -1603,7 +1605,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.listPresets",
     title: "List agent presets",
     description:
-      "List one agent's launch presets, merged across user settings, repository preset files and CCR discovery as the launcher does, so every id is launchable. Identity only: no env or flags. A false completeness flag means a source is still loading.",
+      "List one agent's launchable presets, merged from user settings, repository preset files and CCR as the launcher does. Identity only, no env or flags; a launch can set model and flags without one. A false completeness flag means a source is loading.",
     category: "agent",
     kind: "query",
     danger: "safe",
