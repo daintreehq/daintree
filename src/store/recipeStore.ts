@@ -48,6 +48,7 @@ import type { AgentCliDetail } from "@shared/types/ipc";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
 import { isInRepoRecipeId, safeRecipeFilename } from "@shared/utils/recipeFilename";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { deepEqualIgnoringUndefined } from "@shared/utils/layoutMerge";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -211,7 +212,12 @@ interface RecipeState {
   isLoading: boolean;
   currentProjectId: string | null;
 
-  loadRecipes: (projectId: string) => Promise<void>;
+  /**
+   * `background` marks a silent refresh of an already-loaded project (window
+   * focus): it leaves `isLoading` alone and skips re-raising an unchanged
+   * collision notice.
+   */
+  loadRecipes: (projectId: string, options?: { background?: boolean }) => Promise<void>;
   /** Replace the plugin tier wholesale from main's authoritative snapshot. */
   setPluginRecipes: (recipes: TerminalRecipe[]) => void;
   exportRecipeToFile: (id: string) => Promise<boolean>;
@@ -329,6 +335,11 @@ function clearRecipeToolbarPin(recipe: TerminalRecipe, currentProjectId: string 
 }
 
 let loadRecipesRequestId = 0;
+const lastCollisionSignatureByProject = new Map<string, string>();
+
+function reuseIfEqual<T>(previous: T, next: T): T {
+  return deepEqualIgnoringUndefined(previous, next) ? previous : next;
+}
 
 /**
  * Flatten the four recipe tiers into the list the UI renders.
@@ -396,25 +407,28 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }));
   },
 
-  loadRecipes: async (projectId: string) => {
+  loadRecipes: async (projectId: string, options?: { background?: boolean }) => {
     const requestId = ++loadRecipesRequestId;
     const previousProjectId = get().currentProjectId;
     const clearRecipes = previousProjectId && previousProjectId !== projectId;
-    set({
-      isLoading: true,
-      currentProjectId: projectId,
-      // The plugin tier is intentionally absent from this reset: it is global,
-      // owned by the plugin hook, and re-fetching it per project switch would
-      // make every switch flash plugin recipes out of the list (#11860).
-      ...(clearRecipes
-        ? {
-            recipes: mergeRecipes([], [], [], get().pluginRecipes),
-            globalRecipes: [],
-            projectRecipes: [],
-            inRepoRecipes: [],
-          }
-        : {}),
-    });
+    const background = options?.background === true && previousProjectId === projectId;
+    if (!background) {
+      set({
+        isLoading: true,
+        currentProjectId: projectId,
+        // The plugin tier is intentionally absent from this reset: it is global,
+        // owned by the plugin hook, and re-fetching it per project switch would
+        // make every switch flash plugin recipes out of the list (#11860).
+        ...(clearRecipes
+          ? {
+              recipes: mergeRecipes([], [], [], get().pluginRecipes),
+              globalRecipes: [],
+              projectRecipes: [],
+              inRepoRecipes: [],
+            }
+          : {}),
+      });
+    }
     try {
       const [globalRecipesRaw, projectRecipesResult, inRepoRecipesRaw] = await Promise.all([
         // Degrade each source independently: a transient read failure in one
@@ -446,20 +460,47 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         if (!mirror) return r;
         return { ...r, lastUsedAt: mirror.lastUsedAt, usageHistory: mirror.usageHistory };
       });
-      set({
-        globalRecipes,
-        projectRecipes,
-        inRepoRecipes,
-        recipes: mergeRecipes(globalRecipes, projectRecipes, inRepoRecipes, get().pluginRecipes),
-        isLoading: false,
-      });
+      // Focus reloads usually read back exactly what is already in memory.
+      // Keep the existing array identities when the content is unchanged so
+      // every `recipes` subscriber doesn't re-render for a no-op refresh.
+      const prev = get();
+      const nextGlobal = reuseIfEqual(prev.globalRecipes, globalRecipes);
+      const nextProject = reuseIfEqual(prev.projectRecipes, projectRecipes);
+      const nextInRepo = reuseIfEqual(prev.inRepoRecipes, inRepoRecipes);
+      const nextRecipes = reuseIfEqual(
+        prev.recipes,
+        mergeRecipes(nextGlobal, nextProject, nextInRepo, prev.pluginRecipes)
+      );
+      if (
+        nextGlobal !== prev.globalRecipes ||
+        nextProject !== prev.projectRecipes ||
+        nextInRepo !== prev.inRepoRecipes ||
+        nextRecipes !== prev.recipes ||
+        prev.isLoading
+      ) {
+        set({
+          globalRecipes: nextGlobal,
+          projectRecipes: nextProject,
+          inRepoRecipes: nextInRepo,
+          recipes: nextRecipes,
+          isLoading: false,
+        });
+      }
       // A recipe couldn't be promoted to the shared repo because a different
       // recipe already owns its filename slug. Route to the inbox (low
       // priority, project-scoped supersede) instead of a console-only log:
       // it's a non-urgent, ignorable conflict whose fix (rename) lives in the
       // recipe manager, so the least-restricted surface is correct.
       const collisions = projectRecipesResult.collisions;
+      const collisionSignature = JSON.stringify(collisions);
+      const collisionsUnchanged =
+        lastCollisionSignatureByProject.get(projectId) === collisionSignature;
       if (collisions.length > 0) {
+        lastCollisionSignatureByProject.set(projectId, collisionSignature);
+      } else {
+        lastCollisionSignatureByProject.delete(projectId);
+      }
+      if (collisions.length > 0 && !(background && collisionsUnchanged)) {
         const first = collisions[0]!;
         notify({
           type: "warning",
@@ -1544,7 +1585,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       .map(terminalToRecipeTerminal);
   },
 
-  reset: () =>
+  reset: () => {
+    lastCollisionSignatureByProject.clear();
     set({
       recipes: [],
       globalRecipes: [],
@@ -1553,7 +1595,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       pluginRecipes: [],
       isLoading: false,
       currentProjectId: null,
-    }),
+    });
+  },
 });
 
 export const useRecipeStore = create<RecipeState>()(createRecipeStore);

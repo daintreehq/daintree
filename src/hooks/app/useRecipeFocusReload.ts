@@ -37,7 +37,7 @@ export function useRecipeFocusReload(): void {
       lastFiredRef.current = now;
       const projectId = useRecipeStore.getState().currentProjectId;
       if (!projectId) return;
-      void useRecipeStore.getState().loadRecipes(projectId);
+      void useRecipeStore.getState().loadRecipes(projectId, { background: true });
     };
 
     const handleFocus = () => trigger();
