@@ -14,7 +14,8 @@ export type ResizeHandleEdge = "left" | "left-inset" | "right" | "top" | "inline
 
 const EDGE_CLASS: Record<Exclude<ResizeHandleEdge, "inline">, string> = {
   left: "absolute inset-y-0 -left-1.5 w-3",
-  "left-inset": "absolute inset-y-0 left-0 w-3 justify-start",
+  // The grip steps inside the 2px inset outline on focus rather than vanish under it.
+  "left-inset": "absolute inset-y-0 left-0 w-3 justify-start focus-visible:pl-0.5",
   right: "absolute inset-y-0 -right-1.5 w-3",
   top: "absolute inset-x-0 top-0 h-3",
 };
