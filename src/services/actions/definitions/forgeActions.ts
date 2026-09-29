@@ -206,12 +206,7 @@ const ForgePRResultSchema = z.object({
     .string()
     .optional()
     .describe("Roll-up head-commit CI state: success, failure, pending, neutral or unknown"),
-  mergeState: z
-    .string()
-    .optional()
-    .describe(
-      "conflicts when the forge reported the head conflicts with the base branch; absent when nothing was reported"
-    ),
+  mergeState: z.string().optional(),
   commentCount: z.number().optional(),
   createdAt: z.number().optional(),
   updatedAt: z.number().optional(),
