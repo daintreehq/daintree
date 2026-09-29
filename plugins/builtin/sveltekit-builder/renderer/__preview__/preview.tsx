@@ -104,6 +104,7 @@ function MockSite() {
           ].map((plan, index) => (
             <div
               key={plan.name}
+              // eslint-disable-next-line component-contract/no-raw-shadow -- mocks the user's own SvelteKit page, not Daintree chrome
               className="rounded-xl border border-[#e2e8f0] bg-white p-5 shadow-sm"
             >
               <p className="text-sm font-semibold">{plan.name}</p>

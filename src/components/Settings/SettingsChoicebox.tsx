@@ -38,7 +38,8 @@ interface SettingsChoiceboxProps<T extends string = string> extends Omit<
 const CARD_BASE_CLASSES =
   "flex-1 px-3 py-2 rounded-[var(--radius-md)] border text-sm text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
 
-const CARD_SELECTED_CLASSES = "border-border-strong bg-overlay-subtle text-text-primary shadow-sm";
+const CARD_SELECTED_CLASSES =
+  "border-border-strong bg-overlay-subtle text-text-primary shadow-[var(--theme-shadow-ambient)]";
 
 const CARD_UNSELECTED_CLASSES =
   "border-border-default bg-surface-canvas text-text-secondary hover:border-daintree-text/30 hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-border-default disabled:hover:text-text-secondary";

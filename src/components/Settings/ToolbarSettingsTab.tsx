@@ -1089,7 +1089,7 @@ export function ToolbarSettingsTab() {
           </div>
           <DragOverlay dropAnimation={dropAnimation}>
             {activeId && activeMetadata ? (
-              <SettingsGroup className="shadow-md cursor-grabbing">
+              <SettingsGroup className="shadow-[var(--theme-shadow-floating)] cursor-grabbing">
                 <ToolbarButtonCard
                   buttonId={activeId}
                   metadata={activeMetadata}
