@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockExecaChildren, type ChildBehaviour } from "./helpers/editorChild.js";
 
 const fsMock = vi.hoisted(() => ({
-  statSync: vi.fn<(path: string) => { isFile: () => boolean }>(),
-  accessSync: vi.fn<(path: string, mode?: number) => void>(),
+  promises: {
+    stat: vi.fn<(path: string) => Promise<{ isFile: () => boolean }>>(),
+    access: vi.fn<(path: string, mode?: number) => Promise<void>>(),
+  },
   constants: { X_OK: 1 },
 }));
 
@@ -48,13 +50,13 @@ describe("EditorService.discover", () => {
 
   function mockExistingFiles(paths: string[]) {
     const pathSet = new Set(paths);
-    fsMock.statSync.mockImplementation((filePath: string) => {
+    fsMock.promises.stat.mockImplementation(async (filePath: string) => {
       if (pathSet.has(filePath)) {
         return { isFile: () => true };
       }
       throw new Error("ENOENT");
     });
-    fsMock.accessSync.mockImplementation((filePath: string) => {
+    fsMock.promises.access.mockImplementation(async (filePath: string) => {
       if (pathSet.has(filePath)) return;
       throw new Error("EACCES");
     });
@@ -70,7 +72,7 @@ describe("EditorService.discover", () => {
     mockExistingFiles(["/Applications/WebStorm.app/Contents/MacOS/webstorm"]);
 
     const discover = await loadDiscover();
-    const results = discover();
+    const results = await discover();
     const webstorm = results.find((e) => e.id === "webstorm");
 
     expect(webstorm).toBeDefined();
@@ -83,7 +85,7 @@ describe("EditorService.discover", () => {
     mockExistingFiles(["/Applications/IntelliJ IDEA.app/Contents/MacOS/idea"]);
 
     const discover = await loadDiscover();
-    const results = discover();
+    const results = await discover();
     const webstorm = results.find((e) => e.id === "webstorm");
 
     expect(webstorm).toBeDefined();
@@ -96,7 +98,7 @@ describe("EditorService.discover", () => {
     mockExistingFiles(["/Users/testuser/Applications/IntelliJ IDEA.app/Contents/MacOS/idea"]);
 
     const discover = await loadDiscover();
-    const results = discover();
+    const results = await discover();
     const webstorm = results.find((e) => e.id === "webstorm");
 
     expect(webstorm).toBeDefined();
@@ -106,6 +108,100 @@ describe("EditorService.discover", () => {
     );
   });
 
+  // Probes run concurrently, so completion order is arbitrary; the pick must
+  // still be the one a sequential walk makes.
+  it("keeps binary-then-directory precedence when a lower-priority probe settles first", async () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    process.env.PATH = "/slow/bin:/fast/bin";
+    const present = new Set(["/slow/bin/idea", "/fast/bin/idea", "/fast/bin/webstorm"]);
+    fsMock.promises.stat.mockImplementation(async (filePath: string) => {
+      if (filePath.startsWith("/slow/")) await new Promise((r) => setTimeout(r, 20));
+      if (present.has(filePath)) return { isFile: () => true };
+      throw new Error("ENOENT");
+    });
+    fsMock.promises.access.mockImplementation(async () => {});
+
+    const discover = await loadDiscover();
+    const results = await discover();
+
+    expect(results.find((e) => e.id === "webstorm")!.executablePath).toBe("/fast/bin/webstorm");
+
+    present.delete("/fast/bin/webstorm");
+    const second = await discover();
+    expect(second.find((e) => e.id === "webstorm")!.executablePath).toBe("/slow/bin/idea");
+  });
+
+  it("skips a directory match and a non-executable file for the next candidate", async () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    process.env.PATH = "/a:/b:/c";
+    fsMock.promises.stat.mockImplementation(async (filePath: string) => {
+      if (filePath === "/a/code") return { isFile: () => false };
+      if (filePath === "/b/code" || filePath === "/c/code") return { isFile: () => true };
+      throw new Error("ENOENT");
+    });
+    fsMock.promises.access.mockImplementation(async (filePath: string) => {
+      if (filePath === "/b/code") throw new Error("EACCES");
+    });
+
+    const discover = await loadDiscover();
+    const results = await discover();
+
+    expect(results.find((e) => e.id === "vscode")!.executablePath).toBe("/c/code");
+    expect(fsMock.promises.access).not.toHaveBeenCalledWith("/a/code", expect.anything());
+  });
+
+  it("never has more than two probes in flight, across editors", async () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    process.env.PATH = Array.from({ length: 8 }, (_, i) => `/p${i}`).join(":");
+    let inFlight = 0;
+    let peak = 0;
+    fsMock.promises.stat.mockImplementation(async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 1));
+      inFlight--;
+      throw new Error("ENOENT");
+    });
+
+    const discover = await loadDiscover();
+    const results = await discover();
+
+    expect(results.every((e) => !e.available)).toBe(true);
+    expect(peak).toBe(2);
+  });
+
+  it("stops at the first match without probing the candidates behind it", async () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    process.env.PATH = Array.from({ length: 20 }, (_, i) => `/p${i}`).join(":");
+    mockExistingFiles(["/p0/code"]);
+
+    const discover = await loadDiscover();
+    const results = await discover();
+
+    expect(results.find((e) => e.id === "vscode")!.executablePath).toBe("/p0/code");
+    const vscodeProbes = fsMock.promises.stat.mock.calls.filter(([p]) => p.endsWith("/code"));
+    expect(vscodeProbes).toEqual([["/p0/code"]]);
+  });
+
+  it("keeps directory-then-PATHEXT order on win32 without an X_OK check", async () => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    process.env.PATH = "C:\\one;C:\\two";
+    const originalPATHEXT = process.env.PATHEXT;
+    process.env.PATHEXT = ".COM;.EXE;.CMD";
+    mockExistingFiles(["C:\\two\\code.com", "C:\\one\\code.cmd"]);
+
+    try {
+      const discover = await loadDiscover();
+      const results = await discover();
+
+      expect(results.find((e) => e.id === "vscode")!.executablePath).toBe("C:\\one\\code.cmd");
+      expect(fsMock.promises.access).not.toHaveBeenCalled();
+    } finally {
+      if (originalPATHEXT === undefined) delete process.env.PATHEXT;
+      else process.env.PATHEXT = originalPATHEXT;
+    }
+  });
+
   it("still discovers JetBrains IDE via Toolbox on macOS", async () => {
     Object.defineProperty(process, "platform", { value: "darwin" });
     const toolboxPath =
@@ -113,7 +209,7 @@ describe("EditorService.discover", () => {
     mockExistingFiles([toolboxPath]);
 
     const discover = await loadDiscover();
-    const results = discover();
+    const results = await discover();
     const webstorm = results.find((e) => e.id === "webstorm");
 
     expect(webstorm).toBeDefined();
@@ -126,7 +222,7 @@ describe("EditorService.discover", () => {
     mockExistingFiles(["/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"]);
 
     const discover = await loadDiscover();
-    const results = discover();
+    const results = await discover();
     const vscode = results.find((e) => e.id === "vscode");
 
     expect(vscode).toBeDefined();
@@ -141,7 +237,7 @@ describe("EditorService.discover", () => {
     mockExistingFiles(["/Applications/Sublime Text.app/Contents/SharedSupport/bin/subl"]);
 
     const discover = await loadDiscover();
-    const results = discover();
+    const results = await discover();
     const sublime = results.find((e) => e.id === "sublime");
 
     expect(sublime).toBeDefined();
@@ -158,7 +254,7 @@ describe("EditorService.discover", () => {
     ]);
 
     const discover = await loadDiscover();
-    const results = discover();
+    const results = await discover();
     const antigravity = results.find((e) => e.id === "antigravity-ide");
 
     expect(antigravity).toBeDefined();
@@ -175,7 +271,7 @@ describe("EditorService.discover", () => {
     ]);
 
     const discover = await loadDiscover();
-    const results = discover();
+    const results = await discover();
     const antigravity = results.find((e) => e.id === "antigravity-ide");
 
     expect(antigravity).toBeDefined();
@@ -191,7 +287,7 @@ describe("EditorService.discover", () => {
     mockExistingFiles(["/usr/local/bin/antigravity-ide"]);
 
     const discover = await loadDiscover();
-    const results = discover();
+    const results = await discover();
     const antigravity = results.find((e) => e.id === "antigravity-ide");
 
     expect(antigravity).toBeDefined();
@@ -204,7 +300,7 @@ describe("EditorService.discover", () => {
     mockExistingFiles(["/Applications/WebStorm.app/Contents/MacOS/webstorm"]);
 
     const discover = await loadDiscover();
-    const results = discover();
+    const results = await discover();
     const webstorm = results.find((e) => e.id === "webstorm");
 
     expect(webstorm).toBeDefined();
@@ -216,7 +312,7 @@ describe("EditorService.discover", () => {
     mockExistingFiles(["/Applications/CLion.app/Contents/MacOS/clion"]);
 
     const discover = await loadDiscover();
-    const results = discover();
+    const results = await discover();
     const webstorm = results.find((e) => e.id === "webstorm");
 
     expect(webstorm).toBeDefined();
@@ -230,7 +326,7 @@ describe("EditorService.discover", () => {
     mockExistingFiles(["/usr/local/bin/code"]);
 
     const discover = await loadDiscover();
-    const results = discover();
+    const results = await discover();
     const vscode = results.find((e) => e.id === "vscode");
 
     expect(vscode).toBeDefined();
@@ -243,7 +339,7 @@ describe("EditorService.discover", () => {
     mockExistingFiles(["/Applications/PyCharm.app/Contents/MacOS/pycharm"]);
 
     const discover = await loadDiscover();
-    const results = discover();
+    const results = await discover();
     const webstorm = results.find((e) => e.id === "webstorm");
 
     expect(webstorm).toBeDefined();
@@ -256,7 +352,7 @@ describe("EditorService.discover", () => {
     mockExistingFiles([]);
 
     const discover = await loadDiscover();
-    const results = discover();
+    const results = await discover();
 
     expect(results.length).toBeGreaterThan(0);
     for (const editor of results) {
@@ -296,10 +392,10 @@ describe("EditorService.openFile", () => {
     process.env.PATH = "";
     delete process.env.VISUAL;
     delete process.env.EDITOR;
-    fsMock.statSync.mockImplementation(() => {
+    fsMock.promises.stat.mockImplementation(async () => {
       throw new Error("ENOENT");
     });
-    fsMock.accessSync.mockImplementation(() => {
+    fsMock.promises.access.mockImplementation(async () => {
       throw new Error("EACCES");
     });
   });
