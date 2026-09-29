@@ -1553,7 +1553,7 @@ export function FileBrowserPane({
             above the rows its arrival would shift them under a click in
             progress. */}
         {rootError !== null && (
-          <div className="shrink-0 border-t border-border-default p-2">
+          <div className="shrink-0 border-t border-divider p-2">
             <InlineStatusBanner
               severity="error"
               icon={FolderTree}
