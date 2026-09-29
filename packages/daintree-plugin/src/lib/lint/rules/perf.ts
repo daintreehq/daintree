@@ -30,8 +30,8 @@ const undebouncedSubscription: LintRule = {
   id: "undebounced-worktree-subscription",
   severity: "warn",
   appliesTo: "any",
-  message: "subscription without debounceMs delivers every event in a burst",
-  hint: "pass { debounceMs: 200 }, or debounceMs: 0 to say you want every event — the worktree list re-emits on every git-status poll and a watch fires per write",
+  message: "host fs.watch without debounceMs delivers every write in a burst",
+  hint: "pass { debounceMs: 200 }, or debounceMs: 0 to say you want every event — a watch fires once per write. (Worktree, active-worktree and agent-state subscriptions already coalesce by default.)",
   check(file) {
     const hits: RuleHit[] = [];
     const inspect = (open: number, at: number, index: number, name: string) => {
@@ -46,9 +46,6 @@ const undebouncedSubscription: LintRule = {
         message: `${name} without debounceMs delivers every event in a burst`,
       });
     };
-    for (const m of file.masked.matchAll(/\bonDidChangeWorktrees\s*\(/g)) {
-      inspect(m.index + m[0].length - 1, m.index, 1, "onDidChangeWorktrees");
-    }
     const nodeFs = NODE_FS_IMPORT.test(file.code);
     for (const m of file.masked.matchAll(/(\.\s*)?\bfs\s*\.\s*watch\s*\(/g)) {
       // A bare `fs.watch` in a file importing Node's fs is Node's, which has no debounceMs.

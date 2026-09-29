@@ -112,7 +112,10 @@ export type PluginHostNotifyMethod =
   // `write`/`resize` are void in the public handle contract, so there is no
   // reply for the worker to await.
   | "process.write"
-  | "process.resize";
+  | "process.resize"
+  // A push the worker refused before it crossed the port (over the size cap,
+  // or not clonable), reported so main's metrics count it. Carries no payload.
+  | "pushRejected";
 
 /**
  * Event subscriptions the worker proxy can open against the host. The

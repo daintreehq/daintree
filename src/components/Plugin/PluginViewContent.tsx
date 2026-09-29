@@ -57,6 +57,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { actionService } from "@/services/ActionService";
 import {
+  generationOfViewUrl,
   measurePluginViewPhase,
   pluginViewMetrics,
   type PluginViewPhase,
@@ -319,6 +320,10 @@ export function makePluginViewContent(
     name: displayName,
     standalone = false,
   } = config;
+  // The load this factory's views belong to. Every observation carries it, so
+  // one a replaced load's view makes after its successor mounted is dropped
+  // instead of being counted against the new load.
+  const viewGeneration = generationOfViewUrl(componentPath);
 
   // Defined once per content factory, not inline in render: the boundary swaps
   // its fallback subtree whenever this component *type* changes identity, which
@@ -413,7 +418,7 @@ export function makePluginViewContent(
     _startTime,
     commitTime
   ) => {
-    pluginViewMetrics.recordCommit(pluginId, actualDuration, commitTime);
+    pluginViewMetrics.recordCommit(pluginId, actualDuration, commitTime, viewGeneration);
   };
 
   /**
@@ -620,15 +625,19 @@ export function makePluginViewContent(
             retry: timing.retry,
             firstPaintMs: roundMs(firstPaintMs),
           });
-          pluginViewMetrics.recordViewLoad(pluginId, {
-            kindId,
-            activateMs: roundMs(timing.activateMs),
-            importMs: roundMs(timing.importMs),
-            stylesMs: roundMs(timing.stylesMs),
-            firstPaintMs: roundMs(firstPaintMs),
-            retry: timing.retry,
-            at: Date.now(),
-          });
+          pluginViewMetrics.recordViewLoad(
+            pluginId,
+            {
+              kindId,
+              activateMs: roundMs(timing.activateMs),
+              importMs: roundMs(timing.importMs),
+              stylesMs: roundMs(timing.stylesMs),
+              firstPaintMs: roundMs(firstPaintMs),
+              retry: timing.retry,
+              at: Date.now(),
+            },
+            viewGeneration
+          );
         });
       });
       return () => {

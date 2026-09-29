@@ -2,7 +2,7 @@ import { ipcMain, type WebContents } from "electron";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { PLUGIN_METRICS_METHOD_CHANNELS } from "./pluginMetrics.preload.js";
-import { parseRendererMetricsReports } from "../../schemas/pluginMetrics.js";
+import { parseRendererMetricsEnvelopes } from "../../schemas/pluginMetrics.js";
 import type * as PluginServiceModule from "../../services/PluginService.js";
 import type { PluginMetricsService } from "../../services/plugin/PluginMetricsService.js";
 import type { PluginPerfSnapshot } from "../../../shared/types/pluginMetrics.js";
@@ -82,14 +82,17 @@ export function registerPluginMetricsHandlers(options?: {
     if (!allowReport(event.sender)) return;
     // Pinned synchronously: the sender's binding can change while the service loads.
     const senderProjectId = projectFor(event.sender.id);
-    const reports = parseRendererMetricsReports(payload).filter((report) =>
+    const envelopes = parseRendererMetricsEnvelopes(payload).filter(({ report }) =>
       visibleTo(report.pluginId, senderProjectId)
     );
-    if (reports.length === 0) return;
+    if (envelopes.length === 0) return;
     void resolveMetrics()
       .then((metrics) => {
-        // The service drops reports for plugins it has not loaded.
-        for (const report of reports) metrics.recordRendererReport(report);
+        // The service drops reports for plugins it has not loaded, and for a
+        // load other than the one currently live under that id.
+        for (const { generation, report } of envelopes) {
+          metrics.recordRendererReport(report, generation);
+        }
       })
       .catch(() => {
         // Metrics are best-effort; a failed load of the service is reported elsewhere.

@@ -54,6 +54,7 @@ import {
 } from "../PluginHostFactory.js";
 import { CHANNELS } from "../../../ipc/channels.js";
 import { flushPluginPushes, resetPluginPushBatcherForTests } from "../pluginPushBatcher.js";
+import { PLUGIN_PUSH_MAX_PAYLOAD_BYTES } from "../../../../shared/config/pluginBudgets.js";
 import { events } from "../../events.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { UNBOUND_PLUGIN_HOST_BINDING } from "../../../../shared/types/plugin.js";
@@ -1461,5 +1462,147 @@ describe("createHost subscriptions coalesce by default", () => {
     dispose();
     await vi.advanceTimersByTimeAsync(500);
     expect(callback).not.toHaveBeenCalled();
+  });
+});
+
+describe("coalesced subscriptions and the plugin's own lifetime", () => {
+  afterEach(() => {
+    events.removeAllListeners();
+    serviceRefsMock.getPtyClient.mockReset();
+    vi.useRealTimers();
+  });
+
+  /** What unload and activation rollback do: run the tracked cleanups, never the returned disposers. */
+  function runAutomaticCleanup(h: Harness): void {
+    const list = h.deps.pluginEventCleanups.get(PLUGIN_ID) ?? [];
+    h.deps.pluginEventCleanups.delete(PLUGIN_ID);
+    for (const dispose of [...list]) dispose();
+  }
+
+  function emitAgentTransition(): void {
+    events.emit("agent:state-changed", {
+      terminalId: "term-a",
+      state: "working",
+      previousState: "idle",
+      timestamp: 1,
+    } as never);
+  }
+
+  const subscriptions = [
+    {
+      name: "onDidChangeWorktrees",
+      subscribe: (host: ReturnType<typeof createHost>["host"], callback: () => void) =>
+        host.onDidChangeWorktrees(callback, { debounceMs: 300 }),
+      trigger: (h: Harness) => emit(h, "worktree-update", { projectPath: ROOT_A }),
+    },
+    {
+      name: "onDidChangeActiveWorktree",
+      subscribe: (host: ReturnType<typeof createHost>["host"], callback: () => void) =>
+        host.onDidChangeActiveWorktree(callback, { debounceMs: 300 }),
+      trigger: (h: Harness) => emit(h, "worktree-activated", { projectPath: ROOT_A }),
+    },
+    {
+      name: "onDidChangeAgentState",
+      subscribe: (host: ReturnType<typeof createHost>["host"], callback: () => void) =>
+        host.onDidChangeAgentState(callback, { debounceMs: 300 }),
+      trigger: () => emitAgentTransition(),
+    },
+  ];
+
+  it.each(subscriptions)(
+    "$name: automatic cleanup cancels a queued delivery before a same-id reload",
+    async ({ subscribe, trigger }) => {
+      vi.useFakeTimers();
+      serviceRefsMock.getPtyClient.mockReturnValue({
+        getTerminalProjectId: vi.fn(() => PROJECT_A),
+      });
+      const h = makeHarness();
+      h.ambientFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a", isCurrent: true })]));
+      const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+      const callback = vi.fn();
+      await subscribe(host, callback);
+
+      trigger(h);
+      runAutomaticCleanup(h);
+      // The same id loads again before the window closes.
+      h.plugins.set(PLUGIN_ID, fakePlugin());
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(callback).not.toHaveBeenCalled();
+      expect(h.ambientFetch).not.toHaveBeenCalled();
+      expect(h.deps.pluginEventCleanups.get(PLUGIN_ID)).toBeUndefined();
+    }
+  );
+
+  it.each(subscriptions)(
+    "$name: a queued delivery never reaches a closure a same-id reload replaced",
+    async ({ subscribe, trigger }) => {
+      vi.useFakeTimers();
+      serviceRefsMock.getPtyClient.mockReturnValue({
+        getTerminalProjectId: vi.fn(() => PROJECT_A),
+      });
+      const h = makeHarness();
+      h.ambientFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a", isCurrent: true })]));
+      const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+      const callback = vi.fn();
+      await subscribe(host, callback);
+
+      trigger(h);
+      // No cleanup ran at all: only the instance identity stands in the way.
+      h.plugins.set(PLUGIN_ID, fakePlugin());
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(callback).not.toHaveBeenCalled();
+    }
+  );
+
+  it("drops a worktree delivery whose read resolves after a same-id reload", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    await host.onDidChangeWorktrees(callback, { debounceMs: 0 });
+    let release: (() => void) | undefined;
+    h.ambientFetch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(okFetch([worktree({ id: "wt-a" })]));
+        })
+    );
+    emit(h, "worktree-update", { projectPath: ROOT_A });
+    await flush();
+    h.plugins.set(PLUGIN_ID, fakePlugin());
+    release?.();
+    await flush();
+    expect(callback).not.toHaveBeenCalled();
+  });
+});
+
+describe("createHost push rejections are metered", () => {
+  beforeEach(() => resetPluginPushBatcherForTests());
+
+  it("counts an oversize or uncloneable push at the host boundary, not an accepted one", async () => {
+    const h = makeHarness();
+    const recordPushRejected = vi.fn();
+    const deps = { ...h.deps, recordPushRejected } as PluginHostFactoryDeps;
+    const { host } = createHost(deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    await host.broadcastToRenderer("ok", { a: 1 });
+    expect(recordPushRejected).not.toHaveBeenCalled();
+
+    const huge = { blob: "x".repeat(PLUGIN_PUSH_MAX_PAYLOAD_BYTES + 1) };
+    expect(() => host.broadcastToRenderer("big", huge)).toThrow(/PLUGIN_PAYLOAD_TOO_LARGE/);
+    await expect(host.postToPanel("big", huge, "panel-1")).rejects.toThrow(
+      /PLUGIN_PAYLOAD_TOO_LARGE/
+    );
+    await expect(host.postToPanel("fn", { run: () => 1 }, "panel-1")).rejects.toThrow(
+      /PLUGIN_PAYLOAD_UNCLONEABLE/
+    );
+    expect(recordPushRejected).toHaveBeenCalledTimes(3);
+    expect(recordPushRejected).toHaveBeenCalledWith(PLUGIN_ID);
+
+    // A host a same-id reload replaced does not count against its successor.
+    h.plugins.set(PLUGIN_ID, fakePlugin());
+    expect(() => host.broadcastToRenderer("big", huge)).toThrow(/PLUGIN_PAYLOAD_TOO_LARGE/);
+    expect(recordPushRejected).toHaveBeenCalledTimes(3);
+    flushPluginPushes();
   });
 });

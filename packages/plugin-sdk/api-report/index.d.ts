@@ -5511,12 +5511,22 @@ interface SyncedCollectionSnapshot<T> {
  * consecutive, so a view that sees `revision` skip a number knows it missed a
  * delta. Apply in order: `reset` (clear everything), then `removes`, then
  * `upserts` — a key already present keeps its position, a new one is appended.
+ *
+ * A change set too large for one push is split across consecutive revisions,
+ * each applied like any other delta. One that cannot be split small enough (a
+ * single item over the limit) is replaced by a `resync` delta.
  */
 interface SyncedCollectionDelta<T> {
     epoch: string;
     revision: number;
     /** True when the collection was replaced wholesale; `upserts` then holds every item. */
     reset?: boolean;
+    /**
+     * True when the changes at this revision could not be pushed (too large):
+     * `removes` and `upserts` are empty, and a view holding an older revision
+     * pulls a fresh snapshot instead of applying it.
+     */
+    resync?: boolean;
     removes: string[];
     upserts: Array<[string, T]>;
 }
@@ -5531,6 +5541,14 @@ interface SyncedCollectionOptions<T> {
      * everything done in the same task.
      */
     flushMs?: number;
+    /**
+     * Largest delta sent in one push, estimated as JSON length. Default 512 KiB,
+     * half the host's 1 MiB push cap (`PLUGIN_PUSH_MAX_PAYLOAD_BYTES` in the
+     * host's `shared/config/pluginBudgets.ts`), leaving room for multi-byte text
+     * the estimate undercounts. Larger change sets are split across consecutive
+     * revisions; an item that alone exceeds it makes views resync instead.
+     */
+    maxDeltaBytes?: number;
 }
 /** A keyed collection a worker owns and plugin views mirror with `useSyncedCollection`. */
 interface SyncedCollection<T> {

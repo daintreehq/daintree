@@ -114,6 +114,74 @@ describe("@daintreehq/plugin-ui 1.1 lists", () => {
     expect(onSelect).toHaveBeenLastCalledWith(0);
   });
 
+  it("skips disabled rows and never selects one from the keyboard or a click", () => {
+    const onSelect = vi.fn();
+    const labels = ["Alpha", "Beta", "Bravo", "Charlie"];
+    const disabled = new Set([0, 1]);
+    let result: ReturnType<typeof kit.useListNavigation> | undefined;
+    function Picker() {
+      result = kit.useListNavigation({
+        count: labels.length,
+        onSelect,
+        getLabel: (i) => labels[i]!,
+        isDisabled: (i) => disabled.has(i),
+      });
+      return createElement(
+        "div",
+        { ...result.containerProps, "data-testid": "list" },
+        labels.map((label, i) =>
+          createElement(kit.ListRow, { key: label, ...result!.getRowProps(i), title: label })
+        )
+      );
+    }
+    render(createElement(Picker));
+    const list = screen.getByTestId("list");
+    const options = screen.getAllByRole("option");
+    expect(options[0]!.getAttribute("aria-disabled")).toBe("true");
+    expect(options[2]!.getAttribute("aria-disabled")).toBeNull();
+
+    // The initial index is disabled, so the cursor starts on the first enabled row.
+    expect(result?.activeIndex).toBe(2);
+    expect(list.getAttribute("aria-activedescendant")).toBe(options[2]!.id);
+    fireEvent.click(options[1]!);
+    expect(onSelect).not.toHaveBeenCalled();
+    act(() => result!.setActiveIndex(1));
+    expect(result?.activeIndex).toBe(2);
+    fireEvent.keyDown(list, { key: "ArrowDown" });
+    expect(result?.activeIndex).toBe(3);
+    fireEvent.keyDown(list, { key: "ArrowUp" });
+    expect(result?.activeIndex).toBe(2);
+    fireEvent.keyDown(list, { key: "ArrowUp" });
+    expect(result?.activeIndex).toBe(2);
+    fireEvent.keyDown(list, { key: "Home" });
+    expect(result?.activeIndex).toBe(2);
+    fireEvent.keyDown(list, { key: " " });
+    expect(onSelect).toHaveBeenLastCalledWith(2);
+    fireEvent.keyDown(list, { key: "End" });
+    expect(result?.activeIndex).toBe(3);
+    // Typeahead passes over the disabled "Alpha" and "Beta".
+    fireEvent.keyDown(list, { key: "a" });
+    expect(result?.activeIndex).toBe(3);
+    fireEvent.keyDown(list, { key: "Enter" });
+    expect(onSelect).toHaveBeenLastCalledWith(3);
+  });
+
+  it("never selects in a list whose rows are all disabled", () => {
+    const onSelect = vi.fn();
+    let result: ReturnType<typeof kit.useListNavigation> | undefined;
+    function Probe() {
+      result = kit.useListNavigation({ count: 3, onSelect, isDisabled: () => true });
+      return createElement("div", { ...result.containerProps, "data-testid": "all-off" });
+    }
+    render(createElement(Probe));
+    const list = screen.getByTestId("all-off");
+    expect(result?.activeIndex).toBe(-1);
+    expect(list.getAttribute("aria-activedescendant")).toBeNull();
+    for (const key of ["ArrowDown", "End", "Enter", " "]) fireEvent.keyDown(list, { key });
+    expect(result?.activeIndex).toBe(-1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it("wraps, clamps and typeaheads in useListNavigation", () => {
     let result: ReturnType<typeof kit.useListNavigation> | undefined;
     const labels = ["Alpha", "Beta", "Bravo", "Charlie"];
@@ -397,6 +465,28 @@ describe("@daintreehq/plugin-ui 1.1 forms and settings", () => {
     render(createElement(kit.Switch, { "aria-label": "Auto refresh", onCheckedChange }));
     fireEvent.click(screen.getByRole("switch", { name: "Auto refresh" }));
     expect(onCheckedChange).toHaveBeenCalledWith(true);
+    expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("switch", { name: "Auto refresh" }));
+    expect(onCheckedChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("draws the app's one switch, keeping a plugin's DOM props and ignoring size", () => {
+    const onFocus = vi.fn();
+    render(
+      createElement(kit.Switch, {
+        "aria-label": "Sync",
+        defaultChecked: true,
+        size: "sm",
+        "data-kind": "sync",
+        onFocus,
+      })
+    );
+    const toggle = screen.getByRole("switch", { name: "Sync" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(toggle.getAttribute("data-size")).toBe("md");
+    expect(toggle.getAttribute("data-kind")).toBe("sync");
+    fireEvent.focus(toggle);
+    expect(onFocus).toHaveBeenCalled();
   });
 
   it("switches Tabs and renders the active panel", () => {

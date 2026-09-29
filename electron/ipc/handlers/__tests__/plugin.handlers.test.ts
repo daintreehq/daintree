@@ -70,6 +70,7 @@ const { mockGetPluginRecipes, mockRecordPluginRecipeUse, mockUpdatePluginRecipeM
   }));
 
 const mockGetPluginTours = vi.hoisted(() => vi.fn((): unknown[] => []));
+const mockMetricsRecordInvoke = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
@@ -114,6 +115,7 @@ vi.mock("../../../services/PluginService.js", () => ({
     restartPluginWorker: (...args: unknown[]) => mockRestartPluginWorker(...args),
     listPluginRuntimeStatuses: (...args: unknown[]) => mockListPluginRuntimeStatuses(...args),
     getDataBackupSource: (...args: unknown[]) => mockGetDataBackupSource(...args),
+    metrics: { recordInvoke: (...args: unknown[]) => mockMetricsRecordInvoke(...args) },
   },
 }));
 
@@ -178,6 +180,8 @@ vi.mock("electron", () => ({
 }));
 
 import { registerPluginHandlers } from "../plugin.js";
+import { notifyIpcEnvelopeRejected } from "../../envelopeRejections.js";
+import { PluginPayloadTooLargeError } from "../../../services/plugin/pluginPayloadLimits.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../../ipcGuard.js";
 import { PluginInvokeOwnershipError } from "../../../services/plugin/PluginInvokeErrors.js";
 import { pluginInstallJobs } from "../../../services/plugin/PluginInstallJobRegistry.js";
@@ -1419,6 +1423,81 @@ describe("registerPluginHandlers", () => {
       errorMessage: expect.stringMatching(/at least \d+ bytes/),
     });
     expect(mockStableArgsSha256).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INVOKE meters refused args against the load live at the refusal", async () => {
+    mockDispatchHandler.mockResolvedValue("ok");
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+    const trustedEvent = { senderFrame: { url: "app://daintree/" }, sender: { id: 1 } };
+    // An accepted invoke first, as any running app has made one by now.
+    await invokeHandler(trustedEvent, "x", "y", "small");
+    mockMetricsRecordInvoke.mockClear();
+
+    const huge = "x".repeat(PLUGIN_INVOKE_MAX_ARGS_BYTES + 1);
+    await expect(invokeHandler(trustedEvent, "x", "y", huge)).rejects.toThrow(
+      /PLUGIN_PAYLOAD_TOO_LARGE/
+    );
+    // Recorded synchronously with the refusal: nothing deferred can land on a
+    // same-id successor loaded in between.
+    expect(mockMetricsRecordInvoke).toHaveBeenCalledTimes(1);
+    expect(mockMetricsRecordInvoke).toHaveBeenCalledWith("x", expect.any(Number), "oversized");
+  });
+
+  it("PLUGIN_INVOKE meters an args refusal only for a sender in the plugin's own project", async () => {
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+    const trustedEvent = { senderFrame: { url: "app://daintree/" }, sender: { id: 7 } };
+    mockGetProjectForWebContents.mockReturnValue("proj-b");
+    const huge = "x".repeat(PLUGIN_INVOKE_MAX_ARGS_BYTES + 1);
+    await expect(
+      invokeHandler(trustedEvent, "project__proj-a__acme.local", "y", huge)
+    ).rejects.toThrow();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(mockMetricsRecordInvoke).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INVOKE meters an envelope the security wrapper refused before the handler ran", async () => {
+    mockDispatchHandler.mockResolvedValue("ok");
+    const cleanup = registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+    const event = { senderFrame: { url: "app://daintree/" }, sender: { id: 3 } };
+    mockGetProjectForWebContents.mockReturnValue("proj-a");
+    await invokeHandler(event, "acme.demo", "save", "small");
+    mockMetricsRecordInvoke.mockClear();
+    const refusal = new PluginPayloadTooLargeError("acme.demo", 'arguments to "save"', 1, 2);
+    notifyIpcEnvelopeRejected("plugin:invoke", event as never, ["acme.demo", "save"], refusal);
+    expect(mockMetricsRecordInvoke).toHaveBeenCalledWith("acme.demo", 0, "oversized");
+
+    // Scoped like the dispatch: another project's view cannot run up the count.
+    mockMetricsRecordInvoke.mockClear();
+    notifyIpcEnvelopeRejected(
+      "plugin:invoke",
+      event as never,
+      ["project__proj-b__acme.local", "save"],
+      refusal
+    );
+    // Only a size refusal is an oversize invoke.
+    notifyIpcEnvelopeRejected(
+      "plugin:invoke",
+      event as never,
+      ["acme.demo", "save"],
+      new Error("ARG_COUNT_EXCEEDED")
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(mockMetricsRecordInvoke).not.toHaveBeenCalled();
+
+    // Unregistering removes the observer with the handler.
+    cleanup();
+    notifyIpcEnvelopeRejected("plugin:invoke", event as never, ["acme.demo", "save"], refusal);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(mockMetricsRecordInvoke).not.toHaveBeenCalled();
   });
 
   it("PLUGIN_INVOKE handler audits dispatch failures (#9240)", async () => {

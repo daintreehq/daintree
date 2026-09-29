@@ -281,6 +281,63 @@ describe("useCachedHostChannel invalidateOn", () => {
     expect(invoke).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps an invalidation after its only view unmounts before the refetch fires", async () => {
+    let n = 0;
+    invoke.mockImplementation(async () => ++n);
+    const opts = { invalidateOn: "m-changed", staleMs: 60_000 };
+    const a = renderHook(() => useCachedHostChannel("acme", "m", null, opts));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    expect(invoke).toHaveBeenCalledTimes(1);
+    push("m-changed");
+    a.unmount();
+    await act(async () => void (await vi.advanceTimersByTimeAsync(200)));
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    const b = renderHook(() => useCachedHostChannel("acme", "m", null, opts));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(b.result.current.data).toBe(2);
+
+    b.unmount();
+    renderHook(() => useCachedHostChannel("acme", "m", null, opts));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let a response sent before an invalidation clear it", async () => {
+    const first = deferred<number>();
+    invoke.mockReturnValueOnce(first.promise).mockResolvedValue(2);
+    const opts = { invalidateOn: "o-changed", staleMs: 60_000 };
+    const a = renderHook(() => useCachedHostChannel("acme", "o", null, opts));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    push("o-changed");
+    a.unmount();
+    await act(async () => first.resolve(1));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(200)));
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    const b = renderHook(() => useCachedHostChannel("acme", "o", null, opts));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(b.result.current.data).toBe(2);
+  });
+
+  it("does not join a request sent before an invalidation when remounting", async () => {
+    const first = deferred<number>();
+    invoke.mockReturnValueOnce(first.promise).mockResolvedValue(2);
+    const opts = { invalidateOn: "j-changed", staleMs: 60_000 };
+    const a = renderHook(() => useCachedHostChannel("acme", "j", null, opts));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    push("j-changed");
+    a.unmount();
+    const b = renderHook(() => useCachedHostChannel("acme", "j", null, opts));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    expect(invoke).toHaveBeenCalledTimes(2);
+    await act(async () => first.resolve(1));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    expect(b.result.current.data).toBe(2);
+  });
+
   it("shares one refetch between views on the same key, and unsubscribes on unmount", async () => {
     invoke.mockResolvedValue("x");
     const opts = { invalidateOn: "k-changed" };

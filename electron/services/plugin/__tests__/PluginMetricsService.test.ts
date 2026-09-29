@@ -30,6 +30,9 @@ interface Fixture {
   sampleProcessMemory: ReturnType<typeof vi.fn>;
 }
 
+/** The live load's authority every fixture plugin reports under. */
+const GENERATION = "pi-live";
+
 function makeFixture(): Fixture {
   const known = new Set<string>(["acme.demo"]);
   const builtins = new Set<string>();
@@ -37,6 +40,7 @@ function makeFixture(): Fixture {
   const memory: ProcessMemorySample[] = [];
   const host: PluginMetricsHost = {
     isKnownPlugin: (id) => known.has(id),
+    isCurrentGeneration: (id, generation) => known.has(id) && generation === GENERATION,
     isolationOf: (id) => (builtins.has(id) ? "in-process" : "worker"),
     workerPids: () => pids.entries(),
   };
@@ -74,7 +78,9 @@ describe("PluginMetricsService", () => {
   it("ignores plugins the host has not loaded", () => {
     fx.service.recordInvoke("acme.unknown", 5, "ok");
     fx.service.recordActivation("acme.unknown", 5);
-    expect(fx.service.recordRendererReport(report({ pluginId: "acme.unknown" }))).toBe(false);
+    expect(fx.service.recordRendererReport(report({ pluginId: "acme.unknown" }), GENERATION)).toBe(
+      false
+    );
     expect(fx.service.getSnapshot("acme.unknown")).toBeNull();
     expect(fx.service.getAll()).toEqual([]);
   });
@@ -181,7 +187,8 @@ describe("PluginMetricsService", () => {
         ],
         commitDurationsMs: [b.viewCommitP95Ms + 10],
         commitCount: 1,
-      })
+      }),
+      GENERATION
     );
     const over = fx.service.getSnapshot("acme.demo")!.overBudget;
     expect(over).toEqual(["activationMs", "viewLoadMs", "viewCommitP95Ms", "invokeP95Ms"]);
@@ -210,12 +217,14 @@ describe("PluginMetricsService", () => {
         commitCount: 900,
         longFrames: [{ durationMs: 80, blockingMs: 30, source: "commit", at: 50 }],
         longFramesDropped: { count: 4, blockingMs: 100 },
-      })
+      }),
+      GENERATION
     );
     fx.service.recordRendererReport(
       report({
         longFrames: [{ durationMs: 60, blockingMs: 10, source: "script", at: 20 }],
-      })
+      }),
+      GENERATION
     );
     const snap = fx.service.getSnapshot("acme.demo")!;
     expect(snap.viewLoads).toHaveLength(MAX_VIEW_LOADS);
@@ -225,7 +234,7 @@ describe("PluginMetricsService", () => {
   });
 
   it("keeps viewCommits null when no commit durations were reported", () => {
-    fx.service.recordRendererReport(report({ commitCount: 0 }));
+    fx.service.recordRendererReport(report({ commitCount: 0 }), GENERATION);
     expect(fx.service.getSnapshot("acme.demo")!.viewCommits).toBeNull();
   });
 

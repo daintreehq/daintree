@@ -1,4 +1,4 @@
-import { useId, useRef, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import type {
   PluginFormFieldControlProps,
@@ -20,6 +20,7 @@ import type {
   PluginToolbarProps,
 } from "@shared/types/plugin-sdk-react";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { SettingsActions, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,7 +46,6 @@ import {
 import { PaneState, PaneStateActions } from "@/components/ui/PaneState";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
-import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UnderlineTabs, type UnderlineTabItem } from "@/components/ui/UnderlineTabs";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
@@ -289,26 +289,31 @@ function KitFormField({
   );
 }
 
+// Through SettingsSwitch, so a plugin's switch is the app's one switch. `size`
+// is accepted for compatibility and ignored: switches draw at one size.
 function KitSwitch({
   checked,
   defaultChecked,
   onCheckedChange,
   disabled,
   name,
-  size,
+  size: _size,
   className,
   ...rest
 }: PluginSwitchProps) {
   const onChange = fn(onCheckedChange);
+  const controlled = typeof checked === "boolean";
+  const [uncontrolled, setUncontrolled] = useState(defaultChecked === true);
   return (
-    <Switch
+    <SettingsSwitch
       {...pickDomProps(rest)}
-      checked={typeof checked === "boolean" ? checked : undefined}
-      defaultChecked={typeof defaultChecked === "boolean" ? defaultChecked : undefined}
-      onCheckedChange={onChange ? (next) => onChange(next === true) : undefined}
+      checked={controlled ? checked : uncontrolled}
+      onCheckedChange={(next) => {
+        if (!controlled) setUncontrolled(next === true);
+        onChange?.(next === true);
+      }}
       disabled={disabled === true}
       name={str(name)}
-      size={oneOf(size, ["sm", "md"] as const)}
       className={str(className)}
     />
   );
@@ -532,15 +537,17 @@ function KitListRow({
   // A listbox option (from useListNavigation): the pointer moves the one
   // cursor, so it takes the highlight alone and never a second hover fill.
   if (typeof dom.role === "string") {
+    // `aria-disabled` arrives from useListNavigation's `isDisabled`.
+    const unavailable = inert || dom["aria-disabled"] === true || dom["aria-disabled"] === "true";
     return (
       <div
         {...dom}
-        // Unavailable rows keep their place for the cursor but never select.
+        // Unavailable rows keep their place but never select.
         onClick={(event) => {
-          if (!inert && typeof dom.onClick === "function") dom.onClick(event);
+          if (!unavailable && typeof dom.onClick === "function") dom.onClick(event);
         }}
-        aria-disabled={inert || undefined}
-        className={cn(PALETTE_ROW_CLASS, LIST_ROW_BOX, inert && "opacity-50", str(className))}
+        aria-disabled={unavailable || undefined}
+        className={cn(PALETTE_ROW_CLASS, LIST_ROW_BOX, unavailable && "opacity-50", str(className))}
       >
         {body}
       </div>

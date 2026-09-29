@@ -2339,10 +2339,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
     /**
      * Fire-and-forget: hand main a batch of plugin view cost observations
-     * drained from this renderer's `pluginViewMetrics` registry. Main validates,
-     * clamps and drops reports for plugins it has not loaded.
+     * drained from this renderer's `pluginViewMetrics` registry, each tagged
+     * with the plugin load it was observed against. Main validates, clamps and
+     * drops reports for plugins it has not loaded or for a load it has retired.
      */
-    reportViewMetrics(reports: import("../pluginMetrics.js").PluginRendererMetricsReport[]): void;
+    reportViewMetrics(reports: import("./pluginMetrics.js").PluginRendererMetricsEnvelope[]): void;
     /**
      * Subscribe to per-plugin perf snapshots, pushed at most once a second and
      * only while at least one listener is attached (worker memory is sampled

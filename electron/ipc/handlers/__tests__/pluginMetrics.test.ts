@@ -29,7 +29,7 @@ import { MAX_REPORTS_PER_SECOND, registerPluginMetricsHandlers } from "../plugin
 import {
   MAX_REPORTED_COMMITS,
   MAX_REPORTS_PER_MESSAGE,
-  parseRendererMetricsReports,
+  parseRendererMetricsEnvelopes,
 } from "../../../schemas/pluginMetrics.js";
 import { PluginMetricsService } from "../../../services/plugin/PluginMetricsService.js";
 import { makeProjectPluginInstanceKey } from "../../../../shared/types/plugin.js";
@@ -75,6 +75,23 @@ function validReport(pluginId = "acme.demo") {
   };
 }
 
+/** The live load's `plugin://` authority, per plugin; see `isCurrentGeneration`. */
+const liveGenerations = new Map<string, string>();
+const generationFor = (pluginId: string) => liveGenerations.get(pluginId) ?? `pi-${pluginId}`;
+
+/** Tag reports the way the renderer's reporter does. */
+function envelopes(...reports: Array<ReturnType<typeof validReport>>) {
+  return reports.map((report) => ({ generation: generationFor(report.pluginId), report }));
+}
+
+/** The report-level parse, through the envelope parser the channel uses. */
+function parseRendererMetricsReports(payload: unknown) {
+  const wrapped = Array.isArray(payload)
+    ? payload.map((report: unknown) => ({ generation: "pi-test", report }))
+    : payload;
+  return parseRendererMetricsEnvelopes(wrapped).map((envelope) => envelope.report);
+}
+
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 let metrics: PluginMetricsService;
@@ -83,9 +100,11 @@ let cleanup: () => void;
 beforeEach(() => {
   listeners.clear();
   senderProjects.clear();
+  liveGenerations.clear();
   metrics = new PluginMetricsService({
     host: {
       isKnownPlugin: (id) => id === "acme.demo" || id === PROJECT_A_PLUGIN,
+      isCurrentGeneration: (id, generation) => generation === generationFor(id),
       isolationOf: () => "worker",
       workerPids: () => [],
     },
@@ -172,10 +191,11 @@ describe("parseRendererMetricsReports", () => {
 describe("plugin:report-view-metrics", () => {
   it("records reports for loaded plugins and drops the rest", async () => {
     const sender = makeSender();
-    emit(CHANNELS.PLUGIN_REPORT_VIEW_METRICS, sender, [
-      validReport(),
-      validReport("acme.unloaded"),
-    ]);
+    emit(
+      CHANNELS.PLUGIN_REPORT_VIEW_METRICS,
+      sender,
+      envelopes(validReport(), validReport("acme.unloaded"))
+    );
     await flush();
     const snap = metrics.getSnapshot("acme.demo")!;
     expect(snap.viewLoads).toHaveLength(1);
@@ -187,14 +207,65 @@ describe("plugin:report-view-metrics", () => {
   it("rate-limits a sender that floods reports", async () => {
     const sender = makeSender();
     for (let i = 0; i < MAX_REPORTS_PER_SECOND + 10; i++) {
-      emit(CHANNELS.PLUGIN_REPORT_VIEW_METRICS, sender, [validReport()]);
+      emit(CHANNELS.PLUGIN_REPORT_VIEW_METRICS, sender, envelopes(validReport()));
     }
     await flush();
     expect(metrics.getSnapshot("acme.demo")!.longFrames.count).toBe(MAX_REPORTS_PER_SECOND);
     // Another renderer has its own budget.
-    emit(CHANNELS.PLUGIN_REPORT_VIEW_METRICS, makeSender(), [validReport()]);
+    emit(CHANNELS.PLUGIN_REPORT_VIEW_METRICS, makeSender(), envelopes(validReport()));
     await flush();
     expect(metrics.getSnapshot("acme.demo")!.longFrames.count).toBe(MAX_REPORTS_PER_SECOND + 1);
+  });
+});
+
+describe("plugin:report-view-metrics load generations", () => {
+  it("drops a report buffered across an unload and same-id reload", async () => {
+    const sender = makeSender();
+    liveGenerations.set("acme.demo", "pi-first");
+    // Observed and buffered against the first load...
+    const stale = envelopes(validReport());
+    // ...which is unloaded (its metrics evicted) and reloaded under a fresh
+    // authority before the renderer's drain lands.
+    metrics.evict("acme.demo");
+    liveGenerations.set("acme.demo", "pi-second");
+    emit(CHANNELS.PLUGIN_REPORT_VIEW_METRICS, sender, stale);
+    await flush();
+    expect(metrics.getAll()).toEqual([]);
+
+    emit(CHANNELS.PLUGIN_REPORT_VIEW_METRICS, sender, envelopes(validReport()));
+    await flush();
+    expect(metrics.getSnapshot("acme.demo")!.viewLoads).toHaveLength(1);
+  });
+
+  it("drops a report whose load is retired while the metrics service is still loading", async () => {
+    cleanup();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    cleanup = registerPluginMetricsHandlers({
+      resolveMetrics: async () => {
+        await gate;
+        return metrics;
+      },
+      projectFor: (id) => senderProjects.get(id) ?? null,
+    });
+    liveGenerations.set("acme.demo", "pi-first");
+    emit(CHANNELS.PLUGIN_REPORT_VIEW_METRICS, makeSender(), envelopes(validReport()));
+    liveGenerations.set("acme.demo", "pi-second");
+    release();
+    await flush();
+    expect(metrics.getAll()).toEqual([]);
+  });
+
+  it("rejects an entry without a generation or with a bare report", async () => {
+    emit(CHANNELS.PLUGIN_REPORT_VIEW_METRICS, makeSender(), [
+      validReport(),
+      { report: validReport() },
+      { generation: "", report: validReport() },
+    ]);
+    await flush();
+    expect(metrics.getAll()).toEqual([]);
   });
 });
 
@@ -202,13 +273,13 @@ describe("project scoping", () => {
   it("accepts reports for a project instance only from that project's views", async () => {
     const other = makeSender();
     senderProjects.set(other.id, "proj-b");
-    emit(CHANNELS.PLUGIN_REPORT_VIEW_METRICS, other, [validReport(PROJECT_A_PLUGIN)]);
+    emit(CHANNELS.PLUGIN_REPORT_VIEW_METRICS, other, envelopes(validReport(PROJECT_A_PLUGIN)));
     await flush();
     expect(metrics.getAll()).toEqual([]);
 
     const own = makeSender();
     senderProjects.set(own.id, "proj-a");
-    emit(CHANNELS.PLUGIN_REPORT_VIEW_METRICS, own, [validReport(PROJECT_A_PLUGIN)]);
+    emit(CHANNELS.PLUGIN_REPORT_VIEW_METRICS, own, envelopes(validReport(PROJECT_A_PLUGIN)));
     await flush();
     expect(metrics.getSnapshot(PROJECT_A_PLUGIN)!.viewLoads).toHaveLength(1);
   });
