@@ -175,12 +175,27 @@ export function useRovingRows({
 
   const onContainerBlur = useCallback(
     (event: Pick<React.FocusEvent, "relatedTarget" | "currentTarget">) => {
-      const next = event.relatedTarget;
-      // A null related target is a window blur or the focused row being
-      // removed, and both have to leave the record alone.
-      if (next instanceof Node && !event.currentTarget.contains(next)) {
+      const container = event.currentTarget;
+      const forget = () => {
         focusedKeyRef.current = null;
+        // An arrow press that is still waiting on its row to mount must not
+        // pull focus back once the user has gone somewhere else.
+        pendingFocusRef.current = null;
+      };
+      const next = event.relatedTarget;
+      if (next instanceof Node) {
+        if (!container.contains(next)) forget();
+        return;
       }
+      // A null related target is a blur to the page — or the focused row being
+      // removed, which parking handles. Only after the commit can the two be
+      // told apart: a row that is still connected means focus really left.
+      const key = focusedKeyRef.current;
+      const row = key === null ? undefined : elementsRef.current.get(key);
+      queueMicrotask(() => {
+        if (container.contains(document.activeElement)) return;
+        if (row?.isConnected) forget();
+      });
     },
     []
   );

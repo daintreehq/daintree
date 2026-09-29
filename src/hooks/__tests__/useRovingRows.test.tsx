@@ -144,4 +144,28 @@ describe("useRovingRows", () => {
     await act(async () => {});
     expect(document.activeElement).toBe(document.body);
   });
+
+  it("forgets the focused row when focus drops straight from it to the page", async () => {
+    const { getByText, rerender } = render(<List mounted={["a", "b", "c"]} />);
+    act(() => getByText("b").focus());
+    act(() => getByText("b").blur());
+    await act(async () => {});
+    rerender(<List mounted={["c", "d"]} />);
+    await act(async () => {});
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("drops a pending arrow-key focus once focus has left the list", async () => {
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    const { getByText, rerender } = render(<List mounted={["a", "b"]} />);
+    act(() => getByText("b").focus());
+    // End lands on "d", which is not mounted yet.
+    fireEvent.keyDown(getByText("b"), { key: "End" });
+    act(() => outside.focus());
+    rerender(<List mounted={["c", "d"]} />);
+    await act(async () => {});
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
+  });
 });
