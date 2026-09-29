@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
-import { useWorktrees } from "@/hooks/useWorktrees";
+import { useWorktreeNames } from "@/hooks/useWorktrees";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   useIsDragging,
@@ -91,7 +91,7 @@ export function TrashContainer({
   const prevLengthRef = useRef(trashedTerminals.length);
   const hintShowCountRef = useRef(0);
   const isExecutingRef = useRef(false);
-  const { worktreeMap } = useWorktrees();
+  const worktreeNames = useWorktreeNames();
   const emptyTrash = usePanelStore((s) => s.emptyTrash);
   const removePanel = usePanelStore((s) => s.removePanel);
   // Only show the ghost pill for panel drags — worktree-card sort drags also flip
@@ -609,7 +609,7 @@ export function TrashContainer({
                     {items.map((item) => {
                       if (item.type === "group") {
                         const worktreeName = item.groupMetadata.worktreeId
-                          ? worktreeMap.get(item.groupMetadata.worktreeId)?.name
+                          ? worktreeNames.get(item.groupMetadata.worktreeId)
                           : undefined;
                         return (
                           <TrashGroupItem
@@ -625,7 +625,7 @@ export function TrashContainer({
                         );
                       }
                       const worktreeName = item.terminal.worktreeId
-                        ? worktreeMap.get(item.terminal.worktreeId)?.name
+                        ? worktreeNames.get(item.terminal.worktreeId)
                         : undefined;
                       return (
                         <TrashBinItem

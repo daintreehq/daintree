@@ -134,7 +134,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     stateTip.dismiss();
   };
 
-  const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
   const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
   const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
   const moveTerminalToGrid = usePanelStore((s) => s.moveTerminalToGrid);
@@ -168,12 +167,16 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   }, [panels, activeTabId]);
   const activePanelId = activePanel?.id;
 
-  // Derive isOpen from store state - open if ANY panel in this group is active
-  const isOpen = panels.some((p) => p.id === activeDockTerminalId);
   // The pane this group actually has open in the dock — the id every close must
   // name. Reading it from the store (rather than assuming the active tab) keeps
-  // a close honest even if a tab switch and the dock state ever disagree.
-  const openDockPanelId = isOpen ? activeDockTerminalId : null;
+  // a close honest even if a tab switch and the dock state ever disagree. Scoped
+  // to this group's own panels so another chip's popover opening or closing
+  // leaves the selection unchanged and this group un-rendered.
+  const openDockPanelId = usePanelStore((s) => {
+    const id = s.activeDockTerminalId;
+    return id !== null && panels.some((p) => p.id === id) ? id : null;
+  });
+  const isOpen = openDockPanelId !== null;
 
   const [tabListEl, setTabListEl] = useState<HTMLDivElement | null>(null);
 

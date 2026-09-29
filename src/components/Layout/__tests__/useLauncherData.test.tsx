@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook } from "@testing-library/react";
-import type { AgentSettings, CliAvailability } from "@shared/types";
+import { act, renderHook } from "@testing-library/react";
+import type { AgentSettings, CliAvailability, WorktreeSnapshot } from "@shared/types";
 
 // The launcher's inventory hook, which both placements read. Its one subtle job
 // is that `pinnedCount` has to index the same group the model slices — the
@@ -12,6 +12,7 @@ let mockHasRealData = true;
 let mockAgentSettings: AgentSettings | null = { agents: {} } as AgentSettings;
 let mockLeftButtons: string[] = [];
 let mockRightButtons: string[] = [];
+let mockActiveWorktreeId: string | null = null;
 
 // Hoisted: a fresh object per selector call would churn the hook's memo for
 // reasons that have nothing to do with the hook — the real store hands back a
@@ -22,7 +23,7 @@ vi.mock("@/store", () => ({
   useProjectStore: (selector: (s: { currentProject: unknown }) => unknown) =>
     selector({ currentProject: CURRENT_PROJECT }),
   useWorktreeSelectionStore: (selector: (s: { activeWorktreeId: string | null }) => unknown) =>
-    selector({ activeWorktreeId: null }),
+    selector({ activeWorktreeId: mockActiveWorktreeId }),
 }));
 
 vi.mock("@/store/scratchStore", () => ({
@@ -47,7 +48,14 @@ vi.mock("@/store/toolbarPreferencesStore", () => ({
   ) => selector({ layout: { leftButtons: mockLeftButtons, rightButtons: mockRightButtons } }),
 }));
 
-vi.mock("@/hooks/useWorktrees", () => ({ useWorktrees: () => ({ worktrees: [] }) }));
+vi.mock("@/hooks/useWorktreeStore", async () => {
+  const { create } = await import("zustand");
+  return {
+    useWorktreeStore: create<{ worktrees: Map<string, WorktreeSnapshot> }>(() => ({
+      worktrees: new Map(),
+    })),
+  };
+});
 
 vi.mock("@/config/agents", () => ({
   getAgentIds: () => ["claude", "gemini", "codex"],
@@ -55,6 +63,7 @@ vi.mock("@/config/agents", () => ({
 }));
 
 import { useLauncherData } from "../useLauncherData";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 
 beforeEach(() => {
@@ -63,7 +72,29 @@ beforeEach(() => {
   mockAgentSettings = { agents: {} } as AgentSettings;
   mockLeftButtons = [];
   mockRightButtons = [];
+  mockActiveWorktreeId = null;
+  (useWorktreeStore as unknown as { setState: (s: object) => void }).setState({
+    worktrees: new Map(),
+  });
 });
+
+function snapshot(id: string, extra: Partial<WorktreeSnapshot> = {}): WorktreeSnapshot {
+  return {
+    id,
+    worktreeId: id,
+    path: `/repo/${id}`,
+    name: id,
+    branch: `feature/${id}`,
+    isCurrent: false,
+    ...extra,
+  } as WorktreeSnapshot;
+}
+
+function setWorktrees(...snaps: WorktreeSnapshot[]): void {
+  (useWorktreeStore as unknown as { setState: (s: object) => void }).setState({
+    worktrees: new Map(snaps.map((s) => [s.id, s])),
+  });
+}
 
 describe("useLauncherData", () => {
   it("counts pins against the launchable group the split actually slices", () => {
@@ -146,5 +177,49 @@ describe("useLauncherData", () => {
     const first = result.current;
     rerender();
     expect(result.current).toBe(first);
+  });
+
+  it("launches into the active worktree with its recipe variables", () => {
+    mockActiveWorktreeId = "wt-a";
+    setWorktrees(
+      snapshot("wt-a", {
+        issueNumber: 42,
+        linked: { pr: { ref: { number: 7 } } } as WorktreeSnapshot["linked"],
+      }),
+      snapshot("wt-b")
+    );
+    const { result } = renderHook(() => useLauncherData());
+    expect(result.current.cwd).toBe("/repo/wt-a");
+    expect(result.current.recipeContext).toEqual({
+      issueNumber: 42,
+      prNumber: 7,
+      branchName: "feature/wt-a",
+      worktreePath: "/repo/wt-a",
+    });
+  });
+
+  it("does not re-render on git-status updates that leave the launch fields alone", () => {
+    // Both the dock and the toolbar consume this hook; every git-status pass
+    // replaces a snapshot, the active one included, while agents edit files.
+    mockActiveWorktreeId = "wt-a";
+    const a = snapshot("wt-a");
+    const b = snapshot("wt-b");
+    setWorktrees(a, b);
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders++;
+      return useLauncherData();
+    });
+    const first = result.current;
+    renders = 0;
+
+    act(() => setWorktrees(a, { ...b, lastActivityTimestamp: 1 }));
+    act(() => setWorktrees({ ...a, lastActivityTimestamp: 2 }, b));
+    expect(renders).toBe(0);
+    expect(result.current).toBe(first);
+
+    act(() => setWorktrees({ ...a, branch: "renamed" }, b));
+    expect(renders).toBe(1);
+    expect(result.current.recipeContext?.branchName).toBe("renamed");
   });
 });

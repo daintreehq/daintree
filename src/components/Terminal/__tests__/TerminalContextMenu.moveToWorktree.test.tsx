@@ -269,11 +269,14 @@ function openMenu(worktrees: WorktreeState[], currentWorktreeId = "wt-main") {
       cwd: "/repo",
     },
   };
-  return render(
+  const view = render(
     <TerminalContextMenu terminalId="panel-1">
       <div>Panel body</div>
     </TerminalContextMenu>
   );
+  // The menu lists worktrees only while it is open, and Radix reports the open.
+  act(() => menuOpenChange.current?.(true));
+  return view;
 }
 
 function moveRows(): HTMLButtonElement[] {
@@ -406,6 +409,7 @@ function subContent(): HTMLElement {
 
 function rightClickPane(init: MouseEventInit = { clientX: 0, clientY: 0 }) {
   fireEvent.contextMenu(screen.getByText("Panel body"), init);
+  act(() => menuOpenChange.current?.(true));
 }
 
 /** Radix's close for the root content, which a submenu selection also ends in. */
@@ -453,6 +457,19 @@ describe("TerminalContextMenu — Move to worktree cap and picker handoff (#1244
     menuCloseAutoFocus.current = null;
     pickerProps.current = null;
     anchorRef.current = null;
+  });
+
+  it("leaves a closed menu off the worktree list", () => {
+    worktreesRef.current = manyWorktrees(3);
+    panelsById.current = {
+      "panel-1": { id: "panel-1", title: "One", kind: "terminal", worktreeId: "wt-main" },
+    };
+    render(renderPanel("panel-1"));
+    // Every pane carries a closed menu; none of them tracks worktree churn.
+    expect(screen.queryByText("Move to worktree")).toBeNull();
+
+    rightClickPane();
+    expect(moveRows()).toHaveLength(3);
   });
 
   it.each([11, 12])(

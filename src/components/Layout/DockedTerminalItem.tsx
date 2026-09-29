@@ -83,7 +83,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     stateTip.dismiss();
   };
 
-  const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
   const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
   const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
   const moveTerminalToGrid = usePanelStore((s) => s.moveTerminalToGrid);
@@ -91,8 +90,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
   const preferredTerminalFocusTarget = usePanelStore((s) => s.preferredTerminalFocusTarget);
 
-  // Derive isOpen from store state
-  const isOpen = activeDockTerminalId === terminal.id;
+  // A boolean, not the raw id: opening or closing another chip's popover must
+  // not re-render this one.
+  const isOpen = usePanelStore((s) => s.activeDockTerminalId === terminal.id);
 
   // Tracks whether the worktree sidebar is hidden by the chrome gesture, so
   // popover collision padding can extend left when there's no sidebar there.

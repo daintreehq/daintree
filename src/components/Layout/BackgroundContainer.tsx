@@ -14,7 +14,7 @@ import { closeAndAnnounce } from "@/lib/accessibility";
 import type { TrashedTerminalGroupMetadata } from "@/store/slices";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useBackgroundedTerminals } from "@/hooks/useTerminalSelectors";
-import { useWorktrees } from "@/hooks/useWorktrees";
+import { useWorktreeNames } from "@/hooks/useWorktrees";
 import {
   DOCK_STATUS_PILL_CLASS,
   DOCK_STATUS_PILL_OPEN_CLASS,
@@ -90,7 +90,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
       trackTerminalFocus: state.trackTerminalFocus,
     }))
   );
-  const { worktreeMap } = useWorktrees();
+  const worktreeNames = useWorktreeNames();
 
   const waitingCount = useMemo(
     () => terminals.filter((t) => t.agentState === "waiting").length,
@@ -362,7 +362,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
                             groupRestoreId={item.groupRestoreId}
                             groupMetadata={item.groupMetadata}
                             terminals={item.terminals}
-                            worktreeMap={worktreeMap}
+                            worktreeNames={worktreeNames}
                             showWorktree={showWorktree}
                             watchedPanels={watchedPanels}
                             onRestoreGroup={handleRestoreGroup}
@@ -374,7 +374,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
                       }
                       const worktreeName =
                         showWorktree && item.terminal.worktreeId
-                          ? worktreeMap.get(item.terminal.worktreeId)?.name
+                          ? worktreeNames.get(item.terminal.worktreeId)
                           : undefined;
                       return (
                         <BackgroundSingleItem
@@ -567,7 +567,7 @@ function BackgroundGroupItem({
   groupRestoreId,
   groupMetadata,
   terminals,
-  worktreeMap,
+  worktreeNames,
   showWorktree,
   watchedPanels,
   onRestoreGroup,
@@ -578,7 +578,7 @@ function BackgroundGroupItem({
   groupRestoreId: string;
   groupMetadata: TrashedTerminalGroupMetadata;
   terminals: PtyPanelData[];
-  worktreeMap: ReturnType<typeof useWorktrees>["worktreeMap"];
+  worktreeNames: ReadonlyMap<string, string>;
   showWorktree: boolean;
   watchedPanels: Set<string>;
   onRestoreGroup: (groupRestoreId: string, metadata: TrashedTerminalGroupMetadata) => void;
@@ -593,7 +593,7 @@ function BackgroundGroupItem({
   // Named on the header too, so a collapsed group still says where it lives.
   const groupWorktreeId = groupMetadata.worktreeId ?? terminals[0]?.worktreeId;
   const groupWorktreeName =
-    showWorktree && groupWorktreeId ? worktreeMap.get(groupWorktreeId)?.name : undefined;
+    showWorktree && groupWorktreeId ? worktreeNames.get(groupWorktreeId) : undefined;
 
   return (
     <div>
@@ -669,7 +669,7 @@ function BackgroundGroupItem({
             .map((terminal) => {
               const worktreeName =
                 showWorktree && terminal.worktreeId
-                  ? worktreeMap.get(terminal.worktreeId)?.name
+                  ? worktreeNames.get(terminal.worktreeId)
                   : undefined;
               return (
                 <BackgroundSingleItem

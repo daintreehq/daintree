@@ -1,4 +1,12 @@
-import { Fragment, useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  Fragment,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { isMac, isWindows } from "@/lib/platform";
 import type React from "react";
 import { type PanelLocation } from "@/types";
@@ -202,6 +210,16 @@ function containPortalOrLongPress(event: React.PointerEvent) {
 }
 
 /**
+ * Reports the menu content unmounting. Not `onCloseAutoFocus`: Radix defers
+ * that to a timeout, so a menu reopened before it fires would be cleared while
+ * open again. A layout cleanup runs in the unmount's own commit.
+ */
+function MenuUnmountSignal({ onUnmount }: { onUnmount: (mounted: false) => void }) {
+  useLayoutEffect(() => () => onUnmount(false), [onUnmount]);
+  return null;
+}
+
+/**
  * The right-click menu for one panel, scoped to that panel wherever the
  * pointer found it: its own surface, a dock item, a tab, a sidebar row.
  */
@@ -241,7 +259,13 @@ function TerminalContextMenuBody({
     }
   }, [maximizeTarget, terminalId, getPanelGroup]);
 
-  const worktrees = useSidebarWorktreeOrder();
+  // Every pane, dock chip and tab carries one of these menus, closed nearly all
+  // the time; only the open menu lists worktrees. Set on open and cleared when
+  // the content unmounts (after the exit animation, so the submenu doesn't
+  // empty out mid-fade), so a git-status pass on any worktree doesn't
+  // re-render every closed menu.
+  const [isMenuMounted, setIsMenuMounted] = useState(false);
+  const worktrees = useSidebarWorktreeOrder({ enabled: isMenuMounted });
   // Subscribed so a plugin registering or dropping its kind reaches the menu;
   // the generic panel menu reads its capabilities from this snapshot.
   const panelKindRegistry = useSyncExternalStore(
@@ -342,6 +366,7 @@ function TerminalContextMenuBody({
       // hook never runs for that close; drop the intent rather than let it open
       // the picker on some later, unrelated close.
       if (open) {
+        setIsMenuMounted(true);
         pendingMovePickerRef.current = null;
         pendingHandOverRef.current = null;
         pendingMenuDispatchRef.current = null;
@@ -1205,6 +1230,7 @@ function TerminalContextMenuBody({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
+          <MenuUnmountSignal onUnmount={setIsMenuMounted} />
           {layoutSection}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
@@ -1272,6 +1298,7 @@ function TerminalContextMenuBody({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
+          <MenuUnmountSignal onUnmount={setIsMenuMounted} />
           {layoutSection}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
@@ -1338,6 +1365,7 @@ function TerminalContextMenuBody({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
+          <MenuUnmountSignal onUnmount={setIsMenuMounted} />
           {layoutSection}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("duplicate")}>
@@ -1394,6 +1422,7 @@ function TerminalContextMenuBody({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
+          <MenuUnmountSignal onUnmount={setIsMenuMounted} />
           {/* The header's overflow menu renders this same list (#12606). */}
           {getGenericPanelMenuGroups({
             location: currentLocation === "grid" ? "grid" : "dock",
@@ -1462,6 +1491,7 @@ function TerminalContextMenuBody({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
+          <MenuUnmountSignal onUnmount={setIsMenuMounted} />
           {hasPty && (
             <>
               <ContextMenuItem

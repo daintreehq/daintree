@@ -50,12 +50,11 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
         Object.entries(dragHandle.listeners).filter(([name]) => name !== "onKeyDown")
       )
     : undefined;
-  const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
   const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
   const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
   const moveTerminalToGrid = usePanelStore((s) => s.moveTerminalToGrid);
 
-  const isOpen = activeDockTerminalId === panel.id;
+  const isOpen = usePanelStore((s) => s.activeDockTerminalId === panel.id);
 
   const sidebarHidden = useFocusStore((s) => s.gestureSidebarHidden);
   const collisionPadding = useMemo(() => {

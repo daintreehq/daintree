@@ -13,7 +13,7 @@ import type { PtyPanelData } from "@shared/types/panel";
 import type { PanelLocation } from "@shared/types";
 import type { ComponentType } from "react";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
-import { useWorktrees } from "@/hooks/useWorktrees";
+import { useWorktreeNames } from "@/hooks/useWorktrees";
 import {
   DOCK_STATUS_PILL_CLASS,
   DOCK_STATUS_PILL_OPEN_CLASS,
@@ -64,7 +64,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
       trackTerminalFocus: state.trackTerminalFocus,
     }))
   );
-  const { worktreeMap } = useWorktrees();
+  const worktreeNames = useWorktreeNames();
   const focusHandoff = useDockPopoverFocusHandoff();
   const count = terminals.length;
   const isHere = (t: PtyPanelData) => (t.worktreeId ?? null) === (activeWorktreeId ?? null);
@@ -141,7 +141,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                     {items.map((terminal) => {
                       const worktreeName =
                         section.key === "elsewhere" && terminal.worktreeId
-                          ? worktreeMap.get(terminal.worktreeId)?.name
+                          ? worktreeNames.get(terminal.worktreeId)
                           : undefined;
                       return (
                         <button

@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { useWorktree, useWorktrees } from "../useWorktrees";
+import { useWorktree, useWorktreeNames, useWorktrees } from "../useWorktrees";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore } from "@/store/createWorktreeStore";
 import type { WorktreeSnapshot } from "@shared/types";
@@ -93,5 +93,44 @@ describe("useWorktrees identity", () => {
     });
     expect(result.current.worktreeMap.get("b")).not.toBe(original);
     expect(result.current.worktreeMap.get("b")?.modifiedCount).toBe(2);
+  });
+});
+
+describe("useWorktreeNames", () => {
+  it("re-renders on a rename or a new worktree, not on status updates", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([snap("a"), snap("b")], { epoch: "test", seq: 1 });
+
+    let renders = 0;
+    const { result } = renderHook(
+      () => {
+        renders++;
+        return useWorktreeNames();
+      },
+      { wrapper: withStore(store) }
+    );
+    const first = result.current;
+    expect([...first]).toEqual([
+      ["a", "a"],
+      ["b", "b"],
+    ]);
+    renders = 0;
+
+    act(() => {
+      store.getState().applyUpdate(snap("a", { modifiedCount: 3 }), { epoch: "test", seq: 2 });
+    });
+    expect(renders).toBe(0);
+    expect(result.current).toBe(first);
+
+    act(() => {
+      store.getState().applyUpdate(snap("b", { name: "renamed" }), { epoch: "test", seq: 3 });
+    });
+    expect(result.current.get("b")).toBe("renamed");
+
+    act(() => {
+      store.getState().applyUpdate(snap("c"), { epoch: "test", seq: 4 });
+    });
+    expect(result.current.get("c")).toBe("c");
+    expect(renders).toBe(2);
   });
 });

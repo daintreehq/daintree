@@ -6,12 +6,11 @@ import type { PtyPanelData } from "@shared/types/panel";
 import { StatusContainer, type StatusContainerConfig } from "../StatusContainer";
 
 vi.mock("@/hooks/useWorktrees", () => ({
-  useWorktrees: () => ({
-    worktreeMap: new Map([
-      ["wt-1", { id: "wt-1", name: "feature-auth" }],
-      ["wt-2", { id: "wt-2", name: "feature-ui" }],
+  useWorktreeNames: () =>
+    new Map([
+      ["wt-1", "feature-auth"],
+      ["wt-2", "feature-ui"],
     ]),
-  }),
 }));
 
 vi.mock("@/store/worktreeStore", () => ({
