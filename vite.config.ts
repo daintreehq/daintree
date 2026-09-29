@@ -1062,8 +1062,8 @@ function rendererBundleSizePlugin(): Plugin {
 }
 
 // Emits dist/.vite/first-render-seeds.json — the root-relative source paths of
-// the app root plus every lazy panel chunk that loads on the first-render path,
-// derived from the panel-kind registry (getFirstRenderPreloadSeeds). The
+// the static first-render seeds (the app root), derived from the panel-kind
+// registry (getFirstRenderPreloadSeeds). The
 // check-first-render-chunk-budget script reads this artifact instead of a
 // hardcoded list, so the seed set can never drift from the registry. Build-only;
 // the seeds are static registry data, not bundle-derived, so this doesn't
@@ -1229,13 +1229,15 @@ interface BundleChunkLike {
 }
 
 // Injects `<link rel="modulepreload">` for the eager static closure of the
-// first-render seed chunks (the lazy browser/dev-preview/review panels a
-// restored session renders immediately). Vite auto-preloads the entry chunk and
-// everything in its static `imports[]` closure, but NOT chunks reached only
-// through a dynamic import() boundary — so a restored panel's chunk and its
-// private vendor deps download serially (parse entry → discover the lazy import
-// → fetch the chunk → discover its deps → fetch those). Preloading the eager
-// closure of the seeds collapses that first-paint waterfall.
+// first-render seed chunks (the app root the entry shell dynamically imports).
+// Vite auto-preloads the entry chunk and everything in its static `imports[]`
+// closure, but NOT chunks reached only through a dynamic import() boundary — so
+// App and its private vendor deps would download serially (parse entry →
+// discover the lazy import → fetch the chunk → discover its deps → fetch
+// those). Preloading the eager closure of the seeds collapses that waterfall.
+// Restored-pane chunks are session-dependent and warmed by the entry shell from
+// the boot payload instead (preloadRestoredPanes), so a session without a
+// file/diff pane never pays for CodeMirror here.
 //
 // Eager-only by construction: the closure follows `imports[]` and NEVER
 // `dynamicImports[]`, so deliberately-deferred subtrees (vendor-motion's domMax,

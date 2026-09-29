@@ -63,6 +63,7 @@ import { terminalInstanceService } from "@/services/terminal/TerminalInstanceSer
 import { unlockSidebarHydration } from "@/lib/layoutTransitionLock";
 import { logError } from "@/utils/logger";
 import { FileDocumentCloseGuardHost } from "@/panels/file/FileDocumentCloseGuardHost";
+import { onHelpPanelRuntimeRequested } from "@/lib/helpPanelRuntimeGate";
 
 function preloadGlobalBannerCoordinator() {
   return import("../Recovery/GlobalBannerCoordinator");
@@ -73,6 +74,8 @@ const LazyGlobalBannerCoordinator = lazy(() =>
 // Fetch eagerly: `safeMode` is set synchronously during hydration, so the
 // first post-hydration render can suspend before the idle preload fires.
 void preloadGlobalBannerCoordinator();
+
+const HELP_PANEL_IDLE_MOUNT_TIMEOUT_MS = 2000;
 
 function preloadHelpPanel() {
   // Gate the panel chunk on the HybridInputBar chunk: the assistant always
@@ -87,11 +90,12 @@ function preloadHelpPanel() {
   return Promise.all([import("../HelpPanel"), inputBar]).then(([m]) => m);
 }
 // Named `HelpPanel` (not Lazy*) because AppLayout.sidebar.test.ts asserts on
-// the `<HelpPanel ...>` JSX shape. The render below is unconditional (panel
-// visibility is CSS-width driven), so the chunk is always needed — fetch it
-// eagerly to run in parallel with hydration instead of after first mount.
+// the `<HelpPanel ...>` JSX shape. Not fetched at module eval: the assistant is
+// always closed on a cold boot (helpPanelStore never persists `isOpen`), so the
+// panel, its input bar and the CodeMirror vendor chunk would be paid for on the
+// first-render path by a surface nobody can see yet. The mount latch below
+// pulls it in on first open or at idle after hydration, whichever comes first.
 const HelpPanel = lazy(() => preloadHelpPanel().then((m) => ({ default: m.HelpPanel })));
-void preloadHelpPanel();
 
 // Demo-mode tooling is dev/recording-only and never reachable in production
 // (the `window.electron?.demo` gate is undefined unless launched with
@@ -246,6 +250,33 @@ export function AppLayout({
   // transitionend (#6182). pointer-events-none + the panel's own tabIndex gating
   // already cover the in-flight window.
   const [assistantInert, setAssistantInert] = useState(!showAssistant);
+  // One-way latch: once mounted, HelpPanel stays mounted (closing must not
+  // unmount it — that would destroy the assistant PTY, #6619). A closed panel
+  // still has work to do: the cold-resume peek waits on hydration anyway, and a
+  // direct launch (`help.launchAgent`) asks for the mount through
+  // helpPanelRuntimeGate before it binds a session. So an idle mount after
+  // hydration loses nothing while keeping the chunk off the first-paint path.
+  const [helpPanelLatched, setHelpPanelLatched] = useState(showAssistant);
+  const helpPanelMounted = helpPanelLatched || showAssistant;
+  useEffect(() => {
+    if (helpPanelLatched) return;
+    return onHelpPanelRuntimeRequested(() => setHelpPanelLatched(true));
+  }, [helpPanelLatched]);
+  useEffect(() => {
+    if (helpPanelLatched) return;
+    if (showAssistant) {
+      setHelpPanelLatched(true);
+      return;
+    }
+    if (!isHydrated) return;
+    const mount = () => setHelpPanelLatched(true);
+    if (typeof requestIdleCallback === "function") {
+      const id = requestIdleCallback(mount, { timeout: HELP_PANEL_IDLE_MOUNT_TIMEOUT_MS });
+      return () => cancelIdleCallback(id);
+    }
+    const timer = setTimeout(mount, 0);
+    return () => clearTimeout(timer);
+  }, [helpPanelLatched, showAssistant, isHydrated]);
 
   // #11070: the assistant's post-transition reveal repaint is a durable
   // obligation, not a one-shot. On a cold first open the slide settles while the
@@ -1052,15 +1083,17 @@ export function AppLayout({
                 className="absolute top-0 right-0 h-full"
                 style={{ width: layout.helpPanelWidth }}
               >
-                <Suspense fallback={null}>
-                  <HelpPanel
-                    width={layout.helpPanelWidth}
-                    isVisible={showAssistant}
-                    isReadyToLaunch={isHydrated}
-                    onResizeStart={handleAssistantResizeStart}
-                    onResizeEnd={handleAssistantResizeEnd}
-                  />
-                </Suspense>
+                {helpPanelMounted && (
+                  <Suspense fallback={null}>
+                    <HelpPanel
+                      width={layout.helpPanelWidth}
+                      isVisible={showAssistant}
+                      isReadyToLaunch={isHydrated}
+                      onResizeStart={handleAssistantResizeStart}
+                      onResizeEnd={handleAssistantResizeEnd}
+                    />
+                  </Suspense>
+                )}
               </div>
             </div>
           </ErrorBoundary>

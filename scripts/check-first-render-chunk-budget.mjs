@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 // Walks dist/.vite/manifest.json from a fixed seed list (the renderer entry
-// chunk plus the React.lazy() dynamic imports rendered on the first-paint
-// path) and sums the gzipped bytes of every reachable chunk. The closure is
-// "what the user actually downloads before they can interact" — eager imports
-// plus the lazy chunks for any panel restored from the previous session.
+// chunk plus the app root the entry shell dynamically imports) and sums the
+// gzipped bytes of every reachable chunk. The closure is "what every boot
+// downloads before it can interact" — the same set index.html modulepreloads.
+// Restored-panel chunks are session-dependent and warmed from the boot payload,
+// so they are not part of it.
 //
 // Compares against the checked-in first-render-chunk-baseline.json.
 //
@@ -38,10 +39,9 @@ const SUMMARY_FILE = path.join(DIST, "first-render-chunk-summary.md");
 
 // Seed list: every source path that is part of the renderer's first-paint
 // bundle. The renderer entry chunk is auto-detected via `isEntry`. The seeds
-// are the app root (src/App.tsx — dynamically imported by the entry shell) plus
-// the React.lazy boundaries in src/panels/registry.tsx that resolve immediately
-// when a persisted browser/dev-preview/review panel is restored — i.e. on the
-// first-render path even though they're nominally "lazy".
+// are the app root (src/App.tsx — dynamically imported by the entry shell).
+// The `firstRenderRestore` pane chunks used to be seeds too; they are now
+// preloaded only when the boot payload restores their kind.
 //
 // The list is no longer hardcoded here: it's derived from the panel-kind
 // registry (shared/config/panelKindRegistry.ts → getFirstRenderPreloadSeeds) and
@@ -126,7 +126,7 @@ function readFirstRenderSeeds() {
   }
   if (seeds.length === 0) {
     console.error(
-      "::error::first-render seeds is empty — the registry produced no firstRenderRestore kinds"
+      "::error::first-render seeds is empty — getFirstRenderPreloadSeeds() produced no seeds"
     );
     process.exit(1);
   }
@@ -149,8 +149,8 @@ function readFirstRenderSeeds() {
 //
 // The seeds (renderer entry + the registry-derived first-render seeds) are
 // always enqueued explicitly regardless of `followDynamic` — they're first-paint
-// paths by definition (a persisted browser/dev-preview/review panel restores
-// synchronously), not edges discovered by walking `dynamicImports[]`.
+// paths by definition (the entry shell imports the app root unconditionally),
+// not edges discovered by walking `dynamicImports[]`.
 //
 // Thin manifest adapter over the shared first-render-closure-lib traversal: the
 // firstRenderModulePreloadPlugin in vite.config.ts walks the same graph through

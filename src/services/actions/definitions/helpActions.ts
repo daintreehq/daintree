@@ -21,6 +21,7 @@ import { logError } from "@/utils/logger";
 import { extractHelpSessionErrorCode } from "@/utils/clientHelpSessionError";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
 import { loadCustomLaunchFlags } from "@/lib/assistantLaunchFlags";
+import { ensureHelpPanelRuntime } from "@/lib/helpPanelRuntimeGate";
 import { openTour } from "@/components/Tour/tourEvents";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { getAssistantSupportedAgentIds } from "@shared/config/agentRegistry";
@@ -149,6 +150,9 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       const projectState = useProjectStore.getState();
       const workspace = projectState.currentProject ?? useScratchStore.getState().currentScratch;
       const isProjectStateSettled = projectState.isBootstrapped;
+      // Started before the first await so the panel's lazy chunk loads in
+      // parallel with the folder lookup; awaited before the session is bound.
+      const helpPanelRuntimeReady = ensureHelpPanelRuntime();
       const folderPath = await window.electron.help.getFolderPath();
       if (!folderPath) {
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
@@ -203,6 +207,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       // Read once, before the provision, so the lane this session is minted for
       // is the same one the terminal binds into below even if the user switches
       // tabs while the await is outstanding.
+      await helpPanelRuntimeReady;
       const activeSlot = useHelpPanelStore.getState().activeSlot;
 
       try {

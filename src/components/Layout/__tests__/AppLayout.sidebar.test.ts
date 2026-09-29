@@ -124,7 +124,7 @@ describe("AppLayout assistant push sidebar — issue #6619", () => {
     expect(source).not.toMatch(/"absolute top-0 right-0 bottom-0 z-30"/);
   });
 
-  it("lazily defines and eagerly preloads HelpPanel (issue #10389)", () => {
+  it("lazily defines HelpPanel and keeps it off the first-paint path (issue #10389)", () => {
     // HelpPanel (~175KB source subtree) must not be in the eager entry chunk.
     expect(source).not.toMatch(/import \{ HelpPanel \} from/);
     // The panel chunk must GATE on the HybridInputBar chunk (Promise.all, not
@@ -136,9 +136,19 @@ describe("AppLayout assistant push sidebar — issue #6619", () => {
     );
     // Named `HelpPanel` (not Lazy*) so the JSX assertions above keep matching.
     expect(source).toContain("const HelpPanel = lazy(");
-    // The render is unconditional, so the chunk is always needed — it must be
-    // in-flight at module evaluation, not after first mount.
-    expect(source).toContain("void preloadHelpPanel();");
+    // The assistant is always closed on a cold boot, so the chunk must not be
+    // fetched at module evaluation; the mount latch pulls it in on first open
+    // or at idle after hydration.
+    expect(source).not.toContain("void preloadHelpPanel();");
+    expect(source).toContain("const helpPanelMounted = helpPanelLatched || showAssistant;");
+    expect(source).toMatch(/if \(!isHydrated\) return;[\s\S]*?requestIdleCallback\(mount/);
+    expect(source).toMatch(/\{helpPanelMounted && \(\s*<Suspense fallback=\{null\}>\s*<HelpPanel/);
+  });
+
+  it("never unmounts HelpPanel once latched (issue #6619)", () => {
+    // The latch is one-way: nothing may reset it, or closing the assistant
+    // would tear down its PTY exactly like the old conditional render did.
+    expect(source).not.toContain("setHelpPanelLatched(false)");
   });
 
   it("keeps the Assistant content full width while the slot animates (issue #10693 off-canvas)", () => {

@@ -30,6 +30,10 @@ import { HelpIntroBanner } from "./HelpIntroBanner";
 import { HelpPanelHeader } from "./HelpPanelHeader";
 import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "./HelpSessionTabs";
 import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
+import {
+  markHelpPanelRuntimeMounted,
+  markHelpPanelRuntimeUnmounted,
+} from "@/lib/helpPanelRuntimeGate";
 import { trimSessionTabTitle } from "./sessionTabTitle";
 import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 import {
@@ -997,6 +1001,13 @@ export function HelpPanel({
     },
     [width, setWidth, onResizeStart, onResizeEnd]
   );
+
+  // Child effects run before the parent's, so every lane runtime's
+  // `controller.start()` has armed its listeners by the time this fires.
+  useEffect(() => {
+    markHelpPanelRuntimeMounted();
+    return markHelpPanelRuntimeUnmounted;
+  }, []);
 
   // Run any in-flight resize teardown if the panel unmounts mid-drag.
   useEffect(() => {
