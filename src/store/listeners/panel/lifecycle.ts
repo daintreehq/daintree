@@ -165,6 +165,9 @@ export async function handleFallbackTriggered(data: {
         context: { ...fallbackAddress },
       });
     } else {
+      // A spawn failure lands on the panel as `restartError`, which the pane
+      // shows inline; a precondition refusal leaves nothing on screen.
+      const shownInline = Boolean(usePanelStore.getState().panelsById[terminalId]?.restartError);
       notify({
         type: "error",
         priority: "high",
@@ -173,6 +176,7 @@ export async function handleFallbackTriggered(data: {
         duration: 12000,
         supersedeKey: fallbackSupersedeKey,
         context: { eventKind: "agent", ...fallbackAddress },
+        suppressWhenOriginVisible: shownInline,
         action: {
           label: "Send diagnostics",
           actionId: "diagnostics.openReview",

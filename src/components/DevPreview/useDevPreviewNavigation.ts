@@ -244,6 +244,7 @@ export function useDevPreviewNavigation({
     if (!url || url === "about:blank") return false;
     if (screenshotInFlightRef.current) return false;
     screenshotInFlightRef.current = true;
+    const address = panelNotificationAddress(id);
     try {
       const image = await webview.capturePage();
       const pngData = new Uint8Array(image.toPNG());
@@ -256,7 +257,7 @@ export function useDevPreviewNavigation({
         type: "error",
         title: "Screenshot failed",
         message: "Couldn't copy the screenshot to clipboard",
-        context: panelNotificationAddress(id),
+        context: address,
       });
       return false;
     } finally {

@@ -890,7 +890,6 @@ export function activateDockLaunchItem(
   if (item.disabled) return;
 
   if (item.category === "panel") {
-    const targetWorktreeId = ctx.activeWorktreeId ?? undefined;
     // The menu closes on select, so an action that refuses leaves no trace
     // otherwise — the same reason LauncherQuickActions reports its refusals.
     void launchPanelKind({
@@ -919,10 +918,7 @@ export function activateDockLaunchItem(
           // `uiFeedback` is a passive kind, so without this the toast the
           // closed menu depends on would be an inbox row nobody sees.
           priority: "high",
-          context: {
-            eventKind: "uiFeedback",
-            ...(targetWorktreeId ? { worktreeId: targetWorktreeId } : {}),
-          },
+          context: { eventKind: "uiFeedback" },
           action: { label: "Retry", onClick: () => activateDockLaunchItem(item, ctx) },
         });
       })

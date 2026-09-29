@@ -297,6 +297,16 @@ describe("notify()", () => {
       expect(entries.map((e) => e.context?.panelId)).toEqual(["p-2", "p-1"]);
     });
 
+    it("keeps a shared event kind when clearing the combined toast's address", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ ...makeCoalescePayload(), context: { eventKind: "completed", panelId: "p-1" } });
+      notify({ ...makeCoalescePayload(), context: { eventKind: "completed", panelId: "p-2" } });
+
+      expect(useNotificationStore.getState().notifications[0]!.context).toEqual({
+        eventKind: "completed",
+      });
+    });
+
     it("keeps the address when coalescing events from the same subject", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ ...makeCoalescePayload(), context: { worktreeId: "wt-1", panelId: "p-1" } });

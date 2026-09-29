@@ -18,6 +18,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isScheduledQuietNow, nextOccurrenceTimestamp } from "@shared/utils/quietHours";
 import { normalizeForDedup } from "@shared/utils/normalizeErrorMessage";
 import { UNDO_ACTION_LABEL } from "@/lib/undoToast";
+import { worktreeNameFromId } from "@/lib/notificationSourceLabel";
 import type { ErrorRetryability, ErrorType } from "@/store/errorStore";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 
@@ -293,8 +294,8 @@ interface NotifyPayloadBase {
    * a single updating toast over a short window (~2s); `rateLimitKey` drops
    * the would-be toast entirely and aggregates the missed signal into an
    * inbox summary, catching slow-dripping noisy producers that sit outside
-   * the coalesce window. Falls back to `correlationId ?? context.projectId ??
-   * context.worktreeId ?? type` when omitted.
+   * the coalesce window. Falls back to `correlationId`, then
+   * `context.projectId`, then `<context.worktreeId>:<type>`, then `type`.
    */
   rateLimitKey?: string;
   /** When false, the history entry exists but does not increment the unread badge. Defaults to true. */
@@ -664,14 +665,28 @@ function pruneRateLimitBuckets(): void {
   }
 }
 
-function getRateLimitKey(payload: NotifyPayload): string {
-  return (
-    payload.rateLimitKey ??
-    payload.correlationId ??
-    payload.context?.projectId ??
-    payload.context?.worktreeId ??
-    payload.type
-  );
+interface RateLimitBucketId {
+  key: string;
+  /** How the overflow summary names the source. */
+  label: string;
+  /** Set when every event in the bucket is about this one worktree. */
+  worktreeId?: string;
+}
+
+function getRateLimitBucketId(payload: NotifyPayload): RateLimitBucketId {
+  const explicit = payload.rateLimitKey ?? payload.correlationId ?? payload.context?.projectId;
+  if (explicit) return { key: explicit, label: explicit };
+  const worktreeId = payload.context?.worktreeId;
+  if (worktreeId) {
+    // Keyed by severity too: a burst of routine successes in one worktree
+    // must not spend the tokens its next failure needs.
+    return {
+      key: `${worktreeId}:${payload.type}`,
+      label: worktreeNameFromId(worktreeId),
+      worktreeId,
+    };
+  }
+  return { key: payload.type, label: payload.type };
 }
 
 function buildOverflowSummary(source: string, count: number): string {
@@ -686,7 +701,7 @@ function buildOverflowSummary(source: string, count: number): string {
  * low-priority summary inbox row keyed by the bucket.
  */
 function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
-  const key = getRateLimitKey(payload);
+  const { key, label, worktreeId } = getRateLimitBucketId(payload);
   const now = Date.now();
   let bucket = _rateLimitBuckets.get(key);
 
@@ -736,7 +751,7 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
   if (bucket.overflowEntryId) {
     const updated = historyStore.updateEntryMessage(
       bucket.overflowEntryId,
-      buildOverflowSummary(key, bucket.overflowCount)
+      buildOverflowSummary(label, bucket.overflowCount)
     );
     if (!updated) {
       bucket.overflowEntryId = null;
@@ -744,18 +759,20 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
     }
   }
   if (!bucket.overflowEntryId) {
-    // No context on the summary row: a bucket can span multiple projects
-    // when its key isn't context-derived (explicit `rateLimitKey`, falls
-    // back to `correlationId` or `type`), so a contextual affordance like
-    // "Mute project X" would dispatch against the first overflow's project
-    // and silently mute the wrong target on later events.
+    // No project context on the summary row: a bucket can span multiple
+    // projects when its key isn't context-derived (explicit `rateLimitKey`,
+    // falls back to `correlationId` or `type`), so a contextual affordance
+    // like "Mute project X" would dispatch against the first overflow's
+    // project and silently mute the wrong target on later events. A
+    // worktree-keyed bucket is about one worktree, so the row files under it.
     bucket.overflowEntryId = historyStore.addEntry({
       type: payload.type,
       title: payload.title,
-      message: buildOverflowSummary(key, bucket.overflowCount),
+      message: buildOverflowSummary(label, bucket.overflowCount),
       correlationId: payload.correlationId,
       seenAsToast: false,
       countable: payload.countable,
+      ...(worktreeId ? { context: { worktreeId } } : {}),
     });
   }
 
@@ -1127,7 +1144,11 @@ export function notify(payload: NotifyPayload): string {
           notification.context?.worktreeId !== context?.worktreeId ||
           notification.context?.panelId !== context?.panelId
         ) {
-          patch.context = undefined;
+          // A kind both events share still names the combined toast, so its
+          // "Silence …" affordance stays; only the address is ambiguous.
+          const sharedKind =
+            notification.context?.eventKind === context?.eventKind ? context?.eventKind : undefined;
+          patch.context = sharedKind ? { eventKind: sharedKind } : undefined;
         }
         // Mirror the create-path rule: when the updated toast will be
         // action-bearing, promote it to sticky so the user has time to act.

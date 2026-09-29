@@ -117,6 +117,7 @@ export function useWebviewDialog(
     (confirmed: boolean, response?: string) => {
       const current = dialogQueue[0];
       if (!current) return;
+      const address = panelNotificationAddress(panelId);
 
       window.electron.webview
         .respondToDialog(current.dialogId, confirmed, response)
@@ -136,7 +137,7 @@ export function useWebviewDialog(
               "Couldn't send a response to the page dialog. The page may be unresponsive — try reloading the panel.",
             priority: "high",
             duration: 0,
-            context: panelNotificationAddress(panelId),
+            context: address,
           });
         });
 
