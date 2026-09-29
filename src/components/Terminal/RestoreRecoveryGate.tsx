@@ -1,4 +1,5 @@
 import { useState, type Ref } from "react";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useShallow } from "zustand/react/shallow";
 import { FolderClock, Play, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -64,9 +65,9 @@ function FolderRow({ label, path }: { label: string; path: string }) {
   return (
     <div className="flex min-w-0 items-baseline gap-2 text-xs">
       <dt className="shrink-0 text-text-secondary">{label}</dt>
-      <dd className="min-w-0 truncate font-mono text-text-primary" title={path}>
-        {path}
-      </dd>
+      <TruncatedTooltip content={path}>
+        <dd className="min-w-0 truncate font-mono text-text-primary">{path}</dd>
+      </TruncatedTooltip>
     </div>
   );
 }

@@ -1256,7 +1256,7 @@ describe("tree-header root path copy (#11407)", () => {
     vi.useRealTimers();
   });
 
-  it("leaves the label inert at the worktree root", () => {
+  it("leaves the label inert at the worktree root", async () => {
     // No rootPath — the label is a bare basename, not a path worth copying.
     render(paneJsx());
 
@@ -1264,12 +1264,16 @@ describe("tree-header root path copy (#11407)", () => {
 
     const el = label();
     expect(el.tagName).toBe("SPAN");
-    // Not focusable, and the hover text still resolves the worktree.
+    // Not focusable, and the hover text still resolves the worktree — through
+    // the app's tooltip, never a native title.
     expect(el.hasAttribute("tabindex")).toBe(false);
-    expect(el.getAttribute("title")).toBe("/repo");
+    expect(el.hasAttribute("title")).toBe(false);
 
     fireEvent.click(el);
     expect(writeTextMock).not.toHaveBeenCalled();
+
+    fireEvent.focus(el);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("/repo");
   });
 
   it("stays inert when the root is set but the worktree cannot be resolved", () => {

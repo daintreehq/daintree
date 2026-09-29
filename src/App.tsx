@@ -428,15 +428,23 @@ function AppInner() {
   if (crashState.status === "pending" || crashState.status === "failed") {
     return (
       <div className="h-screen w-screen bg-surface-canvas">
-        <Suspense fallback={null}>
-          <LazyCrashRecoveryDialog
-            crash={crashState.crash}
-            config={crashState.config}
-            onResolve={resolveCrash}
-            onUpdateConfig={updateCrashConfig}
-            {...(crashState.status === "failed" && { initialError: crashState.errorMessage })}
-          />
-        </Suspense>
+        {/* The dialog explains clipped rows through the shared tooltip, which
+            needs a provider this early branch otherwise never mounts. */}
+        <TooltipProvider
+          delayDuration={UI_TOOLTIP_DELAY_DURATION}
+          skipDelayDuration={UI_TOOLTIP_SKIP_DELAY_DURATION}
+          disableHoverableContent
+        >
+          <Suspense fallback={null}>
+            <LazyCrashRecoveryDialog
+              crash={crashState.crash}
+              config={crashState.config}
+              onResolve={resolveCrash}
+              onUpdateConfig={updateCrashConfig}
+              {...(crashState.status === "failed" && { initialError: crashState.errorMessage })}
+            />
+          </Suspense>
+        </TooltipProvider>
         {/* Diagnostics host stays reachable while the crash dialog is blocking
             the app — without this, the inline "Send diagnostics" action in
             CrashRecoveryDialog (recovery-failed banner) has nothing to render

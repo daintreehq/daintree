@@ -50,10 +50,11 @@ export function relativeTimePhrase(diffMs: number, timestampMs?: number): string
   return `on ${absoluteDateFormatter.format(new Date(timestampMs))}`;
 }
 
+// Every name, not "and 2 others": this card is itself the disclosure, so there
+// is nowhere further to reveal the rest.
 function joinNames(names: string[]): string {
   if (names.length <= 1) return names.join("");
-  if (names.length === 2) return `${names[0]} and ${names[1]}`;
-  return `${names[0]} and ${names.length - 1} others`;
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 const MINUTE_MS = 60_000;
@@ -187,12 +188,7 @@ export function CommitInfoTooltip({
               {author ? author.name : "Last commit"}
             </span>
             {coAuthorLine && (
-              <span
-                className="truncate text-2xs text-text-secondary"
-                title={coAuthors.map((p) => p.name).join(", ")}
-              >
-                {coAuthorLine}
-              </span>
+              <span className="break-words text-2xs text-text-secondary">{coAuthorLine}</span>
             )}
             <span className="flex min-w-0 items-center gap-1.5 text-2xs text-text-secondary">
               <span className="shrink-0">Committed {committed}</span>

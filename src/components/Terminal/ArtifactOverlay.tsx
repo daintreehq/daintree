@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useId, useRef, type ReactNode } from "react";
 import { DiffStat } from "@/components/ui/DiffStat";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import {
   Check,
   ChevronRight,
@@ -263,9 +264,9 @@ function PatchPreview({ patch, scrollClassName }: { patch: Artifact; scrollClass
         <span className="min-w-0 flex-1 text-xs text-text-primary">
           {files.length > 0 ? (
             files.map((file) => (
-              <span key={file} className="block truncate font-mono" title={file}>
-                {file}
-              </span>
+              <TruncatedTooltip key={file} content={file}>
+                <span className="block truncate font-mono">{file}</span>
+              </TruncatedTooltip>
             ))
           ) : (
             <span className="font-mono">{patch.filename || "patch"}</span>
@@ -481,11 +482,18 @@ function ArtifactItem({
           )}
         />
         <Icon aria-hidden="true" className="size-3.5 shrink-0 text-text-secondary" />
-        <span className="min-w-0 flex-1 truncate text-sm" title={artifact.filename || undefined}>
-          <span className="sr-only">{typeLabel}: </span>
-          <span className="font-medium text-text-primary">{base}</span>
-          {dir && <span className="ml-1.5 text-xs text-text-secondary">{dir}</span>}
-        </span>
+        {/* Pointer-only: the whole row is the button. */}
+        <TruncatedTooltip
+          content={artifact.filename}
+          disabled={!artifact.filename}
+          focusable={false}
+        >
+          <span className="min-w-0 flex-1 truncate text-sm">
+            <span className="sr-only">{typeLabel}: </span>
+            <span className="font-medium text-text-primary">{base}</span>
+            {dir && <span className="ml-1.5 text-xs text-text-secondary">{dir}</span>}
+          </span>
+        </TruncatedTooltip>
         {applyResult && (
           <span className="shrink-0 text-xs text-text-secondary">
             {applyResult.kind === "applied" ? "Applied" : "Didn't apply"}

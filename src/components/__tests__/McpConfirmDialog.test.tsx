@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { McpConfirmDialog } from "../McpConfirmDialog";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   __resetMcpConfirmStoreForTesting,
   requestMcpConfirmation,
@@ -574,7 +575,7 @@ describe("McpConfirmDialog", () => {
       actionTitle: "Delete worktree",
       callerInfo: { token4LastChars: "1234", userAgent: "Claude Code" },
     });
-    render(<McpConfirmDialog />);
+    render(<McpConfirmDialog />, { wrapper: TooltipProvider });
 
     expect(screen.getByText("Requested by")).toBeTruthy();
     expect(screen.getByText("Claude Code")).toBeTruthy();
@@ -588,7 +589,7 @@ describe("McpConfirmDialog", () => {
       actionTitle: "Delete worktree",
       callerInfo: { token4LastChars: "1234", userAgent: "Claude Code" },
     });
-    render(<McpConfirmDialog />);
+    render(<McpConfirmDialog />, { wrapper: TooltipProvider });
 
     // AppDialog portals to document.body, so render()'s container is empty.
     const text = document.body.textContent ?? "";

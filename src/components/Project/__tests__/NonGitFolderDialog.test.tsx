@@ -52,6 +52,7 @@ vi.mock("@/components/ui/AppDialog", () => {
   return { AppDialog };
 });
 
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { NonGitFolderDialog } from "../NonGitFolderDialog";
 
 const DIRECTORY = "/Users/someone/Downloads/archive";
@@ -66,7 +67,7 @@ function renderDialog(overrides: Partial<Parameters<typeof NonGitFolderDialog>[0
     onCancel: vi.fn(),
     ...overrides,
   };
-  return { props, ...render(<NonGitFolderDialog {...props} />) };
+  return { props, ...render(<NonGitFolderDialog {...props} />, { wrapper: TooltipProvider }) };
 }
 
 describe("NonGitFolderDialog (#11405)", () => {

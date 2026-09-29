@@ -1,6 +1,17 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, act, within, waitFor } from "@testing-library/react";
+import {
+  render as rtlRender,
+  screen,
+  fireEvent,
+  cleanup,
+  act,
+  within,
+  waitFor,
+  type RenderOptions,
+} from "@testing-library/react";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { SafeModeBanner } from "../SafeModeBanner";
 import { useSafeModeStore } from "@/store/safeModeStore";
 
@@ -23,6 +34,11 @@ vi.mock("@/utils/logger", () => ({
 import { actionService } from "@/services/ActionService";
 
 const mockedDispatch = vi.mocked(actionService.dispatch);
+
+// The app root supplies the TooltipProvider.
+function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
+  return rtlRender(ui, { wrapper: TooltipProvider, ...options });
+}
 
 beforeAll(() => {
   vi.stubGlobal(

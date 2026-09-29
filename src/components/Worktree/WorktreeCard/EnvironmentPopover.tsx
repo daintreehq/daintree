@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { cn } from "@/lib/utils";
 import {
   Check,
@@ -320,12 +321,11 @@ export function EnvironmentPopover({
                 {/* The icon buttons' own padding would pull the row's right edge in
                   from the status and Check status above and below it. */}
                 <div className="-mr-1.5 flex min-w-0 items-center gap-1">
-                  <span
-                    className="min-w-0 flex-1 truncate font-mono text-2xs text-text-primary"
-                    title={resourceEndpoint}
-                  >
-                    {resourceEndpoint}
-                  </span>
+                  <TruncatedTooltip content={resourceEndpoint}>
+                    <span className="min-w-0 flex-1 truncate font-mono text-2xs text-text-primary">
+                      {resourceEndpoint}
+                    </span>
+                  </TruncatedTooltip>
                   <CopyButton
                     text={resourceEndpoint}
                     aria-label="Copy endpoint"

@@ -1,5 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ChevronRight, Coffee, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { projectClient, systemClient } from "@/clients";
@@ -82,13 +84,23 @@ function settled<T>(result: PromiseSettledResult<T>, what: string): T | null {
   return null;
 }
 
-/** One label/value line. Values are tabular so a column of them lines up. */
-function MemoryRow({ label, value, title }: { label: string; value: string; title?: string }) {
+/**
+ * One label/value line. Values are tabular so a column of them lines up. A
+ * `hint` explains what the label counts; without one, a clipped label reveals
+ * itself.
+ */
+function MemoryRow({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  const text = <span className="truncate text-text-secondary">{label}</span>;
   return (
     <div className="flex items-baseline justify-between gap-3 text-xs">
-      <span className="truncate text-text-secondary" title={title}>
-        {label}
-      </span>
+      {hint ? (
+        <Tooltip>
+          <TooltipTrigger asChild>{text}</TooltipTrigger>
+          <TooltipContent side="left">{hint}</TooltipContent>
+        </Tooltip>
+      ) : (
+        <TruncatedTooltip content={label}>{text}</TruncatedTooltip>
+      )}
       <span className="shrink-0 tabular-nums text-text-primary">{value}</span>
     </div>
   );
@@ -152,7 +164,7 @@ function MemorySummary({
           the start reads "Unavailable" here rather than dropping the line. */}
       <MemoryRow
         label="Terminal programs"
-        title="Dev servers, agents and tools your terminals started"
+        hint="Dev servers, agents and tools your terminals started"
         value={workloads !== null ? formatMemory(workloads.totalMemoryMb) : "Unavailable"}
       />
       {workloadNote !== null && (
@@ -225,12 +237,7 @@ function ProjectBreakdown({
       <SectionLabel>Terminal memory by project</SectionLabel>
       <div id="resource-project-rows" className="space-y-1">
         {visible.map((row) => (
-          <MemoryRow
-            key={row.key}
-            label={row.name}
-            title={row.name}
-            value={formatMemory(row.memoryMb)}
-          />
+          <MemoryRow key={row.key} label={row.name} value={formatMemory(row.memoryMb)} />
         ))}
       </div>
       {folded && (
@@ -278,12 +285,14 @@ function ProcessTable({ metrics }: { metrics: ProcessMetricEntry[] }) {
               key={proc.pid}
               className="flex items-baseline justify-between gap-2 text-2xs tabular-nums"
             >
-              <span
-                className="min-w-0 truncate text-text-secondary"
-                title={`${label} (${proc.pid})`}
-              >
-                {label}
-              </span>
+              {/* Always on offer, not only when clipped: the PID is what
+                  matches the row to the OS's own process list. */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="min-w-0 truncate text-text-secondary">{label}</span>
+                </TooltipTrigger>
+                <TooltipContent side="left">{`${label} (${proc.pid})`}</TooltipContent>
+              </Tooltip>
               <span className="flex shrink-0 gap-2 text-text-secondary">
                 <span>{formatMemory(proc.memoryMB)}</span>
                 <span className="w-10 text-right">{proc.cpuPercent}%</span>

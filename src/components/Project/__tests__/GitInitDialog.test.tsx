@@ -192,9 +192,13 @@ describe("GitInitDialog", () => {
   ])(
     "renders %s as the destination path with no dropped or duplicated characters",
     (directoryPath, expected) => {
-      renderDialog({ directoryPath });
+      const { container } = renderDialog({ directoryPath });
 
-      expect(screen.getByTitle(expected).textContent).toBe(expected);
+      // The caption's own spans, read together, are the visible path.
+      const captions = [...container.ownerDocument.querySelectorAll("p.font-mono")].map((p) =>
+        [...p.querySelectorAll(":scope > span.truncate")].map((s) => s.textContent).join("")
+      );
+      expect(captions).toContain(expected);
     }
   );
 

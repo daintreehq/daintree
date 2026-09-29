@@ -7,7 +7,16 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  waitFor,
+  type RenderOptions,
+} from "@testing-library/react";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 
 const findSessions = vi.hoisted(() => vi.fn());
@@ -93,6 +102,11 @@ function held(id: string): PtyPanelData {
   const panel = usePanelStore.getState().panelsById[id];
   if (!panel || !isPtyPanel(panel)) throw new Error(`${id} is not a terminal pane`);
   return panel;
+}
+
+// The app root supplies the TooltipProvider.
+function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
+  return rtlRender(ui, { wrapper: TooltipProvider, ...options });
 }
 
 beforeEach(() => {

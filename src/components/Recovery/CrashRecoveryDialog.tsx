@@ -3,6 +3,8 @@ import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { formatPath } from "@/utils/textParsing";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { formatBytes } from "@/lib/formatBytes";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { InlineError } from "@/components/ui/field";
 import {
   AlertTriangle,
@@ -712,9 +714,11 @@ function PanelRow({
       <div className="flex-1 min-w-0">
         <div className="text-sm text-text-primary truncate">{panel.title || panel.kind}</div>
         {panel.cwd && (
-          <div className="font-mono text-xs text-text-secondary truncate" title={panel.cwd}>
-            {formatPath(panel.cwd, homeDir)}
-          </div>
+          <TruncatedTooltip content={panel.cwd}>
+            <div className="font-mono text-xs text-text-secondary truncate">
+              {formatPath(panel.cwd, homeDir)}
+            </div>
+          </TruncatedTooltip>
         )}
       </div>
       <div className="flex items-center gap-1.5 shrink-0">
@@ -776,14 +780,17 @@ function ActionTrailRow({ action }: { action: ActionBreadcrumb }) {
         <span className="text-text-secondary shrink-0">{action.danger}</span>
       )}
       {action.confirmed && (
-        <span className="text-status-warning shrink-0" title="Confirmed destructive action">
-          confirmed
-        </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-status-warning shrink-0">confirmed</span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Confirmed destructive action</TooltipContent>
+        </Tooltip>
       )}
       {args && (
-        <span className="text-text-secondary truncate font-mono" title={args}>
-          {args}
-        </span>
+        <TruncatedTooltip content={args}>
+          <span className="text-text-secondary truncate font-mono">{args}</span>
+        </TruncatedTooltip>
       )}
     </div>
   );

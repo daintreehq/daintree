@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { SymlinkTooltip } from "./SymlinkTooltip";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { useRovingRows, type UseRovingRowsResult } from "@/hooks/useRovingRows";
 import { FileSymlink, Folder, FolderSymlink } from "lucide-react";
@@ -277,9 +278,9 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
           className={cn(FILE_TREE_ICON_CLASS, "h-3.5 w-3.5 shrink-0", FILE_TREE_ICON_COLOR_CLASS)}
           aria-hidden="true"
         />
-        <span className="truncate" title={symlinkDescription ?? undefined}>
-          {row.name}
-        </span>
+        <SymlinkTooltip description={symlinkDescription}>
+          <span className="truncate">{row.name}</span>
+        </SymlinkTooltip>
         {symlinkDescription && <span className="sr-only">{symlinkDescription}</span>}
       </span>
       <span className="w-20 shrink-0 text-right tabular-nums text-text-secondary">

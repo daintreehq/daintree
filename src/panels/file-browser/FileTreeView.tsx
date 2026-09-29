@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { SymlinkTooltip } from "./SymlinkTooltip";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import {
   ChevronDown,
@@ -719,12 +720,9 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
       {/* `min-w-0` is what lets `truncate` actually shrink here: a flex item
           defaults to `min-width: auto` and would otherwise push the trailing
           status marker out of the row instead of ellipsing the name. */}
-      <span
-        className={cn("min-w-0 truncate", isSelected && "font-medium")}
-        title={symlinkDescription ?? undefined}
-      >
-        {row.name}
-      </span>
+      <SymlinkTooltip description={symlinkDescription}>
+        <span className={cn("min-w-0 truncate", isSelected && "font-medium")}>{row.name}</span>
+      </SymlinkTooltip>
       {symlinkMarkerId && (
         // Screen-reader only, and layout-neutral (`sr-only` is absolutely
         // positioned) so it can sit between the name and the `ml-auto` git

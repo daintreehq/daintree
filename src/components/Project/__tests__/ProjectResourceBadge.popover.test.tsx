@@ -7,8 +7,8 @@
  * preserve the last good value with an explicit note (never a fake 0), and
  * process-level detail stays folded until asked for.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render } from "@testing-library/react";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { act } from "react";
 
 vi.mock("@/clients", () => ({
@@ -60,6 +60,14 @@ import type {
 } from "@shared/types/memoryAccounting";
 import type { ProcessMetricEntry } from "@shared/types/ipc/system";
 import { ProjectResourceBadge } from "../ProjectResourceBadge";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { primeRadix } from "@/components/ui/radix-loader";
+
+// Load the deferred Radix primitives up front: the tooltips mount on them, and
+// the fake timers these tests run under would otherwise stall the lazy load.
+beforeAll(async () => {
+  await primeRadix();
+});
 
 const mockGetAll = vi.mocked(projectClient.getAll);
 const mockGetBulkStats = vi.mocked(projectClient.getBulkStats);
@@ -113,7 +121,8 @@ function makeMemorySnapshot(
 }
 
 async function renderOpenBadge(): Promise<HTMLElement> {
-  const { container } = render(<ProjectResourceBadge />);
+  // The app root supplies the TooltipProvider.
+  const { container } = render(<ProjectResourceBadge />, { wrapper: TooltipProvider });
   // Flush the initial badge poll so the trigger renders.
   await act(async () => {
     await Promise.resolve();
@@ -141,6 +150,38 @@ let originalHidden: boolean;
 
 function emitCached(): void {
   Array.from(cachedHandlers).forEach((h) => h());
+}
+
+/** Opens a trigger's tooltip by focusing it and returns what it says. */
+async function tooltipTextOf(trigger: HTMLElement): Promise<string | null> {
+  await act(async () => {
+    fireEvent.focus(trigger);
+  });
+  // `hidden: true`: jsdom has no layout, and here the popper keeps its wrapper
+  // at visibility:hidden (hideWhenDetached). The open tooltip's content is still
+  // what's read.
+  const text = screen.queryByRole("tooltip", { hidden: true })?.textContent ?? null;
+  await act(async () => {
+    fireEvent.blur(trigger);
+  });
+  return text;
+}
+
+/**
+ * The label cell of the process row for `pid`, found by the tooltip that pairs
+ * the label with its pid — the pid is only on offer there, never a native title.
+ */
+async function findProcessRowLabel(
+  container: HTMLElement,
+  pid: number
+): Promise<{ label: HTMLElement; tooltip: string } | null> {
+  const section = container.querySelector<HTMLElement>("#resource-diagnostics");
+  if (!section) return null;
+  for (const trigger of Array.from(section.querySelectorAll<HTMLElement>("[data-state]"))) {
+    const tooltip = await tooltipTextOf(trigger);
+    if (tooltip?.endsWith(`(${pid})`)) return { label: trigger, tooltip };
+  }
+  return null;
 }
 
 function findMemoryRow(container: HTMLElement, value: string): HTMLElement | undefined {
@@ -465,14 +506,14 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
     )!;
 
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(container.querySelector('[title$="(321)"]')).toBeNull();
+    expect(await findProcessRowLabel(container, 321)).toBeNull();
 
     await act(async () => {
       fireEvent.click(toggle);
     });
 
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(container.querySelector('[title$="(321)"]')).not.toBeNull();
+    expect(await findProcessRowLabel(container, 321)).not.toBeNull();
   });
 });
 
@@ -496,11 +537,11 @@ describe("ProjectResourceBadge — process ownership", () => {
     return container;
   }
 
-  /** The process row's label cell, located by the pid its title carries. */
-  function processRowLabel(container: HTMLElement, pid: number): string {
-    const row = container.querySelector(`[title$="(${pid})"]`);
-    if (!row) throw new Error(`No process row for pid ${pid}`);
-    return row.textContent ?? "";
+  /** The process row's label text, located by the pid its tooltip carries. */
+  async function processRowLabel(container: HTMLElement, pid: number): Promise<string> {
+    const found = await findProcessRowLabel(container, pid);
+    if (!found) throw new Error(`No process row for pid ${pid}`);
+    return found.label.textContent ?? "";
   }
 
   it("names the owning project instead of the generic renderer label", async () => {
@@ -508,7 +549,7 @@ describe("ProjectResourceBadge — process ownership", () => {
 
     const container = await renderWithDiagnostics();
 
-    expect(processRowLabel(container, 400)).toBe("RuinWeave view");
+    expect(await processRowLabel(container, 400)).toBe("RuinWeave view");
   });
 
   it("leaves an unowned process on its generic label", async () => {
@@ -519,7 +560,7 @@ describe("ProjectResourceBadge — process ownership", () => {
     const container = await renderWithDiagnostics();
 
     // Scoped to the row: unrelated popover copy may legitimately say "view".
-    expect(processRowLabel(container, 200)).toBe("GPU Process");
+    expect(await processRowLabel(container, 200)).toBe("GPU Process");
   });
 
   it("surfaces the full label on hover when the row truncates", async () => {
@@ -529,7 +570,9 @@ describe("ProjectResourceBadge — process ownership", () => {
 
     const container = await renderWithDiagnostics();
 
-    const row = container.querySelector('[title*="RuinWeave"]');
-    expect(row?.getAttribute("title")).toBe("2 views · Cedar Forge, RuinWeave (400)");
+    // Through the app's tooltip, never a native title.
+    expect(container.querySelectorAll("[title]")).toHaveLength(0);
+    const found = await findProcessRowLabel(container, 400);
+    expect(found?.tooltip).toBe("2 views · Cedar Forge, RuinWeave (400)");
   });
 });
