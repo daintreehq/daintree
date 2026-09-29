@@ -195,6 +195,8 @@ describe("app-level stacking", () => {
     const source = read("src/components/Layout/AppLayout.tsx");
     expect(source).toContain("z-[var(--z-panel)]");
     expect(source).toContain("z-[var(--z-portal)]");
+    expect(source).toContain("z-[var(--z-panel-scrim)]");
+    expect(zToken(css, "panel-scrim")).toBeLessThan(zToken(css, "panel"));
     expect(source).not.toMatch(/"fixed (?:right-0 )?bottom-0 z-(?:40|50)\b/);
   });
 

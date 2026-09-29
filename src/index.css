@@ -150,6 +150,7 @@ code.hljs {
    * Establishes a clear stacking hierarchy for UI layers.
    * Higher tiers always appear above lower tiers.
    *
+   * Tier 30: The scrim behind a panel-tier sheet (the Theme Browser shield)
    * Tier 40: Fixed panels (dock, sidebars)
    * Tier 50: Portal overlay
    * Tier 55: Maximized content (terminals)
@@ -167,6 +168,7 @@ code.hljs {
    * Tier 90: Drag shields — a transparent full-window cover while a divider
    *          drags, so iframes and webviews cannot swallow the pointer
    */
+  --z-panel-scrim: 30;
   --z-panel: 40;
   --z-portal: 50;
   --z-maximized: 55;

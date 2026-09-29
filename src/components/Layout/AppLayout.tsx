@@ -1130,7 +1130,7 @@ export function AppLayout({
               aria-hidden="true"
               onClick={() => useThemeBrowserStore.getState().close()}
               data-visible={themeBrowserVisible}
-              className="fixed inset-0 z-30 bg-scrim-soft/30 hover:bg-scrim-soft/45 hover:backdrop-blur-[2px] starting:opacity-0 data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
+              className="fixed inset-0 z-[var(--z-panel-scrim)] bg-scrim-soft/30 hover:bg-scrim-soft/45 hover:backdrop-blur-[2px] starting:opacity-0 data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
               style={{
                 transitionProperty: "background-color, opacity",
                 transitionDuration: `var(--duration-150), ${themeBrowserMotion.duration}ms`,
