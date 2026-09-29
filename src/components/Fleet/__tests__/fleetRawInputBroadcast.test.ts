@@ -2,13 +2,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyFleetBroadcastResult, broadcastFleetRawInput } from "../fleetRawInputBroadcast";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { PtyPanelData } from "@shared/types/panel";
 
-const broadcastMock = vi.hoisted(() => vi.fn<(ids: string[], data: string) => void>());
+const broadcastMock = vi.hoisted(() =>
+  vi.fn<(ids: string[], data: string, reportSuccess?: boolean) => void>()
+);
 const notifyUserInputMock = vi.hoisted(() => vi.fn<(id: string, data?: string) => void>());
 const notifyEnterPressedMock = vi.hoisted(() => vi.fn<(id: string) => void>());
 const clearDirectingStateMock = vi.hoisted(() => vi.fn<(id: string) => void>());
@@ -72,6 +75,7 @@ function resetStores(): void {
     previewArmedIds: new Set<string>(),
   });
   useFleetFailureStore.getState().clear();
+  useFleetBroadcastProgressStore.setState({ isActive: false });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
   useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: false });
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", isFleetScopeActive: false });
@@ -88,7 +92,7 @@ describe("broadcastFleetRawInput", () => {
 
     expect(broadcastFleetRawInput("t1", "npm test\r")).toBe(true);
 
-    expect(broadcastMock).toHaveBeenCalledWith(["t2", "t1", "t3"], "npm test\r");
+    expect(broadcastMock).toHaveBeenCalledWith(["t2", "t1", "t3"], "npm test\r", false);
   });
 
   it("works for normal terminals without agent identity", () => {
@@ -97,7 +101,36 @@ describe("broadcastFleetRawInput", () => {
 
     expect(broadcastFleetRawInput("shell-a", "\u0003")).toBe(true);
 
-    expect(broadcastMock).toHaveBeenCalledWith(["shell-a", "shell-b"], "\u0003");
+    expect(broadcastMock).toHaveBeenCalledWith(["shell-a", "shell-b"], "\u0003", false);
+  });
+
+  it("asks for successes only while a failure chip is showing", () => {
+    seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+
+    broadcastFleetRawInput("t1", "a");
+    expect(broadcastMock).toHaveBeenLastCalledWith(["t1", "t2"], "a", false);
+
+    useFleetFailureStore.getState().recordFailure(null, ["t2"]);
+    broadcastFleetRawInput("t1", "b");
+    expect(broadcastMock).toHaveBeenLastCalledWith(["t1", "t2"], "b", true);
+
+    applyFleetBroadcastResult({ results: [{ id: "t2", ok: true }] });
+    broadcastFleetRawInput("t1", "c");
+    expect(broadcastMock).toHaveBeenLastCalledWith(["t1", "t2"], "c", false);
+  });
+
+  it("asks for successes while a structured broadcast could still record a chip", () => {
+    seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+
+    useFleetBroadcastProgressStore.getState().init(2);
+    broadcastFleetRawInput("t1", "a");
+    expect(broadcastMock).toHaveBeenLastCalledWith(["t1", "t2"], "a", true);
+
+    useFleetBroadcastProgressStore.getState().finish();
+    broadcastFleetRawInput("t1", "b");
+    expect(broadcastMock).toHaveBeenLastCalledWith(["t1", "t2"], "b", false);
   });
 
   it("returns false when the origin is not armed", () => {
@@ -133,7 +166,7 @@ describe("broadcastFleetRawInput", () => {
 
     expect(broadcastFleetRawInput("grid-a", "ls\r")).toBe(true);
 
-    expect(broadcastMock).toHaveBeenCalledWith(["grid-a", "grid-b"], "ls\r");
+    expect(broadcastMock).toHaveBeenCalledWith(["grid-a", "grid-b"], "ls\r", false);
   });
 
   it("returns false for empty raw input", () => {
@@ -247,7 +280,7 @@ describe("broadcastFleetRawInput", () => {
     expect(broadcastFleetRawInput("t1", "ls\r")).toBe(true);
 
     // The write still goes out to every target...
-    expect(broadcastMock).toHaveBeenCalledWith(["t1", "t2"], "ls\r");
+    expect(broadcastMock).toHaveBeenCalledWith(["t1", "t2"], "ls\r", false);
     // ...but the layout is left untouched.
     expect(useWorktreeSelectionStore.getState().isFleetScopeActive).toBe(false);
   });
@@ -260,7 +293,7 @@ describe("broadcastFleetRawInput", () => {
 
     // The actual write still goes out — adding the notifyEnterPressed call
     // must not gate or short-circuit the broadcast.
-    expect(broadcastMock).toHaveBeenCalledWith(["t1", "t2", "t3"], "\r");
+    expect(broadcastMock).toHaveBeenCalledWith(["t1", "t2", "t3"], "\r", false);
     expect(notifyEnterPressedMock.mock.calls.map(([id]) => id).sort()).toEqual(["t1", "t2", "t3"]);
   });
 });

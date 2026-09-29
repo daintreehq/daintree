@@ -204,9 +204,23 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   handlers.push(() => ptyClient.off("terminal-status", handleTerminalStatus));
 
   // Per-target results from a fleet broadcast write. Drives the failure chip
-  // and auto-disarm of dead-pipe targets in the renderer.
+  // and auto-disarm of dead-pipe targets in the renderer. A fleet is armed
+  // from one project view, so only that project's views can act on a result.
+  // Entries Main can no longer attribute (killed mid-write) go to every view
+  // on their own, so no foreign view records a live target's failure that its
+  // later, project-scoped recovery would never reach.
   const handleBroadcastWriteResult = (payload: BroadcastWriteResultPayload) => {
-    broadcastToRenderer(CHANNELS.TERMINAL_BROADCAST_WRITE_RESULT, payload);
+    const byProject = new Map<string | null, BroadcastWriteResultPayload["results"]>();
+    for (const result of payload.results) {
+      const projectId = ptyClient.getTerminalProjectId(result.id);
+      const group = byProject.get(projectId);
+      if (group) group.push(result);
+      else byProject.set(projectId, [result]);
+    }
+    // A null project falls back to every view inside broadcastToProjectRenderers.
+    for (const [projectId, results] of byProject) {
+      broadcastToProjectRenderers(projectId, CHANNELS.TERMINAL_BROADCAST_WRITE_RESULT, { results });
+    }
   };
   ptyClient.on("broadcast-write-result", handleBroadcastWriteResult);
   handlers.push(() => ptyClient.off("broadcast-write-result", handleBroadcastWriteResult));

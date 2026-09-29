@@ -406,7 +406,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onBackendReady(callback: () => void): () => void;
     sendKey(id: string, key: string): void;
     batchDoubleEscape(ids: string[]): void;
-    broadcastWrite(ids: string[], data: string): void;
+    broadcastWrite(ids: string[], data: string, reportSuccess?: boolean): void;
     onBroadcastWriteResult(callback: (data: BroadcastWriteResultPayload) => void): () => void;
     reportTitleState(id: string, state: "working" | "waiting"): void;
     updateObservedTitle(id: string, title: string): void;
