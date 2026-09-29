@@ -1859,8 +1859,8 @@ export class WorkspaceService {
         onEmfileLimitReached: () => this.handleEmfileLimitReached(),
         onWatcherRecovered: () => this.handleWatcherRecovered(),
         onGitConfigChanged: () => this.scheduleForgeRemoteReprobe({ observedConfigWrite: true }),
-        onScheduleFetch: (worktreeId, _isCurrent, force, prune) =>
-          this.executeFetchForWorktree(worktreeId, force, prune),
+        onScheduleFetch: (worktreeId, _isCurrent, force, prune, maxAgeMs) =>
+          this.executeFetchForWorktree(worktreeId, force, prune, maxAgeMs),
       },
       this.mainBranch,
       this.pollQueue,
@@ -2122,7 +2122,8 @@ export class WorkspaceService {
   private async executeFetchForWorktree(
     worktreeId: string,
     force: boolean,
-    prune?: boolean
+    prune?: boolean,
+    maxAgeMs?: number
   ): Promise<WorkspaceFetchResult | undefined> {
     const target = this.monitors.get(worktreeId);
     if (!target || !target.isRunning) return undefined;
@@ -2137,6 +2138,7 @@ export class WorkspaceService {
       prune,
       remotes,
       primaryRemote,
+      ...(maxAgeMs !== undefined ? { maxAgeMs } : {}),
     });
     // Re-read after the await: a worktree removed mid-fetch leaves `target`
     // pointing at a stopped monitor, and stamping fetch state onto it would

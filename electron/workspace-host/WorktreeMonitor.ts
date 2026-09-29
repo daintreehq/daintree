@@ -112,12 +112,15 @@ export interface WorktreeMonitorCallbacks {
    * shared across sibling monitors. Resolves regardless of fetch outcome.
    * `force` bypasses the per-repo failure cache (manual user-triggered refresh);
    * `prune` is left undefined on scheduled paths, which prunes (#12091).
+   * `maxAgeMs` is passed only by cadence-timer runs — see
+   * `FetchSchedulerHost.onExecuteFetch`.
    */
   onScheduleFetch?: (
     worktreeId: string,
     isCurrent: boolean,
     force: boolean,
-    prune?: boolean
+    prune?: boolean,
+    maxAgeMs?: number
   ) => Promise<WorkspaceFetchResult | void> | WorkspaceFetchResult | void;
 }
 
@@ -408,10 +411,12 @@ export class WorktreeMonitor {
       get hasFetchCallback() {
         return Boolean(monitor.callbacks.onScheduleFetch);
       },
-      onExecuteFetch: (force: boolean, prune?: boolean) => {
+      onExecuteFetch: (force: boolean, prune?: boolean, maxAgeMs?: number) => {
         const cb = monitor.callbacks.onScheduleFetch;
         if (!cb) return;
-        return cb(monitor.id, monitor._isCurrent, force, prune);
+        return maxAgeMs === undefined
+          ? cb(monitor.id, monitor._isCurrent, force, prune)
+          : cb(monitor.id, monitor._isCurrent, force, prune, maxAgeMs);
       },
       onUpdate: () => monitor.emitUpdate(),
     };

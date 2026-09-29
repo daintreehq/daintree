@@ -332,6 +332,22 @@ describe("WorkspaceService.executeFetchForWorktree", () => {
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({ prune: undefined }));
   });
 
+  it("hands a cadence run's freshness window to the coordinator, and only then", async () => {
+    const monitor = createMonitor("/test/wt-cadence");
+    monitor.start();
+    const spy = vi
+      .spyOn(service["fetchCoordinator"], "fetchForWorktree")
+      .mockResolvedValue({ status: "success", remote: "origin" });
+
+    await service["executeFetchForWorktree"]("/test/wt-cadence", false, undefined, 224_000);
+    await service["executeFetchForWorktree"]("/test/wt-cadence", true, false);
+
+    expect(spy.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({ force: false, maxAgeMs: 224_000 })
+    );
+    expect(spy.mock.calls[1]![0]).not.toHaveProperty("maxAgeMs");
+  });
+
   it("does not stamp fetch state onto a monitor removed while the fetch was running", async () => {
     const monitor = createMonitor("/test/wt-gone");
     monitor.start();

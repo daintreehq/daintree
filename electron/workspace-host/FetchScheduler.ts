@@ -15,6 +15,12 @@ const FETCH_JITTER_FRACTION = 0.25;
 // window for fresh ahead/behind on app launch.
 const FETCH_INITIAL_DELAY_MIN_MS = 2_000;
 const FETCH_INITIAL_DELAY_MAX_MS = 5_000;
+// Headroom between a cadence timer's shortest possible delay and the freshness
+// window it asks for, so a timer that fires a hair early (Node allows ~1ms)
+// still sees its own last fetch as due rather than fresh.
+const FETCH_FRESHNESS_SLACK_MS = 1_000;
+// Floor for a re-armed timer anchored to a sibling's fetch.
+const FETCH_MIN_REARM_DELAY_MS = 1_000;
 
 function randomBetween(minMs: number, maxMs: number): number {
   if (maxMs <= minMs) return minMs;
@@ -49,11 +55,19 @@ export interface FetchSchedulerHost {
    * which the coordinator reads as "prune" — the pre-#12091 behavior.
    *
    * The resolved value is the primary remote's result, which the user-triggered
-   * path reports back to the renderer. Scheduled callers ignore it.
+   * path reports back to the renderer. Scheduled callers read only its
+   * `freshSince`, to anchor the next cadence timer.
+   *
+   * `maxAgeMs` is set only on cadence-timer runs: a planned remote's success
+   * within that window — by any sibling on the same commondir — counts as this
+   * run's fetch of it. Forced, initial (startup / focus-flip / resume) and
+   * user-triggered runs leave it undefined and keep the coordinator's default
+   * dedup window.
    */
   onExecuteFetch(
     force: boolean,
-    prune?: boolean
+    prune?: boolean,
+    maxAgeMs?: number
   ): Promise<WorkspaceFetchResult | void> | WorkspaceFetchResult | void;
   /**
    * Re-emit a snapshot so the renderer reflects the in-flight transition.
@@ -65,6 +79,16 @@ export interface FetchSchedulerHost {
 
 export class FetchScheduler {
   private fetchTimer: NodeJS.Timeout | null = null;
+  /** Whether the armed timer is a startup-tier one, which anchoring never touches. */
+  private fetchTimerInitial = false;
+  /**
+   * Time the next cadence interval counts from, set by the last cadence run
+   * that reused a sibling's fetch. Undefined means "from now" — every other
+   * outcome, including forced and initial runs, which keep their old timing.
+   * Kept on the scheduler, not passed through, so an interval change
+   * re-arming the timer does not forget it.
+   */
+  private cadenceAnchorAt: number | undefined;
   private _pendingFetchPromise: Promise<unknown> | null = null;
   /**
    * When `triggerNow()` is called while a non-force fetch is in-flight, we
@@ -123,24 +147,53 @@ export class FetchScheduler {
     if (!this.host.isRunning || !this.host.pollingEnabled) return;
     if (!this.host.hasFetchCallback) return;
     if (this.fetchTimer) return;
+    // A startup / resume / focus-flip timer starts the cadence over; an anchor
+    // from before it (say, before a pause) must not shorten what follows.
+    if (initial) this.cadenceAnchorAt = undefined;
 
-    const delay = initial
+    let delay = initial
       ? randomBetween(FETCH_INITIAL_DELAY_MIN_MS, FETCH_INITIAL_DELAY_MAX_MS)
       : this.pickInterval();
+    // After a cadence run that reused a sibling's fetch, count the jittered
+    // interval from that fetch rather than from now, so the refs' age stays
+    // bounded by one interval — the same bound a lone worktree gets — instead
+    // of stacking one interval on another.
+    if (!initial && this.cadenceAnchorAt !== undefined) {
+      const age = Date.now() - this.cadenceAnchorAt;
+      if (age > 0) delay = Math.max(FETCH_MIN_REARM_DELAY_MS, delay - age);
+    }
 
+    this.fetchTimerInitial = initial;
     this.fetchTimer = setTimeout(() => {
       this.fetchTimer = null;
       if (this.disposed || !this.host.isRunning || !this.host.pollingEnabled) return;
-      void this.run(false);
+      void this.run(false, undefined, initial ? undefined : this.freshnessWindow());
     }, delay);
   }
 
-  private pickInterval(): number {
+  private intervalBounds(): { minMs: number; maxMs: number } {
     const base = this.host.isCurrent ? this.focusedIntervalMs : this.backgroundIntervalMs;
     const jitterRange = Math.floor(base * FETCH_JITTER_FRACTION);
     const minMs = Math.max(1000, base - jitterRange);
     const maxMs = Math.max(minMs + 1000, base + jitterRange);
+    return { minMs, maxMs };
+  }
+
+  private pickInterval(): number {
+    const { minMs, maxMs } = this.intervalBounds();
     return randomBetween(minMs, maxMs);
+  }
+
+  /**
+   * How old the shared refs may be for a cadence run to count a sibling's
+   * fetch as its own: just under the shortest delay this scheduler could have
+   * drawn. A lone worktree therefore always fetches when its timer fires (its
+   * own last fetch is at least that old), while a sibling's fetch inside the
+   * window satisfies it — and the anchored re-arm in `schedule` keeps the
+   * worst-case ref age at one jittered interval, same as fetching itself.
+   */
+  private freshnessWindow(): number {
+    return this.intervalBounds().minMs - FETCH_FRESHNESS_SLACK_MS;
   }
 
   /** Clear the timer and re-arm — used by the focus-change setter. */
@@ -165,7 +218,11 @@ export class FetchScheduler {
     }
   }
 
-  private async run(force: boolean, prune?: boolean): Promise<WorkspaceFetchResult | void> {
+  private async run(
+    force: boolean,
+    prune?: boolean,
+    maxAgeMs?: number
+  ): Promise<WorkspaceFetchResult | void> {
     if (this.disposed || !this.host.isRunning) return;
     if (!force && !this.host.pollingEnabled) return;
     if (!this.host.hasFetchCallback) return;
@@ -177,11 +234,23 @@ export class FetchScheduler {
       return await this.queueForceFetch(prune);
     }
 
-    const run = Promise.resolve(this.host.onExecuteFetch(force, prune))
-      .catch(() => {
-        // Coordinator handles classification; scheduler doesn't surface
-        // fetch errors directly — they don't block local-status updates.
-      })
+    const startedAt = Date.now();
+    let freshSince: number | undefined;
+    const run = Promise.resolve(
+      maxAgeMs === undefined
+        ? this.host.onExecuteFetch(force, prune)
+        : this.host.onExecuteFetch(force, prune, maxAgeMs)
+    )
+      .then(
+        (result) => {
+          freshSince = result ? result.freshSince : undefined;
+          return result;
+        },
+        () => {
+          // Coordinator handles classification; scheduler doesn't surface
+          // fetch errors directly — they don't block local-status updates.
+        }
+      )
       .finally(() => {
         this._pendingFetchPromise = null;
         const queued = this._pendingForceFetch;
@@ -203,6 +272,10 @@ export class FetchScheduler {
           // stopped scheduler, which is exactly the "declined" signal.
           void this.run(true, queued.prune).then(queued.resolve, () => queued.resolve());
         } else {
+          this.updateCadenceAnchor(maxAgeMs !== undefined, startedAt, freshSince);
+          // An interval change while this run was in flight armed a cadence
+          // timer off the previous anchor; re-arm it from this run's outcome.
+          if (this.fetchTimer && !this.fetchTimerInitial) this.clearTimer();
           // schedule() declines on a paused host, so a fetch that was already
           // in flight when the project was backgrounded can't restart the
           // cadence — resume re-arms it.
@@ -218,6 +291,26 @@ export class FetchScheduler {
     // unhandled rejection AND leaves the fetch un-awaited.
     this.emitUpdate();
     return await run;
+  }
+
+  /**
+   * Record where the next cadence interval counts from. Only a cadence run
+   * anchors, and only by how old the reused refs already were when the run
+   * started: time spent fetching never counts, so a slow multi-remote batch
+   * can't drive back-to-back minimum-delay re-arms. A run with no successful
+   * remote (`freshSince` absent) re-arms from now, as before.
+   */
+  private updateCadenceAnchor(
+    cadence: boolean,
+    startedAt: number,
+    freshSince: number | undefined
+  ): void {
+    if (!cadence || freshSince === undefined) {
+      this.cadenceAnchorAt = undefined;
+      return;
+    }
+    const reusedAge = Math.max(0, startedAt - freshSince);
+    this.cadenceAnchorAt = reusedAge > 0 ? Date.now() - reusedAge : undefined;
   }
 
   /**
