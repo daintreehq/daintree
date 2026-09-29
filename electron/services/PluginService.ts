@@ -265,7 +265,9 @@ import { PluginRecipeMetadataStore } from "./plugin/PluginRecipeMetadataStore.js
 import { broadcastToRenderer, broadcastToProjectRenderers } from "../ipc/utils.js";
 import { PLUGIN_INVOKE_MAX_RESULT_BYTES } from "../../shared/config/pluginBudgets.js";
 import { assertPayloadWithinLimit, estimatePayloadBytes } from "./plugin/pluginPayloadLimits.js";
-import { routePluginPush } from "./plugin/pluginPushBatcher.js";
+import { getPluginPushBatcher, routePluginPush } from "./plugin/pluginPushBatcher.js";
+import { PluginMetricsService, classifyInvokeFailure } from "./plugin/PluginMetricsService.js";
+import { markPerformance } from "../utils/performance.js";
 import { deepFreeze } from "../utils/deepFreeze.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo, PluginRequiredSettingsStatus } from "../../shared/types/plugin.js";
@@ -1011,6 +1013,8 @@ export class PluginService {
    */
   private readonly broadcaster: PluginContributionBroadcaster;
   private readonly panelLifecycleBroker: PluginPanelLifecycleBroker;
+  /** Per-plugin cost observations, read by the perf IPC and the dev CLI. */
+  readonly metrics: PluginMetricsService;
   /** sourceId → detach its `destroyed` listener. See `watchPanelLifecycleSource`. */
   private readonly panelLifecycleSourceCleanups = new Map<number, () => void>();
   private disposed = false;
@@ -1097,6 +1101,18 @@ export class PluginService {
     this.initPromise = new Promise<void>((resolve) => {
       this.resolveInit = resolve;
     });
+
+    this.metrics = new PluginMetricsService({
+      host: {
+        isKnownPlugin: (pluginId) => this.plugins.has(pluginId),
+        isolationOf: (pluginId) =>
+          this.plugins.get(pluginId)?.isBuiltin === true ? "in-process" : "worker",
+        workerPids: () => this.liveWorkerPids(),
+      },
+    });
+    getPluginPushBatcher().setFlushObserver((pluginId, messages, bytes) =>
+      this.metrics.recordPushes(pluginId, messages, bytes)
+    );
 
     this.broadcaster = new PluginContributionBroadcaster({
       isDisposed: () => this.disposed,
@@ -1284,6 +1300,7 @@ export class PluginService {
    */
   dispose(): void {
     this.disposed = true;
+    this.metrics.dispose();
     // Native watchers go first: a settled burst arriving mid-teardown would
     // otherwise queue a reload into a service that is going away.
     this.projectPluginWatcherRegistry?.dispose();
@@ -3196,6 +3213,7 @@ export class PluginService {
     // contribution broadcasts; what it dispatches must find them published.
     this.broadcaster.interruptHolds();
 
+    const activationStart = performance.now();
     const promise = this._doActivate(pluginId).then(
       () => {
         // Guard against an unload — or a disable→re-enable that reloaded the id
@@ -3206,6 +3224,7 @@ export class PluginService {
         // #10887). Identity-compare the loaded object, not just presence.
         if (this.plugins.get(pluginId) === plugin) {
           this.activatedPlugins.add(pluginId);
+          this.recordActivationMetric(pluginId, performance.now() - activationStart);
         }
       },
       () => {
@@ -3221,6 +3240,22 @@ export class PluginService {
     );
     this.activationPromises.set(pluginId, promise);
     return promise;
+  }
+
+  /**
+   * Call to settled, including worker boot for worker plugins. Only successful
+   * activations are recorded; a failure already has its own provenance record.
+   */
+  private recordActivationMetric(pluginId: string, durationMs: number): void {
+    this.metrics.recordActivation(pluginId, durationMs);
+    markPerformance("plugin-activated", { pluginId, durationMs: Math.round(durationMs) });
+  }
+
+  private *liveWorkerPids(): Iterable<readonly [string, number]> {
+    for (const [pluginId, entry] of this.pluginWorkers) {
+      const pid = entry.workerHost.pid;
+      if (pid !== null) yield [pluginId, pid];
+    }
   }
 
   /**
@@ -4441,6 +4476,40 @@ export class PluginService {
     ctx: PluginIpcContext,
     args: unknown[]
   ): Promise<unknown> {
+    // Metered here rather than from the audit log, which can be disabled and is
+    // capped. Timed from after activation: a cold start is recorded as the
+    // activation it is, not as a slow first invoke.
+    const timing = { handlerStart: Number.NaN };
+    // A call that outlives an unload+reload of the id describes the old
+    // generation; it must not land in the replacement's fresh entry.
+    const generation = this.plugins.get(pluginId);
+    const sameGeneration = (): boolean =>
+      generation !== undefined && this.plugins.get(pluginId) === generation;
+    try {
+      const result = await this.dispatchHandlerUnmetered(pluginId, channel, ctx, args, timing);
+      if (sameGeneration()) {
+        this.metrics.recordInvoke(pluginId, performance.now() - timing.handlerStart, "ok");
+      }
+      return result;
+    } catch (err) {
+      if (!Number.isNaN(timing.handlerStart) && sameGeneration()) {
+        this.metrics.recordInvoke(
+          pluginId,
+          performance.now() - timing.handlerStart,
+          classifyInvokeFailure(err)
+        );
+      }
+      throw err;
+    }
+  }
+
+  private async dispatchHandlerUnmetered(
+    pluginId: string,
+    channel: string,
+    ctx: PluginIpcContext,
+    args: unknown[],
+    timing: { handlerStart: number }
+  ): Promise<unknown> {
     // Ownership guard (#10462): the renderer is a single shared WebContents in
     // which every plugin runs in the same realm, so a caller can pass an
     // arbitrary `pluginId`. Reject any id the host has not actually loaded
@@ -4461,6 +4530,7 @@ export class PluginService {
     // its `activate()` to run if it hasn't yet, so handlers registered during
     // activation are available on the very first call. No-op once activated.
     await this.activatePlugin(pluginId);
+    timing.handlerStart = performance.now();
 
     const key = `${pluginId}:${channel}`;
     const descriptor = this.pluginActions.get(channel);
@@ -5957,6 +6027,7 @@ export class PluginService {
     this.invalidatePluginAuthority(pluginId);
     this.plugins.delete(pluginId);
     this.pluginWorkerActivity.delete(pluginId);
+    this.metrics.evict(pluginId);
     this.hostBindings.delete(pluginId);
     // Every unload emits, worker or not: a plugin with only views has no
     // worker status, yet a renderer holding one of its settings views needs

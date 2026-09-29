@@ -74,6 +74,12 @@ export interface PluginCliServerHandlers {
   /** Unload a dev plugin when the CLI's `dev` session stops. */
   devStop: (params: { pluginId: string }) => Promise<void>;
   /**
+   * The dev plugin's perf snapshot (`PluginPerfSnapshot`), or `null` when it is
+   * not loaded. Polled by `daintree-plugin dev` to show measurements against
+   * budgets; each poll keeps worker memory sampling alive.
+   */
+  devMetrics: (params: { pluginId: string }) => Promise<unknown>;
+  /**
    * Trust and per-directory state for one project's committed plugins (#12214).
    * Read-only, and the only way `daintree-plugin doctor` can report the state
    * Daintree actually computed rather than one it guessed: trust lives in
@@ -176,6 +182,10 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
         const p = DevParamsSchema.parse(params ?? {});
         await handlers.devStop(p);
         return { status: "ok" };
+      }
+      case "plugin.dev.metrics": {
+        const p = DevParamsSchema.parse(params ?? {});
+        return { snapshot: (await handlers.devMetrics(p)) ?? null };
       }
       case "plugin.project.status": {
         const p = ProjectStatusParamsSchema.parse(params ?? {});
@@ -373,6 +383,10 @@ export async function startPluginCliServer(): Promise<void> {
       uninstall: ({ pluginId, deleteSettings }) => handleUninstall(pluginId, deleteSettings),
       devStart: ({ pluginId }) => pluginService.loadDevPlugin(pluginId),
       devStop: ({ pluginId }) => pluginService.stopDevSession(pluginId),
+      devMetrics: async ({ pluginId }) => {
+        pluginService.metrics.leaseSampling();
+        return pluginService.metrics.getSnapshot(pluginId);
+      },
       projectStatus: async ({ projectRoot }) => {
         const { projectStore } = await import("./ProjectStore.js");
         const normalized = path.resolve(projectRoot);
