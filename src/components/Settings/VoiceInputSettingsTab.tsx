@@ -5,7 +5,6 @@ import {
   EyeOff,
   Plus,
   X,
-  Check,
   XCircle,
   ExternalLink,
   ChevronRight,
@@ -861,7 +860,7 @@ function ApiKeyRow({
       </>
     ) : status.kind === "removed" ? (
       <>
-        <Check className="w-3.5 h-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
+        <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
         Key removed
       </>
     ) : status.kind === "remove-failed" ? (

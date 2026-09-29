@@ -99,6 +99,9 @@ function holders(sf: ts.SourceFile): Holder[] {
           const init = attr.initializer;
           if (name === "icon" && ts.isJsxExpression(init) && init.expression) {
             if (ts.isIdentifier(init.expression)) icon = init.expression.text;
+            // `icon={<TriangleAlert className="…" />}`, the element form.
+            else if (ts.isJsxSelfClosingElement(init.expression))
+              icon = init.expression.tagName.getText(sf);
           }
           if (name === "severity" && ts.isStringLiteral(init)) severity = init.text;
         }

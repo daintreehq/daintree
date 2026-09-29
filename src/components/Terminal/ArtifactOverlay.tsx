@@ -579,7 +579,7 @@ function ArtifactItem({
               </OutcomeLine>
             )}
             {feedback?.kind === "saved" && (
-              <OutcomeLine tone="neutral" icon={Check}>
+              <OutcomeLine tone="neutral" icon={CircleCheck}>
                 Saved to{" "}
                 <span className="break-all font-mono text-text-secondary">{feedback.filePath}</span>
               </OutcomeLine>
