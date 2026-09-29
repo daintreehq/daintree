@@ -31,6 +31,7 @@ import type {
 import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import { CHANNELS } from "./ipc/channels.js";
+import { PLUGIN_PUSH_BATCH_CHANNEL } from "./services/plugin/pluginPushProtocol.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import {
   BrokerError,
@@ -1079,6 +1080,23 @@ interface PluginPushChannelEntry {
 }
 const _pluginPushChannels = new Map<string, PluginPushChannelEntry>();
 
+// Main batches every push on this transport into one message per renderer per
+// macrotask (an ordered `[fullChannel, envelope]` array). Each entry is replayed
+// through the per-channel dispatcher below, in order, so panel filtering and
+// subscriber isolation are exactly those of an individually sent push.
+let _pluginPushBatchAttached = false;
+function _attachPluginPushBatchListener(): void {
+  if (_pluginPushBatchAttached) return;
+  _pluginPushBatchAttached = true;
+  ipcRenderer.on(PLUGIN_PUSH_BATCH_CHANNEL, (event, batch: unknown) => {
+    if (!Array.isArray(batch)) return;
+    for (const entry of batch) {
+      if (!Array.isArray(entry) || typeof entry[0] !== "string") continue;
+      _pluginPushChannels.get(entry[0])?.handler(event, entry[1]);
+    }
+  });
+}
+
 function _pluginPushOn(
   pluginId: string,
   channel: string,
@@ -1086,6 +1104,7 @@ function _pluginPushOn(
   callback: PluginPushSubscriber
 ): () => void {
   const fullChannel = `plugin:${pluginId}:${channel}`;
+  _attachPluginPushBatchListener();
   let entry = _pluginPushChannels.get(fullChannel);
   if (!entry) {
     const subscribers = new Map<string | null, Set<PluginPushSubscriber>>();

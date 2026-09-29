@@ -334,3 +334,44 @@ describe("locate (#12610)", () => {
     expect(broker.locate("p1", "acme")).toEqual({ kind: "missing" });
   });
 });
+
+describe("pushTargetsFor", () => {
+  it.each(["mounted", "hidden", "backgrounded", "trashed", "render-failed"] as const)(
+    "counts a %s panel's renderer as a holder",
+    (phase) => {
+      const broker = makeBroker();
+      broker.ingest(7, [event({ phase })]);
+      expect(broker.pushTargetsFor("p1", "acme")).toEqual([7]);
+    }
+  );
+
+  it("returns every renderer that holds the panel", () => {
+    const broker = makeBroker();
+    broker.ingest(7, [event()]);
+    broker.ingest(9, [event({ phase: "backgrounded" })]);
+    expect(broker.pushTargetsFor("p1", "acme").sort()).toEqual([7, 9]);
+  });
+
+  it("returns nothing for an unreported or removed panel", () => {
+    const broker = makeBroker();
+    expect(broker.pushTargetsFor("p1", "acme")).toEqual([]);
+    broker.ingest(7, [event(), event({ phase: "removed" })]);
+    expect(broker.pushTargetsFor("p1", "acme")).toEqual([]);
+  });
+
+  it("returns nothing when ownership is in doubt", () => {
+    const owners: Record<string, string | undefined> = { "acme.dash": "acme" };
+    const broker = new PluginPanelLifecycleBroker((kindId) => owners[kindId]);
+    broker.ingest(7, [event()]);
+    expect(broker.pushTargetsFor("p1", "other")).toEqual([]);
+    owners["acme.dash"] = undefined;
+    expect(broker.pushTargetsFor("p1", "acme")).toEqual([]);
+  });
+
+  it("forgets a cleared renderer", () => {
+    const broker = makeBroker();
+    broker.ingest(7, [event()]);
+    broker.clearSource(7);
+    expect(broker.pushTargetsFor("p1", "acme")).toEqual([]);
+  });
+});

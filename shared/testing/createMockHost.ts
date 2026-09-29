@@ -61,6 +61,7 @@ import type {
   PluginStorageScope,
   PluginToastOptions,
   PluginTypedIpcHandler,
+  PluginHandlerOptions,
   PluginWorktreeSnapshot,
   PluginWorktreesResult,
   PluginAgentSnapshot,
@@ -1167,21 +1168,21 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     registerHandler<TArgs = unknown, TResult = unknown>(
       channel: string,
       schemaOrHandler: PluginChannelSchema<TArgs, TResult> | PluginIpcHandler,
-      handler?: PluginTypedIpcHandler<TArgs, TResult>
+      handlerOrOptions?: PluginTypedIpcHandler<TArgs, TResult> | PluginHandlerOptions,
+      _options?: PluginHandlerOptions
     ): Promise<void> {
-      // Handle both overloads:
-      // 1. registerHandler(channel, schema, handler) — typed
-      // 2. registerHandler(channel, handler) — untyped
-      if (handler !== undefined) {
-        // Typed overload: schemaOrHandler is a schema, handler is the typed handler
+      // Handle both overloads, each with an optional trailing options bag:
+      // 1. registerHandler(channel, schema, handler, options?) — typed
+      // 2. registerHandler(channel, handler, options?) — untyped
+      if (typeof handlerOrOptions === "function" || typeof schemaOrHandler !== "function") {
+        // Typed overload: schemaOrHandler is a schema, the third arg the typed handler.
         // The cast is necessary because PluginTypedIpcHandler is structurally compatible
         // with PluginIpcHandler and we're storing it in a untyped recording array.
         registeredHandlers.push({
           channel,
-          handler: handler as unknown as PluginIpcHandler,
+          handler: handlerOrOptions as unknown as PluginIpcHandler,
         });
       } else {
-        // Untyped overload: schemaOrHandler is the handler
         registeredHandlers.push({
           channel,
           handler: schemaOrHandler as PluginIpcHandler,

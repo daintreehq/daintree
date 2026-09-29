@@ -63,6 +63,10 @@ import {
   scopeMatchesPattern,
 } from "../fileDecorationRegistry.js";
 import { broadcastToRenderer, broadcastToProjectRenderers } from "../../ipc/utils.js";
+import { PLUGIN_PUSH_MAX_PAYLOAD_BYTES } from "../../../shared/config/pluginBudgets.js";
+import { assertPayloadWithinLimit } from "./pluginPayloadLimits.js";
+import { resolveInvokeTimeoutMs, runWithInvokeDeadline } from "./pluginInvokeDeadline.js";
+import { getPluginPushBatcher, routePluginPush } from "./pluginPushBatcher.js";
 import { isAppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -95,6 +99,8 @@ import type {
   PluginActionContribution,
   PluginActionDescriptor,
   PluginChannelSchema,
+  PluginHandlerOptions,
+  PluginIpcContext,
   PluginTypedIpcHandler,
   ActionHandler,
   PluginQuickPickItem,
@@ -654,10 +660,62 @@ export function createHost(
    * a window that never routes through ProjectViewManager); in that state there
    * is no other project's view for it to reach.
    */
-  const pushToRenderers: (channel: string, ...args: unknown[]) => void =
+  const sendToScope: (channel: string, ...args: unknown[]) => void =
     boundProjectId === null
       ? broadcastToRenderer
       : (channel, ...args) => broadcastToProjectRenderers(boundProjectId, channel, ...args);
+  // Direct sends (badges, decoration invalidations, toasts) go out immediately,
+  // so anything this plugin already pushed is delivered first: a renderer must
+  // never see a badge or toast before the panel update that preceded it.
+  const pushToRenderers = (channel: string, ...args: unknown[]): void => {
+    getPluginPushBatcher().flush();
+    sendToScope(channel, ...args);
+  };
+
+  /**
+   * The `plugin:{pluginId}:{channel}` transport shared by broadcastToRenderer
+   * and postToPanel. Throws on an oversize payload (each caller surfaces that
+   * the way it surfaces its other validation errors); the worker proxy applies
+   * the same cap before the payload crosses its port, and this re-check covers
+   * builtins and a worker that skipped it. Delivery is batched per renderer and, for a
+   * targeted push, narrowed to the renderer holding the panel.
+   */
+  const pushPluginMessage = (channel: string, panelId: string | null, payload: unknown): void => {
+    const bytes = assertPayloadWithinLimit(
+      pluginId,
+      `push payload on "${channel}"`,
+      payload,
+      PLUGIN_PUSH_MAX_PAYLOAD_BYTES
+    );
+    routePluginPush({
+      pluginId,
+      projectId: boundProjectId,
+      channel: `plugin:${pluginId}:${channel}`,
+      panelId,
+      payload,
+      bytes,
+      locatePanel: (target, owner) => deps.panelLifecycleBroker.pushTargetsFor(target, owner),
+    });
+  };
+
+  /**
+   * Wrap a channel handler in its invoke deadline. The wrapper keeps the
+   * handler's declared arity, which the dispatch-time signature hint reads.
+   */
+  const withInvokeDeadline = <
+    THandler extends (ctx: PluginIpcContext, ...args: never[]) => unknown,
+  >(
+    channel: string,
+    timeoutMs: number,
+    handler: THandler
+  ): THandler => {
+    if (timeoutMs === 0) return handler;
+    const call = handler as unknown as (ctx: PluginIpcContext, ...args: unknown[]) => unknown;
+    const wrapped = (ctx: PluginIpcContext, ...args: unknown[]): unknown =>
+      runWithInvokeDeadline(pluginId, channel, timeoutMs, ctx, (scoped) => call(scoped, ...args));
+    Object.defineProperty(wrapped, "length", { value: handler.length });
+    return wrapped as unknown as THandler;
+  };
 
   /**
    * Does a worktree event belong to the bound project? Unbound hosts see every
@@ -984,27 +1042,52 @@ export function createHost(
         | PluginChannelSchema<unknown, unknown>
         | PluginIpcHandler
         | PluginTypedIpcHandler<unknown, unknown>,
-      typedHandler?: PluginTypedIpcHandler<unknown, unknown>
+      typedHandlerOrOptions?: PluginTypedIpcHandler<unknown, unknown> | PluginHandlerOptions,
+      typedOptions?: PluginHandlerOptions
     ) => {
       if (revoked) {
         throw new Error(
           `Plugin "${pluginId}" host revoked: registerHandler called after activate() returned or timed out`
         );
       }
-      if (typedHandler !== undefined) {
-        // A three-argument call is the typed overload by definition; if the
-        // second arg isn't a schema, reject loudly instead of silently
-        // dropping the typed handler and registering the second arg as a
-        // legacy handler — that mismatch would look like a phantom no-op
-        // at first dispatch.
+      // A function in third position is the typed overload by definition. Short
+      // of that, a function in second position is the legacy overload, whose
+      // optional third argument is the options bag.
+      const isLegacy =
+        typeof typedHandlerOrOptions !== "function" && typeof schemaOrHandler === "function";
+      const options = isLegacy
+        ? (typedHandlerOrOptions as PluginHandlerOptions | undefined)
+        : typedOptions;
+      const timeoutMs = resolveInvokeTimeoutMs(pluginId, channel, options?.timeoutMs);
+      if (!isLegacy) {
+        const typedHandler = typedHandlerOrOptions;
+        // The typed overload by definition; if the second arg isn't a schema,
+        // reject loudly instead of silently dropping the typed handler and
+        // registering the second arg as a legacy handler — that mismatch would
+        // look like a phantom no-op at first dispatch.
         if (!isChannelSchema(schemaOrHandler)) {
           throw new Error(
             `Plugin "${pluginId}" registerHandler: second argument must be a channel schema { args, result } when a typed handler is provided`
           );
         }
-        deps.registerHandler(pluginId, channel, schemaOrHandler, typedHandler);
+        deps.registerHandler(
+          pluginId,
+          channel,
+          schemaOrHandler,
+          typeof typedHandler === "function"
+            ? withInvokeDeadline(
+                channel,
+                timeoutMs,
+                typedHandler as PluginTypedIpcHandler<unknown, unknown>
+              )
+            : (typedHandler as PluginTypedIpcHandler<unknown, unknown> | undefined)
+        );
       } else {
-        deps.registerHandler(pluginId, channel, schemaOrHandler as PluginIpcHandler);
+        deps.registerHandler(
+          pluginId,
+          channel,
+          withInvokeDeadline(channel, timeoutMs, schemaOrHandler as PluginIpcHandler)
+        );
       }
       return Promise.resolve();
     }) as PluginHostApi["registerHandler"],
@@ -1024,7 +1107,7 @@ export function createHost(
       // transport — broadcastToRenderer, postToPanel, and the process stream
       // share the `plugin:{pluginId}:{channel}` channel and one `plugin.on`
       // subscriber receives all three.
-      pushToRenderers(`plugin:${pluginId}:${channel}`, { panelId: null, payload });
+      pushPluginMessage(channel, null, payload);
       return Promise.resolve();
     },
     // The post-activation-safe sibling of broadcastToRenderer: same
@@ -1058,8 +1141,12 @@ export function createHost(
           );
         }
       }
-      const targetPanelId = panelId ?? null;
-      pushToRenderers(`plugin:${pluginId}:${channel}`, { panelId: targetPanelId, payload });
+      try {
+        pushPluginMessage(channel, panelId ?? null, payload);
+      } catch (err) {
+        // An oversize payload rejects like the channel check above (#10617).
+        return Promise.reject(err);
+      }
       return Promise.resolve();
     },
     getActiveWorktree: async () => {

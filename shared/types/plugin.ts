@@ -2365,6 +2365,19 @@ export interface PluginChannelSchema<TArgs, TResult> {
 }
 
 /**
+ * Per-channel options for {@link PluginHostApi.registerHandler}.
+ */
+export interface PluginHandlerOptions {
+  /**
+   * Deadline, in milliseconds, for one invoke of this channel. When it passes,
+   * the renderer's `invoke` rejects with a `PLUGIN_INVOKE_TIMEOUT:` error and a
+   * worker-hosted handler's invoke is cancelled. Defaults to five minutes;
+   * `0` disables the deadline for handlers that legitimately run longer.
+   */
+  timeoutMs?: number;
+}
+
+/**
  * Provider-agnostic projection of a worktree's linked forge resources (issue
  * and/or PR), exposed on {@link PluginWorktreeSnapshot.linked}. Replaces the
  * GitHub-shaped flat fields that previously leaked onto the snapshot —
@@ -3680,7 +3693,8 @@ export interface PluginActivationApi {
   registerHandler<TArgs, TResult>(
     channel: string,
     schema: PluginChannelSchema<TArgs, TResult>,
-    handler: PluginTypedIpcHandler<TArgs, TResult>
+    handler: PluginTypedIpcHandler<TArgs, TResult>,
+    options?: PluginHandlerOptions
   ): Promise<void>;
   /**
    * Legacy untyped overload: a variadic handler with no host-side validation.
@@ -3688,7 +3702,11 @@ export interface PluginActivationApi {
    * typed overload above is preferred for new code. Also revoke-guarded — must
    * be called during `activate()`.
    */
-  registerHandler(channel: string, handler: PluginIpcHandler): Promise<void>;
+  registerHandler(
+    channel: string,
+    handler: PluginIpcHandler,
+    options?: PluginHandlerOptions
+  ): Promise<void>;
   /**
    * Push a fire-and-forget payload to all renderers listening on `channel`.
    * Intended for the activation window — wiring up the renderer-side view of a

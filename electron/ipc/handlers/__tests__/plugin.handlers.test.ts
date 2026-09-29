@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PLUGIN_INVOKE_MAX_ARGS_BYTES } from "../../../../shared/config/pluginBudgets.js";
 import { access, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1382,6 +1383,30 @@ describe("registerPluginHandlers", () => {
     await expect(invokeHandler(trustedEvent, "x", "y")).rejects.toThrow(
       "No plugin handler registered for x:y"
     );
+  });
+
+  it("PLUGIN_INVOKE rejects oversize args before dispatch and audits the rejection", async () => {
+    mockDispatchHandler.mockResolvedValue("never");
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 1 },
+    };
+    const huge = "x".repeat(PLUGIN_INVOKE_MAX_ARGS_BYTES + 1);
+    await expect(invokeHandler(trustedEvent, "x", "y", huge)).rejects.toThrow(
+      /^PLUGIN_PAYLOAD_TOO_LARGE: plugin "x" arguments to "y"/
+    );
+    expect(mockDispatchHandler).not.toHaveBeenCalled();
+    expect(mockAuditAppend.mock.calls[0][0]).toMatchObject({
+      pluginId: "x",
+      actionId: "y",
+      result: "error",
+    });
   });
 
   it("PLUGIN_INVOKE handler audits dispatch failures (#9240)", async () => {
