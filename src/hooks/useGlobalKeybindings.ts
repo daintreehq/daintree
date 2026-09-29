@@ -123,8 +123,13 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       const hudPending =
         pendingChord !== null && combosFieldsEqual(pendingChord, COMMAND_HUD_PREFIX);
       const activePaletteId = usePaletteStore.getState().activePaletteId;
-      const hasModalDialog = document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
-      const hasDialogBackstop = document.querySelector(`[${ESCAPE_BACKSTOP_DIALOG_ATTR}]`) !== null;
+      // Both flags only gate Escape handling. They are whole-document scans, so
+      // skip them for every other keystroke (all typing flows through here).
+      const isEscape = e.key === "Escape";
+      const hasModalDialog =
+        isEscape && document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+      const hasDialogBackstop =
+        isEscape && document.querySelector(`[${ESCAPE_BACKSTOP_DIALOG_ATTR}]`) !== null;
       // The command HUD's search input is the active typing surface while the
       // Cmd+K chord is pending AND focus sits inside the HUD.
       const insideHud = hudPending && target.closest("[data-command-hud]") != null;
