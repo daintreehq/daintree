@@ -238,6 +238,11 @@ export function createRendererBridge(
   // WebContents ids that already have a teardown-eviction listener wired, so we
   // never double-register one across repeated fetches or a server restart.
   const perWebContentsEvictionWired = new Set<number>();
+  // In-flight unpinned fetches by target WebContents id, for coalescing.
+  const unpinnedInflight = new Map<
+    number,
+    { promise: Promise<ActionManifestEntry[]>; extendDeadline: () => void }
+  >();
 
   // One-shot latch so a persistently broken workspace lookup can't flood the
   // log on every dispatch (#11536).
@@ -521,7 +526,12 @@ export function createRendererBridge(
   function sendManifestRequest(
     resolveWebContents: () => Electron.WebContents,
     onResolved: (manifest: ActionManifestEntry[]) => void,
-    route?: BridgeRoute
+    route?: BridgeRoute,
+    /**
+     * Receives controls for the request once it is registered: whether it is
+     * still awaiting its answer, and a handle that restarts its deadline.
+     */
+    onArmed?: (controls: { isPending: () => boolean; extendDeadline: () => void }) => void
   ): Promise<ActionManifestEntry[]> {
     return new Promise((resolve, reject) => {
       let webContents: Electron.WebContents;
@@ -534,7 +544,7 @@ export function createRendererBridge(
 
       const requestId = randomUUID();
       const webContentsId = webContents.id;
-      const timer = setTimeout(() => {
+      const onTimeout = () => {
         const pending = pendingManifests.get(requestId);
         pending?.destroyedCleanup?.();
         pendingManifests.delete(requestId);
@@ -543,7 +553,8 @@ export function createRendererBridge(
             `Manifest request timed out${routeTimeoutSuffix(route, MCP_MANIFEST_REQUEST_TIMEOUT_MS)}`
           )
         );
-      }, MCP_MANIFEST_REQUEST_TIMEOUT_MS);
+      };
+      const timer = setTimeout(onTimeout, MCP_MANIFEST_REQUEST_TIMEOUT_MS);
 
       const onDestroyed = () => {
         const pending = pendingManifests.get(requestId);
@@ -589,11 +600,21 @@ export function createRendererBridge(
         destroyedCleanup: settle,
       });
 
+      onArmed?.({
+        isPending: () => pendingManifests.has(requestId),
+        extendDeadline: () => {
+          const pending = pendingManifests.get(requestId);
+          if (!pending) return;
+          clearTimeout(pending.timer);
+          pending.timer = setTimeout(onTimeout, MCP_MANIFEST_REQUEST_TIMEOUT_MS);
+        },
+      });
+
       const send = () => {
         try {
           webContents.send(CHANNELS.MCP_SERVER_GET_MANIFEST_REQUEST, { requestId });
         } catch (err) {
-          clearTimeout(timer);
+          clearTimeout(pendingManifests.get(requestId)?.timer ?? timer);
           settle();
           pendingManifests.delete(requestId);
           reject(normalizeError(err, "Failed to request action manifest"));
@@ -725,13 +746,76 @@ export function createRendererBridge(
     });
   }
 
+  /**
+   * Unpinned manifest fetch from the focused project view. Concurrent callers
+   * targeting the same view coalesce onto one in-flight request — a burst of
+   * session handshakes otherwise has the renderer rebuild and ship the full
+   * manifest once per session. Keyed by the resolved WebContents so a focus
+   * change mid-flight starts a fresh fetch rather than answering from the
+   * previous view. Like the pinned path, a settled fetch is never reused.
+   *
+   * Each caller keeps the full deadline it had with a request of its own: a
+   * joiner pushes the shared request's deadline out to its own, and every
+   * caller times out on its own clock, so a late joiner is never failed early
+   * by the first caller's expiring budget.
+   */
   function requestManifest(): Promise<ActionManifestEntry[]> {
-    return sendManifestRequest(
-      () => getActiveProjectWebContents(),
-      (manifest) => {
-        cachedManifest = manifest;
+    let webContents: Electron.WebContents;
+    try {
+      webContents = getActiveProjectWebContents();
+    } catch (err) {
+      return Promise.reject(normalizeError(err, "MCP renderer bridge unavailable"));
+    }
+    const id = webContents.id;
+    let flight = unpinnedInflight.get(id);
+    if (flight) {
+      flight.extendDeadline();
+    } else {
+      let controls: { isPending: () => boolean; extendDeadline: () => void } | undefined;
+      const promise = sendManifestRequest(
+        () => webContents,
+        (manifest) => {
+          cachedManifest = manifest;
+        },
+        undefined,
+        (armed) => {
+          controls = armed;
+        }
+      );
+      const created = { promise, extendDeadline: () => controls?.extendDeadline() };
+      // A send that threw has already settled the request; registering it
+      // would hand a same-turn caller that failure instead of its own attempt.
+      if (controls?.isPending()) {
+        unpinnedInflight.set(id, created);
+        const clearInflight = () => {
+          if (unpinnedInflight.get(id) === created) unpinnedInflight.delete(id);
+        };
+        promise.then(clearInflight, clearInflight);
       }
-    );
+      flight = created;
+    }
+    return withCallerDeadline(flight.promise);
+  }
+
+  function withCallerDeadline(
+    shared: Promise<ActionManifestEntry[]>
+  ): Promise<ActionManifestEntry[]> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("Manifest request timed out")),
+        MCP_MANIFEST_REQUEST_TIMEOUT_MS
+      );
+      shared.then(
+        (manifest) => {
+          clearTimeout(timer);
+          resolve(manifest);
+        },
+        (err: unknown) => {
+          clearTimeout(timer);
+          reject(err);
+        }
+      );
+    });
   }
 
   function dispatchAction(
@@ -1048,6 +1132,7 @@ export function createRendererBridge(
       // double-registering on the next fetch.
       perWebContentsCache.clear();
       perWebContentsInflight.clear();
+      unpinnedInflight.clear();
     },
   };
 }
