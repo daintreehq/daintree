@@ -312,7 +312,7 @@ const tierBoundsNewSessions = (tier: HelpAssistantTier, confirmationsSkipped: bo
 // The live value lives in the row's description, where the select's narrow
 // rail cannot clip it.
 const DAINTREE_CONFIRMATION_OPTIONS = [
-  { value: "inherit", label: "Follow Skip permission prompts" },
+  { value: "inherit", label: "Follow global setting" },
   { value: "always-ask", label: "Always ask" },
   { value: "never-ask", label: "Never ask" },
 ];

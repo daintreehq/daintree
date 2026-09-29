@@ -512,7 +512,7 @@ describe("DaintreeAssistantSettingsTab", () => {
         </SettingsValidationProvider>
       );
       await waitForContent(container, "Daintree confirmations");
-      expect(container.textContent).toContain("Follow Skip permission prompts");
+      expect(container.textContent).toContain("Follow global setting");
       expect(container.textContent).toContain(
         "Settings > Agents > Skip permission prompts, which is on."
       );
