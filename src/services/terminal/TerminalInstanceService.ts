@@ -218,6 +218,8 @@ class TerminalInstanceService {
   private revealController: TerminalRevealController;
   private unsubTierChanged: (() => void) | null = null;
   private unsubResizeResult: (() => void) | null = null;
+  private unsubExit: (() => void) | null = null;
+  private exitHandlers = new Map<string, (exitCode: number) => void>();
   private offViewLifecycle: () => void;
   private offViewObservability: () => void;
   private suppressedWebGLReleaseTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1055,6 +1057,18 @@ class TerminalInstanceService {
   }
 
   /**
+   * One process-wide PTY exit listener routed by id. The preload event bus calls
+   * every subscriber across the contextBridge per event, so a listener per
+   * terminal made each exit O(N) and closing a project's N terminals O(N²).
+   */
+  private ensureExitSubscription(): void {
+    if (this.unsubExit) return;
+    this.unsubExit = terminalClient.onExit((id, exitCode) => {
+      this.exitHandlers.get(id)?.(exitCode);
+    });
+  }
+
+  /**
    * Store the geometry the PTY reports holding. A new PTY incarnation retires
    * the previous one's divergence history — the counter describes one live
    * backend process, not the pane.
@@ -1351,8 +1365,7 @@ class TerminalInstanceService {
     });
     listeners.push(unsubData);
 
-    const unsubExit = terminalClient.onExit((termId, exitCode) => {
-      if (termId !== id) return;
+    const handleExit = (exitCode: number) => {
       const current = this.instances.get(id);
       // Ahead of the suppression gate: the PTY is gone either way, and a
       // suppressed exit (trash/restore churn) is exactly the case where the pane
@@ -1367,8 +1380,12 @@ class TerminalInstanceService {
         writeLocal(current, `\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
       }
       exitSubscribers.forEach((cb) => cb(exitCode));
+    };
+    this.ensureExitSubscription();
+    this.exitHandlers.set(id, handleExit);
+    listeners.push(() => {
+      if (this.exitHandlers.get(id) === handleExit) this.exitHandlers.delete(id);
     });
-    listeners.push(unsubExit);
 
     const kind = "terminal" as const;
 
@@ -3867,6 +3884,8 @@ class TerminalInstanceService {
     this.unsubTierChanged = null;
     this.unsubResizeResult?.();
     this.unsubResizeResult = null;
+    this.unsubExit?.();
+    this.unsubExit = null;
     this.workerIngestController.dispose();
     this.resizePassScheduler.dispose();
     this.reflowController.dispose();
