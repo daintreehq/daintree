@@ -1277,12 +1277,12 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   closeCrossWorktreeDiff: () =>
     set({ crossDiffDialog: { isOpen: false, initialWorktreeId: null } }),
 
-  trackTerminalFocus: (worktreeId, terminalId) =>
-    set((state) => {
-      const next = new Map(state.lastFocusedTerminalByWorktree);
-      next.set(worktreeId, terminalId);
-      return { lastFocusedTerminalByWorktree: next };
-    }),
+  // Mutated in place without set(): this map is only ever read imperatively
+  // via getState(), so notifying would just re-run every selector on this
+  // store on each focus move.
+  trackTerminalFocus: (worktreeId, terminalId) => {
+    get().lastFocusedTerminalByWorktree.set(worktreeId, terminalId);
+  },
 
   clearWorktreeFocusTracking: (worktreeId) =>
     set((state) => {
