@@ -10,6 +10,14 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
       window.clearTimeout(timerRef.current);
     }
 
+    // Nothing to publish. Arming anyway (as every mount did) lands a same-value
+    // setState after the delay, which React can still render the host for — a
+    // wasted full composer render shortly after every mount.
+    if (Object.is(value, debounced)) {
+      timerRef.current = null;
+      return;
+    }
+
     timerRef.current = window.setTimeout(() => {
       setDebounced(value);
     }, delayMs);
@@ -20,7 +28,7 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
         timerRef.current = null;
       }
     };
-  }, [delayMs, value]);
+  }, [debounced, delayMs, value]);
 
   return debounced;
 }
