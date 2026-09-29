@@ -90,9 +90,45 @@ documentTabClassName(isActive); // text-xs font-medium, border-r divider, inset 
 
 ### Dock Item Active
 
-**Role:** Dock buttons (launch pill, popover-open triggers). Use a neutral lift — no accent border or ring.
+**Role:** Everything on the dock that opens a popover: the docked-panel chips (terminal and agent, tab group, file/browser/plugin), the status pills (Background, Waiting, Errors, Trash), the launch pill. Use a neutral lift — no accent border or ring.
 
-**Usage:** The accent border+ring active treatment previously documented here was deliberately retired (commit `e30d29638`, "replace accent ring on popover-open dock buttons with neutral lift"). Dock buttons now render via the `pill` Button variant (`button.tsx`) — neutral surface, ambient shadow, no accent active state. The launch pill (`DockLaunchButton.tsx`) goes further and intentionally does NOT keep its accent focus-visible ring after a pointer-dismissed dropdown (see comment near `wasPointerCloseRef`); keyboard dismissal still restores focus for WAI-ARIA. Reach for the neutral overlay ladder, not accent, for any new dock-state treatment.
+```tsx
+// chips — src/components/Layout/dockChipStyles.ts
+cn(DOCK_CHIP_CLASS, isOpen && DOCK_CHIP_OPEN_CLASS);
+// status pills — src/components/Layout/dockStatusPill.tsx
+cn(DOCK_STATUS_PILL_CLASS, isOpen && DOCK_STATUS_PILL_OPEN_CLASS);
+```
+
+**Usage:** The accent border+ring active treatment previously documented here was deliberately retired (commit `e30d29638`, "replace accent ring on popover-open dock buttons with neutral lift"), first for the pills and then for the chips, which had kept it as a copy-pasted class string in three files. Do not respell either state — import the constants.
+
+- **Open** is the neutral ladder's top rung: `bg-overlay-emphasis` on the pills; `--dock-item-bg-active` / `--dock-item-border-active` on the chips, whose `:root` defaults are `overlay-emphasis` and `border-default` and which light themes lift to white. Neither default nor any theme override may be accent-derived. The open fill is repeated under `hover:` so pointing at an open item never drops it back to the hover step.
+- **Hover** is one fill for the whole strip: `--dock-item-bg-hover` (`overlay-medium`), chips and pills alike.
+- **Agent-state glyph** on a chip is `DOCK_STATE_GLYPH_CLASS` (12px), the size the tab strip, panel header and sidebar draw it beside a 14px kind icon. The plain-command spinner and finished check in the same slot take the same size.
+- **Separators** inside a chip (title | command) are `bg-border-divider`, like every other separator.
+- The launch pill (`DockLaunchButton.tsx`) intentionally does NOT keep its accent focus-visible ring after a pointer-dismissed dropdown (see comment near `wasPointerCloseRef`); keyboard dismissal still restores focus for WAI-ARIA.
+
+Pinned by `src/components/Layout/__tests__/dockFamily.contract.test.ts` and the accent guard.
+
+---
+
+### Dock Status Popover List
+
+**Role:** The lists inside the Background, Waiting, Errors and Trash popovers — short, sectioned ("This worktree" / "Other worktrees"), each row a panel with a primary action and a few secondary buttons.
+
+```tsx
+<div className={DOCK_POPOVER_HEADER_CLASS}>…</div>
+<DockPopoverList>
+  <div data-dock-row="" className={cn(rowLayout, DOCK_POPOVER_ROW_HOVER_CLASS)}>…</div>
+</DockPopoverList>
+```
+
+**Usage:** All from `src/components/Layout/dockStatusPill.tsx`.
+
+- **Header** — padding and a bottom divider, no fill of its own: the popover is the surface.
+- **List** — `DockPopoverList`: a compact `ScrollShadow` (the overflow cue under auto-hiding scrollbars) with one height cap for all four, `min(360px, available height − 5rem)`. Never a local `max-h-[…]`.
+- **Row hover** — `DOCK_POPOVER_ROW_HOVER_CLASS`, the [List Row Hover](#list-row-hover) step with the 150ms colour transition. A row's state (waiting, working) is its glyph and label, never a coloured rail or wash. A group's header is its own row; the group wrapper does not hover, so a member and its group never light together.
+- **Keyboard** — after the NotificationCenter popover. A keyboard-opened pill focuses the popover root (`useDockPopoverFocusHandoff`), and Down/Home or Up/End enters the list; a pointer open leaves focus on the pill. The list is one Tab stop: Up/Down/Home/End move between rows onto each row's primary control (`data-dock-row-target`, else its first button), Left/Right move across that row's own buttons, and only the current row's buttons are tabbable. Keyboard focus is the focus ring, never a second fill.
+- **Right-click** — a row that stands for a panel (Waiting, Background) opens that panel's own `TerminalContextMenu`, the menu its dock chip or pane header opens, scoped to the row's `terminalId`.
 
 ---
 
@@ -340,6 +376,8 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 | Button Ghost | `button.tsx` (`ghost` variant) | Ghost button hover with overlay-hover |
 | Button Link | `button.tsx` (`link` variant, `inline` size) | Underlined secondary text that inherits its sentence |
 | Dock Launch Button | `DockLaunchButton.tsx` (`pill` variant) | Neutral lift, no accent active state |
+| Dock Chip | `dockChipStyles.ts` (`DockedTerminalItem`, `DockedTabGroup`, `DockedNonPtyPanelItem`) | Neutral open lift shared with the status pills, 12px state glyph |
+| Dock Status Popover | `dockStatusPill.tsx` (`DockPopoverList`, Waiting/Background/Status/Trash) | Shared header, scroll-shadowed list, row hover, one-Tab-stop keyboard list |
 | Settings Subtab | `SettingsSubtabBar.tsx` | Active tab with bottom border accent |
 | Document Tab | `ui/document-tab.tsx` (`TabButton`, `PortalToolbar`, `HelpSessionTabs`) | Accent underline on a lifted fill, one close control, manual activation |
 | Worktree Card | `WorktreeCard.tsx` | Card hover with neutral overlay + ambient elevation |

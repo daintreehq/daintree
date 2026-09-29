@@ -179,6 +179,17 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
   },
 }));
 
+// Right-click on a row must be that row's panel, so the menu records whose it is.
+vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
+  TerminalContextMenu: ({
+    terminalId,
+    children,
+  }: {
+    terminalId: string;
+    children: React.ReactNode;
+  }) => <div data-menu-for={terminalId}>{children}</div>,
+}));
+
 import { BackgroundContainer } from "../BackgroundContainer";
 
 function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
@@ -295,32 +306,34 @@ describe("BackgroundContainer", () => {
       expect(away).toContain("feature-ui");
     });
 
-    it("uses ambient border + tint for waiting state, not panel-state classes", () => {
-      mockTerminals = [makeTerminal({ id: "t1", agentState: "waiting" })];
+    it("carries agent state in the glyph and label, never in the row's surface", () => {
+      // A popover row is highlighted by hover and focus alone, as in the other
+      // three status popovers; a coloured rail per state was a second language.
+      mockTerminals = [
+        makeTerminal({ id: "t-wait", title: "a", agentState: "waiting" }),
+        makeTerminal({ id: "t-work", title: "b", agentState: "working" }),
+        makeTerminal({ id: "t-idle", title: "c", agentState: "idle" }),
+      ];
       render(<BackgroundContainer />);
-      const row = screen.getByTestId("background-single-item");
-      expect(row.className).toContain("border-l-2");
-      expect(row.className).toContain("border-l-[color:var(--color-activity-waiting)]");
-      expect(row.className).toContain(
-        "bg-[color-mix(in_oklab,var(--color-activity-waiting)_8%,transparent)]"
-      );
-      expect(row.className).not.toContain("panel-state-waiting");
+      const rows = screen.getAllByTestId("background-single-item");
+      expect(rows).toHaveLength(3);
+      expect(new Set(rows.map((row) => row.className)).size).toBe(1);
+      for (const row of rows) expect(row.className).not.toMatch(/panel-state-|border-l-/);
+      expect(screen.getAllByText(/waiting/i).length).toBeGreaterThan(0);
     });
+  });
 
-    it("uses working ambient styling without panel-state classes", () => {
-      mockTerminals = [makeTerminal({ id: "t1", agentState: "working" })];
+  describe("row context menu", () => {
+    it("scopes each row's right-click to that row's own panel", () => {
+      mockTerminals = [
+        makeTerminal({ id: "t1", title: "first" }),
+        makeTerminal({ id: "t2", title: "second" }),
+      ];
       render(<BackgroundContainer />);
-      const row = screen.getByTestId("background-single-item");
-      expect(row.className).toContain("border-l-[color:var(--color-activity-working)]");
-      expect(row.className).not.toContain("panel-state-working");
-    });
-
-    it("uses a transparent border placeholder for passive states (no layout shift)", () => {
-      mockTerminals = [makeTerminal({ id: "t1", agentState: "idle" })];
-      render(<BackgroundContainer />);
-      const row = screen.getByTestId("background-single-item");
-      expect(row.className).toContain("border-l-2");
-      expect(row.className).toContain("border-l-transparent");
+      const rows = screen.getAllByTestId("background-single-item");
+      expect(
+        rows.map((row) => row.closest("[data-menu-for]")?.getAttribute("data-menu-for"))
+      ).toEqual(["t1", "t2"]);
     });
   });
 

@@ -1,6 +1,7 @@
 import { useState, useCallback, useSyncExternalStore } from "react";
 import { RotateCcw, X, Layers, ChevronRight, Unlink } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DOCK_POPOVER_ROW_HOVER_CLASS } from "./dockStatusPill";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
@@ -119,9 +120,16 @@ export function TrashGroupItem({
     <div
       data-trash-row
       data-row-id={groupRestoreId}
-      className="relative shrink-0 overflow-hidden rounded-[var(--radius-sm)] bg-transparent transition-colors hover:bg-tint/5"
+      className="relative shrink-0 overflow-hidden rounded-[var(--radius-sm)]"
     >
-      <div className="flex items-start gap-2 px-2.5 py-1.5 group">
+      {/* The header is its own row: hovering a member must not light the whole group too. */}
+      <div
+        data-dock-row=""
+        className={cn(
+          "flex items-start gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 group",
+          DOCK_POPOVER_ROW_HOVER_CLASS
+        )}
+      >
         <Button
           variant="ghost"
           size="icon-xs"
@@ -242,7 +250,11 @@ export function TrashGroupItem({
               return (
                 <div
                   key={terminal.id}
-                  className="flex items-center gap-2 px-2 py-1 text-2xs rounded-[var(--radius-sm)] hover:bg-tint/5 group/panel"
+                  data-dock-row=""
+                  className={cn(
+                    "flex items-center gap-2 px-2 py-1 text-2xs rounded-[var(--radius-sm)] group/panel",
+                    DOCK_POPOVER_ROW_HOVER_CLASS
+                  )}
                 >
                   <TerminalIcon
                     kind={terminal.kind}

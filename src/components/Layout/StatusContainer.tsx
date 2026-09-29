@@ -17,7 +17,10 @@ import { useWorktrees } from "@/hooks/useWorktrees";
 import {
   DOCK_STATUS_PILL_CLASS,
   DOCK_STATUS_PILL_OPEN_CLASS,
+  DOCK_POPOVER_HEADER_CLASS,
+  DOCK_POPOVER_ROW_HOVER_CLASS,
   DOCK_POPOVER_SECTIONS,
+  DockPopoverList,
   DockPopoverSection,
   DockStatusPillLabel,
   dockStatusScopeDescription,
@@ -94,6 +97,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                 aria-haspopup="dialog"
                 aria-expanded={isOpen}
                 aria-controls={config.contentId}
+                onClick={focusHandoff.onTriggerClick}
                 aria-label={`${config.buttonLabel}: ${displayCount} agent${displayCount === 1 ? "" : "s"} ${dockStatusScopeDescription(displayCount, hereCount)}`}
               >
                 <DockStatusPillLabel
@@ -118,15 +122,16 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
           className="w-96 p-0"
           side="top"
           align="end"
-          onOpenAutoFocus={(e) => e.preventDefault()}
+          onOpenAutoFocus={focusHandoff.onOpenAutoFocus}
           onCloseAutoFocus={focusHandoff.onCloseAutoFocus}
+          onKeyDown={focusHandoff.onContentKeyDown}
         >
           <div className="flex flex-col">
-            <div className="px-3 py-2 border-b border-divider bg-surface-canvas/50 flex justify-between items-center">
+            <div className={DOCK_POPOVER_HEADER_CLASS}>
               <span className="text-xs font-medium text-text-secondary">{config.headerLabel}</span>
             </div>
 
-            <div className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto">
+            <DockPopoverList>
               {DOCK_POPOVER_SECTIONS.map((section) => {
                 const items = section.key === "here" ? hereTerminals : elsewhereTerminals;
                 if (items.length === 0) return null;
@@ -141,6 +146,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                         <button
                           key={terminal.id}
                           type="button"
+                          data-dock-row=""
                           onClick={() => {
                             const worktreeId = terminal.worktreeId?.trim();
                             if (worktreeId && worktreeId !== activeWorktreeId) {
@@ -152,7 +158,10 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                             focusHandoff.markHandoff();
                             setIsOpen(false);
                           }}
-                          className="flex items-center justify-between gap-2.5 w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] transition-colors group text-left hover:bg-tint/5 focus-visible:bg-tint/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                          className={cn(
+                            "flex items-center justify-between gap-2.5 w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] group text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
+                            DOCK_POPOVER_ROW_HOVER_CLASS
+                          )}
                         >
                           <div className="flex items-center gap-2 min-w-0 flex-1">
                             <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
@@ -195,7 +204,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                   </DockPopoverSection>
                 );
               })}
-            </div>
+            </DockPopoverList>
           </div>
         </PopoverContent>
       </Popover>

@@ -18,13 +18,17 @@ import { useWorktrees } from "@/hooks/useWorktrees";
 import {
   DOCK_STATUS_PILL_CLASS,
   DOCK_STATUS_PILL_OPEN_CLASS,
+  DOCK_POPOVER_HEADER_CLASS,
+  DOCK_POPOVER_ROW_HOVER_CLASS,
   DOCK_POPOVER_SECTIONS,
+  DockPopoverList,
   DockPopoverSection,
   DockStatusPillLabel,
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { STATE_ICONS, STATE_LABELS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
@@ -34,7 +38,6 @@ import {
   KILL_TERMINAL_CONFIRM_LABEL,
   killTerminalDescription,
 } from "./killTerminalStrings";
-import type { AgentState } from "@/types";
 
 interface BackgroundContainerProps {
   compact?: boolean;
@@ -53,19 +56,6 @@ interface BackgroundDisplayGroup {
 }
 
 type BackgroundDisplayItem = BackgroundDisplaySingle | BackgroundDisplayGroup;
-
-// PopoverContent has overflow-hidden, which clips the box-shadow used by
-// panel-state-waiting / panel-state-working. Use a left-border + tint instead
-// so the ambient signal survives at popover row scale.
-function rowAmbientClass(agentState: AgentState | undefined): string {
-  if (agentState === "waiting") {
-    return "border-l-2 border-l-[color:var(--color-activity-waiting)] bg-[color-mix(in_oklab,var(--color-activity-waiting)_8%,transparent)]";
-  }
-  if (agentState === "working") {
-    return "border-l-2 border-l-[color:var(--color-activity-working)] bg-[color-mix(in_oklab,var(--color-activity-working)_6%,transparent)]";
-  }
-  return "border-l-2 border-l-transparent";
-}
 
 export function BackgroundContainer({ compact = false }: BackgroundContainerProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -305,6 +295,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
                 aria-expanded={isOpen}
                 aria-controls="background-container-popover"
                 aria-label={triggerLabel}
+                onClick={focusHandoff.onTriggerClick}
               >
                 <DockStatusPillLabel
                   icon={<Moon className="text-text-secondary" aria-hidden="true" />}
@@ -329,8 +320,9 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
           className="w-96 p-0"
           side="top"
           align="end"
-          onOpenAutoFocus={(e) => e.preventDefault()}
+          onOpenAutoFocus={focusHandoff.onOpenAutoFocus}
           onCloseAutoFocus={focusHandoff.onCloseAutoFocus}
+          onKeyDown={focusHandoff.onContentKeyDown}
           onPointerDownOutside={(e) => {
             // Keep the popover anchored while the kill confirm dialog is open;
             // AppDialog is a react-dom portal with no Radix marker on its root,
@@ -345,7 +337,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
           }}
         >
           <div className="flex flex-col">
-            <div className="px-3 py-2 border-b border-divider bg-surface-canvas/50 flex justify-between items-center">
+            <div className={DOCK_POPOVER_HEADER_CLASS}>
               <span className="text-xs font-medium text-text-secondary">Background panels</span>
               {waitingCount > 0 && (
                 <span className="text-3xs font-medium text-text-secondary tabular-nums">
@@ -354,7 +346,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
               )}
             </div>
 
-            <div className="p-1 flex flex-col gap-1 max-h-[360px] overflow-y-auto">
+            <DockPopoverList>
               {DOCK_POPOVER_SECTIONS.map((section) => {
                 const items = section.key === "here" ? hereItems : elsewhereItems;
                 if (items.length === 0) return null;
@@ -398,7 +390,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
                   </DockPopoverSection>
                 );
               })}
-            </div>
+            </DockPopoverList>
           </div>
         </PopoverContent>
 
@@ -442,86 +434,68 @@ function BackgroundSingleItem({
   const title = terminal.title || "Terminal";
 
   return (
-    <div
-      data-testid="background-single-item"
-      data-agent-state={agentState ?? "unknown"}
-      className={cn(
-        "flex items-start gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] hover:bg-tint/5 transition-colors group",
-        rowAmbientClass(agentState),
-        compact && "py-1 pl-1.5"
-      )}
-    >
-      <div className="shrink-0 mt-0.5 opacity-70 group-hover:opacity-100 transition-opacity">
-        <TerminalIcon
-          kind={terminal.kind}
-          chrome={deriveTerminalChrome(terminal)}
-          className={compact ? "h-2.5 w-2.5" : "h-3 w-3"}
-        />
-      </div>
-
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <span
-            className={cn(
-              "truncate font-medium text-text-primary transition-colors",
-              compact ? "text-2xs" : "text-xs"
-            )}
-          >
-            {title}
-          </span>
-          {terminal.lastStateChange != null && (
-            <LiveTimeAgo
-              timestamp={terminal.lastStateChange}
-              className="text-3xs text-text-secondary shrink-0"
-            />
-          )}
+    // The row's state is its glyph and label, not a coloured rail: a row in a
+    // popover list is highlighted by hover or focus alone, as in the other three.
+    // Right-click is this panel's own menu.
+    <TerminalContextMenu terminalId={terminal.id}>
+      <div
+        data-testid="background-single-item"
+        data-agent-state={agentState ?? "unknown"}
+        data-dock-row=""
+        className={cn(
+          "flex items-start gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] group",
+          DOCK_POPOVER_ROW_HOVER_CLASS,
+          compact && "py-1 pl-1.5"
+        )}
+      >
+        <div className="shrink-0 mt-0.5 opacity-70 group-hover:opacity-100 transition-opacity">
+          <TerminalIcon
+            kind={terminal.kind}
+            chrome={deriveTerminalChrome(terminal)}
+            className={compact ? "h-2.5 w-2.5" : "h-3 w-3"}
+          />
         </div>
-        <div className="flex items-center gap-1.5 mt-0.5 text-2xs text-text-secondary">
-          {worktreeName && <span className="truncate">{worktreeName}</span>}
-          {worktreeName && (stateLabel || terminal.activityHeadline) && (
-            <span aria-hidden="true">·</span>
-          )}
-          {StateIcon && stateLabel && (
-            <span className="inline-flex items-center gap-1 shrink-0">
-              <StateIcon className={cn("h-2.5 w-2.5", stateColor)} />
-              <span>{stateLabel}</span>
-            </span>
-          )}
-          {terminal.activityHeadline && (
-            <>
-              {(worktreeName || stateLabel) && <span aria-hidden="true">·</span>}
-              <span className="truncate italic text-text-secondary">
-                {terminal.activityHeadline}
-              </span>
-            </>
-          )}
-        </div>
-      </div>
 
-      <div className="flex gap-0.5 shrink-0 mt-0.5">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                onWatchToggle(terminal);
-              }}
-              // A toggle's name stays put; `pressed` announces the state. The
-              // glyph shows the state too: BellDot is the pane header's
-              // "watching" mark, where a slashed bell read as muted.
-              aria-label="Watch for completion"
-              pressed={isWatched}
-              data-testid="bg-watch-button"
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span
+              className={cn(
+                "truncate font-medium text-text-primary transition-colors",
+                compact ? "text-2xs" : "text-xs"
+              )}
             >
-              {isWatched ? <BellDot aria-hidden="true" /> : <Bell aria-hidden="true" />}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Watch for completion</TooltipContent>
-        </Tooltip>
+              {title}
+            </span>
+            {terminal.lastStateChange != null && (
+              <LiveTimeAgo
+                timestamp={terminal.lastStateChange}
+                className="text-3xs text-text-secondary shrink-0"
+              />
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 mt-0.5 text-2xs text-text-secondary">
+            {worktreeName && <span className="truncate">{worktreeName}</span>}
+            {worktreeName && (stateLabel || terminal.activityHeadline) && (
+              <span aria-hidden="true">·</span>
+            )}
+            {StateIcon && stateLabel && (
+              <span className="inline-flex items-center gap-1 shrink-0">
+                <StateIcon className={cn("h-2.5 w-2.5", stateColor)} />
+                <span>{stateLabel}</span>
+              </span>
+            )}
+            {terminal.activityHeadline && (
+              <>
+                {(worktreeName || stateLabel) && <span aria-hidden="true">·</span>}
+                <span className="truncate italic text-text-secondary">
+                  {terminal.activityHeadline}
+                </span>
+              </>
+            )}
+          </div>
+        </div>
 
-        {!compact && (
+        <div className="flex gap-0.5 shrink-0 mt-0.5">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -529,37 +503,62 @@ function BackgroundSingleItem({
                 size="icon-sm"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onRestore(terminal);
+                  onWatchToggle(terminal);
                 }}
-                aria-label={`Restore ${title}`}
-                data-testid="bg-restore-button"
+                // A toggle's name stays put; `pressed` announces the state. The
+                // glyph shows the state too: BellDot is the pane header's
+                // "watching" mark, where a slashed bell read as muted.
+                aria-label="Watch for completion"
+                pressed={isWatched}
+                data-testid="bg-watch-button"
               >
-                <RotateCcw aria-hidden="true" />
+                {isWatched ? <BellDot aria-hidden="true" /> : <Bell aria-hidden="true" />}
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">{`Restore ${title}`}</TooltipContent>
+            <TooltipContent side="bottom">Watch for completion</TooltipContent>
           </Tooltip>
-        )}
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost-danger"
-              size="icon-sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                onKill(terminal.id);
-              }}
-              aria-label={`Kill ${title}`}
-              data-testid="bg-kill-button"
-            >
-              <OctagonX aria-hidden="true" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{`Kill ${title}`}</TooltipContent>
-        </Tooltip>
+          {!compact && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRestore(terminal);
+                  }}
+                  aria-label={`Restore ${title}`}
+                  data-testid="bg-restore-button"
+                  data-dock-row-target=""
+                >
+                  <RotateCcw aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{`Restore ${title}`}</TooltipContent>
+            </Tooltip>
+          )}
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost-danger"
+                size="icon-sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onKill(terminal.id);
+                }}
+                aria-label={`Kill ${title}`}
+                data-testid="bg-kill-button"
+              >
+                <OctagonX aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{`Kill ${title}`}</TooltipContent>
+          </Tooltip>
+        </div>
       </div>
-    </div>
+    </TerminalContextMenu>
   );
 }
 
@@ -596,8 +595,14 @@ function BackgroundGroupItem({
     showWorktree && groupWorktreeId ? worktreeMap.get(groupWorktreeId)?.name : undefined;
 
   return (
-    <div className="rounded-[var(--radius-sm)] bg-transparent hover:bg-tint/5 transition-colors">
-      <div className="flex items-center gap-2 px-2.5 py-1.5 group">
+    <div>
+      <div
+        data-dock-row=""
+        className={cn(
+          "flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-sm)] group",
+          DOCK_POPOVER_ROW_HOVER_CLASS
+        )}
+      >
         <Button
           variant="ghost"
           size="icon-xs"

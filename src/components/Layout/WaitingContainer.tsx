@@ -30,10 +30,14 @@ import {
   KILL_TERMINAL_CONFIRM_LABEL,
   killTerminalDescription,
 } from "./killTerminalStrings";
+import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import {
   DOCK_STATUS_PILL_CLASS,
   DOCK_STATUS_PILL_OPEN_CLASS,
+  DOCK_POPOVER_HEADER_CLASS,
+  DOCK_POPOVER_ROW_HOVER_CLASS,
   DOCK_POPOVER_SECTIONS,
+  DockPopoverList,
   DockPopoverSection,
   DockStatusPillLabel,
   dockStatusScopeDescription,
@@ -247,6 +251,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
                 aria-haspopup="dialog"
                 aria-expanded={isOpen}
                 aria-controls="waiting-container-popover"
+                onClick={focusHandoff.onTriggerClick}
                 aria-label={`Waiting: ${displayCount} ${displayCount === 1 ? "agent" : "agents"} ${dockStatusScopeDescription(displayCount, hereCount)}`}
               >
                 <DockStatusPillLabel
@@ -271,8 +276,9 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
           className="w-96 p-0"
           side="top"
           align="end"
-          onOpenAutoFocus={(e) => e.preventDefault()}
+          onOpenAutoFocus={focusHandoff.onOpenAutoFocus}
           onCloseAutoFocus={focusHandoff.onCloseAutoFocus}
+          onKeyDown={focusHandoff.onContentKeyDown}
           onPointerDownOutside={(e) => {
             if (killConfirmId !== null) e.preventDefault();
           }}
@@ -284,7 +290,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
           }}
         >
           <div className="flex flex-col">
-            <div className="px-3 py-2 border-b border-divider bg-surface-canvas/50 flex justify-between items-center">
+            <div className={DOCK_POPOVER_HEADER_CLASS}>
               <span className="text-xs font-medium text-text-secondary">Waiting for input</span>
               <span className="text-3xs font-medium text-text-secondary tabular-nums">
                 {count} {count === 1 ? "agent" : "agents"}
@@ -292,7 +298,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
               </span>
             </div>
 
-            <div className="p-1 flex flex-col gap-1 max-h-[360px] overflow-y-auto">
+            <DockPopoverList>
               {DOCK_POPOVER_SECTIONS.map((section) => {
                 const items = section.key === "here" ? hereItems : elsewhereItems;
                 if (items.length === 0) return null;
@@ -332,7 +338,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
                   </DockPopoverSection>
                 );
               })}
-            </div>
+            </DockPopoverList>
           </div>
         </PopoverContent>
 
@@ -360,8 +366,7 @@ interface WaitingSingleItemProps {
   onKill: (terminalId: string) => void;
 }
 
-const ROW_SURFACE_CLASS =
-  "rounded-[var(--radius-sm)] transition-colors duration-150 ease-out hover:bg-tint/5";
+const ROW_SURFACE_CLASS = cn("rounded-[var(--radius-sm)]", DOCK_POPOVER_ROW_HOVER_CLASS);
 
 const ROW_TARGET_CLASS =
   "flex w-full min-w-0 items-center gap-2 h-7 px-2 text-left rounded-[var(--radius-sm)] outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2 cursor-pointer select-none";
@@ -388,86 +393,90 @@ function WaitingSingleItem({
   return (
     // The activation target and the kill button are siblings, never nested:
     // the wrapper only owns the shared hover surface and the reveal group.
-    <div className={cn("group/row relative", ROW_SURFACE_CLASS)}>
-      <button
-        type="button"
-        data-testid="waiting-single-item"
-        data-agent-state={agentState ?? "unknown"}
-        data-waiting-reason={terminal.waitingReason ?? "unknown"}
-        onClick={() => onActivate(terminal, groupId)}
-        className={ROW_TARGET_CLASS}
-        aria-label={`Focus ${title}${task ? `: ${task}` : ""}${worktreeName ? ` in ${worktreeName}` : ""}${reason ? ` — ${waitingHeadline(reason).toLowerCase()}` : ""}${terminal.activityHeadline ? ` — ${terminal.activityHeadline}` : ""}`}
-        aria-describedby={terminal.lastStateChange != null ? ageId : undefined}
-      >
-        <TerminalIcon
-          kind={terminal.kind}
-          chrome={deriveTerminalChrome(terminal)}
-          className="h-3 w-3 shrink-0"
-        />
+    // Right-click is this row's panel, the same menu its dock chip or pane
+    // header opens — never the popover's or the active panel's.
+    <TerminalContextMenu terminalId={terminal.id}>
+      <div data-dock-row="" className={cn("group/row relative", ROW_SURFACE_CLASS)}>
+        <button
+          type="button"
+          data-testid="waiting-single-item"
+          data-agent-state={agentState ?? "unknown"}
+          data-waiting-reason={terminal.waitingReason ?? "unknown"}
+          onClick={() => onActivate(terminal, groupId)}
+          className={ROW_TARGET_CLASS}
+          aria-label={`Focus ${title}${task ? `: ${task}` : ""}${worktreeName ? ` in ${worktreeName}` : ""}${reason ? ` — ${waitingHeadline(reason).toLowerCase()}` : ""}${terminal.activityHeadline ? ` — ${terminal.activityHeadline}` : ""}`}
+          aria-describedby={terminal.lastStateChange != null ? ageId : undefined}
+        >
+          <TerminalIcon
+            kind={terminal.kind}
+            chrome={deriveTerminalChrome(terminal)}
+            className="h-3 w-3 shrink-0"
+          />
 
-        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-          <span className="min-w-0 max-w-[65%] shrink-0 truncate text-xs font-medium text-text-primary">
-            {title}
+          <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+            <span className="min-w-0 max-w-[65%] shrink-0 truncate text-xs font-medium text-text-primary">
+              {title}
+            </span>
+            {(context || terminal.activityHeadline) && (
+              <span className="min-w-0 truncate text-2xs text-text-secondary">
+                {context}
+                {context && terminal.activityHeadline && " · "}
+                {terminal.activityHeadline && (
+                  <span className="italic">{terminal.activityHeadline}</span>
+                )}
+              </span>
+            )}
           </span>
-          {(context || terminal.activityHeadline) && (
-            <span className="min-w-0 truncate text-2xs text-text-secondary">
-              {context}
-              {context && terminal.activityHeadline && " · "}
-              {terminal.activityHeadline && (
-                <span className="italic">{terminal.activityHeadline}</span>
+
+          {reason && (
+            <span
+              className={cn(
+                "shrink-0 rounded-[var(--radius-sm)] px-1.5 py-px text-3xs font-medium",
+                reason === "error"
+                  ? "bg-status-error/15 text-text-primary"
+                  : "bg-state-waiting/15 text-text-primary"
               )}
+              data-testid={`waiting-reason-badge-${terminal.id}`}
+            >
+              {WAITING_REASON_BADGE_LABEL[reason]}
             </span>
           )}
-        </span>
 
-        {reason && (
-          <span
-            className={cn(
-              "shrink-0 rounded-[var(--radius-sm)] px-1.5 py-px text-3xs font-medium",
-              reason === "error"
-                ? "bg-status-error/15 text-text-primary"
-                : "bg-state-waiting/15 text-text-primary"
-            )}
-            data-testid={`waiting-reason-badge-${terminal.id}`}
-          >
-            {WAITING_REASON_BADGE_LABEL[reason]}
-          </span>
-        )}
-
-        {/* The age holds the trailing slot at rest and yields it to the kill
+          {/* The age holds the trailing slot at rest and yields it to the kill
             button on hover/focus, so no row reserves an empty action column. */}
-        <span
-          id={ageId}
-          className="min-w-6 shrink-0 text-right text-3xs leading-none transition-opacity duration-150 ease-out group-hover/row:opacity-0 group-focus-within/row:opacity-0"
-        >
-          {terminal.lastStateChange != null && (
-            <LiveTimeAgo
-              timestamp={terminal.lastStateChange}
-              noTooltip
-              className="text-3xs text-text-secondary tabular-nums"
-            />
-          )}
-        </span>
-      </button>
+          <span
+            id={ageId}
+            className="min-w-6 shrink-0 text-right text-3xs leading-none transition-opacity duration-150 ease-out group-hover/row:opacity-0 group-focus-within/row:opacity-0"
+          >
+            {terminal.lastStateChange != null && (
+              <LiveTimeAgo
+                timestamp={terminal.lastStateChange}
+                noTooltip
+                className="text-3xs text-text-secondary tabular-nums"
+              />
+            )}
+          </span>
+        </button>
 
-      <div className="absolute inset-y-0 right-0.5 flex items-center pointer-events-none invisible opacity-0 transition-[opacity,visibility] duration-150 ease-out group-hover/row:visible group-hover/row:opacity-100 group-focus-within/row:visible group-focus-within/row:opacity-100">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost-danger"
-              size="icon-sm"
-              className="pointer-events-auto transition-colors"
-              onClick={() => onKill(terminal.id)}
-              aria-label={`Kill ${title}${task ? `: ${task}` : ""}`}
-              data-testid="waiting-kill-button"
-            >
-              <OctagonX aria-hidden="true" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{`Kill ${title}`}</TooltipContent>
-        </Tooltip>
+        <div className="absolute inset-y-0 right-0.5 flex items-center pointer-events-none invisible opacity-0 transition-[opacity,visibility] duration-150 ease-out group-hover/row:visible group-hover/row:opacity-100 group-focus-within/row:visible group-focus-within/row:opacity-100">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost-danger"
+                size="icon-sm"
+                className="pointer-events-auto transition-colors"
+                onClick={() => onKill(terminal.id)}
+                aria-label={`Kill ${title}${task ? `: ${task}` : ""}`}
+                data-testid="waiting-kill-button"
+              >
+                <OctagonX aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{`Kill ${title}`}</TooltipContent>
+          </Tooltip>
+        </div>
       </div>
-    </div>
+    </TerminalContextMenu>
   );
 }
 
@@ -497,7 +506,7 @@ function WaitingGroupItem({
 
   return (
     <div className="flex flex-col gap-px">
-      <div className={ROW_SURFACE_CLASS}>
+      <div data-dock-row="" className={ROW_SURFACE_CLASS}>
         <button
           id={headerId}
           type="button"

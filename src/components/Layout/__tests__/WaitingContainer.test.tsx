@@ -157,6 +157,17 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
   },
 }));
 
+// Right-click on a row must be that row's panel, so the menu records whose it is.
+vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
+  TerminalContextMenu: ({
+    terminalId,
+    children,
+  }: {
+    terminalId: string;
+    children: React.ReactNode;
+  }) => <div data-menu-for={terminalId}>{children}</div>,
+}));
+
 import { WaitingContainer } from "../WaitingContainer";
 
 function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
@@ -668,6 +679,25 @@ describe("WaitingContainer", () => {
       expect(collapseButtons.length).toBe(2);
       fireEvent.click(collapseButtons[0]!);
       expect(screen.getAllByTestId("waiting-single-item").length).toBe(2);
+    });
+  });
+
+  describe("row context menu", () => {
+    it("scopes each row's right-click to that row's own panel, group members included", () => {
+      mockTerminals = [
+        makeTerminal({ id: "t1", title: "solo" }),
+        makeTerminal({ id: "t2", title: "member-a" }),
+        makeTerminal({ id: "t3", title: "member-b" }),
+      ];
+      mockTabGroups = new Map([
+        ["g1", makeGroup({ id: "g1", activeTabId: "t2", panelIds: ["t2", "t3"] })],
+      ]);
+      render(<WaitingContainer />);
+      const rows = screen.getAllByTestId("waiting-single-item");
+      const owners = rows.map((row) =>
+        row.closest("[data-menu-for]")?.getAttribute("data-menu-for")
+      );
+      expect(owners.sort()).toEqual(["t1", "t2", "t3"]);
     });
   });
 
