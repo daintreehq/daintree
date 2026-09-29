@@ -2,6 +2,12 @@
 @import "tw-animate-css";
 @plugin "@tailwindcss/typography";
 @source not "../.lessons/**/*";
+/* Auto-detection scans the whole repo. None of these reach the renderer DOM, and
+   test files are full of banned-class fixtures that would otherwise ship. */
+@source not "../{electron,e2e,scripts,docs,help,.claude,.agents,.github}/**/*";
+@source not "../**/__tests__/**/*";
+@source not "../**/*.test.{ts,tsx}";
+@source not "../*.md";
 @import "./styles/design-contract.css";
 @import "./styles/components/toolbar.css";
 @import "./styles/components/settings.css";
