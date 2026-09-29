@@ -41,7 +41,7 @@ export function BaseBranchFileRow({
       <div
         className={cn(
           "group/baserow w-full flex items-center text-xs rounded-[var(--radius-md)] px-1.5 py-1.5",
-          "hover:bg-overlay-subtle transition-colors"
+          "hover:bg-overlay-subtle transition-colors duration-150 ease-out"
         )}
       >
         <button
@@ -67,7 +67,7 @@ export function BaseBranchFileRow({
             <PathTail
               data-testid="base-branch-file-row-dir"
               className={cn(
-                "shrink font-mono text-2xs transition-colors",
+                "shrink font-mono text-2xs transition-colors duration-150 ease-out",
                 "text-text-secondary group-hover/baserow:text-text-primary"
               )}
             >
@@ -77,7 +77,7 @@ export function BaseBranchFileRow({
           <span
             data-testid="base-branch-file-row-base"
             className={cn(
-              "shrink truncate font-medium font-mono text-2xs transition-colors",
+              "shrink truncate font-medium font-mono text-2xs transition-colors duration-150 ease-out",
               "text-text-primary group-hover/baserow:text-text-primary"
             )}
           >
