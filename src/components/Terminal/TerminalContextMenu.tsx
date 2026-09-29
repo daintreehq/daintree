@@ -96,6 +96,7 @@ import {
   Radio,
   RadioTower,
   RefreshCw,
+  RotateCcw,
   RotateCw,
   Send,
   Settings,

@@ -395,7 +395,7 @@ function WaitingSingleItem({
     // the wrapper only owns the shared hover surface and the reveal group.
     // Right-click is this row's panel, the same menu its dock chip or pane
     // header opens — never the popover's or the active panel's.
-    <TerminalContextMenu terminalId={terminal.id}>
+    <TerminalContextMenu terminalId={terminal.id} proxy>
       <div data-dock-row="" className={cn("group/row relative", ROW_SURFACE_CLASS)}>
         <button
           type="button"

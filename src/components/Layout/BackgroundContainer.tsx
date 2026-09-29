@@ -437,7 +437,7 @@ function BackgroundSingleItem({
     // The row's state is its glyph and label, not a coloured rail: a row in a
     // popover list is highlighted by hover or focus alone, as in the other three.
     // Right-click is this panel's own menu.
-    <TerminalContextMenu terminalId={terminal.id}>
+    <TerminalContextMenu terminalId={terminal.id} proxy>
       <div
         data-testid="background-single-item"
         data-agent-state={agentState ?? "unknown"}
