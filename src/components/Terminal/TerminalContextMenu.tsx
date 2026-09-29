@@ -4,6 +4,7 @@ import type React from "react";
 import { type PanelLocation } from "@/types";
 import { usePanelStore } from "@/store";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
@@ -569,6 +570,14 @@ function TerminalContextMenuBody({
     terminalPty?.flowStatus === "paused-resource-governor";
 
   const currentLocation: PanelLocation = forceLocation ?? terminal?.location ?? "grid";
+  // Reachable from the dock's Background popover. Its way back is a restore to
+  // wherever it was sent from; moving it or sending it to background again
+  // would leave the background bookkeeping behind.
+  const isBackgrounded = terminal?.location === "background";
+  // A row in the dock's Waiting popover can stand for a pane in another
+  // worktree, which the grid in front of the user does not render.
+  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+  const isInActiveWorktree = (terminal?.worktreeId ?? null) === (activeWorktreeId ?? null);
 
   const mac = isMac();
   const clipboardCombos = terminalClipboardCombos(mac);
@@ -781,6 +790,9 @@ function TerminalContextMenuBody({
             { terminalId },
             { source: sourceRef.current }
           );
+          break;
+        case "restore-from-background":
+          usePanelStore.getState().restoreBackgroundTerminal(terminalId);
           break;
         case "background":
           void actionService.dispatch(
@@ -1042,7 +1054,8 @@ function TerminalContextMenuBody({
 
   // Somewhere other than the panel's own worktree, which may already be gone —
   // the header's overflow menu counts it the same way.
-  const canMoveToWorktree = worktrees.some((wt) => wt.id !== terminal.worktreeId);
+  const canMoveToWorktree =
+    !isBackgrounded && worktrees.some((wt) => wt.id !== terminal.worktreeId);
   const renderMoveToWorktreeSubmenu = (label: string) => (
     <ContextMenuSub>
       <ContextMenuSubTrigger>
@@ -1082,7 +1095,7 @@ function TerminalContextMenuBody({
   const layoutSection = (
     <>
       {canMoveToWorktree && renderMoveToWorktreeSubmenu("Move to worktree")}
-      {terminalPty?.launchAgentId && (
+      {terminalPty?.launchAgentId && !isBackgrounded && (
         <ContextMenuItem
           onSelect={() =>
             void actionService.dispatch(
@@ -1096,20 +1109,29 @@ function TerminalContextMenuBody({
           Move to new worktree…
         </ContextMenuItem>
       )}
-      <ContextMenuItem
-        // Move-to-grid is always safe; move-to-dock only for kinds the dock
-        // renders (PTY + dockable non-PTY like file panels).
-        disabled={currentLocation === "grid" && !kindCapabilities.isDockable}
-        onSelect={() => handleAction(currentLocation === "grid" ? "move-to-dock" : "move-to-grid")}
-      >
-        {currentLocation === "grid" ? (
-          <PanelBottomClose className={ICON_CLASS} />
-        ) : (
-          <PanelTopClose className={ICON_CLASS} />
-        )}
-        {currentLocation === "grid" ? "Move to dock" : "Move to grid"}
-      </ContextMenuItem>
-      {currentLocation === "grid" && (
+      {isBackgrounded ? (
+        <ContextMenuItem onSelect={() => handleAction("restore-from-background")}>
+          <RotateCcw className={ICON_CLASS} aria-hidden="true" />
+          Restore from background
+        </ContextMenuItem>
+      ) : (
+        <ContextMenuItem
+          // Move-to-grid is always safe; move-to-dock only for kinds the dock
+          // renders (PTY + dockable non-PTY like file panels).
+          disabled={currentLocation === "grid" && !kindCapabilities.isDockable}
+          onSelect={() =>
+            handleAction(currentLocation === "grid" ? "move-to-dock" : "move-to-grid")
+          }
+        >
+          {currentLocation === "grid" ? (
+            <PanelBottomClose className={ICON_CLASS} />
+          ) : (
+            <PanelTopClose className={ICON_CLASS} />
+          )}
+          {currentLocation === "grid" ? "Move to dock" : "Move to grid"}
+        </ContextMenuItem>
+      )}
+      {currentLocation === "grid" && isInActiveWorktree && (
         <ContextMenuItem
           onSelect={() => handleAction("toggle-maximize")}
           keybinding="terminal.maximize"
@@ -1196,10 +1218,12 @@ function TerminalContextMenuBody({
           {tourMenuItem}
           {pluginOwnedMenuItems}
           <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleAction("background")}>
-            <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
-            Send to background
-          </ContextMenuItem>
+          {!isBackgrounded && (
+            <ContextMenuItem onSelect={() => handleAction("background")}>
+              <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
+              Send to background
+            </ContextMenuItem>
+          )}
           <ContextMenuItem onSelect={() => handleAction("trash")}>
             <Trash2 className={ICON_CLASS} aria-hidden="true" />
             Trash browser
@@ -1261,10 +1285,12 @@ function TerminalContextMenuBody({
           {tourMenuItem}
           {pluginOwnedMenuItems}
           <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleAction("background")}>
-            <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
-            Send to background
-          </ContextMenuItem>
+          {!isBackgrounded && (
+            <ContextMenuItem onSelect={() => handleAction("background")}>
+              <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
+              Send to background
+            </ContextMenuItem>
+          )}
           <ContextMenuItem onSelect={() => handleAction("trash")}>
             <Trash2 className={ICON_CLASS} aria-hidden="true" />
             Trash dev preview
@@ -1312,10 +1338,12 @@ function TerminalContextMenuBody({
           {tourMenuItem}
           {pluginOwnedMenuItems}
           <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleAction("background")}>
-            <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
-            Send to background
-          </ContextMenuItem>
+          {!isBackgrounded && (
+            <ContextMenuItem onSelect={() => handleAction("background")}>
+              <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
+              Send to background
+            </ContextMenuItem>
+          )}
           <ContextMenuItem onSelect={() => handleAction("trash")}>
             <Trash2 className={ICON_CLASS} aria-hidden="true" />
             Trash review
@@ -1671,11 +1699,15 @@ function TerminalContextMenuBody({
           </ContextMenuItem>
           {tourMenuItem}
           {pluginOwnedMenuItems}
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleAction("background")}>
-            <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
-            Send to background
-          </ContextMenuItem>
+          {!isBackgrounded && (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuItem onSelect={() => handleAction("background")}>
+                <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
+                Send to background
+              </ContextMenuItem>
+            </>
+          )}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("trash")}>
             <Trash2 className={ICON_CLASS} aria-hidden="true" />
