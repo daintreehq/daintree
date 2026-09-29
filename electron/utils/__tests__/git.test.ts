@@ -741,6 +741,206 @@ describe("getWorktreeChangesWithStats per-file diff cache", () => {
     expect(result.totalInsertions).toBe(6);
     expect(result.totalDeletions).toBe(4);
   });
+
+  // Answers `1\t1` for every pathspec it is handed, like a real numstat.
+  function echoNumstat(fail?: (paths: string[]) => boolean) {
+    mockGit.diff.mockImplementation(async (args: string[]) => {
+      const paths = args.slice(args.indexOf("--") + 1);
+      if (fail?.(paths)) throw new Error("transient git failure");
+      return paths.map((p) => `1\t1\t${p}`).join("\n") + "\n";
+    });
+  }
+  const diffedPaths = () =>
+    (mockGit.diff.mock.calls as [string[]][]).flatMap(([args]) =>
+      args.slice(args.indexOf("--") + 1)
+    );
+
+  it("diffs and caches every file of a changeset past 100 files", async () => {
+    const cwd = "/per-file-cache-large/" + Math.random();
+    setupRevparse(cwd, "head-oid-large");
+    const modified = Array.from({ length: 150 }, (_, i) => `src/f${i}.ts`);
+    mockGit.status.mockResolvedValue({ ...emptyStatus, modified });
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 50 });
+    echoNumstat();
+
+    const first = await getWorktreeChangesWithStats(cwd, true);
+    expect(new Set(diffedPaths())).toEqual(new Set(modified));
+    expect(first.changes.every((c) => c.insertions === 1 && c.deletions === 1)).toBe(true);
+    expect(first.totalInsertions).toBe(150);
+
+    mockGit.diff.mockClear();
+    const second = await getWorktreeChangesWithStats(cwd, true);
+    expect(mockGit.diff).not.toHaveBeenCalled();
+    expect(second.totalInsertions).toBe(150);
+    expect(second.totalDeletions).toBe(150);
+  });
+
+  it("splits a long pathspec list across diff spawns that each fit the argv budget", async () => {
+    const cwd = "/per-file-cache-argv/" + Math.random();
+    setupRevparse(cwd, "head-oid-argv");
+    const modified = Array.from(
+      { length: 400 },
+      (_, i) => `packages/some-deeply/nested/module-${i}/${"x".repeat(60)}.ts`
+    );
+    mockGit.status.mockResolvedValue({ ...emptyStatus, modified });
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 50 });
+    echoNumstat();
+
+    const result = await getWorktreeChangesWithStats(cwd, true);
+
+    expect(mockGit.diff.mock.calls.length).toBeGreaterThan(1);
+    for (const [args] of mockGit.diff.mock.calls as [string[]][]) {
+      const pathChars = args
+        .slice(args.indexOf("--") + 1)
+        .reduce((sum, p) => sum + p.length + 1, 0);
+      expect(pathChars).toBeLessThanOrEqual(16_000);
+    }
+    expect(diffedPaths()).toEqual(modified);
+    expect(result.totalInsertions).toBe(400);
+  });
+
+  it("caches only the batches whose diff succeeded and stops after a failure", async () => {
+    const cwd = "/per-file-cache-batchfail/" + Math.random();
+    setupRevparse(cwd, "head-oid-batchfail");
+    const modified = Array.from({ length: 400 }, (_, i) => `lib/${"y".repeat(80)}-${i}.ts`);
+    mockGit.status.mockResolvedValue({ ...emptyStatus, modified });
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 50 });
+    let call = 0;
+    echoNumstat(() => ++call === 2);
+
+    await getWorktreeChangesWithStats(cwd, true);
+    expect(mockGit.diff).toHaveBeenCalledTimes(2);
+    const firstBatch = (mockGit.diff.mock.calls[0][0] as string[]).slice(
+      (mockGit.diff.mock.calls[0][0] as string[]).indexOf("--") + 1
+    );
+
+    mockGit.diff.mockClear();
+    echoNumstat();
+    const result = await getWorktreeChangesWithStats(cwd, true);
+
+    const firstBatchSet = new Set(firstBatch);
+    expect(diffedPaths()).toEqual(modified.filter((p) => !firstBatchSet.has(p)));
+    expect(result.totalInsertions).toBe(400);
+  });
+
+  it("keeps cached diff stats and commit metadata while their keys are unchanged, however long", async () => {
+    const cwd = "/per-file-cache-nottl/" + Math.random();
+    setupRevparse(cwd, "head-oid-nottl");
+    mockGit.status.mockResolvedValue({ ...emptyStatus, modified: ["src/a.ts"] });
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 50 });
+    echoNumstat();
+    __clearLastCommitLogCacheForTesting();
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      await getWorktreeChangesWithStats(cwd, true);
+      mockGit.diff.mockClear();
+      mockGit.raw.mockClear();
+
+      vi.setSystemTime(Date.now() + 60 * 60 * 1000);
+      const result = await getWorktreeChangesWithStats(cwd, true);
+
+      expect(mockGit.diff).not.toHaveBeenCalled();
+      expect(mockGit.raw.mock.calls.filter(([args]) => args[0] === "log")).toHaveLength(0);
+      expect(result.totalInsertions).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-diffs a file whose index state moved while the file itself did not", async () => {
+    const cwd = "/per-file-cache-index/" + Math.random();
+    setupRevparse(cwd, "head-oid-index");
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 50 });
+    mockGit.status.mockResolvedValue({
+      ...emptyStatus,
+      modified: ["src/a.ts"],
+      files: [{ path: "src/a.ts", index: " ", working_dir: "M" }],
+    });
+    mockGit.diff.mockResolvedValue("2\t1\tsrc/a.ts\n");
+    await getWorktreeChangesWithStats(cwd, true);
+
+    // `git rm --cached src/a.ts`: same HEAD, same bytes on disk, but the diff
+    // against HEAD is now a whole-file deletion.
+    mockGit.status.mockResolvedValue({
+      ...emptyStatus,
+      deleted: ["src/a.ts"],
+      files: [{ path: "src/a.ts", index: "D", working_dir: " " }],
+    });
+    mockGit.diff.mockReset();
+    mockGit.diff.mockResolvedValue("0\t40\tsrc/a.ts\n");
+    const result = await getWorktreeChangesWithStats(cwd, true);
+
+    expect(mockGit.diff).toHaveBeenCalledTimes(1);
+    expect(result.totalDeletions).toBe(40);
+  });
+
+  it("does not cache a failed log read, so the same HEAD retries it", async () => {
+    const cwd = "/per-file-cache-logfail/" + Math.random();
+    __clearLastCommitLogCacheForTesting();
+    const headOid = "head-oid-logfail-" + Math.random();
+    let logFails = true;
+    mockGit.raw.mockImplementation(async (args: string[]) => {
+      if (args[0] === "rev-parse") return `${headOid}\n${cwd}`;
+      if (args[0] === "log") {
+        if (logFails) throw new Error("timeout");
+        return "1700000000\tAda\tada@example.com\tfix things\0";
+      }
+      return "";
+    });
+    mockGit.status.mockResolvedValue(emptyStatus);
+
+    const failed = await getWorktreeChangesWithStats(cwd, true);
+    expect(failed.lastCommitMessage).toBeUndefined();
+
+    logFails = false;
+    const recovered = await getWorktreeChangesWithStats(cwd, true);
+    expect(recovered.lastCommitMessage).toBe("fix things");
+  });
+
+  it("rethrows an abort during a later batch without publishing the pass", async () => {
+    const cwd = "/per-file-cache-batchabort/" + Math.random();
+    setupRevparse(cwd, "head-oid-batchabort");
+    const modified = Array.from({ length: 400 }, (_, i) => `lib/${"z".repeat(80)}-${i}.ts`);
+    mockGit.status.mockResolvedValue({ ...emptyStatus, modified });
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 50 });
+    const controller = new AbortController();
+    const abortError = new Error("the operation was aborted");
+    let call = 0;
+    mockGit.diff.mockImplementation(async (args: string[]) => {
+      if (++call === 2) {
+        controller.abort();
+        throw abortError;
+      }
+      const paths = args.slice(args.indexOf("--") + 1);
+      return paths.map((p) => `1\t1\t${p}`).join("\n") + "\n";
+    });
+
+    await expect(
+      getWorktreeChangesWithStats(cwd, { forceRefresh: true, signal: controller.signal })
+    ).rejects.toBe(abortError);
+    expect(mockGit.diff).toHaveBeenCalledTimes(2);
+
+    // Nothing was published: a plain read runs status again.
+    mockGit.status.mockClear();
+    await getWorktreeChangesWithStats(cwd);
+    expect(mockGit.status).toHaveBeenCalledTimes(1);
+  });
+
+  it("stats each untracked file once per pass and reuses it for the mtime", async () => {
+    const cwd = "/per-file-cache-untracked-stat/" + Math.random();
+    setupRevparse(cwd, "head-oid-untracked-stat");
+    mockGit.status.mockResolvedValue({ ...emptyStatus, not_added: ["notes/new.md"] });
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 4242, size: 12 });
+
+    const result = await getWorktreeChangesWithStats(cwd, true);
+
+    const statsOfFile = (fs.stat as ReturnType<typeof vi.fn>).mock.calls.filter(([p]) =>
+      String(p).endsWith("notes/new.md")
+    );
+    expect(statsOfFile).toHaveLength(1);
+    expect(result.changes[0]).toMatchObject({ status: "untracked", mtimeMs: 4242 });
+  });
 });
 
 describe("getWorktreeChangesWithStats binary file handling", () => {
@@ -1218,6 +1418,78 @@ describe("getWorktreeChangesWithStats cancellation (#12460)", () => {
     expect(vi.mocked(createHardenedGit)).toHaveBeenCalledWith(cwd, controller.signal);
   });
 
+  it("reuses one git instance per caller signal and builds a fresh one for a new signal", async () => {
+    const cwd = "/cancel-test/" + Math.random();
+    const monitor = new AbortController();
+    mockGit.status.mockResolvedValue(emptyStatus);
+
+    await getWorktreeChangesWithStats(cwd, { forceRefresh: true, signal: monitor.signal });
+    await getWorktreeChangesWithStats(cwd, { forceRefresh: true, signal: monitor.signal });
+    expect(vi.mocked(createHardenedGit)).toHaveBeenCalledTimes(1);
+
+    // A restarted monitor carries a new signal; the old instance's abort
+    // binding must not be reused.
+    const restarted = new AbortController();
+    await getWorktreeChangesWithStats(cwd, { forceRefresh: true, signal: restarted.signal });
+    expect(vi.mocked(createHardenedGit)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(createHardenedGit)).toHaveBeenLastCalledWith(cwd, restarted.signal);
+
+    await getWorktreeChangesWithStats(cwd, true);
+    await getWorktreeChangesWithStats(cwd, true);
+    expect(vi.mocked(createHardenedGit)).toHaveBeenCalledTimes(4);
+  });
+
+  it("reuses the WSL git instance for the same signal", async () => {
+    const cwd = "/cancel-test/" + Math.random();
+    const controller = new AbortController();
+    const wsl = { distro: "Ubuntu", uncPath: "\\\\wsl$\\Ubuntu\\reuse", posixPath: "/reuse" };
+    mockGit.status.mockResolvedValue(emptyStatus);
+
+    await getWorktreeChangesWithStats(cwd, { forceRefresh: true, wsl, signal: controller.signal });
+    await getWorktreeChangesWithStats(cwd, { forceRefresh: true, wsl, signal: controller.signal });
+
+    expect(vi.mocked(createWslHardenedGit)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createHardenedGit)).not.toHaveBeenCalled();
+  });
+
+  it("reports a worktree removed between the stat and the spawn as removed, not as missing git", async () => {
+    const cwd = "/cancel-test/" + Math.random();
+    const statMock = fs.stat as ReturnType<typeof vi.fn>;
+    statMock.mockResolvedValueOnce({ mtimeMs: 1000 });
+    statMock.mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    mockGit.status.mockRejectedValue(simpleGitMissingBinaryError(["status", "--porcelain"]));
+
+    await expect(getWorktreeChangesWithStats(cwd, true)).rejects.toBeInstanceOf(
+      WorktreeRemovedError
+    );
+  });
+
+  it("retries the WSL route each pass after falling back to native git", async () => {
+    const cwd = "/cancel-test/" + Math.random();
+    const controller = new AbortController();
+    const wsl = { distro: "Ubuntu", uncPath: "\\\\wsl$\\Ubuntu\\fallback", posixPath: "/fallback" };
+    mockGit.status.mockResolvedValue(emptyStatus);
+    vi.mocked(createWslHardenedGit).mockRejectedValue(new Error("wrong platform"));
+
+    try {
+      await getWorktreeChangesWithStats(cwd, {
+        forceRefresh: true,
+        wsl,
+        signal: controller.signal,
+      });
+      await getWorktreeChangesWithStats(cwd, {
+        forceRefresh: true,
+        wsl,
+        signal: controller.signal,
+      });
+    } finally {
+      vi.mocked(createWslHardenedGit).mockImplementation((() => mockGit) as never);
+    }
+
+    expect(vi.mocked(createWslHardenedGit)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(createHardenedGit)).toHaveBeenCalledTimes(1);
+  });
+
   it("rethrows a cancelled read as-is without logging it as a git failure", async () => {
     const cwd = "/cancel-test/" + Math.random();
     const controller = new AbortController();
@@ -1348,7 +1620,6 @@ describe("getWorktreeChangesWithStats oversized changeset warnings", () => {
     conflicted: [],
     not_added: [],
   };
-  const NUMSTAT_MSG = "Large changeset detected; limiting numstat to first 100 files";
   const UNTRACKED_MSG = "Large number of untracked files; limiting to first 200";
 
   const files = (prefix: string, n: number) =>
@@ -1364,32 +1635,6 @@ describe("getWorktreeChangesWithStats oversized changeset warnings", () => {
     (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 50 });
     mockGit.raw.mockResolvedValue("");
     mockGit.diff.mockResolvedValue("");
-  });
-
-  it("warns about a large tracked changeset once per cwd until it drops under the cap", async () => {
-    const cwd = "/oversized-numstat/" + Math.random();
-    const large = { ...emptyStatus, modified: files("src", 150) };
-    mockGit.status.mockResolvedValue(large);
-
-    await getWorktreeChangesWithStats(cwd, true);
-    invalidateWorktreeCache(cwd);
-    await getWorktreeChangesWithStats(cwd, true);
-    await getWorktreeChangesWithStats(cwd, true);
-
-    expect(warnCount(NUMSTAT_MSG)).toBe(1);
-    expect(logWarn).toHaveBeenCalledWith(NUMSTAT_MSG, {
-      cwd,
-      totalFiles: 150,
-      limitedTo: 100,
-    });
-
-    mockGit.status.mockResolvedValue({ ...emptyStatus, modified: files("src", 5) });
-    await getWorktreeChangesWithStats(cwd, true);
-    expect(warnCount(NUMSTAT_MSG)).toBe(1);
-
-    mockGit.status.mockResolvedValue(large);
-    await getWorktreeChangesWithStats(cwd, true);
-    expect(warnCount(NUMSTAT_MSG)).toBe(2);
   });
 
   it("warns about many untracked files once per cwd until it drops under the cap", async () => {
