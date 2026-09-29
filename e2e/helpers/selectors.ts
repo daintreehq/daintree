@@ -11,7 +11,7 @@ export const SEL = {
   },
   portal: {
     region: 'aside[aria-label="Portal"]',
-    resizeHandle: '[aria-label="Resize portal panel"]',
+    resizeHandle: '[aria-label^="Resize portal panel"]',
     launchpadHeading: 'h2:has-text("New Chat")',
     container: '[aria-label="Portal"]',
     tab: '[role="tab"]',
@@ -24,7 +24,7 @@ export const SEL = {
     closeTab: (title: string) => `[aria-label="Close ${title}"]`,
   },
   sidebar: {
-    resizeHandle: '[aria-label="Resize sidebar"]',
+    resizeHandle: '[aria-label^="Resize sidebar"]',
     aside: 'aside[aria-label="Sidebar"]',
   },
   settings: {

@@ -789,10 +789,10 @@ const SHOTS: Shot[] = [
     slug: "split-divider-ctx",
     url: "/panel-header-preview.html?scene=split-agent-browser",
     viewport: { width: 1440, height: 600 },
-    ready: '[role="separator"][aria-label="Resize left pane"]',
+    ready: '[role="separator"][aria-label^="Resize left pane"]',
     path: "Right-click the divider between two panes in a two-pane split",
     open: async (page) => {
-      const trigger = page.locator('[role="separator"][aria-label="Resize left pane"]').first();
+      const trigger = page.locator('[role="separator"][aria-label^="Resize left pane"]').first();
       const surface = page.locator(MENU).last();
       const point = await rightClick(page, trigger, surface);
       // The divider runs the full pane height; crop to where it was clicked.
