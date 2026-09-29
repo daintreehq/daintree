@@ -3,6 +3,10 @@ import type { HandlerMap, HostContext } from "./types.js";
 
 export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
   const { ptyManager, sendEvent } = ctx;
+  // Targets whose last broadcast write failed transiently. Their next success
+  // is always reported, so the chip clears even when that keystroke left the
+  // renderer before the failure reached it and so did not ask for successes.
+  const failedTargets = new Set<string>();
 
   return {
     write: (msg) => {
@@ -42,9 +46,19 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
       // dead-pipe errors via `logWriteError` and returns void. The throwing
       // variant returns `{ ok, error? }` per call so a dead target produces
       // an actionable result the renderer can use to auto-disarm the pane.
+      //
+      // An all-ok write sends nothing unless the renderer asked for successes
+      // (it has a failed chip to clear) — otherwise every keystroke into an
+      // armed fleet would round-trip N results that nothing acts on.
       const ids: string[] = Array.isArray(msg.ids) ? msg.ids : [];
       const data: string = typeof msg.data === "string" ? msg.data : "";
       if (!data) return;
+      const reportSuccess = msg.reportSuccess === true;
+      if (failedTargets.size > 0) {
+        for (const id of failedTargets) {
+          if (!ptyManager.getTerminal(id)) failedTargets.delete(id);
+        }
+      }
       const results: BroadcastWriteTargetResult[] = [];
       for (const id of ids) {
         if (typeof id !== "string" || !id) continue;
@@ -59,8 +73,9 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
         }
         const outcome = ptyManager.tryWrite(id, data);
         if (outcome.ok) {
-          results.push({ id, ok: true });
+          if (failedTargets.delete(id) || reportSuccess) results.push({ id, ok: true });
         } else {
+          failedTargets.add(id);
           const err = outcome.error;
           const code = typeof err?.code === "string" ? err.code : undefined;
           const message = err?.message ?? "unknown write error";

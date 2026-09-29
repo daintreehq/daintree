@@ -1835,13 +1835,13 @@ export class PtyClient extends EventEmitter {
    * shard instead of N renderer→main IPC hops, cutting fan-out latency on
    * large fleets.
    */
-  broadcastWrite(ids: string[], data: string): void {
+  broadcastWrite(ids: string[], data: string, reportSuccess = false): void {
     if (!Array.isArray(ids) || ids.length === 0 || typeof data !== "string" || data.length === 0)
       return;
     const validIds = ids.filter((id) => typeof id === "string" && id.length > 0);
     if (validIds.length === 0) return;
     for (const [shard, shardIds] of this.groupByOwnerShard(validIds)) {
-      shard.send({ type: "broadcast-write", ids: shardIds, data });
+      shard.send({ type: "broadcast-write", ids: shardIds, data, reportSuccess });
     }
   }
 

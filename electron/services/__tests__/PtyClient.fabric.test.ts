@@ -224,12 +224,28 @@ describe("PtyClient fabric", () => {
       const shardA = projectShard("project-a");
       const shardB = projectShard("project-b");
       expect(messagesOfType(shardA.child, "broadcast-write")).toEqual([
-        { type: "broadcast-write", ids: ["t1", "t2"], data: "hello" },
+        { type: "broadcast-write", ids: ["t1", "t2"], data: "hello", reportSuccess: false },
       ]);
       expect(messagesOfType(shardB.child, "broadcast-write")).toEqual([
-        { type: "broadcast-write", ids: ["t3"], data: "hello" },
+        { type: "broadcast-write", ids: ["t3"], data: "hello", reportSuccess: false },
       ]);
       expect(messagesOfType(defaultShard().child, "broadcast-write")).toHaveLength(0);
+      client.dispose();
+    });
+
+    it("forwards a success-report request to every shard", () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("t3", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+
+      client.broadcastWrite(["t1", "t3"], "x", true);
+
+      expect(messagesOfType(projectShard("project-a").child, "broadcast-write")).toEqual([
+        { type: "broadcast-write", ids: ["t1"], data: "x", reportSuccess: true },
+      ]);
+      expect(messagesOfType(projectShard("project-b").child, "broadcast-write")).toEqual([
+        { type: "broadcast-write", ids: ["t3"], data: "x", reportSuccess: true },
+      ]);
       client.dispose();
     });
 

@@ -94,7 +94,8 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   const handleTerminalBroadcastWrite = (
     _event: Electron.IpcMainEvent,
     ids: unknown,
-    data: unknown
+    data: unknown,
+    reportSuccess?: unknown
   ) => {
     try {
       if (!Array.isArray(ids) || typeof data !== "string") {
@@ -103,7 +104,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       }
       const validIds = ids.filter((id): id is string => typeof id === "string" && id.length > 0);
       if (validIds.length === 0 || data.length === 0) return;
-      ptyClient.broadcastWrite(validIds, data);
+      ptyClient.broadcastWrite(validIds, data, reportSuccess === true);
     } catch (error) {
       console.error("Error broadcasting write to terminals:", error);
     }

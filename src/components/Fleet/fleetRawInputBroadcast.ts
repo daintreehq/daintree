@@ -2,6 +2,7 @@ import { terminalClient } from "@/clients";
 import { registerFleetInputBroadcastHandler } from "@/services/terminal/fleetInputRouter";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { isFleetArmEligible, useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { usePanelStore } from "@/store/panelStore";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
@@ -31,7 +32,13 @@ export function broadcastFleetRawInput(originId: string, data: string): boolean 
   const targets = resolveLiveFleetTargetIds();
   if (targets.length < 2 || !targets.includes(originId)) return false;
 
-  terminalClient.broadcast(targets, data);
+  // Successes only matter while a chip is showing — they are what clears it —
+  // or while a structured broadcast could record one before this write lands.
+  // Asking for them otherwise costs a result message per keystroke.
+  const reportSuccess =
+    useFleetFailureStore.getState().failedIds.size > 0 ||
+    useFleetBroadcastProgressStore.getState().isActive;
+  terminalClient.broadcast(targets, data, reportSuccess);
   // Mirror the origin's xterm onData → onUserInput path on every non-origin
   // target so the `directing` indicator fires fleet-wide. Pass the raw
   // payload (not "") so Phase 2 escalation still kicks in for large pastes —

@@ -488,13 +488,14 @@ export const terminalClient = {
    * message, the host writes to each PTY in a tight loop. Keeps renderer
    * latency bounded regardless of fleet size.
    */
-  broadcast: (ids: string[], data: string): void => {
+  broadcast: (ids: string[], data: string, reportSuccess = false): void => {
     if (ids.length === 0 || data.length === 0) return;
-    window.electron.terminal.broadcastWrite(ids, data);
+    window.electron.terminal.broadcastWrite(ids, data, reportSuccess);
   },
 
   /**
-   * Listen for per-target results emitted after every fleet broadcast write.
+   * Listen for per-target results emitted after a fleet broadcast write that
+   * failed somewhere, or that was asked to report successes.
    * Used by `fleetRawInputBroadcast` to surface the failure chip and to
    * auto-disarm targets whose pty is permanently gone (EPIPE/EIO/EBADF/
    * ECONNRESET).
