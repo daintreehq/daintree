@@ -60,6 +60,27 @@ export function forceXtermReflow(element: HTMLElement): void {
 }
 
 /**
+ * {@link forceXtermReflow} for several terminals with one layout flush: every
+ * jitter write lands first, a single read lays out the document once, then the
+ * reverts. Calling the single form in a loop costs one forced layout per
+ * element, since each read follows the previous element's revert.
+ */
+export function forceXtermReflowBatch(elements: readonly HTMLElement[]): void {
+  if (elements.length === 0) return;
+  const prev = elements.map((element) => element.style.paddingTop);
+  let written = 0;
+  try {
+    for (const element of elements) {
+      element.style.paddingTop = "0.01px";
+      written++;
+    }
+    void elements[0]!.offsetHeight;
+  } finally {
+    for (let i = 0; i < written; i++) elements[i]!.style.paddingTop = prev[i]!;
+  }
+}
+
+/**
  * Resume xterm's core RenderService after its IntersectionObserver paused it.
  *
  * In xterm 6 `_isPaused` is written in exactly one place — the observer
