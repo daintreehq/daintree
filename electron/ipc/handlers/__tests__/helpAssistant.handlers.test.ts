@@ -238,7 +238,11 @@ describe("registerHelpAssistantHandlers", () => {
     expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.daintreeConfirmations", "always-ask");
 
     storeMock.set.mockClear();
-    await handler(null, { daintreeConfirmations: "never-ask" as unknown as "inherit" });
+    await handler(null, { daintreeConfirmations: "never-ask" });
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.daintreeConfirmations", "never-ask");
+
+    storeMock.set.mockClear();
+    await handler(null, { daintreeConfirmations: "skip" as unknown as "inherit" });
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
@@ -248,6 +252,9 @@ describe("registerHelpAssistantHandlers", () => {
 
     storeMock.get.mockReturnValue({ daintreeConfirmations: "always-ask" });
     expect(await handler(null)).toMatchObject({ daintreeConfirmations: "always-ask" });
+
+    storeMock.get.mockReturnValue({ daintreeConfirmations: "never-ask" });
+    expect(await handler(null)).toMatchObject({ daintreeConfirmations: "never-ask" });
 
     storeMock.get.mockReturnValue({
       daintreeConfirmations: "skip" as unknown as "inherit",

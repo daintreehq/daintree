@@ -47,9 +47,11 @@ import {
 } from "@shared/config/agentRegistry";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
-import { assistantSkipsDaintreeConfirmations } from "@shared/utils/assistantDaintreeConfirmations";
+import {
+  assistantSkipsDaintreeConfirmations,
+  isHelpAssistantDaintreeConfirmations,
+} from "@shared/utils/assistantDaintreeConfirmations";
 import type {
-  HelpAssistantDaintreeConfirmations,
   HelpAssistantIdleHibernateMinutes,
   HelpAssistantSettings,
   HelpAssistantTier,
@@ -298,21 +300,22 @@ interface BypassCopy {
 // Scoped to new sessions because both the tier and the bypass preference are
 // provision-time snapshots — a session already running keeps the tier it was
 // minted with, which the live-status card reports.
-// While the assistant inherits "Skip permission prompts" (#12874) those
+// While Daintree confirmations skips them (#12874, #12989) those
 // confirmations are skipped too, so the second sentence says that instead.
 const tierBoundsNewSessions = (tier: HelpAssistantTier, confirmationsSkipped: boolean): string =>
   `New sessions are limited to the Daintree actions in the ${TIER_SHORT_LABEL[tier]} tool set. ${
     confirmationsSkipped
-      ? "Daintree's own confirmations are skipped as well, because Daintree confirmations follows Skip permission prompts."
+      ? "Daintree's own confirmations, closing panels included, are skipped as well, as set by Daintree confirmations below."
       : "Actions that need confirmation still open Daintree's own prompt unless an automation grant covers them."
   }`;
 
 const daintreeConfirmationOptions = (globalSkipPermissions: boolean) => [
   {
     value: "inherit",
-    label: `Use Skip permission prompts (currently: ${globalSkipPermissions ? "on" : "off"})`,
+    label: `Follow Skip permission prompts (currently: ${globalSkipPermissions ? "on" : "off"})`,
   },
   { value: "always-ask", label: "Always ask" },
+  { value: "never-ask", label: "Never ask" },
 ];
 
 /**
@@ -900,8 +903,8 @@ export function DaintreeAssistantSettingsTab() {
   };
 
   const setDaintreeConfirmations = (value: string) => {
-    if (value !== "inherit" && value !== "always-ask") return;
-    void persist({ daintreeConfirmations: value as HelpAssistantDaintreeConfirmations });
+    if (!isHelpAssistantDaintreeConfirmations(value)) return;
+    void persist({ daintreeConfirmations: value });
   };
 
   const toggleDebugLogging = () => {
@@ -1030,6 +1033,14 @@ export function DaintreeAssistantSettingsTab() {
 
   const handleGoToAgentSettings = () => {
     void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
+  };
+
+  const handleGoToSkipPermissions = () => {
+    void actionService.dispatch(
+      "app.settings.openTab",
+      { tab: "agents", subtab: "general", sectionId: "agents-skip-permissions" },
+      { source: "user" }
+    );
   };
 
   const handleOpenCommandsFolder = () => {
@@ -1297,7 +1308,16 @@ export function DaintreeAssistantSettingsTab() {
           <SettingsSelect
             id="assistant-daintree-confirmations"
             label="Daintree confirmations"
-            description="Whether Daintree asks before the assistant runs an action like deleting a worktree. Following Skip permission prompts, those actions run without asking while it's on and ask while it's off."
+            description={
+              <>
+                Whether Daintree asks before the assistant deletes a worktree, closes a panel it
+                didn't open, or runs another action that needs confirmation. By default it follows{" "}
+                <Button variant="link" onClick={handleGoToSkipPermissions}>
+                  Settings &gt; Agents &gt; Skip permission prompts
+                </Button>
+                , which is {globalSkipPermissions ? "on" : "off"}.
+              </>
+            }
             value={settings.daintreeConfirmations}
             onValueChange={setDaintreeConfirmations}
             options={daintreeConfirmationOptions(globalSkipPermissions)}

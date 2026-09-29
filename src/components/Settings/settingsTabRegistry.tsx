@@ -1099,17 +1099,21 @@ export const SETTINGS_REGISTRY = [
         section: "Security",
         title: "Daintree confirmations",
         description:
-          "Whether Daintree asks before the assistant runs an action, or follows Skip permission prompts",
+          "Whether Daintree asks before the assistant runs an action: follow Skip permission prompts, always ask, or never ask",
         keywords: [
           "assistant",
           "confirmations",
           "confirm",
           "dialog",
           "ask",
+          "never ask",
+          "always ask",
           "skip",
           "permissions",
           "security",
           "delete",
+          "close",
+          "kill",
         ],
       },
       {

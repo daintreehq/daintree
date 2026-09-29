@@ -6,7 +6,6 @@ import type { IpcContext } from "../types.js";
 import { HELP_ASSISTANT_METHOD_CHANNELS } from "./helpAssistant.preload.js";
 import type {
   HelpAssistantAuditRetention,
-  HelpAssistantDaintreeConfirmations,
   HelpAssistantIdleHibernateMinutes,
   HelpAssistantSettings,
   HelpSessionLiveStatus,
@@ -17,6 +16,7 @@ import {
   normalizeHelpAssistantTier,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { hasShellMetachar } from "../../../shared/utils/shellEscape.js";
+import { isHelpAssistantDaintreeConfirmations as isValidDaintreeConfirmations } from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import { applyModelIdPatch, sanitizeModelIdMap } from "../../utils/helpAssistantModels.js";
 import type * as McpServerServiceModule from "../../services/McpServerService.js";
 
@@ -73,10 +73,6 @@ function isValidIdleHibernateMinutes(value: unknown): value is HelpAssistantIdle
   return (
     value === 0 || value === 5 || value === 15 || value === 30 || value === 60 || value === 120
   );
-}
-
-function isValidDaintreeConfirmations(value: unknown): value is HelpAssistantDaintreeConfirmations {
-  return value === "inherit" || value === "always-ask";
 }
 
 function isValidHelpAssistantTier(value: unknown): value is HelpAssistantTier {

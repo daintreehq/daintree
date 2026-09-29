@@ -11336,13 +11336,10 @@ describe("assistant skip preference (#12874)", () => {
     help.sessionStore.grantCache.dispose();
   });
 
-  // #12881's protected close is asked whatever a grant says, and the skip
-  // preference covers only what a grant could, so it never waives that ask.
-  it("still asks before closing a panel the assistant did not open", async () => {
-    const requestCloseApproval = vi.fn().mockResolvedValue({
-      result: { ok: true, result: { selectedTargetIds: ["t-user"] } },
-      confirmationDecision: "approved",
-    });
+  // #12989: the skip covers the protected close (#12881) and the
+  // target-picking tools a native grant cannot.
+  it("closes a panel the assistant did not open without asking, audited as the skip", async () => {
+    const requestCloseApproval = vi.fn();
     const help = skipServer({
       origin: "help",
       skipped: true,
@@ -11356,21 +11353,39 @@ describe("assistant skip preference (#12874)", () => {
 
     await callTool(help.server, { name: "terminal.close", arguments: { terminalId: "t-user" } });
 
-    expect(requestCloseApproval).toHaveBeenCalledTimes(1);
-    expect(help.dispatchAction).toHaveBeenCalledTimes(1);
-    expect(help.dispatchAction.mock.calls[0][3]).not.toBe("skip-preference");
-    expect(lastAudit(help.appendAuditRecord).authorization).not.toBe("skip-preference");
+    expect(requestCloseApproval).not.toHaveBeenCalled();
+    expect(help.dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([true, "skip-preference"]);
+    expect(lastAudit(help.appendAuditRecord)).toMatchObject({ authorization: "skip-preference" });
+    expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "terminal.close", danger: false })
+    );
     help.sessionStore.grantCache.dispose();
   });
 
-  it("closes nothing unasked when the user declines a protected close under the preference", async () => {
+  it("does not stamp a close that would never have asked", async () => {
+    const help = skipServer({
+      origin: "help",
+      skipped: true,
+      entries: [makeManifestEntry("terminal.close")],
+      extraDeps: { readTerminalAgentState: vi.fn(async () => null) },
+    });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "terminal.close", arguments: {} });
+
+    expect(help.dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([false]);
+    expect(lastAudit(help.appendAuditRecord).authorization).toBeUndefined();
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("still asks before a protected close while the preference resolves to ask", async () => {
     const requestCloseApproval = vi.fn().mockResolvedValue({
       result: { ok: false, error: { code: "USER_REJECTED", message: "declined" } },
       confirmationDecision: "rejected",
     });
     const help = skipServer({
       origin: "help",
-      skipped: true,
+      skipped: false,
       entries: [makeManifestEntry("terminal.close")],
       extraDeps: {
         requestCloseApproval,
@@ -11384,15 +11399,75 @@ describe("assistant skip preference (#12874)", () => {
       arguments: { terminalId: "t-user" },
     });
 
+    expect(requestCloseApproval).toHaveBeenCalledTimes(1);
     expect(help.dispatchAction).not.toHaveBeenCalled();
     expect(toolErrorPayload(result).code).toBe("USER_REJECTED");
     help.sessionStore.grantCache.dispose();
   });
 
-  it("leaves an agent's close-all to its dialog, which is where the sweep is approved", async () => {
+  it("runs a closeMany of panels it did not open without asking, each item under the skip", async () => {
+    const requestCloseApproval = vi.fn();
     const help = skipServer({
       origin: "help",
       skipped: true,
+      entries: [makeManifestEntry("terminal.close"), makeManifestEntry("terminal.closeMany")],
+      extraDeps: {
+        requestCloseApproval,
+        readTerminalAgentState: vi.fn(async () => null),
+      },
+    });
+    await help.server.connect(makeMockTransport());
+
+    const result = await callTool(help.server, {
+      name: "terminal.closeMany",
+      arguments: { terminalIds: ["t-a", "t-b"] },
+    });
+
+    expect(requestCloseApproval).not.toHaveBeenCalled();
+    expect(help.dispatchAction.mock.calls.map((c) => [c[1], ...c.slice(2)])).toEqual([
+      [{ terminalId: "t-a" }, true, "skip-preference"],
+      [{ terminalId: "t-b" }, true, "skip-preference"],
+    ]);
+    expect(result.structuredContent).toMatchObject({
+      results: [
+        { target: "t-a", ok: true },
+        { target: "t-b", ok: true },
+      ],
+    });
+    // One strip row for the batch, and none of it waits.
+    for (const call of help.notifyToolCallStarted.mock.calls) {
+      expect(call[0]).toMatchObject({ danger: false });
+    }
+    expect(
+      help.appendAuditRecord.mock.calls.map((c) => (c[0] as Record<string, unknown>).authorization)
+    ).toEqual(["skip-preference", "skip-preference", "skip-preference"]);
+    help.sessionStore.grantCache.dispose();
+  });
+
+  // The target-picking tools a native grant cannot cover. `killAll` and
+  // `killBatch` sit in no assistant tier today; the gate is the same for them.
+  it("runs an agent's close-all pre-confirmed under the skip", async () => {
+    const help = skipServer({
+      origin: "help",
+      skipped: true,
+      entries: [makeManifestEntry("terminal.closeAll")],
+    });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "terminal.closeAll", arguments: {} });
+
+    expect(help.dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([true, "skip-preference"]);
+    expect(lastAudit(help.appendAuditRecord)).toMatchObject({ authorization: "skip-preference" });
+    expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "terminal.closeAll", danger: false })
+    );
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("leaves an agent's close-all to its dialog while the preference resolves to ask", async () => {
+    const help = skipServer({
+      origin: "help",
+      skipped: false,
       entries: [makeManifestEntry("terminal.closeAll")],
     });
     await help.server.connect(makeMockTransport());
