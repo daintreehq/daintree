@@ -355,7 +355,9 @@ jobs:
         uses: ./.github/actions/setup-node-install
         with:
           node_version: ${{ env.NODE_VERSION }}
-          msvs_version: "2022"
+          # why: the windows-11-arm image ships only Visual Studio 2026, so
+          # pinning 2022 makes node-gyp reject the one install it finds. Leave
+          # it unset and let node-gyp pick whichever version is present.
 
       - name: Build (arm64)
         shell: bash
