@@ -45,37 +45,65 @@ function useTourOffer() {
 
   useEffect(() => {
     let active = true;
-    const refresh = () =>
+    // Restoring a minimized window fires `visibilitychange` and `focus` back to
+    // back, each its own dispatch, so both would otherwise pay an IPC read.
+    // One read per activation: leaving (blur or hide) starts a new one, whose
+    // return must read afresh rather than inherit a read from before the user
+    // left. A failed read gives its activation back so the next signal retries.
+    let activation = 0;
+    let readActivation: number | null = null;
+    let latestRead = 0;
+    const refresh = () => {
+      if (readActivation === activation) return;
+      const claimed = activation;
+      readActivation = claimed;
+      const read = ++latestRead;
       // Deferred so a missing bridge (tests, previews) rejects instead of throwing
       // out of the effect.
       safeFireAndForget(
         Promise.resolve()
           .then(() => getOnboardingState())
-          .then((onboarding) => {
-            if (!active) return;
-            setState((current) =>
-              current.kind === "dismissed-note"
-                ? current
-                : inviteStateFor(tourProgressFor(onboarding.tours, DAINTREE_TOUR_ID))
-            );
-          }),
+          .then(
+            (onboarding) => {
+              // An older read landing after a newer one started is stale.
+              if (!active || read !== latestRead) return;
+              setState((current) =>
+                current.kind === "dismissed-note"
+                  ? current
+                  : inviteStateFor(tourProgressFor(onboarding.tours, DAINTREE_TOUR_ID))
+              );
+            },
+            (error: unknown) => {
+              if (readActivation === claimed) readActivation = null;
+              throw error;
+            }
+          ),
         { context: "Reading tour invitation state" }
       );
+    };
+    const onLeave = () => {
+      activation++;
+    };
     // Another tour finishing leaves this one's offer where it was.
     const onCompleted = (event: Event) => {
       if (tourIdOf(event) === DAINTREE_TOUR_ID) setState({ kind: "hidden" });
     };
     const onVisible = () => {
       if (document.visibilityState === "visible") refresh();
+      else onLeave();
     };
     refresh();
+    // Mounted while the user is elsewhere: their return is a fresh activation.
+    if (!document.hasFocus()) onLeave();
     window.addEventListener(TOUR_COMPLETED_EVENT, onCompleted);
     window.addEventListener("focus", onVisible);
+    window.addEventListener("blur", onLeave);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       active = false;
       window.removeEventListener(TOUR_COMPLETED_EVENT, onCompleted);
       window.removeEventListener("focus", onVisible);
+      window.removeEventListener("blur", onLeave);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);

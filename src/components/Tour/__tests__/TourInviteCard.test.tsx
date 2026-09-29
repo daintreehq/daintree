@@ -137,6 +137,83 @@ describe("TourInviteCard", () => {
     });
     await waitFor(() => expect(screen.queryByTestId("tour-invite-card")).toBeNull());
   });
+
+  it("reads once when a restore fires both visibility and focus", async () => {
+    setup(tour());
+    render(<TourInviteCard />);
+    await screen.findByRole("button", { name: "Start tour" });
+    getOnboardingStateMock.mockClear();
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    // The first read has landed before focus arrives; focus still belongs to
+    // the same return.
+    await waitFor(() => expect(getOnboardingStateMock).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(getOnboardingStateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads afresh on return when a read from before leaving is still out", async () => {
+    setup(tour());
+    render(<TourInviteCard />);
+    await screen.findByRole("button", { name: "Start tour" });
+    let releaseStale: () => void = () => {};
+    getOnboardingStateMock.mockReturnValueOnce(
+      new Promise((resolve) => (releaseStale = () => resolve(stored(tour()))))
+    );
+    getOnboardingStateMock.mockClear();
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(getOnboardingStateMock).toHaveBeenCalledTimes(1));
+    // The user leaves, finishes the tour elsewhere and comes back while that
+    // read is still out; it predates the finish and must not win.
+    getOnboardingStateMock.mockResolvedValue(stored(tour({ completed: true })));
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(screen.queryByTestId("tour-invite-card")).toBeNull());
+    await act(async () => {
+      releaseStale();
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId("tour-invite-card")).toBeNull();
+  });
+
+  it("reads again after a failed read, without waiting to leave", async () => {
+    setup(tour());
+    render(<TourInviteCard />);
+    await screen.findByRole("button", { name: "Start tour" });
+    getOnboardingStateMock.mockClear();
+    getOnboardingStateMock.mockRejectedValueOnce(new Error("bridge down"));
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(getOnboardingStateMock).toHaveBeenCalledTimes(1));
+    getOnboardingStateMock.mockResolvedValue(stored(tour({ completed: true })));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(screen.queryByTestId("tour-invite-card")).toBeNull());
+  });
 });
 
 describe("TourInviteCard with other tours", () => {
