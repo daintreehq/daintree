@@ -1,4 +1,4 @@
-import { AlertCircle, Package, RefreshCw } from "lucide-react";
+import { AlertCircle, Package, RotateCw } from "lucide-react";
 import { InlineError } from "@/components/ui/field";
 import { Callout } from "@/components/ui/Callout";
 import { Button } from "@/components/ui/button";
@@ -312,7 +312,7 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
             is useful whatever the folder's state — including "unreadable",
             where fixing the manifest and reloading is the whole loop. */}
         <Button variant="outline" size="sm" onClick={() => void reload()} loading={reloading}>
-          <RefreshCw />
+          <RotateCw />
           Reload from folder
         </Button>
 

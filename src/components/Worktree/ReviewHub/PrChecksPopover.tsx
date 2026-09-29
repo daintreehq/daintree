@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { ChevronRight, CircleDashed, ExternalLink, Info, RotateCw, Send } from "lucide-react";
+import { ChevronRight, CircleDashed, ExternalLink, Info, RefreshCw, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -311,7 +311,7 @@ export function PrChecksPopover({
               onClick={runFetch}
               className={FOOTER_BUTTON_MOTION}
             >
-              <RotateCw aria-hidden="true" />
+              <RefreshCw aria-hidden="true" />
               {reloadLabel}
             </Button>
             {failingCount > 0 && (

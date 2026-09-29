@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Plus, Trash2, Edit3, Download, FileDown, Check, Pin, AlertTriangle } from "lucide-react";
+import { AlertTriangle, Check, Download, FileDown, Pencil, Pin, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
@@ -315,7 +315,7 @@ export function RecipesTab({
                                   onClick={() => handleEditRecipe(recipe)}
                                   aria-label={`Edit recipe ${recipe.name}`}
                                 >
-                                  <Edit3 />
+                                  <Pencil />
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent side="bottom">Edit recipe</TooltipContent>

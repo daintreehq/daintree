@@ -33,7 +33,8 @@ export {
   Coffee, // Daintree keeping the machine from idle-sleeping while agents work — the long-standing keep-awake metaphor
   FileStack, // artifacts an agent left in a terminal — the code, patches and files pulled from its output
   FileText, // view selected file path in the read-only file viewer
-  FolderGit2, // git worktree (single)
+  FolderDown, // clone a repository — a folder arriving, beside Open project's FolderOpen and Create project's FolderPlus
+  FolderGit2, // git worktree (single), and any count of worktrees
   FolderOpen, // reveal in file manager (Finder / Explorer / file manager)
   FolderOutput, // worktree living outside the project directory (external)
   FolderTree, // Daintree's own file browser panel (the worktree file tree)

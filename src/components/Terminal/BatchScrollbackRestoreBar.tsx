@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { History, RotateCcw } from "lucide-react";
+import { History, RefreshCw } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, type PanelGridState } from "@/store/panelStore";
@@ -59,7 +59,7 @@ export function BatchScrollbackRestoreBar({ className }: { className?: string })
         action={{
           id: "retry-batch",
           label: "Retry batch",
-          icon: RotateCcw,
+          icon: RefreshCw,
           variant: "primary",
           onClick: handleRetry,
           ariaLabel: "Retry batch",

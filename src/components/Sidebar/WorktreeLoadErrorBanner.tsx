@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { RotateCcw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { boundedErrorText } from "@/utils/errorText";
 import { actionService } from "@/services/ActionService";
@@ -46,7 +46,7 @@ export function WorktreeLoadErrorBanner({
   const retryAction: BannerAction = {
     id: "retry",
     label: "Retry",
-    icon: RotateCcw,
+    icon: RefreshCw,
     variant: "primary",
     onClick: () => void handleRetry(),
     ariaLabel: "Retry loading worktrees",

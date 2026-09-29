@@ -1,4 +1,4 @@
-import { Clock, RotateCcw, WifiOff, type LucideIcon } from "lucide-react";
+import { Clock, type LucideIcon, RefreshCw, WifiOff } from "lucide-react";
 import { InlineStatusBanner, type InlineStatusBannerSeverity } from "./InlineStatusBanner";
 import { boundedErrorText } from "@/utils/errorText";
 import type { TerminalReconnectError } from "@/types";
@@ -36,7 +36,7 @@ export function ReconnectErrorBanner({
   const retryAction = {
     id: "retry",
     label: "Retry",
-    icon: RotateCcw,
+    icon: RefreshCw,
     variant: "primary" as const,
     onClick: () => onRestart(terminalId),
     title: "Retry reconnecting",

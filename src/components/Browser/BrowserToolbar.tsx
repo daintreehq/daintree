@@ -3,23 +3,22 @@ import { flushSync } from "react-dom";
 import {
   ArrowLeft,
   ArrowRight,
-  RotateCw,
-  ExternalLink,
-  Copy,
+  Camera,
   Check,
-  Link,
+  Code,
+  Copy,
+  Ellipsis,
+  ExternalLink,
   Globe,
   Lock,
+  PanelRight,
+  RotateCw,
+  Scan,
+  Smartphone,
+  SquareTerminal,
+  X,
   ZoomIn,
   ZoomOut,
-  Scan,
-  Camera,
-  SquareTerminal,
-  Code,
-  Smartphone,
-  PanelRight,
-  Ellipsis,
-  X,
 } from "lucide-react";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { cn } from "@/lib/utils";
@@ -1214,7 +1213,7 @@ export function BrowserToolbar({
                 {isCompact && (
                   <>
                     <DropdownMenuItem disabled={!address} onSelect={() => void handleCopy()}>
-                      <Link data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      <Copy data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Copy URL
                     </DropdownMenuItem>
                     {consoleInMenu && (

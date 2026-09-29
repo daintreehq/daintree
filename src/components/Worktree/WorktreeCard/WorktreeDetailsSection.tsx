@@ -21,9 +21,9 @@ import {
   ChevronRight,
   GitCommitHorizontal,
   Pause,
-  Plug,
   Play,
-  RotateCcw,
+  Plug,
+  RefreshCw,
   ShieldAlert,
   Trash2,
 } from "lucide-react";
@@ -628,7 +628,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     loading={isRetryingSetup}
                     className="shrink-0 shadow-none inset-shadow-none"
                   >
-                    <RotateCcw aria-hidden="true" />
+                    <RefreshCw aria-hidden="true" />
                     Retry setup
                   </Button>
                 </div>
@@ -683,7 +683,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                 // The row's own signal: an approval is waiting on the user.
                 <ShieldAlert className="text-status-warning" aria-hidden="true" />
               ) : (
-                <RotateCcw aria-hidden="true" />
+                <RefreshCw aria-hidden="true" />
               )}
               {commandsNeedApproval ? "Review commands" : "Run setup"}
             </Button>

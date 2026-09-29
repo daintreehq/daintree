@@ -9,30 +9,30 @@ import React, {
   type ReactNode,
 } from "react";
 import {
-  Check,
-  X,
-  Maximize2,
-  Minimize2,
-  RotateCcw,
-  Grid2X2,
-  Plus,
-  RadioTower,
   Bell,
   BellOff,
+  Check,
   ChevronDown,
   CirclePlay,
   CopyPlus,
   DatabaseBackup,
   Ellipsis,
+  Grid2X2,
   Lock,
+  Maximize2,
+  Minimize2,
   PanelBottomClose,
   PanelTopClose,
   Pencil,
+  Plus,
+  RadioTower,
   RefreshCw,
+  RotateCw,
   Settings,
   ShieldAlert,
   Trash2,
   Unlock,
+  X,
 } from "lucide-react";
 import {
   DndContext,
@@ -1667,7 +1667,7 @@ function PanelHeaderComponent({
                           : "Restart session"
                       }
                     >
-                      <RotateCcw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      <RotateCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       {armedRestartId === id
                         ? `Confirm restart (${countdown ?? 0}s)`
                         : "Restart session"}

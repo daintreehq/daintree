@@ -13,6 +13,7 @@ Daintree's UI runs on Lucide icons via `lucide-react`. The few files in this dir
 
 - Use Lucide's existing icons. Only add a bespoke component to `brands/` if it's a real third-party brand mark with recognition value.
 - For Daintree-specific concepts, pick the closest Lucide icon and add it to the alias list in `index.ts`. We don't draw bespoke icons for app concepts.
+- Recurring actions (retry, refresh, reload, restart, restore, copy, edit, settings) have one glyph each; the table lives in `docs/themes/component-contract.md` under "Action glyphs" and a contract test enforces it.
 - Always set `aria-hidden="true"` unless the icon is the sole label for an interactive control, in which case use `aria-label` instead.
 
 ## Style reference

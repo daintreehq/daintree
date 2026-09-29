@@ -1,4 +1,4 @@
-import { Eye, GitBranch, GitCommitHorizontal, LayoutGrid } from "lucide-react";
+import { Eye, FolderGit2, GitCommitHorizontal, LayoutGrid } from "lucide-react";
 import { cn, reveal } from "@daintreehq/tour/kit";
 import { MockAppMark } from "@daintreehq/tour/mock-app";
 import { useCue, useTimelineIndex, type TimelinePoint } from "@daintreehq/tour/react";
@@ -6,7 +6,7 @@ import { useCue, useTimelineIndex, type TimelinePoint } from "@daintreehq/tour/r
 // Each idea lands as it's spoken.
 const WHY = [
   { icon: LayoutGrid, label: "Agents side by side", cue: "side" },
-  { icon: GitBranch, label: "A worktree per task", cue: "task" },
+  { icon: FolderGit2, label: "A worktree per task", cue: "task" },
   { icon: Eye, label: "See who needs you", cue: "see" },
   { icon: GitCommitHorizontal, label: "Review and ship", cue: "ship" },
 ] as const;

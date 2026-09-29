@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { RotateCw } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { SidebarFooterGlyph } from "@/components/Layout/SidebarFooterGlyph";
@@ -203,7 +203,7 @@ export function ProjectPluginIndicator() {
               onClick={() => void reload()}
               loading={reloading}
             >
-              <RefreshCw />
+              <RotateCw />
               Reload from folder
             </Button>
 

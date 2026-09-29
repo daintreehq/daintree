@@ -1,4 +1,4 @@
-import { MonitorX, RotateCcw } from "lucide-react";
+import { MonitorX, RefreshCw } from "lucide-react";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { boundedErrorText } from "@/utils/errorText";
 
@@ -44,7 +44,7 @@ export function TerminalAttachErrorBanner({
       action={{
         id: "retry-attach",
         label: "Retry",
-        icon: RotateCcw,
+        icon: RefreshCw,
         variant: "primary",
         onClick: () => onRetry(terminalId),
         title: "Rebuild the terminal display and replay its output",

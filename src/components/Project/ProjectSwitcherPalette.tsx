@@ -3,9 +3,11 @@ import { Callout } from "@/components/ui/Callout";
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import type { JSX } from "react";
 import {
+  AppWindow,
   BellOff,
   ChevronRight,
-  Download,
+  CircleStop,
+  Copy,
   FileText,
   FolderInput,
   FolderOpen,
@@ -15,15 +17,12 @@ import {
   Pin,
   PinOff,
   Plus,
-  Settings2,
+  Settings,
   Trash2,
   X,
-  AppWindow,
-  CircleStop,
-  Copy,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { Moon } from "@/components/icons";
+import { FolderDown, Moon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
@@ -2552,7 +2551,7 @@ function ProjectPaletteInner({
           <div>
             {onOpenProjectSettings && (
               <ProjectCommandRow
-                icon={Settings2}
+                icon={Settings}
                 tone="manage"
                 label="Project settings…"
                 onClick={onOpenProjectSettings}
@@ -2560,7 +2559,7 @@ function ProjectPaletteInner({
             )}
             {onAddProject && (
               <ProjectCommandRow
-                icon={Plus}
+                icon={FolderOpen}
                 tone="create"
                 label="Open project…"
                 onClick={onAddProject}
@@ -2569,7 +2568,7 @@ function ProjectPaletteInner({
             )}
             {onCloneRepo && (
               <ProjectCommandRow
-                icon={Download}
+                icon={FolderDown}
                 tone="create"
                 label="Clone repository…"
                 onClick={onCloneRepo}

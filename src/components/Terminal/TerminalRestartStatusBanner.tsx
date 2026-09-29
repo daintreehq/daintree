@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { XCircle, RotateCcw, AlertTriangle } from "lucide-react";
+import { AlertTriangle, RotateCw, XCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import type { RestartBannerVariant } from "./restartStatus";
@@ -123,7 +123,7 @@ export function TerminalRestartStatusBanner({
           action={{
             id: "restart",
             label: "Restart session",
-            icon: RotateCcw,
+            icon: RotateCw,
             variant: "dangerFilled",
             onClick: onRestart,
             title: "Restart session",

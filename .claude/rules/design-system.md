@@ -62,6 +62,8 @@ The gates are a family, not one number — all in `src/lib/animationUtils.ts`:
 
 Lucide only (`lucide-react`) — no bespoke glyphs for app concepts. A new concept takes the closest Lucide icon, added to the alias list in `src/components/icons/index.ts`. Bespoke exceptions: `DaintreeIcon`, `AgentStateCircles`, `McpServerIcon`, `brands/`.
 
+Recurring actions wear one glyph each: `RefreshCw` retry/refresh, `RotateCw` reload/restart, `RotateCcw` only restore/reset/revert/undo; `Copy` for copying (`Link` means linking), `Pencil` edit, `Settings` project settings, `FolderGit2` worktree. Table: `docs/themes/component-contract.md` → Action glyphs.
+
 Agent-state glyphs (green spinner / amber circle / blue check) are app-wide vocabulary — never swap in a foreign glyph. Never render `SpinnerCircle` static.
 
 ## High contrast

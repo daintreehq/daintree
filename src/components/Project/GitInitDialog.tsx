@@ -3,7 +3,7 @@ import { InlineError } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Check } from "lucide-react";
+import { Check, FolderOpen } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { FolderGit2 } from "@/components/icons";
@@ -760,7 +760,7 @@ export function GitInitDialog({
             onClick={handleClose}
             className="gap-2"
           >
-            <Check className="h-4 w-4" />
+            <FolderOpen className="h-4 w-4" />
             Open project
           </Button>
         ) : mode === "running" ? (

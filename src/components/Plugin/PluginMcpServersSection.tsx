@@ -4,7 +4,7 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { InlineError } from "@/components/ui/field";
 import { Callout } from "@/components/ui/Callout";
-import { ChevronRight, RefreshCw } from "lucide-react";
+import { ChevronRight, RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
@@ -318,7 +318,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
                   disabled={isRestarting || isSpawning}
                   className="shrink-0"
                 >
-                  <SpinningIcon icon={RefreshCw} active={isRestarting} className="w-3.5 h-3.5" />
+                  <SpinningIcon icon={RotateCw} active={isRestarting} className="w-3.5 h-3.5" />
                   {status === "not-started" ? "Start server" : "Restart server"}
                 </Button>
               </div>

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight, CircleHelp, CircleStop, Ellipsis, RotateCcw } from "lucide-react";
+import { ChevronRight, CircleHelp, CircleStop, Ellipsis, RotateCw } from "lucide-react";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import {
   DropdownMenu,
@@ -142,7 +142,7 @@ export function HelpPanelHeader({
           {canRestartConversation && (
             <>
               <DropdownMenuItem destructive onSelect={onRestartConversation}>
-                <RotateCcw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                <RotateCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                 Restart conversation
               </DropdownMenuItem>
               <DropdownMenuSeparator />

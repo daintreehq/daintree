@@ -4,18 +4,17 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowRightToLine,
-  RotateCw,
-  X,
-  Plus,
+  ChevronDown,
+  Copy,
   CopyPlus,
   ExternalLink,
   Globe,
-  Link,
-  Link2,
   ListX,
   PanelRight,
+  Plus,
+  RotateCw,
   Server,
-  ChevronDown,
+  X,
 } from "lucide-react";
 import {
   DndContext,
@@ -220,7 +219,7 @@ function SortableTab({
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem disabled={!hasUrl} onSelect={afterClose(() => onCopyUrl(tab.id))}>
-          <Link data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          <Copy data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Copy URL
         </ContextMenuItem>
         <ContextMenuItem disabled={!hasUrl} onSelect={afterClose(() => onOpenExternal(tab.id))}>
@@ -556,7 +555,7 @@ export function PortalToolbar({
               aria-label="Copy URL"
               className={iconButtonClass}
             >
-              <Link2 className={PANE_TOOLBAR_ICON_CLASS} />
+              <Copy className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Copy URL</TooltipContent>

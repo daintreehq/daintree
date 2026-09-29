@@ -1,22 +1,21 @@
 import { useMemo, useState } from "react";
 import { InlineError } from "@/components/ui/field";
 import {
+  Check,
+  ExternalLink,
   FolderOpen,
   FolderPlus,
-  Check,
-  Newspaper,
-  ExternalLink,
-  GitBranch,
-  Plug,
-  Pin,
-  Sparkles,
   type LucideIcon,
+  Newspaper,
+  Pin,
+  Plug,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { KbdChord } from "@/components/ui/Kbd";
-import { AppWindow, BrandMark, DaintreeIcon } from "@/components/icons";
+import { AppWindow, BrandMark, DaintreeIcon, FolderDown } from "@/components/icons";
 import { useProjectStore } from "@/store/projectStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -150,7 +149,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
       },
       {
         id: "clone-repository",
-        icon: GitBranch,
+        icon: FolderDown,
         title: "Clone repository",
         description: "Pull a repo from a Git URL",
         onClick: openCloneRepoDialog,

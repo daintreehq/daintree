@@ -6,7 +6,7 @@ import {
   Download,
   Eraser,
   ExternalLink,
-  RotateCcw,
+  RefreshCw,
   RotateCw,
   XCircle,
 } from "lucide-react";
@@ -176,7 +176,7 @@ export function DevPreviewWebviewOverlays({
                       Reload preview
                     </DropdownMenuItem>
                     <DropdownMenuItem onSelect={onRestartDevServer}>
-                      <RotateCcw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                      <RotateCw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Restart dev server
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
@@ -193,7 +193,7 @@ export function DevPreviewWebviewOverlays({
               </div>
             ) : (
               <Button onClick={onRetryWebviewLoad} variant="subtle" size="sm">
-                <RotateCw />
+                <RefreshCw />
                 Retry
               </Button>
             )}

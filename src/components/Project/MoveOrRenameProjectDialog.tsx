@@ -7,8 +7,8 @@ import {
   FolderInput,
   FolderSearch,
   HelpCircle,
-  RotateCcw,
   type LucideIcon,
+  RefreshCw,
 } from "lucide-react";
 import { basename, dirname, join, normalize } from "@shared/utils/path";
 import { validateFolderName } from "@shared/utils/folderName";
@@ -592,7 +592,7 @@ function RelocationPreviewSection({
           title="Couldn't check what will change"
           description={describePreviewFailure(loadError)}
           {...(describePreviewFailure(loadError) !== loadError ? { contextLine: loadError } : {})}
-          action={{ id: "retry", label: "Retry", icon: RotateCcw, onClick: onRetry }}
+          action={{ id: "retry", label: "Retry", icon: RefreshCw, onClick: onRetry }}
           className="rounded-[var(--radius-md)]"
         />
       </div>

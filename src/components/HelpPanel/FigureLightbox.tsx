@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type Ref } from "react";
-import { ChevronLeft, ChevronRight, ImageOff, RotateCw } from "lucide-react";
+import { ChevronLeft, ChevronRight, ImageOff, RefreshCw } from "lucide-react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -248,7 +248,7 @@ export function FigureLightbox({
                       stageRef.current?.focus({ preventScroll: true });
                     }}
                   >
-                    <RotateCw aria-hidden="true" />
+                    <RefreshCw aria-hidden="true" />
                     Retry
                   </Button>
                 </div>
