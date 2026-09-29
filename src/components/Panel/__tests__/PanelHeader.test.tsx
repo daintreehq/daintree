@@ -769,6 +769,69 @@ describe("PanelHeader", () => {
     });
   });
 
+  describe("Restart session", () => {
+    const agentPanel = (agentState: string) => ({
+      id: "test-panel",
+      kind: "terminal",
+      title: "Claude",
+      launchAgentId: "claude",
+      detectedAgentId: "claude",
+      everDetectedAgent: true,
+      agentState,
+    });
+
+    const renderWithRestart = (panel?: Record<string, unknown>) => {
+      mockHasPty = true;
+      mockCanRestart = true;
+      mockStoreState = { ...mockStoreState, panelsById: panel ? { "test-panel": panel } : {} };
+      const onRestart = vi.fn();
+      render(<PanelHeader {...makeProps({ onRestart })} />);
+      return onRestart;
+    };
+
+    it("restarts an idle shell on the first click, with no confirm step", () => {
+      const onRestart = renderWithRestart({ id: "test-panel", kind: "terminal" });
+      fireEvent.click(screen.getByTestId("panel-restart"));
+      expect(onRestart).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("panel-restart-confirm")).toBeNull();
+    });
+
+    it("restarts an agent that is not working without asking", () => {
+      const onRestart = renderWithRestart(agentPanel("waiting"));
+      fireEvent.click(screen.getByTestId("panel-restart"));
+      expect(onRestart).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).not.toHaveBeenCalled();
+    });
+
+    it("routes a working agent through terminal.restart's confirm once focus is back", async () => {
+      const onRestart = renderWithRestart(agentPanel("working"));
+      fireEvent.click(screen.getByTestId("panel-restart"));
+      expect(onRestart).not.toHaveBeenCalled();
+      // Not from the item: the menu is still returning focus to its trigger.
+      expect(mockDispatch).not.toHaveBeenCalled();
+      act(() => mockMenuCloseAutoFocus?.(new Event("closeAutoFocus", { cancelable: true })));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "terminal.restart",
+        { terminalId: "test-panel" },
+        { source: "menu" }
+      );
+      expect(onRestart).not.toHaveBeenCalled();
+    });
+
+    it("keeps one label and no warning tint on the item", () => {
+      renderWithRestart(agentPanel("working"));
+      const item = screen.getByTestId("panel-restart");
+      fireEvent.click(item);
+      const after = screen.getByTestId("panel-restart");
+      expect(after.textContent).toBe("Restart session");
+      expect(after.getAttribute("class") ?? "").not.toMatch(/status-warning/);
+    });
+  });
+
   describe("Move to worktree", () => {
     const findMenuButton = (label: string) =>
       Array.from(screen.getByTestId("overflow-menu").querySelectorAll("button")).find(
@@ -2387,7 +2450,7 @@ describe("PanelHeader", () => {
       mockStoreState = { ...mockStoreState, watchedPanels: new Set(["test-panel"]) };
       const chrome = deriveTerminalChrome({ kind: "terminal", launchAgentId: "claude" });
       render(<PanelHeader {...makeProps({ chrome, agentId: "claude", onRestart: vi.fn() })} />);
-      // The restart row is part of the set under test, armed label included.
+      // The restart row is part of the set under test.
       expect(screen.getByTestId("panel-restart")).toBeDefined();
       const menu = screen.getByTestId("overflow-menu");
       const labels = Array.from(menu.querySelectorAll("button")).map((b) =>
