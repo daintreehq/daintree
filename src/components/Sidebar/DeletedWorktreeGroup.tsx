@@ -23,6 +23,7 @@ import {
 } from "@/store/terminalPendingDestructiveActionStore";
 import { DeletedWorktreeCard } from "./DeletedWorktreeCard";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   SortableWorktreeTerminal,
@@ -372,49 +373,53 @@ function DeletedWorktreeTerminalChip({
     : placementLabel;
 
   // No `role="listitem"` here — `SortableWorktreeTerminal` already provides one
-  // around this chip, and nesting a second announces every entry twice.
+  // around this chip, and nesting a second announces every entry twice. The
+  // chip's menu is the session's own, "Move to worktree" included: the other
+  // way to rescue it.
   return (
-    <div className="group/chip flex items-center rounded-[var(--radius-lg)] transition-colors duration-150 hover:bg-overlay-subtle">
-      <button
-        ref={dragHandle?.setActivatorNodeRef}
-        type="button"
-        data-drag-handle
-        className="flex h-6 w-6 shrink-0 items-center justify-center cursor-grab rounded-[var(--radius-md)] text-text-secondary hover:text-text-primary focus-visible:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px] active:cursor-grabbing"
-        aria-label={`Drag to rescue ${label}`}
-        {...(dragHandle?.listeners as React.HTMLAttributes<HTMLElement> | undefined)}
-      >
-        <GripVertical className="w-3 h-3" aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        onClick={() => onSelect(terminal)}
-        className="flex min-h-6 min-w-0 flex-1 items-center gap-2 self-stretch rounded-[var(--radius-md)] pr-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-        aria-label={label}
-        aria-description={description}
-      >
-        <TerminalIcon chrome={chrome} className="w-3 h-3 shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-xs font-medium text-text-secondary transition-colors duration-150 group-hover/chip:text-text-primary">
-          {terminal.title}
-        </span>
-        <span className="flex shrink-0 items-center gap-1.5" aria-hidden="true">
-          {StateIcon && agentState && (
-            <StateIcon
-              className={cn(
-                "w-3 h-3",
-                getEffectiveStateColor(agentState),
-                agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
-              )}
-            />
-          )}
-          <span className="text-text-secondary">
-            {terminal.location === "dock" ? (
-              <PanelBottom className="w-3 h-3" />
-            ) : (
-              <PanelTopClose className="w-3 h-3" />
-            )}
+    <TerminalContextMenu terminalId={terminal.id} proxy>
+      <div className="group/chip flex items-center rounded-[var(--radius-lg)] transition-colors duration-150 hover:bg-overlay-subtle">
+        <button
+          ref={dragHandle?.setActivatorNodeRef}
+          type="button"
+          data-drag-handle
+          className="flex h-6 w-6 shrink-0 items-center justify-center cursor-grab rounded-[var(--radius-md)] text-text-secondary hover:text-text-primary focus-visible:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px] active:cursor-grabbing"
+          aria-label={`Drag to rescue ${label}`}
+          {...(dragHandle?.listeners as React.HTMLAttributes<HTMLElement> | undefined)}
+        >
+          <GripVertical className="w-3 h-3" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          onClick={() => onSelect(terminal)}
+          className="flex min-h-6 min-w-0 flex-1 items-center gap-2 self-stretch rounded-[var(--radius-md)] pr-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+          aria-label={label}
+          aria-description={description}
+        >
+          <TerminalIcon chrome={chrome} className="w-3 h-3 shrink-0" />
+          <span className="min-w-0 flex-1 truncate text-xs font-medium text-text-secondary transition-colors duration-150 group-hover/chip:text-text-primary">
+            {terminal.title}
           </span>
-        </span>
-      </button>
-    </div>
+          <span className="flex shrink-0 items-center gap-1.5" aria-hidden="true">
+            {StateIcon && agentState && (
+              <StateIcon
+                className={cn(
+                  "w-3 h-3",
+                  getEffectiveStateColor(agentState),
+                  agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
+                )}
+              />
+            )}
+            <span className="text-text-secondary">
+              {terminal.location === "dock" ? (
+                <PanelBottom className="w-3 h-3" />
+              ) : (
+                <PanelTopClose className="w-3 h-3" />
+              )}
+            </span>
+          </span>
+        </button>
+      </div>
+    </TerminalContextMenu>
   );
 }

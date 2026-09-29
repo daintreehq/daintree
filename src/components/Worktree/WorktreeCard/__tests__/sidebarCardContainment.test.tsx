@@ -26,6 +26,12 @@ import { WorktreeTerminalSection } from "../WorktreeTerminalSection";
 
 const mockAnimate = vi.fn();
 
+// Each tab and session row owns a TerminalContextMenu, which reads the worktree
+// store; its scoping is pinned in its own suite, so it is a passthrough here.
+vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
+  TerminalContextMenu: ({ children }: { children?: unknown }) => <>{children as never}</>,
+}));
+
 vi.mock("framer-motion", () => {
   const MotionDiv = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
     ({ children, ...props }, ref) => (

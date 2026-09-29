@@ -10,6 +10,12 @@ import { HelpSessionTabs } from "@/components/HelpPanel/HelpSessionTabs";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { documentTabClassName } from "../document-tab";
 
+// Each tab and session row owns a TerminalContextMenu, which reads the worktree
+// store; its scoping is pinned in its own suite, so it is a passthrough here.
+vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
+  TerminalContextMenu: ({ children }: { children?: unknown }) => <>{children as never}</>,
+}));
+
 vi.mock("@/hooks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks")>()),
   useEffectiveCombo: () => undefined,

@@ -12,6 +12,12 @@ import type { PtyPanelData } from "@shared/types/panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 
+// Each tab and session row owns a TerminalContextMenu, which reads the worktree
+// store; its scoping is pinned in its own suite, so it is a passthrough here.
+vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
+  TerminalContextMenu: ({ children }: { children?: unknown }) => <>{children as never}</>,
+}));
+
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
   return { ...actual, createPortal: (children: ReactNode) => children };

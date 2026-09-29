@@ -1190,6 +1190,7 @@ function PanelHeaderComponent({
                       fallbackTooltip={tab.fallbackTooltip}
                       hasDangerousFlags={tab.hasDangerousFlags}
                       tabPanelId={tabPanelId}
+                      menuLocation={location}
                       onClick={() => onTabClick?.(tab.id)}
                       onClose={() => onTabClose?.(tab.id)}
                       onRename={
@@ -1228,6 +1229,7 @@ function PanelHeaderComponent({
                   fallbackTooltip={tab.fallbackTooltip}
                   hasDangerousFlags={tab.hasDangerousFlags}
                   tabPanelId={tabPanelId}
+                  menuLocation={location}
                   onClick={() => onTabClick?.(tab.id)}
                   onClose={() => onTabClose?.(tab.id)}
                   onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}

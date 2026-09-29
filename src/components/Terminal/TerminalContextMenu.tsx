@@ -110,6 +110,7 @@ import {
   ContextMenuSubContent,
   ContextMenuSubTrigger,
   ContextMenuTrigger,
+  stopContextMenuPropagation,
 } from "@/components/ui/context-menu";
 import { MenuActionSourceContext, type MenuActionSourceValue } from "@/components/ui/menu-source";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
@@ -162,16 +163,26 @@ interface TerminalContextMenuProps {
   terminalId: string;
   children: React.ReactNode;
   forceLocation?: PanelLocation;
+  /**
+   * The trigger stands for the panel rather than being its surface: a tab in a
+   * strip, a sidebar session row, a rescue chip. A proxy owns the right-click
+   * under it, so the event stops here instead of reaching an enclosing menu —
+   * the active panel's own in a tab strip, the worktree card's in the sidebar.
+   * It also leaves `data-context-trigger` to the panel, so opening a panel's
+   * menu from the keyboard never lands on a row standing in for it.
+   */
+  proxy?: boolean;
 }
 
 /**
- * Right-click context menu for panel headers (terminal, agent, browser, dev-preview).
- * Used by both DockedTerminalItem and PanelHeader.
+ * The right-click menu for one panel, scoped to that panel wherever the
+ * pointer found it: its own surface, a dock item, a tab, a sidebar row.
  */
 export function TerminalContextMenu({
   terminalId,
   children,
   forceLocation,
+  proxy = false,
 }: TerminalContextMenuProps) {
   const terminal = usePanelStore((state) => state.panelsById[terminalId]);
   const maximizeTarget = usePanelStore((s) => s.maximizeTarget);
@@ -330,6 +341,14 @@ export function TerminalContextMenu({
     };
   }, []);
 
+  const handleTriggerContextMenu = useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      if (proxy) stopContextMenuPropagation(event);
+      captureMovePickerAnchor(event);
+    },
+    [proxy, captureMovePickerAnchor]
+  );
+
   // Radix also opens the menu from a touch or pen long-press, which never
   // raises the contextmenu event the capture above hangs off.
   const captureMovePickerAnchorOnPress = useCallback(
@@ -419,7 +438,7 @@ export function TerminalContextMenu({
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent<HTMLElement>) => {
-      captureMovePickerAnchor(e);
+      handleTriggerContextMenu(e);
       const { panelsById } = usePanelStore.getState();
       const resolved: Array<{ panelId: string; label: string }> = [];
       const seenIds = new Set<string>([terminalId]);
@@ -466,7 +485,7 @@ export function TerminalContextMenu({
       setHoveredFilePath(terminalInstanceService.getHoveredFilePath(terminalId));
       setHoveredFileKind(terminalInstanceService.getHoveredFileKind(terminalId));
     },
-    [captureMovePickerAnchor, terminalId, recentVoiceTargets]
+    [handleTriggerContextMenu, terminalId, recentVoiceTargets]
   );
 
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
@@ -900,6 +919,10 @@ export function TerminalContextMenu({
     return <div className="contents">{children}</div>;
   }
 
+  const triggerMarker = proxy
+    ? { "data-context-proxy": terminalId }
+    : { "data-context-trigger": terminalId };
+
   const isBrowser = isBrowserPanel(terminal);
   const isDevPreview = isDevPreviewPanel(terminal);
   const isReview = isReviewPanel(terminal);
@@ -1077,8 +1100,8 @@ export function TerminalContextMenu({
         <ContextMenuTrigger asChild>
           <div
             className="contents"
-            data-context-trigger={terminalId}
-            onContextMenu={captureMovePickerAnchor}
+            {...triggerMarker}
+            onContextMenu={handleTriggerContextMenu}
             onPointerDown={captureMovePickerAnchorOnPress}
           >
             {children}
@@ -1142,8 +1165,8 @@ export function TerminalContextMenu({
         <ContextMenuTrigger asChild>
           <div
             className="contents"
-            data-context-trigger={terminalId}
-            onContextMenu={captureMovePickerAnchor}
+            {...triggerMarker}
+            onContextMenu={handleTriggerContextMenu}
             onPointerDown={captureMovePickerAnchorOnPress}
           >
             {children}
@@ -1206,8 +1229,8 @@ export function TerminalContextMenu({
         <ContextMenuTrigger asChild>
           <div
             className="contents"
-            data-context-trigger={terminalId}
-            onContextMenu={captureMovePickerAnchor}
+            {...triggerMarker}
+            onContextMenu={handleTriggerContextMenu}
             onPointerDown={captureMovePickerAnchorOnPress}
           >
             {children}
@@ -1260,8 +1283,8 @@ export function TerminalContextMenu({
         <ContextMenuTrigger asChild>
           <div
             className="contents"
-            data-context-trigger={terminalId}
-            onContextMenu={captureMovePickerAnchor}
+            {...triggerMarker}
+            onContextMenu={handleTriggerContextMenu}
             onPointerDown={captureMovePickerAnchorOnPress}
           >
             {children}
@@ -1328,7 +1351,7 @@ export function TerminalContextMenu({
         <ContextMenuTrigger asChild>
           <div
             className="contents"
-            data-context-trigger={terminalId}
+            {...triggerMarker}
             onContextMenu={handleContextMenu}
             onPointerDown={captureMovePickerAnchorOnPress}
           >

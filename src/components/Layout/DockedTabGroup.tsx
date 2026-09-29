@@ -843,6 +843,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                             presetColor={panelPresetColors.get(panel.id)}
                             isUsingFallback={panel.isUsingFallback}
                             tabPanelId={tabPanelId}
+                            menuLocation="dock"
                             onClick={() => handleTabClick(panel.id)}
                             onClose={() => handleTabClose(panel.id)}
                             onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
@@ -882,6 +883,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                                 presetColor={panelPresetColors.get(panel.id)}
                                 isUsingFallback={panel.isUsingFallback}
                                 tabPanelId={tabPanelId}
+                                menuLocation="dock"
                                 onClick={() => handleTabClick(panel.id)}
                                 onClose={() => handleTabClose(panel.id)}
                                 onRename={(newTitle) => handleTabRename(panel.id, newTitle)}

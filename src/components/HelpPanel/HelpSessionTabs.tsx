@@ -1,10 +1,18 @@
 import { useCallback, useId, useMemo, useRef } from "react";
 import { LayoutGroup } from "framer-motion";
-import { Plus } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { SpinnerCircle, HollowCircle, InteractingCircle } from "@/components/icons";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+  stopContextMenuPropagation,
+} from "@/components/ui/context-menu";
 import {
   DocumentTabClose,
   DocumentTabIndicator,
@@ -131,6 +139,8 @@ interface SessionTabChipProps {
   onSelect: (slot: number) => void;
   onClose: (slot: number) => void;
   onFocusTab: (slot: number) => void;
+  canOpenSession: boolean;
+  onOpenSession?: () => void;
 }
 
 /**
@@ -147,6 +157,8 @@ function SessionTabChip({
   onSelect,
   onClose,
   onFocusTab,
+  canOpenSession,
+  onOpenSession,
 }: SessionTabChipProps) {
   const stateId = `${tabId}-state`;
   const title = tab.fullTitle ?? tab.label;
@@ -222,13 +234,34 @@ function SessionTabChip({
   // swapping it in when a title arrives would remount the tab and drop keyboard focus.
   const hasTitleTip =
     tab.fullTitle !== undefined && (tab.fullTitle !== tab.label || isLabelTruncated);
+  // Each lane owns its menu, like every other tab in the app: a right-click on a
+  // background lane closes that lane, never the one in front.
   return (
-    <Tooltip autoDismiss={false} open={hasTitleTip ? undefined : false}>
-      <TooltipTrigger asChild>{chip}</TooltipTrigger>
-      {tab.fullTitle !== undefined && (
-        <TooltipContent side="bottom">{tab.fullTitle}</TooltipContent>
-      )}
-    </Tooltip>
+    <ContextMenu>
+      <Tooltip autoDismiss={false} open={hasTitleTip ? undefined : false}>
+        <ContextMenuTrigger asChild onContextMenu={stopContextMenuPropagation}>
+          <TooltipTrigger asChild>{chip}</TooltipTrigger>
+        </ContextMenuTrigger>
+        {tab.fullTitle !== undefined && (
+          <TooltipContent side="bottom">{tab.fullTitle}</TooltipContent>
+        )}
+      </Tooltip>
+      <ContextMenuContent>
+        {onOpenSession && (
+          <>
+            <ContextMenuItem disabled={!canOpenSession} onSelect={onOpenSession}>
+              <Plus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              New session
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
+        <ContextMenuItem onSelect={() => onClose(tab.slot)}>
+          <X data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          Close session
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -404,6 +437,8 @@ export function HelpSessionTabs({
               onSelect={onSelect}
               onClose={handlePointerClose}
               onFocusTab={handleTabFocus}
+              canOpenSession={canOpenSession}
+              onOpenSession={onOpenSession}
             />
           ))}
         </LayoutGroup>
