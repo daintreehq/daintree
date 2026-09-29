@@ -34,6 +34,34 @@ import {
   type IconName,
   type DropdownMenuEntry,
   type DaintreeTheme,
+  VirtualList,
+  DataTable,
+  LogView,
+  PaneHeader,
+  Toolbar,
+  ToolbarButton,
+  PaneState,
+  FormField,
+  Input,
+  Switch,
+  Tabs,
+  ProgressBar,
+  SettingsSection,
+  SettingsGroup,
+  SettingsRow,
+  SettingsActions,
+  ListRow,
+  SeverityIcon,
+  useListNavigation,
+  formatTimeAgo,
+  formatRelativeTime,
+  formatBytes,
+  formatCount,
+  formatDuration,
+  type DataTableColumn,
+  type DataTableSort,
+  type LogEntry,
+  type Severity,
 } from "@daintreehq/plugin-ui";
 
 const props: MarkdownProps = { source: "# Notes", basePath: "/repo/notes/", fontSize: "lg" };
@@ -86,6 +114,95 @@ export function useAccent(): string {
 // @ts-expect-error token keys are a closed set
 export const badToken = getDaintreeTheme().tokens["accent-nope"];
 export const stop: () => void = onDidChangeDaintreeTheme((theme) => void theme.themeId);
+
+interface Issue { id: number; title: string; }
+const issues: Issue[] = [{ id: 1, title: "Crash" }];
+
+export const list = createElement(VirtualList<Issue>, {
+  items: issues,
+  "aria-label": "Issues",
+  itemKey: (_index, issue) => issue?.id ?? 0,
+  renderItem: (_index, issue) => issue?.title,
+});
+// @ts-expect-error a list needs an accessible name
+export const unnamedList = createElement(VirtualList, { count: 3, renderItem: () => null });
+// @ts-expect-error rows are typed through the generic
+export const badRow = createElement(VirtualList<Issue>, { items: issues, "aria-label": "x", renderItem: (_i, issue) => issue?.missing });
+
+const columns: DataTableColumn<Issue>[] = [
+  { id: "title", header: "Title", sortable: true, render: (issue) => issue.title },
+  { id: "id", header: "#", width: 64, align: "end" },
+];
+export const table = createElement(DataTable<Issue>, {
+  "aria-label": "Issues",
+  rows: issues,
+  rowKey: (issue) => issue.id,
+  columns,
+  sort: { columnId: "title", direction: "asc" },
+  onSortChange: (next: DataTableSort) => void next.direction,
+  onRowClick: (issue) => void issue.title,
+});
+export const keyedTable = createElement(DataTable<Issue>, { "aria-label": "x", rows: issues, rowKey: "id", columns });
+// @ts-expect-error sort directions are a closed set
+export const badSort: DataTableSort = { columnId: "title", direction: "up" };
+
+const entry: LogEntry = { text: "failed", severity: "error" };
+export const log = createElement(LogView, { lines: ["one", entry], maxLines: 2000, "aria-label": "Output" });
+// @ts-expect-error severities are a closed set
+export const badEntry: LogEntry = { text: "x", severity: "fatal" };
+
+export const header = createElement(PaneHeader, {
+  title: "Issues",
+  icon: "list",
+  actions: createElement(Toolbar, { "aria-label": "Actions" }, createElement(ToolbarButton, { icon: "refresh", "aria-label": "Refresh" })),
+});
+export const loading = createElement(PaneState, { kind: "loading", title: "Loading issues" });
+export const failed = createElement(PaneState, { kind: "error", title: "Failed", onRetry: () => {} });
+// @ts-expect-error pane state kinds are a closed set
+export const badState = createElement(PaneState, { kind: "sad", title: "x" });
+
+export const form = createElement(FormField, { label: "Title", error: "Required", children: createElement(Input, {}) });
+export const toggle = createElement(Switch, { checked: true, onCheckedChange: (next: boolean) => void next, "aria-label": "On" });
+export const tabs = createElement(Tabs, {
+  "aria-label": "Views",
+  items: [{ value: "a", label: "A", badge: 3 }],
+  value: "a",
+  onValueChange: (next: string) => void next,
+  children: (value: string) => value,
+});
+export const progress = createElement(ProgressBar, { value: 0.5, label: "Indexing" });
+// @ts-expect-error a progress bar needs a label
+export const unnamedProgress = createElement(ProgressBar, { value: 0.5 });
+
+export const settings = createElement(
+  SettingsSection,
+  { title: "Sync" },
+  createElement(
+    SettingsGroup,
+    null,
+    createElement(SettingsRow, {
+      label: "Auto refresh",
+      control: (ids) => createElement(Switch, { "aria-labelledby": ids.labelId, disabled: ids.disabled }),
+    }),
+    createElement(SettingsActions, { status: "Saved" })
+  )
+);
+
+export function Picker() {
+  const nav = useListNavigation({ count: issues.length, onSelect: (index: number) => void index });
+  const index: number = nav.activeIndex;
+  return createElement(ListRow, { ...nav.getRowProps(index), title: "Crash", meta: formatTimeAgo(Date.now()) });
+}
+
+const severity: Severity = "danger";
+export const glyph = createElement(SeverityIcon, { severity, size: 12 });
+export const labels: string[] = [
+  formatTimeAgo("2026-01-01T00:00:00Z"),
+  formatRelativeTime(new Date()),
+  formatBytes(1024),
+  formatCount(12_345),
+  formatDuration(90_000),
+];
 `;
 
 let consumerDir: string;

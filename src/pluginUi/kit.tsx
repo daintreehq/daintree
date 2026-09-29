@@ -34,7 +34,7 @@ export function fromKit<P extends object>(
   name: string,
   pick: (kit: PluginKit) => ComponentType<P>,
   fallback?: (props: P) => ReactNode
-): ComponentType<P> {
+): (props: P) => ReactNode {
   function Loaded(props: P) {
     const kit = loaded ?? use(loadKit());
     return createElement(pick(kit), props);
