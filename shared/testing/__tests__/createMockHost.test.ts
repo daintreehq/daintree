@@ -435,7 +435,11 @@ describe("createMockHost", () => {
     const cb = vi.fn();
     await host.onDidChangeWorktrees(cb);
     host.simulateWorktreesChange([sampleSnapshot]);
-    expect(cb).toHaveBeenCalledWith([sampleSnapshot]);
+    expect(cb).toHaveBeenCalledWith([sampleSnapshot], {
+      added: [sampleSnapshot.id],
+      removed: [],
+      changed: [],
+    });
   });
 
   it("getAgentState returns null until a state change is simulated", async () => {
@@ -1718,5 +1722,33 @@ describe("createMockHost settings follow the declarations", () => {
     expect(() => host.settings.onDidChange("channel", () => {}, "local")).toThrow(
       /declared in "project"/
     );
+  });
+});
+
+describe("createMockHost fs.readFiles", () => {
+  it("reads what was written, per path and in order, with NOT_FOUND for the rest", async () => {
+    const host = createMockHost();
+    await host.fs.writeFile("/repo/a.txt", "alpha");
+    const results = await host.fs.readFiles!(["/repo/missing", "/repo/a.txt"]);
+    expect(results).toEqual([
+      {
+        path: "/repo/missing",
+        ok: false,
+        error: { code: "NOT_FOUND", message: expect.stringContaining("ENOENT") },
+      },
+      { path: "/repo/a.txt", ok: true, content: "alpha" },
+    ]);
+  });
+
+  it("mirrors the host's encoding, per-file cap and validation", async () => {
+    const host = createMockHost();
+    await host.fs.writeFile("/repo/big.txt", "x".repeat(20));
+    const [bytes] = await host.fs.readFiles!(["/repo/big.txt"], { encoding: "bytes" });
+    expect(bytes?.ok === true && bytes.content instanceof Uint8Array).toBe(true);
+    const [capped] = await host.fs.readFiles!(["/repo/big.txt"], { maxBytesPerFile: 5 });
+    expect(capped).toMatchObject({ ok: false, error: { code: "TOO_LARGE" } });
+    const call = host.fs.readFiles as (p: unknown, o?: unknown) => Promise<unknown>;
+    await expect(call(new Array(1025).fill("/a"))).rejects.toThrow(/at most 1024/);
+    await expect(call(["/a"], { encoding: "latin1" })).rejects.toThrow(/encoding/);
   });
 });

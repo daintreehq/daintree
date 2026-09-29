@@ -247,6 +247,51 @@ interface PluginFsReadWithRevisionResult {
      */
     revision: string;
 }
+/**
+ * Options for {@link PluginFsApi.readFiles}. `encoding` picks the content type:
+ * `"utf-8"` (the default) decodes each file as {@link PluginFsApi.readFile}
+ * does, `"bytes"` returns raw bytes as {@link PluginFsApi.readFileBytes} does.
+ */
+interface PluginFsReadFilesOptions<E extends PluginFsReadFilesEncoding = PluginFsReadFilesEncoding> extends PluginHostCallOptions {
+    encoding?: E;
+    /**
+     * Per-file ceiling in bytes. A larger file is not read past the ceiling and
+     * comes back as `{ ok: false, error: { code: "TOO_LARGE" } }`. Must be a
+     * non-negative integer; omitted means only the call's total budget applies.
+     */
+    maxBytesPerFile?: number;
+}
+/** Content type of a {@link PluginFsApi.readFiles} call. */
+type PluginFsReadFilesEncoding = "utf-8" | "bytes";
+/**
+ * Why one path in a {@link PluginFsApi.readFiles} call was not read.
+ *
+ * - `PATH_NOT_ALLOWED` / `PERMISSION_REQUIRED` — the same refusals
+ *   {@link PluginFsApi.readFile} rejects with (outside every allowed root, or
+ *   the root's read capability is not declared)
+ * - `NOT_FOUND` — nothing at the path
+ * - `NOT_A_FILE` — a directory, FIFO, device or other non-regular file
+ * - `TARGET_IS_SYMLINK` / `TARGET_UNAVAILABLE` — the verified-open refusals
+ *   {@link PluginFsApi.readFile} documents
+ * - `TOO_LARGE` — bigger than `maxBytesPerFile`
+ * - `RESULT_TOO_LARGE` — the call's total byte budget was spent on earlier
+ *   entries; read this path in a later call
+ * - `READ_FAILED` — anything else (the `message` says what)
+ */
+type PluginFsReadFilesErrorCode = "PATH_NOT_ALLOWED" | "PERMISSION_REQUIRED" | "NOT_FOUND" | "NOT_A_FILE" | "TARGET_IS_SYMLINK" | "TARGET_UNAVAILABLE" | "TOO_LARGE" | "RESULT_TOO_LARGE" | "READ_FAILED";
+/** One entry of a {@link PluginFsApi.readFiles} result, in request order. */
+type PluginFsReadFilesEntry<C = string> = {
+    readonly path: string;
+    readonly ok: true;
+    readonly content: C;
+} | {
+    readonly path: string;
+    readonly ok: false;
+    readonly error: {
+        readonly code: PluginFsReadFilesErrorCode;
+        readonly message: string;
+    };
+};
 /** Options for {@link PluginFsApi.watch}. */
 interface PluginFsWatchOptions extends PluginHostCallOptions {
     /**
@@ -337,6 +382,33 @@ interface PluginFsApi {
      * containment, verified open and cancellation as {@link readFile}.
      */
     readFileWithRevision(filePath: string, options?: PluginHostCallOptions): Promise<PluginFsReadWithRevisionResult>;
+    /**
+     * Read many files in one host round trip — the bulk counterpart to
+     * {@link readFile} for a search, an index build, or a tree of small config
+     * files, where one call per file costs a round trip each.
+     *
+     * Every path gets exactly the checks {@link readFile} applies — containment
+     * against `scopes.fs.allowedPaths`, the root's read capability, and the
+     * verified open — but a refusal fails only that entry: the result has one
+     * {@link PluginFsReadFilesEntry} per path, in request order, each either
+     * `{ ok: true, content }` or `{ ok: false, error: { code, message } }`.
+     *
+     * Bounded so the result always fits one host reply: at most 1024 paths per
+     * call (more rejects the call), and at most 8 MiB of content in total,
+     * measured as returned (decoded UTF-8 text, or bytes) and spent in request
+     * order — entries past the budget come back `RESULT_TOO_LARGE` for a
+     * follow-up call, and the same request always defers the same entries.
+     * The whole call rejects only on a missing read capability for every root,
+     * an unloaded plugin, invalid arguments, or `options.signal` aborting.
+     *
+     * Optional in the type so existing hand-written {@link PluginFsApi} fakes
+     * keep compiling; Daintree's host, the worker host and `createMockHost`
+     * always provide it.
+     */
+    readFiles?: {
+        (paths: readonly string[], options?: PluginFsReadFilesOptions<"utf-8">): Promise<PluginFsReadFilesEntry<string>[]>;
+        (paths: readonly string[], options: PluginFsReadFilesOptions<"bytes">): Promise<PluginFsReadFilesEntry<Uint8Array>[]>;
+    };
     /**
      * Create a directory and any missing ancestors. Creating a directory that
      * already exists is a no-op; a non-directory at the path rejects. Gated and

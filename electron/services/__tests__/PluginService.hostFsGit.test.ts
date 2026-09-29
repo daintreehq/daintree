@@ -2239,3 +2239,130 @@ describe("host.fs.watch option validation", () => {
     }
   });
 });
+
+describe("host.fs.readFiles", () => {
+  const readFiles = (host: PluginHostApi) => host.fs.readFiles!;
+
+  it("reads many files in one call, in request order, with per-path results", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await fs.writeFile(join(allowed, "a.txt"), "alpha");
+    await fs.writeFile(join(allowed, "b.txt"), "beta");
+    const missing = join(allowed, "missing.txt");
+
+    const results = await readFiles(host)([
+      join(allowed, "b.txt"),
+      missing,
+      join(allowed, "a.txt"),
+    ]);
+
+    expect(results.map((r) => r.path)).toEqual([
+      join(allowed, "b.txt"),
+      missing,
+      join(allowed, "a.txt"),
+    ]);
+    expect(results[0]).toMatchObject({ ok: true, content: "beta" });
+    expect(results[1]).toMatchObject({ ok: false });
+    expect(results[2]).toMatchObject({ ok: true, content: "alpha" });
+  });
+
+  it("applies readFile's containment to every path and fails only the refused entry", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const secret = join(baseDir, "secret.txt");
+    await fs.writeFile(secret, "TOPSECRET");
+    await fs.symlink(secret, join(allowed, "link.txt"));
+    await fs.writeFile(join(allowed, "ok.txt"), "fine");
+
+    const results = await readFiles(host)([
+      join(allowed, "..", "secret.txt"),
+      join(allowed, "link.txt"),
+      join(allowed, "ok.txt"),
+    ]);
+
+    expect(results[0]).toMatchObject({ ok: false, error: { code: "PATH_NOT_ALLOWED" } });
+    expect(results[1]).toMatchObject({ ok: false, error: { code: "PATH_NOT_ALLOWED" } });
+    expect(results[2]).toMatchObject({ ok: true, content: "fine" });
+    expect(JSON.stringify(results)).not.toContain("TOPSECRET");
+  });
+
+  it("rejects the whole call without any read capability", async () => {
+    const host = registerPlugin(["fs:project-write"], [allowed]);
+    await expect(readFiles(host)([join(allowed, "x.txt")])).rejects.toThrow(/PERMISSION_REQUIRED/);
+  });
+
+  it("refuses a path whose root class lacks its read capability per entry", async () => {
+    // Only user-data reads declared; a project root path is refused by class.
+    const host = registerPlugin(["fs:user-data-read"], [allowed]);
+    await fs.writeFile(join(allowed, "p.txt"), "p");
+    const [result] = await readFiles(host)([join(allowed, "p.txt")]);
+    expect(result).toMatchObject({ ok: false, error: { code: "PERMISSION_REQUIRED" } });
+  });
+
+  it("reports directories as NOT_A_FILE and missing files as NOT_FOUND", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await fs.mkdir(join(allowed, "dir"));
+    const results = await readFiles(host)([join(allowed, "dir"), join(allowed, "nope.txt")]);
+    expect(results[0]).toMatchObject({ ok: false, error: { code: "NOT_A_FILE" } });
+    expect(results[1]).toMatchObject({ ok: false, error: { code: "NOT_FOUND" } });
+  });
+
+  it("returns bytes for encoding: bytes, copied out of the pool", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    await fs.writeFile(join(allowed, "i.png"), bytes);
+    const [result] = await readFiles(host)([join(allowed, "i.png")], { encoding: "bytes" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.content).toBeInstanceOf(Uint8Array);
+    expect([...result.content]).toEqual([...bytes]);
+    expect(result.content.byteOffset).toBe(0);
+  });
+
+  it("refuses a file past maxBytesPerFile without failing the rest", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await fs.writeFile(join(allowed, "big.txt"), "x".repeat(100));
+    await fs.writeFile(join(allowed, "small.txt"), "y".repeat(10));
+    const results = await readFiles(host)([join(allowed, "big.txt"), join(allowed, "small.txt")], {
+      maxBytesPerFile: 50,
+    });
+    expect(results[0]).toMatchObject({ ok: false, error: { code: "TOO_LARGE" } });
+    expect(results[1]).toMatchObject({ ok: true, content: "y".repeat(10) });
+  });
+
+  it("holds the call to its total content budget", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    // Three 3 MiB files against the 8 MiB budget: two fit, one is deferred.
+    const chunk = "z".repeat(3 * 1024 * 1024);
+    const paths = [0, 1, 2].map((i) => join(allowed, `c${i}.txt`));
+    for (const p of paths) await fs.writeFile(p, chunk);
+
+    const results = await readFiles(host)(paths);
+
+    const ok = results.filter((r) => r.ok);
+    const deferred = results.filter((r) => !r.ok);
+    expect(ok).toHaveLength(2);
+    expect(deferred).toHaveLength(1);
+    expect(deferred[0]).toMatchObject({ error: { code: "RESULT_TOO_LARGE" } });
+  });
+
+  it("validates its arguments", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const call = readFiles(host) as (paths: unknown, options?: unknown) => Promise<unknown>;
+    await expect(call("not-an-array")).rejects.toThrow(/VALIDATION/);
+    await expect(call([""])).rejects.toThrow(/VALIDATION/);
+    await expect(call(new Array(1025).fill(join(allowed, "a")))).rejects.toThrow(/at most 1024/);
+    await expect(call([join(allowed, "a")], { encoding: "latin1" })).rejects.toThrow(/encoding/);
+    await expect(call([join(allowed, "a")], { maxBytesPerFile: -1 })).rejects.toThrow(
+      /maxBytesPerFile/
+    );
+  });
+
+  it("rejects the call when its signal aborts", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await fs.writeFile(join(allowed, "a.txt"), "a");
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      readFiles(host)([join(allowed, "a.txt")], { signal: controller.signal })
+    ).rejects.toThrow();
+  });
+});

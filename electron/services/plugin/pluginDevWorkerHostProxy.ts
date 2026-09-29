@@ -41,6 +41,9 @@ import type {
   PluginFsDirEntry,
   PluginFsWriteResult,
   PluginFsReadWithRevisionResult,
+  PluginFsApi,
+  PluginFsReadFilesEntry,
+  PluginFsReadFilesOptions,
   PluginRenderPdfResult,
   PluginFsStat,
   PluginGitStatus,
@@ -93,6 +96,7 @@ import type {
   PluginWorkerSubscriptionKind,
   PluginWorkerToHostMessage,
   RegisterMcpToolsParams,
+  PluginWorkerWorktreesEvent,
 } from "../../../shared/types/pluginDevWorker.js";
 
 type Post = (message: PluginWorkerToHostMessage) => void;
@@ -838,11 +842,17 @@ export class PluginDevWorkerHostProxy {
       getWorktreeStatus: (path, options) =>
         this.call<PluginWorktreeStatus | null>("getWorktreeStatus", path, options?.signal),
       getAgentState: () => this.call<PluginAgentSnapshot | null>("getAgentState", undefined),
-      onDidChangeAgentState: (callback) => {
+      onDidChangeAgentState: (callback, options) => {
         this.assertActivationOpen("onDidChangeAgentState");
-        // Subscription wired synchronously; only the disposer is async.
-        const dispose = this.subscribe("agent-state", (payload) =>
-          callback(payload as PluginAgentSnapshot)
+        // Subscription wired synchronously; only the disposer is async. The
+        // window is applied host-side; an omitted option crosses the port as
+        // absent, so main applies the same default an in-process plugin gets.
+        const dispose = this.subscribe(
+          "agent-state",
+          (payload) => callback(payload as PluginAgentSnapshot),
+          undefined,
+          undefined,
+          options?.debounceMs
         );
         return Promise.resolve(dispose);
       },
@@ -872,21 +882,28 @@ export class PluginDevWorkerHostProxy {
         );
         return Promise.resolve(dispose);
       },
-      onDidChangeActiveWorktree: (callback) => {
+      onDidChangeActiveWorktree: (callback, options) => {
         this.assertActivationOpen("onDidChangeActiveWorktree");
         // Subscription wired synchronously; only the disposer is async.
-        const dispose = this.subscribe("active-worktree", (payload) =>
-          callback(payload as PluginWorktreeSnapshot | null)
+        const dispose = this.subscribe(
+          "active-worktree",
+          (payload) => callback(payload as PluginWorktreeSnapshot | null),
+          undefined,
+          undefined,
+          options?.debounceMs
         );
         return Promise.resolve(dispose);
       },
       onDidChangeWorktrees: (callback, options) => {
         this.assertActivationOpen("onDidChangeWorktrees");
-        // Debounce is applied host-side: the worker forwards `debounceMs` in the
-        // subscribe message and the real host coalesces before pushing events.
+        // Coalescing and the change set are computed host-side: the worker
+        // forwards `debounceMs` and main pushes one event per delivery.
         const dispose = this.subscribe(
           "worktrees",
-          (payload) => callback(payload as PluginWorktreeSnapshot[]),
+          (payload) => {
+            const event = payload as PluginWorkerWorktreesEvent;
+            callback(event.snapshots, event.change);
+          },
           undefined,
           undefined,
           options?.debounceMs
@@ -1191,6 +1208,19 @@ export class PluginDevWorkerHostProxy {
             { path: filePath },
             options?.signal
           ),
+        readFiles: ((paths: readonly string[], options?: PluginFsReadFilesOptions) =>
+          this.call<PluginFsReadFilesEntry<string | Uint8Array>[]>(
+            "fs.readFiles",
+            {
+              paths,
+              // Forwarded as given so the host rejects a malformed value.
+              ...(options?.encoding !== undefined && { encoding: options.encoding }),
+              ...(options?.maxBytesPerFile !== undefined && {
+                maxBytesPerFile: options.maxBytesPerFile,
+              }),
+            },
+            options?.signal
+          )) as NonNullable<PluginFsApi["readFiles"]>,
         mkdir: (dirPath) => this.call<void>("fs.mkdir", { path: dirPath }),
         appendFile: (filePath, contents) =>
           this.call<void>("fs.appendFile", { path: filePath, contents }),

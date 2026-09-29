@@ -95,6 +95,10 @@ export type {
   PluginFsDirEntry,
   PluginFsStat,
   PluginFsReadWithRevisionResult,
+  PluginFsReadFilesOptions,
+  PluginFsReadFilesEncoding,
+  PluginFsReadFilesEntry,
+  PluginFsReadFilesErrorCode,
   PluginFsWatchOptions,
   PluginGitApi,
   PluginGitStatus,
@@ -166,6 +170,7 @@ export type {
 export type {
   PluginWorktreeSnapshot,
   PluginWorktreesResult,
+  PluginWorktreesChange,
   PluginWorktreesUnavailableReason,
   PluginWorktreeLinked,
   PluginWorktreeLinkedIssue,

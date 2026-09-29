@@ -41,6 +41,18 @@ import {
   type PluginStorageManager,
 } from "./PluginStorageManager.js";
 import { createListenerFailureState, invokeTrackedListener } from "./pluginCallbackUtils.js";
+import {
+  readBoundedFromHandle,
+  runReadFiles,
+  validateReadFilesCall,
+  type ReadOneOutcome,
+} from "./pluginFsReadFiles.js";
+import {
+  MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS,
+  WorktreeChangeTracker,
+  createSubscriptionCoalescer,
+  resolveSubscriptionDebounceMs,
+} from "./pluginSubscriptionCoalescing.js";
 import { isChannelSchema } from "./PluginChannelRegistry.js";
 import { abortErrorFor } from "./pluginAbortError.js";
 import { openPluginDatabase, resolvePluginDatabaseLocation } from "./pluginDatabase.js";
@@ -156,20 +168,6 @@ import type {
  * scope-wide invalidation (no `paths`) is the correct fallback anyway.
  */
 const MAX_FILE_DECORATION_PATHS = 1000;
-/**
- * Floor for a plugin-supplied `onDidChangeWorktrees` `debounceMs`. A positive
- * value below this is clamped up so a plugin can't request a near-zero debounce
- * that defeats the coalescing intent while still paying timer overhead; `0` /
- * omitted disables debouncing entirely (fire on every change).
- */
-const MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS = 50;
-/**
- * Bound on how long a debounced `onDidChangeWorktrees` burst may defer its
- * callback, as a multiple of the plugin's `debounceMs`. Multi-agent churn can
- * stream worktree updates with no quiet gap for as long as agents are working,
- * and a pure trailing debounce would withhold the snapshot for that whole time.
- */
-const PLUGIN_SUBSCRIPTION_MAX_WAIT_FACTOR = 4;
 /**
  * Ceiling for a `host.fs.watch` `debounceMs`. Node clamps any timer delay past
  * 2^31-1 ms to 1 ms, so an unbounded value would turn "almost never" into
@@ -1307,34 +1305,55 @@ export function createHost(
         throw err;
       }
     },
-    onDidChangeActiveWorktree: (callback) => {
+    onDidChangeActiveWorktree: (callback, options) => {
       if (revoked) {
         throw new Error(
           `Plugin "${pluginId}" host revoked: onDidChangeActiveWorktree called after activate() returned or timed out`
         );
       }
+      // One fetch per burst rather than per activation: the snapshot is read
+      // when the window closes, so it is always the worktree active at the end.
+      // Serialised like onDidChangeWorktrees, so a slow read can never land
+      // after a newer activation's and leave the plugin on the older one.
+      let disposed = false;
+      let chain: Promise<void> = Promise.resolve();
+      const coalescer = createSubscriptionCoalescer(
+        resolveSubscriptionDebounceMs(options?.debounceMs),
+        () => {
+          chain = chain.then(async () => {
+            if (!deps.plugins.has(pluginId) || disposed) return;
+            try {
+              const snapshots = await fetchWorktreeSnapshots();
+              // Re-check after the async fetch so a racing unloadPlugin()
+              // doesn't fire the callback into a disposed plugin closure.
+              if (!deps.plugins.has(pluginId) || disposed) return;
+              const active = snapshots.find((s) => s.isCurrent === true);
+              callback(active ? toPluginWorktreeSnapshot(active) : null);
+            } catch (err) {
+              console.error(
+                `[PluginService] onDidChangeActiveWorktree callback for "${pluginId}" failed:`,
+                err
+              );
+            }
+          });
+        }
+      );
       // Subscription wired synchronously (revoke guard already held above);
       // only the disposer return value is wrapped in a resolved promise.
-      const dispose = deps.subscribeWorktreeEvent(pluginId, "worktree-activated", async (event) => {
+      const unsubscribe = deps.subscribeWorktreeEvent(pluginId, "worktree-activated", (event) => {
         // A bound host must not wake on another project activating a worktree:
         // "active" means active within its own project, so a foreign event is
-        // not a change it can observe at all.
+        // not a change it can observe at all — nor may it extend a burst.
         if (!isEventForBoundProject(event)) return;
         if (!deps.plugins.has(pluginId)) return;
-        try {
-          const snapshots = await fetchWorktreeSnapshots();
-          // Re-check after the async fetch so a racing unloadPlugin()
-          // doesn't fire the callback into a disposed plugin closure.
-          if (!deps.plugins.has(pluginId)) return;
-          const active = snapshots.find((s) => s.isCurrent === true);
-          callback(active ? toPluginWorktreeSnapshot(active) : null);
-        } catch (err) {
-          console.error(
-            `[PluginService] onDidChangeActiveWorktree callback for "${pluginId}" failed:`,
-            err
-          );
-        }
+        coalescer.push();
       });
+      const dispose = (): void => {
+        if (disposed) return;
+        disposed = true;
+        coalescer.dispose();
+        unsubscribe();
+      };
       return Promise.resolve(dispose);
     },
     onDidChangeWorktrees: (callback, options) => {
@@ -1343,20 +1362,20 @@ export function createHost(
           `Plugin "${pluginId}" host revoked: onDidChangeWorktrees called after activate() returned or timed out`
         );
       }
-      // Opt-in debounce: the host re-emits the worktree set on every git-status
-      // poll, so a UI-updating plugin can coalesce bursts into a single
-      // trailing callback. Values below the floor are clamped up; 0/omitted
-      // fires on every change. See PluginHostSubscriptionOptions.
-      const debounceMs =
-        typeof options?.debounceMs === "number" && options.debounceMs > 0
-          ? Math.max(options.debounceMs, MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS)
-          : 0;
+      // Coalesced by default: the host re-emits the worktree set on every
+      // git-status poll. `debounceMs: 0` restores one callback per event.
+      const tracker = new WorktreeChangeTracker();
+      // Deliveries are serialised: each fetch starts after the previous one
+      // delivered, so raw mode still gets one callback per event, in order,
+      // and the change tracker's base is always the list handed over last.
+      let chain: Promise<void> = Promise.resolve();
       const runEmit = async (): Promise<void> => {
-        if (!deps.plugins.has(pluginId)) return;
+        if (!deps.plugins.has(pluginId) || disposed) return;
         try {
           const snapshots = await fetchWorktreeSnapshots();
-          if (!deps.plugins.has(pluginId)) return;
-          callback(snapshots.map(toPluginWorktreeSnapshot));
+          if (!deps.plugins.has(pluginId) || disposed) return;
+          const list = snapshots.map(toPluginWorktreeSnapshot);
+          callback(list, tracker.next(list));
         } catch (err) {
           console.error(
             `[PluginService] onDidChangeWorktrees callback for "${pluginId}" failed:`,
@@ -1364,55 +1383,35 @@ export function createHost(
           );
         }
       };
-      let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-      let burstDeadline = 0;
-      // A foreign project's churn is dropped before the debounce timer is even
-      // armed, so a bound host's trailing callback can't be pushed out
-      // indefinitely by worktree traffic in a project it cannot see. Churn in
-      // its own project can't either: each burst fires by its deadline.
-      const emit =
-        debounceMs > 0
-          ? (event?: PluginWorktreeEventPayload): void => {
-              if (!isEventForBoundProject(event)) return;
-              // Monotonic: a wall-clock rollback must not push the deadline out.
-              const now = performance.now();
-              if (debounceTimer) {
-                clearTimeout(debounceTimer);
-              } else {
-                burstDeadline = now + debounceMs * PLUGIN_SUBSCRIPTION_MAX_WAIT_FACTOR;
-              }
-              debounceTimer = setTimeout(
-                () => {
-                  debounceTimer = null;
-                  void runEmit();
-                },
-                Math.max(0, Math.min(debounceMs, burstDeadline - now))
-              );
-            }
-          : (event?: PluginWorktreeEventPayload): void => {
-              if (!isEventForBoundProject(event)) return;
-              void runEmit();
-            };
+      let disposed = false;
+      const coalescer = createSubscriptionCoalescer(
+        resolveSubscriptionDebounceMs(options?.debounceMs),
+        () => {
+          chain = chain.then(runEmit);
+        }
+      );
+      // A foreign project's churn is dropped before the window is even armed,
+      // so a bound host's trailing callback can't be pushed out by worktree
+      // traffic in a project it cannot see. Churn in its own project can't
+      // either: each burst fires by its deadline.
+      const emit = (event?: PluginWorktreeEventPayload): void => {
+        if (!isEventForBoundProject(event)) return;
+        coalescer.push();
+      };
       // Fires on both add/update and remove so plugins' cached lists stay
-      // correct after deletions. Each subscription is tracked separately
-      // so a single disposer stops both. A shared debounce timer coalesces
-      // bursts that span both event kinds.
+      // correct after deletions. One coalescer spans both event kinds.
       const disposeUpdate = deps.subscribeWorktreeEvent(pluginId, "worktree-update", emit);
       const disposeRemove = deps.subscribeWorktreeEvent(pluginId, "worktree-removed", emit);
-      let disposed = false;
       const dispose = (): void => {
         if (disposed) return;
         disposed = true;
-        if (debounceTimer) {
-          clearTimeout(debounceTimer);
-          debounceTimer = null;
-        }
+        coalescer.dispose();
         disposeUpdate();
         disposeRemove();
       };
       return Promise.resolve(dispose);
     },
-    onDidChangeAgentState: (callback) => {
+    onDidChangeAgentState: (callback, options) => {
       if (revoked) {
         throw new Error(
           `Plugin "${pluginId}" host revoked: onDidChangeAgentState called after activate() returned or timed out`
@@ -1425,26 +1424,60 @@ export function createHost(
       }
       // The agent:state-changed bus is a synchronous module-level singleton
       // (unlike WorkspaceClient), so we subscribe directly — no deferred
-      // replay queue is needed. The handler caches the latest snapshot so
-      // getAgentState() can serve it without re-deriving state.
+      // replay queue is needed. The cache behind getAgentState() is updated on
+      // every transition; only delivery to the callback is coalesced.
       const failures = createListenerFailureState();
-      const handler = (payload: AgentStateChangePayload): void => {
-        if (!isAgentEventForBoundProject(payload)) return;
-        if (!deps.plugins.has(pluginId)) return;
+      // Latest transition per terminal within the window. Delete-then-set
+      // keeps the map in the order of each terminal's latest transition.
+      const pending = new Map<string, PluginAgentSnapshot>();
+      let active = true;
+      const deliver = (snapshot: PluginAgentSnapshot): void => {
         invokeTrackedListener(
           failures,
           pluginId,
           "onDidChangeAgentState",
-          () => {
-            const snapshot = toPluginAgentSnapshot(payload);
-            lastAgentSnapshot = snapshot;
-            return callback(snapshot);
-          },
+          () => callback(snapshot),
           () => dispose()
         );
       };
+      const coalescer = createSubscriptionCoalescer(
+        resolveSubscriptionDebounceMs(options?.debounceMs),
+        () => {
+          const batch = [...pending.values()];
+          pending.clear();
+          for (const snapshot of batch) {
+            // A listener quarantined mid-batch disposes the subscription; the
+            // rest of the batch must not reach it.
+            if (!active || !deps.plugins.has(pluginId)) return;
+            deliver(snapshot);
+          }
+        }
+      );
+      const handler = (payload: AgentStateChangePayload): void => {
+        if (!isAgentEventForBoundProject(payload)) return;
+        if (!deps.plugins.has(pluginId)) return;
+        const snapshot = toPluginAgentSnapshot(payload);
+        lastAgentSnapshot = snapshot;
+        // Keyed by the raw routing ids the projection drops; an event with
+        // neither shares one bucket, so it still ends on its latest value.
+        const raw = payload as { terminalId?: unknown };
+        const key =
+          typeof raw.terminalId === "string" && raw.terminalId.length > 0
+            ? `t:${raw.terminalId}`
+            : payload.agentId !== undefined
+              ? `a:${payload.agentId}`
+              : "unkeyed";
+        pending.delete(key);
+        pending.set(key, snapshot);
+        coalescer.push();
+      };
       const unsub = events.on("agent:state-changed", handler);
-      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => unsub());
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
+        active = false;
+        coalescer.dispose();
+        pending.clear();
+        unsub();
+      });
       return Promise.resolve(dispose);
     },
     onDidChangePanelLifecycle: (callback) => {
@@ -3034,6 +3067,37 @@ function buildFsApi(
       );
       return { contents: buffer.toString("utf-8"), revision: sha256Hex(buffer) };
     },
+    readFiles: (async (paths: readonly string[], options?: unknown) => {
+      requireLoaded("readFiles");
+      requireAnyReadCap("readFiles");
+      const call = validateReadFilesCall(pluginId, paths, options);
+      return runReadFiles(call, async (filePath, limit) => {
+        // The same gates readFile applies, per path; a refusal becomes that
+        // entry's error rather than failing the batch.
+        const { resolved, rootClass } = await containWithClass(filePath);
+        requireLoaded("readFiles");
+        requireReadCapForClass("readFiles", rootClass);
+        call.signal?.throwIfAborted();
+        // O_NONBLOCK, as in readFileBounded: a FIFO standing at the path must
+        // not leave the open pending with the rest of the batch behind it.
+        return withVerifiedReadHandle(
+          pluginId,
+          "readFiles",
+          resolved,
+          fs.constants.O_NONBLOCK ?? 0,
+          async (handle, opened): Promise<ReadOneOutcome> => {
+            if (!opened.isFile()) return { status: "not-a-file" };
+            const bytes = await readBoundedFromHandle(
+              handle,
+              Number(opened.size),
+              limit,
+              call.signal
+            );
+            return bytes === null ? { status: "too-large" } : { status: "ok", bytes };
+          }
+        );
+      });
+    }) as NonNullable<BuiltinPluginFsApi["readFiles"]>,
     readFileBounded: async (filePath, options) => {
       options?.signal?.throwIfAborted();
       requireLoaded("readFileBounded");
