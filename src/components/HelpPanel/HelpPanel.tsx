@@ -10,6 +10,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 import { ExternalLink, MessageCircle, Settings2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -90,7 +91,7 @@ const LazyHybridInputBar = lazy(() =>
 );
 
 const RESIZE_STEP = 10;
-const RESIZE_PAGE_STEP = 50;
+const RESIZE_STEP_LARGE = 50;
 
 const ASSISTANT_DOCS_URL = "https://daintree.org/docs/daintree-assistant";
 const ASSISTANT_INSTALLER_URL = "https://daintree.org/download";
@@ -1020,34 +1021,16 @@ export function HelpPanel({
     setWidth(HELP_PANEL_DEFAULT_WIDTH);
   }, [setWidth]);
 
-  // Resize via keyboard.
-  const handleResizeKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        setWidth(Math.min(width + RESIZE_STEP, HELP_PANEL_MAX_WIDTH));
-      } else if (e.key === "ArrowRight") {
-        e.preventDefault();
-        setWidth(Math.max(width - RESIZE_STEP, HELP_PANEL_MIN_WIDTH));
-      } else if (e.key === "PageUp") {
-        e.preventDefault();
-        setWidth(Math.min(width + RESIZE_PAGE_STEP, HELP_PANEL_MAX_WIDTH));
-      } else if (e.key === "PageDown") {
-        e.preventDefault();
-        setWidth(Math.max(width - RESIZE_PAGE_STEP, HELP_PANEL_MIN_WIDTH));
-      } else if (e.key === "Home") {
-        e.preventDefault();
-        setWidth(HELP_PANEL_MIN_WIDTH);
-      } else if (e.key === "End") {
-        e.preventDefault();
-        setWidth(HELP_PANEL_MAX_WIDTH);
-      } else if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        handleResetWidth();
-      }
-    },
-    [width, setWidth, handleResetWidth]
-  );
+  const handleResizeKeyDown = useSplitterKeys({
+    growKey: "ArrowLeft",
+    value: width,
+    min: HELP_PANEL_MIN_WIDTH,
+    max: HELP_PANEL_MAX_WIDTH,
+    step: RESIZE_STEP,
+    largeStep: RESIZE_STEP_LARGE,
+    onChange: setWidth,
+    onReset: handleResetWidth,
+  });
 
   // Hide the panel without tearing down the agent or conversation.
   const handleClose = useCallback(() => {

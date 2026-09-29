@@ -7,6 +7,8 @@ import {
   TOOL_DRAWER_MIN_WIDTH,
 } from "@/store/devPreviewToolStore";
 import { cn } from "@/lib/utils";
+import { ResizeHandle } from "@/components/ui/ResizeHandle";
+import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 
 /**
  * The page's floor beside a docked drawer. A drawer that keeps taking width from
@@ -19,6 +21,7 @@ const PAGE_MIN_WIDTH = 480;
 /** What a floating drawer always leaves of the page, so it never covers it whole. */
 const OVERLAY_GUTTER = 56;
 const RESIZE_STEP = 16;
+const RESIZE_STEP_LARGE = 64;
 
 /** Live width of the preview pane the drawer is docked into; 0 until measured. */
 function usePaneWidth(root: HTMLElement | null): number {
@@ -52,7 +55,7 @@ function useDrawerResize(): {
   start: (e: React.PointerEvent, from: number) => void;
   move: (e: React.PointerEvent) => void;
   end: () => void;
-  onKeyDown: (e: React.KeyboardEvent, from: number) => void;
+  commit: (width: number) => void;
   reset: () => void;
 } {
   const stored = useDevPreviewToolStore((s) => s.drawerWidth);
@@ -113,22 +116,9 @@ function useDrawerResize(): {
     };
   }, [isResizing, end]);
 
-  const onKeyDown = useCallback(
-    (e: React.KeyboardEvent, from: number) => {
-      if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        setDrawerWidth(from + RESIZE_STEP);
-      } else if (e.key === "ArrowRight") {
-        e.preventDefault();
-        setDrawerWidth(from - RESIZE_STEP);
-      }
-    },
-    [setDrawerWidth]
-  );
-
   const reset = useCallback(() => setDrawerWidth(TOOL_DRAWER_DEFAULT_WIDTH), [setDrawerWidth]);
 
-  return { draft, isResizing, start, move, end, onKeyDown, reset };
+  return { draft, isResizing, start, move, end, commit: setDrawerWidth, reset };
 }
 
 /**
@@ -152,7 +142,7 @@ export function DevPreviewToolDrawerChrome({
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
   const paneWidth = usePaneWidth(root);
   const stored = useDevPreviewToolStore((s) => s.drawerWidth);
-  const { draft, isResizing, start, move, end, onKeyDown, reset } = useDrawerResize();
+  const { draft, isResizing, start, move, end, commit, reset } = useDrawerResize();
   const wanted = draft ?? stored;
 
   // Unmeasured (first paint, or a pane that never reports) docks: the common
@@ -169,6 +159,17 @@ export function DevPreviewToolDrawerChrome({
       : TOOL_DRAWER_MAX_WIDTH;
   const rangeMax = Math.max(Math.round(width), Math.round(effectiveMax));
   const rangeMin = Math.min(TOOL_DRAWER_MIN_WIDTH, Math.round(width));
+  // Docked right, so ArrowLeft widens it.
+  const handleKeyDown = useSplitterKeys({
+    growKey: "ArrowLeft",
+    value: width,
+    min: rangeMin,
+    max: rangeMax,
+    step: RESIZE_STEP,
+    largeStep: RESIZE_STEP_LARGE,
+    onChange: commit,
+    onReset: reset,
+  });
 
   return (
     <div
@@ -190,39 +191,23 @@ export function DevPreviewToolDrawerChrome({
         floating && "absolute inset-y-0 right-0 z-30 shadow-[var(--theme-shadow-floating)]"
       )}
     >
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize tool drawer (double-click to reset)"
-        aria-valuenow={Math.round(width)}
-        aria-valuemin={rangeMin}
-        aria-valuemax={rangeMax}
-        tabIndex={0}
+      <ResizeHandle
+        growKey="ArrowLeft"
+        edge="left"
+        label="Resize tool drawer"
+        value={width}
+        min={rangeMin}
+        max={rangeMax}
+        isResizing={isResizing}
+        className="z-20"
         onPointerDown={(e) => start(e, width)}
         onPointerMove={isResizing ? move : undefined}
         onPointerUp={isResizing ? end : undefined}
         onPointerCancel={isResizing ? end : undefined}
         onLostPointerCapture={isResizing ? end : undefined}
-        onKeyDown={(e) => onKeyDown(e, width)}
-        onDoubleClick={reset}
-        className={cn(
-          "group/resize absolute inset-y-0 -left-1.5 z-20 flex w-3 cursor-col-resize items-center justify-center",
-          // Neutral throughout: a resize handle is a secondary affordance, and
-          // the accent in this region belongs to the tool itself.
-          "transition-colors focus-visible:bg-overlay-medium focus-visible:outline-hidden",
-          // Hover styling is off while resizing, or it outranks the drag state.
-          isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft"
-        )}
-      >
-        <div
-          className={cn(
-            "h-8 rounded-full transition-[width] delay-100 duration-150",
-            isResizing
-              ? "w-0.5 bg-text-primary/50"
-              : "w-px bg-text-primary/20 group-hover/resize:w-0.5 group-hover/resize:bg-text-primary/35 group-focus-visible/resize:w-0.5 group-focus-visible/resize:bg-text-primary/60"
-          )}
-        />
-      </div>
+        onKeyDown={handleKeyDown}
+        onReset={reset}
+      />
       <div data-drawer-content className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {children}
       </div>

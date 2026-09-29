@@ -113,7 +113,7 @@ describe("ARIA page landmarks — issue #5416", () => {
     });
 
     it("links the resize separator to the panel it controls via aria-controls", () => {
-      expect(source).toMatch(/role="separator"[\s\S]*?aria-controls="portal-placeholder"/);
+      expect(source).toMatch(/<ResizeHandle[\s\S]*?aria-controls="portal-placeholder"/);
     });
   });
 });

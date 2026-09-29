@@ -223,17 +223,45 @@ describe("useDockPopoverResize", () => {
     });
     const { result } = renderHook(() => useDockPopoverResize());
     act(() => {
-      result.current.handleProps.onDoubleClick();
+      result.current.handleProps.onReset();
     });
     expect(useDockStore.getState().popoverHeight).toBe(POPOVER_DEFAULT_HEIGHT);
   });
 
-  it("exposes accurate ARIA bounds on the handle", () => {
+  it("exposes accurate bounds for the handle", () => {
     const { result } = renderHook(() => useDockPopoverResize());
-    expect(result.current.handleProps.role).toBe("separator");
-    expect(result.current.handleProps["aria-orientation"]).toBe("horizontal");
-    expect(result.current.handleProps["aria-valuemin"]).toBe(POPOVER_MIN_HEIGHT);
-    expect(result.current.handleProps["aria-valuemax"]).toBe(maxHeight());
-    expect(result.current.handleProps["aria-valuenow"]).toBe(POPOVER_DEFAULT_HEIGHT);
+    expect(result.current.handleProps.min).toBe(POPOVER_MIN_HEIGHT);
+    expect(Math.round(result.current.handleProps.max)).toBe(maxHeight());
+    expect(result.current.handleProps.value).toBe(POPOVER_DEFAULT_HEIGHT);
+  });
+
+  it("names the panel and leaves the reset hint to the shared handle", () => {
+    const { result } = renderHook(() => useDockPopoverResize());
+    expect(result.current.handleProps.label).toBe("Resize docked panel");
+  });
+
+  it("resets on Enter and Space, and jumps to the bounds on Home and End", () => {
+    act(() => {
+      useDockStore.setState({ popoverHeight: 420 });
+    });
+    const { result } = renderHook(() => useDockPopoverResize());
+    const press = (key: string, shiftKey = false) =>
+      act(() => {
+        result.current.handleProps.onKeyDown({
+          key,
+          shiftKey,
+          preventDefault: vi.fn(),
+        } as unknown as React.KeyboardEvent);
+      });
+    press("Enter");
+    expect(useDockStore.getState().popoverHeight).toBe(POPOVER_DEFAULT_HEIGHT);
+    press("Home");
+    expect(useDockStore.getState().popoverHeight).toBe(POPOVER_MIN_HEIGHT);
+    press("ArrowUp", true);
+    expect(useDockStore.getState().popoverHeight).toBe(POPOVER_MIN_HEIGHT + 50);
+    press("End");
+    expect(Math.round(useDockStore.getState().popoverHeight)).toBe(maxHeight());
+    press(" ");
+    expect(useDockStore.getState().popoverHeight).toBe(POPOVER_DEFAULT_HEIGHT);
   });
 });

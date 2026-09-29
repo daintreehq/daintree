@@ -648,17 +648,14 @@ const loadControls: Loader = async () => {
             <DockPopoverResizeHandle
               isResizing={false}
               handleProps={{
-                role: "separator",
-                "aria-orientation": "horizontal",
-                "aria-label": "Resize terminal popover",
-                "aria-valuenow": 320,
-                "aria-valuemin": 200,
-                "aria-valuemax": 600,
-                tabIndex: 0,
+                label: "Resize docked panel",
+                value: 320,
+                min: 200,
+                max: 600,
                 "data-testid": "dock-popover-resize-handle",
                 onMouseDown: () => {},
                 onKeyDown: () => {},
-                onDoubleClick: () => {},
+                onReset: () => {},
               }}
             />
           </div>
