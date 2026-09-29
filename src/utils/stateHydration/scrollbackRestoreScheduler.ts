@@ -35,6 +35,83 @@ function notifyRestoreListeners(): void {
   terminalInstanceService.notifyScrollbackRestoreListeners();
 }
 
+// Snapshot fetches (and the chunked replays they start) are bounded and run
+// focused pane first, so the pane the user is looking at isn't queued behind —
+// and parsed in 12 ms xterm slices interleaved with — every other pane's
+// snapshot. Hidden panes finish later; the focused pane never waits for a slot.
+const MAX_CONCURRENT_RESTORES = 3;
+
+interface QueuedRestore {
+  terminalId: string;
+  run: () => Promise<void>;
+}
+
+const restoreQueue: QueuedRestore[] = [];
+let activeRestores = 0;
+// Bumped by reset so a restore dispatched before it can't release a slot the
+// fresh queue never granted.
+let queueGeneration = 0;
+
+// Focus often lands after the batch is queued (boot focus is assigned once
+// hydration finishes), so a focus change has to dispatch a waiting pane too.
+let unsubFocus: (() => void) | null = null;
+function syncFocusSubscription(): void {
+  if (restoreQueue.length > 0 && !unsubFocus) {
+    unsubFocus = usePanelStore.subscribe(
+      (state) => state.focusedId,
+      () => pumpRestoreQueue()
+    );
+  } else if (restoreQueue.length === 0 && unsubFocus) {
+    unsubFocus();
+    unsubFocus = null;
+  }
+}
+
+// Read at dispatch time, not at schedule time: panes mount, reveal and take
+// focus while the queue drains. Focus comes from the store alone — an
+// instance's own isFocused flag can outlive the pane that set it.
+function restorePriority(terminalId: string, focusedId: string | null): number {
+  if (terminalId === focusedId) return 0;
+  if (terminalInstanceService.get(terminalId)?.isVisible) return 1;
+  return 2;
+}
+
+function pumpRestoreQueue(): void {
+  const focusedId = usePanelStore.getState().focusedId;
+  while (restoreQueue.length > 0) {
+    let best: QueuedRestore | undefined;
+    let bestIndex = 0;
+    let bestPriority = Infinity;
+    for (const [index, queued] of restoreQueue.entries()) {
+      const priority = restorePriority(queued.terminalId, focusedId);
+      if (priority < bestPriority) {
+        best = queued;
+        bestIndex = index;
+        bestPriority = priority;
+        if (priority === 0) break;
+      }
+    }
+    if (!best) break;
+    if (activeRestores >= MAX_CONCURRENT_RESTORES && bestPriority !== 0) break;
+
+    restoreQueue.splice(bestIndex, 1);
+    activeRestores++;
+    const { run } = best;
+    const generation = queueGeneration;
+    scheduleBackgroundFetchAndRestore(async () => {
+      try {
+        await run();
+      } finally {
+        if (generation === queueGeneration) {
+          activeRestores--;
+          pumpRestoreQueue();
+        }
+      }
+    });
+  }
+  syncFocusSubscription();
+}
+
 export function scheduleScrollbackRestore(
   tasks: TerminalRestoreTask[],
   isCurrent: () => boolean
@@ -121,8 +198,10 @@ export function scheduleScrollbackRestore(
       }
     };
 
-    scheduleBackgroundFetchAndRestore(doRestore);
+    restoreQueue.push({ terminalId: task.terminalId, run: doRestore });
   }
+
+  pumpRestoreQueue();
 
   // One notify for the whole batch of initial transitions above — the
   // per-terminal `doRestore` transitions notify individually as they fire.
@@ -152,7 +231,11 @@ export function retryFailedScrollbackRestoreBatch(failedTerminalIds: string[]): 
   scheduleScrollbackRestore(retryTasks, () => true);
 }
 
-/** Clear the captured retry tasks. Exported for test isolation and teardown. */
+/** Clear the captured retry tasks and the restore queue. Exported for test isolation and teardown. */
 export function resetScrollbackRestoreBatch(): void {
   lastBatchTaskMap.clear();
+  restoreQueue.length = 0;
+  activeRestores = 0;
+  queueGeneration++;
+  syncFocusSubscription();
 }
