@@ -222,6 +222,7 @@ import { registerAppView } from "../webContentsRegistry.js";
 import { unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { injectSkeletonCss } from "../skeletonCss.js";
+import { projectStore } from "../../services/ProjectStore.js";
 import { notifyError } from "../../ipc/errorHandlers.js";
 
 function createMockWindow() {
@@ -450,6 +451,37 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
         vi.mocked(logInfo).mock.calls.filter(([event]) => event === "projectview.coldstart")
       ).toHaveLength(0);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves a cancelled cold switch to the requesting renderer it rolled back to (#13035)", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(notifyError).mockClear();
+      vi.mocked(projectStore.getProjectById).mockImplementation(
+        (id: string) => (id === "proj-a" ? { name: "Alpha" } : null) as never
+      );
+      const slowWc = createMockWebContents();
+      wcQueue.push(slowWc);
+
+      const rejection = expectRejection(
+        manager.switchTo("proj-b", "/path/b", undefined, {
+          requesterWebContentsId: initialWc.id,
+        })
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(PAINT_HARD_MS + 10);
+      const err = await rejection;
+
+      expect(err.message).toContain("View never painted");
+      expect((err as { userMessage?: string }).userMessage).toBe(
+        "The project didn't finish displaying, so the switch was cancelled and you're still in Alpha."
+      );
+      expect(manager.getActiveProjectId()).toBe("proj-a");
+      expect(vi.mocked(notifyError)).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(projectStore.getProjectById).mockImplementation(() => null);
       vi.useRealTimers();
     }
   });
@@ -1893,6 +1925,48 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
     expect((await retry).isNew).toBe(false);
     expect(manager.getActiveProjectId()).toBe("proj-a");
     expect(attachedWebContents()).toEqual([initialWc]);
+  });
+
+  it("leaves a cancelled warm switch to the requesting renderer it rolled back to (#13035)", async () => {
+    const bWc = await switchToColdB();
+    holdFrames(initialWc);
+    vi.mocked(projectStore.getProjectById).mockImplementation(
+      (id: string) => (id === "proj-b" ? { name: "Bravo" } : null) as never
+    );
+    try {
+      const rejected = expectRejection(
+        manager.switchTo("proj-a", "/path/a", undefined, { requesterWebContentsId: bWc.id })
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      manager.signalWarmViewPainted(initialWc.id);
+      await vi.advanceTimersByTimeAsync(PAINT_HARD_MS);
+
+      const error = await rejected;
+      expect(error.message).toContain("View never painted");
+      expect((error as { userMessage?: string }).userMessage).toBe(
+        "The project didn't finish displaying, so the switch was cancelled and you're still in Bravo."
+      );
+      expect(manager.getActiveProjectId()).toBe("proj-b");
+      expect(attachedWebContents()).toEqual([bWc]);
+      expect(vi.mocked(notifyError)).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(projectStore.getProjectById).mockImplementation(() => null);
+    }
+  });
+
+  it("still reports a cancelled warm switch whose requester is not the restored view", async () => {
+    await switchToColdB();
+    holdFrames(initialWc);
+
+    const rejected = expectRejection(
+      manager.switchTo("proj-a", "/path/a", undefined, { requesterWebContentsId: 12_345 })
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    manager.signalWarmViewPainted(initialWc.id);
+    await vi.advanceTimersByTimeAsync(PAINT_HARD_MS);
+
+    const error = await rejected;
+    expect(vi.mocked(notifyError)).toHaveBeenCalledWith(error, { source: "project-switch" });
   });
 
   it("completes a cold switch in a minimised window without waiting for frames", async () => {

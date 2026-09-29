@@ -1312,3 +1312,39 @@ describe("switch busy indication (#10736)", () => {
     expect(useProjectStore.getState().switchingToProjectId).toBe("project-c");
   });
 });
+
+describe("a switch the paint gate cancelled (#13035)", () => {
+  const USER_MESSAGE =
+    "The project didn't finish displaying, so the switch was cancelled and you're still in Alpha.";
+
+  /** The preload's encoding: code, then the urlencoded userMessage. */
+  function cancelledRejection(): Error {
+    return new Error(
+      `[AppError|INTERNAL|${encodeURIComponent(USER_MESSAGE)}] View never painted: cached project view parked after warm paint gate timeout`
+    );
+  }
+
+  it.each([
+    ["switchProject", "switch", "Couldn't switch project"],
+    ["reopenProject", "reopen", "Couldn't reopen project"],
+  ] as const)(
+    "%s toasts main's user copy, not the technical message",
+    async (action, clientMethod, title) => {
+      const { notify } = await import("@/lib/notify");
+      projectClientMock[clientMethod].mockRejectedValueOnce(cancelledRejection());
+      const { useProjectStore } = await import("../projectStore");
+      useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+      await useProjectStore.getState()[action](projectB.id);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(notify).toHaveBeenCalledTimes(1);
+      const toast = vi.mocked(notify).mock.calls[0]?.[0];
+      expect(toast).toMatchObject({ type: "error", title, message: USER_MESSAGE });
+      expect(toast?.actions?.map((a) => a.label)).toEqual(["Try again"]);
+      expect(useProjectStore.getState().error).toBe(USER_MESSAGE);
+      expect(useProjectStore.getState().isSwitching).toBe(false);
+    }
+  );
+});

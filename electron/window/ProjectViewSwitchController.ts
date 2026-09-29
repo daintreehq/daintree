@@ -16,8 +16,6 @@ import {
   registerProjectView,
 } from "./webContentsRegistry.js";
 import { clearWorkspaceEviction } from "../services/workspaceResidency.js";
-import { notifyError } from "../ipc/errorHandlers.js";
-import { AppError } from "../utils/errorTypes.js";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { unfreezeWebContents } from "../utils/webContentsLifecycle.js";
@@ -37,10 +35,11 @@ import {
   pruneOrphanedChildren,
 } from "./ProjectViewLifecycleController.js";
 import { notifyProjectPluginsOpened } from "./projectPluginLifecycle.js";
+import { createCancelledSwitchError, reportSwitchFailure } from "./projectSwitchCancelledError.js";
 import { setupViewHandlers } from "./ProjectViewHandlers.js";
 import { evictStaleViews } from "./ProjectViewEvictionController.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
-import type { ViewEntry } from "./ProjectViewManagerTypes.js";
+import type { SwitchRequestOptions, ViewEntry } from "./ProjectViewManagerTypes.js";
 import type {
   ProjectFocusOnActivateIntent,
   ProjectSwitchTrace,
@@ -128,7 +127,8 @@ export async function performSwitch(
   host: ProjectViewManager,
   projectId: string,
   projectPath: string,
-  trace?: ProjectSwitchTrace
+  trace?: ProjectSwitchTrace,
+  request?: SwitchRequestOptions
 ): Promise<{ view: WebContentsView; isNew: boolean }> {
   // Callers without a renderer-minted trace (menu, tests) still get a
   // switchId so this switch's marks and the incoming view's stay joinable.
@@ -301,15 +301,15 @@ export async function performSwitch(
         // Discard the intent with the switch so a later unrelated one can't
         // deliver it.
         consumePendingFocusIntent(host, projectId);
-        const unpaintedError = new AppError({
-          code: "INTERNAL",
+        const unpaintedError = createCancelledSwitchError({
           message: cachedRendererGone
             ? "View never painted: cached project view renderer gone during warm paint gate"
             : "View never painted: cached project view parked after warm paint gate timeout",
           context: { phase: "paint", projectId, waitedMs },
+          previousProjectId,
         });
         if (!host.disposed && !host.win.isDestroyed()) {
-          notifyError(unpaintedError, { source: "project-switch" });
+          reportSwitchFailure(unpaintedError, request?.requesterWebContentsId, outgoingView);
         }
         throw unpaintedError;
       }
@@ -677,10 +677,10 @@ export async function performSwitch(
         gateChannel: coldReleaseChannel,
         rollbackProjectId: previousProjectId,
       });
-      throw new AppError({
-        code: "INTERNAL",
+      throw createCancelledSwitchError({
         message: "View never painted: project view abandoned after paint gate hard timeout",
         context: { phase: "paint", projectId, waitedMs: effectiveHardMs },
+        previousProjectId,
       });
     }
 
@@ -818,7 +818,7 @@ export async function performSwitch(
       console.error("[ProjectViewManager] pruneOrphanedChildren threw:", pruneError);
     }
 
-    notifyError(loadError, { source: "project-switch" });
+    reportSwitchFailure(loadError, request?.requesterWebContentsId, outgoingView);
 
     throw loadError;
   } finally {

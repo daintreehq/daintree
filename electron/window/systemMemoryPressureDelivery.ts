@@ -63,6 +63,11 @@ export function publishSystemMemoryPressure(
   }
 }
 
+/** The episode now open, as published at its opening edge; null when none is. */
+export function getOpenSystemMemoryPressure(): SystemMemoryPressurePayload | null {
+  return openEpisode;
+}
+
 /** Call from the did-finish-load of a window's visible view. */
 export function deliverOpenSystemMemoryPressure(win: BrowserWindow, wc: WebContents): void {
   deliver(win, wc, true);
