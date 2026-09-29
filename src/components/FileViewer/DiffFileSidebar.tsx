@@ -342,6 +342,7 @@ export function DiffFileSidebar({
     preferredKey: currentIndex >= 0 ? String(currentIndex) : null,
     reveal: revealRovingRow,
     windowed,
+    containerRef: listRef,
   });
   const { tabStopKey, onRowFocus, rowRef, reportTabStopMounted } = roving;
 
@@ -464,9 +465,9 @@ export function DiffFileSidebar({
       </div>
 
       <div
-        ref={listRef}
         onKeyDown={roving.onKeyDown}
         {...roving.containerProps}
+        ref={listRef}
         className={cn(
           "min-h-0 flex-1 overscroll-contain px-2 pb-2",
           // The virtualizer brings its own scroller; two nested ones would give

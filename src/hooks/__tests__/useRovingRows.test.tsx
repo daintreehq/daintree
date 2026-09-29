@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, expect, it, vi } from "vitest";
-import { act, renderHook } from "@testing-library/react";
+import { act, fireEvent, render, renderHook } from "@testing-library/react";
 import { useRovingRows } from "../useRovingRows";
 
 const KEYS = ["a", "b", "c", "d"];
@@ -34,7 +34,8 @@ describe("useRovingRows", () => {
     // Nothing has reported yet: no row is known to hold the stop.
     expect(result.current.containerProps.tabIndex).toBe(0);
     act(() => result.current.reportTabStopMounted(true));
-    expect(result.current.containerProps.tabIndex).toBeUndefined();
+    // Out of the tab order, but still able to hold focus parked on it.
+    expect(result.current.containerProps.tabIndex).toBe(-1);
     act(() => result.current.reportTabStopMounted(false));
     expect(result.current.containerProps.tabIndex).toBe(0);
   });
@@ -64,5 +65,45 @@ describe("useRovingRows", () => {
     container.append(row);
     act(() => result.current.containerProps.onFocus({ target: row, currentTarget: container }));
     expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it("parks focus on the list when the focused row is windowed out, and keeps the arrows working", async () => {
+    function List({ mounted }: { mounted: string[] }) {
+      const roving = useRovingRows({ keys: KEYS, windowed: true });
+      return (
+        <div data-testid="list" onKeyDown={roving.onKeyDown} {...roving.containerProps}>
+          {mounted.map((key) => (
+            <button
+              key={key}
+              type="button"
+              data-roving-row=""
+              ref={roving.rowRef(key)}
+              tabIndex={roving.tabStopKey === key ? 0 : -1}
+              onFocus={() => roving.onRowFocus(key)}
+            >
+              {key}
+            </button>
+          ))}
+        </div>
+      );
+    }
+    const { getByText, getByTestId, rerender } = render(<List mounted={["a", "b", "c"]} />);
+    act(() => getByText("b").focus());
+
+    // A plain re-render hands every row a fresh ref callback; that is not an
+    // unmount and must leave focus where it is.
+    rerender(<List mounted={["a", "b", "c"]} />);
+    await act(async () => {});
+    expect(document.activeElement).toBe(getByText("b"));
+
+    // The window scrolls past the focused row.
+    rerender(<List mounted={["c", "d"]} />);
+    await act(async () => {});
+    const list = getByTestId("list");
+    expect(document.activeElement).toBe(list);
+
+    // Arrows continue from the row that had focus.
+    fireEvent.keyDown(list, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(getByText("c"));
   });
 });
