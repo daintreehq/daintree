@@ -1,0 +1,316 @@
+import {
+  isArbitraryTextSize,
+  isFocusTreatment,
+  isRawArbitraryShadow,
+  isRawRadius,
+  isTextColourSlashAlpha,
+  LEGACY_DAINTREE,
+  legacyAlias,
+  splitModifier,
+  splitToken,
+  STOCK_COLOUR,
+  STOCK_SHADOW,
+} from "../classTokens.js";
+import { hasProp, propString } from "../extract.js";
+import type { ClassToken, LintFile, LintRule, RuleHit } from "../types.js";
+
+/** A rule over every class token, reporting each one `test` names a message for. */
+function classRule(
+  base: Omit<LintRule, "check" | "appliesTo">,
+  test: (token: string, split: ReturnType<typeof splitToken>) => string | null
+): LintRule {
+  return {
+    ...base,
+    appliesTo: "any",
+    check(file) {
+      const hits: RuleHit[] = [];
+      for (const context of file.classContexts) {
+        for (const { token, offset } of context) {
+          const message = test(token, splitToken(token));
+          if (message !== null) hits.push({ offset, message });
+        }
+      }
+      return hits;
+    },
+  };
+}
+
+const stockColour = classRule(
+  {
+    id: "stock-palette-colour",
+    severity: "error",
+    message: "stock Tailwind colour",
+    hint: "use a semantic token (bg-surface-panel, text-text-secondary, text-status-danger, border-border-default); themes are runtime tokens",
+  },
+  (token, { base }) =>
+    STOCK_COLOUR.test(splitModifier(base).value)
+      ? `"${token}" is a stock Tailwind colour, which compiles to nothing in a plugin`
+      : null
+);
+
+const darkVariant = classRule(
+  {
+    id: "dark-variant",
+    severity: "warn",
+    message: "`dark:` follows the OS colour scheme, not the Daintree theme",
+    hint: "drop the dark: variant — semantic tokens already change with the theme",
+  },
+  (token, { variants }) =>
+    variants.includes("dark")
+      ? `"${token}" uses dark:, which follows the OS colour scheme rather than the Daintree theme`
+      : null
+);
+
+const legacyUtility = classRule(
+  {
+    id: "legacy-daintree-utility",
+    severity: "warn",
+    message: "legacy daintree-* colour alias",
+    hint: "use the semantic token the alias points at",
+  },
+  (token, { base }) => {
+    const legacy = legacyAlias(base);
+    if (!legacy) return null;
+    const replacement = LEGACY_DAINTREE.get(legacy.alias);
+    return replacement
+      ? `"${token}" is a legacy alias; use ${legacy.prefix}-${replacement}`
+      : `"${token}" is a legacy daintree-* alias with no semantic equivalent here`;
+  }
+);
+
+const rawShadow = classRule(
+  {
+    id: "raw-shadow",
+    severity: "warn",
+    message: "stock or hardcoded shadow",
+    hint: "use shadow-[var(--theme-shadow-ambient)], shadow-[var(--theme-shadow-floating)] or shadow-[var(--theme-shadow-dialog)]",
+  },
+  (token, { base }) =>
+    STOCK_SHADOW.test(base) || isRawArbitraryShadow(base)
+      ? `"${token}" draws a fixed-colour shadow that ignores the theme`
+      : null
+);
+
+const arbitraryTextSize = classRule(
+  {
+    id: "arbitrary-text-size",
+    severity: "warn",
+    message: "arbitrary font size",
+    hint: "use a step of the type scale: text-2xs, text-xs, text-sm, text-base, text-lg",
+  },
+  (token, { base }) => (isArbitraryTextSize(base) ? `"${token}" is off the type scale` : null)
+);
+
+const textSlashAlpha = classRule(
+  {
+    id: "text-colour-slash-alpha",
+    severity: "warn",
+    message: "text colour with slash alpha",
+    hint: "use a solid token one step down instead (text-text-secondary, text-text-muted)",
+  },
+  (token, { base }) =>
+    isTextColourSlashAlpha(base)
+      ? `"${token}" fades the glyphs against whatever is behind them, losing contrast`
+      : null
+);
+
+const rawRadius = classRule(
+  {
+    id: "raw-radius",
+    severity: "warn",
+    message: "radius off the theme's scale",
+    hint: "name a step (rounded-sm, rounded-md, rounded-lg) or read a token (rounded-[var(--radius-md)])",
+  },
+  (token, { base }) =>
+    isRawRadius(base)
+      ? base.includes("[")
+        ? `"${token}" hardcodes a radius the theme's radius scale cannot move`
+        : `"${token}" renders the theme's rounded-lg, not Tailwind's 0.25rem; name the step you mean`
+      : null
+);
+
+const spinner = classRule(
+  {
+    id: "hand-rolled-spinner",
+    severity: "warn",
+    message: "hand-applied animate-spin",
+    hint: "prefer `Spinner` from @daintreehq/plugin-ui",
+  },
+  (_token, { base }) =>
+    base === "animate-spin"
+      ? "animate-spin applied by hand; the kit's spinner respects reduced motion"
+      : null
+);
+
+const badge = classRule(
+  {
+    id: "hand-rolled-badge",
+    severity: "warn",
+    message: "hand-tinted status pill",
+    hint: "prefer `Badge` from @daintreehq/plugin-ui",
+  },
+  (token, { base }) =>
+    /^bg-status-(?:error|danger|warning|success|info)\/10$/.test(base)
+      ? `"${token}" hand-tints a status pill`
+      : null
+);
+
+function outlineHits(context: ClassToken[]): RuleHit[] {
+  const hits: RuleHit[] = [];
+  const split = context.map((entry) => ({ ...entry, ...splitToken(entry.token) }));
+  const covered = split.some(({ variants, base }) => isFocusTreatment(variants, base));
+  for (const { token, offset, variants, base } of split) {
+    if (variants.length > 0) continue;
+    if (base === "outline-none") {
+      hits.push({
+        offset,
+        message: `"${token}" removes the outline even in forced-colours mode; use outline-hidden with a focus-visible: ring`,
+      });
+    } else if ((base === "outline-hidden" || base === "outline-0") && !covered) {
+      hits.push({
+        offset,
+        message: `"${token}" hides the focus outline and nothing paints a replacement`,
+      });
+    }
+  }
+  return hits;
+}
+
+const outlineSuppression: LintRule = {
+  id: "unpaired-outline-suppression",
+  severity: "warn",
+  appliesTo: "any",
+  message: "focus outline suppressed without a replacement",
+  hint: "pair it with a visible focus treatment, e.g. focus-visible:ring-2 focus-visible:ring-border-strong",
+  check(file) {
+    return file.classContexts.flatMap(outlineHits);
+  },
+};
+
+const applyDirective: LintRule = {
+  id: "apply-directive",
+  severity: "warn",
+  appliesTo: "any",
+  target: "style",
+  message: "@apply needs a Tailwind build step plugin styles never get",
+  hint: "put the utilities on the element's className instead",
+  check(file) {
+    return [...file.code.matchAll(/@apply\b/g)].map((m) => ({ offset: m.index }));
+  },
+};
+
+function elementRule(
+  base: Omit<LintRule, "check" | "appliesTo">,
+  test: (file: LintFile, element: LintFile["elements"][number]) => string | null
+): LintRule {
+  return {
+    ...base,
+    appliesTo: "view",
+    check(file) {
+      const hits: RuleHit[] = [];
+      for (const element of file.elements) {
+        const message = test(file, element);
+        if (message !== null) hits.push({ offset: element.offset, message });
+      }
+      return hits;
+    },
+  };
+}
+
+const rawButton = elementRule(
+  {
+    id: "raw-button",
+    severity: "warn",
+    message: "raw <button>",
+    hint: "prefer `Button` from @daintreehq/plugin-ui — it carries the host's focus ring, sizes and variants",
+  },
+  (_file, element) =>
+    element.intrinsic && element.tag === "button" ? "raw <button> restyles a kit primitive" : null
+);
+
+const KIT_FOR_INPUT: Record<string, string> = {
+  checkbox: "Checkbox",
+};
+
+const rawFormControl = elementRule(
+  {
+    id: "raw-form-control",
+    severity: "warn",
+    message: "raw form control",
+    hint: "prefer the matching component from @daintreehq/plugin-ui",
+  },
+  (file, element) => {
+    if (!element.intrinsic) return null;
+    if (element.tag === "textarea")
+      return "raw <textarea>; prefer `Textarea` from @daintreehq/plugin-ui";
+    if (element.tag === "select") return "raw <select>; prefer `Select` from @daintreehq/plugin-ui";
+    if (element.tag !== "input") return null;
+    const type = propString(file, element, "type") ?? "text";
+    if (type === "hidden" || type === "file") return null;
+    if (type === "radio")
+      return 'raw <input type="radio">; prefer a selection control from @daintreehq/plugin-ui';
+    const kit = KIT_FOR_INPUT[type] ?? "Input";
+    return `raw <input type="${type}">; prefer \`${kit}\` from @daintreehq/plugin-ui`;
+  }
+);
+
+const nativeTitle = elementRule(
+  {
+    id: "native-title-tooltip",
+    severity: "warn",
+    message: "native title= tooltip",
+    hint: "prefer `Tooltip` from @daintreehq/plugin-ui — the OS tooltip ignores the theme and the keyboard",
+  },
+  (file, element) =>
+    (element.intrinsic || element.tag === "Button") && hasProp(file, element, "title")
+      ? `title= on <${element.tag}> draws an OS tooltip`
+      : null
+);
+
+const inlineSvgIcon = elementRule(
+  {
+    id: "inline-svg-icon",
+    severity: "warn",
+    message: "inline 24×24 SVG icon",
+    hint: "prefer `Icon` from @daintreehq/plugin-ui, which draws the host's own icon set",
+  },
+  (file, element) =>
+    element.intrinsic &&
+    element.tag === "svg" &&
+    propString(file, element, "viewBox")?.trim() === "0 0 24 24"
+      ? "inline 24×24 <svg> copies an icon the kit already draws"
+      : null
+);
+
+const lucideImport: LintRule = {
+  id: "lucide-react-import",
+  severity: "warn",
+  appliesTo: "view",
+  message: "lucide-react is bundled into the view",
+  hint: "prefer `Icon` from @daintreehq/plugin-ui, served by the host at no bundle cost",
+  check(file) {
+    const match = /(?:from\s*|import\s*\(\s*|require\(\s*)["']lucide-react(?:\/[^"']*)?["']/.exec(
+      file.code
+    );
+    return match ? [{ offset: match.index }] : [];
+  },
+};
+
+export const CONSISTENCY_RULES: LintRule[] = [
+  stockColour,
+  darkVariant,
+  legacyUtility,
+  rawShadow,
+  arbitraryTextSize,
+  textSlashAlpha,
+  rawRadius,
+  outlineSuppression,
+  spinner,
+  badge,
+  applyDirective,
+  rawButton,
+  rawFormControl,
+  nativeTitle,
+  inlineSvgIcon,
+  lucideImport,
+];
