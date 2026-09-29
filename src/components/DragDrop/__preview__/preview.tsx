@@ -16,7 +16,7 @@ import {
 } from "@dnd-kit/sortable";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { LazyMotion, domAnimation } from "framer-motion";
-import { GripVertical } from "lucide-react";
+import { GripVertical, Trash2, Wrench, Globe } from "lucide-react";
 import { resolveAppTheme } from "@shared/theme/themes";
 import type { PanelInstance } from "@shared/types/panel";
 import type { WorktreeSnapshot } from "@shared/types";
@@ -25,7 +25,12 @@ import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewS
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { DRAG_GRIP_CLASS, DRAG_GRIP_ICON_CLASS } from "@/components/ui/dragGripStyles";
+import { DOCK_STATUS_PILL_CLASS } from "@/components/Layout/dockStatusPill";
+import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { TerminalDragPreview } from "../TerminalDragPreview";
+import { DROP_TARGET_FRAME } from "../dropIndicator";
 import { WorktreeDragPreview } from "../WorktreeDragPreview";
 import { GridPlaceholder } from "../GridPlaceholder";
 import { DockPlaceholder } from "../DockPlaceholder";
@@ -77,7 +82,7 @@ installPreviewShims();
  *
  * Query parameters (the spec drives these):
  *   ?theme=daintree|bondi|…      built-in theme id
- *   ?scene=ghosts|grid|dock|drag-grid|drag-dock|drag-sidebar|sheet
+ *   ?scene=ghosts|grid|dock|targets|drag-grid|drag-dock|drag-sidebar|sheet
  *   ?kind=terminal|agent|…|none  which panel the placeholder stands in for
  *   ?over=1                      dock scene: draw the rail's drag-over highlight
  *   ?dragging=0                  dock scene: render the idle spacer instead
@@ -277,7 +282,7 @@ function DockRail({
       <div
         className={cn(
           "flex min-h-[var(--dock-item-height)] items-center gap-[var(--dock-gap)] px-1",
-          highlighted && "rounded-md bg-overlay-soft ring-2 ring-inset ring-border-default"
+          highlighted && cn(DROP_TARGET_FRAME, "rounded-[var(--radius-md)]")
         )}
       >
         <div className="flex min-h-[calc(var(--dock-item-height)-4px)] min-w-[100px] items-center gap-[var(--dock-gap)]">
@@ -529,8 +534,160 @@ function Sheet() {
   );
 }
 
+/**
+ * Every container that takes a drop whole, at rest and armed side by side, each
+ * over the surface it lives on: the grid, the dock rail, both trash pills, a
+ * sidebar worktree card (the real `.sidebar-worktree-card` rules, active and
+ * idle), and a toolbar settings column with its grips. The armed halves use the
+ * same `DROP_TARGET_FRAME` the components do; the worktree card uses
+ * `data-drop-target`, which sidebar.css paints.
+ */
+function TargetsScene() {
+  const pair = (render: (armed: boolean) => ReactNode, shot: string, caption: string) => (
+    <figure className="m-0 flex flex-col gap-2">
+      <div className="grid grid-cols-2 gap-4">
+        <div data-shot={`${shot}-rest`}>{render(false)}</div>
+        <div data-shot={`${shot}-armed`} data-armed="">
+          {render(true)}
+        </div>
+      </div>
+      <figcaption className="m-0">
+        <Caption>{caption} — rest · armed</Caption>
+      </figcaption>
+    </figure>
+  );
+  return (
+    <div
+      data-preview-shell=""
+      className="flex flex-col gap-8 bg-surface-canvas p-6"
+      style={{ width }}
+    >
+      {pair(
+        (armed) => (
+          // ContentGridDefault paints the grid colour inline on the element that
+          // takes the frame, so the frame's fill never shows there — only its edge.
+          <div
+            className={cn(
+              "grid h-[180px] grid-cols-2 gap-1 bg-noise p-1",
+              armed && DROP_TARGET_FRAME
+            )}
+            style={{ gridAutoRows: 172, backgroundColor: "var(--color-grid-bg)" }}
+          >
+            <FixturePanel terminal={NEIGHBOURS[0]!} />
+          </div>
+        ),
+        "target-grid",
+        "grid, pointer over its empty half"
+      )}
+      {pair(
+        (armed) => (
+          <DockRail highlighted={armed}>
+            {NEIGHBOURS.slice(0, 2).map((terminal) => (
+              <FixtureChip key={terminal.id} terminal={terminal} />
+            ))}
+          </DockRail>
+        ),
+        "target-dock",
+        "dock rail"
+      )}
+      {pair(
+        (armed) => (
+          <div className="flex items-center gap-2 bg-[var(--dock-bg)] p-2">
+            <Button
+              variant="pill"
+              size="sm"
+              type="button"
+              className={cn("px-3 opacity-70", armed && cn("opacity-100", DROP_TARGET_FRAME))}
+            >
+              <Trash2 className="h-3.5 w-3.5 text-text-secondary" aria-hidden="true" />
+              <span className="font-medium">Trash (drop to delete)</span>
+            </Button>
+            <Button
+              variant="pill"
+              size="sm"
+              type="button"
+              className={cn(DOCK_STATUS_PILL_CLASS, "px-3", armed && DROP_TARGET_FRAME)}
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>Trash · 3</span>
+            </Button>
+          </div>
+        ),
+        "target-trash",
+        "trash, empty ghost and populated pill"
+      )}
+      {pair(
+        (armed) => (
+          <div className="flex w-[280px] flex-col bg-surface-sidebar py-1">
+            {SIDEBAR_ROWS.slice(0, 2).map((worktree, index) => (
+              <div
+                key={worktree.id}
+                className="sidebar-worktree-card relative isolate px-3 py-2"
+                data-variant="sidebar"
+                data-active={index === 0 ? "true" : undefined}
+                data-hoverable={index === 0 ? undefined : "true"}
+                data-drop-target={armed ? "true" : undefined}
+              >
+                <div className="truncate text-xs font-medium text-text-primary">
+                  {worktree.issueTitle ?? worktree.branch}
+                </div>
+                <div className="truncate font-mono text-2xs text-text-secondary">
+                  {worktree.branch}
+                </div>
+              </div>
+            ))}
+          </div>
+        ),
+        "target-worktree",
+        "sidebar worktree cards, active and idle"
+      )}
+      {pair(
+        (armed) => (
+          <SettingsGroup
+            label="Left · 2 buttons"
+            className={cn("min-h-12", armed && DROP_TARGET_FRAME)}
+          >
+            {[
+              { label: "Browser", Icon: Globe, draggable: true },
+              { label: "Tools", Icon: Wrench, draggable: false },
+            ].map(({ label, Icon, draggable }) => (
+              <SettingsRow
+                key={label}
+                labelText={label}
+                label={
+                  <span className="flex min-w-0 items-center gap-2.5">
+                    {draggable ? (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Reorder ${label}`}
+                        className={cn(DRAG_GRIP_CLASS, "-my-0.5")}
+                      >
+                        <GripVertical aria-hidden="true" className={DRAG_GRIP_ICON_CLASS} />
+                      </span>
+                    ) : (
+                      <span className="-my-0.5 h-6 w-6 shrink-0" aria-hidden="true" />
+                    )}
+                    <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span className="truncate">{label}</span>
+                  </span>
+                }
+                control={<span className="h-5 w-9 rounded-full bg-overlay-medium" />}
+              />
+            ))}
+          </SettingsGroup>
+        ),
+        "target-toolbar",
+        "toolbar settings column, with a movable and a fixed row"
+      )}
+    </div>
+  );
+}
+
 function Preview() {
   switch (scene) {
+    case "targets":
+      return <TargetsScene />;
     case "grid":
       return <GridScene />;
     case "dock":
