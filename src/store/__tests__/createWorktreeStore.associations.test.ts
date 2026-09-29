@@ -257,6 +257,40 @@ describe("createWorktreeStore — linked PR preservation (#8870)", () => {
     expect(store.getState().worktrees.get("wt-1")?.linked).toBeNull();
   });
 
+  it("replaces linked when only the CI counts or base branch move", () => {
+    const ci = (failed: number) => ({
+      state: "failure" as const,
+      total: 5,
+      passed: 5 - failed,
+      failed,
+      pending: 0,
+      rawData: null,
+    });
+    const withCi = (failed: number, baseRef = "develop"): PluginWorktreeLinked => ({
+      providerId: "github",
+      pr: { ...makePr(123, "Fix the thing")!, ciStatus: ci(failed), baseRef },
+    });
+    const store = createWorktreeStore();
+    // Same prLastUpdatedAt throughout: the host no longer bumps it for
+    // unchanged PRs, so it can't be what carries these changes.
+    store
+      .getState()
+      .applySnapshot([makeSnapshot("wt-1", { linked: withCi(1), prLastUpdatedAt: 1 })], nextV());
+
+    store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { linked: withCi(2), prLastUpdatedAt: 1 }), nextV());
+    expect(store.getState().worktrees.get("wt-1")?.linked?.pr?.ciStatus?.failed).toBe(2);
+
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { linked: withCi(2, "main"), prLastUpdatedAt: 1 }),
+        nextV()
+      );
+    expect(store.getState().worktrees.get("wt-1")?.linked?.pr?.baseRef).toBe("main");
+  });
+
   it("preserves linked.pr when applySnapshot omits the linked field", () => {
     const store = createWorktreeStore();
     store.getState().applySnapshot([makeSnapshot("wt-1", { linked: linkedWithPr })], nextV());

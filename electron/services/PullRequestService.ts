@@ -119,6 +119,10 @@ interface InternalLinkedPR {
   url: string;
   state: NormalizedPRState;
   isDraft?: boolean;
+  // Carried so every emit for this PR — not just the detection one — rebuilds
+  // `linked.pr` with it. The host full-replaces `linked.pr` per event, so an
+  // emit without it dropped the base-branch divergence target back to main.
+  baseRef?: string;
   ciStatus?: CIStatusState;
   _ciStatus?: CIStatus;
   providerId: string;
@@ -209,6 +213,10 @@ class PullRequestService {
   // the next polling cycle (#8851).
   private issueTitleFetchedWorktrees = new Set<string>();
   private detectedPRs = new Map<string, InternalLinkedPR>();
+  // Worktrees whose authoritative "no PR" has already been announced, keyed to
+  // the branch + provider it was decided for. A branch without a PR is never
+  // resolved, so every poll re-asks and would otherwise re-emit the same clear.
+  private announcedNoPR = new Map<string, string>();
   private updateDebounceTimer: NodeJS.Timeout | null = null;
   private unsubscribers: (() => void)[] = [];
 
@@ -305,6 +313,9 @@ class PullRequestService {
     } else if (currentContext) {
       this.candidates.delete(state.worktreeId);
     }
+    if (branchChanged || !shouldTrack) {
+      this.announcedNoPR.delete(state.worktreeId);
+    }
 
     // Drop PR state whenever we de-track a previously-tracked worktree, not
     // just on a branch change. Otherwise a worktree that flips to
@@ -359,6 +370,7 @@ class PullRequestService {
   }
 
   private handleWorktreeRemove({ worktreeId }: { worktreeId: string }): void {
+    this.announcedNoPR.delete(worktreeId);
     if (this.candidates.has(worktreeId) || this.detectedPRs.has(worktreeId)) {
       const branchName = this.candidates.get(worktreeId)?.branchName;
       const clearedProviderId = this.detectedPRs.get(worktreeId)?.providerId;
@@ -935,6 +947,7 @@ class PullRequestService {
     this.resolvedWorktrees.clear();
     this.issueTitleFetchedWorktrees.clear();
     this.detectedPRs.clear();
+    this.announcedNoPR.clear();
     this.consecutiveErrors = 0;
     this.nextRetryAt = 0;
     // A pass from the previous project/token must not satisfy a refresh
@@ -1163,6 +1176,7 @@ class PullRequestService {
         providerId: detected.providerId,
         owner: repo.owner,
         repo: repo.repo,
+        baseRef: detected.baseRef,
         timestamp: Date.now(),
       });
     }
@@ -1564,9 +1578,15 @@ class PullRequestService {
             this.issueTitleFetchedWorktrees.delete(worktreeId);
             this.detectedPRs.delete(worktreeId);
             logInfo("PR no longer found during revalidation - clearing state", { worktreeId });
+            const clearedBranch = lookupBranchByWorktreeId.get(worktreeId);
+            if (clearedBranch !== undefined) {
+              // This clear already announces the absence the next branch
+              // lookup is about to confirm.
+              this.announcedNoPR.set(worktreeId, `${detectedPR.providerId}\0${clearedBranch}`);
+            }
             events.emit("sys:pr:cleared", {
               worktreeId,
-              branchName: lookupBranchByWorktreeId.get(worktreeId),
+              branchName: clearedBranch,
               providerId: detectedPR.providerId,
               timestamp: Date.now(),
             });
@@ -1578,7 +1598,8 @@ class PullRequestService {
             detectedPR.state !== newState ||
             detectedPR.number !== pr.number ||
             detectedPR.title !== pr.title ||
-            detectedPR.url !== pr.url;
+            detectedPR.url !== pr.url ||
+            detectedPR.baseRef !== pr.baseRef;
 
           // The probe's fresh REST markers, read before the emit rather than
           // after: a title edit and a push can land in the same tick, and the
@@ -1594,6 +1615,7 @@ class PullRequestService {
             detectedPR.state = newState;
             detectedPR.title = pr.title;
             detectedPR.url = pr.url;
+            detectedPR.baseRef = pr.baseRef;
 
             logInfo("PR metadata changed during revalidation", {
               worktreeId,
@@ -1955,6 +1977,9 @@ class PullRequestService {
             // disappeared between cycles would otherwise leave a pending
             // entry keeping the 30s revalidation boost armed indefinitely.
             this.detectedPRs.delete(worktreeId);
+            const noPRKey = `${providerId}\0${branch}`;
+            if (this.announcedNoPR.get(worktreeId) === noPRKey) continue;
+            this.announcedNoPR.set(worktreeId, noPRKey);
             events.emit("sys:pr:cleared", {
               worktreeId,
               branchName: branch,
@@ -1971,18 +1996,32 @@ class PullRequestService {
           url: pr.url,
           state: pr.state,
           isDraft: pr.isDraft,
+          baseRef: pr.baseRef,
           providerId,
           stagnantPollCount: 0,
         };
 
         for (const worktreeId of worktreeIds) {
+          // A refresh keeps `detectedPRs`, so the prior entry tells a genuine
+          // detection apart from a re-announcement of the same PR.
+          const prior = this.detectedPRs.get(worktreeId);
+          const reannounced =
+            prior !== undefined &&
+            prior.number === internalPR.number &&
+            prior.state === internalPR.state &&
+            prior.title === internalPR.title &&
+            prior.url === internalPR.url &&
+            prior.isDraft === internalPR.isDraft &&
+            prior.baseRef === internalPR.baseRef &&
+            prior.providerId === internalPR.providerId;
           this.resolvedWorktrees.add(worktreeId);
           this.detectedPRs.set(worktreeId, internalPR);
+          this.announcedNoPR.delete(worktreeId);
 
           const lookupBranch = lookupBranchByWorktreeId.get(worktreeId);
           const issueNumber = this.candidates.get(worktreeId)?.issueNumber;
 
-          logInfo("PR detected for worktree", {
+          (reannounced ? logDebug : logInfo)("PR detected for worktree", {
             worktreeId,
             prNumber: pr.number,
             prState: internalPR.state,
@@ -2189,6 +2228,7 @@ class PullRequestService {
               owner: repo.owner,
               repo: repo.repo,
               ciStatus: pr._ciStatus,
+              baseRef: detected.baseRef,
               timestamp: Date.now(),
             });
           }

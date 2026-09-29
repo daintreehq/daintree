@@ -1253,6 +1253,10 @@ export class WorktreeMonitor {
     this.issueLastUpdatedAt = ms;
   }
 
+  setPRLastUpdatedAt(ms: number | undefined): void {
+    this.prLastUpdatedAt = ms;
+  }
+
   setPRTitle(title: string | undefined): void {
     this.prTitle = title;
   }

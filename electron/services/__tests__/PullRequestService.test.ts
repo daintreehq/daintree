@@ -4019,4 +4019,203 @@ describe("PullRequestService", () => {
       }
     });
   });
+
+  describe("unchanged re-announcements", () => {
+    it("announces a branch's missing PR once, not on every poll", async () => {
+      mockForgeProviderResolved(async () => null);
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+      const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+      const off = events.on("sys:pr:cleared", (p) => cleared.push(p));
+
+      pullRequestService.initialize("/repo", "test-project-id");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/no-pr" })
+      );
+      await pullRequestService.refresh();
+      await pullRequestService.refresh();
+      await pullRequestService.refresh();
+
+      expect(cleared).toHaveLength(1);
+      expect(lastMockBridge!.findPRByBranch).toHaveBeenCalledTimes(3);
+
+      off();
+      pullRequestService.destroy();
+    });
+
+    it("re-announces the missing PR after a branch round trip, a removal, or a reset", async () => {
+      mockForgeProviderResolved(async () => null);
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+      const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+      const off = events.on("sys:pr:cleared", (p) => cleared.push(p));
+      const noPRClears = (branch: string) =>
+        cleared.filter((c) => c.branchName === branch && c.providerId !== undefined).length;
+
+      pullRequestService.initialize("/repo", "test-project-id");
+      const update = (branch: string) =>
+        events.emit("sys:worktree:update", makeWorktreeSnapshot({ worktreeId: "wt-1", branch }));
+
+      update("feature/a");
+      await pullRequestService.refresh();
+      expect(noPRClears("feature/a")).toBe(1);
+
+      update("feature/b");
+      await pullRequestService.refresh();
+      update("feature/a");
+      await pullRequestService.refresh();
+      expect(noPRClears("feature/b")).toBe(1);
+      expect(noPRClears("feature/a")).toBe(2);
+
+      events.emit("sys:worktree:remove", { worktreeId: "wt-1", timestamp: Date.now() });
+      update("feature/a");
+      await pullRequestService.refresh();
+      expect(noPRClears("feature/a")).toBe(3);
+
+      pullRequestService.reset();
+      pullRequestService.initialize("/repo", "test-project-id");
+      update("feature/a");
+      await pullRequestService.refresh();
+      expect(noPRClears("feature/a")).toBe(4);
+
+      off();
+      pullRequestService.destroy();
+    });
+
+    it("still detects a PR that opens on a branch whose absence was announced", async () => {
+      let pr: ForgePR | null = null;
+      mockForgeProviderResolved(async () => pr);
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+      const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+      const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+      const offD = events.on("sys:pr:detected", (p) => detected.push(p));
+      const offC = events.on("sys:pr:cleared", (p) => cleared.push(p));
+
+      pullRequestService.initialize("/repo", "test-project-id");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/later" })
+      );
+      await pullRequestService.refresh();
+      expect(cleared).toHaveLength(1);
+
+      pr = makeMockForgePR({ number: 9, headRef: "feature/later" });
+      await pullRequestService.refresh();
+      expect(detected.map((d) => d.prNumber)).toContain(9);
+
+      // The PR vanishes again (e.g. branch re-pushed after the PR was deleted):
+      // the fresh absence must be announced, not suppressed by the first one.
+      pr = null;
+      await pullRequestService.refresh();
+      expect(cleared).toHaveLength(2);
+
+      offD();
+      offC();
+      pullRequestService.destroy();
+    });
+
+    it("carries baseRef on the CI follow-up emit so linked.pr keeps its base branch", async () => {
+      const mockImpl = mockForgeProviderResolved(async () =>
+        makeMockForgePR({ number: 7, baseRef: "develop" })
+      );
+      mockImpl.batchLookups = {
+        getCIStatuses: vi.fn(
+          async (_repo: RepoRef, prNumbers: number[]) =>
+            new Map<number, CIStatus | null>(prNumbers.map((n) => [n, ciStatusFixture("pending")]))
+        ),
+      };
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+      const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+      const off = events.on("sys:pr:detected", (p) => detected.push(p));
+
+      pullRequestService.initialize("/repo", "test-project-id");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+      await pullRequestService.refresh();
+      await flushLoaders();
+
+      const phase2 = detected.find((d) => d.prCiStatus === "pending");
+      expect(phase2?.baseRef).toBe("develop");
+
+      // The blur sweep re-emits the swept PR too, and must not drop it either.
+      detected.length = 0;
+      pullRequestService.setCIEnrichmentEnabled(false);
+      expect(detected).toHaveLength(1);
+      expect(detected[0].prCiStatus).toBeUndefined();
+      expect(detected[0].baseRef).toBe("develop");
+
+      off();
+      pullRequestService.destroy();
+    });
+
+    it("logs a re-detected unchanged PR at debug and a changed one at info", async () => {
+      const logInfo = vi.fn();
+      vi.doMock("../../utils/logger.js", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../../utils/logger.js")>()),
+        logInfo,
+      }));
+      try {
+        let title = "First";
+        mockForgeProviderResolved(async () => makeMockForgePR({ number: 5, title }));
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const { events } = await import("../events.js");
+        const detectedLogs = () =>
+          logInfo.mock.calls.filter(([msg]) => msg === "PR detected for worktree").length;
+
+        pullRequestService.initialize("/repo", "test-project-id");
+        events.emit(
+          "sys:worktree:update",
+          makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+        );
+        await pullRequestService.refresh();
+        await pullRequestService.refresh();
+        expect(detectedLogs()).toBe(1);
+
+        title = "Second";
+        await pullRequestService.refresh();
+        expect(detectedLogs()).toBe(2);
+
+        pullRequestService.destroy();
+      } finally {
+        vi.doUnmock("../../utils/logger.js");
+      }
+    });
+
+    it("does not repeat a revalidation clear on the next no-PR branch lookup", async () => {
+      let pr: ForgePR | null = makeMockForgePR({ number: 5 });
+      const mockImpl = mockForgeProviderResolved(async () => pr);
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+      const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+      const off = events.on("sys:pr:cleared", (p) => cleared.push(p));
+
+      pullRequestService.initialize("/repo", "test-project-id");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+      await pullRequestService.refresh();
+      expect(cleared).toHaveLength(0);
+
+      // The PR is deleted: revalidation by number confirms it's gone.
+      pr = null;
+      vi.mocked(mockImpl.getPR).mockResolvedValue(null);
+      await (
+        pullRequestService as unknown as { revalidateResolvedPRs(): Promise<void> }
+      ).revalidateResolvedPRs();
+      expect(cleared).toHaveLength(1);
+      expect(cleared[0]).toMatchObject({ worktreeId: "wt-1", branchName: "feature/a" });
+
+      await pullRequestService.refresh();
+      expect(cleared).toHaveLength(1);
+
+      off();
+      pullRequestService.destroy();
+    });
+  });
 });

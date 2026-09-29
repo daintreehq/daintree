@@ -161,6 +161,7 @@ function dependsOnRemote(monitor: WorktreeMonitor): string {
 import { waitForPathExists } from "../utils/fs.js";
 import { markHostPerformance } from "../utils/hostPerformance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { worktreeSnapshotContentEqual } from "../../shared/utils/worktreeSnapshotTick.js";
 import {
   parseCheckedOutBranches,
   nextAvailableBranchName,
@@ -809,9 +810,22 @@ export class WorkspaceService {
           prCiStatus: resolvedPrCiStatus,
           prTitle: data.prTitle,
           issueTitle: data.issueTitle,
-          prLastUpdatedAt: data.prLastUpdatedAt,
-          issueLastUpdatedAt: data.issueLastUpdatedAt,
         });
+
+        // Every full detection pass (each app focus) and every CI re-check
+        // re-announces PRs that haven't moved. When the snapshot is unchanged
+        // the renderer already holds exactly this, so skip the snapshot, the
+        // overlay and the timestamp bump — the stamp alone would otherwise
+        // defeat the emit gate and ship a full snapshot per worktree per pass.
+        if (worktreeSnapshotContentEqual(prevSnapshot, monitor.getSnapshot())) {
+          return;
+        }
+        if (data.prLastUpdatedAt !== undefined) {
+          monitor.setPRLastUpdatedAt(data.prLastUpdatedAt);
+        }
+        if (data.issueLastUpdatedAt !== undefined) {
+          monitor.setIssueLastUpdatedAt(data.issueLastUpdatedAt);
+        }
 
         if (monitor.hasInitialStatus) {
           this.emitUpdate(monitor);

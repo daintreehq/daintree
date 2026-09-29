@@ -2348,6 +2348,25 @@ function lifecyclePhaseResultsEqual(
   return true;
 }
 
+// Counts are rendered on the card, so a re-run that moves them under the same
+// state is a real change. The host no longer re-stamps unchanged PRs, so a
+// bumped timestamp can't be relied on to carry it through.
+function ciStatusEqual(
+  a: import("../../shared/types/forge.js").CIStatus | undefined,
+  b: import("../../shared/types/forge.js").CIStatus | undefined
+): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  return (
+    a.state === b.state &&
+    a.total === b.total &&
+    a.passed === b.passed &&
+    a.failed === b.failed &&
+    a.pending === b.pending &&
+    a.requiredChecksPassing === b.requiredChecksPassing
+  );
+}
+
 function linkedEqual(
   a: import("../../shared/types/plugin.js").PluginWorktreeLinked | null,
   b: import("../../shared/types/plugin.js").PluginWorktreeLinked | null
@@ -2360,7 +2379,8 @@ function linkedEqual(
     a.pr?.state === b.pr?.state &&
     a.pr?.url === b.pr?.url &&
     a.pr?.title === b.pr?.title &&
-    a.pr?.ciStatus?.state === b.pr?.ciStatus?.state &&
+    a.pr?.baseRef === b.pr?.baseRef &&
+    ciStatusEqual(a.pr?.ciStatus, b.pr?.ciStatus) &&
     a.issue?.ref.number === b.issue?.ref.number &&
     a.issue?.title === b.issue?.title
   );
