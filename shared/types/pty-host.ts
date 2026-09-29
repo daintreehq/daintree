@@ -342,7 +342,7 @@ export type PtyHostRequest =
   | { type: "get-terminals-for-project"; projectId: string; requestId: string }
   | { type: "get-terminal"; id: string; requestId: string; submissionToken?: string }
   | { type: "replay-history"; id: string; maxLines: number; requestId: string }
-  | { type: "get-serialized-state"; id: string; requestId: string }
+  | { type: "get-serialized-state"; id: string; requestId: string; tailRows?: number }
   | {
       type: "init-buffers";
       visualBuffers: SharedArrayBuffer[];

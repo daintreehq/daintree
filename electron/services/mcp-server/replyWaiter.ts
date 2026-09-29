@@ -6,7 +6,9 @@ import {
   type NoticeReply,
   type NotifyStateChange,
   type NotifyTerminalInfo,
+  REPLY_SEARCH_ROWS,
 } from "./terminalNotify.js";
+import { readTailSnapshot } from "../../../shared/utils/artifactParser.js";
 
 /**
  * Blocking replies (`waitForReply`): a send or launch that holds its MCP call
@@ -56,7 +58,10 @@ export interface AwaitedReply {
 
 export interface ReplyWaiterPtyClient {
   getTerminalAsync(id: string): Promise<NotifyTerminalInfo | null>;
-  getSerializedStateAsync?(id: string): Promise<{ data: string } | null>;
+  getSerializedStateAsync?(
+    id: string,
+    options?: { tailRows: number }
+  ): Promise<{ data: string; partial?: true } | null>;
   on(event: "exit", listener: (id: string, exitCode: number) => void): unknown;
   off(event: "exit", listener: (id: string, exitCode: number) => void): unknown;
 }
@@ -244,7 +249,11 @@ export class ReplyWaiterService {
     }
     let reply: NoticeReply | null = null;
     if (outcome !== "closed" && lines > 0 && client?.getSerializedStateAsync) {
-      const snapshot = await client.getSerializedStateAsync(terminalId).catch(() => null);
+      const getState = client.getSerializedStateAsync.bind(client);
+      const snapshot = await readTailSnapshot(
+        (options) => getState(terminalId, options),
+        REPLY_SEARCH_ROWS
+      ).catch(() => null);
       if (snapshot !== null) {
         const endAt =
           handback === undefined

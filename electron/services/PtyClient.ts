@@ -124,7 +124,10 @@ import {
   type PowerPolicyLevel,
 } from "../../shared/types/powerPolicy.js";
 import { getPowerPolicy } from "../window/powerPolicy.js";
-import type { SerializedTerminalSnapshot } from "../../shared/types/terminal.js";
+import type {
+  SerializeReadOptions,
+  SerializedTerminalSnapshot,
+} from "../../shared/types/terminal.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
 import type { TerminalHandback } from "../../shared/types/handback.js";
@@ -2643,13 +2646,21 @@ export class PtyClient extends EventEmitter {
    * @param id - Terminal identifier
    * @returns Serialized state string or null if terminal not found
    */
-  async getSerializedStateAsync(id: string): Promise<SerializedTerminalSnapshot | null> {
+  async getSerializedStateAsync(
+    id: string,
+    options?: SerializeReadOptions
+  ): Promise<SerializedTerminalSnapshot | null> {
     const shard = this.shardForTerminal(id);
     // Extended timeout for large terminals with lots of scrollback (see PTY_TIMEOUTS).
     const promise = sendPtyHostRpc<SerializedTerminalSnapshot | null>(
       shard,
       `serialize-${id}`,
-      (requestId) => ({ type: "get-serialized-state", id, requestId }),
+      (requestId) => ({
+        type: "get-serialized-state",
+        id,
+        requestId,
+        ...(options?.tailRows !== undefined ? { tailRows: options.tailRows } : {}),
+      }),
       { method: "get-serialized-state", timeoutMs: PTY_TIMEOUTS["get-serialized-state"] }
     );
     return promise.catch(() => {

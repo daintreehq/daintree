@@ -55,6 +55,7 @@ import type {
 import {
   isUsableTerminalGeometry,
   isValidTerminalGeometry,
+  type SerializeReadOptions,
   type SerializedTerminalSnapshot,
 } from "../../shared/types/terminal.js";
 import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
@@ -1017,12 +1018,15 @@ export class PtyManager extends EventEmitter {
   /**
    * Get serialized terminal state (async, uses worker for large terminals).
    */
-  async getSerializedStateAsync(id: string): Promise<SerializedTerminalSnapshot | null> {
+  async getSerializedStateAsync(
+    id: string,
+    options?: SerializeReadOptions
+  ): Promise<SerializedTerminalSnapshot | null> {
     const terminal = this.registry.get(id);
     if (!terminal) {
       return null;
     }
-    return terminal.getSerializedStateAsync();
+    return terminal.getSerializedStateAsync(options);
   }
 
   private resolveTtyPath(pid: number): string | undefined {

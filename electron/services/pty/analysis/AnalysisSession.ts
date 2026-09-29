@@ -41,7 +41,10 @@ import type {
   AnalysisMonitorStartSpec,
   WorkerToHostMessage,
 } from "../analysisWorkerProtocol.js";
-import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
+import type {
+  SerializeReadOptions,
+  SerializedTerminalSnapshot,
+} from "../../../../shared/types/terminal.js";
 
 // Mirrors AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS in TerminalProcess: floor between
 // agent-output content comparisons.
@@ -354,8 +357,14 @@ export class AnalysisSession {
     };
   }
 
-  serialize(): Promise<SerializedTerminalSnapshot | null> {
+  serialize(options?: SerializeReadOptions): Promise<SerializedTerminalSnapshot | null> {
+    const tailRows = options?.tailRows;
     return this.drainThen(() => {
+      if (tailRows !== undefined) {
+        const [data, partial] = this.serializeTail(tailRows);
+        const tail = this.withGeometry(data);
+        return tail && partial ? { ...tail, partial: true } : tail;
+      }
       const snapshot = this.withGeometry(this.serializeFull());
       // Read in the same drain callback as the serialize, so the tail and the
       // screen describe the same parsed prefix of the stream.
@@ -486,6 +495,22 @@ export class AnalysisSession {
         resolve(fn());
       });
     });
+  }
+
+  // Newest `tailRows` scrollback rows plus the screen. `partial` is reported so
+  // a caller whose tail came up short can fall back to a whole-buffer read.
+  private serializeTail(tailRows: number): [string | null, boolean] {
+    const addon = this.serializeAddon;
+    const terminal = this.headlessTerminal;
+    if (!addon || !terminal) return [null, false];
+    try {
+      const rows = Math.max(0, Math.floor(tailRows));
+      const partial = terminal.buffer.normal.length > rows + terminal.rows;
+      return [addon.serialize({ scrollback: rows }), partial];
+    } catch (error) {
+      console.error(`[AnalysisSession] Failed to serialize ${this.terminalId}:`, error);
+      return [null, false];
+    }
   }
 
   private serializeFull(): string | null {

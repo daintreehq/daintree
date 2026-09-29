@@ -1349,8 +1349,10 @@ function buildElectronApi(): ElectronAPI {
       replayHistory: (terminalId: string, maxLines?: number) =>
         _unwrappingInvoke(CHANNELS.TERMINAL_REPLAY_HISTORY, { terminalId, maxLines }),
 
-      getSerializedState: (terminalId: string) =>
-        _unwrappingInvoke(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, terminalId),
+      getSerializedState: (terminalId: string, options?: { tailRows?: number }) =>
+        options === undefined
+          ? _unwrappingInvoke(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, terminalId)
+          : _unwrappingInvoke(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, terminalId, options),
 
       getSerializedStates: (terminalIds: string[]) =>
         _unwrappingInvoke(CHANNELS.TERMINAL_GET_SERIALIZED_STATES, terminalIds),

@@ -6,7 +6,10 @@ import type {
   AnalysisFinalCapture,
   MonitorStartOptions,
 } from "./AnalysisBackend.js";
-import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
+import type {
+  SerializeReadOptions,
+  SerializedTerminalSnapshot,
+} from "../../../../shared/types/terminal.js";
 import type {
   AnalysisChunkFlags,
   AnalysisFinalSnapshot,
@@ -90,7 +93,11 @@ export interface WorkerBackendSpec {
 export interface AnalysisPoolHost {
   /** Returns true when the message was actually handed to a live worker. */
   post(terminalId: string, msg: HostToWorkerMessage): boolean;
-  request(terminalId: string, op: AnalysisRequestOp): Promise<AnalysisRequestResult>;
+  request(
+    terminalId: string,
+    op: AnalysisRequestOp,
+    tailRows?: number
+  ): Promise<AnalysisRequestResult>;
   unregister(terminalId: string): void;
 }
 
@@ -435,10 +442,10 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     return this.cursorLine;
   }
 
-  async serialize(): Promise<SerializedTerminalSnapshot | null> {
+  async serialize(options?: SerializeReadOptions): Promise<SerializedTerminalSnapshot | null> {
     if (this.inactive()) return null;
     const flushed = this.flushHeldFeed();
-    const result = await this.pool.request(this.spec.terminalId, "serialize");
+    const result = await this.pool.request(this.spec.terminalId, "serialize", options?.tailRows);
     const snapshot = asSnapshot(result);
     if (!snapshot || (flushed && !this.continuityLost)) return snapshot;
     // Held output the worker never received is missing from this snapshot.

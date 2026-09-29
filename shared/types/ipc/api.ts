@@ -68,7 +68,7 @@ import type {
   SemanticSearchMatch,
 } from "./terminal.js";
 import type { AppVersionInfo } from "./app.js";
-import type { SerializedTerminalSnapshot } from "../terminal.js";
+import type { SerializeReadOptions, SerializedTerminalSnapshot } from "../terminal.js";
 import type {
   SaveArtifactOptions,
   SaveArtifactResult,
@@ -333,7 +333,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     reconnect(terminalId: string): Promise<TerminalReconnectResult>;
     reconnectBulk(terminalIds: string[]): Promise<Record<string, TerminalReconnectResult>>;
     replayHistory(terminalId: string, maxLines?: number): Promise<{ replayed: number }>;
-    getSerializedState(terminalId: string): Promise<SerializedTerminalSnapshot | null>;
+    getSerializedState(
+      terminalId: string,
+      options?: SerializeReadOptions
+    ): Promise<SerializedTerminalSnapshot | null>;
     getSerializedStates(
       terminalIds: string[]
     ): Promise<Record<string, SerializedTerminalSnapshot | null>>;

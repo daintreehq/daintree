@@ -373,3 +373,30 @@ export function tailCapturedOutput(
   }
   return { content, lineCount: selected.length, truncated };
 }
+
+/**
+ * Scrollback rows to request for a tail of `lines` normalized lines. Twice the
+ * lines leaves room for the blank rows and wrapped rows normalization drops;
+ * `readTailSnapshot` reads again in full when even that comes up short.
+ */
+export function tailRowsFor(lines: number): number {
+  return Math.max(1, Math.floor(lines)) * 2;
+}
+
+/**
+ * Read a snapshot for a last-`lines` consumer without serializing the whole
+ * scrollback. A capped read stands in for the full one only when it still holds
+ * more than `lines` normalized lines: the tail then sits wholly inside it, so
+ * the result is identical. Anything shorter is re-read in full.
+ */
+export async function readTailSnapshot<T extends { data: string; partial?: true }>(
+  read: (options?: { tailRows: number }) => Promise<T | null>,
+  lines: number
+): Promise<T | null> {
+  const capped = await read({ tailRows: tailRowsFor(lines) });
+  if (capped === null || capped.partial !== true) return capped;
+  const limit = Math.max(1, Math.floor(lines));
+  const normalized = normalizeCapturedOutput(capped.data);
+  if (normalized.length > 0 && normalized.split("\n").length > limit) return capped;
+  return read();
+}

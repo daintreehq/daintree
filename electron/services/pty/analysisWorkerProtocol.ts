@@ -86,6 +86,8 @@ export type HostToWorkerMessage =
       terminalId: string;
       op: AnalysisRequestOp;
       generation: number;
+      /** `serialize` only: cap the read to this many scrollback rows. */
+      tailRows?: number;
     };
 
 export interface AnalysisFinalSnapshot {

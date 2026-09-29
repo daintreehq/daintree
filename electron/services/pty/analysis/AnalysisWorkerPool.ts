@@ -171,7 +171,11 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
     }
   }
 
-  request(terminalId: string, op: AnalysisRequestOp): Promise<AnalysisRequestResult> {
+  request(
+    terminalId: string,
+    op: AnalysisRequestOp,
+    tailRows?: number
+  ): Promise<AnalysisRequestResult> {
     const slot = this.assignments.get(terminalId);
     if (this.disposed || !slot?.alive || !slot.worker) {
       return Promise.resolve(emptyResult(op));
@@ -187,7 +191,14 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
       const generation = slot.generation;
       this.pending.set(requestId, { resolve, timer, slotIndex: slot.index, op, generation });
       try {
-        slot.worker!.postMessage({ type: "request", requestId, terminalId, op, generation });
+        slot.worker!.postMessage({
+          type: "request",
+          requestId,
+          terminalId,
+          op,
+          generation,
+          ...(tailRows !== undefined ? { tailRows } : {}),
+        });
         slot.lastActivityAt = Date.now();
       } catch (error) {
         clearTimeout(timer);
