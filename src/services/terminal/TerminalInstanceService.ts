@@ -3360,24 +3360,32 @@ class TerminalInstanceService {
 
   applyGlobalOptions(options: Partial<Terminal["options"]>): void {
     const textMetricKeys = ["fontSize", "fontFamily", "lineHeight", "letterSpacing", "fontWeight"];
-    const textMetricsChanged = textMetricKeys.some((key) => key in options);
+    const entries = Object.entries(options);
 
     this.instances.forEach((managed, id) => {
-      Object.entries(options).forEach(([key, value]) => {
+      // The global sync always carries theme + font keys, and mounted terminals
+      // have usually received the same values from XtermAdapter already. Diff
+      // per instance against what xterm holds so an unchanged font does not
+      // refit (forced layout + PTY resize RPC) every terminal on a theme change,
+      // and an unchanged theme does not force an extra full repaint.
+      const changedKeys = entries.filter(
+        ([key, value]) => Reflect.get(managed.terminal.options, key) !== value
+      );
+      for (const [key, value] of changedKeys) {
         // @ts-expect-error xterm options are indexable
         managed.terminal.options[key] = value;
-      });
+      }
       // Same rationale as updateOptions: re-clamp cursorBlink so a global
       // theme/font change doesn't silently re-enable the blink timer on
       // backgrounded plain terminals.
       this.applyCursorBlinkPolicy(managed);
 
-      if (textMetricsChanged) {
+      if (changedKeys.some(([key]) => textMetricKeys.includes(key))) {
         managed.lastWidth = 0;
         managed.lastHeight = 0;
         this.resizeController.fit(id);
       }
-      if ("theme" in options) {
+      if (changedKeys.some(([key]) => key === "theme")) {
         managed.terminal.refresh(0, managed.terminal.rows - 1);
       }
     });

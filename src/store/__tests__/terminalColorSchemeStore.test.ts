@@ -539,6 +539,18 @@ describe("terminalColorSchemeStore", () => {
       expect(third).toEqual(first);
     });
 
+    it("invalidates the cache when colour-vision mode changes", () => {
+      // The unknown-scheme fallback reads CSS variables that colour-vision mode
+      // rewrites, so a mode change must yield a freshly computed object.
+      useTerminalColorSchemeStore.setState({ selectedSchemeId: "no-such-scheme" });
+      const first = selectEffectiveTheme(useTerminalColorSchemeStore.getState());
+      expect(selectEffectiveTheme(useTerminalColorSchemeStore.getState())).toBe(first);
+
+      useAppThemeStore.setState({ colorVisionMode: "red-green" });
+
+      expect(selectEffectiveTheme(useTerminalColorSchemeStore.getState())).not.toBe(first);
+    });
+
     it("getEffectiveTheme returns app-preview theme when app preview is active", () => {
       // Set terminal to dracula
       useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
