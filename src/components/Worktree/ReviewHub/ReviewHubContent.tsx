@@ -49,7 +49,7 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { hasKeyModifier, stepListboxCursor } from "@/hooks/useListboxCursor";
+import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 import { basename, join } from "@shared/utils/path";
 import {
   isFileRowMenuKey,
@@ -1745,6 +1745,9 @@ export function ReviewHubContent({
     // The file list is collapsed — no rows are visible, so don't let keys mutate
     // the index or fire stage/unstage/open-diff on rows the user can't see.
     if (!fileListExpanded) return;
+    // The base-branch comparison swaps the working-tree list out; its rows are
+    // not on screen to step through, open or stage.
+    if (diffMode !== "working-tree") return;
     if (navigableItems.length === 0) return;
 
     // Shift+F10 / the ContextMenu key open the focused row's menu. The rows
@@ -1799,7 +1802,7 @@ export function ReviewHubContent({
     };
 
     // A persistent file list, so the arrows stop at its ends rather than wrap.
-    const next = hasKeyModifier(e)
+    const next = keyBelongsToField(e)
       ? null
       : stepListboxCursor(e.key, focusedIndex, navigableItems.length, { wrap: false });
     if (next !== null) {

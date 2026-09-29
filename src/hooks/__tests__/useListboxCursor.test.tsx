@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import {
-  hasKeyModifier,
+  keyBelongsToField,
   stepListboxCursor,
   useListboxCursor,
   type ListboxCursorKeyEvent,
@@ -243,12 +243,26 @@ describe("stepListboxCursor", () => {
   });
 });
 
-describe("hasKeyModifier", () => {
-  it("reports any of the four modifiers", () => {
-    const bare = { shiftKey: false, metaKey: false, ctrlKey: false, altKey: false };
-    expect(hasKeyModifier(bare)).toBe(false);
+describe("keyBelongsToField", () => {
+  const bare = { shiftKey: false, metaKey: false, ctrlKey: false, altKey: false };
+
+  it("leaves a modified key to the field", () => {
+    expect(keyBelongsToField(bare)).toBe(false);
     for (const k of ["shiftKey", "metaKey", "ctrlKey", "altKey"] as const) {
-      expect(hasKeyModifier({ ...bare, [k]: true })).toBe(true);
+      expect(keyBelongsToField({ ...bare, [k]: true })).toBe(true);
     }
+  });
+
+  it("leaves a composing key to the IME, from a React or a native event", () => {
+    expect(keyBelongsToField({ ...bare, nativeEvent: { isComposing: true, keyCode: 0 } })).toBe(
+      true
+    );
+    expect(keyBelongsToField({ ...bare, nativeEvent: { isComposing: false, keyCode: 229 } })).toBe(
+      true
+    );
+    expect(keyBelongsToField({ ...bare, isComposing: true })).toBe(true);
+    expect(keyBelongsToField({ ...bare, nativeEvent: { isComposing: false, keyCode: 35 } })).toBe(
+      false
+    );
   });
 });

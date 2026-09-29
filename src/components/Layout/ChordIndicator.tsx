@@ -17,6 +17,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { KbdChord } from "@/components/ui/Kbd";
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
+import { keyBelongsToField } from "@/hooks/useListboxCursor";
 
 const LIST_ID = "command-hud-listbox";
 const OPTION_ID_PREFIX = "command-hud-option";
@@ -188,6 +189,14 @@ export function ChordIndicator() {
           e.preventDefault();
           selectPrevious();
           break;
+        // First and last, as in every other palette. Shift+Home selects the
+        // query instead, and an empty list leaves the keys to the caret.
+        case "Home":
+        case "End":
+          if (keyBelongsToField(e) || results.length === 0) break;
+          e.preventDefault();
+          setSelectedIndex(e.key === "Home" ? 0 : results.length - 1);
+          break;
         case "Enter":
           e.preventDefault();
           runSelected();
@@ -198,7 +207,7 @@ export function ChordIndicator() {
           break;
       }
     },
-    [selectNext, selectPrevious, runSelected, close]
+    [selectNext, selectPrevious, runSelected, close, results.length, setSelectedIndex]
   );
 
   if (!shouldRender) return null;

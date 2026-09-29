@@ -1058,6 +1058,46 @@ describe("useRecipeRunner — keyboard model", () => {
     expect(result.current.focusedItemId).toBe("recipe-option-gamma");
   });
 
+  it("wraps the arrows at the ends, jumps with Home/End, and leaves Shift+End to the field", () => {
+    recipes.push(
+      makeRecipe({ id: "alpha", name: "Alpha" }),
+      makeRecipe({ id: "beta", name: "Beta" }),
+      makeRecipe({ id: "gamma", name: "Gamma" })
+    );
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    const { container } = render(
+      <div tabIndex={0} onKeyDown={(e) => result.current.handleKeyDown(e)} />
+    );
+    const press = (key: string) => {
+      act(() => {
+        fireEvent.keyDown(container.firstChild!, { key });
+      });
+    };
+    const first = "recipe-option-alpha";
+    const last = "recipe-option-create";
+    expect(result.current.focusedItemId).toBe(first);
+
+    press("ArrowUp");
+    expect(result.current.focusedItemId).toBe(last);
+    press("ArrowDown");
+    expect(result.current.focusedItemId).toBe(first);
+
+    press("End");
+    expect(result.current.focusedItemId).toBe(last);
+    press("Home");
+    expect(result.current.focusedItemId).toBe(first);
+
+    let notConsumed = false;
+    act(() => {
+      notConsumed = fireEvent.keyDown(container.firstChild!, { key: "End", shiftKey: true });
+    });
+    expect(notConsumed).toBe(true);
+    expect(result.current.focusedItemId).toBe(first);
+  });
+
   it("exposes the create option id when focusedIndex is at the trailing button", () => {
     recipes.push(makeRecipe({ id: "alpha", name: "Alpha" }));
 

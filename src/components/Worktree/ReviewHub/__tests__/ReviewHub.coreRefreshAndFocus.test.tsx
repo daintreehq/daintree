@@ -898,6 +898,28 @@ describe("ReviewHub", () => {
       expect(screen.queryByLabelText("Commit message")).toBeNull();
     });
 
+    it("leaves the file-list keys alone while the base-branch comparison is showing", async () => {
+      HTMLElement.prototype.scrollIntoView = vi.fn();
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      act(() => {
+        fireEvent.click(screen.getByRole("radio", { name: /vs main/i }));
+      });
+      await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalled());
+
+      for (const key of ["End", "ArrowDown", " "]) {
+        let notConsumed = false;
+        act(() => {
+          notConsumed = fireEvent.keyDown(document, { key });
+        });
+        expect(notConsumed).toBe(true);
+      }
+      await act(async () => {});
+      expect(stageFileMock).not.toHaveBeenCalled();
+      expect(unstageFileMock).not.toHaveBeenCalled();
+    });
+
     it("resets to working-tree mode when closed and reopened", async () => {
       const { rerender } = render(
         <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />

@@ -253,6 +253,27 @@ describe("IssuePickerDialog keyboard contract", () => {
     expect(active()).toContain("One");
   });
 
+  it("leaves the navigation keys to the field while the loading skeleton shows", async () => {
+    vi.useFakeTimers();
+    try {
+      listIssuesMock.mockResolvedValue({ items: [makeIssue(1, "One"), makeIssue(2, "Two")] });
+      renderDialog();
+      // Loaded, but still inside the skeleton's minimum dwell: no list on screen.
+      await flush();
+      expect(listIssuesMock).toHaveBeenCalled();
+      expect(screen.queryByRole("listbox")).toBeNull();
+
+      expect(fireEvent.keyDown(input(), { key: "End" })).toBe(true);
+      expect(fireEvent.keyDown(input(), { key: "ArrowDown" })).toBe(true);
+
+      await flush(FIRST_PAINT_MS);
+      expect(screen.getByRole("listbox")).toBeTruthy();
+      expect(fireEvent.keyDown(input(), { key: "End" })).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("moves the cursor to the row the pointer is over, so only one row is highlighted", async () => {
     listIssuesMock.mockResolvedValue({ items: [makeIssue(1, "One"), makeIssue(2, "Two")] });
     renderDialog();

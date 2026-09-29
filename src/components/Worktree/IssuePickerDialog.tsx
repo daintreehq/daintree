@@ -19,7 +19,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { pluralize } from "@/lib/pluralize";
-import { hasKeyModifier, stepListboxCursor } from "@/hooks/useListboxCursor";
+import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 
 interface IssuePickerDialogProps {
   isOpen: boolean;
@@ -223,7 +223,11 @@ export function IssuePickerDialog({
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
-    const next = hasKeyModifier(e) ? null : stepListboxCursor(e.key, selectedIndex, issues.length);
+    // Rows held behind the loading skeleton are not a list to step through yet.
+    const next =
+      keyBelongsToField(e) || !hasResults
+        ? null
+        : stepListboxCursor(e.key, selectedIndex, issues.length);
     if (next !== null) {
       e.preventDefault();
       setSelectedIndex(next);

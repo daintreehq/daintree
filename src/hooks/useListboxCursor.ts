@@ -92,17 +92,30 @@ export function stepListboxCursor(
 }
 
 /**
- * Whether a key arrived with a modifier. The list steps on bare keys only:
- * Shift+Home selects the field's text, Cmd+Arrow moves its caret, and a chord
- * belongs to whatever bound it.
+ * Whether a key belongs to the field rather than the list. The list steps on
+ * bare keys only: Shift+Home selects the field's text, Cmd+Arrow moves its
+ * caret, a chord belongs to whatever bound it, and mid-composition every key is
+ * the IME's (Chromium can emit 229 before `isComposing` flips). Takes a React
+ * event or a native one.
  */
-export function hasKeyModifier(e: {
+export function keyBelongsToField(e: {
   shiftKey: boolean;
   metaKey: boolean;
   ctrlKey: boolean;
   altKey: boolean;
+  isComposing?: boolean;
+  keyCode?: number;
+  nativeEvent?: { isComposing: boolean; keyCode: number };
 }): boolean {
-  return e.shiftKey || e.metaKey || e.ctrlKey || e.altKey;
+  const native = e.nativeEvent ?? e;
+  return (
+    e.shiftKey ||
+    e.metaKey ||
+    e.ctrlKey ||
+    e.altKey ||
+    native.isComposing === true ||
+    native.keyCode === 229
+  );
 }
 
 /**

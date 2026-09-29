@@ -137,6 +137,32 @@ describe("usePrefixPicker — cursor across a changing list", () => {
   });
 });
 
+describe("usePrefixPicker — stepping rule", () => {
+  it("wraps the arrows at the ends, jumps with Home/End, and leaves Shift+End to the field", () => {
+    const p = renderPicker();
+    p.type("d");
+    const count = p.picker.prefixSuggestions.length;
+    expect(count).toBeGreaterThan(1);
+    const first = "prefix-option-0";
+    const last = `prefix-option-${count - 1}`;
+    const active = () => p.field.getAttribute("aria-activedescendant");
+    expect(active()).toBe(first);
+
+    expect(p.key("ArrowUp").defaultPrevented).toBe(true);
+    expect(active()).toBe(last);
+    p.key("ArrowDown");
+    expect(active()).toBe(first);
+
+    expect(p.key("End").defaultPrevented).toBe(true);
+    expect(active()).toBe(last);
+    expect(p.key("Home").defaultPrevented).toBe(true);
+    expect(active()).toBe(first);
+
+    expect(p.key("End", { shiftKey: true }).defaultPrevented).toBe(false);
+    expect(active()).toBe(first);
+  });
+});
+
 describe("usePrefixPicker — Tab and Enter only swallowed on a pick", () => {
   it("leaves Tab and Enter alone when the list is closed", () => {
     const p = renderPicker();

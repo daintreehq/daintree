@@ -313,6 +313,20 @@ describe("QuickRun", () => {
     expect(lit()).toBe(rows[0]);
   });
 
+  it("leaves End to the IME mid-composition while the list shows", () => {
+    seedHistory("npm test", "npm run lint", "ls -la");
+    render(<Footer projectId="test-project" />);
+    const input = openPanel();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    const rows = commandOptions();
+    const lit = () => document.getElementById(input.getAttribute("aria-activedescendant") ?? "");
+    expect(lit()).toBe(rows[0]);
+
+    expect(fireEvent.keyDown(input, { key: "End", isComposing: true })).toBe(true);
+    expect(fireEvent.keyDown(input, { key: "End", keyCode: 229 })).toBe(true);
+    expect(lit()).toBe(rows[0]);
+  });
+
   it("dismisses suggestions on Escape without leaving the field", () => {
     localStorage.setItem(
       "daintree_cmd_history_test-project",

@@ -37,7 +37,7 @@ import { classifyGitError, getGitRecoveryHint } from "@shared/utils/gitOperation
 import { logError } from "@/utils/logger";
 import type { GitCommit, GitPushCommitPreview } from "@shared/types/git";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
-import { hasKeyModifier, stepListboxCursor } from "@/hooks/useListboxCursor";
+import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 import { FORGE_DROPDOWN_PANEL_SIZE } from "./forgeStatsDropdownContract";
 
 // The commits pill's list (issue #10414). Commit history is local git data, not
@@ -834,7 +834,7 @@ export function LocalCommitsDropdown({
       // WebKit's first keydown, before `isComposing` is set.
       if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       // The Load more row is the list's last row; -1 is the search field itself.
-      const next = hasKeyModifier(e)
+      const next = keyBelongsToField(e)
         ? null
         : stepListboxCursor(e.key, cursorIndex, maxCursor + 1, { allowNone: true });
       if (next !== null) {

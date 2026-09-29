@@ -10,7 +10,7 @@ import {
   RotateCw,
 } from "lucide-react";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
-import { hasKeyModifier, stepListboxCursor } from "@/hooks/useListboxCursor";
+import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
@@ -614,7 +614,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // Down opens a shut list; the other navigation keys only move a list that is
     // showing, so Home and End keep the caret while it is shut. -1 is the field.
-    const navigable = !hasKeyModifier(e) && (listOpen || e.key === "ArrowDown");
+    const navigable = !keyBelongsToField(e) && (listOpen || e.key === "ArrowDown");
     const next = navigable
       ? stepListboxCursor(e.key, activeIndex, suggestions.length, { allowNone: true })
       : null;

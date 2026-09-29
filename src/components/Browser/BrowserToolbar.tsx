@@ -55,7 +55,7 @@ import { copyWithToast } from "@/lib/copyWithToast";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
-import { hasKeyModifier, stepListboxCursor } from "@/hooks/useListboxCursor";
+import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 import {
   getUiTransitionDuration,
   UI_ENTER_DURATION,
@@ -416,7 +416,7 @@ export function BrowserToolbar({
       if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       if (isDropdownOpen && suggestions.length > 0) {
         // -1 is the address as typed: Up from the first row returns to it.
-        const next = hasKeyModifier(e)
+        const next = keyBelongsToField(e)
           ? null
           : stepListboxCursor(e.key, highlightedIndex, suggestions.length, { allowNone: true });
         if (next !== null) {

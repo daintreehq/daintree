@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
+import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 
 interface SettingsSubjectPickerProps<T extends { id: string }> {
   /**
@@ -142,19 +143,18 @@ export function SettingsSubjectPicker<T extends { id: string }>({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    const next = keyBelongsToField(e) ? null : stepListboxCursor(e.key, cursor, items.length);
+    if (next !== null) {
+      // With nothing matched, Home and End stay with the caret.
+      if (noMatch && !e.key.startsWith("Arrow")) return;
+      e.preventDefault();
+      if (noMatch) return;
+      // The first arrow after a pointer opening starts from the page being shown.
+      const fromPointerOpen = cursor < 0 && e.key.startsWith("Arrow") && currentIndex >= 0;
+      setCursor(fromPointerOpen ? currentIndex : next);
+      return;
+    }
     switch (e.key) {
-      case "ArrowDown":
-      case "ArrowUp": {
-        e.preventDefault();
-        if (noMatch) return;
-        const step = e.key === "ArrowDown" ? 1 : -1;
-        setCursor((prev) => {
-          // The first arrow after a pointer opening starts from the page being shown.
-          if (prev < 0) return currentIndex >= 0 ? currentIndex : step > 0 ? 0 : items.length - 1;
-          return Math.min(Math.max(prev + step, 0), items.length - 1);
-        });
-        break;
-      }
       case "Enter": {
         const item = cursor >= 0 ? items[cursor] : undefined;
         if (item) {

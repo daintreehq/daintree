@@ -187,6 +187,37 @@ describe("ThemeBrowser", () => {
     expect(useAppThemeStore.getState().previewSchemeId).toBe(expectedNext?.id);
   });
 
+  it("holds the arrows at the list's ends and jumps with Home/End, leaving the field's Home/End to the caret", () => {
+    render(<Harness />);
+
+    const list = screen.getByRole("listbox", { name: "Theme list" });
+    const search = screen.getByLabelText("Filter themes");
+    const rows = screen.getAllByRole("option");
+    const first = rows[0]!.id;
+    const last = rows[rows.length - 1]!.id;
+    expect(first).not.toBe(last);
+    const active = () => search.getAttribute("aria-activedescendant");
+
+    fireEvent.keyDown(list, { key: "End" });
+    expect(active()).toBe(last);
+    fireEvent.keyDown(list, { key: "ArrowDown" });
+    expect(active()).toBe(last);
+
+    fireEvent.keyDown(list, { key: "Home" });
+    expect(active()).toBe(first);
+    fireEvent.keyDown(list, { key: "ArrowUp" });
+    expect(active()).toBe(first);
+
+    expect(fireEvent.keyDown(list, { key: "End", shiftKey: true })).toBe(true);
+    expect(active()).toBe(first);
+
+    expect(fireEvent.keyDown(search, { key: "End" })).toBe(true);
+    expect(active()).toBe(first);
+    fireEvent.keyDown(list, { key: "End" });
+    expect(fireEvent.keyDown(search, { key: "Home" })).toBe(true);
+    expect(active()).toBe(last);
+  });
+
   it("switching the type filter reverts an active preview", () => {
     const target = otherDarkScheme();
     render(<Harness />);

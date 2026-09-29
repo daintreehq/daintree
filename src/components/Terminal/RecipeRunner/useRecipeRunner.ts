@@ -23,6 +23,7 @@ import {
   type RankedRecipe,
 } from "./recipeRunnerUtils";
 import type { TerminalRecipe, RecipeTerminal, RunCommand } from "@/types";
+import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 
 // Every missing terminal is one the user chose not to open at the panel-limit
 // confirm. They answered it a moment ago; a failure banner would blame the limit.
@@ -535,12 +536,10 @@ export function useRecipeRunner({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === "ArrowDown") {
+      const next = keyBelongsToField(e) ? null : stepListboxCursor(e.key, focusedIndex, totalItems);
+      if (next !== null) {
         e.preventDefault();
-        setFocusedIndex((prev) => (prev + 1) % totalItems);
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setFocusedIndex((prev) => (prev - 1 + totalItems) % totalItems);
+        setFocusedIndex(next);
       } else if (e.key === "Enter") {
         e.preventDefault();
         const flat = getFlatRecipes();
