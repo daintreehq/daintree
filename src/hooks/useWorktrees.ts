@@ -17,12 +17,23 @@ export interface UseWorktreesReturn {
   setActive: (id: string) => void;
 }
 
+// Store snapshots are immutable and replaced per worktree on change, so caching
+// by snapshot identity keeps every untouched worktree's normalized object
+// stable across Map updates — sidebar cards and other per-worktree consumers
+// then see unchanged props and skip re-rendering.
+const normalizedBySnapshot = new WeakMap<WorktreeSnapshot, WorktreeState>();
+
 function normalizeSnapshot(s: WorktreeSnapshot): WorktreeState {
-  return {
-    ...s,
-    worktreeChanges: s.worktreeChanges ?? null,
-    lastActivityTimestamp: s.lastActivityTimestamp ?? null,
-  } as WorktreeState;
+  let normalized = normalizedBySnapshot.get(s);
+  if (!normalized) {
+    normalized = {
+      ...s,
+      worktreeChanges: s.worktreeChanges ?? null,
+      lastActivityTimestamp: s.lastActivityTimestamp ?? null,
+    } as WorktreeState;
+    normalizedBySnapshot.set(s, normalized);
+  }
+  return normalized;
 }
 
 // Keyed by store Map identity so the normalize-clone + sort happens once per
@@ -63,6 +74,13 @@ function getNormalized(worktreeMap: Map<string, WorktreeSnapshot>): {
     normalizedCache.set(worktreeMap, cached);
   }
   return cached;
+}
+
+/** The normalized view of a store worktree Map, shared with `useWorktrees`. */
+export function getNormalizedWorktreeMap(
+  worktreeMap: Map<string, WorktreeSnapshot>
+): Map<string, WorktreeState> {
+  return getNormalized(worktreeMap).normalizedMap;
 }
 
 // Stable sentinel for gated consumers — getNormalized caches per Map identity,

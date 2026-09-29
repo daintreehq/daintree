@@ -1137,12 +1137,18 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     onOpenRecipeEditor: handleOpenRecipeEditor,
   });
 
-  const sortableIds = useMemo(
-    () => filteredWorktrees.map((w) => getWorktreeSortDragId(w.id)),
-    [filteredWorktrees]
+  // `filteredWorktrees` gets a new identity on every worktree update, even when
+  // only one card's status changed. Keying the id order on its content keeps
+  // `dragStartOrder` and dnd-kit's `SortableContext` items stable across those
+  // updates, so the memoized rows (and every sortable card) skip re-rendering.
+  // NUL can't occur in a worktree id, so the join is unambiguous.
+  const worktreeOrderKey = filteredWorktrees.map((w) => w.id).join("\0");
+  const dragStartOrder = useMemo(
+    () => (worktreeOrderKey === "" ? [] : worktreeOrderKey.split("\0")),
+    [worktreeOrderKey]
   );
+  const sortableIds = useMemo(() => dragStartOrder.map(getWorktreeSortDragId), [dragStartOrder]);
 
-  const dragStartOrder = useMemo(() => filteredWorktrees.map((w) => w.id), [filteredWorktrees]);
   useEffect(() => {
     dragStartOrderRef.current = dragStartOrder;
   }, [dragStartOrder]);
