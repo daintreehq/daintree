@@ -207,12 +207,28 @@ function forgetRow(id: string): void {
   holdStartedAt.delete(id);
 }
 
-export function resetDeletedWorktreeCleanupState(): void {
+function forgetAllRows(): void {
   firedIds.clear();
   armedTtlMs.clear();
   heldRemaining.clear();
   holdStartedAt.clear();
+}
+
+export function resetDeletedWorktreeCleanupState(): void {
+  forgetAllRows();
   lastSweepAt = null;
+}
+
+/**
+ * The interval does not run while there are no rows, so nothing advances
+ * `lastSweepAt` across that stretch. Stamp it wherever an idle sweep would
+ * have: at any moment the view was observable. Left alone while cached or
+ * hidden, so a row that arrives then is still credited the unobserved time —
+ * possibly more of it than before, which only ever defers a deadline.
+ */
+function markIdleObservation(deps: SweepDeps = DEFAULT_DEPS): void {
+  if (deps.isViewCached() || deps.isViewHidden()) return;
+  lastSweepAt = deps.now();
 }
 
 function clampRemaining(remainingMs: number, ttlMs: number): number {
@@ -425,7 +441,8 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
 }
 
 /**
- * Start the 1 Hz cleanup sweep.
+ * Start the 1 Hz cleanup sweep. The interval only runs while there is at
+ * least one deleted-worktree row to count down.
  *
  * A cached project view keeps reporting `visibilityState === "visible"` while
  * main has it detached, hidden and (absent a live agent) frozen, so the
@@ -448,6 +465,9 @@ export function startDeletedWorktreeCleanup(): () => void {
     // A controller constructed during a cached window never receives a
     // `cached` phase, so the arm has to check the seeded state itself.
     if (isProjectViewCached()) return;
+    // Nearly every session has no deleted rows; a 1 Hz timer with nothing to
+    // count down is an idle wakeup a second for the life of the view.
+    if (useWorktreeSelectionStore.getState().deletedWorktrees.size === 0) return;
     interval = setInterval(() => sweepDeletedWorktreeCleanup(), DELETED_WORKTREE_SWEEP_INTERVAL_MS);
   };
 
@@ -473,6 +493,18 @@ export function startDeletedWorktreeCleanup(): () => void {
     if (phase === "revealed") sweepDeletedWorktreeCleanup();
   });
 
+  const offRows = useWorktreeSelectionStore.subscribe((state, prevState) => {
+    if (state.deletedWorktrees === prevState.deletedWorktrees) return;
+    if (state.deletedWorktrees.size > 0) {
+      if (prevState.deletedWorktrees.size === 0) markIdleObservation();
+      startSweeping();
+      return;
+    }
+    stopSweeping();
+    forgetAllRows();
+    markIdleObservation();
+  });
+
   const onVisibilityChange = () => {
     if (!document.hidden) sweepDeletedWorktreeCleanup();
   };
@@ -480,6 +512,7 @@ export function startDeletedWorktreeCleanup(): () => void {
 
   return () => {
     stopSweeping();
+    offRows();
     offViewLifecycle();
     document.removeEventListener("visibilitychange", onVisibilityChange);
   };

@@ -207,8 +207,10 @@ describe("startDeletedWorktreeCleanup view lifecycle", () => {
   it("owns exactly one interval across cache, repeated activation, and disposal", () => {
     // Asserted on timer ownership rather than on the deadline: an absolute
     // deadline is idempotent, so stacked intervals cannot be detected by
-    // watching how fast the countdown moves.
+    // watching how fast the countdown moves. A row is needed: with none there
+    // is nothing to sweep and no interval at all.
     const idle = vi.getTimerCount();
+    addRow();
     start();
     expect(vi.getTimerCount()).toBe(idle + 1);
 
