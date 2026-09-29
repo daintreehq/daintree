@@ -2106,12 +2106,21 @@ describe("HttpLifecycle", () => {
         const deps = fakeDeps();
         const { handle } = lifecycle(deps);
         const resetIdleTimer = vi.spyOn(deps.sessionStore, "resetIdleTimer");
+        const UNDICI_BODY_TIMEOUT_MS = 300_000;
         const { sessionId, streamRes } = await openSseSession(deps, handle, ELEVATED_AUTH);
         const { idleTimer } = deps.sessionStore.sessions.get(sessionId)!;
+        const byteTimes = [Date.now()];
+        streamRes.write.mockImplementation(() => {
+          byteTimes.push(Date.now());
+          return true;
+        });
 
-        vi.advanceTimersByTime(6 * 60 * 1000);
+        vi.advanceTimersByTime(3 * UNDICI_BODY_TIMEOUT_MS);
 
-        expect(keepalives(streamRes)).toBeGreaterThan(0);
+        const gaps = byteTimes.slice(1).map((t, i) => t - byteTimes[i]!);
+        expect(gaps.length).toBeGreaterThan(0);
+        expect(Math.max(...gaps)).toBeLessThan(UNDICI_BODY_TIMEOUT_MS);
+        expect(Date.now() - byteTimes.at(-1)!).toBeLessThan(UNDICI_BODY_TIMEOUT_MS);
         expect(resetIdleTimer).not.toHaveBeenCalled();
         expect(deps.sessionStore.sessions.get(sessionId)?.idleTimer).toBe(idleTimer);
       });
