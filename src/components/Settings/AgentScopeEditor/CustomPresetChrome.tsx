@@ -7,6 +7,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PresetColorPicker } from "../PresetColorPicker";
 import { SETTINGS_CONTROL_WIDTH, SettingsRow } from "../SettingsGroup";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
+import { inlineRenameFieldInputProps } from "@/components/Panel/inlineRenameField";
 import type { AgentPreset } from "@/config/agents";
 
 interface CustomPresetChromeProps {
@@ -41,11 +42,19 @@ export function CustomPresetChrome({
   onDuplicate,
 }: CustomPresetChromeProps) {
   const renameButtonRef = useRef<HTMLButtonElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
   // Enter and Escape unmount the input that has focus. Hand focus back to the
   // rename button then — but not after an ordinary blur, where the user already
   // put focus somewhere else on purpose.
   const restoreFocusRef = useRef(false);
   const errorId = useId();
+  // Select-all on entry, like every inline rename: a new name usually replaces
+  // the old one rather than extending it.
+  useEffect(() => {
+    if (!isEditing) return;
+    renameInputRef.current?.focus();
+    renameInputRef.current?.select();
+  }, [isEditing]);
   useEffect(() => {
     if (!isEditing && restoreFocusRef.current) {
       restoreFocusRef.current = false;
@@ -69,6 +78,8 @@ export function CustomPresetChrome({
             />
             {isEditing ? (
               <Input
+                ref={renameInputRef}
+                {...inlineRenameFieldInputProps}
                 density="compact"
                 // The title's own weight and size, so the row reads as the same
                 // name in edit mode; compact keeps the label row from jumping.
@@ -78,6 +89,8 @@ export function CustomPresetChrome({
                 onBlur={() => void onCommitEdit()}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
+                    // An Enter that confirms an IME composition is text entry.
+                    if (e.nativeEvent.isComposing) return;
                     e.preventDefault();
                     restoreFocusRef.current = true;
                     if (!onCommitEdit()) restoreFocusRef.current = false;
@@ -89,7 +102,6 @@ export function CustomPresetChrome({
                     onCancelEdit();
                   }
                 }}
-                autoFocus
                 aria-label="Preset name"
                 aria-invalid={renameError ? true : undefined}
                 aria-describedby={renameError ? errorId : undefined}
