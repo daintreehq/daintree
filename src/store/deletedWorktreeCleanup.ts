@@ -223,7 +223,7 @@ function clampRemaining(remainingMs: number, ttlMs: number): number {
  * The sweep is the one path that closes terminals with nobody watching: the
  * row vanishes and the trash TTL kills the PTYs seconds later, so a user who
  * stepped away would otherwise have no record it happened. The entry is only a
- * record — by the time anyone reads the inbox the terminals are gone, so it
+ * record — the inbox is usually read long after the trash window closes, so it
  * carries no restore action and its copy is past tense. Inbox-only — the event
  * is unattended by definition, so a toast would interrupt whatever the user
  * moved on to.
@@ -245,7 +245,7 @@ function notifySweepTrashed(swept: readonly SweptRow[]): void {
   if (swept.length === 0) return;
   const terminalCount = swept.reduce((n, row) => n + row.count, 0);
   const single = swept.length === 1 ? swept[0]! : null;
-  const where = single ? single.title : pluralize(swept.length, "deleted worktree");
+  const where = single ? single.title : pluralize(swept.length, "worktree");
   const message = `Closed ${pluralize(terminalCount, "terminal")} left open in ${where}.`;
   notify({
     type: "info",

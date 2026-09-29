@@ -328,10 +328,10 @@ describe("sweepDeletedWorktreeCleanup", () => {
     expect(payload.priority).toBe("low");
     expect(payload.type).toBe("info");
     expect(payload.title).toBe("Deleted worktree cleaned up");
-    // Past tense: the trash TTL has killed the PTYs long before anyone reads the inbox.
+    // Past tense: the inbox is usually read long after the trash TTL has killed the PTYs.
     expect(payload.message).toBe("Closed 2 terminals left open in feature/x.");
     expect(payload.context).toEqual({ worktreeId: "wt-1", eventKind: "agent" });
-    // No restore/undo — the terminals are gone by the time the entry is read.
+    // No restore/undo — the trash window is far shorter than inbox dwell time.
     expect(payload.action).toBeUndefined();
     expect(payload.actions).toBeUndefined();
   });
@@ -382,7 +382,7 @@ describe("sweepDeletedWorktreeCleanup", () => {
     const payload = vi.mocked(notify).mock.calls[0]![0];
     expect(payload.priority).toBe("low");
     expect(payload.title).toBe("Deleted worktrees cleaned up");
-    expect(payload.message).toBe("Closed 4 terminals left open in 3 deleted worktrees.");
+    expect(payload.message).toBe("Closed 4 terminals left open in 3 worktrees.");
     expect(payload.context?.eventKind).toBe("agent");
     expect(payload.action).toBeUndefined();
     expect(payload.actions).toBeUndefined();
