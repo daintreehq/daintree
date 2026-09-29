@@ -485,7 +485,7 @@ function CheckRows({
                 size="icon-xs"
                 onClick={() => onOpenExternal(detailsUrl)}
                 aria-label={labels.get(row.key)}
-                className="-my-1 transition-colors"
+                className="-my-1 [&_svg]:size-3.5"
               >
                 <ExternalLink aria-hidden="true" />
               </Button>

@@ -201,7 +201,7 @@ export function RecentCallsPopover({
                 {retry}
               </div>
             )}
-            <ul className="divide-y divide-border-subtle">
+            <ul className="divide-y divide-[var(--border-divider)]">
               {groups.map((group, index) => {
                 const headingId = `${baseId}-group-${index}`;
                 return (
@@ -224,7 +224,7 @@ export function RecentCallsPopover({
 
       {/* The popover is five calls by design; the rest of the history is one
           step away rather than something the user has to know to look for. */}
-      <div className="shrink-0 border-t border-border-subtle px-1 py-1">
+      <div className="shrink-0 border-t border-divider px-1 py-1">
         <button
           type="button"
           onClick={onOpenAuditLog}

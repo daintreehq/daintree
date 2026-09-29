@@ -31,6 +31,7 @@ const TITLED_POPOVER_FILES = [
   "src/components/Terminal/FindCodexSessionAction.tsx",
   "src/components/Terminal/TerminalNotifyChip.tsx",
   "src/components/HelpPanel/RecentCallsPopover.tsx",
+  "src/components/Fleet/FleetCountChip.tsx",
 ];
 
 /** Every popover this family covers, titled or not: the rules below hold in all of them. */
@@ -40,7 +41,6 @@ const POPOVER_FILES = [
   "src/components/Layout/LocalCommitsDropdown.tsx",
   "src/components/Worktree/WorktreeFilterPopover.tsx",
   "src/components/Project/ProjectIdentityEditor.tsx",
-  "src/components/Fleet/FleetCountChip.tsx",
   "src/components/Fleet/FleetPickerContent.tsx",
   "src/components/EventInspector/EventFilters.tsx",
 ];
@@ -65,6 +65,7 @@ const ROW_HOVER_FILES = [
   "src/components/Fleet/FleetCountChip.tsx",
   "src/components/Fleet/FleetPickerContent.tsx",
   "src/components/HelpPanel/RecentCallsPopover.tsx",
+  "src/components/EventInspector/EventFilters.tsx",
 ];
 
 describe("popover header contract", () => {
@@ -103,6 +104,7 @@ describe("popover header contract", () => {
       // heavier border ramp both drifted in as header and footer rules.
       expect(src, rel).not.toMatch(/border-\[var\(--border-divider\)\]/);
       expect(src, rel).not.toMatch(/border-[bt] border-border-default\b/);
+      expect(src, rel).not.toMatch(/\b(?:border|divide)-border-subtle\b|border-daintree-border/);
       // Title strips are `py-2`; a split `pt-2.5 pb-*` was the drift.
       expect(src, rel).not.toMatch(/\bpt-2\.5 pb-/);
     }
@@ -153,13 +155,17 @@ describe("popover header contract", () => {
       expect(src, rel).toContain("POPOVER_ROW_HOVER_CLASS");
       expect(src, rel).not.toMatch(/hover:bg-tint\/\[0\.0[0-9]\]/);
     }
-    expect(read("src/components/HelpPanel/RecentCallsPopover.tsx")).not.toMatch(
-      /hover:bg-overlay-soft/
-    );
+    for (const rel of [
+      "src/components/HelpPanel/RecentCallsPopover.tsx",
+      "src/components/EventInspector/EventFilters.tsx",
+    ]) {
+      expect(read(rel), rel).not.toMatch(/hover:bg-overlay-soft/);
+    }
   });
 
   it("an empty popover list is an EmptyState, not a hand-set sentence", () => {
     for (const rel of [
+      "src/components/Fleet/FleetCountChip.tsx",
       "src/components/Terminal/FindCodexSessionAction.tsx",
       "src/components/Terminal/SubagentChip.tsx",
       "src/components/HelpPanel/RecentCallsPopover.tsx",
@@ -168,7 +174,7 @@ describe("popover header contract", () => {
       const src = read(rel);
       expect(src, rel).toContain("<EmptyState");
       expect(src, rel).not.toMatch(
-        /<p\b[^>]*>\s*(No (other|messages|events)|Ask the assistant)[^<]*<\/p>/
+        /<p\b[^>]*>\s*(No (other|messages|events)|None|Ask the assistant)[^<]*<\/p>/
       );
     }
   });

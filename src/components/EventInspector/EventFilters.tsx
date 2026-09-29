@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { POPOVER_ROW_HOVER_CLASS } from "@/components/ui/popoverHeader";
 import { SearchField, clearSearchBeforeDismiss } from "@/components/ui/SearchField";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { Check, ListFilter } from "lucide-react";
@@ -283,7 +284,10 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
                       type="button"
                       aria-pressed={isChecked}
                       onClick={() => toggleTypeFilter(type)}
-                      className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-1 py-1 text-left hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-1 py-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
+                        POPOVER_ROW_HOVER_CLASS
+                      )}
                     >
                       <Check
                         aria-hidden="true"

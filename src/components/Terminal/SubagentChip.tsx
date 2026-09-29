@@ -5,6 +5,7 @@ import { Network } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Spinner } from "@/components/ui/Spinner";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
@@ -47,6 +48,8 @@ import {
 } from "@/components/ui/popoverHeader";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { pluralize } from "@/lib/pluralize";
+
+const TRANSCRIPT_SKELETON_WIDTHS = ["w-4/5", "w-3/5"] as const;
 
 const TONE_CLASSES: Record<"error" | "waiting" | "muted", string> = {
   error: "text-status-error",
@@ -233,15 +236,28 @@ function SubagentRow({
       <div id={panelId} hidden={!isOpen} className="px-3 pb-3 pl-8">
         {isOpen && (
           <>
-            {showSpinner && (
-              <span
-                className="mb-2 flex items-center gap-2 text-xs text-text-secondary"
-                role="status"
-              >
-                <Spinner size="sm" />
-                {transcript === null ? "Loading transcript" : "Loading newer messages"}
-              </span>
-            )}
+            {showSpinner &&
+              (transcript === null ? (
+                // The first read has nothing to show yet, so it holds the
+                // messages' own shape: a label over a line or two of text.
+                <Skeleton label="Loading transcript" className="flex flex-col gap-2">
+                  {TRANSCRIPT_SKELETON_WIDTHS.map((width) => (
+                    <div key={width} className="flex flex-col gap-1">
+                      <SkeletonBone immediate className="h-2.5 w-10" />
+                      <SkeletonBone immediate className={cn("h-3", width)} />
+                    </div>
+                  ))}
+                </Skeleton>
+              ) : (
+                // A refresh keeps the messages already read and says so beside them.
+                <span
+                  className="mb-2 flex items-center gap-2 text-xs text-text-secondary"
+                  role="status"
+                >
+                  <Spinner size="sm" />
+                  Loading newer messages
+                </span>
+              ))}
             {transcript !== null && (
               <TranscriptBody transcript={transcript} provider={provider} onRetry={retry} />
             )}
