@@ -190,6 +190,18 @@ export const PERF_MARKS = {
   RENDERER_CLS_SAMPLE: "renderer_cls_sample",
   RENDERER_CLS_FINAL: "renderer_cls_final",
 
+  /**
+   * Plugin view load, per open, each carrying `{ pluginId, kindId, retry }`.
+   * START is the attempt being created; ACTIVATED and IMPORTED close the
+   * `activateForView` and `import()` (+ styles) phases; FIRST_PAINT is the
+   * double-rAF after the view's first commit. The always-on product numbers
+   * come from `pluginViewMetrics`, not from these capture-gated marks.
+   */
+  PLUGIN_VIEW_LOAD_START: "plugin_view.load_start",
+  PLUGIN_VIEW_ACTIVATED: "plugin_view.activated",
+  PLUGIN_VIEW_IMPORTED: "plugin_view.imported",
+  PLUGIN_VIEW_FIRST_PAINT: "plugin_view.first_paint",
+
   // Per-WebContentsView preload evaluation cost (#9770). Captured in the
   // sandboxed preload and flushed via PERF_FLUSH_RENDERER_MARKS at preload
   // bottom; the main-process handler correlates each pair with its view via

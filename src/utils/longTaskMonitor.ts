@@ -1,5 +1,6 @@
 import { logWarn } from "./logger";
 import { isRendererPerfCaptureEnabled, markRendererPerformance, RENDERER_T0 } from "./performance";
+import { pluginViewMetrics, type PluginViewMetrics } from "@/services/plugin/pluginViewMetrics";
 
 const STARTUP_SUPPRESSION_MS = 5_000;
 const WARN_RATE_LIMIT_MS = 10_000;
@@ -56,6 +57,50 @@ function summarizeScripts(scripts: PerformanceScriptTiming[]): ScriptSummary[] {
     }));
 }
 
+/**
+ * Record a long animation frame against every plugin that was active in it.
+ *
+ * A script served from a plugin's `plugin://` origin names that plugin
+ * directly. React-scheduled render work runs from host chunks, though, so a
+ * plugin view's own render shows up under the app's URL — for those the frame
+ * is matched against the plugin's recent Profiler commit windows instead. Both
+ * are recorded as "the plugin was active", never as the cause. Every frame the
+ * browser reports is considered (Blink's floor is 50ms); the warning threshold
+ * below is about log noise, not about what counts as a long frame.
+ */
+export function attributeLongFrameToPlugins(
+  entry: PerformanceLongAnimationFrameTiming,
+  metrics: PluginViewMetrics = pluginViewMetrics
+): void {
+  if (!metrics.isTracking()) return;
+
+  const at = Math.round(
+    (typeof performance.timeOrigin === "number"
+      ? performance.timeOrigin
+      : Date.now() - performance.now()) + entry.startTime
+  );
+  const durationMs = entry.duration;
+  const blockingMs = entry.blockingDuration ?? 0;
+
+  let scriptPlugins: string[] | undefined;
+  for (const script of entry.scripts ?? []) {
+    const pluginId = script.sourceURL ? metrics.pluginIdForScriptUrl(script.sourceURL) : undefined;
+    if (!pluginId) continue;
+    scriptPlugins ??= [];
+    if (scriptPlugins.includes(pluginId)) continue;
+    scriptPlugins.push(pluginId);
+    metrics.recordLongFrame(pluginId, { durationMs, blockingMs, source: "script", at });
+  }
+
+  for (const pluginId of metrics.pluginsCommittingDuring(
+    entry.startTime,
+    entry.startTime + entry.duration
+  )) {
+    if (scriptPlugins?.includes(pluginId)) continue;
+    metrics.recordLongFrame(pluginId, { durationMs, blockingMs, source: "commit", at });
+  }
+}
+
 export function startLongTaskMonitor(thresholdMs = 100): () => void {
   if (typeof window === "undefined") {
     return () => {};
@@ -71,6 +116,8 @@ export function startLongTaskMonitor(thresholdMs = 100): () => void {
   try {
     observer = new PerformanceObserver((list) => {
       for (const entry of list.getEntries() as PerformanceLongAnimationFrameTiming[]) {
+        attributeLongFrameToPlugins(entry);
+
         const topScripts = summarizeScripts(entry.scripts ?? []);
         const topScript = topScripts[0];
 

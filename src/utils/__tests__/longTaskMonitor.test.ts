@@ -35,7 +35,8 @@ vi.mock("../performance", () => ({
 }));
 
 import { logWarn } from "../logger";
-import { startLongTaskMonitor } from "../longTaskMonitor";
+import { attributeLongFrameToPlugins, startLongTaskMonitor } from "../longTaskMonitor";
+import { createPluginViewMetrics, pluginViewMetrics } from "@/services/plugin/pluginViewMetrics";
 
 type ScriptFixture = {
   invoker?: string;
@@ -390,5 +391,101 @@ describe("startLongTaskMonitor", () => {
     startLongTaskMonitor(100);
     emitLoafEntry({ duration: 150 });
     expect(mockMarkRendererPerformance).not.toHaveBeenCalled();
+  });
+});
+
+describe("attributeLongFrameToPlugins", () => {
+  afterEach(() => {
+    pluginViewMetrics.reset();
+    vi.restoreAllMocks();
+  });
+
+  it("does nothing once no plugin view is mounted", () => {
+    const metrics = createPluginViewMetrics();
+    metrics.registerViewOrigin("acme", "plugin://acme/v.js");
+    metrics.retainView("acme")();
+    const recordLongFrame = vi.spyOn(metrics, "recordLongFrame");
+    attributeLongFrameToPlugins(
+      makeLoafEntry({
+        duration: 200,
+        scripts: [{ duration: 150, sourceURL: "plugin://acme/v.js" }],
+      }),
+      metrics
+    );
+    expect(recordLongFrame).not.toHaveBeenCalled();
+  });
+
+  it("attributes a frame to the plugin whose plugin:// script ran in it", () => {
+    const metrics = createPluginViewMetrics();
+    metrics.retainView("acme");
+    metrics.registerViewOrigin("acme", "plugin://acme/__dtv-1/view.js");
+    attributeLongFrameToPlugins(
+      makeLoafEntry({
+        duration: 120,
+        blockingDuration: 70,
+        startTime: 5000,
+        scripts: [
+          { duration: 40, sourceURL: "app://daintree/assets/index.js" },
+          { duration: 60, sourceURL: "plugin://acme/__dtv-1/view.js" },
+          { duration: 10, sourceURL: "plugin://acme/__dtv-1/chunk.js" },
+        ],
+      }),
+      metrics
+    );
+    const [report] = metrics.drainReports();
+    expect(report!.pluginId).toBe("acme");
+    expect(report!.longFrames).toEqual([
+      { durationMs: 120, blockingMs: 70, source: "script", at: expect.any(Number) },
+    ]);
+  });
+
+  it("falls back to commit-window overlap for host-scheduled render work", () => {
+    const metrics = createPluginViewMetrics();
+    metrics.retainView("acme");
+    metrics.recordCommit("acme", 30, 1010, 1040);
+    metrics.recordCommit("beta", 5, 3000, 3005);
+    metrics.drainReports();
+    attributeLongFrameToPlugins(
+      makeLoafEntry({
+        duration: 100,
+        blockingDuration: 50,
+        startTime: 1000,
+        scripts: [{ duration: 90, sourceURL: "app://daintree/assets/react-dom.js" }],
+      }),
+      metrics
+    );
+    const reports = metrics.drainReports();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]!.pluginId).toBe("acme");
+    expect(reports[0]!.longFrames[0]!.source).toBe("commit");
+  });
+
+  it("records a plugin once per frame, preferring its script over a commit overlap", () => {
+    const metrics = createPluginViewMetrics();
+    metrics.retainView("acme");
+    metrics.registerViewOrigin("acme", "plugin://acme/view.js");
+    metrics.recordCommit("acme", 30, 1010, 1040);
+    metrics.drainReports();
+    attributeLongFrameToPlugins(
+      makeLoafEntry({
+        duration: 100,
+        startTime: 1000,
+        scripts: [{ duration: 90, sourceURL: "plugin://acme/view.js" }],
+      }),
+      metrics
+    );
+    const [report] = metrics.drainReports();
+    expect(report!.longFrames.map((f) => f.source)).toEqual(["script"]);
+  });
+
+  it("runs from the observer without changing the warning behaviour", () => {
+    vi.mocked(logWarn).mockClear();
+    pluginViewMetrics.retainView("acme");
+    pluginViewMetrics.recordCommit("acme", 30, 10, 40);
+    pluginViewMetrics.drainReports();
+    startLongTaskMonitor(100);
+    emitLoafEntry({ duration: 80, startTime: 0 });
+    expect(logWarn).not.toHaveBeenCalled();
+    expect(pluginViewMetrics.drainReports()[0]!.longFrames).toHaveLength(1);
   });
 });
