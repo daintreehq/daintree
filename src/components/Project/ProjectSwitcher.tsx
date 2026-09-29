@@ -40,7 +40,8 @@ export function ProjectSwitcher() {
   const workspaceIdentity = activeWorkspaceIdentity(currentProject, currentScratch);
   const isLoading = useProjectStore((state) => state.isLoading);
   const showLoadingSpinner = useDohertyGate(isLoading);
-  const projectSwitcher = useProjectSwitcherPalette();
+  // Its trigger badge counts agents with the switcher closed.
+  const projectSwitcher = useProjectSwitcherPalette({ liveStatsWhileClosed: true });
   const projectSwitcherShortcut = useEffectiveCombo("project.switcherPalette");
   const projectSwitcherAriaShortcut = useAriaKeyshortcuts("project.switcherPalette");
   const isDropdownOpen = projectSwitcher.isOpen && projectSwitcher.mode === "dropdown";

@@ -111,6 +111,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentity";
 import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
+import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
@@ -717,6 +718,12 @@ export function Toolbar({
   const { entry: forgeProviderEntry } = useResolvedForgeProvider(currentProject?.id ?? null);
   const forgeProviderName = forgeProviderEntry?.contribution.name ?? null;
   const projectSwitcher = projectSwitcherPalette;
+  // Read from the store rather than `projectSwitcher.activeProject`, whose
+  // counts are held while the switcher is closed — which is when this pill's
+  // menu opens.
+  const activeProjectHasProcesses = useProjectStatsStore((state) =>
+    currentProject ? (state.stats[currentProject.id]?.processCount ?? 0) > 0 : false
+  );
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const activeWorktree = useWorktreeStore((state) =>
@@ -2567,7 +2574,7 @@ export function Toolbar({
                         <Settings data-menu-icon className="mr-2 h-3.5 w-3.5" />
                         Project settings…
                       </ContextMenuItem>
-                      {activeSearchableProject && activeSearchableProject.processCount > 0 && (
+                      {activeSearchableProject && activeProjectHasProcesses && (
                         <ContextMenuItem
                           destructive
                           onSelect={() => handleStopProject(currentProject.id)}
