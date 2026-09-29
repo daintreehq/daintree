@@ -15,7 +15,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { compareProjectsByMode, type OtherProjectsSortMode } from "@/lib/projectSort";
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { notify } from "@/lib/notify";
-import { copyPathWithFeedback } from "@/lib/copyPathFeedback";
+import { copyWithToast } from "@/lib/copyWithToast";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { logError } from "@/utils/logger";
@@ -2076,7 +2076,7 @@ export function useProjectSwitcherPalette({
   );
 
   const copyPath = useCallback(
-    (path: string) => copyPathWithFeedback(copyToClipboard, path),
+    (path: string) => copyWithToast("Path", path, { write: copyToClipboard }),
     [copyToClipboard]
   );
 
