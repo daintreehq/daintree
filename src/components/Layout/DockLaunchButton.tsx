@@ -1,4 +1,15 @@
-import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  Fragment,
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { ChevronRight, Keyboard, Pin, Plug, Plus, Settings2, SquareTerminal } from "lucide-react";
@@ -17,7 +28,11 @@ import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/
 import { BrandMark, Workflow } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
-import { agentStateDotColor, STATE_LABELS } from "@/components/Worktree/terminalStateConfig";
+import {
+  agentStateDotColor,
+  STATE_LABELS,
+  type AttentionAgentState,
+} from "@/components/Worktree/terminalStateConfig";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { comboToAriaKeyshortcuts, describeChord, labelWithShortcut } from "@/lib/kbdShortcut";
@@ -224,10 +239,6 @@ export function DockLaunchButton({
   const { newAgentIds, showDiscoveryBadge, readyAgentIds, markAgentsSeen, recordAgentFirstSeen } =
     useLauncherDiscovery(agentAvailability);
 
-  const agentAttentionStates = usePanelStore(
-    useShallow((s) => deriveAgentAttentionStates(s.panelsById, s.panelIds, activeWorktreeId))
-  );
-
   // Re-probe on view visibility changes (Electron LRU reactivation, tab
   // switches). The window-focus trigger is handled once globally in
   // useAgentLauncher; both paths share the 30s throttle in the store. Only the
@@ -249,9 +260,13 @@ export function DockLaunchButton({
     };
   }, [placement, refreshAvailability]);
 
-  // Fold per-agent presentation onto the inventory the host supplied: presets,
-  // the running pip and the discovery cue all come from stores this component
-  // already subscribes to, so a host would only be relaying them.
+  // Fold per-agent presentation onto the inventory the host supplied: presets
+  // and the discovery cue come from stores this component already subscribes
+  // to, so a host would only be relaying them. The running pip deliberately
+  // stays out: it flips on every agent state change, and folding it in here
+  // rebuilt the model and the search index of both mounted launchers on each
+  // flip while their menus sat closed. The open menu reads it from
+  // `AgentAttentionProvider` instead.
   const enrichedAgents = useMemo<DockLaunchAgent[]>(
     () =>
       agents.map((agent) => {
@@ -274,19 +289,10 @@ export function DockLaunchButton({
                   savedPresetId
                 )
               : undefined,
-          attentionState: agentAttentionStates.get(agent.id) ?? null,
           isNew: newAgentIds.has(agent.id),
         };
       }),
-    [
-      activeWorktreeId,
-      agentAttentionStates,
-      agentSettings,
-      agents,
-      ccrPresetsByAgent,
-      newAgentIds,
-      projectPresetsByAgent,
-    ]
+    [activeWorktreeId, agentSettings, agents, ccrPresetsByAgent, newAgentIds, projectPresetsByAgent]
   );
 
   const model = useDockLaunchModel({
@@ -403,10 +409,9 @@ export function DockLaunchButton({
     ]
   );
 
-  const fuse = useMemo(
-    () => new Fuse(model.searchItems, DOCK_LAUNCH_FUSE_OPTIONS),
-    [model.searchItems]
-  );
+  // Built on the first query rather than per model: both launchers stay
+  // mounted with their menus closed, and most opens never search.
+  const getFuse = useMemo(() => lazyFuse(model.searchItems), [model.searchItems]);
 
   // The expansion is spliced into the row list BEFORE the palette hook sees it,
   // not into the rendered output afterwards: the flat array is the navigation
@@ -463,7 +468,7 @@ export function DockLaunchButton({
     (rows: DockLaunchRow[], nextQuery: string): DockLaunchRow[] => {
       const trimmed = nextQuery.trim();
       if (!trimmed) return rows;
-      const ranked = fuse
+      const ranked = getFuse()
         .search(trimmed)
         .slice(0, SEARCH_RESULT_CAP)
         .map(({ item }) => ({
@@ -474,7 +479,7 @@ export function DockLaunchButton({
         }));
       return insertExpandedPresetRows(ranked, expandedPresetParentKey);
     },
-    [expandedPresetParentKey, fuse]
+    [expandedPresetParentKey, getFuse]
   );
 
   const { query, results, selectedIndex, setQuery, setSelectedIndex, selectPrevious, selectNext } =
@@ -1066,83 +1071,112 @@ export function DockLaunchButton({
           />
         </AppPaletteDialog.Header>
 
-        <AppPaletteDialog.Body
-          // Anchored, so the budget is the room Radix reports on the opening
-          // side, less the header, rather than the centred dialog's 60vh — which
-          // clipped the footer in a short window with space still below it.
-          maxHeight="max-h-[min(40rem,calc(var(--radix-popover-content-available-height)-5.5rem))]"
-          // Browse gives the scrolling to the columns alone, so the footer
-          // below them is laid out rather than estimated: the body stops
-          // scrolling and hands its remaining height down a flex chain.
-          scrollClassName={isBrowsing ? "p-2 flex min-h-0 flex-col overflow-hidden" : undefined}
-          ariaLabel="Launcher results"
-          activeDescendant={activeDescendant}
-          onNavigationKeyDown={handleNavigationKeyDown}
-        >
-          {agentInventoryState === "loading" && (
-            // Before the first real availability result, "no agents installed"
-            // and "still detecting" are indistinguishable — say which it is
-            // rather than letting the list read as an empty agent inventory.
-            <div
-              data-testid="dock-launcher-loading"
-              className="px-2.5 py-1.5 text-xs text-text-secondary"
-            >
-              Checking agents…
-            </div>
-          )}
-          {results.length === 0 ? (
-            <AppPaletteDialog.Empty query={query} emptyMessage="Nothing to launch" />
-          ) : (
-            <div ref={setLayoutNode} className={cn(isBrowsing && "flex min-h-0 flex-1 flex-col")}>
+        <AgentAttentionProvider activeWorktreeId={activeWorktreeId}>
+          <AppPaletteDialog.Body
+            // Anchored, so the budget is the room Radix reports on the opening
+            // side, less the header, rather than the centred dialog's 60vh — which
+            // clipped the footer in a short window with space still below it.
+            maxHeight="max-h-[min(40rem,calc(var(--radix-popover-content-available-height)-5.5rem))]"
+            // Browse gives the scrolling to the columns alone, so the footer
+            // below them is laid out rather than estimated: the body stops
+            // scrolling and hands its remaining height down a flex chain.
+            scrollClassName={isBrowsing ? "p-2 flex min-h-0 flex-col overflow-hidden" : undefined}
+            ariaLabel="Launcher results"
+            activeDescendant={activeDescendant}
+            onNavigationKeyDown={handleNavigationKeyDown}
+          >
+            {agentInventoryState === "loading" && (
+              // Before the first real availability result, "no agents installed"
+              // and "still detecting" are indistinguishable — say which it is
+              // rather than letting the list read as an empty agent inventory.
               <div
-                id={listboxId}
-                role="listbox"
-                aria-label="Launcher results"
-                data-launcher-layout={isBrowsing ? "columns" : "list"}
-                className={cn(isBrowsing && "flex min-h-0 flex-1 flex-col")}
+                data-testid="dock-launcher-loading"
+                className="px-2.5 py-1.5 text-xs text-text-secondary"
               >
-                {isBrowsing ? (
-                  <>
-                    {/* The columns scroll; the footer below them does not, so
-                        Manage agents and Customize toolbar stay in view however
-                        long the agent list is. The columns take
-                        whatever height the body has left after the footer. */}
-                    <ScrollShadow role="none" className="min-h-0 flex-1">
-                      <div
-                        role="none"
-                        className={cn(
-                          "grid gap-x-3",
-                          twoColumns && "grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]"
-                        )}
-                      >
-                        <div role="none" data-launcher-column="start" className="min-w-0">
-                          {columns.start.map(renderRow)}
-                        </div>
-                        <div role="none" data-launcher-column="end" className="min-w-0">
-                          {columns.end.map(renderRow)}
-                        </div>
-                      </div>
-                    </ScrollShadow>
-                    {columns.footer.length > 0 && (
-                      <div
-                        role="none"
-                        data-launcher-column="footer"
-                        className="mt-1 flex shrink-0 flex-wrap gap-1 border-t border-divider pt-1"
-                      >
-                        {columns.footer.map(renderRow)}
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  results.map((row, index) => renderRow({ row, index }))
-                )}
+                Checking agents…
               </div>
-            </div>
-          )}
-        </AppPaletteDialog.Body>
+            )}
+            {results.length === 0 ? (
+              <AppPaletteDialog.Empty query={query} emptyMessage="Nothing to launch" />
+            ) : (
+              <div ref={setLayoutNode} className={cn(isBrowsing && "flex min-h-0 flex-1 flex-col")}>
+                <div
+                  id={listboxId}
+                  role="listbox"
+                  aria-label="Launcher results"
+                  data-launcher-layout={isBrowsing ? "columns" : "list"}
+                  className={cn(isBrowsing && "flex min-h-0 flex-1 flex-col")}
+                >
+                  {isBrowsing ? (
+                    <>
+                      {/* The columns scroll; the footer below them does not, so
+                          Manage agents and Customize toolbar stay in view however
+                          long the agent list is. The columns take
+                          whatever height the body has left after the footer. */}
+                      <ScrollShadow role="none" className="min-h-0 flex-1">
+                        <div
+                          role="none"
+                          className={cn(
+                            "grid gap-x-3",
+                            twoColumns && "grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]"
+                          )}
+                        >
+                          <div role="none" data-launcher-column="start" className="min-w-0">
+                            {columns.start.map(renderRow)}
+                          </div>
+                          <div role="none" data-launcher-column="end" className="min-w-0">
+                            {columns.end.map(renderRow)}
+                          </div>
+                        </div>
+                      </ScrollShadow>
+                      {columns.footer.length > 0 && (
+                        <div
+                          role="none"
+                          data-launcher-column="footer"
+                          className="mt-1 flex shrink-0 flex-wrap gap-1 border-t border-divider pt-1"
+                        >
+                          {columns.footer.map(renderRow)}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    results.map((row, index) => renderRow({ row, index }))
+                  )}
+                </div>
+              </div>
+            )}
+          </AppPaletteDialog.Body>
+        </AgentAttentionProvider>
       </AppPalettePopover.Content>
     </AppPalettePopover>
   );
+}
+
+/** Build the index on first use; `useMemo` re-mints the getter per item set. */
+function lazyFuse(items: DockLaunchItem[]): () => Fuse<DockLaunchItem> {
+  let fuse: Fuse<DockLaunchItem> | null = null;
+  return () => (fuse ??= new Fuse(items, DOCK_LAUNCH_FUSE_OPTIONS));
+}
+
+const NO_ATTENTION: ReadonlyMap<string, AttentionAgentState | null> = new Map();
+const AgentAttentionContext = createContext(NO_ATTENTION);
+
+/**
+ * The running pip's subscription, scoped to the open menu. Popover content is
+ * unmounted while closed, so agent state churn never reaches a closed launcher,
+ * and while open it re-renders the rows without touching the model.
+ */
+function AgentAttentionProvider({
+  activeWorktreeId,
+  children,
+}: {
+  activeWorktreeId: string | null;
+  children: ReactNode;
+}) {
+  const states = usePanelStore(
+    useShallow((s) => deriveAgentAttentionStates(s.panelsById, s.panelIds, activeWorktreeId))
+  );
+  return <AgentAttentionContext.Provider value={states}>{children}</AgentAttentionContext.Provider>;
 }
 
 /** Content width below which the two columns fold into one. */
@@ -1292,7 +1326,7 @@ function DockLaunchCaptureRow({ row, onDone }: { row: DockLaunchRow; onDone: () 
   );
 }
 
-function RunningDot({ state }: { state: NonNullable<DockLaunchAgent["attentionState"]> | null }) {
+function RunningDot({ state }: { state: AttentionAgentState | null }) {
   const color = state ? agentStateDotColor(state) : null;
   return (
     <span
@@ -1338,6 +1372,8 @@ function DockLaunchOption({
 }: DockLaunchOptionProps) {
   const item = row.kind === "cue" ? undefined : row.item;
   const agent = item?.category === "agent" ? item.agent : undefined;
+  const attentionStates = useContext(AgentAttentionContext);
+  const attentionState = agent ? (attentionStates.get(agent.id) ?? null) : null;
   // Only a built-in agent's own row: presets share the agent's binding, and a
   // plugin agent has no `agent.<id>` action to bind at all.
   const shortcutAgentId = rowShortcutAgentId(row);
@@ -1539,9 +1575,7 @@ function DockLaunchOption({
     originLabel,
     // The corner pip is aria-hidden, so the state it draws is spoken here, on
     // the same gate — worded like the overflow badge's "1 agent waiting".
-    row.kind === "item" && agent?.attentionState
-      ? `Agent ${STATE_LABELS[agent.attentionState]}`
-      : undefined,
+    row.kind === "item" && attentionState ? `Agent ${STATE_LABELS[attentionState]}` : undefined,
     isRecent ? "Recent" : undefined,
     launchOutcome ? `Launches ${launchOutcome}` : undefined,
     agent?.isNew ? "New" : undefined,
@@ -1665,7 +1699,7 @@ function DockLaunchOption({
             )}
           </span>
         )}
-        <DockLaunchOptionIcon row={row} />
+        <DockLaunchOptionIcon row={row} attentionState={attentionState} />
         {/* `min-w-0 flex-1`: the name is the query the user came here with, and
             it takes the width the row can spare rather than yielding to whatever
             metadata sits beside it.
@@ -1848,7 +1882,13 @@ const DOCK_LAUNCH_CUE_ICONS: Record<DockLaunchCueId, LucideIcon> = {
   "customize-toolbar": TOOLBAR_CUSTOMIZE_ICON,
 };
 
-function DockLaunchOptionIcon({ row }: { row: DockLaunchRow }) {
+function DockLaunchOptionIcon({
+  row,
+  attentionState,
+}: {
+  row: DockLaunchRow;
+  attentionState: AttentionAgentState | null;
+}) {
   if (row.kind === "cue") {
     const CueIcon = DOCK_LAUNCH_CUE_ICONS[row.cue];
     return <CueIcon className="w-3.5 h-3.5 mr-2 shrink-0" />;
@@ -1876,7 +1916,7 @@ function DockLaunchOptionIcon({ row }: { row: DockLaunchRow }) {
       ) : (
         <SquareTerminal className="w-3.5 h-3.5 shrink-0" />
       )}
-      {row.kind === "item" && <RunningDot state={agent.attentionState ?? null} />}
+      {row.kind === "item" && <RunningDot state={attentionState} />}
     </span>
   );
 }
