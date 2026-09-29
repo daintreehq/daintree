@@ -83,17 +83,17 @@ describe("McpAuditLogViewer on a minute tick", () => {
         onRefresh={vi.fn()}
       />
     );
-    expect(ageOf("fresh.tool")).toBe("10s ago");
-    expect(ageOf("old.tool")).toBe("3h ago");
+    expect(ageOf("fresh.tool")).toBe("10 seconds ago");
+    expect(ageOf("old.tool")).toBe("3 hours ago");
     timeRenders.count = 0;
     advance(60_000);
-    expect(ageOf("fresh.tool")).toBe("1m ago");
-    expect(ageOf("old.tool")).toBe("3h ago");
+    expect(ageOf("fresh.tool")).toBe("1 minute ago");
+    expect(ageOf("old.tool")).toBe("3 hours ago");
     // Only the row whose label moved re-rendered.
     expect(timeRenders.count).toBe(1);
     advance(3_600_000);
-    expect(ageOf("fresh.tool")).toBe("1h ago");
-    expect(ageOf("old.tool")).toBe("4h ago");
+    expect(ageOf("fresh.tool")).toBe("1 hour ago");
+    expect(ageOf("old.tool")).toBe("4 hours ago");
   });
 
   it("clears a row's anomaly marker when its signal expires, though its age holds", () => {
@@ -115,7 +115,7 @@ describe("McpAuditLogViewer on a minute tick", () => {
     const row = () => screen.getByText("flagged.tool").closest("li")!;
     expect(row().querySelector('[aria-label="Anomaly (warning)"]')).not.toBeNull();
     advance(60_000);
-    expect(ageOf("flagged.tool")).toBe("3h ago");
+    expect(ageOf("flagged.tool")).toBe("3 hours ago");
     expect(row().querySelector('[aria-label="Anomaly (warning)"]')).toBeNull();
   });
 

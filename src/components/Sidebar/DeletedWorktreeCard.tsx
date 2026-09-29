@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState, type MouseEvent } from "react";
+import { formatPath } from "@/utils/textParsing";
 import { FolderX, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
@@ -22,6 +23,8 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 interface DeletedWorktreeCardProps {
   worktree: DeletedWorktree;
+  /** Collapses the home directory to "~" in the path line; fetched once by the sidebar. */
+  homeDir?: string;
   /**
    * Grouped cards hide their own trash button (#11260) — the group's single
    * bulk clear replaces N per-row ones, which is the point of grouping. A
@@ -47,6 +50,7 @@ interface DeletedWorktreeCardProps {
  */
 export function DeletedWorktreeCard({
   worktree,
+  homeDir,
   showDismissAction = true,
 }: DeletedWorktreeCardProps) {
   const panelsById = usePanelStore((s) => s.panelsById);
@@ -242,9 +246,12 @@ export function DeletedWorktreeCard({
             branch name down to a few characters, and the name is what says
             which worktree this is. */}
         <div className="mt-0.5 flex items-center gap-2">
-          <TruncatedTooltip content={worktree.path}>
-            <div className="min-w-0 flex-1 truncate text-xs text-text-muted line-through">
-              {worktree.path}
+          <TruncatedTooltip
+            content={worktree.path}
+            isTruncated={formatPath(worktree.path, homeDir) !== worktree.path || undefined}
+          >
+            <div className="min-w-0 flex-1 truncate font-mono text-xs text-text-muted line-through">
+              {formatPath(worktree.path, homeDir)}
             </div>
           </TruncatedTooltip>
           {hold !== undefined && (

@@ -14,7 +14,7 @@ import {
   AuditFilterSelect,
   AuditRecordTime,
   AuditTimeRangeSelect,
-  formatAuditAge,
+  auditAgeLabel,
   type AuditTimeRange,
 } from "./auditLogParts";
 import {
@@ -412,8 +412,8 @@ function sameRowOutput(prev: LogRowProps, next: LogRowProps): boolean {
     prev.record === next.record &&
     prev.anomaly === next.anomaly &&
     (prev.now === next.now ||
-      formatAuditAge(prev.record.timestamp, prev.now) ===
-        formatAuditAge(next.record.timestamp, next.now))
+      auditAgeLabel(prev.record.timestamp, prev.now) ===
+        auditAgeLabel(next.record.timestamp, next.now))
   );
 }
 

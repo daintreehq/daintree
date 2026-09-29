@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
 import type { ProjectPulse } from "@shared/types";
 import {
   GitCommit,
@@ -21,7 +22,7 @@ interface PulseSummaryProps {
 interface StatProps {
   icon: ReactNode;
   value: number | string;
-  label: string;
+  label: ReactNode;
   highlight?: boolean;
   className?: string;
   // StreakFlame carries its own tier color; defaulting to true keeps neutral
@@ -111,7 +112,12 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
           <Stat
             icon={<FilePenLine className="w-3.5 h-3.5 text-status-info" />}
             value={pluralize(pulse.uncommitted!.changedFiles, "file")}
-            label={`+${pulse.uncommitted!.insertions ?? 0}/-${pulse.uncommitted!.deletions ?? 0}`}
+            label={
+              <DiffStat
+                insertions={pulse.uncommitted!.insertions}
+                deletions={pulse.uncommitted!.deletions}
+              />
+            }
           />
         )}
       </div>
@@ -149,12 +155,10 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
             </div>
           )}
 
-          {(pulse.deltaToMain!.insertions ?? 0) > 0 && (
-            <span className="font-mono text-status-success">+{pulse.deltaToMain!.insertions}</span>
-          )}
-          {(pulse.deltaToMain!.deletions ?? 0) > 0 && (
-            <span className="font-mono text-status-error">-{pulse.deltaToMain!.deletions}</span>
-          )}
+          <DiffStat
+            insertions={pulse.deltaToMain!.insertions}
+            deletions={pulse.deltaToMain!.deletions}
+          />
         </div>
       )}
     </div>

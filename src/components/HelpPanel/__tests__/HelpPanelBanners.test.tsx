@@ -326,8 +326,8 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
     expect(queryByTestId("help-grant-active-banner")).toBeNull();
   });
 
-  it("renders the tool id and a mm:ss countdown derived from expiresAt", () => {
-    // 2 min 5 s out — ceil keeps it at 2:0x even with a few ms of render lag.
+  it("renders the tool id and a unit countdown derived from expiresAt", () => {
+    // 2 min 5 s out — ceil keeps it at 2m 0-5s even with a few ms of render lag.
     const { getByTestId } = render(
       <HelpPanelBanners
         {...baseProps()}
@@ -344,7 +344,7 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
     const text = banner.textContent ?? "";
     expect(text).toContain("search_docs");
     // The displayed remaining time is derived, not a hardcoded literal.
-    expect(text).toMatch(/2:0\d/);
+    expect(text).toMatch(/2m( [1-5]s)? left/);
   });
 
   it("shows a smaller remaining time for a nearer expiry (countdown is computed)", () => {
@@ -360,10 +360,10 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
       />
     );
     const text = getByTestId("help-grant-active-banner").textContent ?? "";
-    expect(text).toMatch(/0:0[45]/);
+    expect(text).toMatch(/(^|\D)[45]s left/);
   });
 
-  it("clamps a past expiry to 0:00 rather than rendering a negative timer", () => {
+  it("clamps a past expiry to 0s rather than rendering a negative timer", () => {
     const { getByTestId } = render(
       <HelpPanelBanners
         {...baseProps()}
@@ -375,7 +375,7 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
         }}
       />
     );
-    expect(getByTestId("help-grant-active-banner").textContent).toContain("0:00");
+    expect(getByTestId("help-grant-active-banner").textContent).toContain("0s left");
   });
 
   it("ticks the countdown down over time and stops after unmount (no leak)", () => {
@@ -388,12 +388,12 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
           activeGrant={{ sessionId: "s1", toolId: "t1", ttlMs: 900_000, expiresAt: base + 5_000 }}
         />
       );
-      expect(getByTestId("help-grant-active-banner").textContent).toContain("0:05");
+      expect(getByTestId("help-grant-active-banner").textContent).toContain("5s left");
       // Advance both wall-clock and the interval so the derived value updates.
       act(() => {
         vi.advanceTimersByTime(2_000);
       });
-      expect(getByTestId("help-grant-active-banner").textContent).toContain("0:03");
+      expect(getByTestId("help-grant-active-banner").textContent).toContain("3s left");
       // Unmount must clear the interval — advancing further is a no-op, not a
       // post-unmount state update.
       unmount();

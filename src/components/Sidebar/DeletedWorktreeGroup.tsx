@@ -59,6 +59,7 @@ interface GroupMember {
 
 interface DeletedWorktreeGroupProps {
   worktrees: DeletedWorktree[];
+  homeDir?: string;
 }
 
 /**
@@ -77,7 +78,7 @@ interface DeletedWorktreeGroupProps {
  * `origin: "accordion"` drag data a card's terminal row does and `DndProvider`
  * needs no knowledge of this component at all.
  */
-export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
+export function DeletedWorktreeGroup({ worktrees, homeDir }: DeletedWorktreeGroupProps) {
   const panelsById = usePanelStore((s) => s.panelsById);
   const panelIdsByWorktreeId = usePanelStore((s) => s.panelIdsByWorktreeId);
   const setFocused = usePanelStore((s) => s.setFocused);
@@ -241,7 +242,12 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
 
       {isExpanded ? (
         members.map(({ worktree }) => (
-          <DeletedWorktreeCard key={worktree.id} worktree={worktree} showDismissAction={false} />
+          <DeletedWorktreeCard
+            key={worktree.id}
+            worktree={worktree}
+            homeDir={homeDir}
+            showDismissAction={false}
+          />
         ))
       ) : (
         <SortableContext

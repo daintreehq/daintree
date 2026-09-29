@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { ChevronDown, X, Eye, RotateCw } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -25,13 +26,6 @@ function deriveTaskStatus(t: PtyPanelData): TaskStatus {
     return t.exitCode === 0 ? "success" : "failed";
   }
   return "running";
-}
-
-function formatElapsed(ms: number): string {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 /**
@@ -338,7 +332,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
           command to a letter at the 200px floor. */}
       {status === "running" && (
         <span className="text-3xs text-text-secondary tabular-nums shrink-0 group-hover:hidden group-focus-within:hidden">
-          {formatElapsed(elapsed)}
+          {formatElapsedDuration(elapsed)}
         </span>
       )}
       {/* Failure in words, where the elapsed time sat while it ran. A red dot

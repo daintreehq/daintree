@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { formatTimeAgo } from "../timeAgo";
+import { formatAbsoluteDate, formatLastChecked, formatTimeAgo } from "../timeAgo";
 
 describe("formatTimeAgo", () => {
   afterEach(() => {
@@ -36,11 +36,19 @@ describe("formatTimeAgo", () => {
     expect(formatTimeAgo("garbage|data")).toBe("Unknown");
   });
 
-  it("returns a locale date string for timestamps older than 30 days", () => {
+  it("falls back to a short month-day date past 30 days, never a numeric date", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2024-03-15T12:00:00Z"));
     const result = formatTimeAgo("2024-01-15T12:00:00Z");
-    expect(result).toBe(new Date("2024-01-15T12:00:00Z").toLocaleDateString());
+    expect(result).toBe(formatAbsoluteDate(Date.parse("2024-01-15T12:00:00Z"), Date.now()));
+    expect(result).not.toMatch(/^\d+[/.-]\d+/);
+    expect(result).not.toMatch(/ago$/);
+  });
+
+  it("adds the year only when the date is outside the current one", () => {
+    const now = Date.parse("2024-03-15T12:00:00Z");
+    expect(formatAbsoluteDate(Date.parse("2024-01-15T12:00:00Z"), now)).not.toMatch(/2024/);
+    expect(formatAbsoluteDate(Date.parse("2023-01-15T12:00:00Z"), now)).toMatch(/2023/);
   });
 
   describe("numeric epoch ms input", () => {
@@ -72,16 +80,26 @@ describe("formatTimeAgo", () => {
       expect(formatTimeAgo(now.getTime() - 5 * 86_400_000)).toBe("5d ago");
     });
 
-    it("returns a locale date string for epoch ms older than 30 days", () => {
+    it("returns the short date for epoch ms older than 30 days", () => {
       vi.useFakeTimers();
       const now = new Date("2024-03-15T12:00:00Z");
       vi.setSystemTime(now);
       const oldDate = new Date("2024-01-15T12:00:00Z");
-      expect(formatTimeAgo(oldDate.getTime())).toBe(oldDate.toLocaleDateString());
+      expect(formatTimeAgo(oldDate.getTime())).toBe(
+        formatAbsoluteDate(oldDate.getTime(), now.getTime())
+      );
     });
 
     it("returns 'Unknown' for NaN input", () => {
       expect(formatTimeAgo(NaN)).toBe("Unknown");
+    });
+  });
+
+  describe("formatLastChecked", () => {
+    it("is the compact age behind one fixed prefix, with no trailing period", () => {
+      const now = Date.parse("2024-01-15T12:05:00Z");
+      const label = formatLastChecked(now - 5 * 60_000, now);
+      expect(label).toMatch(/^Last checked \d+m ago$/);
     });
   });
 });

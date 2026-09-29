@@ -8,6 +8,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 import { PaneState } from "@/components/ui/PaneState";
 import { useShallow } from "zustand/react/shallow";
 import { Plug, RotateCcw, Hourglass, Folders, XCircle } from "lucide-react";
@@ -1559,23 +1560,12 @@ function TerminalPaneComponent({
           }}
           descriptionExtras={
             injectionStatus === "injecting" ? (
-              <div
-                role="progressbar"
-                aria-label="Context injection"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={Math.round(
-                  Math.min(Math.max((injectionProgress?.progress ?? 0) * 100, 0), 100)
-                )}
-                className="mt-1.5 h-0.5 w-full overflow-hidden rounded-full bg-overlay-soft"
-              >
-                <div
-                  className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
-                  style={{
-                    width: `${Math.min(Math.max((injectionProgress?.progress ?? 0) * 100, 0), 100)}%`,
-                  }}
-                />
-              </div>
+              <ProgressBar
+                label="Context injection"
+                value={Math.round((injectionProgress?.progress ?? 0) * 100)}
+                size="thin"
+                className="mt-1.5"
+              />
             ) : undefined
           }
         />

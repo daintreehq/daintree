@@ -3,6 +3,7 @@ import {
   getCachedStagingStatus,
   rememberStagingStatus,
 } from "./stagingStatusCache";
+import { DiffStat } from "@/components/ui/DiffStat";
 import {
   useCallback,
   useDeferredValue,
@@ -2164,10 +2165,10 @@ export function ReviewHubContent({
                           {(baseBranchChurn.ins > 0 || baseBranchChurn.del > 0) && (
                             <>
                               {" "}
-                              <span className="text-status-success">
-                                +{baseBranchChurn.ins}
-                              </span>{" "}
-                              <span className="text-status-error">-{baseBranchChurn.del}</span>
+                              <DiffStat
+                                insertions={baseBranchChurn.ins}
+                                deletions={baseBranchChurn.del}
+                              />
                             </>
                           )}
                         </span>

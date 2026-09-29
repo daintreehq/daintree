@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { formatCountdown } from "@/utils/formatCountdown";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { Callout } from "@/components/ui/Callout";
@@ -235,18 +236,6 @@ const TIER_RANK: Record<HelpAssistantTier, number> = {
   core: 0,
   full: 1,
 };
-
-// Format a whole-seconds grant countdown as "Xm Ys" / "Xm" / "Ys". Exported
-// for unit coverage of the boundary cases (sub-minute, exact minute, mixed).
-export function formatGrantRemaining(totalSeconds: number): string {
-  const safe = Math.max(0, Math.floor(totalSeconds));
-  if (safe >= 60) {
-    const minutes = Math.floor(safe / 60);
-    const seconds = safe % 60;
-    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
-  }
-  return `${safe}s`;
-}
 
 function groupToolsByNamespace(tools: readonly string[]): Array<[string, string[]]> {
   const groups = new Map<string, string[]>();
@@ -1799,7 +1788,7 @@ function GrantCountdown({ expiresAt }: { expiresAt: number }) {
   const remainingMs = expiresAt - now;
   return (
     <span role="timer" className="font-mono text-text-secondary tabular-nums shrink-0">
-      {remainingMs <= 0 ? "expiring" : `expires in ${formatGrantRemaining(remainingMs / 1000)}`}
+      {remainingMs <= 0 ? "expiring" : `${formatCountdown(remainingMs / 1000)} left`}
     </span>
   );
 }

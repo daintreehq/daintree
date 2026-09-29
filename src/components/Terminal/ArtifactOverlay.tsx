@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useId, useRef, type ReactNode } from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
 import {
   Check,
   ChevronRight,
@@ -244,13 +245,12 @@ function PatchDiffLines({ content }: { content: string }) {
 function PatchStats({ content, className }: { content: string; className?: string }) {
   const { additions, deletions } = getPatchStats(content);
   return (
-    <span
-      className={cn("font-mono text-xs tabular-nums shrink-0", className)}
+    <DiffStat
+      insertions={additions}
+      deletions={deletions}
+      className={cn("text-xs shrink-0", className)}
       aria-label={`${additions} added, ${deletions} removed`}
-    >
-      <span className="text-diff-gutter-insert">+{additions}</span>{" "}
-      <span className="text-diff-gutter-delete">−{deletions}</span>
-    </span>
+    />
   );
 }
 

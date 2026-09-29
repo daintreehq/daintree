@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { formatBytes } from "@/lib/formatBytes";
 import { InlineError } from "@/components/ui/field";
 import { Image, Upload, FolderInput, Palette } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -569,7 +570,7 @@ export function GeneralTab({
                         {iconPreview}
                       </div>
                       <p className="flex-1 min-w-0 text-xs text-text-secondary">
-                        Custom icon · {Math.round(new Blob([projectIconSvg]).size / 1024)}KB
+                        Custom icon · {formatBytes(new Blob([projectIconSvg]).size)}
                       </p>
                       <Button
                         variant="outline"

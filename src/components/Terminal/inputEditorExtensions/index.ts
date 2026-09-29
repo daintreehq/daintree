@@ -12,7 +12,6 @@ export {
   createContentAttributes,
   createComboboxAttributes,
   createPlainPasteKeymap,
-  formatFileSize,
   minimalDocChange,
   removeChipRange,
 } from "./base";

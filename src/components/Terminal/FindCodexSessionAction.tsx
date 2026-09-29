@@ -1,4 +1,5 @@
 import { useCallback, useId, useState, type ReactNode } from "react";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { useShallow } from "zustand/react/shallow";
 import { Search, RefreshCw } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -12,7 +13,6 @@ import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { buildResumeCommand } from "@shared/types";
 import { reconcileResumeLaunchFlags } from "@/services/agentResume";
-import { formatTimeAgo } from "@/utils/timeAgo";
 import { logWarn, logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { codexClient } from "@/clients/codexClient";
@@ -340,9 +340,10 @@ export function FindCodexSessionAction({
                     {firstLine(session.preview).slice(0, 80) || session.id.slice(0, 8)}
                   </span>
                   {session.updatedAt > 0 && (
-                    <span className="text-3xs text-text-placeholder tabular-nums">
-                      {formatTimeAgo(session.updatedAt)}
-                    </span>
+                    <TimeAgo
+                      timestamp={session.updatedAt}
+                      className="text-3xs text-text-placeholder"
+                    />
                   )}
                 </button>
               </li>

@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { Button } from "@/components/ui/button";
 import { SearchField } from "@/components/ui/SearchField";
+import { TimeAgo } from "@/components/ui/TimeAgo";
+import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import {
   Select,
   SelectContent,
@@ -123,26 +125,14 @@ export function AuditTimeRangeSelect({
   );
 }
 
-export function formatAuditAge(ts: number, now: number): string {
-  const diffMs = now - ts;
-  if (diffMs < 0) return "just now";
-  const sec = Math.floor(diffMs / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  return `${Math.floor(hr / 24)}d ago`;
+/** The label `AuditRecordTime` prints, for callers that skip re-renders when it holds. */
+export function auditAgeLabel(ts: number, now: number): string {
+  return formatRelativeTime(ts, Math.max(now, ts));
 }
 
 /** A record's age, with the exact time one hover (or one screen-reader read) away. */
 export function AuditRecordTime({ ts, now }: { ts: number; now: number }) {
-  const date = new Date(ts);
-  return (
-    <time dateTime={date.toISOString()} title={date.toLocaleString()}>
-      {formatAuditAge(ts, now)}
-    </time>
-  );
+  return <TimeAgo timestamp={ts} now={Math.max(now, ts)} verbose />;
 }
 
 /**

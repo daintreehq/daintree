@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 import { GroupedVirtuoso, type GroupedVirtuosoHandle } from "react-virtuoso";
 import { Folder } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -146,14 +148,11 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
         >
           {basename(file.path)}
         </span>
-        <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-2xs">
-          {(file.insertions ?? 0) > 0 && (
-            <span className="text-status-success">+{file.insertions}</span>
-          )}
-          {(file.deletions ?? 0) > 0 && (
-            <span className="text-status-error">-{file.deletions}</span>
-          )}
-        </span>
+        <DiffStat
+          insertions={file.insertions}
+          deletions={file.deletions}
+          className="ml-auto shrink-0 pl-2 text-2xs"
+        />
       </button>
       <Tooltip>
         <TooltipTrigger asChild>
@@ -417,14 +416,11 @@ export function DiffFileSidebar({
       <div className="shrink-0 border-b border-border-default px-3.5 py-2">
         <div className="flex items-baseline justify-between gap-2 text-xs">
           <span className="font-medium text-text-primary">{pluralize(files.length, "file")}</span>
-          <span className="flex items-center gap-1.5 font-mono text-2xs">
-            {summary.insertions > 0 && (
-              <span className="text-status-success">+{summary.insertions}</span>
-            )}
-            {summary.deletions > 0 && (
-              <span className="text-status-error">-{summary.deletions}</span>
-            )}
-          </span>
+          <DiffStat
+            insertions={summary.insertions}
+            deletions={summary.deletions}
+            className="text-2xs"
+          />
         </div>
         <div className="mt-1" data-testid="diff-sidebar-progress">
           <span className="text-2xs text-text-muted">
@@ -433,19 +429,13 @@ export function DiffFileSidebar({
           {/* The track only appears once review has started — an empty
               full-width strip at zero progress reads as stray chrome. */}
           {viewedCount > 0 && (
-            <div
-              role="progressbar"
-              aria-label="Files viewed"
-              aria-valuemin={0}
-              aria-valuemax={files.length}
-              aria-valuenow={viewedCount}
-              className="mt-1 h-0.5 overflow-hidden rounded-full bg-tint/10"
-            >
-              <div
-                className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
-                style={{ width: `${files.length ? (viewedCount / files.length) * 100 : 0}%` }}
-              />
-            </div>
+            <ProgressBar
+              label="Files viewed"
+              value={viewedCount}
+              max={files.length}
+              size="thin"
+              className="mt-1"
+            />
           )}
         </div>
       </div>

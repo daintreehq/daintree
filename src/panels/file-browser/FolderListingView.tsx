@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { useRovingRows, type UseRovingRowsResult } from "@/hooks/useRovingRows";
 import { FileSymlink, Folder, FolderSymlink } from "lucide-react";
 import { join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/formatBytes";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { FILE_DRAG_MIME, encodeFileDragPaths } from "@/lib/fileDragPayload";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
@@ -291,7 +291,7 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
           MODIFIED_COLUMN_CLASS
         )}
       >
-        {row.mtimeMs == null ? UNKNOWN : formatRelativeTime(row.mtimeMs)}
+        {row.mtimeMs == null ? UNKNOWN : <TimeAgo timestamp={row.mtimeMs} verbose />}
       </span>
     </div>
   );

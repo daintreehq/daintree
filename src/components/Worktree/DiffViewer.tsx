@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -1513,12 +1514,7 @@ function FileDiff({
             </span>
           )}
           <div className="flex items-center gap-2 shrink-0 text-text-secondary">
-            {(additions > 0 || deletions > 0) && (
-              <span className="flex items-center gap-1">
-                {additions > 0 && <span className="text-status-success">+{additions}</span>}
-                {deletions > 0 && <span className="text-status-danger">-{deletions}</span>}
-              </span>
-            )}
+            <DiffStat insertions={additions} deletions={deletions} />
             {notesEnabled && (
               <Tooltip>
                 <TooltipTrigger asChild>

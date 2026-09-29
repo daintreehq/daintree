@@ -1,4 +1,5 @@
 import type { FreshnessLevel } from "@/hooks/useRepositoryStats";
+import { formatTimeAgo } from "@/utils/timeAgo";
 
 export type BadgeFreshnessCause = "rate-limit" | "circuit-breaker";
 
@@ -16,18 +17,12 @@ export function freshnessClass(level: FreshnessLevel): string {
   }
 }
 
+/** `formatTimeAgo` with "unknown" for a missing, invalid or future timestamp. */
 export function formatTimeSince(timestamp: number | null, now: number): string {
   if (timestamp == null || !Number.isFinite(timestamp) || timestamp <= 0 || timestamp > now) {
     return "unknown";
   }
-  const seconds = Math.floor((now - timestamp) / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  return formatTimeAgo(timestamp, now);
 }
 
 export function freshnessSuffix(

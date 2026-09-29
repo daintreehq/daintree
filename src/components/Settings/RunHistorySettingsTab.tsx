@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { Radio } from "lucide-react";
 import { Workflow } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -12,7 +13,6 @@ import {
   SettingsGroup,
   SettingsRow,
 } from "@/components/Settings/SettingsGroup";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { useRunHistoryStore } from "@/store/runHistoryStore";
 import type { RunHistoryRecord } from "@shared/types";
@@ -33,16 +33,7 @@ function CountPill({ label, failed = false }: { label: string; failed?: boolean 
 }
 
 function RunTime({ timestamp }: { timestamp: number }) {
-  const date = new Date(timestamp);
-  return (
-    <time
-      dateTime={date.toISOString()}
-      title={date.toLocaleString()}
-      className="shrink-0 text-xs text-text-secondary"
-    >
-      {formatRelativeTime(timestamp)}
-    </time>
-  );
+  return <TimeAgo timestamp={timestamp} verbose className="shrink-0 text-xs text-text-secondary" />;
 }
 
 /** Per-target failures, in the row's text colour with the error glyph as the signal. */

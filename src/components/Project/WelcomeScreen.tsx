@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 import { InlineError } from "@/components/ui/field";
 import {
   Check,
@@ -25,8 +26,9 @@ import { compareProjectsByMode } from "@/lib/projectSort";
 import { cn } from "@/lib/utils";
 import { keybindingService } from "@/services/KeybindingService";
 import { getProjectGradient, getBrandColorHex } from "@/lib/colorUtils";
-import { formatTimeAgo } from "@/utils/timeAgo";
-import { middleTruncate } from "@/utils/textParsing";
+import { formatPath, middleTruncatePath } from "@/utils/textParsing";
+import { useHomeDir } from "@/hooks/app/useHomeDir";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { CHECKLIST_ITEMS } from "@/components/Onboarding/checklistItems";
 import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboarding";
 import { TourWelcomeLink } from "@/components/Tour/TourInviteCard";
@@ -434,6 +436,7 @@ function TopProjects({
   projects: ReturnType<typeof useProjectStore.getState>["projects"];
   onSelect: (projectId: string) => Promise<void>;
 }) {
+  const { homeDir } = useHomeDir();
   return (
     <div className="w-full">
       {/* "Your projects", not "Recent projects": the order follows the switcher's
@@ -473,19 +476,20 @@ function TopProjects({
               <TruncatedTooltip
                 content={project.path}
                 focusable={false}
-                isTruncated={middleTruncate(project.path, 48) !== project.path || undefined}
+                isTruncated={
+                  middleTruncatePath(formatPath(project.path, homeDir), 48) !== project.path ||
+                  undefined
+                }
               >
-                <span className="text-xs text-text-secondary truncate block @min-[1920px]/welcome:text-sm">
-                  {middleTruncate(project.path, 48)}
+                <span className="font-mono text-xs text-text-secondary truncate block @min-[1920px]/welcome:text-sm">
+                  {middleTruncatePath(formatPath(project.path, homeDir), 48)}
                 </span>
               </TruncatedTooltip>
             </div>
-            <span
+            <TimeAgo
+              timestamp={project.lastOpened}
               className="text-xs text-text-secondary shrink-0 @min-[1920px]/welcome:text-sm"
-              title={new Date(project.lastOpened).toLocaleString()}
-            >
-              {formatTimeAgo(project.lastOpened)}
-            </span>
+            />
           </button>
         ))}
       </div>
@@ -728,19 +732,12 @@ function InlineChecklist({
         />
       </div>
 
-      <div
-        role="progressbar"
-        aria-label="Getting started progress"
-        aria-valuemin={0}
-        aria-valuemax={progressTotal}
-        aria-valuenow={progressDone}
-        className="w-full h-1 bg-overlay-medium rounded-full mb-4 overflow-hidden"
-      >
-        <div
-          className="h-full bg-text-secondary rounded-full transition-[width] duration-150 ease-out"
-          style={{ width: `${(progressDone / progressTotal) * 100}%` }}
-        />
-      </div>
+      <ProgressBar
+        label="Getting started progress"
+        value={progressDone}
+        max={progressTotal}
+        className="mb-4"
+      />
 
       <ol className="space-y-1">
         <ChecklistReportRow done label="Install Daintree" />

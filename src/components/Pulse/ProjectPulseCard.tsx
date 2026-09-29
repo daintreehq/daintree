@@ -33,6 +33,7 @@ import { useProjectHealth } from "@/hooks/useProjectHealth";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { systemClient } from "@/clients/systemClient";
 import { formatTimeSince } from "@/components/Layout/FreshnessUtils";
+import { formatTimeAgo } from "@/utils/timeAgo";
 import { formatCompactCount, formatCountExact } from "@/lib/formatCount";
 import { pluralize } from "@/lib/pluralize";
 
@@ -85,17 +86,6 @@ function ciStatusLabel(status: ForgeProjectHealthPayload["ciStatus"]): string {
     default:
       return "no CI";
   }
-}
-
-function relativeTime(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-  if (days === 0) return "today";
-  if (days === 1) return "1d ago";
-  if (days < 30) return `${days}d ago`;
-  const months = Math.floor(days / 30);
-  if (months === 1) return "1mo ago";
-  return `${months}mo ago`;
 }
 
 interface HealthChipProps {
@@ -207,7 +197,7 @@ function HealthSignals({
       {health.latestRelease && (
         <HealthChip
           icon={<Tag className="w-3.5 h-3.5 text-current" />}
-          label={`${health.latestRelease.tagName}${health.latestRelease.publishedAt ? ` (${relativeTime(health.latestRelease.publishedAt)})` : ""}`}
+          label={`${health.latestRelease.tagName}${health.latestRelease.publishedAt ? ` (${formatTimeAgo(health.latestRelease.publishedAt)})` : ""}`}
           onClick={() => openUrl(health.latestRelease!.url)}
           tone="accent"
         />

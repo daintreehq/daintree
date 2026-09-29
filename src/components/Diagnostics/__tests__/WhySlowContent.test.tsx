@@ -302,7 +302,7 @@ describe("WhySlowContent", () => {
       await vi.advanceTimersByTimeAsync(15_000);
     });
     expect(screen.getByTestId("why-slow-stale-note").textContent).toBe(
-      "Refresh failed · data from 15s ago"
+      "Refresh failed · last updated just now"
     );
     expect(screen.queryByTestId("why-slow-updated-note")).toBeNull();
 

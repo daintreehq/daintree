@@ -1,4 +1,5 @@
 import type React from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import type { FileDecoration } from "@shared/types/forge";
 import { cn } from "@/lib/utils";
@@ -89,8 +90,7 @@ export function BaseBranchFileRow({
             data-testid="base-branch-file-row-churn"
             className="ml-2 flex items-center gap-1 shrink-0 text-3xs tabular-nums"
           >
-            {insertions > 0 && <span className="text-status-success">+{insertions}</span>}
-            {deletions > 0 && <span className="text-status-error">-{deletions}</span>}
+            <DiffStat insertions={insertions} deletions={deletions} />
           </div>
         )}
         {hasBadge && (

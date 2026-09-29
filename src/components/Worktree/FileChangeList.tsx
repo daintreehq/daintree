@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
 import type { FileChangeDetail } from "../../types";
 import { cn } from "../../lib/utils";
 import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
@@ -196,12 +197,7 @@ function FileChangeRow({
               </span>
 
               <div className="ml-2 flex items-center gap-2 shrink-0 text-2xs">
-                {(change.insertions ?? 0) > 0 && (
-                  <span className="text-status-success">+{change.insertions}</span>
-                )}
-                {(change.deletions ?? 0) > 0 && (
-                  <span className="text-status-error">-{change.deletions}</span>
-                )}
+                <DiffStat insertions={change.insertions} deletions={change.deletions} />
                 <FileDecorationBadge decoration={decoration} />
               </div>
             </div>

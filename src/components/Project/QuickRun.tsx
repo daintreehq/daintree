@@ -752,7 +752,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
         <div className="mb-1.5 flex min-w-0 items-center gap-1 text-2xs text-text-secondary">
           <GitBranch className="h-3 w-3 shrink-0" aria-hidden="true" />
           <TruncatedTooltip content={destinationLabel}>
-            <span className="truncate">{destinationLabel}</span>
+            <span className="truncate font-mono">{destinationLabel}</span>
           </TruncatedTooltip>
         </div>
       )}
@@ -1044,7 +1044,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                       <span className="flex min-w-0 items-center gap-1 @max-[280px]/footer:basis-full">
                         <GitBranch className="h-3 w-3 shrink-0" aria-hidden="true" />
                         <span className="sr-only">Runs on </span>
-                        <span className="min-w-0 truncate">{destinationLabel}</span>
+                        <span className="min-w-0 truncate font-mono">{destinationLabel}</span>
                       </span>
                       <span className="flex shrink-0 items-center gap-1 @max-[280px]/footer:h-4 @max-[280px]/footer:min-w-0 @max-[280px]/footer:flex-1">
                         <span className="min-w-0 truncate">

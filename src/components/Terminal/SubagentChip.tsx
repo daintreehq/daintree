@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type MouseEvent } from "react";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { useShallow } from "zustand/react/shallow";
 import { ChevronRight, RefreshCw } from "lucide-react";
 import { Network } from "@/components/icons";
@@ -14,7 +15,6 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
-import { formatTimeAgo } from "@/utils/timeAgo";
 import { logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { SUBAGENT_PROVIDERS, toSubagentProvider } from "@/clients/subagentProviders";
@@ -222,9 +222,10 @@ function SubagentRow({
                 {subtitle}
               </span>
               {subagent.updatedAt > 0 && (
-                <span className="shrink-0 text-3xs text-text-secondary tabular-nums">
-                  {formatTimeAgo(subagent.updatedAt)}
-                </span>
+                <TimeAgo
+                  timestamp={subagent.updatedAt}
+                  className="shrink-0 text-3xs text-text-secondary"
+                />
               )}
             </span>
           )}

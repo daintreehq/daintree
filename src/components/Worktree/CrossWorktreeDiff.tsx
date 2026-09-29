@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo, type ReactNode } from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
 import { GitCompare, ChevronLeft, ChevronRight, Folder, RefreshCw, WrapText } from "lucide-react";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
@@ -150,10 +151,11 @@ function CrossWorktreeFileRow({
         >
           {basename(file.path)}
         </span>
-        <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-2xs tabular-nums">
-          {insertions > 0 && <span className="text-status-success">+{insertions}</span>}
-          {deletions > 0 && <span className="text-status-error">-{deletions}</span>}
-        </span>
+        <DiffStat
+          insertions={insertions}
+          deletions={deletions}
+          className="ml-auto shrink-0 pl-2 text-2xs"
+        />
       </button>
     </TruncatedTooltip>
   );
@@ -209,10 +211,7 @@ function ChangeSetSummary({ files }: { files: CrossWorktreeFile[] }) {
   return (
     <div className="flex items-baseline justify-between gap-2 text-xs">
       <span className="font-medium text-text-primary">{pluralize(files.length, "file")}</span>
-      <span className="flex items-center gap-1.5 font-mono text-2xs tabular-nums">
-        {totalInsertions > 0 && <span className="text-status-success">+{totalInsertions}</span>}
-        {totalDeletions > 0 && <span className="text-status-error">-{totalDeletions}</span>}
-      </span>
+      <DiffStat insertions={totalInsertions} deletions={totalDeletions} className="text-2xs" />
     </div>
   );
 }

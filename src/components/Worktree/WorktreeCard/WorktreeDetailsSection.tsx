@@ -1,4 +1,5 @@
 import type React from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
 import { prefetchStagingStatus } from "@/components/Worktree/ReviewHub/stagingStatusCache";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import type { WorktreeState } from "@/types";
@@ -432,25 +433,10 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       <span ref={countRef} className="inline-block">
                         {pluralize(worktree.worktreeChanges.changedFileCount, "file")}
                       </span>
-                      {((worktree.worktreeChanges.insertions ?? 0) > 0 ||
-                        (worktree.worktreeChanges.deletions ?? 0) > 0) && (
-                        <span className="flex items-center gap-0.5">
-                          {(worktree.worktreeChanges.insertions ?? 0) > 0 && (
-                            <span className="text-status-success">
-                              +{worktree.worktreeChanges.insertions}
-                            </span>
-                          )}
-                          {(worktree.worktreeChanges.insertions ?? 0) > 0 &&
-                            (worktree.worktreeChanges.deletions ?? 0) > 0 && (
-                              <span className="text-text-muted">/</span>
-                            )}
-                          {(worktree.worktreeChanges.deletions ?? 0) > 0 && (
-                            <span className="text-status-error">
-                              -{worktree.worktreeChanges.deletions}
-                            </span>
-                          )}
-                        </span>
-                      )}
+                      <DiffStat
+                        insertions={worktree.worktreeChanges.insertions}
+                        deletions={worktree.worktreeChanges.deletions}
+                      />
                     </span>
                   ) : (
                     <span
