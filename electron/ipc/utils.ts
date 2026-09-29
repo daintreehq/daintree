@@ -49,7 +49,8 @@ function parseIpcPayload<S extends z.ZodTypeAny>(
 
 const rateLimitTimestamps = new Map<string, number[]>();
 
-export type IpcChannelCategory = "fileOps" | "artifactOps" | "gitOps" | "terminalSpawn";
+export type IpcChannelCategory =
+  "fileOps" | "artifactOps" | "gitOps" | "terminalSpawn" | "pluginInvoke";
 
 export const channelToCategory: Record<string, IpcChannelCategory> = {
   "copytree:generate": "fileOps",
@@ -65,6 +66,7 @@ export const channelToCategory: Record<string, IpcChannelCategory> = {
   "git:get-project-pulse": "gitOps",
   "git:list-commits": "gitOps",
   "terminal:spawn": "terminalSpawn",
+  "plugin:invoke": "pluginInvoke",
 };
 
 export function checkRateLimit(channel: string, maxCalls: number, windowMs: number): void {

@@ -53,6 +53,7 @@ import {
   type PluginWorktreeSnapshotFetchResult,
 } from "../PluginHostFactory.js";
 import { CHANNELS } from "../../../ipc/channels.js";
+import { flushPluginPushes, resetPluginPushBatcherForTests } from "../pluginPushBatcher.js";
 import { events } from "../../events.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { UNBOUND_PLUGIN_HOST_BINDING } from "../../../../shared/types/plugin.js";
@@ -554,6 +555,8 @@ describe("createHost debounced onDidChangeWorktrees", () => {
 });
 
 describe("createHost renderer pushes", () => {
+  beforeEach(() => resetPluginPushBatcherForTests());
+
   it("routes toast, broadcast and panel posts to the bound project's views", async () => {
     const h = makeHarness();
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
@@ -561,6 +564,7 @@ describe("createHost renderer pushes", () => {
     await host.showToast({ message: "hi", type: "info" });
     await host.broadcastToRenderer("ping", { a: 1 });
     await host.postToPanel("stream", { b: 2 }, "panel-1");
+    flushPluginPushes();
 
     expect(ipcUtilsMock.broadcastToRenderer).not.toHaveBeenCalled();
     const targets = ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map((c) => c[0]);
@@ -568,9 +572,10 @@ describe("createHost renderer pushes", () => {
     expect(ipcUtilsMock.broadcastToProjectRenderers.mock.calls[0][1]).toBe(
       CHANNELS.NOTIFICATION_SHOW_TOAST
     );
-    // Plugin pushes resolve their renderers through the batcher, same scope.
+    // Plugin pushes resolve their renderers through the batcher at flush time,
+    // same scope, once per flush.
     const pushScopes = ipcUtilsMock.getProjectRendererTargets.mock.calls.map((c) => c[0]);
-    expect(pushScopes).toEqual([PROJECT_A, PROJECT_A]);
+    expect(pushScopes).toEqual([PROJECT_A]);
   });
 
   it("still broadcasts app-wide when unbound", async () => {
@@ -579,6 +584,7 @@ describe("createHost renderer pushes", () => {
 
     await host.showToast({ message: "hi", type: "info" });
     await host.broadcastToRenderer("ping", { a: 1 });
+    flushPluginPushes();
 
     expect(ipcUtilsMock.broadcastToProjectRenderers).not.toHaveBeenCalled();
     expect(ipcUtilsMock.broadcastToRenderer).toHaveBeenCalledTimes(1);

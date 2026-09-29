@@ -228,8 +228,14 @@ const rawButton = elementRule(
     element.intrinsic && element.tag === "button" ? "raw <button> restyles a kit primitive" : null
 );
 
+/** The `type`s the kit `Input` renders as-is; it coerces any other to `text`. */
+const KIT_INPUT_TYPES = new Set(["text", "search", "email", "url", "password", "number", "tel"]);
+
 const KIT_FOR_INPUT: Record<string, string> = {
   checkbox: "Checkbox",
+  button: "Button",
+  submit: "Button",
+  reset: "Button",
 };
 
 const rawFormControl = elementRule(
@@ -243,13 +249,22 @@ const rawFormControl = elementRule(
     if (!element.intrinsic) return null;
     if (element.tag === "textarea")
       return "raw <textarea>; prefer `Textarea` from @daintreehq/plugin-ui";
-    if (element.tag === "select") return "raw <select>; prefer `Select` from @daintreehq/plugin-ui";
+    if (element.tag === "select") {
+      // The kit `Select` is single-choice; a multi-select has no kit equivalent.
+      if (hasProp(file, element, "multiple")) return null;
+      return "raw <select>; prefer `Select` from @daintreehq/plugin-ui";
+    }
     if (element.tag !== "input") return null;
-    const type = propString(file, element, "type") ?? "text";
-    if (type === "hidden" || type === "file") return null;
+    const literal = propString(file, element, "type");
+    // A computed type could be anything; only a literal one is worth a suggestion.
+    if (literal === null && hasProp(file, element, "type")) return null;
+    const type = (literal ?? "text").toLowerCase();
     if (type === "radio")
       return 'raw <input type="radio">; prefer a selection control from @daintreehq/plugin-ui';
-    const kit = KIT_FOR_INPUT[type] ?? "Input";
+    const kit = KIT_FOR_INPUT[type] ?? (KIT_INPUT_TYPES.has(type) ? "Input" : null);
+    // date, time, range, color, file, hidden and the rest have no kit control:
+    // the native element, styled with theme tokens, is the right call.
+    if (kit === null) return null;
     return `raw <input type="${type}">; prefer \`${kit}\` from @daintreehq/plugin-ui`;
   }
 );
@@ -259,10 +274,11 @@ const nativeTitle = elementRule(
     id: "native-title-tooltip",
     severity: "warn",
     message: "native title= tooltip",
-    hint: "prefer `Tooltip` from @daintreehq/plugin-ui — the OS tooltip ignores the theme and the keyboard",
+    hint: "prefer `Tooltip` from @daintreehq/plugin-ui, or `IconButton`'s `tooltip` prop — the OS tooltip ignores the theme and the keyboard",
   },
+  // Intrinsic elements only: `title` is part of the kit components' public DOM props.
   (file, element) =>
-    (element.intrinsic || element.tag === "Button") && hasProp(file, element, "title")
+    element.intrinsic && hasProp(file, element, "title")
       ? `title= on <${element.tag}> draws an OS tooltip`
       : null
 );

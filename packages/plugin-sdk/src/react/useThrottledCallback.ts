@@ -27,10 +27,14 @@ function schedule(ms: number | undefined, run: () => void): () => void {
 
 /**
  * Coalesce a callback that fires faster than the view can usefully paint —
- * progress ticks, streamed log lines, pointer moves — so it runs at most once
+ * progress ticks, the latest status, pointer moves — so it runs at most once
  * per frame (or per `ms`) with the latest arguments. Wrap the state setter
  * rather than the render: pushes still arrive at full rate, React just commits
  * once per frame.
+ *
+ * Calls inside a window are dropped in favour of the last one, so this is for
+ * values where only the newest matters. For logs or streamed lines, push every
+ * chunk into a buffer (a ref) and flush the buffer to state once per frame.
  *
  * ```tsx
  * const [progress, setProgress] = useState(0);

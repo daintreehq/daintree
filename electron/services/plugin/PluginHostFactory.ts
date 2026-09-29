@@ -67,9 +67,9 @@ import {
 } from "../fileDecorationRegistry.js";
 import { broadcastToRenderer, broadcastToProjectRenderers } from "../../ipc/utils.js";
 import { PLUGIN_PUSH_MAX_PAYLOAD_BYTES } from "../../../shared/config/pluginBudgets.js";
-import { assertPayloadWithinLimit } from "./pluginPayloadLimits.js";
+import { assertPayloadWithinLimit, snapshotPayload } from "./pluginPayloadLimits.js";
 import { resolveInvokeTimeoutMs, runWithInvokeDeadline } from "./pluginInvokeDeadline.js";
-import { getPluginPushBatcher, routePluginPush } from "./pluginPushBatcher.js";
+import { flushPluginPushes, routePluginPush, withPushFlushBarrier } from "./pluginPushBatcher.js";
 import { isAppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -667,13 +667,18 @@ export function createHost(
     boundProjectId === null
       ? broadcastToRenderer
       : (channel, ...args) => broadcastToProjectRenderers(boundProjectId, channel, ...args);
-  // Direct sends (badges, decoration invalidations, toasts) go out immediately,
-  // so anything this plugin already pushed is delivered first: a renderer must
-  // never see a badge or toast before the panel update that preceded it.
+  // Every direct renderer delivery from this host — badges, decoration
+  // invalidations and toasts here, and dispatches, prompts and panel reloads
+  // through the wrapped collaborators below — first delivers what this plugin
+  // already pushed: a renderer must never see a toast, a prompt or a reload
+  // before the panel update that preceded it.
   const pushToRenderers = (channel: string, ...args: unknown[]): void => {
-    getPluginPushBatcher().flush();
+    flushPluginPushes();
     sendToScope(channel, ...args);
   };
+  const dispatcher = withPushFlushBarrier(deps.dispatcher);
+  const promptDispatcher = withPushFlushBarrier(deps.promptDispatcher);
+  const panelReloadDispatcher = withPushFlushBarrier(deps.panelReloadDispatcher);
 
   /**
    * The `plugin:{pluginId}:{channel}` transport shared by broadcastToRenderer
@@ -684,18 +689,18 @@ export function createHost(
    * targeted push, narrowed to the renderer holding the panel.
    */
   const pushPluginMessage = (channel: string, panelId: string | null, payload: unknown): void => {
-    const bytes = assertPayloadWithinLimit(
-      pluginId,
-      `push payload on "${channel}"`,
-      payload,
-      PLUGIN_PUSH_MAX_PAYLOAD_BYTES
-    );
+    const what = `push payload on "${channel}"`;
+    const bytes = assertPayloadWithinLimit(pluginId, what, payload, PLUGIN_PUSH_MAX_PAYLOAD_BYTES);
     routePluginPush({
       pluginId,
       projectId: boundProjectId,
       channel: `plugin:${pluginId}:${channel}`,
       panelId,
-      payload,
+      // Delivery is deferred to the next flush, so a builtin that mutates and
+      // re-posts one object must not have both pushes carry its final state.
+      // Cloning here also refuses an uncloneable payload on the call that made
+      // it, instead of failing a whole renderer batch later.
+      payload: snapshotPayload(pluginId, what, payload),
       bytes,
       locatePanel: (target, owner) => deps.panelLifecycleBroker.pushTargetsFor(target, owner),
     });
@@ -1255,7 +1260,7 @@ export function createHost(
           );
         }
         try {
-          const agents = await deps.dispatcher.sendAgentsListToRenderer(boundProjectId);
+          const agents = await dispatcher.sendAgentsListToRenderer(boundProjectId);
           return isBound() ? agents : [];
         } catch (err) {
           if (isProjectViewUnavailable(err)) return [];
@@ -1283,7 +1288,7 @@ export function createHost(
         // picker the user answers, and it inherits the bridge's project
         // targeting, unload drain and caller-signal dismissal. With a target it
         // answers as soon as the renderer has drafted.
-        const value = await deps.promptDispatcher.requestPrompt(
+        const value = await promptDispatcher.requestPrompt(
           pluginId,
           {
             kind: "sendToAgent",
@@ -1829,7 +1834,7 @@ export function createHost(
         throw new Error(`Plugin "${pluginId}" reloadPanel: panelId must be a non-empty string`);
       }
       if (!isBound()) return "unavailable";
-      return deps.panelReloadDispatcher.reload(pluginId, panelId, boundProjectId);
+      return panelReloadDispatcher.reload(pluginId, panelId, boundProjectId);
     },
     // NOT revoke-guarded for the same reason as invalidateFileDecorations:
     // plugins fire toasts from post-activation callbacks and timers. Liveness
@@ -1886,7 +1891,7 @@ export function createHost(
         // with PROJECT_VIEW_UNAVAILABLE when that project has no live view;
         // unbound stays ambient, since an app-global plugin's action belongs
         // wherever the user is looking.
-        return deps.dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId);
+        return dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId);
       }
       if (boundProjectId !== null) {
         // The confused-deputy guard: a project-bound plugin may restate its own
@@ -1896,7 +1901,7 @@ export function createHost(
             `PERMISSION_REQUIRED: plugin "${pluginId}" is bound to its own project and cannot dispatch to project "${requestedProjectId}"`
           );
         }
-        return deps.dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId);
+        return dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId);
       }
       // Unbound with an explicit target (#13119): only after the user turned
       // the switch on. No JIT prompt and no built-in bypass — the switch is the
@@ -1926,7 +1931,7 @@ export function createHost(
         });
       };
       try {
-        const result = await deps.dispatcher.sendDispatchToRenderer(
+        const result = await dispatcher.sendDispatchToRenderer(
           actionId,
           args,
           requestedProjectId
@@ -1950,7 +1955,7 @@ export function createHost(
       list: async () => {
         if (!deps.plugins.has(pluginId)) return [];
         try {
-          return await deps.dispatcher.sendActionsListToRenderer(boundProjectId);
+          return await dispatcher.sendActionsListToRenderer(boundProjectId);
         } catch (err) {
           // A bound host whose project has no live view is the catalog's
           // documented "no renderer available" case, not an error — this
@@ -1963,7 +1968,7 @@ export function createHost(
       get: async (actionId) => {
         if (!deps.plugins.has(pluginId)) return null;
         try {
-          return await deps.dispatcher.sendActionsGetToRenderer(actionId, boundProjectId);
+          return await dispatcher.sendActionsGetToRenderer(actionId, boundProjectId);
         } catch (err) {
           if (isProjectViewUnavailable(err)) return null;
           throw err;
@@ -1975,7 +1980,7 @@ export function createHost(
       // plugin can warn before dispatch() returns CONFIRMATION_REQUIRED.
       canDispatch: async (actionId) => {
         if (!deps.plugins.has(pluginId)) return "restricted";
-        const entry = await deps.dispatcher
+        const entry = await dispatcher
           .sendActionsGetToRenderer(actionId, boundProjectId)
           .catch((err: unknown) => {
             if (isProjectViewUnavailable(err)) return null;
@@ -2008,7 +2013,7 @@ export function createHost(
       // rejects when that project has no view at all. Unbound is deliberately
       // ambient — an app-global plugin's prompt belongs in front of whoever is
       // looking.
-      const value = await deps.promptDispatcher.requestPrompt(
+      const value = await promptDispatcher.requestPrompt(
         pluginId,
         {
           kind: "quickPick",
@@ -2022,7 +2027,7 @@ export function createHost(
     }) as PluginHostApi["showQuickPick"],
     showInputBox: async (options, callOptions) => {
       if (!deps.plugins.has(pluginId)) return undefined;
-      const value = await deps.promptDispatcher.requestPrompt(
+      const value = await promptDispatcher.requestPrompt(
         pluginId,
         { kind: "inputBox", options: sanitizeInputBoxOptions(options) },
         boundProjectId,
@@ -2035,7 +2040,7 @@ export function createHost(
       if (!options || typeof options !== "object" || typeof options.title !== "string") {
         throw new Error(`Plugin "${pluginId}" showConfirm: options.title must be a string`);
       }
-      const value = await deps.promptDispatcher.requestPrompt(
+      const value = await promptDispatcher.requestPrompt(
         pluginId,
         { kind: "confirm", options: sanitizeConfirmOptions(options) },
         boundProjectId,
@@ -2189,7 +2194,7 @@ export function createHost(
         if (!deps.plugins.has(pluginId)) {
           throw new Error(`Plugin "${pluginId}" settings.open: plugin is no longer loaded`);
         }
-        const result = await deps.dispatcher.sendDispatchToRenderer(
+        const result = await dispatcher.sendDispatchToRenderer(
           "plugin.openSettings",
           key === undefined ? { pluginId } : { pluginId, key },
           boundProjectId

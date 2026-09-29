@@ -108,8 +108,8 @@ describe("element rules", () => {
       `<div><Checkbox /><input type="hidden" name="id" /><input type="file" /></div>`,
     ],
     "native-title-tooltip": [
-      `<div><span title="Open">x</span><Button title="Go" /></div>`,
-      `<Tooltip content="Open"><span aria-label="Open">x</span></Tooltip>`,
+      `<div><span title="Open">x</span></div>`,
+      `<div><Tooltip content="Open"><span aria-label="Open">x</span></Tooltip><Button title="Go" /></div>`,
     ],
     "inline-svg-icon": [
       `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 12h14" /></svg>`,
@@ -141,6 +141,35 @@ describe("element rules", () => {
       expect.stringContaining("`Checkbox`"),
       expect.stringContaining("`Input`"),
     ]);
+  });
+
+  it("suggests Input only for the types the kit Input renders", async () => {
+    const findings = await lintFor(
+      "raw-form-control",
+      view(
+        `<div><input type="email" /><input type="Number" /><input type="submit" /><input type="date" /><input type="range" /><input type="color" /><input type="time" /><input type={kind} /></div>`
+      )
+    );
+    expect(findings.map((f) => f.message)).toEqual([
+      expect.stringContaining('type="email">; prefer `Input`'),
+      expect.stringContaining('type="number">; prefer `Input`'),
+      expect.stringContaining("`Button`"),
+    ]);
+  });
+
+  it("does not suggest the single-choice kit Select for a multi-select", async () => {
+    expect(await lintFor("raw-form-control", view(`<select multiple />`))).toEqual([]);
+    expect(await lintFor("raw-form-control", view(`<select />`))).toHaveLength(1);
+  });
+
+  it("flags title= on intrinsic elements only, not on kit components", async () => {
+    const findings = await lintFor(
+      "native-title-tooltip",
+      view(`<div><Button title="Go" /><IconButton title="x" /><a title="Docs" href="#" /></div>`)
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain("<a>");
+    expect(findings[0]!.hint).toContain("tooltip");
   });
 
   it("reads a zero-build view's createElement calls the same way", async () => {

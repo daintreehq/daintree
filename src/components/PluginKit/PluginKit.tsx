@@ -344,11 +344,24 @@ function KitSpinningIcon({ icon, active, size, className }: PluginSpinningIconPr
   );
 }
 
+const BADGE_TONES = [
+  "neutral",
+  "outline",
+  "error",
+  "danger",
+  "warning",
+  "success",
+  "info",
+] as const;
+
 function KitBadge({ children, tone, size, shape, className, ...rest }: PluginBadgeProps) {
+  const accepted = oneOf(tone, BADGE_TONES);
   return (
     <Badge
       {...pickDomProps(rest)}
-      tone={oneOf(tone, ["neutral", "outline", "error", "warning", "success", "info"] as const)}
+      // `danger` is the kit's alias for the pill's `error` tone: a badge has no
+      // glyph to tell a caution from a failure, so both wear the same tint.
+      tone={accepted === "danger" ? "error" : accepted}
       size={oneOf(size, ["xs", "sm", "md"] as const)}
       shape={oneOf(shape, ["default", "pill"] as const)}
       className={str(className)}

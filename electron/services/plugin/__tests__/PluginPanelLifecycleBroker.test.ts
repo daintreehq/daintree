@@ -336,6 +336,16 @@ describe("locate (#12610)", () => {
 });
 
 describe("pushTargetsFor", () => {
+  let clock = 0;
+  const makeBroker = (): PluginPanelLifecycleBroker =>
+    new PluginPanelLifecycleBroker(
+      (kindId) => OWNERS[kindId],
+      () => clock
+    );
+  const pastGrace = (): void => {
+    clock += 2_000;
+  };
+
   it.each(["mounted", "hidden", "backgrounded", "trashed", "render-failed"] as const)(
     "counts a %s panel's renderer as a holder",
     (phase) => {
@@ -349,13 +359,57 @@ describe("pushTargetsFor", () => {
     const broker = makeBroker();
     broker.ingest(7, [event()]);
     broker.ingest(9, [event({ phase: "backgrounded" })]);
-    expect(broker.pushTargetsFor("p1", "acme").sort()).toEqual([7, 9]);
+    expect([...(broker.pushTargetsFor("p1", "acme") as number[])].sort()).toEqual([7, 9]);
   });
 
-  it("returns nothing for an unreported or removed panel", () => {
+  it("returns nothing for an unreported panel and 'closed' for a removed one", () => {
     const broker = makeBroker();
     expect(broker.pushTargetsFor("p1", "acme")).toEqual([]);
     broker.ingest(7, [event(), event({ phase: "removed" })]);
+    // A moving panel is removed from one renderer before the next reports it,
+    // so right after `removed` it still reads as unreported.
+    expect(broker.pushTargetsFor("p1", "acme")).toEqual([]);
+    pastGrace();
+    expect(broker.pushTargetsFor("p1", "acme")).toBe("closed");
+    // Closed is the owner's answer only; anyone else still sees "unknown".
+    expect(broker.pushTargetsFor("p1", "other")).toEqual([]);
+  });
+
+  it("is not closed while another renderer still holds the panel", () => {
+    const broker = makeBroker();
+    broker.ingest(7, [event()]);
+    broker.ingest(9, [event()]);
+    broker.ingest(7, [event({ phase: "removed" })]);
+    expect(broker.pushTargetsFor("p1", "acme")).toEqual([9]);
+  });
+
+  it("clears the closed mark when the id is reported live again", () => {
+    const broker = makeBroker();
+    broker.ingest(7, [event(), event({ phase: "removed" })]);
+    broker.ingest(9, [event()]);
+    expect(broker.pushTargetsFor("p1", "acme")).toEqual([9]);
+    broker.ingest(9, [event({ phase: "removed" })]);
+    pastGrace();
+    expect(broker.pushTargetsFor("p1", "acme")).toBe("closed");
+  });
+
+  it("keeps a bounded memory of closed panels", () => {
+    const broker = makeBroker();
+    for (let i = 0; i < 1100; i++) {
+      broker.ingest(7, [
+        event({ panelId: `x${i}` }),
+        event({ panelId: `x${i}`, phase: "removed" }),
+      ]);
+    }
+    pastGrace();
+    expect(broker.pushTargetsFor("x0", "acme")).toEqual([]);
+    expect(broker.pushTargetsFor("x1099", "acme")).toBe("closed");
+  });
+
+  it("does not treat an evicted renderer's panels as closed", () => {
+    const broker = makeBroker();
+    broker.ingest(7, [event()]);
+    broker.clearSource(7);
     expect(broker.pushTargetsFor("p1", "acme")).toEqual([]);
   });
 

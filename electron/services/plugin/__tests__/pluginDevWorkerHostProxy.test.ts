@@ -1335,6 +1335,41 @@ describe("PluginDevWorkerHostProxy invoke results", () => {
     expect(sent.some((m) => m.type === "invoke-result" && m.requestId === "i2")).toBe(false);
   });
 
+  it("releases a cancelled invoke's entry at once, even if its handler never settles", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.registerHandler("hang", () => new Promise(() => {}));
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i4",
+      kind: "handler",
+      channel: "hang",
+      ctx,
+      args: [],
+    } as any);
+    await tick();
+    expect(proxy.runningInvokeCount()).toBe(1);
+    proxy.handleMessage({ type: "invoke-cancel", requestId: "i4" } as any);
+    expect(proxy.runningInvokeCount()).toBe(0);
+    expect(sent.some((m) => m.type === "invoke-result" && m.requestId === "i4")).toBe(false);
+  });
+
+  it("forgets running invokes on dispose", async () => {
+    const { proxy } = makeProxy();
+    await proxy.host.registerHandler("hang", () => new Promise(() => {}));
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i5",
+      kind: "handler",
+      channel: "hang",
+      ctx,
+      args: [],
+    } as any);
+    await tick();
+    expect(proxy.runningInvokeCount()).toBe(1);
+    proxy.dispose();
+    expect(proxy.runningInvokeCount()).toBe(0);
+  });
+
   it("still answers an invoke that was not cancelled", async () => {
     const { proxy, sent } = makeProxy();
     await proxy.host.registerHandler("fast", () => "ok");

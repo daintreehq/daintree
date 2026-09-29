@@ -55,6 +55,13 @@ vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
   isCachedViewWebContents: (...args: [number]) => mockIsCachedViewWebContents(...args),
 }));
 
+const { mockStableArgsSha256 } = vi.hoisted(() => ({ mockStableArgsSha256: vi.fn() }));
+vi.mock("../../../utils/pluginMcpHash.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../utils/pluginMcpHash.js")>();
+  mockStableArgsSha256.mockImplementation(actual.stableArgsSha256);
+  return { ...actual, stableArgsSha256: mockStableArgsSha256 };
+});
+
 const { mockGetPluginRecipes, mockRecordPluginRecipeUse, mockUpdatePluginRecipeMetadata } =
   vi.hoisted(() => ({
     mockGetPluginRecipes: vi.fn(() => [] as unknown[]),
@@ -1406,7 +1413,12 @@ describe("registerPluginHandlers", () => {
       pluginId: "x",
       actionId: "y",
       result: "error",
+      // Oversize args are recorded unhashed: hashing would serialise the very
+      // payload the cap refused.
+      argsHash: "",
+      errorMessage: expect.stringMatching(/at least \d+ bytes/),
     });
+    expect(mockStableArgsSha256).not.toHaveBeenCalled();
   });
 
   it("PLUGIN_INVOKE handler audits dispatch failures (#9240)", async () => {

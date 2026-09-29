@@ -143,6 +143,20 @@ describe("@daintreehq/plugin-ui kit", () => {
     expect(container.textContent).toContain("Command K");
   });
 
+  it("renders Badge tone danger as the same pill as error", () => {
+    const { container } = render(
+      createElement(
+        "div",
+        null,
+        createElement(kit.Badge, { tone: "danger", children: "Failing" }),
+        createElement(kit.Badge, { tone: "error", children: "Failing" })
+      )
+    );
+    const [danger, error] = container.querySelectorAll("[data-slot='badge']");
+    expect(danger?.getAttribute("data-tone")).toBe("error");
+    expect(danger?.className).toBe(error?.className);
+  });
+
   it("reports Checkbox changes as booleans", () => {
     const onCheckedChange = vi.fn();
     render(createElement(kit.Checkbox, { "aria-label": "Include", onCheckedChange }));

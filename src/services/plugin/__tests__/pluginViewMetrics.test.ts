@@ -5,6 +5,7 @@ import {
   MAX_PENDING_LONG_FRAMES,
   MAX_PENDING_VIEW_LOADS,
   MAX_RECENT_VIEW_LOADS,
+  MAX_TRACKED_PLUGINS,
   createPluginViewMetrics,
 } from "../pluginViewMetrics";
 
@@ -25,8 +26,8 @@ describe("pluginViewMetrics", () => {
   it("drains per-plugin deltas once and then reports nothing", () => {
     const metrics = createPluginViewMetrics();
     metrics.recordViewLoad("acme", sample());
-    metrics.recordCommit("acme", 4, 100, 104);
-    metrics.recordCommit("beta", 2, 200, 202);
+    metrics.recordCommit("acme", 4, 104);
+    metrics.recordCommit("beta", 2, 202);
     metrics.recordLongFrame("acme", { durationMs: 80, blockingMs: 30, source: "commit", at: 5 });
 
     const reports = metrics.drainReports();
@@ -35,14 +36,23 @@ describe("pluginViewMetrics", () => {
       pluginId: "acme",
       viewLoads: [sample()],
       commitDurationsMs: [4],
+      commitCount: 1,
       longFrames: [{ durationMs: 80, blockingMs: 30, source: "commit", at: 5 }],
+      longFramesDropped: { count: 0, blockingMs: 0 },
     });
     expect(reports.find((r) => r.pluginId === "beta")?.commitDurationsMs).toEqual([2]);
 
     expect(metrics.drainReports()).toEqual([]);
-    metrics.recordCommit("beta", 7, 300, 307);
+    metrics.recordCommit("beta", 7, 307);
     expect(metrics.drainReports()).toEqual([
-      { pluginId: "beta", viewLoads: [], commitDurationsMs: [7], longFrames: [] },
+      {
+        pluginId: "beta",
+        viewLoads: [],
+        commitDurationsMs: [7],
+        commitCount: 1,
+        longFrames: [],
+        longFramesDropped: { count: 0, blockingMs: 0 },
+      },
     ]);
   });
 
@@ -50,7 +60,7 @@ describe("pluginViewMetrics", () => {
     const metrics = createPluginViewMetrics();
     expect(metrics.getLocalSnapshot("acme")).toBeNull();
     metrics.recordViewLoad("acme", sample());
-    for (const d of [1, 2, 3, 4, 100]) metrics.recordCommit("acme", d, 0, d);
+    for (const d of [1, 2, 3, 4, 100]) metrics.recordCommit("acme", d, d);
     metrics.recordLongFrame("acme", { durationMs: 90, blockingMs: 40, source: "script", at: 9 });
     metrics.drainReports();
 
@@ -70,10 +80,11 @@ describe("pluginViewMetrics", () => {
     const metrics = createPluginViewMetrics();
     const total = MAX_PENDING_COMMITS * 4;
     for (let i = 0; i < total; i++) {
-      metrics.recordCommit("acme", i === total / 2 ? 999 : 1 + (i % 10), i, i + 1);
+      metrics.recordCommit("acme", i === total / 2 ? 999 : 1 + (i % 10), i + 1);
     }
     const [report] = metrics.drainReports();
     expect(report!.commitDurationsMs).toHaveLength(MAX_PENDING_COMMITS);
+    expect(report!.commitCount).toBe(total);
     expect(Math.max(...report!.commitDurationsMs)).toBe(999);
     expect(metrics.getLocalSnapshot("acme")!.viewCommits!.count).toBe(total);
   });
@@ -83,7 +94,12 @@ describe("pluginViewMetrics", () => {
     for (let i = 0; i < MAX_PENDING_VIEW_LOADS + 10; i++)
       metrics.recordViewLoad("acme", sample({ at: i }));
     for (let i = 0; i < MAX_PENDING_LONG_FRAMES + 10; i++) {
-      metrics.recordLongFrame("acme", { durationMs: 60, blockingMs: 10, source: "commit", at: i });
+      metrics.recordLongFrame("acme", {
+        durationMs: 60,
+        blockingMs: i < MAX_PENDING_LONG_FRAMES ? 10 : 7,
+        source: "commit",
+        at: i,
+      });
     }
     expect(metrics.getLocalSnapshot("acme")!.viewLoads).toHaveLength(MAX_RECENT_VIEW_LOADS);
     expect(metrics.getLocalSnapshot("acme")!.viewLoads.at(-1)!.at).toBe(MAX_PENDING_VIEW_LOADS + 9);
@@ -91,6 +107,8 @@ describe("pluginViewMetrics", () => {
     expect(report!.viewLoads).toHaveLength(MAX_PENDING_VIEW_LOADS);
     expect(report!.viewLoads[0]!.at).toBe(10);
     expect(report!.longFrames).toHaveLength(MAX_PENDING_LONG_FRAMES);
+    expect(report!.longFrames.at(-1)!.at).toBe(MAX_PENDING_LONG_FRAMES - 1);
+    expect(report!.longFramesDropped).toEqual({ count: 10, blockingMs: 70 });
     // The running totals are not bounded by the pending buffer.
     expect(metrics.getLocalSnapshot("acme")!.longFrames.count).toBe(MAX_PENDING_LONG_FRAMES + 10);
   });
@@ -99,16 +117,16 @@ describe("pluginViewMetrics", () => {
     const metrics = createPluginViewMetrics();
     const listener = vi.fn();
     const unsubscribe = metrics.subscribe(listener);
-    metrics.recordCommit("acme", 1, 0, 1);
-    metrics.recordCommit("acme", 1, 1, 2);
-    metrics.recordCommit("beta", 1, 2, 3);
+    metrics.recordCommit("acme", 1, 1);
+    metrics.recordCommit("acme", 1, 2);
+    metrics.recordCommit("beta", 1, 3);
     expect(listener).toHaveBeenCalledTimes(1);
     metrics.drainReports();
-    metrics.recordCommit("acme", 1, 3, 4);
+    metrics.recordCommit("acme", 1, 4);
     expect(listener).toHaveBeenCalledTimes(2);
     unsubscribe();
     metrics.drainReports();
-    metrics.recordCommit("acme", 1, 4, 5);
+    metrics.recordCommit("acme", 1, 5);
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
@@ -121,19 +139,20 @@ describe("pluginViewMetrics", () => {
     expect(metrics.pluginIdForScriptUrl("")).toBeUndefined();
   });
 
-  it("finds plugins whose commit windows overlap a time range", () => {
+  it("finds plugins whose commit time falls in a time range", () => {
     const metrics = createPluginViewMetrics();
-    metrics.recordCommit("acme", 5, 100, 105);
-    metrics.recordCommit("beta", 5, 300, 305);
-    expect(metrics.pluginsCommittingDuring(90, 101)).toEqual(["acme"]);
+    metrics.recordCommit("acme", 5, 105);
+    metrics.recordCommit("beta", 5, 305);
+    expect(metrics.pluginsCommittingDuring(100, 106)).toEqual(["acme"]);
+    expect(metrics.pluginsCommittingDuring(90, 101)).toEqual([]);
     expect(metrics.pluginsCommittingDuring(0, 400).sort()).toEqual(["acme", "beta"]);
     expect(metrics.pluginsCommittingDuring(200, 250)).toEqual([]);
   });
 
   it("keeps a fixed number of commit windows", () => {
     const metrics = createPluginViewMetrics();
-    metrics.recordCommit("old", 1, 0, 1);
-    for (let i = 0; i < 64; i++) metrics.recordCommit("new", 1, 1000 + i, 1001 + i);
+    metrics.recordCommit("old", 1, 1);
+    for (let i = 0; i < 64; i++) metrics.recordCommit("new", 1, 1001 + i);
     expect(metrics.pluginsCommittingDuring(0, 2)).toEqual([]);
   });
 
@@ -153,7 +172,7 @@ describe("pluginViewMetrics", () => {
   it("keeps the window's worst commit even when costs keep climbing", () => {
     const metrics = createPluginViewMetrics();
     const total = MAX_PENDING_COMMITS * 8;
-    for (let i = 0; i < total; i++) metrics.recordCommit("acme", i, i, i + 1);
+    for (let i = 0; i < total; i++) metrics.recordCommit("acme", i, i + 1);
     const [report] = metrics.drainReports();
     expect(report!.commitDurationsMs).toHaveLength(MAX_PENDING_COMMITS);
     expect(Math.max(...report!.commitDurationsMs)).toBe(total - 1);
@@ -166,7 +185,7 @@ describe("pluginViewMetrics", () => {
   it("bounds the plugins and authorities it remembers", () => {
     const metrics = createPluginViewMetrics();
     const releaseOpen = metrics.retainView("open");
-    metrics.recordCommit("open", 1, 0, 1);
+    metrics.recordCommit("open", 1, 1);
     metrics.drainReports();
     for (let i = 0; i < 200; i++) {
       metrics.recordViewLoad(`p${i}`, sample());
@@ -181,11 +200,120 @@ describe("pluginViewMetrics", () => {
     releaseOpen();
   });
 
-  it("confines a commit window to the render's own duration before the commit", () => {
+  it("attributes by commit time, not by a window rebuilt from actualDuration", () => {
     const metrics = createPluginViewMetrics();
-    // Render began at 0, yielded, and did 5ms of work ending in a commit at 500.
-    metrics.recordCommit("acme", 5, 0, 500);
-    expect(metrics.pluginsCommittingDuring(100, 200)).toEqual([]);
+    // 40ms of render work summed across yields, committing at 500: the frame
+    // that ended at 470 did not contain the commit.
+    metrics.recordCommit("acme", 40, 500);
+    expect(metrics.pluginsCommittingDuring(420, 470)).toEqual([]);
     expect(metrics.pluginsCommittingDuring(490, 600)).toEqual(["acme"]);
+  });
+
+  it("requests an early drain once per window as pending buffers near their caps", () => {
+    const metrics = createPluginViewMetrics();
+    const requested = vi.fn();
+    const off = metrics.onDrainRequested(requested);
+    const highWater = Math.floor(MAX_PENDING_COMMITS * 0.75);
+    for (let i = 0; i < highWater - 1; i++) metrics.recordCommit("acme", 1, i);
+    expect(requested).not.toHaveBeenCalled();
+    metrics.recordCommit("acme", 1, highWater);
+    expect(requested).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < MAX_PENDING_COMMITS; i++) metrics.recordCommit("acme", 1, i);
+    for (let i = 0; i < MAX_PENDING_LONG_FRAMES; i++) {
+      metrics.recordLongFrame("beta", { durationMs: 60, blockingMs: 1, source: "commit", at: i });
+    }
+    expect(requested).toHaveBeenCalledTimes(1);
+
+    metrics.drainReports();
+    for (let i = 0; i < Math.floor(MAX_PENDING_LONG_FRAMES * 0.75); i++) {
+      metrics.recordLongFrame("beta", { durationMs: 60, blockingMs: 1, source: "commit", at: i });
+    }
+    expect(requested).toHaveBeenCalledTimes(2);
+
+    metrics.drainReports();
+    for (let i = 0; i < Math.floor(MAX_PENDING_VIEW_LOADS * 0.75); i++) {
+      metrics.recordViewLoad("gamma", sample({ at: i }));
+    }
+    expect(requested).toHaveBeenCalledTimes(3);
+    off();
+    metrics.drainReports();
+    for (let i = 0; i < MAX_PENDING_COMMITS; i++) metrics.recordCommit("acme", 1, i);
+    expect(requested).toHaveBeenCalledTimes(3);
+  });
+
+  it("finishes the record before a drain listener that drains synchronously", () => {
+    const metrics = createPluginViewMetrics();
+    const drained: number[][] = [];
+    const notified = vi.fn();
+    metrics.subscribe(notified);
+    metrics.onDrainRequested(() => {
+      for (const r of metrics.drainReports()) drained.push(r.commitDurationsMs);
+    });
+    const highWater = Math.floor(MAX_PENDING_COMMITS * 0.75);
+    for (let i = 0; i < highWater; i++)
+      metrics.recordCommit("acme", i === highWater - 1 ? 50 : 1, i);
+    expect(drained).toHaveLength(1);
+    expect(drained[0]).toHaveLength(highWater);
+    expect(drained[0]!.at(-1)).toBe(50);
+    // Nothing is pending after that drain, so no stale max and no empty notification.
+    expect(metrics.drainReports()).toEqual([]);
+    expect(notified).toHaveBeenCalledTimes(1);
+    metrics.recordCommit("acme", 2, 1000);
+    expect(metrics.drainReports()[0]!.commitDurationsMs).toEqual([2]);
+  });
+
+  it("ignores a view release left over from before reset()", () => {
+    const metrics = createPluginViewMetrics();
+    const stale = metrics.retainView("acme");
+    metrics.reset();
+    const release = metrics.retainView("acme");
+    stale();
+    expect(metrics.isTracking()).toBe(true);
+    release();
+    expect(metrics.isTracking()).toBe(false);
+  });
+
+  it("evicts closed plugins once their data has drained, keeping open ones", () => {
+    const metrics = createPluginViewMetrics();
+    const releases = Array.from({ length: MAX_TRACKED_PLUGINS + 20 }, (_, i) => {
+      const release = metrics.retainView(`p${i}`);
+      metrics.recordCommit(`p${i}`, 1, i);
+      return release;
+    });
+    metrics.drainReports();
+    // Every entry is open, so none can go even past the cap.
+    expect(metrics.getLocalSnapshot("p0")).not.toBeNull();
+
+    // Closing views brings the map back under the cap without another drain.
+    for (const release of releases.slice(0, 40)) release();
+    let kept = 0;
+    for (let i = 0; i < MAX_TRACKED_PLUGINS + 20; i++) {
+      if (metrics.getLocalSnapshot(`p${i}`)) kept++;
+    }
+    expect(kept).toBe(MAX_TRACKED_PLUGINS);
+    expect(metrics.getLocalSnapshot("p0")).toBeNull();
+    expect(metrics.getLocalSnapshot("p83")).not.toBeNull();
+  });
+
+  it("keeps pending data of closed plugins until it drains, then evicts", () => {
+    const metrics = createPluginViewMetrics();
+    for (let i = 0; i < MAX_TRACKED_PLUGINS + 10; i++) metrics.recordCommit(`p${i}`, 1, i);
+    // Nothing drained yet: every entry still holds a pending delta.
+    expect(metrics.getLocalSnapshot("p0")).not.toBeNull();
+    const reports = metrics.drainReports();
+    expect(reports).toHaveLength(MAX_TRACKED_PLUGINS + 10);
+    expect(metrics.getLocalSnapshot("p0")).toBeNull();
+    expect(metrics.getLocalSnapshot(`p${MAX_TRACKED_PLUGINS + 9}`)).not.toBeNull();
+  });
+
+  it("never evicts the entry it is creating, even when every other entry is protected", () => {
+    const metrics = createPluginViewMetrics();
+    for (let i = 0; i < MAX_TRACKED_PLUGINS; i++) metrics.retainView(`open${i}`);
+    for (let i = 0; i < MAX_TRACKED_PLUGINS; i++) metrics.recordCommit(`open${i}`, 1, i);
+    metrics.drainReports();
+    metrics.recordViewLoad("fresh", sample());
+    const [report] = metrics.drainReports();
+    expect(report!.pluginId).toBe("fresh");
+    expect(report!.viewLoads).toEqual([sample()]);
   });
 });

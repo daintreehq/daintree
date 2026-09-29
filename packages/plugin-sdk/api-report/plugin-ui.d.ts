@@ -11,10 +11,23 @@
 // `/// <reference types="@daintreehq/plugin-sdk/plugin-ui" />` in one file.
 //
 // Stability: the kit is versioned by `PLUGIN_UI_VERSION` (semver). A minor
-// version only adds: new components, new optional props, new icon names, new
-// theme token keys. Within a major version no export, prop, accepted value or
-// token key is removed or narrowed. Every component validates its props at
-// runtime, so a value outside these types is ignored rather than thrown on.
+// version adds new components, new optional props, new icon names and new
+// theme token keys; the only other change it may make is renaming an extended
+// theme token (below). Within a major version no export, prop, accepted value
+// or core token key is removed or narrowed. Every component validates its props at runtime, so a
+// value outside these types is ignored rather than thrown on.
+//
+// Theme tokens come in two tiers. The core tokens — `surface-*`, `text-*`,
+// `border-*`, `accent-*`, `focus-ring` and `status-*` — are stable for the
+// whole major version. The extended groups — `terminal-*` (including the ANSI
+// colours), `syntax-*`, `activity-*` and `category-*` — are provided best
+// effort and may be renamed in a minor version, with the change noted in the
+// release notes. Read an extended token with a fallback.
+//
+// Status vocabulary, shared by `Badge` `tone` and `Callout` `severity`:
+// `error` ≡ `danger` in colour (the `status-error` class is an alias of the
+// `status-danger` theme token), plus `warning`, `success`, `info` and `neutral`. A Badge renders `error` and
+// `danger` identically; a Callout keeps a separate caution glyph for `danger`.
 //
 // Components render Daintree's own controls and are themed with the app.
 // They load with the kit on first use, so a component can paint a frame late
@@ -123,7 +136,7 @@ declare module "@daintreehq/plugin-ui" {
   export const Spinner: ComponentType<SpinnerProps>;
   /** An icon that spins while `active` and finishes its turn before stopping. */
   export const SpinningIcon: ComponentType<SpinningIconProps>;
-  /** A status pill. */
+  /** A status pill. `tone` uses the shared status vocabulary above, plus `outline`. */
   export const Badge: ComponentType<BadgeProps>;
   export const Checkbox: ComponentType<CheckboxProps>;
   export const Input: ComponentType<InputProps>;
@@ -170,7 +183,10 @@ declare module "@daintreehq/plugin-ui" {
    * For styling DOM, prefer the theme's CSS classes and variables; they
    * follow the theme without a re-render.
    *
-   * Token keys (the `--theme-*` CSS variable names without the prefix):
+   * Token keys (the `--theme-*` CSS variable names without the prefix). The
+   * surface, text, border, accent and status groups are core and stable within
+   * the major version; activity, terminal, syntax and category are extended
+   * and may be renamed in a minor version (see the stability note at the top):
    * surfaces `surface-{grid,sidebar,canvas,panel,panel-elevated,input,inset,hover,active}`;
    * text `text-{primary,secondary,muted,placeholder,inverse,link}`;
    * borders `border-{default,subtle,strong,divider,interactive}`;
