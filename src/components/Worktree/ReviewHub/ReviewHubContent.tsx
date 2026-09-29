@@ -49,6 +49,7 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { hasKeyModifier, stepListboxCursor } from "@/hooks/useListboxCursor";
 import { basename, join } from "@shared/utils/path";
 import {
   isFileRowMenuKey,
@@ -1797,19 +1798,18 @@ export function ReviewHubContent({
       fileListRef.current?.focus({ preventScroll: true });
     };
 
+    // A persistent file list, so the arrows stop at its ends rather than wrap.
+    const next = hasKeyModifier(e)
+      ? null
+      : stepListboxCursor(e.key, focusedIndex, navigableItems.length, { wrap: false });
+    if (next !== null) {
+      e.preventDefault();
+      e.stopPropagation();
+      moveFocus(next);
+      return;
+    }
+
     switch (e.key) {
-      case "ArrowDown": {
-        e.preventDefault();
-        e.stopPropagation();
-        moveFocus(focusedIndex < 0 ? 0 : Math.min(focusedIndex + 1, navigableItems.length - 1));
-        return;
-      }
-      case "ArrowUp": {
-        e.preventDefault();
-        e.stopPropagation();
-        moveFocus(focusedIndex < 0 ? navigableItems.length - 1 : Math.max(focusedIndex - 1, 0));
-        return;
-      }
       case "Enter": {
         if (targetIsControl || focusedIndex < 0) return;
         const item = navigableItems[focusedIndex];

@@ -55,6 +55,7 @@ import { copyWithToast } from "@/lib/copyWithToast";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import { hasKeyModifier, stepListboxCursor } from "@/hooks/useListboxCursor";
 import {
   getUiTransitionDuration,
   UI_ENTER_DURATION,
@@ -414,14 +415,13 @@ export function BrowserToolbar({
       // Keys that belong to an IME composition are the composition's to handle.
       if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       if (isDropdownOpen && suggestions.length > 0) {
-        if (e.key === "ArrowDown") {
+        // -1 is the address as typed: Up from the first row returns to it.
+        const next = hasKeyModifier(e)
+          ? null
+          : stepListboxCursor(e.key, highlightedIndex, suggestions.length, { allowNone: true });
+        if (next !== null) {
           e.preventDefault();
-          setHighlightedIndex((i) => Math.min(i + 1, suggestions.length - 1));
-          return;
-        }
-        if (e.key === "ArrowUp") {
-          e.preventDefault();
-          setHighlightedIndex((i) => Math.max(i - 1, -1));
+          setHighlightedIndex(next);
           return;
         }
         if (e.key === "Enter" && highlightedIndex >= 0) {

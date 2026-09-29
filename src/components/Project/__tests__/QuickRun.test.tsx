@@ -283,6 +283,36 @@ describe("QuickRun", () => {
     expect(input.getAttribute("aria-expanded")).toBe("true");
   });
 
+  it("wraps the arrows through the field and jumps with Home and End while the list shows", () => {
+    seedHistory("npm test", "npm run lint", "ls -la");
+    render(<Footer projectId="test-project" />);
+    const input = openPanel();
+    const lit = () => {
+      const id = input.getAttribute("aria-activedescendant");
+      return id ? document.getElementById(id) : null;
+    };
+
+    // Home and End keep the caret while the list is shut.
+    expect(fireEvent.keyDown(input, { key: "End" })).toBe(true);
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    const rows = commandOptions();
+    expect(rows.length).toBe(3);
+    expect(lit()).toBe(rows[0]);
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(lit()).toBeNull();
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(lit()).toBe(rows[2]);
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(lit()).toBeNull();
+
+    fireEvent.keyDown(input, { key: "End" });
+    expect(lit()).toBe(rows[2]);
+    fireEvent.keyDown(input, { key: "Home" });
+    expect(lit()).toBe(rows[0]);
+  });
+
   it("dismisses suggestions on Escape without leaving the field", () => {
     localStorage.setItem(
       "daintree_cmd_history_test-project",
@@ -388,12 +418,19 @@ describe("QuickRun", () => {
       }
       expect(bands.size).toBe(3);
 
-      // Walking every row with the arrows never lights a band.
-      for (let i = 0; i < all.length + 2; i++) {
+      // Walking every row with the arrows never lights a band. A lap passes
+      // through the field itself once, where nothing is lit.
+      let atField = 0;
+      for (let i = 0; i < commandOptions().length + 1; i++) {
         fireEvent.keyDown(input, { key: "ArrowDown" });
-        const lit = document.getElementById(input.getAttribute("aria-activedescendant")!);
-        expect(lit?.getAttribute("aria-disabled")).toBeNull();
+        const activeId = input.getAttribute("aria-activedescendant");
+        if (activeId === null) {
+          atField++;
+          continue;
+        }
+        expect(document.getElementById(activeId)?.getAttribute("aria-disabled")).toBeNull();
       }
+      expect(atField).toBe(1);
     } finally {
       settingsMock.allDetectedRunners = [];
       settingsMock.runCommands = [];

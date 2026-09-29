@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useListboxCursor, type ListboxCursorKeyEvent } from "../useListboxCursor";
+import {
+  hasKeyModifier,
+  stepListboxCursor,
+  useListboxCursor,
+  type ListboxCursorKeyEvent,
+} from "../useListboxCursor";
 
 function keyEvent(
   key: string,
@@ -156,5 +161,94 @@ describe("useListboxCursor", () => {
     act(() => result.current.handleKeyDown(keyEvent("Enter", { keyCode: 229 })));
 
     expect(onSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe("stepListboxCursor", () => {
+  const walk = (key: string, from: number, count: number, steps: number, options = {}) => {
+    const seen: number[] = [];
+    let index = from;
+    for (let i = 0; i < steps; i++) {
+      index = stepListboxCursor(key, index, count, options)!;
+      seen.push(index);
+    }
+    return seen;
+  };
+
+  it("a wrapping list visits every row once per lap, in both directions", () => {
+    for (const count of [1, 2, 5]) {
+      const down = walk("ArrowDown", 0, count, count);
+      expect(new Set(down).size).toBe(count);
+      expect(down[count - 1]).toBe(0);
+      const up = walk("ArrowUp", 0, count, count);
+      expect(new Set(up).size).toBe(count);
+      expect(up[count - 1]).toBe(0);
+    }
+  });
+
+  it("Down past the last row and Up past the first go round to the other end", () => {
+    expect(stepListboxCursor("ArrowDown", 4, 5)).toBe(0);
+    expect(stepListboxCursor("ArrowUp", 0, 5)).toBe(4);
+  });
+
+  it("a list with a none position passes through it on the way round", () => {
+    const lap = walk("ArrowDown", -1, 3, 4, { allowNone: true });
+    expect(lap).toEqual([0, 1, 2, -1]);
+    const back = walk("ArrowUp", -1, 3, 4, { allowNone: true });
+    expect(back).toEqual([2, 1, 0, -1]);
+  });
+
+  it("a non-wrapping list holds at both ends", () => {
+    expect(stepListboxCursor("ArrowDown", 4, 5, { wrap: false })).toBe(4);
+    expect(stepListboxCursor("ArrowUp", 0, 5, { wrap: false })).toBe(0);
+  });
+
+  it("Home and End jump to the ends whatever the options", () => {
+    for (const options of [{}, { wrap: false }, { allowNone: true }]) {
+      for (const from of [-1, 0, 2, 4]) {
+        expect(stepListboxCursor("Home", from, 5, options)).toBe(0);
+        expect(stepListboxCursor("End", from, 5, options)).toBe(4);
+      }
+    }
+  });
+
+  it("an out-of-range cursor enters at the near end of travel", () => {
+    expect(stepListboxCursor("ArrowDown", 9, 5)).toBe(0);
+    expect(stepListboxCursor("ArrowUp", 9, 5)).toBe(4);
+    expect(stepListboxCursor("ArrowUp", -1, 5, { wrap: false })).toBe(4);
+  });
+
+  it("leaves other keys and empty lists alone", () => {
+    expect(stepListboxCursor("Enter", 0, 5)).toBeNull();
+    expect(stepListboxCursor("PageDown", 0, 5)).toBeNull();
+    expect(stepListboxCursor("ArrowDown", 0, 0)).toBeNull();
+    expect(stepListboxCursor("Home", -1, 0)).toBeNull();
+  });
+
+  it("every result is a row or the none position the list allows", () => {
+    for (const key of ["ArrowDown", "ArrowUp", "Home", "End"]) {
+      for (const count of [1, 3]) {
+        for (let from = -1; from <= count; from++) {
+          for (const wrap of [true, false]) {
+            const plain = stepListboxCursor(key, from, count, { wrap })!;
+            expect(plain).toBeGreaterThanOrEqual(0);
+            expect(plain).toBeLessThan(count);
+            const withNone = stepListboxCursor(key, from, count, { wrap, allowNone: true })!;
+            expect(withNone).toBeGreaterThanOrEqual(-1);
+            expect(withNone).toBeLessThan(count);
+          }
+        }
+      }
+    }
+  });
+});
+
+describe("hasKeyModifier", () => {
+  it("reports any of the four modifiers", () => {
+    const bare = { shiftKey: false, metaKey: false, ctrlKey: false, altKey: false };
+    expect(hasKeyModifier(bare)).toBe(false);
+    for (const k of ["shiftKey", "metaKey", "ctrlKey", "altKey"] as const) {
+      expect(hasKeyModifier({ ...bare, [k]: true })).toBe(true);
+    }
   });
 });

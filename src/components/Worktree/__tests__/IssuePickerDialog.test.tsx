@@ -227,6 +227,32 @@ describe("IssuePickerDialog keyboard contract", () => {
     }
   });
 
+  it("wraps the arrows at the ends and jumps with Home and End, leaving modified keys to the field", async () => {
+    listIssuesMock.mockResolvedValue({
+      items: [makeIssue(1, "One"), makeIssue(2, "Two"), makeIssue(3, "Three")],
+    });
+    renderDialog();
+    await waitFor(() => screen.getByText("Three", VISIBLE));
+
+    const combobox = screen.getByRole("combobox");
+    const active = () =>
+      document.getElementById(combobox.getAttribute("aria-activedescendant") ?? "")?.textContent;
+
+    expect(active()).toContain("One");
+    fireEvent.keyDown(combobox, { key: "ArrowUp" });
+    expect(active()).toContain("Three");
+    fireEvent.keyDown(combobox, { key: "ArrowDown" });
+    expect(active()).toContain("One");
+    fireEvent.keyDown(combobox, { key: "End" });
+    expect(active()).toContain("Three");
+    fireEvent.keyDown(combobox, { key: "Home" });
+    expect(active()).toContain("One");
+
+    // Shift+End selects the query text; the cursor stays put.
+    expect(fireEvent.keyDown(combobox, { key: "End", shiftKey: true })).toBe(true);
+    expect(active()).toContain("One");
+  });
+
   it("moves the cursor to the row the pointer is over, so only one row is highlighted", async () => {
     listIssuesMock.mockResolvedValue({ items: [makeIssue(1, "One"), makeIssue(2, "Two")] });
     renderDialog();

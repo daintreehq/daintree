@@ -37,6 +37,7 @@ import { classifyGitError, getGitRecoveryHint } from "@shared/utils/gitOperation
 import { logError } from "@/utils/logger";
 import type { GitCommit, GitPushCommitPreview } from "@shared/types/git";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { hasKeyModifier, stepListboxCursor } from "@/hooks/useListboxCursor";
 import { FORGE_DROPDOWN_PANEL_SIZE } from "./forgeStatsDropdownContract";
 
 // The commits pill's list (issue #10414). Commit history is local git data, not
@@ -832,17 +833,17 @@ export function LocalCommitsDropdown({
       // candidate must not also expand or copy a row. The keyCode check covers
       // WebKit's first keydown, before `isComposing` is set.
       if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+      // The Load more row is the list's last row; -1 is the search field itself.
+      const next = hasKeyModifier(e)
+        ? null
+        : stepListboxCursor(e.key, cursorIndex, maxCursor + 1, { allowNone: true });
+      if (next !== null) {
+        e.preventDefault();
+        e.stopPropagation();
+        setCursorIndex(next);
+        return;
+      }
       switch (e.key) {
-        case "ArrowDown":
-          e.preventDefault();
-          e.stopPropagation();
-          setCursorIndex((prev) => Math.min(prev + 1, maxCursor));
-          break;
-        case "ArrowUp":
-          e.preventDefault();
-          e.stopPropagation();
-          setCursorIndex((prev) => Math.max(prev - 1, -1));
-          break;
         case "Enter": {
           e.preventDefault();
           e.stopPropagation();
@@ -909,6 +910,7 @@ export function LocalCommitsDropdown({
       handleRetryPush,
       expandedHashes,
       handleRetry,
+      cursorIndex,
       maxCursor,
       isLoadMoreActive,
       activeCommit,
@@ -986,7 +988,7 @@ export function LocalCommitsDropdown({
           aria-controls={LIST_ID}
           aria-activedescendant={activeDescendantId}
           aria-label="Search commits"
-          aria-keyshortcuts="ArrowDown ArrowUp Enter Shift+Enter PageDown PageUp Escape"
+          aria-keyshortcuts="ArrowDown ArrowUp Home End Enter Shift+Enter PageDown PageUp Escape"
           onClear={handleClearSearch}
           trailing={
             isSlowRefresh && (

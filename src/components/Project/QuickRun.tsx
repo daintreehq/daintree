@@ -10,6 +10,7 @@ import {
   RotateCw,
 } from "lucide-react";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
+import { hasKeyModifier, stepListboxCursor } from "@/hooks/useListboxCursor";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
@@ -611,16 +612,22 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     highlighted != null && normalizeCommand(highlighted.value) !== normalizedInput;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Down opens a shut list; the other navigation keys only move a list that is
+    // showing, so Home and End keep the caret while it is shut. -1 is the field.
+    const navigable = !hasKeyModifier(e) && (listOpen || e.key === "ArrowDown");
+    const next = navigable
+      ? stepListboxCursor(e.key, activeIndex, suggestions.length, { allowNone: true })
+      : null;
     if (e.key === "Enter") {
       e.preventDefault();
       if (runTarget) void handleRunItem(runTarget);
-    } else if (e.key === "ArrowDown") {
+    } else if (navigable && e.key === "ArrowDown") {
       e.preventDefault();
       setShowSuggestions(true);
-      setFocusedSuggestionIndex(Math.min(activeIndex + 1, suggestions.length - 1));
-    } else if (e.key === "ArrowUp") {
+      if (next !== null) setFocusedSuggestionIndex(next);
+    } else if (next !== null) {
       e.preventDefault();
-      setFocusedSuggestionIndex(Math.max(activeIndex - 1, -1));
+      setFocusedSuggestionIndex(next);
     } else if (e.key === "Escape") {
       // Dismiss the menu, keep the field. Blurring threw the keyboard user out
       // of the one control they came here for.

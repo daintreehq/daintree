@@ -40,6 +40,71 @@ export interface UseListboxCursorResult {
   handleKeyDown: (e: ListboxCursorKeyEvent) => void;
 }
 
+export interface StepListboxCursorOptions {
+  /**
+   * Past either end, go round to the other. On for pickers and suggestion
+   * lists, which are short and transient; off for a persistent list, where one
+   * press too many would otherwise throw the user to the far end of a long list.
+   */
+  wrap?: boolean;
+  /**
+   * The list has a resting position of no row at all (`-1`), which in a
+   * combobox is the text the user typed. Up from the first row returns to it,
+   * and a wrapping list passes through it on the way round.
+   */
+  allowNone?: boolean;
+}
+
+/**
+ * Where a list cursor goes for a navigation key: arrows step, Home/End jump to
+ * the ends. Returns `null` for any other key, and for an empty list, so the
+ * caller leaves the key alone.
+ *
+ * The one stepping rule every picker shares, so a list cannot clamp at its ends
+ * or forget Home/End while its neighbours do neither. `index` may be `-1` or
+ * out of range: Down then enters at the first row and Up at the last.
+ */
+export function stepListboxCursor(
+  key: string,
+  index: number,
+  count: number,
+  { wrap = true, allowNone = false }: StepListboxCursorOptions = {}
+): number | null {
+  if (count <= 0) return null;
+  const inRange = index >= 0 && index < count;
+  switch (key) {
+    case "Home":
+      return 0;
+    case "End":
+      return count - 1;
+    case "ArrowDown":
+      if (!inRange) return 0;
+      if (index < count - 1) return index + 1;
+      return wrap ? (allowNone ? -1 : 0) : index;
+    case "ArrowUp":
+      if (!inRange) return count - 1;
+      if (index > 0) return index - 1;
+      if (allowNone) return -1;
+      return wrap ? count - 1 : index;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Whether a key arrived with a modifier. The list steps on bare keys only:
+ * Shift+Home selects the field's text, Cmd+Arrow moves its caret, and a chord
+ * belongs to whatever bound it.
+ */
+export function hasKeyModifier(e: {
+  shiftKey: boolean;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+}): boolean {
+  return e.shiftKey || e.metaKey || e.ctrlKey || e.altKey;
+}
+
 /**
  * The roving cursor a popover listbox needs to be usable from the keyboard:
  * arrows wrap, Home/End jump, Enter commits, Escape closes.
@@ -107,27 +172,16 @@ export function useListboxCursor({
 
       if (itemCount === 0) return;
 
-      switch (e.key) {
-        case "ArrowDown":
-          consume();
-          setCursorIndex((activeIndex + 1) % itemCount);
-          break;
-        case "ArrowUp":
-          consume();
-          setCursorIndex((activeIndex - 1 + itemCount) % itemCount);
-          break;
-        case "Home":
-          consume();
-          setCursorIndex(0);
-          break;
-        case "End":
-          consume();
-          setCursorIndex(itemCount - 1);
-          break;
-        case "Enter":
-          consume();
-          if (activeIndex >= 0) onSelect(activeIndex);
-          break;
+      const next = stepListboxCursor(e.key, activeIndex, itemCount);
+      if (next !== null) {
+        consume();
+        setCursorIndex(next);
+        return;
+      }
+
+      if (e.key === "Enter") {
+        consume();
+        if (activeIndex >= 0) onSelect(activeIndex);
       }
     },
     [activeIndex, itemCount, onClose, onSelect]

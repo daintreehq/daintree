@@ -315,6 +315,29 @@ describe("BrowserToolbar ARIA semantics", () => {
     expect(options[1]!.getAttribute("aria-selected")).toBe("false");
   });
 
+  it("wraps the arrows through the typed address and jumps with Home and End", () => {
+    const { container, getByTestId } = renderToolbar();
+    const input = openDropdown(getByTestId);
+    const listboxId = input.getAttribute("aria-controls")!;
+    const count = container.querySelectorAll('[role="option"]').length;
+    expect(count).toBeGreaterThan(1);
+    const active = () => input.getAttribute("aria-activedescendant");
+
+    act(() => void fireEvent.keyDown(input, { key: "ArrowUp" }));
+    expect(active()).toBe(`${listboxId}-option-${count - 1}`);
+    act(() => void fireEvent.keyDown(input, { key: "ArrowDown" }));
+    expect(active()).toBeNull();
+    act(() => void fireEvent.keyDown(input, { key: "ArrowDown" }));
+    expect(active()).toBe(`${listboxId}-option-0`);
+
+    act(() => void fireEvent.keyDown(input, { key: "End" }));
+    expect(active()).toBe(`${listboxId}-option-${count - 1}`);
+    act(() => void fireEvent.keyDown(input, { key: "Home" }));
+    expect(active()).toBe(`${listboxId}-option-0`);
+    expect(fireEvent.keyDown(input, { key: "End", shiftKey: true })).toBe(true);
+    expect(active()).toBe(`${listboxId}-option-0`);
+  });
+
   it("aria-activedescendant clears when the dropdown closes", async () => {
     const { getByTestId } = renderToolbar();
     const input = openDropdown(getByTestId);
