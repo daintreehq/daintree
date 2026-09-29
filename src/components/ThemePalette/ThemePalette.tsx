@@ -61,7 +61,8 @@ function ThemeListItem({
       aria-current={isCurrent ? "true" : undefined}
       className={cn(
         PALETTE_ROW_CLASS,
-        "w-full text-left px-3 py-1.5 rounded-[var(--radius-md)] flex items-center gap-3"
+        "w-full text-left px-3 rounded-[var(--radius-md)] flex items-center gap-3",
+        scheme.location ? "py-2" : "py-1.5"
       )}
     >
       <div className="flex-1 min-w-0">

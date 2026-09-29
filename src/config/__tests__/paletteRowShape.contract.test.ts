@@ -132,6 +132,9 @@ function boxViolations(rel: string, source: string, family: Family): string[] {
     // branch, has to be one the family allows.
     const conflicting = call.classes.filter(
       (t) =>
+        // Geometry never changes with state: a row that grows or reshapes
+        // under the cursor or the pointer shoves the list.
+        /:(rounded(-|$)|p[xytblrse]?-)/.test(t) ||
         (/^rounded(-|$)/.test(t) && t !== box.radius) ||
         (/^px-/.test(t) && t !== box.inset) ||
         (/^py-/.test(t) && !heights.includes(t))
@@ -172,15 +175,17 @@ const PALETTE_FILES = [
   "src/components/Plugin/PluginQuickPickDialog.tsx",
 ];
 
-/**
- * Palettes whose every row carries a second line (a path, a description). Rows
- * that grow a second line only sometimes (an action's description, a theme's
- * "Active") keep the list's single-line rhythm rather than changing height row
- * by row.
- */
+/** Palettes whose every row carries a second line (a path, a description). */
 const ALWAYS_TWO_LINE_FILES = [
   "src/components/Worktree/WorktreePalette.tsx",
   "src/components/TerminalPalette/NewTerminalPalette.tsx",
+];
+
+/** Palettes whose rows show a second line only when the row has one to show. */
+const SOMETIMES_TWO_LINE_FILES = [
+  "src/components/ActionPalette/ActionPaletteItem.tsx",
+  "src/components/QuickSwitcher/QuickSwitcherItem.tsx",
+  "src/components/ThemePalette/ThemePalette.tsx",
 ];
 
 const files = ROOTS.flatMap(sourceFiles).map((file) => ({
@@ -228,6 +233,16 @@ describe("palette and picker row shape — the checks catch what they claim to",
     ["an oversized height", "popover", row('"px-2 py-20 rounded-[var(--radius-sm)]"')],
     ["the palette box in a popover", "popover", row('"px-3 py-2 rounded-[var(--radius-md)]"')],
     ["the popover box in a palette", "palette", row('"px-2 py-1.5 rounded-[var(--radius-sm)]"')],
+    [
+      "padding that changes under the pointer",
+      "palette",
+      row('"px-3 py-2 rounded-[var(--radius-md)] hover:py-20"'),
+    ],
+    [
+      "a radius that changes with selection",
+      "popover",
+      row('"px-2 py-1.5 rounded-[var(--radius-sm)] aria-selected:rounded-lg"'),
+    ],
     [
       "an allowed box overridden by a later utility",
       "palette",
@@ -290,6 +305,16 @@ describe("palette and picker row shape", () => {
     const rows = rowCalls(read(rel), rel).filter((c) => c.kind === "row");
     expect(rows.length).toBeGreaterThan(0);
     for (const call of rows) expect(call.classes, `${rel}:${call.line}`).toContain("py-2");
+  });
+
+  it.each(SOMETIMES_TWO_LINE_FILES)("sizes %s's rows by whether they show a second line", (rel) => {
+    const rows = rowCalls(read(rel), rel).filter((c) => c.kind === "row");
+    expect(rows.length).toBeGreaterThan(0);
+    for (const call of rows) {
+      expect(call.classes, `${rel}:${call.line}`).toEqual(
+        expect.arrayContaining(["py-1.5", "py-2"])
+      );
+    }
   });
 
   it.each(POPOVER_FILES)(

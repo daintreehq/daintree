@@ -159,7 +159,11 @@ function ActionPaletteItemInner({
     <div
       className={cn(
         PALETTE_ROW_CLASS,
-        "group w-full flex items-start gap-3 px-3 py-1.5 rounded-[var(--radius-md)]",
+        "group w-full flex items-start gap-3 px-3 rounded-[var(--radius-md)]",
+        // A second line takes the two-line height. The danger rationale is
+        // left out: it shows only under the cursor, and a row that grew as the
+        // cursor landed on it would shove the list.
+        summary || (!item.enabled && item.disabledReason) ? "py-2" : "py-1.5",
         "text-text-secondary"
       )}
       id={`action-option-${item.id}`}
