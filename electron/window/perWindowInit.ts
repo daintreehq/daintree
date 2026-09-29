@@ -44,6 +44,18 @@ import {
   getWorkspaceClientRef,
 } from "./serviceRefs.js";
 
+// How long a completed CLI availability check stands in for the per-window
+// re-check. Long enough to cover a burst of window opens and restores, short
+// enough that a window opened much later still picks up newly installed CLIs.
+const CLI_AVAILABILITY_REUSE_MS = 5 * 60 * 1000;
+
+let pluginMenuInitSettled = false;
+
+/** Test-only: forget that plugin init has settled. */
+export function __resetPerWindowInitForTests(): void {
+  pluginMenuInitSettled = false;
+}
+
 /**
  * Run the per-window initialization steps that happen on every
  * `setupWindowServices` call: the per-window CLI deferred task,
@@ -70,9 +82,21 @@ export async function initPerWindowServices(
   // its own CLI check + menu rebuild. Registered here (before any awaits that
   // could hang) so finalize below is guaranteed to run.
   const cliService = cliAvailabilityService;
+  // A recent check, published before this window's initial menu build in
+  // setupWindowServices, feeds that build; re-probing every agent CLI per
+  // window would only re-confirm it. Captured now, before the build, and
+  // reused only if it is still the published result when the task runs — so a
+  // check or refresh landing in between still reaches the menu.
+  const reusableAvailability = cliService.getFreshAvailability(CLI_AVAILABILITY_REUSE_MS);
   registerDeferredTask({
     name: `cli-availability-check:${win.id}`,
     run: async () => {
+      if (
+        reusableAvailability &&
+        cliService.getFreshAvailability(CLI_AVAILABILITY_REUSE_MS) === reusableAvailability
+      ) {
+        return;
+      }
       try {
         const availability = await cliService.checkAvailability();
         console.log("[MAIN] CLI availability checked:", availability);
@@ -94,20 +118,25 @@ export async function initPerWindowServices(
   // code), then await init and rebuild once. Dynamic plugin load/unload does
   // not refresh the native menu — accepted limitation: the native app menu is
   // rebuilt once after init, not on every subsequent contribution change.
-  registerDeferredTask({
-    name: `plugin-menu-rebuild:${win.id}`,
-    run: async () => {
-      try {
-        const { pluginService } = await import("../services/PluginService.js");
-        await pluginService.waitForInit();
-        if (!win.isDestroyed()) {
-          createApplicationMenu(win, cliService);
+  // Once plugin init has settled, every later window's initial menu build
+  // already sees the plugin items, so only windows opened before then queue it.
+  if (!pluginMenuInitSettled) {
+    registerDeferredTask({
+      name: `plugin-menu-rebuild:${win.id}`,
+      run: async () => {
+        try {
+          const { pluginService } = await import("../services/PluginService.js");
+          await pluginService.waitForInit();
+          pluginMenuInitSettled = true;
+          if (!win.isDestroyed()) {
+            createApplicationMenu(win, cliService);
+          }
+        } catch (err) {
+          console.error("[MAIN] Plugin menu rebuild failed:", err);
         }
-      } catch (err) {
-        console.error("[MAIN] Plugin menu rebuild failed:", err);
-      }
-    },
-  });
+      },
+    });
+  }
 
   // Plugin tours are listed in Help, and unlike other plugin menu items they
   // must leave it when their plugin is disabled or uninstalled (#12773), so the
