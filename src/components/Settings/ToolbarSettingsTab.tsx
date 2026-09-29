@@ -440,6 +440,21 @@ function withoutDuplicates(ids: readonly AnyToolbarButtonId[]): AnyToolbarButton
   return Array.from(new Set(ids));
 }
 
+/**
+ * Per key: the value from before a reset where the key still holds what the
+ * reset put there, else whatever it holds now.
+ */
+function restoreUntouched<T extends object>(before: T, afterReset: T, now: T): T {
+  const resetValues = new Map<string, unknown>(Object.entries(afterReset));
+  const keys = new Set([...Object.keys(before), ...resetValues.keys(), ...Object.keys(now)]);
+  const beforeValues = new Map<string, unknown>(Object.entries(before));
+  const nowValues = new Map<string, unknown>(Object.entries(now));
+  const restored = [...keys]
+    .filter((key) => nowValues.get(key) === resetValues.get(key))
+    .map((key) => [key, beforeValues.get(key)] as const);
+  return { ...now, ...Object.fromEntries(restored) };
+}
+
 export function ToolbarSettingsTab() {
   const layout = useToolbarPreferencesStore((s) => s.layout);
   const launcher = useToolbarPreferencesStore((s) => s.launcher);
@@ -468,12 +483,26 @@ export function ToolbarSettingsTab() {
       duration: UNDO_TOAST_DURATION_MS,
       action: {
         label: "Undo",
-        // Whichever half was changed again since the reset keeps that change.
+        // Anything changed again since the reset keeps that change. The two
+        // sides are one unit: a button moved across changes both lists.
         onClick: () => {
           const now = useToolbarPreferencesStore.getState();
+          const sidesUntouched =
+            now.layout.leftButtons === resetLayout.leftButtons &&
+            now.layout.rightButtons === resetLayout.rightButtons;
           useToolbarPreferencesStore.setState({
-            ...(now.layout === resetLayout ? { layout } : {}),
-            ...(now.launcher === resetLauncher ? { launcher } : {}),
+            layout: {
+              ...now.layout,
+              ...(sidesUntouched
+                ? { leftButtons: layout.leftButtons, rightButtons: layout.rightButtons }
+                : {}),
+              pinnedButtons: restoreUntouched(
+                layout.pinnedButtons,
+                resetLayout.pinnedButtons,
+                now.layout.pinnedButtons
+              ),
+            },
+            launcher: restoreUntouched(launcher, resetLauncher, now.launcher),
           });
         },
       },

@@ -1454,30 +1454,50 @@ describe("ToolbarSettingsTab — reset", () => {
     mockAgentSettings = null;
   });
 
-  it("resets at once and offers an Undo that puts the old layout back", () => {
-    const { getByRole, queryByRole } = render(<ToolbarSettingsTab />);
-    const { layout, launcher } = mockToolbarState;
+  const openUndo = () => {
+    const { getByRole } = render(<ToolbarSettingsTab />);
     fireEvent.click(getByRole("button", { name: /reset toolbar/i }));
-
-    expect(queryByRole("alertdialog")).toBeNull();
-    expect(resetMock).toHaveBeenCalledTimes(1);
-    expect(mockNotify).toHaveBeenCalledTimes(1);
-    const payload = mockNotify.mock.calls[0]![0] as {
+    return mockNotify.mock.calls[0]![0] as {
       action: { label: string; onClick: () => void };
     };
+  };
+  const restored = () =>
+    setStateMock.mock.calls.at(-1)![0] as Pick<ToolbarState, "layout" | "launcher">;
+
+  it("resets at once and offers an Undo that puts the old layout back", () => {
+    const { layout, launcher } = mockToolbarState;
+    const payload = openUndo();
+
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(resetMock).toHaveBeenCalledTimes(1);
     expect(payload.action.label).toBe("Undo");
     payload.action.onClick();
-    expect(setStateMock).toHaveBeenCalledWith({ layout, launcher });
+    expect(restored()).toEqual({ layout, launcher });
   });
 
-  it("leaves a layout changed again since the reset alone on Undo", () => {
-    const { getByRole } = render(<ToolbarSettingsTab />);
-    const { launcher } = mockToolbarState;
-    fireEvent.click(getByRole("button", { name: /reset toolbar/i }));
-    const payload = mockNotify.mock.calls[0]![0] as { action: { onClick: () => void } };
+  it("keeps a change made since the reset and restores everything else", () => {
+    const { layout, launcher } = mockToolbarState;
+    const payload = openUndo();
 
-    mockToolbarState = { ...mockToolbarState, layout: { ...mockToolbarState.layout } };
+    // Since the reset, one launcher option changed; the button layout didn't.
+    mockToolbarState = {
+      ...mockToolbarState,
+      launcher: {
+        ...mockToolbarState.launcher,
+        alwaysShowDevServer: !launcher.alwaysShowDevServer,
+      },
+    };
     payload.action.onClick();
-    expect(setStateMock).toHaveBeenCalledWith({ launcher });
+    expect(restored().layout).toEqual(layout);
+    expect(restored().launcher.alwaysShowDevServer).toBe(!launcher.alwaysShowDevServer);
+  });
+
+  it("leaves both sides alone once either side changed again", () => {
+    const payload = openUndo();
+    const changed = { ...mockToolbarState.layout, leftButtons: [] };
+    mockToolbarState = { ...mockToolbarState, layout: changed };
+    payload.action.onClick();
+    expect(restored().layout.leftButtons).toBe(changed.leftButtons);
+    expect(restored().layout.rightButtons).toBe(changed.rightButtons);
   });
 });
