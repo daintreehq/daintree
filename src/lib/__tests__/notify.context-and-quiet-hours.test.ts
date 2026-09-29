@@ -204,6 +204,7 @@ describe("notify()", () => {
         message: "Agent done",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
       const entries = useNotificationHistoryStore.getState().entries;
@@ -219,6 +220,7 @@ describe("notify()", () => {
         message: "Panel event",
         priority: "high",
         context: { panelId: "panel-1" },
+        suppressWhenOriginVisible: true,
       });
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
@@ -244,6 +246,7 @@ describe("notify()", () => {
         message: "Other worktree",
         priority: "high",
         context: { worktreeId: "wt-2" },
+        suppressWhenOriginVisible: true,
       });
       expect(useNotificationStore.getState().notifications).toHaveLength(1);
     });
@@ -256,6 +259,7 @@ describe("notify()", () => {
         message: "Background",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       // Blurred + high → no toast, history only — same as without suppression.
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
@@ -273,6 +277,7 @@ describe("notify()", () => {
         message: "Watch event",
         priority: "watch",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       expect(useNotificationStore.getState().notifications).toHaveLength(1);
     });
@@ -285,6 +290,7 @@ describe("notify()", () => {
         message: "Background only",
         priority: "low",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
       // Navigating away within 500ms should NOT promote a low-priority event.
@@ -301,6 +307,7 @@ describe("notify()", () => {
         message: "Inline bar",
         placement: "grid-bar",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       expect(useNotificationStore.getState().notifications).toHaveLength(1);
     });
@@ -313,6 +320,7 @@ describe("notify()", () => {
         message: "Should promote",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
 
@@ -330,6 +338,7 @@ describe("notify()", () => {
         message: "Panel signal",
         priority: "high",
         context: { panelId: "panel-1" },
+        suppressWhenOriginVisible: true,
       });
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
 
@@ -345,6 +354,7 @@ describe("notify()", () => {
         message: "Stays suppressed",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       vi.advanceTimersByTime(600);
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
@@ -358,6 +368,7 @@ describe("notify()", () => {
         message: "first",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       vi.advanceTimersByTime(600);
       notify({
@@ -365,6 +376,7 @@ describe("notify()", () => {
         message: "second",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       vi.advanceTimersByTime(600);
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
@@ -379,6 +391,7 @@ describe("notify()", () => {
         message: "Will not toast",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       useNotificationSettingsStore.setState({ enabled: false });
       setActiveWorktree("wt-2");
@@ -393,6 +406,7 @@ describe("notify()", () => {
         message: "Will not toast",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       _setQuietUntil(Date.now() + 60_000);
       setActiveWorktree("wt-2");
@@ -408,6 +422,7 @@ describe("notify()", () => {
         priority: "high",
         urgent: true,
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       _setQuietUntil(Date.now() + 60_000);
       setActiveWorktree("wt-2");
@@ -422,6 +437,7 @@ describe("notify()", () => {
         message: "No accessors",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       expect(useNotificationStore.getState().notifications).toHaveLength(1);
     });
@@ -439,6 +455,7 @@ describe("notify()", () => {
         message: "Alt-tab signal",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
       const entryId = useNotificationHistoryStore.getState().entries[0]!.id;
@@ -473,6 +490,7 @@ describe("notify()", () => {
         message: "Back to same surface",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       focusSpy.mockReturnValue(false);
       window.dispatchEvent(new Event("blur"));
@@ -498,6 +516,7 @@ describe("notify()", () => {
         message: "One-shot",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       focusSpy.mockReturnValue(false);
       window.dispatchEvent(new Event("blur"));
@@ -518,6 +537,7 @@ describe("notify()", () => {
         message: "Nav while blurred",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       focusSpy.mockReturnValue(false);
       window.dispatchEvent(new Event("blur"));
@@ -542,6 +562,7 @@ describe("notify()", () => {
         message: "Torn down",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       focusSpy.mockReturnValue(false);
       window.dispatchEvent(new Event("blur"));
@@ -561,6 +582,7 @@ describe("notify()", () => {
         message: "linked",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       const entryId = useNotificationHistoryStore.getState().entries[0]!.id;
       setActiveWorktree("wt-2");
@@ -576,6 +598,7 @@ describe("notify()", () => {
         message: "Late nav",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       vi.advanceTimersByTime(501);
       setActiveWorktree("wt-2");
@@ -590,6 +613,7 @@ describe("notify()", () => {
         message: "Watch in scope",
         priority: "watch",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       expect(useNotificationStore.getState().notifications).toHaveLength(1);
       expect(mockShowNative).toHaveBeenCalledTimes(1);
@@ -603,12 +627,95 @@ describe("notify()", () => {
         message: "cancelled",
         priority: "high",
         context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
       });
       _resetPendingSuppressedForTest();
       // Navigating away should NOT promote — the listener was cleaned up.
       setActiveWorktree("wt-2");
       vi.advanceTimersByTime(600);
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    });
+
+    it("an address alone never suppresses — action results on the active worktree still toast", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      setActiveWorktree("wt-1");
+      setFocusedPanel("panel-1");
+      notify({
+        type: "error",
+        message: "Push failed",
+        priority: "high",
+        context: { worktreeId: "wt-1", panelId: "panel-1" },
+      });
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+      const entries = useNotificationHistoryStore.getState().entries;
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.context).toEqual({ worktreeId: "wt-1", panelId: "panel-1" });
+    });
+
+    it("a panel address decides alone: its worktree being active doesn't suppress it", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      setActiveWorktree("wt-1");
+      setFocusedPanel("panel-2");
+      notify({
+        type: "info",
+        message: "Agent done",
+        priority: "high",
+        context: { worktreeId: "wt-1", panelId: "panel-1" },
+        suppressWhenOriginVisible: true,
+      });
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+    });
+
+    it("suppresses a panel-and-worktree address when that panel is focused", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      setActiveWorktree("wt-1");
+      setFocusedPanel("panel-1");
+      notify({
+        type: "info",
+        message: "Agent done",
+        priority: "high",
+        context: { worktreeId: "wt-1", panelId: "panel-1" },
+        suppressWhenOriginVisible: true,
+      });
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(true);
+    });
+
+    it("a transient payload with a visible origin toasts even when it opts in", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      setActiveWorktree("wt-1");
+      notify({
+        type: "success",
+        message: "Copied",
+        priority: "high",
+        transient: true,
+        context: { worktreeId: "wt-1" },
+        suppressWhenOriginVisible: true,
+      });
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("suppressWhenOriginVisible is ignored with transient")
+      );
+      warn.mockRestore();
+    });
+
+    it("warns when opting in without a panel or worktree address", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      notify({
+        type: "info",
+        message: "No address",
+        priority: "high",
+        context: { projectId: "proj-1" },
+        suppressWhenOriginVisible: true,
+      });
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("has no effect without context.panelId or context.worktreeId")
+      );
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+      warn.mockRestore();
     });
   });
 

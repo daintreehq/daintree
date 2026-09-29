@@ -981,7 +981,10 @@ describe("activateDockLaunchItem", () => {
 
     expect(runRecipeWithResultsMock).toHaveBeenCalledWith("r1", "/repo", "wt-1", undefined);
     await vi.waitFor(() =>
-      expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, { recipeName: "Deploy" })
+      expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, {
+        recipeName: "Deploy",
+        worktreeId: "wt-1",
+      })
     );
   });
 

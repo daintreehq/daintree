@@ -241,6 +241,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
       if (!error) return;
 
+      // A full-app boundary has no subject, so its feedback stays unaddressed.
+      const feedbackAddress = {
+        ...(context?.worktreeId ? { worktreeId: context.worktreeId } : {}),
+        ...(context?.terminalId ? { panelId: context.terminalId } : {}),
+      };
+
       const [enrichment, pluginDiagnostics] = await Promise.all([
         fetchReportEnrichment(),
         fetchPluginDiagnostics(),
@@ -277,7 +283,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               "The full crash report was copied to your clipboard — paste it into the issue body.",
             transient: true,
             priority: "high",
-            context: { eventKind: "uiFeedback" },
+            context: { eventKind: "uiFeedback", ...feedbackAddress },
           });
         } else {
           notify({
@@ -287,7 +293,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               "Couldn't copy the full report. Quote the Error ID shown above when filing the issue.",
             inboxMessage: "Couldn't copy crash report to clipboard.",
             priority: "high",
-            context: { eventKind: "uiFeedback" },
+            context: { eventKind: "uiFeedback", ...feedbackAddress },
           });
         }
       }

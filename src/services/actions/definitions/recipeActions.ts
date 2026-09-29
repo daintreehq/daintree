@@ -264,6 +264,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         notifyRecipeSpawnFailures(results, {
           recipeName,
           projectId: ctx.projectId,
+          worktreeId: targetWorktreeId,
         });
 
         if (results.spawned.length === 0 && results.failed.length > 0) {

@@ -3,6 +3,7 @@ import type { WebviewDialogRequest } from "@/components/Browser/WebviewDialog";
 import { restoreFocusTo } from "@/lib/accessibility";
 import { logError, logWarn } from "@/utils/logger";
 import { notify } from "@/lib/notify";
+import { panelNotificationAddress } from "@/lib/notificationAddress";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export function useWebviewDialog(
@@ -135,7 +136,7 @@ export function useWebviewDialog(
               "Couldn't send a response to the page dialog. The page may be unresponsive — try reloading the panel.",
             priority: "high",
             duration: 0,
-            context: { panelId },
+            context: panelNotificationAddress(panelId),
           });
         });
 

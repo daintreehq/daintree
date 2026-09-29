@@ -497,12 +497,16 @@ export function useWorktreeBulkRemove({
       // single info toast so the user understands why the action is
       // a no-op, then clear selection.
       if (excludedMainCount > 0) {
+        const soleMainId =
+          excludedMainCount === 1
+            ? [...selectedIds].find((id) => worktreeMap.get(id)?.isMainWorktree === true)
+            : undefined;
         notify({
           type: "info",
           title: "Nothing to delete",
           message: "The main worktree can't be deleted from the overview.",
           priority: "high",
-          context: { eventKind: "uiFeedback" },
+          context: { worktreeId: soleMainId, eventKind: "uiFeedback" },
         });
         clearSelection();
       }
@@ -752,6 +756,7 @@ export function useWorktreeBulkRemove({
       failures.push(...keptFailures);
 
       const announce = useAnnouncerStore.getState().announce;
+      const soleTargetId = targets.length === 1 ? targets[0]!.id : undefined;
       if (failures.length === 0) {
         // Transient: the overview grid already reflects the removed
         // worktrees disappearing — the toast is a one-shot confirmation,
@@ -773,7 +778,7 @@ export function useWorktreeBulkRemove({
           message: successMessage,
           transient: true,
           priority: "high",
-          context: { eventKind: "uiFeedback" },
+          context: { worktreeId: soleTargetId, eventKind: "uiFeedback" },
         });
         announce(successTitle);
       } else if (successCount === 0) {
@@ -786,6 +791,7 @@ export function useWorktreeBulkRemove({
           type: "error",
           title: failureTitle,
           message: firstFailure ? firstFailure.reason : "All deletes failed.",
+          ...(soleTargetId ? { context: { worktreeId: soleTargetId } } : {}),
         });
         announce(failureTitle, "assertive");
       } else {

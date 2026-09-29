@@ -1759,7 +1759,7 @@ describe("DockLaunchButton", () => {
     await waitFor(() =>
       expect(notifySpawnFailuresMock).toHaveBeenCalledWith(
         { spawned: [{ index: 0, terminalId: "t-0" }], failed: [] },
-        { recipeName: "My recipe" }
+        { recipeName: "My recipe", worktreeId: "wt-1" }
       )
     );
   });

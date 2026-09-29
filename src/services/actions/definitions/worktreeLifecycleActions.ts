@@ -64,6 +64,7 @@ export function registerWorktreeLifecycleActions(actions: ActionRegistry): void 
             priority: "high",
             title: "Setup retry failed",
             message,
+            context: { worktreeId: targetWorktreeId },
             action: {
               label: "Copy details",
               successLabel: "Copied",

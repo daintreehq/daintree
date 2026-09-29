@@ -268,6 +268,7 @@ export function ModalHostLayer({
   // depending on which launcher opened it (#11668). The palette closes on
   // select, so a refusal has to be reported or it leaves no trace.
   const launchPanelFromPalette = (kindId: string, name: string) => {
+    const targetWorktreeId = activeWorktreeId ?? undefined;
     void launchPanelKind({
       kindId,
       location: "grid",
@@ -291,7 +292,10 @@ export function ModalHostLayer({
           // `uiFeedback` is passive; without this the palette's only signal
           // would be an inbox row.
           priority: "high",
-          context: { eventKind: "uiFeedback" },
+          context: {
+            eventKind: "uiFeedback",
+            ...(targetWorktreeId ? { worktreeId: targetWorktreeId } : {}),
+          },
           action: { label: "Retry", onClick: () => launchPanelFromPalette(kindId, name) },
         });
       })

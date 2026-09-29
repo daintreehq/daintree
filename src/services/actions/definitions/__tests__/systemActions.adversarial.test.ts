@@ -690,7 +690,7 @@ describe("systemActions adversarial", () => {
           // tweak, so only require that the toast carries one.
           title: expect.stringMatching(/\S/),
           message: "Copied 3 files (4 KB) as XML to clipboard",
-          context: { eventKind: "agent" },
+          context: { eventKind: "agent", worktreeId: "wt-1" },
         })
       );
     });
@@ -725,22 +725,17 @@ describe("systemActions adversarial", () => {
       );
     });
 
-    it("keeps the worktree out of the toast context so notify() cannot suppress it", async () => {
-      // notify() routes a high-priority toast to the inbox instead when
-      // `context.worktreeId` matches the worktree already on screen. An agent
-      // copying the ACTIVE worktree is the common case, so naming it here would
-      // silence exactly the signal this toast exists to deliver. A clipboard
-      // overwrite is invisible regardless of which worktree is displayed.
+    it("addresses the toast to the copied worktree, not the active one", async () => {
       const { run } = setupActions();
       await run(
         "copyTree.generateAndCopyFile",
-        { worktreeId: "wt-active" },
+        { worktreeId: "wt-1" },
         { dispatchSource: "agent", activeWorktreeId: "wt-active" }
       );
       // The nested `context` is a plain object, so it is compared by deep
-      // equality rather than partially: an added `worktreeId` fails this.
+      // equality rather than partially.
       expect(notifyMock).toHaveBeenCalledWith(
-        expect.objectContaining({ context: { eventKind: "agent" } })
+        expect.objectContaining({ context: { eventKind: "agent", worktreeId: "wt-1" } })
       );
     });
 
@@ -762,7 +757,7 @@ describe("systemActions adversarial", () => {
         expect.objectContaining({
           type: "success",
           message: "Copied 3 files (4 KB) to clipboard",
-          context: { eventKind: "agent" },
+          context: { eventKind: "agent", worktreeId: "wt-active" },
         })
       );
     });
@@ -889,12 +884,14 @@ describe("systemActions adversarial", () => {
     // Each action needs its own rate-limit bucket: notify() falls back to
     // `type` when none is set, which would pool all three with every other
     // success toast in the app and let an unrelated burst swallow the message.
-    // Naming the worktree in context would let notify() divert the toast to the
-    // inbox whenever the target is already on screen — the common case.
     const CASES = [
-      ["copyTree.generate", undefined],
-      ["copyTree.generateAndCopyFile", undefined],
-      ["copyTree.injectToTerminal", { terminalId: "t-1" }],
+      ["copyTree.generate", undefined, { eventKind: "agent", worktreeId: "wt-active" }],
+      ["copyTree.generateAndCopyFile", undefined, { eventKind: "agent", worktreeId: "wt-active" }],
+      [
+        "copyTree.injectToTerminal",
+        { terminalId: "t-1" },
+        { eventKind: "agent", worktreeId: "wt-active", panelId: "t-1" },
+      ],
     ] as const;
 
     it("gives each action a distinct bucket that is not the shared fallback", async () => {
@@ -911,16 +908,13 @@ describe("systemActions adversarial", () => {
       expect(new Set(keys).size).toBe(CASES.length);
     });
 
-    it("keeps the worktree out of every toast context so notify() cannot suppress it", async () => {
-      for (const [actionId, args] of CASES) {
+    it("addresses every toast to the worktree the bundle was read from", async () => {
+      for (const [actionId, args, context] of CASES) {
         notifyMock.mockClear();
         const { run } = setupActions();
         await run(actionId, args, { activeWorktreeId: "wt-active" });
-        // `context` is a plain object, so this compares by deep equality — an
-        // added `worktreeId` fails here.
-        expect(notifyMock).toHaveBeenCalledWith(
-          expect.objectContaining({ context: { eventKind: "agent" } })
-        );
+        // `context` is a plain object, so this compares by deep equality.
+        expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ context }));
       }
     });
   });

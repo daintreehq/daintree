@@ -849,6 +849,7 @@ export function NewWorktreeDialog({
                     type: "warning",
                     title: "Couldn't undo assignment",
                     message: `${formatErrorMessage(err, "Couldn't unassign issue")} — you can unassign manually on ${forgeName}`,
+                    context: { worktreeId },
                   });
                 });
             };
@@ -858,7 +859,7 @@ export function NewWorktreeDialog({
               message: `#${snapIssue.number} assigned to you`,
               correlationId: worktreeId,
               priority: "high",
-              context: { eventKind: "uiFeedback" },
+              context: { worktreeId, eventKind: "uiFeedback" },
               // Auto-dismiss after a short window instead of staying sticky:
               // notify() defaults action-bearing toasts to duration 0, but the
               // Undo here is an optional, time-limited affordance — not a reason
@@ -876,6 +877,7 @@ export function NewWorktreeDialog({
               type: "warning",
               title: "Couldn't assign issue",
               message: `${message} — you can assign it manually on ${forgeName}`,
+              context: { worktreeId },
               actions: issueUrl
                 ? [
                     {
@@ -910,6 +912,7 @@ export function NewWorktreeDialog({
               type: "warning",
               title: "Couldn't clone layout",
               message: `${message} — the worktree itself was created`,
+              context: { worktreeId },
             });
           }
         } else if (snapSelectedRecipe) {
@@ -935,6 +938,7 @@ export function NewWorktreeDialog({
             notifyRecipeSpawnFailures(results, {
               recipeName: snapSelectedRecipe.name,
               projectId,
+              worktreeId,
             });
           } catch (recipeErr) {
             const message = formatErrorMessage(recipeErr, "Couldn't run recipe");
@@ -951,6 +955,7 @@ export function NewWorktreeDialog({
               type: "warning",
               title: "Couldn't run recipe",
               message: `${message} — the worktree itself was created`,
+              context: { worktreeId: recipeWorktreeId },
               actions: [
                 {
                   label: "Retry recipe",
@@ -960,6 +965,7 @@ export function NewWorktreeDialog({
                         notifyRecipeSpawnFailures(results, {
                           recipeName: snapSelectedRecipe.name,
                           projectId,
+                          worktreeId: recipeWorktreeId,
                         })
                       )
                       .catch((err) => logError("Failed to run recipe", err));

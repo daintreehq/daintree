@@ -347,6 +347,10 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
 
       // Generate a unique ID for this injection operation (for per-operation cancellation)
       const injectionUuid = crypto.randomUUID();
+      const notifyAddress = {
+        panelId: activeTerminal,
+        worktreeId: terminal.worktreeId ?? worktreeId,
+      };
 
       // Set global state so all hook instances can see the active injection
       globalInjectionState.isInjecting = true;
@@ -438,10 +442,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
             "terminal"
           ),
           rateLimitKey: "contextInjection.injectToTerminal",
-          // No `context.worktreeId`: notify() diverts a high-priority toast to
-          // the inbox when it names the worktree already on screen — which is
-          // always the case here, since injection targets a visible terminal.
-          context: { eventKind: "agent" },
+          context: { eventKind: "agent", ...notifyAddress },
         });
 
         if (currentErrorIdRef.current) {

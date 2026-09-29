@@ -364,7 +364,7 @@ export function _resetInitPromise(): void {
 export async function preflightSpawnBatchLimit(
   currentCount: number,
   requestedCount: number,
-  options: { source?: PanelLimitBatchSource } = {}
+  options: { source?: PanelLimitBatchSource; worktreeId?: string } = {}
 ): Promise<{ allowed: number; declined: boolean }> {
   if (requestedCount <= 0) return { allowed: 0, declined: false };
 
@@ -379,7 +379,10 @@ export async function preflightSpawnBatchLimit(
       title: "Panel limit reached",
       message: `Maximum of ${hardLimit} panels reached. Close some panels before adding new ones.`,
       duration: 5000,
-      context: { eventKind: "uiFeedback" },
+      context: {
+        eventKind: "uiFeedback",
+        ...(options.worktreeId ? { worktreeId: options.worktreeId } : {}),
+      },
     });
     return { allowed: 0, declined: false };
   }

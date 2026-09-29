@@ -158,7 +158,7 @@ export function notifyAgentNotStarted(
     title: "Agent not started",
     message: `${describeReason(reason, launch.agentName)} Your prompt is kept for when you start it.`,
     correlationId: launch.worktreeId,
-    context: { eventKind: "agent" },
+    context: { eventKind: "agent", worktreeId: launch.worktreeId },
     placement: "grid-bar",
     // Quiet hours would otherwise leave only an inbox row, which can't carry
     // the prompt back.

@@ -1,4 +1,5 @@
 import { notify } from "@/lib/notify";
+import { panelNotificationAddress } from "@/lib/notificationAddress";
 import { usePanelStore } from "@/store/panelStore";
 import { useUIStore } from "@/store/uiStore";
 
@@ -8,6 +9,9 @@ export function fireWatchNotification(
   agentState: string
 ): void {
   const label = panelTitle || panelId;
+  // The panel itself shows exited/waiting/completed, so a toast is redundant
+  // while it's focused — these are the events suppression exists for.
+  const address = panelNotificationAddress(panelId);
 
   if (agentState === "exited") {
     notify({
@@ -17,7 +21,8 @@ export function fireWatchNotification(
       message: `${label} process has exited`,
       duration: 5000,
       correlationId: panelId,
-      context: { eventKind: "agent", panelId },
+      context: { eventKind: "agent", ...address },
+      suppressWhenOriginVisible: true,
       action: {
         label: "Go to terminal",
         successLabel: "Opened",
@@ -39,7 +44,8 @@ export function fireWatchNotification(
       message: `${label} is waiting for your input`,
       duration: 12000,
       correlationId: panelId,
-      context: { eventKind: "agent", panelId },
+      context: { eventKind: "agent", ...address },
+      suppressWhenOriginVisible: true,
       action: {
         label: "Go to terminal",
         successLabel: "Opened",
@@ -60,7 +66,8 @@ export function fireWatchNotification(
     message: `${label} finished its task`,
     duration: 5000,
     correlationId: panelId,
-    context: { eventKind: "completed", panelId },
+    context: { eventKind: "completed", ...address },
+    suppressWhenOriginVisible: true,
     action: {
       label: "Go to terminal",
       successLabel: "Opened",

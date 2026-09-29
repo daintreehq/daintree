@@ -950,6 +950,10 @@ export function FileBrowserPane({
 
   const handleCopyRootPath = useCallback(() => {
     if (rootAbsolutePath === "") return;
+    // Only the worktree the tree browses addresses the failure — a
+    // workspace-rooted panel's placement worktree is incidental.
+    const worktreeAddress =
+      isWorktreeSource && sourceWorktreeId ? { worktreeId: sourceWorktreeId } : {};
     // Retry re-enters the whole gesture, so a write that only succeeds on the
     // second attempt still flashes and announces.
     const attempt = () => {
@@ -961,17 +965,14 @@ export function FileBrowserPane({
           message: "The clipboard rejected the write.",
           // uiFeedback is passive, and the inbox keeps only actionId actions —
           // resolving to "low" would strip the Retry this toast exists for.
-          // No panelId/worktreeId: those mark the origin surface as already
-          // showing the failure, which suppresses the toast outright — and this
-          // label renders nothing when a write fails.
           priority: "high",
-          context: { eventKind: "uiFeedback" },
+          context: { eventKind: "uiFeedback", panelId: id, ...worktreeAddress },
           action: { label: "Retry", onClick: attempt },
         });
       });
     };
     attempt();
-  }, [rootAbsolutePath, copyRootPath]);
+  }, [rootAbsolutePath, copyRootPath, id, isWorktreeSource, sourceWorktreeId]);
 
   // The one file-row menu, shared with the worktree card's changed files, the
   // Review Hub and the diff sidebar (#11757). It owns everything that acts on

@@ -481,7 +481,7 @@ describe("notify()", () => {
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
     });
 
-    it("warns and drops silently when transient is paired with a visible origin context", () => {
+    it("toasts a transient payload whose addressed origin is visible, without warning", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       setActiveContextAccessors({
@@ -497,11 +497,9 @@ describe("notify()", () => {
           transient: true,
           context: { worktreeId: "wt-1" },
         });
-        expect(useNotificationStore.getState().notifications).toHaveLength(0);
+        expect(useNotificationStore.getState().notifications).toHaveLength(1);
         expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
-        expect(consoleSpy).toHaveBeenCalledWith(
-          expect.stringContaining("transient: true with context")
-        );
+        expect(consoleSpy).not.toHaveBeenCalled();
       } finally {
         _resetActiveContextAccessorsForTest();
         _resetPendingSuppressedForTest();

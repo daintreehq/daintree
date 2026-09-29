@@ -53,6 +53,7 @@ export function useParkReleaseNotifications(): void {
           eventKind: "agent",
           panelId: payload.id,
           ...(run !== undefined ? { projectId: run.workspaceId } : {}),
+          ...(run?.worktreeId !== undefined ? { worktreeId: run.worktreeId } : {}),
         },
         ...(run !== undefined
           ? {

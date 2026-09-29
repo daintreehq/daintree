@@ -890,6 +890,7 @@ export function activateDockLaunchItem(
   if (item.disabled) return;
 
   if (item.category === "panel") {
+    const targetWorktreeId = ctx.activeWorktreeId ?? undefined;
     // The menu closes on select, so an action that refuses leaves no trace
     // otherwise — the same reason LauncherQuickActions reports its refusals.
     void launchPanelKind({
@@ -918,7 +919,10 @@ export function activateDockLaunchItem(
           // `uiFeedback` is a passive kind, so without this the toast the
           // closed menu depends on would be an inbox row nobody sees.
           priority: "high",
-          context: { eventKind: "uiFeedback" },
+          context: {
+            eventKind: "uiFeedback",
+            ...(targetWorktreeId ? { worktreeId: targetWorktreeId } : {}),
+          },
           action: { label: "Retry", onClick: () => activateDockLaunchItem(item, ctx) },
         });
       })
@@ -929,14 +933,12 @@ export function activateDockLaunchItem(
   // Fire-and-forget, but surface spawn failures — the menu closes on select, so
   // a toast/inbox entry is the only signal the user gets when terminals are
   // dropped (e.g. panel limit).
+  const worktreeId = ctx.activeWorktreeId ?? undefined;
   void useRecipeStore
     .getState()
-    .runRecipeWithResults(
-      item.recipe.id,
-      ctx.cwd,
-      ctx.activeWorktreeId ?? undefined,
-      ctx.recipeContext
+    .runRecipeWithResults(item.recipe.id, ctx.cwd, worktreeId, ctx.recipeContext)
+    .then((results) =>
+      notifyRecipeSpawnFailures(results, { recipeName: item.recipe.name, worktreeId })
     )
-    .then((results) => notifyRecipeSpawnFailures(results, { recipeName: item.recipe.name }))
     .catch((error) => logError("Recipe launch from dock failed", error));
 }

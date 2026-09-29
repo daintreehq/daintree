@@ -133,11 +133,9 @@ describe("useContextInjection", () => {
       expect(payload.message).not.toContain("clipboard");
     });
 
-    it("keeps its own rate-limit bucket and omits the worktree from context", async () => {
+    it("keeps its own rate-limit bucket and addresses the target terminal", async () => {
       // The `copyTree.injectToTerminal` action is an independent route to the
       // same client method; a shared bucket would let one suppress the other.
-      // Naming the worktree would let notify() divert this to the inbox, and
-      // injection always targets a terminal that is already on screen.
       await runInjection({ fileCount: 7, stats: { totalSize: 2048 } });
 
       const payload = notifyMock.mock.calls[0]?.[0] as {
@@ -148,7 +146,11 @@ describe("useContextInjection", () => {
       expect(payload.rateLimitKey).toBeTruthy();
       expect(payload.rateLimitKey).not.toBe(payload.type);
       expect(payload.rateLimitKey).not.toBe("copyTree.injectToTerminal");
-      expect(payload.context).toEqual({ eventKind: "agent" });
+      expect(payload.context).toEqual({
+        eventKind: "agent",
+        panelId: "term-1",
+        worktreeId: "wt-1",
+      });
     });
 
     it.each([
