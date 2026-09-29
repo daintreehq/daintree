@@ -2001,7 +2001,7 @@ function ContextSectionHeader({
   // A main worktree is named after its folder, usually the project's own name.
   const worktree = resolvedWorktree && resolvedWorktree !== project ? resolvedWorktree : undefined;
   const label =
-    [project, worktree, worktree && worktreeUnavailable ? "unavailable" : undefined]
+    [project, worktree, worktreeUnavailable ? "unavailable" : undefined]
       .filter(Boolean)
       .join(" · ") || APP_SOURCE_LABEL;
   const hasUnread = unreadIds.length > 0;
@@ -2040,7 +2040,7 @@ function ContextSectionHeader({
               </span>
             ) : null}
             {worktree ? <span className="max-w-[65%] shrink-0 truncate">{worktree}</span> : null}
-            {worktree && worktreeUnavailable ? (
+            {worktreeUnavailable ? (
               <span
                 data-testid="context-section-unavailable"
                 className="shrink-0 pl-1 text-text-secondary"

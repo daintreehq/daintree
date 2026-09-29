@@ -107,6 +107,31 @@ describe("navigateToNotificationSource", () => {
     expect(dispatchMock.mock.calls).toEqual([["panel.focus", { panelId: "pane-3" }]]);
   });
 
+  it("focuses a panel in place when its worktree is one this view doesn't know", async () => {
+    seedPanels({ "pane-4": { location: "grid", worktreeId: "wt-unknown" } });
+    await expect(navigateToNotificationSource({ panelId: "pane-4" })).resolves.toBe(true);
+    expect(trackTerminalFocus).not.toHaveBeenCalled();
+    expect(selectWorktree).not.toHaveBeenCalled();
+    expect(dispatchMock.mock.calls).toEqual([["panel.focus", { panelId: "pane-4" }]]);
+  });
+
+  it("treats a scratch view's own records as this view's", async () => {
+    const win = window as unknown as { __DAINTREE_INITIAL_PROJECT__?: { id: string } };
+    win.__DAINTREE_INITIAL_PROJECT__ = { id: "scratch-1" };
+    try {
+      useProjectStore.setState({ currentProject: null });
+      seedPanels({ "pane-1": { location: "grid", worktreeId: "wt-1" } });
+      await expect(
+        navigateToNotificationSource({ projectId: "scratch-1", panelId: "pane-1" })
+      ).resolves.toBe(true);
+      expect(
+        resolveLiveNotificationDestination({ projectId: "p-other", panelId: "pane-1" })
+      ).toEqual({ kind: "none", reason: "other-project" });
+    } finally {
+      delete win.__DAINTREE_INITIAL_PROJECT__;
+    }
+  });
+
   it("stops when the worktree switch is refused", async () => {
     seedPanels({ "pane-2": { location: "grid", worktreeId: "wt-2" } });
     dispatchMock.mockResolvedValueOnce({ ok: false, error: { message: "no" } });

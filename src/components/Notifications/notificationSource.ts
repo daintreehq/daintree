@@ -1,6 +1,7 @@
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import {
@@ -66,9 +67,19 @@ export function useIsWorktreeUnavailable(
   projectId: string | undefined
 ): boolean {
   const live = useIsWorktreeLive(worktreeId);
-  const currentProjectId = useProjectStore((s) => s.currentProject?.id);
+  const ownerId = useViewOwnerId();
   if (!worktreeId || live) return false;
-  return !isOtherProjectContext({ projectId }, currentProjectId);
+  return !isOtherProjectContext({ projectId }, ownerId);
+}
+
+/**
+ * The workspace this view belongs to: its project, or a scratch workspace,
+ * which has no `currentProject` but still owns the panels it records against
+ * its own id.
+ */
+function useViewOwnerId(): string | undefined {
+  const currentProjectId = useProjectStore((s) => s.currentProject?.id);
+  return getViewWorkspaceId() ?? currentProjectId;
 }
 
 /**
@@ -78,7 +89,7 @@ export function useIsWorktreeUnavailable(
  */
 export function useNotificationDestination(context: NotificationContext): NotificationDestination {
   const panelId = context?.panelId;
-  const currentProjectId = useProjectStore((s) => s.currentProject?.id);
+  const currentProjectId = useViewOwnerId();
   const panelLocation = usePanelStore((s) =>
     panelId ? s.panelsById[panelId]?.location : undefined
   );

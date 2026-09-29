@@ -4,6 +4,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useUIStore } from "@/store/uiStore";
 import { getWorktreeIdSet } from "@/store/storeAccessors";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import {
   resolveNotificationDestination,
@@ -28,7 +29,7 @@ export function resolveLiveNotificationDestination(
     !!getWorktreeIdSet()?.has(worktreeId) &&
     !useWorktreeSelectionStore.getState().deletedWorktrees.has(worktreeId);
   return resolveNotificationDestination(context, {
-    currentProjectId: useProjectStore.getState().currentProject?.id,
+    currentProjectId: getViewWorkspaceId() ?? useProjectStore.getState().currentProject?.id,
     panelLocation: panel?.location,
     panelWorktreeId: panel?.worktreeId,
     worktreeLive,
@@ -69,18 +70,23 @@ export async function navigateToNotificationSource(context: NotificationContext)
 
   const { panelId, worktreeId } = destination;
   if (worktreeId && worktreeId !== selection.activeWorktreeId) {
+    const deleted = selection.deletedWorktrees.has(worktreeId);
+    const live = !deleted && !!getWorktreeIdSet()?.has(worktreeId);
     // Recorded first so the switch restores this panel rather than whichever
     // one the worktree last had focused.
-    selection.trackTerminalFocus(worktreeId, panelId);
-    if (selection.deletedWorktrees.has(worktreeId)) {
+    if (deleted || live) selection.trackTerminalFocus(worktreeId, panelId);
+    if (deleted) {
       // A surviving terminal of a deleted worktree. Session-only, as the
       // deleted card does it: a user-sourced selection would persist an id
       // that no longer exists as the restore target.
       selection.selectWorktree(worktreeId, { source: "focus" });
-    } else {
+    } else if (live) {
       const selected = await actionService.dispatch("worktree.select", { worktreeId });
       if (!selected.ok) return false;
     }
+    // Neither: a worktree this view doesn't know. `worktree.select` doesn't
+    // validate, and the view would switch away again once it reconciled, so
+    // the panel is focused where it is.
   }
   const focused = await actionService.dispatch("panel.focus", { panelId });
   return focused.ok;

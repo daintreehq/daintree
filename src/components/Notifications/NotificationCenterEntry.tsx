@@ -93,7 +93,7 @@ function rowLabel(entry: NotificationHistoryEntry): string {
 // What a click inside the row can land on that is not the row: its recovery
 // actions, its menu and dismiss controls, and the menu's own items.
 const ROW_NESTED_CONTROL_SELECTOR =
-  'button, a, input, select, textarea, [contenteditable="true"], [role="menu"], [role="menuitem"]';
+  'button, a, input, select, textarea, [contenteditable="true"], [role="menuitem"]';
 
 /**
  * The options trigger beside the row's dismiss: the same ghost `icon-xs` box
@@ -243,8 +243,17 @@ export function NotificationCenterEntry({
     const target = e.target;
     if (!(target instanceof Element) || !e.currentTarget.contains(target)) return;
     if (target.closest(ROW_NESTED_CONTROL_SELECTOR)) return;
-    // Selecting text to copy it ends in a click; the record stays readable.
-    if (typeof window !== "undefined" && window.getSelection()?.toString()) return;
+    // Selecting the row's text to copy it ends in a click; the record stays
+    // readable. A selection elsewhere in the app is not this gesture.
+    const selection = typeof window !== "undefined" ? window.getSelection() : null;
+    if (
+      selection &&
+      !selection.isCollapsed &&
+      selection.anchorNode &&
+      e.currentTarget.contains(selection.anchorNode)
+    ) {
+      return;
+    }
     void goToNotificationSource(entry.context);
   };
 
@@ -775,6 +784,8 @@ function RowOptionsMenu({
   // keys only move between rows, so an Escape that handed focus to this
   // trigger (the default) left the user outside j/k.
   const openedFromRowRef = useRef(false);
+  // Set by "Go to source"; consumed by the menu's close-autofocus handler.
+  const goToSourcePendingRef = useRef(false);
   // Opened from the keyboard with nothing under the pointer, so focus goes on
   // the first duration explicitly. Radix's own open focus left it on <body>
   // for a programmatic open. One frame later so it lands after Radix's.
@@ -819,11 +830,14 @@ function RowOptionsMenu({
     void copyCorrelationId(entry.correlationId);
   };
 
-  // The one row-menu item that takes you somewhere else. The inbox closes
-  // behind it once navigation lands; a source gone since the menu opened
-  // leaves it open, and the row then shows why.
+  // The one row-menu item that takes you somewhere else. It only marks the
+  // request: Radix restores focus to the trigger after the menu's exit
+  // animation, which would land after navigation had already moved focus to
+  // the destination and pull it back into the closing inbox. The menu's close
+  // handler starts the navigation instead, once there is nothing left to
+  // restore.
   const handleGoToSource = () => {
-    void goToNotificationSource(entry.context);
+    goToSourcePendingRef.current = true;
   };
 
   const handleReportOnGitHub = () => {
@@ -882,6 +896,20 @@ function RowOptionsMenu({
         className="min-w-[200px] max-w-[280px]"
         ref={menuContentRef}
         onCloseAutoFocus={(event) => {
+          if (goToSourcePendingRef.current) {
+            goToSourcePendingRef.current = false;
+            openedFromRowRef.current = false;
+            event.preventDefault();
+            const row = triggerRef.current?.closest('[role="listitem"]');
+            void goToNotificationSource(entry.context).then((arrived) => {
+              // A source gone since the menu opened leaves the inbox open, and
+              // the row, which now says why, takes focus back.
+              if (!arrived && row instanceof HTMLElement && row.isConnected) {
+                row.focus({ preventScroll: true });
+              }
+            });
+            return;
+          }
           if (!openedFromRowRef.current) return;
           openedFromRowRef.current = false;
           const row = triggerRef.current?.closest('[role="listitem"]');

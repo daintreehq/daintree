@@ -17,6 +17,7 @@ import * as notifyLib from "@/lib/notify";
 import { NotificationCenter } from "../NotificationCenter";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
+import { setWorktreeIdSetAccessor } from "@/store/storeAccessors";
 import { isMac } from "@/lib/platform";
 import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
@@ -138,6 +139,7 @@ beforeEach(() => {
   });
   worktreeStoreMock.worktrees.clear();
   usePanelStore.setState({ panelsById: {}, focusedId: null } as never);
+  useProjectStore.setState({ projects: [], currentProject: null });
   dispatchMock.mockClear();
   getMock.mockReturnValue(null);
   vi.mocked(notifyLib.muteForDuration).mockClear();
@@ -1443,6 +1445,38 @@ describe("NotificationCenter — Group by context toggle", () => {
     expect(screen.getByTestId("context-section-unavailable")).toBeTruthy();
   });
 
+  it("marks a gone main worktree unavailable even when its name is the project's", () => {
+    useNotificationSettingsStore.setState({ groupByContext: true });
+    useProjectStore.setState({
+      projects: [{ id: "p-atlas", name: "atlas" }],
+      currentProject: { id: "p-atlas", name: "atlas" },
+    } as never);
+    setEntries([
+      makeEntry({
+        message: "Gone",
+        context: { projectId: "p-atlas", worktreeId: "/Users/dev/atlas" },
+      }),
+    ]);
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    const header = screen.getByTestId("context-section-header").textContent ?? "";
+    expect(header).toContain("atlas");
+    expect(screen.getByTestId("context-section-unavailable")).toBeTruthy();
+  });
+
+  it("does not mark another project's worktree unavailable", () => {
+    useNotificationSettingsStore.setState({ groupByContext: true });
+    useProjectStore.setState({ currentProject: { id: "p-here" } } as never);
+    setEntries([
+      makeEntry({ message: "Elsewhere", context: { projectId: "p-there", worktreeId: "wt-x" } }),
+    ]);
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    expect(screen.queryByTestId("context-section-unavailable")).toBeNull();
+  });
+
   it("does not mark a worktree this view still has as unavailable", () => {
     useNotificationSettingsStore.setState({ groupByContext: true });
     worktreeStoreMock.worktrees.set("wt-live", { worktreeId: "wt-live", name: "feature-live" });
@@ -2495,6 +2529,61 @@ describe("NotificationCenter — keyboard navigation", () => {
     expect(dispatchMock).toHaveBeenCalledWith("panel.focus", { panelId: "pane-1" });
     expect(dispatchMock).not.toHaveBeenCalledWith("test.retry", expect.anything());
     expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+  });
+
+  it("goes to a live worktree when a worktree-only row is clicked", async () => {
+    worktreeStoreMock.worktrees.set("wt-live", { worktreeId: "wt-live", name: "feature-live" });
+    setWorktreeIdSetAccessor(() => new Set(["wt-live"]));
+    useUIStore.setState({ notificationCenterOpen: true });
+    try {
+      setEntries([
+        makeEntry({ id: "a", message: "Tests failed", context: { worktreeId: "wt-live" } }),
+      ]);
+      render(<NotificationCenter open onClose={vi.fn()} />);
+
+      await act(async () => {
+        fireEvent.click(screen.getByText("Tests failed"));
+      });
+
+      expect(dispatchMock).toHaveBeenCalledWith("worktree.select", { worktreeId: "wt-live" });
+      expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+    } finally {
+      setWorktreeIdSetAccessor(() => null);
+    }
+  });
+
+  it("navigates once from a click on a threaded row, using its latest entry", async () => {
+    usePanelStore.setState({
+      panelsById: {
+        "pane-new": { id: "pane-new", kind: "terminal", location: "grid" },
+        "pane-old": { id: "pane-old", kind: "terminal", location: "grid" },
+      },
+      focusedId: null,
+    } as never);
+    setEntries([
+      makeEntry({
+        id: "new",
+        correlationId: "t1",
+        message: "Latest in thread",
+        timestamp: Date.now(),
+        context: { panelId: "pane-new" },
+      }),
+      makeEntry({
+        id: "old",
+        correlationId: "t1",
+        message: "Earlier in thread",
+        timestamp: Date.now() - 1000,
+        context: { panelId: "pane-old" },
+      }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Latest in thread"));
+    });
+
+    const focusCalls = dispatchMock.mock.calls.filter(([id]) => id === "panel.focus");
+    expect(focusCalls).toEqual([["panel.focus", { panelId: "pane-new" }]]);
   });
 
   it("does nothing on Enter when the row's source is gone", async () => {

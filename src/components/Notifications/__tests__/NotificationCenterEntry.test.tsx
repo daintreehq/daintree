@@ -1155,9 +1155,13 @@ describe("NotificationCenterEntry — go to source", () => {
       />
     );
     await openMenu();
+    // The menu's own surface matches no nested-control selector: only the
+    // row's DOM-containment check keeps a React-bubbled click from counting.
     const menu = screen.getByRole("menu");
+    const separator = menu.querySelector('[role="separator"]');
     await act(async () => {
       fireEvent.click(menu);
+      if (separator) fireEvent.click(separator);
       fireEvent.click(screen.getByText("Copy correlation ID"));
     });
     expect(dispatchMock).not.toHaveBeenCalledWith("panel.focus", expect.anything());
@@ -1170,9 +1174,12 @@ describe("NotificationCenterEntry — go to source", () => {
     await act(async () => {
       fireEvent.click(screen.getByText("Go to source"));
     });
+    // Navigation starts from the menu's close-autofocus, which Radix defers.
+    await waitFor(() => {
+      expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+    });
     const focusCalls = dispatchMock.mock.calls.filter(([id]) => id === "panel.focus");
     expect(focusCalls).toEqual([["panel.focus", { panelId: "pane-42" }]]);
-    expect(useUIStore.getState().notificationCenterOpen).toBe(false);
   });
 
   it("keeps the inbox open when panel.focus fails", async () => {
@@ -1222,6 +1229,39 @@ describe("NotificationCenterEntry — go to source", () => {
       fireEvent.click(item);
     });
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("updates an open row when its panel is trashed", () => {
+    seedPanel("pane-42", "grid");
+    const { container } = render(
+      <NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-42" } })} />
+    );
+    expect(getRow(container).getAttribute("data-navigable")).toBe("true");
+    act(() => {
+      seedPanel("pane-42", "trash");
+    });
+    expect(getRow(container).getAttribute("data-navigable")).toBeNull();
+    expect(
+      container.querySelector('[data-testid="notification-destination-unavailable"]')?.textContent
+    ).toContain("Panel in trash");
+  });
+
+  it("ignores a click that ends a text selection inside the row", async () => {
+    seedPanel("pane-42", "grid");
+    render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-42" } })} />);
+    const text = screen.getByText("Hello");
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+    try {
+      await act(async () => {
+        fireEvent.click(text);
+      });
+      expect(dispatchMock).not.toHaveBeenCalled();
+    } finally {
+      window.getSelection()?.removeAllRanges();
+    }
   });
 
   it("offers Go to source for a worktree-only record", async () => {
