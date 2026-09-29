@@ -14,13 +14,14 @@ import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { KbdChord } from "@/components/ui/Kbd";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
+import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
 import { BrandMark, Workflow } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
 import { agentStateDotColor, STATE_LABELS } from "@/components/Worktree/terminalStateConfig";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
-import { comboToAriaKeyshortcuts, describeChord, labelWithShortcut } from "@/lib/kbdShortcut";
+import { comboToAriaKeyshortcuts, describeChord } from "@/lib/kbdShortcut";
 import { notify } from "@/lib/notify";
 import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
@@ -1742,87 +1743,86 @@ function DockLaunchOption({
             {reservesShortcutSlot && (
               <span className="ml-1 w-6 shrink-0" data-launcher-slot="shortcut">
                 {shortcutAgentId && (
-                  <span
-                    // `role="presentation"`, not a `<button>`. These sit inside
-                    // `role="option"`, where ARIA treats children as presentational
-                    // and a real button trips `nested-interactive`. They were
-                    // already `tabIndex={-1}`, so no keyboard path is lost — focus
-                    // stays on the search box and rows are driven by
-                    // `aria-activedescendant`. Mirrors `ActionPaletteItem`, which
-                    // fixed the same thing on the sibling palette.
-                    role="presentation"
-                    data-testid={`launcher-shortcut-edit-${shortcutAgentId}`}
-                    title={displayCombo ? "Change keyboard shortcut" : "Assign keyboard shortcut"}
-                    onPointerDown={(event) => event.preventDefault()}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      onStartCapture(row.rowKey);
-                    }}
-                    className={cn(
-                      "inline-flex size-6 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0 cursor-pointer",
-                      "text-text-secondary opacity-0 transition-[opacity,color,background-color]",
-                      "hover:bg-overlay-soft hover:text-text-primary",
-                      "group-hover:opacity-100 group-focus-within:opacity-100 group-aria-selected:opacity-100"
-                    )}
+                  <RowControlTooltip
+                    label={displayCombo ? "Change keyboard shortcut" : "Assign keyboard shortcut"}
                   >
-                    <Keyboard className="h-3 w-3" aria-hidden />
-                  </span>
+                    <span
+                      // `role="presentation"`, not a `<button>`. These sit inside
+                      // `role="option"`, where ARIA treats children as presentational
+                      // and a real button trips `nested-interactive`. They were
+                      // already `tabIndex={-1}`, so no keyboard path is lost — focus
+                      // stays on the search box and rows are driven by
+                      // `aria-activedescendant`. Mirrors `ActionPaletteItem`, which
+                      // fixed the same thing on the sibling palette.
+                      role="presentation"
+                      data-testid={`launcher-shortcut-edit-${shortcutAgentId}`}
+                      onPointerDown={(event) => event.preventDefault()}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onStartCapture(row.rowKey);
+                      }}
+                      className={cn(
+                        ROW_CONTROL_CLASS,
+                        "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-aria-selected:opacity-100"
+                      )}
+                    >
+                      <Keyboard className="h-3 w-3" aria-hidden />
+                    </span>
+                  </RowControlTooltip>
                 )}
               </span>
             )}
 
             <span className="ml-0.5 w-6 shrink-0" data-launcher-slot="pin">
               {pinTarget && (
-                <span
-                  role="presentation"
-                  data-launcher-pin=""
-                  // The state rides a data attribute because `aria-pressed` on a
-                  // presentational element is ignored — and it was never what
-                  // announced the pin anyway. The option's own `aria-label`
-                  // carries "Press Option P to pin/unpin to toolbar" and its
-                  // `aria-keyshortcuts` carries the chord.
-                  data-pinned={pinTarget.onToolbar}
-                  title={labelWithShortcut(
-                    pinTarget.onToolbar ? TOOLBAR_UNPIN_LABEL : TOOLBAR_PIN_LABEL,
-                    "Alt+P",
-                    isMac()
-                  )}
-                  // preventDefault keeps focus on the search box. stopPropagation
-                  // belongs on the click below and nowhere else: the row's own
-                  // onClick is an ancestor of this one, so the pin must stop the
-                  // click — but stopping the POINTERDOWN would hide it from Radix's
-                  // DismissableLayer, which needs to see it to classify the next
-                  // outside click as a dismissal.
-                  onPointerDown={(event) => event.preventDefault()}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    onTogglePin(pinTarget);
-                  }}
-                  className={cn(
-                    "inline-flex size-6 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0 cursor-pointer",
-                    "transition-[opacity,color,background-color] hover:bg-overlay-soft hover:text-text-primary",
-                    // Pinned rows read as state markers and stay visible; unpinned
-                    // ones are controls that only appear once the row is under the
-                    // pointer or the selection.
-                    pinTarget.onToolbar
-                      ? "text-text-secondary opacity-100"
-                      : "text-text-secondary opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-aria-selected:opacity-100"
-                  )}
+                <RowControlTooltip
+                  label={pinTarget.onToolbar ? TOOLBAR_UNPIN_LABEL : TOOLBAR_PIN_LABEL}
+                  shortcut="Alt+P"
                 >
-                  {/* `Pin`, filled, for the pinned state — never `PinOff`. A pin
-                  with a slash through it is the "off/muted/unavailable" glyph
-                  in every system that defines one, so wearing it at rest made a
-                  pinned row advertise that it was not pinned. Paired with
-                  `aria-pressed="true"` it read as a double negative to a screen
-                  reader too. Filled-for-selected, outline-for-unselected is the
-                  convention the rest of the app's toggles follow. */}
-                  <Pin
-                    className={cn("h-3 w-3", pinTarget.onToolbar && "fill-current")}
-                    aria-hidden
-                  />
-                </span>
+                  <span
+                    role="presentation"
+                    data-launcher-pin=""
+                    // The state rides a data attribute because `aria-pressed` on a
+                    // presentational element is ignored — and it was never what
+                    // announced the pin anyway. The option's own `aria-label`
+                    // carries "Press Option P to pin/unpin to toolbar" and its
+                    // `aria-keyshortcuts` carries the chord.
+                    data-pinned={pinTarget.onToolbar}
+                    // preventDefault keeps focus on the search box. stopPropagation
+                    // belongs on the click below and nowhere else: the row's own
+                    // onClick is an ancestor of this one, so the pin must stop the
+                    // click — but stopping the POINTERDOWN would hide it from Radix's
+                    // DismissableLayer, which needs to see it to classify the next
+                    // outside click as a dismissal.
+                    onPointerDown={(event) => event.preventDefault()}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onTogglePin(pinTarget);
+                    }}
+                    className={cn(
+                      ROW_CONTROL_CLASS,
+                      // Pinned rows read as state markers and stay visible; unpinned
+                      // ones are controls that only appear once the row is under the
+                      // pointer or the selection.
+                      !pinTarget.onToolbar &&
+                        "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-aria-selected:opacity-100"
+                    )}
+                  >
+                    {/* `Pin`, filled, for the pinned state — never `PinOff`. A pin
+                    with a slash through it is the "off/muted/unavailable" glyph
+                    in every system that defines one, so wearing it at rest made a
+                    pinned row advertise that it was not pinned. Paired with
+                    `aria-pressed="true"` it read as a double negative to a screen
+                    reader too. Filled-for-selected, outline-for-unselected is the
+                    convention the rest of the app's toggles follow. */}
+                    <Pin
+                      className={cn("h-3 w-3", pinTarget.onToolbar && "fill-current")}
+                      aria-hidden
+                    />
+                  </span>
+                </RowControlTooltip>
               )}
             </span>
           </>

@@ -424,7 +424,7 @@ describe("QuickRun", () => {
       fireEvent.change(input, { target: { value: "npm run dev" } });
 
       const active = document.getElementById(input.getAttribute("aria-activedescendant")!)!;
-      expect(active.getAttribute("title")).toBe("npm run dev");
+      expect(active.getAttribute("data-command")).toBe("npm run dev");
       const all = screen.getAllByRole("option");
       const band = all
         .slice(0, all.indexOf(active))
@@ -432,9 +432,11 @@ describe("QuickRun", () => {
         .find((o) => o.getAttribute("aria-disabled") === "true");
       expect(band?.getAttribute("aria-label")).toBe("Pinned");
       // No second "Run npm run dev" row competing with the pinned one.
-      expect(screen.getAllByRole("option").filter((o) => o.title === "npm run dev")).toHaveLength(
-        1
-      );
+      expect(
+        screen
+          .getAllByRole("option")
+          .filter((o) => o.getAttribute("data-command") === "npm run dev")
+      ).toHaveLength(1);
     } finally {
       settingsMock.runCommands = [];
     }
@@ -603,7 +605,7 @@ describe("QuickRun", () => {
     fireEvent.keyDown(input, { key: "ArrowDown" });
 
     const active = document.getElementById(input.getAttribute("aria-activedescendant")!);
-    const expected = active!.getAttribute("title")!;
+    const expected = active!.getAttribute("data-command")!;
     expect(expected).not.toBe("npm");
 
     fireEvent.click(screen.getByRole("button", { name: "Run" }));

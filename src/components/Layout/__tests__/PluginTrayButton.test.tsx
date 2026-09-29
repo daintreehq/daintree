@@ -205,11 +205,14 @@ describe("PluginTrayButton", () => {
       <PluginTrayButton configs={configMap(config({ id: "acme.a", label }))} />
     );
     const row = getByTestId("plugin-tray-row-acme.a");
-    const labelEl = Array.from(row.querySelectorAll("span")).find((el) => el.textContent === label);
-    expect(labelEl).toBeDefined();
+    const copies = Array.from(row.querySelectorAll("span")).filter(
+      (el) => el.textContent === label
+    );
     // Truncation is visual only: the text node stays whole, and the clipped
-    // label says the rest on hover.
-    expect(labelEl!.getAttribute("title")).toBe(label);
+    // label says the rest on hover through TruncatedTooltip (rendered inline by
+    // the tooltip mock) — never a native `title`.
+    expect(copies).toHaveLength(2);
+    for (const el of copies) expect(el.hasAttribute("title")).toBe(false);
   });
 
   it("renders nothing when no plugin contributes a toolbar button", () => {

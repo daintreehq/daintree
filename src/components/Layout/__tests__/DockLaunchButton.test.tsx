@@ -377,7 +377,7 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
 import { DockLaunchButton } from "../DockLaunchButton";
 import { TOOLBAR_CUSTOMIZE_ICON, TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
 import type { DockLaunchAgent } from "../DockLaunchMenuItems";
-import { comboToAriaKeyshortcuts, describeChord, labelWithShortcut } from "@/lib/kbdShortcut";
+import { comboToAriaKeyshortcuts, describeChord } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
 
 /** Spoken by name ("Alt P" / "Option P"), never as the "Alt+P" string. */
@@ -2243,7 +2243,11 @@ describe("DockLaunchButton", () => {
       // Alt+P pins; it does not activate the row, so it is spoken, not declared.
       expect(row.getAttribute("aria-keyshortcuts")).not.toBe("Alt+P");
       expect(row.getAttribute("aria-label")).toContain(PIN_SPOKEN);
-      expect(pin.getAttribute("title")).toContain(labelWithShortcut("", "Alt+P", isMac()).trim());
+      // The mouse tooltip is the shared Tooltip (never `title=`) and shows the chord.
+      expect(pin.hasAttribute("title")).toBe(false);
+      const tip = pin.nextElementSibling;
+      expect(tip?.getAttribute("data-testid")).toBe("tooltip-content");
+      expect(tip?.querySelector("kbd")).not.toBeNull();
       // No second tab stop inside a row: the palette moves selection, not focus,
       // and a focusable control here would break that model.
       expect(pin.tabIndex).toBe(-1);
@@ -2956,7 +2960,12 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       expect(rowByName(container, "Terminal").textContent).toContain("Ctrl Alt T");
       expect(rowByName(container, "File browser").textContent).toContain("Ctrl Alt E");
       // ...and a row with no binding renders no stray hint.
-      expect(rowByName(container, "Browser").querySelector("kbd")).toBeNull();
+      // (The pin control's tooltip carries its own Alt+P keycaps; that is not
+      // the row's launch binding.)
+      const stray = [...rowByName(container, "Browser").querySelectorAll("kbd")].filter(
+        (kbd) => !kbd.closest('[data-testid="tooltip-content"]')
+      );
+      expect(stray).toEqual([]);
     });
 
     it("shows an agent row's own binding", () => {
