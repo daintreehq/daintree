@@ -1450,7 +1450,7 @@ export function NewWorktreeDialog({
             >
               {initialPR ? "Check out" : "Create worktree"}
               {/* Hidden from the name: `aria-keyshortcuts` already says it. */}
-              <span className="ml-1 inline-flex" aria-hidden="true">
+              <span className="inline-flex" aria-hidden="true">
                 <KbdChord shortcut="Cmd+Enter" density="compact" foreground="inverse" />
               </span>
             </Button>

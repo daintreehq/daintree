@@ -208,6 +208,19 @@ describe("GitInitDialog", () => {
     expect(select.value).toBe(DEFAULT_GITIGNORE_TEMPLATE_ID);
   });
 
+  // The closed select shows only the template's name; what it writes is said
+  // beside it, for whichever template is picked.
+  it("describes the picked template under the select", () => {
+    renderDialog();
+    const select = screen.getByLabelText(/^gitignore$/i);
+    const hint = () => document.getElementById(select.getAttribute("aria-describedby") ?? "");
+
+    for (const option of [GITIGNORE_TEMPLATE_OPTIONS[1]!, GITIGNORE_TEMPLATE_OPTIONS[0]!]) {
+      fireEvent.change(select, { target: { value: option.value } });
+      expect(hint()?.textContent).toBe(option.description);
+    }
+  });
+
   it("pre-fills the commit message and submits the default without editing", async () => {
     renderDialog();
 

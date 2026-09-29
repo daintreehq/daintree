@@ -205,6 +205,7 @@ export function GitInitDialog({
   const previousModeRef = useRef<"configure" | "running" | "failed" | "complete">("configure");
   const nameErrorId = useId();
   const commitMessageErrorId = useId();
+  const templateHintId = useId();
 
   const trimmedProjectName = projectName.trim();
   // The name is seeded from the folder, so this only ever fires after the user
@@ -670,7 +671,18 @@ export function GitInitDialog({
                 />
               </FormRow>
 
-              <FormRow label="Gitignore" htmlFor="git-init-template">
+              <FormRow
+                label="Gitignore"
+                htmlFor="git-init-template"
+                hint={
+                  <p id={templateHintId} className="text-xs text-text-secondary">
+                    {
+                      GITIGNORE_TEMPLATE_OPTIONS.find((opt) => opt.value === gitignoreTemplate)
+                        ?.description
+                    }
+                  </p>
+                }
+              >
                 <Select
                   value={gitignoreTemplate}
                   onValueChange={(value) => {
@@ -678,7 +690,11 @@ export function GitInitDialog({
                   }}
                   disabled={configDisabled}
                 >
-                  <SelectTrigger id="git-init-template" className={FIELD_CONTROL_SIZE}>
+                  <SelectTrigger
+                    id="git-init-template"
+                    aria-describedby={templateHintId}
+                    className={FIELD_CONTROL_SIZE}
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>

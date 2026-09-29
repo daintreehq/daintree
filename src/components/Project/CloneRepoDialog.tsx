@@ -927,7 +927,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             >
               Clone
               {/* Hidden from the name: `aria-keyshortcuts` already says it. */}
-              <span className="ml-1 inline-flex" aria-hidden="true">
+              <span className="inline-flex" aria-hidden="true">
                 <KbdChord shortcut="Enter" density="compact" foreground="inverse" />
               </span>
             </Button>
