@@ -198,9 +198,16 @@ describe("SavedFleetQuickRecall in Append mode counts only what it would add", (
 });
 
 describe("SavedFleetsDialog", () => {
-  it("lists every saved fleet, arms only the ones that would arm something, and gates delete on a confirm", async () => {
+  it("lists every saved fleet, arms only the ones that would arm something, and deletes without a confirm", async () => {
     const { SavedFleetsDialog } = await import("../SavedFleetsDialog");
+    const { useProjectStore } = await import("@/store/projectStore");
+    useProjectStore.setState({ currentProject: { id: "p1" } } as never);
+    useProjectSettingsStore.setState({ projectId: "p1" });
     setSaved([snapshot("live", ["a"]), snapshot("dead", ["gone-1"])]);
+    vi.mocked(actionService.dispatch).mockImplementation(async () => {
+      setSaved([snapshot("live", ["a"])]);
+      return { ok: true, result: undefined };
+    });
     const onClose = vi.fn();
     render(<SavedFleetsDialog isOpen onClose={onClose} />);
     expect(screen.getAllByTestId("fleet-saved-manage-row")).toHaveLength(2);
@@ -210,18 +217,19 @@ describe("SavedFleetsDialog", () => {
     );
     expect(disabled).toHaveLength(1);
 
+    const deleteDead = screen.getByLabelText('Delete fleet "dead"');
+    deleteDead.focus();
     await act(async () => {
-      fireEvent.click(screen.getByLabelText('Delete fleet "dead"'));
+      fireEvent.click(deleteDead);
     });
-    expect(actionService.dispatch).not.toHaveBeenCalled();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Delete fleet" }));
-    });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "fleet.deleteNamedFleet",
       { id: "dead" },
       { source: "user" }
     );
+    // The button went with its row; focus lands on the row that is left.
+    expect(document.activeElement).toBe(screen.getByLabelText('Delete fleet "live"'));
   });
 });
 

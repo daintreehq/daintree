@@ -79,7 +79,6 @@ export const SEL = {
     restoreFromDock: 'button[aria-label*="move to grid"]',
     duplicate: '[aria-label="Duplicate panel as new tab"]',
     restart: '[data-testid="panel-restart"]',
-    restartConfirm: '[data-testid="panel-restart-confirm"]',
     tabList: '[role="tablist"][aria-label="Panel tabs"]',
     tab: '[role="tab"]',
     dockPopoverResizeHandle: '[data-testid="dock-popover-resize-handle"]',

@@ -18,9 +18,7 @@ import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup"
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { ClearLogsConfirmDialog } from "@/components/Diagnostics/ClearLogsConfirmDialog";
 import { notify } from "@/lib/notify";
-
-/** How long an Undo stays offered — the same window as the app's other undo toasts. */
-const UNDO_WINDOW_MS = 5_000;
+import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 
 const PROFILE_UPDATE_INTERVAL_MS = 250;
 
@@ -432,7 +430,7 @@ export function TroubleshootingTab() {
         message: `${count} ${count === 1 ? "module is" : "modules are"} back on the default level.`,
         priority: "high",
         transient: true,
-        duration: UNDO_WINDOW_MS,
+        duration: UNDO_TOAST_DURATION_MS,
         context: { eventKind: "uiFeedback" },
         action: {
           label: "Undo",

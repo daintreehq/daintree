@@ -41,7 +41,6 @@ import {
   GripVertical,
 } from "lucide-react";
 import { useToolbarPreferencesStore } from "@/store";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { AnyToolbarButtonId, LauncherItemToolbarButtonId } from "@/../../shared/types/toolbar";
@@ -79,6 +78,8 @@ import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 
 import { buildPluginToolbarMeta } from "@/components/Layout/pluginToolbarMeta";
 import { cn } from "@/lib/utils";
+import { notify } from "@/lib/notify";
+import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { DRAG_GHOST_OPACITY, EASE_OUT_EXPO, UI_ANIMATION_DURATION } from "@/lib/animationUtils";
 import {
   isToolbarButtonOnToolbar,
@@ -439,6 +440,21 @@ function withoutDuplicates(ids: readonly AnyToolbarButtonId[]): AnyToolbarButton
   return Array.from(new Set(ids));
 }
 
+/**
+ * Per key: the value from before a reset where the key still holds what the
+ * reset put there, else whatever it holds now.
+ */
+function restoreUntouched<T extends object>(before: T, afterReset: T, now: T): T {
+  const resetValues = new Map<string, unknown>(Object.entries(afterReset));
+  const keys = new Set([...Object.keys(before), ...resetValues.keys(), ...Object.keys(now)]);
+  const beforeValues = new Map<string, unknown>(Object.entries(before));
+  const nowValues = new Map<string, unknown>(Object.entries(now));
+  const restored = [...keys]
+    .filter((key) => nowValues.get(key) === resetValues.get(key))
+    .map((key) => [key, beforeValues.get(key)] as const);
+  return { ...now, ...Object.fromEntries(restored) };
+}
+
 export function ToolbarSettingsTab() {
   const layout = useToolbarPreferencesStore((s) => s.layout);
   const launcher = useToolbarPreferencesStore((s) => s.launcher);
@@ -452,10 +468,46 @@ export function ToolbarSettingsTab() {
   const positionAgentButton = useToolbarPreferencesStore((s) => s.positionAgentButton);
   const setAlwaysShowDevServer = useToolbarPreferencesStore((s) => s.setAlwaysShowDevServer);
   const setDefaultSelection = useToolbarPreferencesStore((s) => s.setDefaultSelection);
-  const reset = useToolbarPreferencesStore((s) => s.reset);
-  // Confirmed like every other settings reset (shortcuts, agent settings): the
-  // layout is hand-built and nothing restores it once it's gone.
-  const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
+  // Undone rather than confirmed, like the app's other reversible resets: the
+  // whole layout is a small local snapshot, and Undo puts it back exactly.
+  const handleResetToolbar = () => {
+    const { layout, launcher, reset } = useToolbarPreferencesStore.getState();
+    reset();
+    const { layout: resetLayout, launcher: resetLauncher } = useToolbarPreferencesStore.getState();
+    notify({
+      type: "success",
+      title: "Toolbar reset",
+      message: "Buttons, their order and the launcher options are back to the defaults.",
+      priority: "high",
+      transient: true,
+      duration: UNDO_TOAST_DURATION_MS,
+      action: {
+        label: "Undo",
+        // Anything changed again since the reset keeps that change. The two
+        // sides are one unit: a button moved across changes both lists.
+        onClick: latestUndoOnly("toolbar-reset", () => {
+          const now = useToolbarPreferencesStore.getState();
+          const sidesUntouched =
+            now.layout.leftButtons === resetLayout.leftButtons &&
+            now.layout.rightButtons === resetLayout.rightButtons;
+          useToolbarPreferencesStore.setState({
+            layout: {
+              ...now.layout,
+              ...(sidesUntouched
+                ? { leftButtons: layout.leftButtons, rightButtons: layout.rightButtons }
+                : {}),
+              pinnedButtons: restoreUntouched(
+                layout.pinnedButtons,
+                resetLayout.pinnedButtons,
+                now.layout.pinnedButtons
+              ),
+            },
+            launcher: restoreUntouched(launcher, resetLauncher, now.launcher),
+          });
+        }),
+      },
+    });
+  };
 
   const agentSettings = useAgentSettingsStore((s) => s.settings);
   const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
@@ -1186,9 +1238,9 @@ export function ToolbarSettingsTab() {
           control={({ labelId, descriptionId, disabled }) => (
             <Button
               type="button"
-              variant="ghost-danger"
+              variant="outline"
               size="sm"
-              onClick={() => setIsResetConfirmOpen(true)}
+              onClick={handleResetToolbar}
               disabled={disabled}
               aria-labelledby={labelId}
               aria-describedby={descriptionId}
@@ -1198,19 +1250,6 @@ export function ToolbarSettingsTab() {
           )}
         />
       </SettingsGroup>
-      <ConfirmDialog
-        isOpen={isResetConfirmOpen}
-        variant="destructive"
-        onConfirm={() => {
-          reset();
-          setIsResetConfirmOpen(false);
-        }}
-        onClose={() => setIsResetConfirmOpen(false)}
-        title="Reset toolbar?"
-        description="Every button, its side and its order go back to the defaults, and so do the launcher palette options."
-        confirmLabel="Reset toolbar"
-        zIndex="nested"
-      />
     </div>
   );
 }

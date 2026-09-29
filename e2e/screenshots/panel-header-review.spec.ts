@@ -11,7 +11,7 @@
  * than booting Electron: the real `ContentPanel` and `PanelHeader`, the real theme
  * tokens, the real `index.css`, from fixtures that name each state and seed the stores
  * the pane reads. The states no fixture can express — hover, keyboard focus, an open
- * menu, an armed restart, an inline rename — are driven here with a real pointer and
+ * menu, an inline rename — are driven here with a real pointer and
  * real keys.
  *
  * Opt-in only: skips itself unless DAINTREE_SHOT_PANELHEADER is set.
@@ -531,7 +531,8 @@ test("panel header — states, interactions and themes", async ({ page }) => {
       written.push(await snap(pane, `focused-working--${theme}--title-editing.png`));
     }
 
-    // The overflow menu, idle and then with an armed restart counting down.
+    // The overflow menu. Restart has no in-menu state of its own: an idle shell restarts
+    // at once and a working agent gets the app-level confirm dialog.
     {
       const { pane, header } = await open(page, "focused-working", theme);
       await proveState(page, "focused-working", header);
@@ -541,15 +542,6 @@ test("panel header — states, interactions and themes", async ({ page }) => {
       await expect(page.getByTestId("panel-restart")).toBeVisible();
       await page.waitForTimeout(200);
       written.push(await snapRegion(page, pane, 320, `focused-working--${theme}--menu-open.png`));
-
-      await page.getByTestId("panel-restart").click();
-      const confirm = page.getByTestId("panel-restart-confirm");
-      await expect(confirm).toBeVisible();
-      await expect(confirm).toContainText("Confirm restart");
-      await page.waitForTimeout(100);
-      written.push(
-        await snapRegion(page, pane, 320, `focused-working--${theme}--armed-restart.png`)
-      );
     }
 
     // A tab under the cursor reveals its close control.

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Textarea } from "@/components/ui/textarea";
 import { notify } from "@/lib/notify";
+import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { useShallow } from "zustand/react/shallow";
 import { selectDiffNotes, useDiffNotesStore } from "@/store/diffNotesStore";
 import {
@@ -90,9 +91,6 @@ function describeAnchor(anchor: DiffNoteAnchor): string {
   const lines = formatDiffNoteLines(anchor);
   return anchor.startLine === anchor.endLine ? `Line ${lines}` : `Lines ${lines}`;
 }
-
-/** How long a deleted note can be brought back — the app's standard undo window. */
-const NOTE_UNDO_WINDOW_MS = 5_000;
 
 function capitalize(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
@@ -180,7 +178,7 @@ export const DiffNoteCard = memo(function DiffNoteCard({ note, placement }: Diff
       message: capitalize(nameAnchor(deleted.anchor)),
       priority: "high",
       transient: true,
-      duration: NOTE_UNDO_WINDOW_MS,
+      duration: UNDO_TOAST_DURATION_MS,
       context: { eventKind: "uiFeedback" },
       action: { label: "Undo", onClick: () => restoreNote(deleted) },
     });

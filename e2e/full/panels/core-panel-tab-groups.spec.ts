@@ -230,7 +230,7 @@ test.describe.serial("Core: Panel Tab Groups", () => {
         await waitForTerminalText(panel, "PRE_RESTART", T_LONG);
       });
 
-      await test.step("Open overflow menu and arm Restart session", async () => {
+      await test.step("Open overflow menu and choose Restart session", async () => {
         await panel.hover();
         const overflowBtn = panel.locator(SEL.panel.overflowMenu).first();
         await overflowBtn.click();
@@ -240,13 +240,8 @@ test.describe.serial("Core: Panel Tab Groups", () => {
         await restartBtn.click();
       });
 
-      await test.step("Confirm the restart and verify the panel survives", async () => {
-        // Confirm the restart (2-click armed pattern)
-        const confirmBtn = window.locator(SEL.panel.restartConfirm).first();
-        await expect(confirmBtn).toBeVisible({ timeout: T_SHORT });
-        await confirmBtn.click();
-
-        // Panel should remain visible after restart
+      await test.step("Verify the panel survives the restart", async () => {
+        // A plain shell restarts on the first click; only a working agent asks.
         await expect(panel).toBeVisible({ timeout: T_LONG });
       });
 

@@ -86,6 +86,7 @@ import {
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { usePanelStore } from "@/store/panelStore";
+import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -333,40 +334,8 @@ function PanelHeaderComponent({
   // Check if panel kind supports restart via registry
   const canRestart = panelKindCanRestart(kind);
 
-  // Armed restart confirmation state (2-click pattern with 3s timeout)
-  const [armedRestartId, setArmedRestartId] = useState<string | null>(null);
-  const [countdown, setCountdown] = useState<number | null>(null);
   const [overflowTooltipOpen, setOverflowTooltipOpen] = useState(false);
   const overflowButtonRef = useRef<HTMLButtonElement | null>(null);
-  const armedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const ARMED_TIMEOUT_MS = 3000;
-
-  useEffect(() => {
-    return () => {
-      if (armedTimerRef.current) {
-        clearTimeout(armedTimerRef.current);
-      }
-      if (countdownIntervalRef.current) {
-        clearInterval(countdownIntervalRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (armedRestartId !== null && (armedRestartId !== id || !canRestart || !onRestart)) {
-      setArmedRestartId(null);
-      setCountdown(null);
-      if (armedTimerRef.current) {
-        clearTimeout(armedTimerRef.current);
-        armedTimerRef.current = null;
-      }
-      if (countdownIntervalRef.current) {
-        clearInterval(countdownIntervalRef.current);
-        countdownIntervalRef.current = null;
-      }
-    }
-  }, [id, armedRestartId, canRestart, onRestart]);
 
   const dragListeners =
     (location === "grid" || location === "dock") && dragHandle?.listeners
@@ -654,56 +623,17 @@ function PanelHeaderComponent({
     );
   };
 
-  // Restart handler for Radix DropdownMenu onSelect
-  const handleRestartSelect = useCallback(
-    (e: Event) => {
-      if (armedRestartId === id) {
-        // Second select — confirm restart, let menu close
-        setArmedRestartId(null);
-        setCountdown(null);
-        if (armedTimerRef.current) {
-          clearTimeout(armedTimerRef.current);
-          armedTimerRef.current = null;
-        }
-        if (countdownIntervalRef.current) {
-          clearInterval(countdownIntervalRef.current);
-          countdownIntervalRef.current = null;
-        }
-        onRestart?.();
-      } else {
-        // First select — arm, keep menu open
-        e.preventDefault();
-        setArmedRestartId(id);
-        setCountdown(3);
-
-        if (armedTimerRef.current) {
-          clearTimeout(armedTimerRef.current);
-        }
-        if (countdownIntervalRef.current) {
-          clearInterval(countdownIntervalRef.current);
-        }
-
-        let currentCount = 3;
-        countdownIntervalRef.current = setInterval(() => {
-          currentCount -= 1;
-          if (currentCount > 0) {
-            setCountdown(currentCount);
-          }
-        }, 1000);
-
-        armedTimerRef.current = setTimeout(() => {
-          setArmedRestartId(null);
-          setCountdown(null);
-          if (countdownIntervalRef.current) {
-            clearInterval(countdownIntervalRef.current);
-            countdownIntervalRef.current = null;
-          }
-          armedTimerRef.current = null;
-        }, ARMED_TIMEOUT_MS);
-      }
-    },
-    [id, armedRestartId, onRestart]
-  );
+  // Restarting an idle shell costs nothing worth asking about, so it acts at
+  // once; a working agent gets the same confirm as the right-click menu. That
+  // confirm is staged by the action itself, after the menu has handed focus
+  // back, so the dialog's own close returns focus to this panel.
+  const handleRestartSelect = () => {
+    if (terminalHasRunningAgentSession(usePanelStore.getState().panelsById[id])) {
+      pendingMenuDispatchRef.current = { actionId: "terminal.restart", args: { terminalId: id } };
+      return;
+    }
+    onRestart?.();
+  };
 
   const handleWatchToggle = useCallback(() => {
     if (isWatched) {
@@ -1655,24 +1585,9 @@ function PanelHeaderComponent({
                   )}
 
                   {canRestart && onRestart && (
-                    <DropdownMenuItem
-                      onSelect={handleRestartSelect}
-                      className={cn(
-                        armedRestartId === id && "bg-status-warning/10 text-status-warning"
-                      )}
-                      data-testid={
-                        armedRestartId === id ? "panel-restart-confirm" : "panel-restart"
-                      }
-                      aria-label={
-                        armedRestartId === id
-                          ? `Armed — click again to confirm restart. ${countdown !== null ? `Confirmation expires in ${countdown} seconds` : ""}`
-                          : "Restart session"
-                      }
-                    >
+                    <DropdownMenuItem onSelect={handleRestartSelect} data-testid="panel-restart">
                       <RotateCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                      {armedRestartId === id
-                        ? `Confirm restart (${countdown ?? 0}s)`
-                        : "Restart session"}
+                      Restart session
                     </DropdownMenuItem>
                   )}
 

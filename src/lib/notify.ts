@@ -17,6 +17,7 @@ import { useNotificationSettingsStore } from "@/store/notificationSettingsStore"
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isScheduledQuietNow, nextOccurrenceTimestamp } from "@shared/utils/quietHours";
 import { normalizeForDedup } from "@shared/utils/normalizeErrorMessage";
+import { UNDO_ACTION_LABEL } from "@/lib/undoToast";
 import type { ErrorRetryability, ErrorType } from "@/store/errorStore";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 
@@ -214,6 +215,11 @@ export const TOAST_DURATION: Record<NotificationType, number> = {
   info: 6000,
 };
 
+function carriesUndo(payload: Pick<NotifyPayloadBase, "action" | "actions">): boolean {
+  if (payload.action?.label === UNDO_ACTION_LABEL) return true;
+  return payload.actions?.some((a) => a.label === UNDO_ACTION_LABEL) ?? false;
+}
+
 interface CoalesceOptionsBase {
   key: string;
   windowMs?: number;
@@ -301,7 +307,12 @@ interface NotifyPayloadBase {
    * writes the entry; `transient` skips the inbox entirely.
    */
   transient?: boolean;
-  /** When true, the notification bypasses the startup quiet period gate */
+  /**
+   * When true, the notification bypasses quiet hours (scheduled and the startup
+   * quiet period) and the per-source rate limit. Defaults to true for a toast
+   * carrying an Undo action: the user just made the change, and an Undo held
+   * back until quiet hours end would expire unseen. Pass `false` to opt out.
+   */
   urgent?: boolean;
   /** Fires exactly once when the user explicitly dismisses the toast via the close or action button */
   onDismiss?: () => void;
@@ -839,6 +850,9 @@ export function notify(payload: NotifyPayload): string {
   // caller-written "low" apart from one the passive-eventKind policy filled in.
   const hadExplicitPriority = payload.priority !== undefined;
   payload = resolveEventPolicyDefaults(payload);
+  if (payload.urgent === undefined && carriesUndo(payload)) {
+    payload = { ...payload, urgent: true };
+  }
 
   const priority = payload.priority ?? "high";
   const { placement, correlationId, type, title, message, inboxMessage, context } = payload;

@@ -43,6 +43,7 @@ import {
   setSessionQuietUntil,
   type NotificationEventKind,
 } from "@/lib/notify";
+import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { useUIStore } from "@/store/uiStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -579,7 +580,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       // elsewhere without a time limit" exception — the notification history
       // inbox is always accessible as the recovery surface, and Undo provides
       // a reversal mechanism within the time limit.
-      duration: 5000,
+      duration: UNDO_TOAST_DURATION_MS,
       priority: "high",
       // Time-bound undo — surface even during quiet hours so the user has a
       // recovery path.
