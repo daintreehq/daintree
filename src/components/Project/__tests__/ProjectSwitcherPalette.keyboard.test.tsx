@@ -594,7 +594,10 @@ describe("ProjectSwitcherPalette with a project open in another window (#12597)"
     );
 
     const footer = screen.getByTestId("palette-footer");
-    expect(footer.textContent).toContain("⌘↵");
+    // jsdom reports no Mac platform, so the modifier is the one Windows and
+    // Linux press — never a literal ⌘.
+    expect(footer.textContent).toContain("Ctrl+↵");
+    expect(footer.textContent).not.toContain("⌘");
     expect(footer.textContent).toContain("Go to window");
     expect(footer.textContent).not.toContain("New window");
   });

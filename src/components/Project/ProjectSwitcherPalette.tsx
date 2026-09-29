@@ -25,6 +25,8 @@ import type { LucideIcon } from "lucide-react";
 import { FolderDown, Moon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
+import { isMac } from "@/lib/platform";
+import { formatChordText } from "@/lib/kbdShortcut";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
 import {
   PALETTE_ROW_CLASS,
@@ -665,14 +667,19 @@ function modEnterOpensWindow(
 export function getProjectSwitcherEnterHint(
   row: ProjectSwitcherRow | undefined,
   modifierHeld: boolean,
-  canOpenWindow: boolean
+  canOpenWindow: boolean,
+  mac: boolean = isMac()
 ): { keys: string; label: string } | null {
   if (!row) return null;
   const opensWindow = modifierHeld && modEnterOpensWindow(row, canOpenWindow);
+  // The keydown takes Meta or Control, so the modifier is whichever this
+  // platform calls primary — a literal ⌘ tells Windows and Linux to press a key
+  // they don't have. The Enter glyph stays the footer family's ↵.
+  const modEnter = `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`;
   if (row.kind === "project" && isOpenElsewhere(row)) {
-    return { keys: opensWindow ? "⌘↵" : "↵", label: "Go to window" };
+    return { keys: opensWindow ? modEnter : "↵", label: "Go to window" };
   }
-  if (opensWindow && !row.isOpenInThisWindow) return { keys: "⌘↵", label: "New window" };
+  if (opensWindow && !row.isOpenInThisWindow) return { keys: modEnter, label: "New window" };
   return { keys: "↵", label: "Switch" };
 }
 
@@ -721,7 +728,7 @@ function ProjectListItem({
       aria-current={project.isActive ? "true" : undefined}
       className={cn(
         PALETTE_ROW_CLASS,
-        "group w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-md)] text-left cursor-pointer",
+        "group w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] text-left cursor-pointer",
         project.isActive
           ? "text-text-primary"
           : project.isMissing
@@ -969,7 +976,7 @@ function ScratchListItem({
       aria-current={scratch.isActive ? "true" : undefined}
       className={cn(
         PALETTE_ROW_CLASS,
-        "group w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-md)] text-left cursor-pointer",
+        "group w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] text-left cursor-pointer",
         scratch.isActive ? "text-text-primary" : "text-text-secondary"
       )}
       onPointerMove={onHoverRow && !isSelected ? () => onHoverRow(scratch.id) : undefined}
@@ -1680,7 +1687,7 @@ function ScratchNameEditor({
   return (
     <div
       className={cn(
-        "w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-md)] border border-transparent",
+        "w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-sm)] border border-transparent",
         className
       )}
     >
@@ -1696,7 +1703,7 @@ function ScratchNameEditor({
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
         onBlur={onCancel}
-        className="flex-1 min-w-0 bg-overlay-soft border border-[var(--border-overlay)] rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+        className="flex-1 min-w-0 bg-overlay-soft border border-overlay rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
       />
     </div>
   );
@@ -1887,7 +1894,7 @@ function ScratchSection({
                         type="button"
                         onClick={() => onSelect?.(scratch)}
                         className={cn(
-                          "w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-md)] text-left transition-colors",
+                          "w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-sm)] text-left transition-colors",
                           scratch.isActive
                             ? "text-text-primary"
                             : "text-text-secondary hover:text-text-primary",
@@ -2019,7 +2026,7 @@ function ScratchSection({
                 type="button"
                 onClick={() => setEditor({ kind: "create" })}
                 className={cn(
-                  "w-full flex items-center gap-2 px-2 py-1 mt-1 rounded-[var(--radius-md)] text-left transition-colors",
+                  "w-full flex items-center gap-2 px-2 py-1 mt-1 rounded-[var(--radius-sm)] text-left transition-colors",
                   "border border-transparent text-text-secondary hover:bg-overlay-subtle hover:text-text-primary",
                   PALETTE_ROW_FOCUS_CLASS
                 )}
@@ -2047,7 +2054,7 @@ function ScratchSection({
                 // out to their text column. The middle track stands in for the
                 // tile and centres the smaller glyph inside it.
                 "w-full grid grid-cols-[0.5rem_2rem_minmax(0,1fr)] items-center gap-x-2",
-                "px-2 py-1.5 mt-1 rounded-[var(--radius-md)] border border-transparent text-left",
+                "px-2 py-1.5 mt-1 rounded-[var(--radius-sm)] border border-transparent text-left",
                 "text-xs font-medium text-status-error transition-colors hover:bg-status-error/10",
                 PALETTE_ROW_FOCUS_CLASS
               )}
