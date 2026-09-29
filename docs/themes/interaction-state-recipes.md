@@ -101,7 +101,7 @@ cn(DOCK_STATUS_PILL_CLASS, isOpen && DOCK_STATUS_PILL_OPEN_CLASS);
 
 **Usage:** The accent border+ring active treatment previously documented here was deliberately retired (commit `e30d29638`, "replace accent ring on popover-open dock buttons with neutral lift"), first for the pills and then for the chips, which had kept it as a copy-pasted class string in three files. Do not respell either state — import the constants.
 
-- **Open** is the neutral ladder's top rung: `bg-overlay-emphasis` on the pills; `--dock-item-bg-active` / `--dock-item-border-active` on the chips, whose `:root` defaults are `overlay-emphasis` and `border-default` and which light themes lift to white. Neither default nor any theme override may be accent-derived. The open fill is repeated under `hover:` so pointing at an open item never drops it back to the hover step.
+- **Open** is the neutral ladder's top rung: `bg-overlay-emphasis` on the pills; `--dock-item-bg-active` / `--dock-item-border-active` on the chips, whose `:root` defaults are `overlay-emphasis` and `border-strong` and which light themes lift to white. Neither default nor any theme override may be accent-derived. The open fill is repeated under `hover:` so pointing at an open item never drops it back to the hover step.
 - **Hover** is one fill for the whole strip: `--dock-item-bg-hover` (`overlay-medium`), chips and pills alike.
 - **Agent-state glyph** on a chip is `DOCK_STATE_GLYPH_CLASS` (12px), the size the tab strip, panel header and sidebar draw it beside a 14px kind icon. The plain-command spinner and finished check in the same slot take the same size.
 - **Separators** inside a chip (title | command) are `bg-border-divider`, like every other separator.

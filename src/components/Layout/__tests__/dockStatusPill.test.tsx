@@ -81,9 +81,9 @@ describe("DockPopoverList keyboard model", () => {
       .filter((b) => b.tabIndex === 0)
       .map((b) => b.textContent);
 
-  it("is one Tab stop: only one row's controls are tabbable", () => {
+  it("is one Tab stop: the first row's primary control, and nothing else", () => {
     const { list } = renderList();
-    expect(tabbable(list)).toEqual(["a-main", "a-kill"]);
+    expect(tabbable(list)).toEqual(["a-main"]);
   });
 
   it("moves between rows onto each row's primary control, and to the ends", () => {
@@ -119,8 +119,10 @@ describe("DockPopoverList keyboard model", () => {
     expect(document.activeElement).toBe(button("b-watch"));
   });
 
-  it("hands the Tab stop to whichever row focus lands in, pointer or key", () => {
+  it("hands the one Tab stop to whichever control focus lands on, pointer or key", () => {
     const { list } = renderList();
+    act(() => button("b-kill").focus());
+    expect(tabbable(list)).toEqual(["b-kill"]);
     act(() => button("d-member").focus());
     expect(tabbable(list)).toEqual(["d-member"]);
   });

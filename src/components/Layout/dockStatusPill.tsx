@@ -133,16 +133,15 @@ function targetOf(row: HTMLElement): HTMLElement | undefined {
 }
 
 /**
- * The row that holds the list's one Tab stop. Every control in that row stays
- * tabbable, so Tab walks its actions and then leaves; every other row's
- * controls are `tabindex="-1"` and reached with the arrows.
+ * The list's one Tab stop: the control focus was last in, else the first row's
+ * primary control. Everything else is `tabindex="-1"` and reached with the
+ * arrows — Up/Down between rows, Left/Right across a row's own buttons.
  */
-function applyRowStop(list: HTMLElement, active: HTMLElement | undefined) {
+function applyStop(list: HTMLElement, active: HTMLElement | undefined) {
   const rows = rowsOf(list);
-  const stop = active && rows.includes(active) ? active : rows[0];
-  for (const row of rows) {
-    for (const control of controlsOf(row)) control.tabIndex = row === stop ? 0 : -1;
-  }
+  const controls = rows.flatMap(controlsOf);
+  const stop = active && controls.includes(active) ? active : rows[0] && targetOf(rows[0]);
+  for (const control of controls) control.tabIndex = control === stop ? 0 : -1;
 }
 
 /**
@@ -157,15 +156,15 @@ function applyRowStop(list: HTMLElement, active: HTMLElement | undefined) {
  * commit always sees the list that actually exists.
  */
 function DockPopoverListNavigation({ listRef }: { listRef: React.RefObject<HTMLElement | null> }) {
-  const activeRowRef = useRef<HTMLElement | undefined>(undefined);
+  const activeControlRef = useRef<HTMLElement | undefined>(undefined);
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
     const focused =
       document.activeElement instanceof HTMLElement && list.contains(document.activeElement)
-        ? (document.activeElement.closest<HTMLElement>(ROW_SELECTOR) ?? undefined)
+        ? document.activeElement
         : undefined;
-    applyRowStop(list, focused ?? activeRowRef.current);
+    applyStop(list, focused ?? activeControlRef.current);
   });
   useEffect(() => {
     const list = listRef.current;
@@ -174,10 +173,9 @@ function DockPopoverListNavigation({ listRef }: { listRef: React.RefObject<HTMLE
     // Tab never leaves focus on an untabbable control.
     const handleFocusIn = (event: FocusEvent) => {
       if (!(event.target instanceof HTMLElement)) return;
-      const row = event.target.closest<HTMLElement>(ROW_SELECTOR);
-      if (!row || !list.contains(row)) return;
-      activeRowRef.current = row;
-      applyRowStop(list, row);
+      if (!event.target.closest(ROW_SELECTOR) || !list.contains(event.target)) return;
+      activeControlRef.current = event.target;
+      applyStop(list, event.target);
     };
     list.addEventListener("focusin", handleFocusIn);
     return () => list.removeEventListener("focusin", handleFocusIn);

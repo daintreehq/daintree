@@ -221,7 +221,7 @@ code.hljs {
      accent: accent is the focus ring's. */
   --dock-item-bg-active: var(--theme-overlay-emphasis);
   --dock-item-border: var(--theme-border-subtle);
-  --dock-item-border-active: var(--theme-border-default);
+  --dock-item-border-active: var(--theme-border-strong);
   --dock-item-bg-waiting: color-mix(in oklab, var(--color-activity-waiting) 10%, transparent);
   --dock-item-border-waiting: rgb(from var(--color-activity-waiting) r g b / 0.3);
   --state-chip-bg-opacity: var(--theme-state-chip-bg-opacity, 0.15);
