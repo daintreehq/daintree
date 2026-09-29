@@ -37,6 +37,8 @@ export function HelpAssistantAgentChooser({ agentIds, onChoose }: HelpAssistantA
               key={agentId}
               padding="sm"
               onClick={() => onChoose(agentId)}
+              aria-labelledby={`help-agent-${agentId}-name`}
+              aria-describedby={description ? `help-agent-${agentId}-desc` : undefined}
               data-testid={`help-choose-agent-${agentId}`}
               className="group items-center gap-3 w-full text-text-primary"
             >
@@ -44,8 +46,14 @@ export function HelpAssistantAgentChooser({ agentIds, onChoose }: HelpAssistantA
                 <Icon className="w-5 h-5 shrink-0" aria-hidden="true" />
               </BrandMark>
               <span className="flex flex-col min-w-0 flex-1">
-                <span className="text-sm font-medium">{config.name}</span>
-                {description && <span className="text-2xs text-text-secondary">{description}</span>}
+                <span id={`help-agent-${agentId}-name`} className="text-sm font-medium">
+                  {config.name}
+                </span>
+                {description && (
+                  <span id={`help-agent-${agentId}-desc`} className="text-2xs text-text-secondary">
+                    {description}
+                  </span>
+                )}
               </span>
               <ChevronRight
                 className="w-3.5 h-3.5 shrink-0 text-text-secondary group-hover:text-text-primary transition-colors"

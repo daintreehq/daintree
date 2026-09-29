@@ -4,13 +4,6 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 /**
- * The one hover recipe for anything card-shaped the pointer can act on: a
- * neutral wash plus the border stepping up a tier. The border step is what
- * carries it on light themes, where the wash alone composites under the JND.
- */
-const CARD_HOVER_PAINT = ["bg-overlay-subtle", "border-border-strong"] as const;
-
-/**
  * The frame only. Header composition already belongs to `SurfaceHeader`, so
  * there is no `CardHeader`/`CardTitle` here — a card with a header is
  * `<Card padding="none"><SurfaceHeader …/>…</Card>`, which keeps one header
@@ -33,15 +26,17 @@ const cardVariants = cva("rounded-[var(--radius-lg)] border", {
       lg: "p-6",
     },
     /**
-     * Hover paint only. The frame stays a plain `<div>` and never takes focus,
-     * so a focus ring here could never match — the real control inside the card
-     * owns focus, and the accent that goes with it.
+     * Hover paint only: a neutral wash plus the border stepping up a tier — the
+     * border step is what carries it on light themes, where the wash alone
+     * composites under the JND. The frame stays a plain `<div>` and never takes
+     * focus, so a focus ring here could never match — the real control inside
+     * the card owns focus, and the accent that goes with it.
+     *
+     * Every utility is spelled out whole: Tailwind only generates classes it
+     * finds verbatim in source, so a class assembled at runtime paints nothing.
      */
     interactive: {
-      true: cn(
-        "transition-[background-color,border-color] duration-150 ease-out",
-        CARD_HOVER_PAINT.map((utility) => `hover:${utility}`)
-      ),
+      true: "transition-[background-color,border-color] duration-150 ease-out hover:bg-overlay-subtle hover:border-border-strong",
       false: "",
     },
   },
@@ -107,11 +102,18 @@ const choiceCardVariants = cva(
       /**
        * `elevated` lifts one recommended card off the set — a raised surface and
        * the stronger edge, never accent. On light the `/95` alpha makes the lift
-       * translucency-inert, so `.light` takes the opaque surface.
+       * translucency-inert, so `.light` takes the opaque surface; its hover
+       * layers the same wash over that surface as an image, so the fill it
+       * already has is not what hover has to replace.
+       *
+       * `row` is a card in a navigation list of equivalent destinations (the
+       * portal launchpad): borderless at rest, since seven outlines in a column
+       * repeat what the logos already say, and the full card frame on hover.
        */
       tone: {
         default: "",
         elevated: "",
+        row: "",
       },
       selected: {
         true: "border-text-secondary bg-overlay-selected",
@@ -126,16 +128,20 @@ const choiceCardVariants = cva(
       {
         tone: "default",
         selected: false,
-        className: cn(
-          "border-border-default",
-          CARD_HOVER_PAINT.map((utility) => `not-disabled:hover:${utility}`)
-        ),
+        className:
+          "border-border-default not-disabled:hover:bg-overlay-subtle not-disabled:hover:border-border-strong",
+      },
+      {
+        tone: "row",
+        selected: false,
+        className:
+          "border-transparent not-disabled:hover:bg-overlay-subtle not-disabled:hover:border-border-strong",
       },
       {
         tone: "elevated",
         selected: false,
         className:
-          "border-border-strong bg-surface-panel-elevated/95 [.light_&]:bg-surface-panel-elevated not-disabled:hover:bg-surface-panel-elevated shadow-[var(--theme-shadow-ambient)]",
+          "border-border-strong bg-surface-panel-elevated/95 [.light_&]:bg-surface-panel-elevated shadow-[var(--theme-shadow-ambient)] not-disabled:hover:bg-[linear-gradient(var(--color-overlay-subtle),var(--color-overlay-subtle))]",
       },
     ],
     defaultVariants: {
@@ -171,4 +177,4 @@ function ChoiceCard({ className, tone, padding, ref, type = "button", ...props }
   );
 }
 
-export { Card, cardVariants, ChoiceCard, choiceCardVariants, CARD_HOVER_PAINT };
+export { Card, cardVariants, ChoiceCard, choiceCardVariants };

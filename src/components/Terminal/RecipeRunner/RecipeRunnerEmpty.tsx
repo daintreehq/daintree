@@ -38,6 +38,8 @@ export function RecipeRunnerEmpty({
               <ChoiceCard
                 key={suggestion.id}
                 padding="sm"
+                aria-labelledby={`recipe-suggestion-${suggestion.id}-name`}
+                aria-describedby={`recipe-suggestion-${suggestion.id}-command`}
                 data-testid="recipe-suggestion-pill"
                 onClick={() => onRunSuggestion(suggestion)}
                 disabled={disabled}
@@ -50,10 +52,16 @@ export function RecipeRunnerEmpty({
                   )}
                   aria-hidden
                 />
-                <span className="flex-1 text-sm font-medium text-text-primary truncate">
+                <span
+                  id={`recipe-suggestion-${suggestion.id}-name`}
+                  className="flex-1 text-sm font-medium text-text-primary truncate"
+                >
                   {suggestion.name}
                 </span>
-                <span className="text-xs text-text-secondary truncate max-w-[55%]">
+                <span
+                  id={`recipe-suggestion-${suggestion.id}-command`}
+                  className="text-xs text-text-secondary truncate max-w-[55%]"
+                >
                   {suggestion.command}
                 </span>
               </ChoiceCard>

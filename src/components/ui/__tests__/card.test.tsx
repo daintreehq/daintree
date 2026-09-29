@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 import { createRef } from "react";
+import { readFileSync } from "fs";
+import { resolve } from "path";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { cn } from "@/lib/utils";
-import { CARD_HOVER_PAINT, Card, ChoiceCard, cardVariants, choiceCardVariants } from "../card";
+import { Card, ChoiceCard, cardVariants, choiceCardVariants } from "../card";
 import { basePressTreatment } from "@/components/Terminal/__tests__/launcherMotionContract";
 import { SurfaceHeader, SurfaceHeaderTitle } from "../SurfaceHeader";
 import {
@@ -151,7 +153,7 @@ describe("cardVariants", () => {
   });
 });
 
-const TONES = ["default", "elevated"] as const;
+const TONES = ["default", "elevated", "row"] as const;
 const CHOICE_PADDINGS = ["sm", "md"] as const;
 
 function hoverBorders(classes: string): string[] {
@@ -159,7 +161,7 @@ function hoverBorders(classes: string): string[] {
 }
 
 function restBorderColors(classes: string): string[] {
-  return baseUtilities(classes).filter((token) => /^border-(border|text)-/.test(token));
+  return baseUtilities(classes).filter((token) => /^border-((border|text)-|transparent$)/.test(token));
 }
 
 describe("choiceCardVariants", () => {
@@ -187,6 +189,7 @@ describe("choiceCardVariants", () => {
     const fills = (classes: string) =>
       baseUtilities(classes).filter((token) => /^bg-/.test(token) && !token.startsWith("bg-["));
     expect(fills(choiceCardVariants({ tone: "default" }))).toEqual([]);
+    expect(fills(choiceCardVariants({ tone: "row" }))).toEqual([]);
     expect(fills(choiceCardVariants({ tone: "elevated" }))).not.toEqual([]);
     expect(fills(choiceCardVariants({ selected: true }))).not.toEqual([]);
   });
@@ -201,7 +204,9 @@ describe("choiceCardVariants", () => {
     expect(strip(choiceCardVariants({ tone: "default" }))).toEqual(
       strip(cardVariants({ interactive: true }))
     );
-    expect(strip(choiceCardVariants({ tone: "default" }))).toEqual([...CARD_HOVER_PAINT].sort());
+    expect(strip(choiceCardVariants({ tone: "row" }))).toEqual(
+      strip(choiceCardVariants({ tone: "default" }))
+    );
   });
 
   // Hover must never step a selected card's edge down to the hover tier, or a
@@ -246,6 +251,37 @@ describe("choiceCardVariants", () => {
         expectNoUnfocusedAccent(classes);
       }
     }
+  });
+});
+
+// Tailwind generates only the classes it finds verbatim in source, so a class
+// assembled at runtime (`hover:${x}`) ships with no CSS behind it and the card
+// silently loses its hover.
+describe("card recipes are spelled out in source", () => {
+  const source = readFileSync(resolve(__dirname, "../card.tsx"), "utf8");
+  const emitted = new Set<string>();
+  for (const interactive of [true, false]) {
+    for (const variant of VARIANTS) {
+      cardVariants({ variant, interactive })
+        .split(/\s+/)
+        .forEach((t) => emitted.add(t));
+    }
+  }
+  for (const tone of TONES) {
+    for (const selected of [false, true]) {
+      for (const padding of CHOICE_PADDINGS) {
+        choiceCardVariants({ tone, selected, padding })
+          .split(/\s+/)
+          .forEach((t) => emitted.add(t));
+      }
+    }
+  }
+  emitted.delete("");
+
+  it.each([...emitted])("%s appears verbatim in card.tsx", (token) => {
+    expect(source).toMatch(
+      new RegExp(`(^|[\\s"'\`])${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([\\s"'\`]|$)`, "m")
+    );
   });
 });
 

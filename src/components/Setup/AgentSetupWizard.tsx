@@ -1168,7 +1168,11 @@ function AppearanceStep({
                 onChange={() => onThemeSelect(scheme.id)}
                 className="sr-only"
               />
-              <ThemeMockup scheme={scheme} />
+              {/* A picture of the theme, not its name: the preview's sample code
+                  would otherwise be read out as part of the radio's label. */}
+              <span aria-hidden="true" className="block">
+                <ThemeMockup scheme={scheme} />
+              </span>
               <div className="flex items-center justify-between px-0.5">
                 <div className="flex items-center gap-1.5">
                   {isDark ? (

@@ -66,11 +66,14 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
             Manage
           </button>
         </div>
-        <ul className="flex flex-col gap-1.5">
+        <ul className="flex flex-col gap-0.5">
           {links.map((link) => (
             <li key={link.id}>
               <ChoiceCard
+                tone="row"
                 padding="sm"
+                aria-labelledby={`portal-link-${link.id}-title`}
+                aria-describedby={`portal-link-${link.id}-host`}
                 onClick={(e) => {
                   const modifierBackground = mac ? e.metaKey : e.ctrlKey;
                   onOpenUrl(link.url, link.title, modifierBackground);
@@ -89,12 +92,16 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
                 </span>
                 <span className="flex min-w-0 flex-1 items-baseline gap-2">
                   <span
+                    id={`portal-link-${link.id}-title`}
                     className="min-w-0 max-w-[70%] shrink-0 truncate text-sm font-medium text-text-primary"
                     title={link.title}
                   >
                     {link.title}
                   </span>
-                  <span className="min-w-0 truncate text-xs text-text-secondary group-hover:text-text-primary transition-colors duration-150">
+                  <span
+                    id={`portal-link-${link.id}-host`}
+                    className="min-w-0 truncate text-xs text-text-secondary group-hover:text-text-primary transition-colors duration-150"
+                  >
                     {linkHost(link.url)}
                   </span>
                 </span>

@@ -239,7 +239,7 @@ export function RecipeRunnerList({
           // filter input, this button's own focus ring can never paint, so the
           // fill alone (~1.1:1) would be the only cue that Enter creates rather
           // than runs.
-          className="press-scale group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] border border-transparent hover:bg-overlay-hover transition-[background-color,border-color,scale] duration-150 ease-out active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
+          className="press-scale group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] border border-transparent hover:bg-overlay-hover transition-[background-color,border-color] duration-150 ease-out active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
         >
           <Plus
             className="h-3.5 w-3.5 text-text-secondary group-hover:text-text-primary transition-colors shrink-0"

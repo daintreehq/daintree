@@ -73,8 +73,18 @@ describe("choice cards contract", () => {
       const rel = path.relative(SRC, file);
       if (PRESS_OWNERS.has(rel)) continue;
       for (const literal of stringLiterals(fs.readFileSync(file, "utf8"))) {
-        if (/active:scale-\[0\./.test(literal) && !/(^|\s)press-scale(\s|$)/.test(literal)) {
-          offenders.push(`${rel}: ${literal.slice(0, 80)}`);
+        if (!/active:scale-\[0\./.test(literal)) continue;
+        if (!/(^|\s)press-scale(\s|$)/.test(literal)) {
+          offenders.push(`${rel}: no press-scale: ${literal.slice(0, 60)}`);
+        }
+        // A transition list that names scale (or a bare `transition`, which
+        // includes it) eases the release back instead of snapping it.
+        if (
+          /(^|\s)transition(-all|-transform|-\[[^\]]*(scale|transform)[^\]]*\])?(\s|$)/.test(
+            literal
+          )
+        ) {
+          offenders.push(`${rel}: eases the press: ${literal.slice(0, 60)}`);
         }
       }
     }
