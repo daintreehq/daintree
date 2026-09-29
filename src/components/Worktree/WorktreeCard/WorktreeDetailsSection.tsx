@@ -4,7 +4,6 @@ import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import type { WorktreeState } from "@/types";
 import type { RetryAction } from "@/store";
 import type { ErrorRecord } from "@/store/errorStore";
-import { useAnimate } from "framer-motion";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { DURATION_200 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
@@ -41,6 +40,8 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
 } from "@/components/ui/context-menu";
+
+const COUNT_BUMP_EASING = "cubic-bezier(0.4, 0, 0.2, 1)";
 
 const LazyLifecycleCommandApprovalDialog = lazy(() =>
   import("../LifecycleCommandApprovalDialog").then((m) => ({
@@ -143,7 +144,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   });
 
   const changedFileCount = worktree.worktreeChanges?.changedFileCount ?? 0;
-  const [countScope, animate] = useAnimate<HTMLSpanElement>();
+  const countRef = useRef<HTMLSpanElement>(null);
   const prefersReducedMotion = useShouldSkipMotion();
   const didMountRef = useRef(false);
   const prevCountRef = useRef(changedFileCount);
@@ -158,7 +159,8 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     prevCountRef.current = changedFileCount;
 
     if (prefersReducedMotion) return;
-    if (countScope.current == null) return;
+    const countEl = countRef.current;
+    if (countEl == null) return;
     if (
       document.body.dataset.performanceMode === "true" ||
       Date.now() - lastBumpTimeRef.current < DURATION_200
@@ -166,12 +168,19 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
       return;
 
     lastBumpTimeRef.current = Date.now();
-    animate(
-      countScope.current,
-      { scale: [1, 1.06, 1] },
-      { duration: DURATION_200 / 1000, ease: [0.4, 0, 0.2, 1] }
+    // Native WAAPI rather than framer-motion's useAnimate, which dragged its
+    // imperative animate/sequence runtime into the eager motion chunk. The
+    // easing sits on each keyframe so it applies per segment, as framer's
+    // single `ease` did across keyframes.
+    countEl.animate(
+      [
+        { transform: "scale(1)", easing: COUNT_BUMP_EASING },
+        { transform: "scale(1.06)", easing: COUNT_BUMP_EASING },
+        { transform: "scale(1)" },
+      ],
+      { duration: DURATION_200 }
     );
-  }, [changedFileCount, prefersReducedMotion, animate, countScope]);
+  }, [changedFileCount, prefersReducedMotion]);
 
   const isConflicted = reviewState === "conflicted";
   // A clean tree with unpushed commits still has a Review Hub next step —
@@ -419,7 +428,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     </span>
                   ) : hasChanges && worktree.worktreeChanges ? (
                     <span className="flex items-center gap-1.5 text-text-secondary">
-                      <span ref={countScope} className="inline-block">
+                      <span ref={countRef} className="inline-block">
                         {worktree.worktreeChanges.changedFileCount} file
                         {worktree.worktreeChanges.changedFileCount !== 1 ? "s" : ""}
                       </span>

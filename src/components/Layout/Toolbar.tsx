@@ -135,8 +135,11 @@ import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
-import { LazyProjectSwitcherPalette } from "@/lazyPanels";
-import { ProjectIdentityEditor } from "@/components/Project/ProjectIdentityEditor";
+import {
+  LazyProjectIdentityEditor,
+  LazyProjectSwitcherPalette,
+  preloadProjectIdentityEditor,
+} from "@/lazyPanels";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { ToolbarProjectPill, ToolbarProjectPillTooltipBody } from "./ToolbarProjectPill";
 import { shortSha } from "@/utils/textParsing";
@@ -2262,8 +2265,9 @@ export function Toolbar({
     setPillTooltipOpen(false);
     isRestoringFocusPillRef.current = true;
   }, []);
-  const clearPillTooltipFocusSuppression = useCallback(() => {
+  const handlePillPointerEnter = useCallback(() => {
     isRestoringFocusPillRef.current = false;
+    void preloadProjectIdentityEditor().catch(() => {});
   }, []);
   const handlePillDropdownClose = useCallback(() => {
     suppressPillTooltipForFocusRestore();
@@ -2309,6 +2313,7 @@ export function Toolbar({
     setIdentityEditorProjectId(null);
   }
   const isIdentityEditorOpen = identityEditorProjectId !== null;
+  const shouldMountIdentityEditor = useKeepMounted(isIdentityEditorOpen);
   // Selecting the item records the intent; the menu's own close hook spends it.
   // Opening straight from `onSelect` would raise the popover inside the menu's
   // teardown, where Radix still holds the focus trap and the outside-pointer
@@ -2327,7 +2332,10 @@ export function Toolbar({
   // the user has visibly superseded, rather than a popover that springs open on
   // some later, unrelated close.
   const handlePillContextMenuOpenChange = useCallback((open: boolean) => {
-    if (open) pendingIdentityEditRef.current = null;
+    if (!open) return;
+    pendingIdentityEditRef.current = null;
+    // Keyboard-opened menus never see the pill's hover preload.
+    void preloadProjectIdentityEditor().catch(() => {});
   }, []);
   const handlePillContextMenuCloseAutoFocus = useCallback(
     (event: Event) => {
@@ -2339,8 +2347,23 @@ export function Toolbar({
       // opening the editor over it. Every other close keeps the shared
       // restore policy, so a keyboard dismissal lands back on the pill.
       if (pendingProjectId === null || pendingProjectId !== currentProject?.id) return;
-      event.preventDefault();
-      setIdentityEditorProjectId(pendingProjectId);
+      if (LazyProjectIdentityEditor.isLoaded()) {
+        event.preventDefault();
+        setIdentityEditorProjectId(pendingProjectId);
+        return;
+      }
+      // Chunk still in flight: nothing would take focus in the meantime, so let
+      // the menu restore it to the pill, and open only if the user hasn't moved
+      // on by the time it lands — a late popover must not steal focus.
+      void preloadProjectIdentityEditor().then(
+        () => {
+          const active = document.activeElement;
+          const pill = document.querySelector('[data-testid="project-switcher-trigger"]');
+          if (active !== pill && active !== document.body) return;
+          setIdentityEditorProjectId(pendingProjectId);
+        },
+        () => {}
+      );
     },
     [currentProject?.id, suppressPillTooltipForFocusRestore]
   );
@@ -2362,7 +2385,7 @@ export function Toolbar({
           headSha={headSha}
           isDropdownOpen={isDropdownOpen}
           onClick={() => projectSwitcher.open("dropdown")}
-          onPointerEnter={clearPillTooltipFocusSuppression}
+          onPointerEnter={handlePillPointerEnter}
         />
       </TooltipTrigger>
     </ContextMenuTrigger>
@@ -2444,13 +2467,15 @@ export function Toolbar({
               className="app-no-drag relative flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
             >
               {/* Anchor-only sibling of the pill — see ProjectIdentityEditor. */}
-              {currentProject && (
-                <ProjectIdentityEditor
-                  project={currentProject}
-                  open={isIdentityEditorOpen}
-                  onOpenChange={handleIdentityEditorOpenChange}
-                  onCloseAutoFocus={suppressPillTooltipForFocusRestore}
-                />
+              {currentProject && shouldMountIdentityEditor && (
+                <Suspense fallback={null}>
+                  <LazyProjectIdentityEditor
+                    project={currentProject}
+                    open={isIdentityEditorOpen}
+                    onOpenChange={handleIdentityEditorOpenChange}
+                    onCloseAutoFocus={suppressPillTooltipForFocusRestore}
+                  />
+                </Suspense>
               )}
               <Tooltip
                 open={workspaceIdentity.kind !== "none" ? pillTooltipOpen : false}
