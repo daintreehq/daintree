@@ -19,6 +19,7 @@ import {
   ArrowUp,
   ArrowUpFromLine,
   CheckSquare,
+  CircleStop,
   Clock,
   Copy,
   ExternalLink,
@@ -44,14 +45,13 @@ import {
   Plug,
   Puzzle,
   RefreshCw,
-  RotateCcw,
+  RotateCw,
   Save,
   Scissors,
   Server,
   SquareTerminal,
   Trash2,
   Zap,
-  CircleStop,
 } from "lucide-react";
 import {
   ArrowUpDown,
@@ -824,7 +824,7 @@ export function WorktreeMenuItems({
     ),
     devServerState === "running" && onRestartDevServer && (
       <C.Item key="restart" onSelect={() => onRestartDevServer(worktree.id)}>
-        <RotateCcw className={ICON} />
+        <RotateCw className={ICON} />
         Restart dev server
       </C.Item>
     ),

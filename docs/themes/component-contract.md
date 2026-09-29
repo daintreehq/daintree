@@ -91,6 +91,31 @@ The signal to convert is a component growing a third or fourth `isX && "…"` br
 
 Extract shared class strings the way `src/components/ui/paletteRowStyles.ts` does — one exported `cn()` constant, so five palettes cannot grow five spellings of the same row.
 
+## Action glyphs
+
+An action that recurs across the app wears one glyph everywhere, so a user who has learned it once can read it anywhere. The three circular arrows are the ones that drift, because they look interchangeable at 14px; each means one thing:
+
+| Glyph | Means | Labels it goes with |
+| --- | --- | --- |
+| `RefreshCw` | Do it again, or fetch it again. The thing stays what it was. | Retry, Try again, Refresh, Check again, Re-check, Re-scan, Fetch, Redraw |
+| `RotateCw` | Reload a page, view or panel, or restart a process, session or server. | Reload, Reload preview, Reload from folder, Restart terminal, Restart dev server, Restart conversation, Auto-restart |
+| `RotateCcw` | Go back to an earlier state. | Restore, Reset, Revert, Undo, Replay, Resume session |
+
+Never `RotateCcw` for a retry or a restart: the counter-clockwise arrow promises the user they are going back, and a retry does not undo anything. A control with a busy state spins the same glyph through `SpinningIcon`, which only turns clockwise; that is one more reason restart is `RotateCw`.
+
+The other concepts that had split:
+
+| Concept | Glyph | Not |
+| --- | --- | --- |
+| Copy (a URL, a path, a link address) | `Copy`, swapping to `Check` for the copied beat | `Link` / `Link2`, which mean linking something (attach an issue, linked work) |
+| Edit | `Pencil` | `Edit`, `Edit2`, `Edit3` (deprecated Lucide aliases) |
+| Project settings | `Settings` | `Settings2`, which stays the General settings tab and the manage-presets rows |
+| Worktree | `FolderGit2`, including worktree counts | `GitBranch`, which is a branch |
+| Open project | `FolderOpen` | `Plus`, which is the launcher's "make a new thing" |
+| Clone repository | `FolderDown`, beside Open project's `FolderOpen` and Create project's `FolderPlus` | `GitBranch`, `Download`, `FolderGit2` (a worktree) |
+
+`src/config/__tests__/actionGlyphs.contract.test.ts` ties each of these icons to the label beside it (the holder's text or aria-label, an action object's `label`, or a row's `label` prop) and fails when the pair disagrees. A new concept takes the closest Lucide icon and joins the alias list in `src/components/icons/index.ts`.
+
 ## Scales
 
 **Type.** Tailwind's stock `--text-*` steps; this repo overrides none of them. Arbitrary sizes (`text-[11px]`) are off the scale, invisible to it, and do not move when it moves — and because the values sit a pixel apart, 9px through 13px are all in use where the scale offers two steps. When a design genuinely needs a step the scale lacks, add a named step to the `@theme` block in `src/index.css` and use that — `--text-2xs` (11px), `--text-3xs` (10px) and `--text-4xs` (9px) are exactly that, added for the label sizes the stock scale skips, and `button`'s `xs` size now spells itself `text-3xs`. One list of legal sizes beats an open set of brackets. Enforced by `component-contract/no-arbitrary-text-size`; arbitrary _colours_ share the `text-[…]` spelling and are not flagged.

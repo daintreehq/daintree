@@ -1,4 +1,4 @@
-import { XCircle, RotateCcw, FolderEdit, Trash2 } from "lucide-react";
+import { FolderEdit, RefreshCw, Trash2, XCircle } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "./InlineStatusBanner";
 import { BannerOverflowMenu } from "./BannerOverflowMenu";
 import { createCopyErrorAction } from "./copyErrorAction";
@@ -30,7 +30,7 @@ export function TerminalErrorBanner({
   const retryAction: BannerAction = {
     id: "retry",
     label: "Retry",
-    icon: RotateCcw,
+    icon: RefreshCw,
     variant: "primary",
     onClick: () => onRetry(terminalId),
     title: "Retry restart",

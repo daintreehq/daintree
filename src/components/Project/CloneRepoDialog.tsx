@@ -7,7 +7,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { Check, CircleSlash, FolderOpen, LogIn } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
-import { FolderGit2 } from "@/components/icons";
+import { FolderDown } from "@/components/icons";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { projectClient, systemClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
@@ -612,7 +612,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       <AppDialog.Header>
         {/* Neutral, not accent: the header glyph is decoration, and this focus
             region's one load-bearing accent is the keyboard focus ring. */}
-        <AppDialog.Title icon={<FolderGit2 className="h-4 w-4 text-text-secondary" />}>
+        <AppDialog.Title icon={<FolderDown className="h-4 w-4 text-text-secondary" />}>
           Clone repository
         </AppDialog.Title>
         <AppDialog.CloseButton />
@@ -883,7 +883,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       <AppDialog.Footer hint={mode === "configure" || mode === "failed" ? outcomeHint : undefined}>
         {mode === "complete" ? (
           <Button ref={footerActionRef} variant="contrast" onClick={handleClose} className="gap-2">
-            <Check className="h-4 w-4" />
+            <FolderOpen className="h-4 w-4" />
             {launchedDestination === "new" ? "Open in new window" : "Open project"}
           </Button>
         ) : mode === "running" ? (

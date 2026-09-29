@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { ChevronsUpDown, FileText, Plus } from "lucide-react";
+import { ChevronsUpDown, FileText, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { useProjectStore } from "@/store/projectStore";
@@ -291,7 +291,7 @@ export function ProjectSwitcher() {
           onClick={() => void projectSwitcher.addProject()}
           disabled={isLoading}
         >
-          <Plus />
+          <FolderOpen />
           Open project…
         </Button>
       </>

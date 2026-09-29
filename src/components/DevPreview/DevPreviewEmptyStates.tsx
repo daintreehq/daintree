@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ExternalLink,
   Play,
+  RefreshCw,
   RotateCw,
   Settings,
   SquareTerminal,
@@ -204,7 +205,7 @@ export function DevPreviewEmptyStates({
       >
         <PaneStateActions>
           <Button onClick={handleRetry} variant="subtle" size="sm">
-            <RotateCw />
+            <RefreshCw />
             {error.type === "missing-dependencies" ? "Retry install" : "Retry"}
           </Button>
           {viewTerminal ? (
@@ -254,7 +255,7 @@ export function DevPreviewEmptyStates({
                   action={{
                     id: "dev-preview-auto-detect-retry",
                     label: "Retry",
-                    icon: RotateCw,
+                    icon: RefreshCw,
                     variant: "dangerFilled",
                     onClick: () => void handleAutoDetect(offeredCommand),
                   }}
@@ -336,7 +337,7 @@ export function DevPreviewEmptyStates({
                   action={{
                     id: "dev-preview-save-command-retry",
                     label: "Retry",
-                    icon: RotateCw,
+                    icon: RefreshCw,
                     variant: "dangerFilled",
                     onClick: () => void handleSaveCommand(),
                   }}

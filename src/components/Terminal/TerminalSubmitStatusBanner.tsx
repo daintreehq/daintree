@@ -1,4 +1,4 @@
-import { RotateCcw, SendHorizontal } from "lucide-react";
+import { RotateCw, SendHorizontal } from "lucide-react";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { actionService } from "@/services/ActionService";
 
@@ -57,7 +57,7 @@ export function TerminalSubmitStatusBanner({
       action={{
         id: "restart",
         label: "Restart terminal",
-        icon: RotateCcw,
+        icon: RotateCw,
         variant: "primary",
         onClick: () => {
           void actionService.dispatch("terminal.restart", { terminalId }, { source: "user" });

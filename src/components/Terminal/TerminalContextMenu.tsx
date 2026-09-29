@@ -69,16 +69,15 @@ import {
   Bell,
   BellOff,
   CirclePlay,
+  CircleStop,
   Clipboard,
+  Clock,
   Copy,
   CopyPlus,
   DatabaseBackup,
   ExternalLink,
   Globe,
   Info,
-  Link,
-  CircleStop,
-  Clock,
   Lock,
   Maximize2,
   Mic,
@@ -92,7 +91,6 @@ import {
   Radio,
   RadioTower,
   RefreshCw,
-  RotateCcw,
   RotateCw,
   Send,
   Settings,
@@ -1096,7 +1094,7 @@ export function TerminalContextMenu({
             Open in browser
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("copy-url")}>
-            <Link className={ICON_CLASS} aria-hidden="true" />
+            <Copy className={ICON_CLASS} aria-hidden="true" />
             Copy URL
           </ContextMenuItem>
           <ContextMenuSeparator />
@@ -1161,7 +1159,7 @@ export function TerminalContextMenu({
             Open in browser
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("copy-url")}>
-            <Link className={ICON_CLASS} aria-hidden="true" />
+            <Copy className={ICON_CLASS} aria-hidden="true" />
             Copy URL
           </ContextMenuItem>
           <ContextMenuSeparator />
@@ -1377,7 +1375,7 @@ export function TerminalContextMenu({
                     Open link
                   </ContextMenuItem>
                   <ContextMenuItem onSelect={() => handleAction(`copy-link:${hoveredUrl}`)}>
-                    <Link className={ICON_CLASS} aria-hidden="true" />
+                    <Copy className={ICON_CLASS} aria-hidden="true" />
                     Copy link address
                   </ContextMenuItem>
                 </>
@@ -1497,7 +1495,7 @@ export function TerminalContextMenu({
           )}
           {hasPty && (
             <ContextMenuItem onSelect={() => handleAction("restart")}>
-              <RotateCcw className={ICON_CLASS} aria-hidden="true" />
+              <RotateCw className={ICON_CLASS} aria-hidden="true" />
               Restart terminal
             </ContextMenuItem>
           )}

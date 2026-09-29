@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo, useReducer } from "react";
-import { OctagonAlert, RotateCw } from "lucide-react";
+import { OctagonAlert, RefreshCw, RotateCw } from "lucide-react";
 import { DevPreviewDestructiveConfirmDialog } from "./DevPreviewDestructiveConfirmDialog";
 import { usePanelStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
@@ -1002,7 +1002,7 @@ export function DevPreviewPane({
             action={{
               id: "retry-promote-to-portal",
               label: "Retry",
-              icon: RotateCw,
+              icon: RefreshCw,
               variant: "dangerFilled",
               loading: isPromotingToPortal,
               onClick: () => void handlePromoteToPortal(),

@@ -1,13 +1,13 @@
 import { Fragment, useState, useEffect, useMemo, useRef } from "react";
 import {
+  ChevronDown,
   CornerDownLeft,
+  GitBranch,
   LayoutGrid,
   PanelBottom,
-  ChevronDown,
-  GitBranch,
   Pin,
   PinOff,
-  RefreshCw,
+  RotateCw,
 } from "lucide-react";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { usePanelStore } from "@/store/panelStore";
@@ -867,7 +867,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                       aria-label="Auto-restart"
                       aria-pressed={effective.restart}
                     >
-                      <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                      <RotateCw className="h-3.5 w-3.5" aria-hidden="true" />
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">

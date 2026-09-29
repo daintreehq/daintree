@@ -5,7 +5,7 @@ import { useWebviewEviction } from "@/hooks/useWebviewEviction";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { useWebviewEvents } from "@/hooks/useWebviewEvents";
 import { useBrowserActionListeners } from "@/hooks/useBrowserActionListeners";
-import { AlertTriangle, RotateCw, XCircle } from "lucide-react";
+import { AlertTriangle, RefreshCw, RotateCw, XCircle } from "lucide-react";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { usePanelStore } from "@/store";
 import type { BrowserHistory, BrowserNavigationHistorySnapshot } from "@shared/types/browser";
@@ -1002,7 +1002,7 @@ export function BrowserPane({
                   action={{
                     id: "retry-open-external",
                     label: "Retry",
-                    icon: RotateCw,
+                    icon: RefreshCw,
                     variant: "dangerFilled",
                     loading: blockedNav.phase === "opening",
                     onClick: () =>

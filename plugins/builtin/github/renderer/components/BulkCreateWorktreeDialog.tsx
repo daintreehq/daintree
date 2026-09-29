@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import PQueue from "p-queue";
-import { Check, AlertTriangle, UserPlus, RotateCcw } from "lucide-react";
+import { Check, AlertTriangle, UserPlus, RefreshCw } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { FolderGit2 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -1377,7 +1377,7 @@ export function BulkCreateWorktreeDialog({
                   onClick={handleRetryFailed}
                   data-testid="bulk-create-retry-button"
                 >
-                  <RotateCcw />
+                  <RefreshCw />
                   Retry failed
                 </Button>
               )}

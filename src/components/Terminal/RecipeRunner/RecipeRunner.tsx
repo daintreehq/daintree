@@ -1,4 +1,4 @@
-import { Info, RotateCcw, XCircle } from "lucide-react";
+import { Info, RefreshCw, XCircle } from "lucide-react";
 import { useRecipeRunner, type SpawnFailureSummary } from "./useRecipeRunner";
 import { RecipeRunnerGrid } from "./RecipeRunnerGrid";
 import { RecipeRunnerList } from "./RecipeRunnerList";
@@ -81,7 +81,7 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
             action={{
               id: "retry-failed",
               label: "Retry failed",
-              icon: RotateCcw,
+              icon: RefreshCw,
               variant: "primary",
               onClick: runner.handleRetryFailed,
               title: "Retry the terminals that failed to start",

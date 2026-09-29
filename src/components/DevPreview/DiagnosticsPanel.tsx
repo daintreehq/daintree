@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { RotateCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type {
@@ -273,7 +273,7 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
               className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
               aria-label="Refresh diagnostics"
             >
-              <RotateCw className={PANE_TOOLBAR_ICON_CLASS} />
+              <RefreshCw className={PANE_TOOLBAR_ICON_CLASS} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Refresh diagnostics</TooltipContent>

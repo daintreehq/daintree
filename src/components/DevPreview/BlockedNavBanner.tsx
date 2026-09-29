@@ -1,5 +1,5 @@
 import { useCallback, useEffect, type CSSProperties } from "react";
-import { Check, Copy, ExternalLink, RotateCw } from "lucide-react";
+import { Check, Copy, ExternalLink, RefreshCw } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "../Terminal/InlineStatusBanner";
 import { BannerOverflowMenu } from "../Terminal/BannerOverflowMenu";
 import { Spinner } from "@/components/ui/Spinner";
@@ -322,7 +322,7 @@ export function BlockedNavBanner({
   const retryAction: BannerAction = {
     id: "oauth-retry",
     label: "Retry",
-    icon: RotateCw,
+    icon: RefreshCw,
     onClick: handleStartOAuth,
     variant: "primary",
   };

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Check, Copy, ExternalLink, Globe, RotateCw } from "lucide-react";
+import { AlertTriangle, Check, Copy, ExternalLink, Globe, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PanePlaceholder, PaneState, PaneStateActions } from "@/components/ui/PaneState";
 import { PaneLoadingState } from "@/components/ui/PaneLoadingState";
@@ -100,7 +100,7 @@ export function BrowserLoadErrorOverlay({
     >
       <PaneStateActions>
         <Button onClick={onRetry} variant="subtle" size="sm">
-          <RotateCw />
+          <RefreshCw />
           Retry
         </Button>
         <Button onClick={onOpenExternal} variant="ghost" size="sm">

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { ImageOff, RotateCw } from "lucide-react";
+import { ImageOff, RefreshCw } from "lucide-react";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { useHorizontalScrollControls } from "@/hooks/useHorizontalScrollControls";
 import { cn } from "@/lib/utils";
@@ -242,7 +242,7 @@ function FigureThumbnail({ figure, isNewest, isCurrent, onClick }: FigureThumbna
             aria-label={`Retry figure ${figure.figureNumber}`}
             className="flex items-center gap-1 px-1.5 py-0.5 text-3xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded-[var(--radius-sm)]"
           >
-            <RotateCw className="w-2.5 h-2.5" aria-hidden="true" />
+            <RefreshCw className="w-2.5 h-2.5" aria-hidden="true" />
             Retry
           </button>
         </div>

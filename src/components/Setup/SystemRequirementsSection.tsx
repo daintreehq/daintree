@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Callout } from "@/components/ui/Callout";
-import { AlertTriangle, ChevronRight, CircleCheck, RotateCw, CircleX } from "lucide-react";
+import { AlertTriangle, ChevronRight, CircleCheck, CircleX, RefreshCw } from "lucide-react";
 import { m } from "framer-motion";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -221,7 +221,7 @@ export function SystemRequirementsSection({
                   className="shrink-0"
                 >
                   <SpinningIcon
-                    icon={RotateCw}
+                    icon={RefreshCw}
                     active={isChecking}
                     className="w-3 h-3"
                     aria-hidden
@@ -260,7 +260,7 @@ export function SystemRequirementsSection({
               aria-busy={isChecking || undefined}
               aria-disabled={isChecking || undefined}
             >
-              <SpinningIcon icon={RotateCw} active={isChecking} className="w-3 h-3" aria-hidden />
+              <SpinningIcon icon={RefreshCw} active={isChecking} className="w-3 h-3" aria-hidden />
               Re-check
             </Button>
           )}
