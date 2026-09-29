@@ -373,7 +373,10 @@ describe("McpServerService help-bearer revocation (#12993)", () => {
           .httpLifecycle,
         "findHelpBearerHash"
       )
-      .mockReturnValue(null);
+      .mockReturnValue("hash-help");
+    const teardown = vi
+      .spyOn(service, "disconnectBearer")
+      .mockReturnValue({ tokenHash: "hash-help", disconnected: true });
     const revoke = vi.spyOn(service, "revokeOwnershipPrincipal").mockImplementation(() => {
       throw new Error("ledger failed");
     });
@@ -382,7 +385,9 @@ describe("McpServerService help-bearer revocation (#12993)", () => {
         "ledger failed"
       );
       expect(lookup).toHaveBeenCalledWith("help-token");
+      expect(teardown).toHaveBeenCalledWith("hash-help");
     } finally {
+      teardown.mockRestore();
       revoke.mockRestore();
       lookup.mockRestore();
     }
