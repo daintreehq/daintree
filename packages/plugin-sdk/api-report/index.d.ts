@@ -5495,4 +5495,104 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData };
+/**
+ * What the `<channel>-snapshot` invoke answers: the whole collection at one
+ * revision. `entries` are `[key, item]` pairs in the collection's order, so a
+ * view applies deltas without knowing how items are keyed.
+ */
+interface SyncedCollectionSnapshot<T> {
+    /** Identifies one worker-side collection instance. A restarted worker has a new epoch. */
+    epoch: string;
+    revision: number;
+    entries: Array<[string, T]>;
+}
+/**
+ * One change set pushed on `<channel>`. Revisions within an epoch are
+ * consecutive, so a view that sees `revision` skip a number knows it missed a
+ * delta. Apply in order: `reset` (clear everything), then `removes`, then
+ * `upserts` — a key already present keeps its position, a new one is appended.
+ */
+interface SyncedCollectionDelta<T> {
+    epoch: string;
+    revision: number;
+    /** True when the collection was replaced wholesale; `upserts` then holds every item. */
+    reset?: boolean;
+    removes: string[];
+    upserts: Array<[string, T]>;
+}
+interface SyncedCollectionOptions<T> {
+    /** The item's stable identity. Must be a string, unique within the collection. */
+    key: (item: T) => string;
+    /** Items the collection starts with. */
+    initial?: Iterable<T>;
+    /**
+     * How long changes are gathered into one delta, in ms. Default 16: a loop
+     * that upserts 20,000 items sends one message, not 20,000. 0 still batches
+     * everything done in the same task.
+     */
+    flushMs?: number;
+}
+/** A keyed collection a worker owns and plugin views mirror with `useSyncedCollection`. */
+interface SyncedCollection<T> {
+    /** The push channel. The snapshot handler is registered as `snapshotChannel`. */
+    readonly channel: string;
+    readonly snapshotChannel: string;
+    /** The revision of the last delta sent (or skipped because nobody had pulled yet). */
+    readonly revision: number;
+    readonly size: number;
+    get(key: string): T | undefined;
+    has(key: string): boolean;
+    /** The items in order. A new array each call. */
+    values(): T[];
+    /** Add an item, or replace the one with the same key in place. */
+    upsert(item: T): void;
+    upsertMany(items: Iterable<T>): void;
+    /** Remove by key. Returns whether the key was present. */
+    remove(key: string): boolean;
+    removeMany(keys: Iterable<string>): void;
+    /** Replace the whole collection; views receive one `reset` delta. */
+    replace(items: Iterable<T>): void;
+    clear(): void;
+    /** Send pending changes now instead of at the end of the `flushMs` window. */
+    flush(): Promise<void>;
+    /** Stop sending deltas. The snapshot channel keeps answering until the plugin unloads. */
+    dispose(): void;
+}
+/**
+ * The two host calls a synced collection makes. `PluginHostApi` satisfies it,
+ * and so does `createMockHost` from `/testing`.
+ */
+interface SyncedCollectionHost {
+    registerHandler(channel: string, handler: (...args: unknown[]) => unknown): Promise<void>;
+    postToPanel(channel: string, payload: unknown): Promise<void>;
+}
+/** The invoke channel a synced collection's snapshot is served on. */
+declare function syncedCollectionSnapshotChannel(channel: string): string;
+/**
+ * The worker half of "pull on mount, then push deltas". Registers a
+ * `<channel>-snapshot` handler that answers `{ epoch, revision, entries }` and
+ * pushes `{ epoch, revision, reset?, removes, upserts }` on `channel` as the
+ * collection changes, gathering changes made within `flushMs` into one
+ * message. Pair it with `useSyncedCollection(pluginId, channel)` in the view,
+ * which handles the ordering races between the pull and the pushes.
+ *
+ * Pushing the whole list on every change costs the square of its length over
+ * its lifetime; a delta costs only what changed.
+ *
+ * ```ts
+ * export async function activate(host: PluginHostApi) {
+ *   const calls = await createSyncedCollection(host, "calls", { key: (c: Call) => c.id });
+ *   // …on every tool call:
+ *   calls.upsert(call);
+ *   return () => calls.dispose();
+ * }
+ * ```
+ *
+ * Call it during `activate()`: it registers a handler, which the host allows
+ * only then. Apart from one empty delta announcing this instance (so a view
+ * left over from a previous worker resyncs), nothing is pushed until a view
+ * has pulled a snapshot: a plugin whose panel was never opened sends no deltas.
+ */
+declare function createSyncedCollection<T>(host: SyncedCollectionHost, channel: string, options: SyncedCollectionOptions<T>): Promise<SyncedCollection<T>>;
+
+export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type SyncedCollection, type SyncedCollectionDelta, type SyncedCollectionHost, type SyncedCollectionOptions, type SyncedCollectionSnapshot, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };

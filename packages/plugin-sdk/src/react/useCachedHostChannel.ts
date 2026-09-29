@@ -23,6 +23,19 @@ export interface CachedHostChannelOptions {
   signal?: AbortSignal;
   /** False skips fetching (the cached value, if any, is still returned). Default true. */
   enabled?: boolean;
+  /**
+   * A push channel (`host.postToPanel(channel, …)` broadcast) that means "this
+   * result is stale". Each push schedules a refetch; a burst of them within
+   * `debounceMs` of each other costs one. The payload is ignored.
+   */
+  invalidateOn?: string;
+  /**
+   * Quiet time after the last invalidation before refetching, in ms. Default
+   * 100. An invalidation that lands while a request is in flight queues one
+   * more request after it rather than superseding it, so a continuous stream of
+   * changes still settles on fresh data without abandoning every answer.
+   */
+  debounceMs?: number;
 }
 
 export interface CachedHostChannelResult<TResult> {
@@ -72,6 +85,77 @@ const states = new Map<string, CacheState>();
 const listeners = new Map<string, Set<() => void>>();
 const inFlight = new Map<string, InFlight>();
 let nextSeq = 0;
+
+interface InvalidationSubscriber {
+  refetch: () => Promise<unknown>;
+}
+
+interface Invalidation {
+  timer: ReturnType<typeof setTimeout> | null;
+  queued: boolean;
+  /** Views on this key still listening: mounted, enabled, signal not aborted. */
+  subscribers: Set<InvalidationSubscriber>;
+}
+
+// One per cache key, shared by every mounted view showing it, so two views on
+// the same key and channel refetch once per burst, not once each.
+const invalidations = new Map<string, Invalidation>();
+
+function invalidationFor(key: string): Invalidation {
+  let entry = invalidations.get(key);
+  if (!entry) {
+    entry = { timer: null, queued: false, subscribers: new Set() };
+    invalidations.set(key, entry);
+  }
+  return entry;
+}
+
+/** Refetch through a view still listening; none left means nobody wants it. */
+function runInvalidation(key: string, entry: Invalidation): void {
+  const [subscriber] = entry.subscribers;
+  if (!subscriber || invalidations.get(key) !== entry) return;
+  void subscriber.refetch();
+}
+
+function invalidate(key: string, debounceMs: number): void {
+  const entry = invalidations.get(key);
+  if (!entry) return;
+  if (entry.timer !== null) clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => {
+    entry.timer = null;
+    const busy = inFlight.get(key);
+    if (!busy) {
+      runInvalidation(key, entry);
+      return;
+    }
+    // One follow-up behind the request in flight, which covers every push up
+    // to the moment it starts — including ones whose own timer is still armed.
+    if (entry.queued) return;
+    entry.queued = true;
+    void busy.promise.finally(() => {
+      entry.queued = false;
+      if (entry.timer !== null) clearTimeout(entry.timer);
+      entry.timer = null;
+      runInvalidation(key, entry);
+    });
+  }, debounceMs);
+}
+
+function leaveInvalidation(key: string, subscriber: InvalidationSubscriber): void {
+  const entry = invalidations.get(key);
+  if (!entry) return;
+  entry.subscribers.delete(subscriber);
+  if (entry.subscribers.size > 0) return;
+  if (entry.timer !== null) clearTimeout(entry.timer);
+  invalidations.delete(key);
+}
+
+function cancelInvalidation(key: string): void {
+  const entry = invalidations.get(key);
+  if (!entry) return;
+  if (entry.timer !== null) clearTimeout(entry.timer);
+  invalidations.delete(key);
+}
 
 function touch(key: string): CacheState | undefined {
   const state = states.get(key);
@@ -218,6 +302,17 @@ function cacheKeyFor(pluginId: string, channel: string, args: unknown, cacheKey?
  *   pluginId, "list-prs", { repo }, { staleMs: 30_000, signal: disposeSignal },
  * );
  * ```
+ *
+ * With `invalidateOn`, a push on that channel marks the result stale and a
+ * burst of pushes refetches once — the shape for a database `onDidChange` the
+ * worker forwards as `host.postToPanel("notes-changed", null)`:
+ *
+ * ```tsx
+ * const { data: notes } = useCachedHostChannel<null, Note[]>(pluginId, "list-notes", null, {
+ *   invalidateOn: "notes-changed",
+ *   debounceMs: 100,
+ * });
+ * ```
  */
 export function useCachedHostChannel<TArgs = unknown, TResult = unknown>(
   pluginId: string,
@@ -225,7 +320,7 @@ export function useCachedHostChannel<TArgs = unknown, TResult = unknown>(
   args: TArgs,
   options: CachedHostChannelOptions = {}
 ): CachedHostChannelResult<TResult> {
-  const { staleMs = 0, cacheKey, signal, enabled = true } = options;
+  const { staleMs = 0, cacheKey, signal, enabled = true, invalidateOn, debounceMs = 100 } = options;
   const key = cacheKeyFor(pluginId, channel, args, cacheKey);
 
   const subscribe = useCallback((notify: () => void) => subscribeKey(key, notify), [key]);
@@ -246,6 +341,29 @@ export function useCachedHostChannel<TArgs = unknown, TResult = unknown>(
     void request(key, pluginId, channel, argsRef.current, false);
   }, [key, enabled, staleMs, signal, pluginId, channel]);
 
+  useEffect(() => {
+    if (!invalidateOn || !enabled || signal?.aborted) return;
+    const wait = Math.max(0, debounceMs);
+    const args = argsRef;
+    const subscriber: InvalidationSubscriber = {
+      refetch: () => request(key, pluginId, channel, args.current, true),
+    };
+    invalidationFor(key).subscribers.add(subscriber);
+    const off = getPluginHostBridge().on(pluginId, invalidateOn, () => {
+      if (signal?.aborted) return;
+      invalidate(key, wait);
+    });
+    // An aborted view stops counting at once, so a refetch it scheduled runs
+    // only if a sibling on the same key is still listening.
+    const leave = (): void => leaveInvalidation(key, subscriber);
+    signal?.addEventListener("abort", leave, { once: true });
+    return () => {
+      off();
+      signal?.removeEventListener("abort", leave);
+      leave();
+    };
+  }, [invalidateOn, enabled, signal, debounceMs, key, pluginId, channel]);
+
   const revalidate = useCallback(async (): Promise<TResult | undefined> => {
     if (signal?.aborted) return undefined;
     return (await request(key, pluginId, channel, argsRef.current, true)) as TResult | undefined;
@@ -265,4 +383,5 @@ export function resetHostChannelCacheForTests(): void {
   states.clear();
   listeners.clear();
   inFlight.clear();
+  for (const key of [...invalidations.keys()]) cancelInvalidation(key);
 }

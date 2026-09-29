@@ -22,3 +22,15 @@ export {
   setAgentContextDragData,
   encodeAgentContextDragPayload,
 } from "../../../shared/types/plugin-sdk.js";
+// "Pull on mount, then push deltas": the worker half of the synced-collection
+// protocol `useSyncedCollection` (in `/react`) mirrors. A runtime export of the
+// root entry so zero-build workers, which are served this entry, can use it.
+export {
+  createSyncedCollection,
+  syncedCollectionSnapshotChannel,
+  type SyncedCollection,
+  type SyncedCollectionDelta,
+  type SyncedCollectionHost,
+  type SyncedCollectionOptions,
+  type SyncedCollectionSnapshot,
+} from "./sync/syncedCollection.js";

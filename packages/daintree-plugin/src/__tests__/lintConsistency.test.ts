@@ -202,3 +202,101 @@ describe("lucide-react-import", () => {
     ).toEqual([]);
   });
 });
+
+describe("self-container-query", () => {
+  it("flags a container-query variant on the element that declares the container", async () => {
+    const flagged = await lintFor(
+      "self-container-query",
+      view(`<div className="grid grid-cols-2 @container @md:grid-cols-4" />`)
+    );
+    expect(flagged).toHaveLength(1);
+    expect(flagged[0]).toMatchObject({ file: "src/panel.tsx", line: 4 });
+    expect(flagged[0]!.message).toMatch(/@md:grid-cols-4/);
+  });
+
+  it("flags a named container queried by its own name, and range variants", async () => {
+    const flagged = await lintFor(
+      "self-container-query",
+      view(
+        `<div className={cn("@container/card @max-md/card:hidden @min-[400px]:flex", on && "p-2")} />`
+      )
+    );
+    expect(flagged).toHaveLength(2);
+  });
+
+  it("accepts the container on an ancestor, and a variant naming another container", async () => {
+    const clean = await lintFor(
+      "self-container-query",
+      view(
+        `<div className="@container"><div className="grid-cols-2 @md:grid-cols-4" /><div className="@container/inner @lg/outer:p-4" /></div>`
+      )
+    );
+    expect(clean).toEqual([]);
+  });
+
+  it("does not pair a container and a child variant kept in one styles object", async () => {
+    const clean = await lintFor("self-container-query", {
+      "src/styles.ts": `export const cardStyles = { root: "@container p-2", grid: "grid-cols-2 @md:grid-cols-4" };\n`,
+    });
+    expect(clean).toEqual([]);
+  });
+});
+
+describe("native-dialog-in-view", () => {
+  it("flags window.confirm, alert and prompt, qualified or bare", async () => {
+    const flagged = await lintFor("native-dialog-in-view", {
+      "src/panel.tsx": `export default function Panel() {
+  const discard = () => {
+    if (!window.confirm("Discard unsaved changes?")) return;
+    alert("Discarded");
+    const name = globalThis.prompt("Name?");
+  };
+  return <div onClick={discard} />;
+}
+`,
+    });
+    expect(flagged.map((f) => f.line)).toEqual([3, 4, 5]);
+    expect(flagged[0]!.message).toMatch(/window\.confirm\(\).*ConfirmDialog/);
+  });
+
+  it("accepts a local confirm, a method named confirm, and worker code", async () => {
+    const clean = await lintFor("native-dialog-in-view", {
+      "src/panel.tsx": `import { useConfirm } from "./dialogs";
+export default function Panel({ dialog }) {
+  const confirm = useConfirm();
+  const go = async () => {
+    if (await confirm("Discard?")) dialog.confirm();
+  };
+  return <div onClick={go} title="confirm(" />;
+}
+export const api = {
+  confirm(message) {
+    return Promise.resolve(Boolean(message));
+  },
+};
+`,
+      "src/index.ts": `export async function activate(host) {
+  await host.showConfirm({ title: "Sure?" });
+}
+`,
+    });
+    expect(clean).toEqual([]);
+  });
+});
+
+describe("native-dialog-in-view method declarations", () => {
+  it("does not read a method named confirm as a call", async () => {
+    const clean = await lintFor("native-dialog-in-view", {
+      "src/panel.tsx": `const api = {
+  confirm(message) {
+    return Promise.resolve(Boolean(message));
+  },
+};
+export default function Panel() {
+  return <div onClick={() => api.confirm("x")} />;
+}
+`,
+    });
+    expect(clean).toEqual([]);
+  });
+});

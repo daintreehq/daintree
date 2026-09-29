@@ -12,6 +12,7 @@ import {
   STOCK_SHADOW,
 } from "../classTokens.js";
 import { hasProp, propString } from "../extract.js";
+import { matchClose } from "../source.js";
 import type { ClassToken, LintFile, LintRule, RuleHit } from "../types.js";
 
 /** A rule over every class token, reporting each one `test` names a message for. */
@@ -312,6 +313,110 @@ const lucideImport: LintRule = {
   },
 };
 
+/** `@container`, `@container/name` — the element declares itself a query container. */
+const CONTAINER_DECLARATION = /^@container(?:\/([\w-]+))?$/;
+/** `@md`, `@max-lg`, `@min-[400px]`, `@sm/name` — a container-query variant, with its container name. */
+const CONTAINER_VARIANT =
+  /^@(?!container(?:\/|$))(?:min-|max-)?(?:\[[^\]]+\]|[\w.-]+)(?:\/([\w-]+))?$/;
+
+function selfContainerHits(context: ClassToken[]): RuleHit[] {
+  const declared = new Set<string>();
+  for (const { token } of context) {
+    const { variants, base } = splitToken(token);
+    if (variants.length > 0) continue;
+    const match = CONTAINER_DECLARATION.exec(base);
+    if (match) declared.add(match[1] ?? "");
+  }
+  if (declared.size === 0) return [];
+  const hits: RuleHit[] = [];
+  for (const { token, offset } of context) {
+    const variant = splitToken(token).variants.find((v) => CONTAINER_VARIANT.test(v));
+    if (!variant) continue;
+    const name = CONTAINER_VARIANT.exec(variant)?.[1];
+    // An unnamed variant queries the nearest ancestor container, never the
+    // element itself; a named one only misses when it names this element.
+    if (name !== undefined && !declared.has(name)) continue;
+    hits.push({
+      offset,
+      message: `"${token}" sits on the element that declares the container, and a container query never matches its own container`,
+    });
+  }
+  return hits;
+}
+
+const selfContainerQuery: LintRule = {
+  id: "self-container-query",
+  severity: "warn",
+  appliesTo: "any",
+  message: "container-query variant on the container itself",
+  hint: "put @container on a wrapping element and keep the @md:/@lg: variants on its children — the container must be an ancestor",
+  // Reads one class string at a time, so a container and its variant split
+  // across separate cn() arguments are not paired.
+  check(file) {
+    // Per string literal, not per class context: a `*Styles` object holds
+    // one element's classes per property, and pairing `root: "@container"`
+    // with `child: "@md:…"` would flag the idiom this rule recommends. The
+    // lab's case — both on one class string — is the one worth catching.
+    return file.classContexts.flatMap((context) => {
+      const bySegment = new Map<number, ClassToken[]>();
+      for (const token of context) {
+        const segment = file.strings.findIndex(
+          (s) => token.offset >= s.start && token.offset < s.end
+        );
+        const group = bySegment.get(segment);
+        if (group) group.push(token);
+        else bySegment.set(segment, [token]);
+      }
+      return [...bySegment.values()].flatMap(selfContainerHits);
+    });
+  },
+};
+
+const NATIVE_DIALOG =
+  /(?:\b(?:window|globalThis|self)\s*\.\s*|(?<![\w$.]))(confirm|alert|prompt)\s*\(/g;
+
+/** A local binding named `name` — a hook result, an import, a parameter — which a bare call means instead. */
+function bindsName(masked: string, name: string): boolean {
+  const declared = new RegExp(`\\b(?:function\\s*\\*?|const|let|var|class|as)\\s+${name}\\b`);
+  // A destructured or imported name, or a parameter: `{ confirm }`, `(confirm) =>`.
+  const listed = new RegExp(`[{,(]\\s*${name}\\s*(?=[,})=])`);
+  return declared.test(masked) || listed.test(masked);
+}
+
+const DIALOG_KIT: Record<string, string> = {
+  confirm: "ConfirmDialog",
+  alert: "Dialog, or a Callout inline",
+  prompt: "Dialog with an Input",
+};
+
+const nativeDialogInView: LintRule = {
+  id: "native-dialog-in-view",
+  severity: "warn",
+  appliesTo: "view",
+  message: "native browser dialog in a view",
+  hint: "use ConfirmDialog or Dialog from @daintreehq/plugin-ui — a native dialog ignores the theme, blocks the whole window and takes focus from every other panel",
+  check(file) {
+    const hits: RuleHit[] = [];
+    for (const m of file.masked.matchAll(NATIVE_DIALOG)) {
+      const name = m[1]!;
+      const qualified = !m[0].startsWith(name);
+      if (!qualified) {
+        // `confirm(…) { … }` is a method being declared, not called.
+        const close = matchClose(file.masked, m.index + m[0].length - 1);
+        if (close > 0 && /^\s*\{/.test(file.masked.slice(close + 1, close + 40))) continue;
+        // File-wide, not scope-aware: a local `confirm` anywhere in the file
+        // suppresses bare calls everywhere in it, trading a miss for no noise.
+        if (bindsName(file.masked, name)) continue;
+      }
+      hits.push({
+        offset: m.index,
+        message: `${qualified ? m[0].replace(/\s+/g, "").replace(/\($/, "") : name}() opens a native dialog; use ${DIALOG_KIT[name]} from @daintreehq/plugin-ui`,
+      });
+    }
+    return hits;
+  },
+};
+
 export const CONSISTENCY_RULES: LintRule[] = [
   stockColour,
   darkVariant,
@@ -329,4 +434,6 @@ export const CONSISTENCY_RULES: LintRule[] = [
   nativeTitle,
   inlineSvgIcon,
   lucideImport,
+  selfContainerQuery,
+  nativeDialogInView,
 ];

@@ -43,3 +43,19 @@ export {
   type ThrottledCallback,
   type ThrottledCallbackOptions,
 } from "./react/useThrottledCallback.js";
+export {
+  useAnimationFrame,
+  type AnimationFrameCallback,
+  type AnimationFrameOptions,
+} from "./react/useAnimationFrame.js";
+export {
+  useStreamBuffer,
+  type StreamBufferOptions,
+  type StreamBufferResult,
+} from "./react/useStreamBuffer.js";
+export {
+  useSyncedCollection,
+  type SyncedCollectionViewOptions,
+  type SyncedCollectionViewResult,
+} from "./react/useSyncedCollection.js";
+export type { PluginHostBridge } from "./react/hostBridge.js";

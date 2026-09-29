@@ -1333,6 +1333,19 @@ interface CachedHostChannelOptions {
     signal?: AbortSignal;
     /** False skips fetching (the cached value, if any, is still returned). Default true. */
     enabled?: boolean;
+    /**
+     * A push channel (`host.postToPanel(channel, …)` broadcast) that means "this
+     * result is stale". Each push schedules a refetch; a burst of them within
+     * `debounceMs` of each other costs one. The payload is ignored.
+     */
+    invalidateOn?: string;
+    /**
+     * Quiet time after the last invalidation before refetching, in ms. Default
+     * 100. An invalidation that lands while a request is in flight queues one
+     * more request after it rather than superseding it, so a continuous stream of
+     * changes still settles on fresh data without abandoning every answer.
+     */
+    debounceMs?: number;
 }
 interface CachedHostChannelResult<TResult> {
     /** The latest successful result, cached or fresh; `undefined` until the first one lands. */
@@ -1371,6 +1384,17 @@ declare const HOST_CHANNEL_CACHE_LIMIT = 50;
  * const { data, error, validating } = useCachedHostChannel<{ repo: string }, Pr[]>(
  *   pluginId, "list-prs", { repo }, { staleMs: 30_000, signal: disposeSignal },
  * );
+ * ```
+ *
+ * With `invalidateOn`, a push on that channel marks the result stale and a
+ * burst of pushes refetches once — the shape for a database `onDidChange` the
+ * worker forwards as `host.postToPanel("notes-changed", null)`:
+ *
+ * ```tsx
+ * const { data: notes } = useCachedHostChannel<null, Note[]>(pluginId, "list-notes", null, {
+ *   invalidateOn: "notes-changed",
+ *   debounceMs: 100,
+ * });
  * ```
  */
 declare function useCachedHostChannel<TArgs = unknown, TResult = unknown>(pluginId: string, channel: string, args: TArgs, options?: CachedHostChannelOptions): CachedHostChannelResult<TResult>;
@@ -1411,4 +1435,146 @@ type ThrottledCallback<A extends unknown[]> = ((...args: A) => void) & {
  */
 declare function useThrottledCallback<A extends unknown[]>(callback: (...args: A) => void, options?: ThrottledCallbackOptions): ThrottledCallback<A>;
 
-export { type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type PluginAlign, type PluginBadgeProps, type PluginBadgeTone, type PluginButtonProps, type PluginButtonVariant, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCheckboxProps, type PluginConfirmDialogProps, type PluginCopyButtonProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableSort, type PluginDialogAction, type PluginDialogProps, type PluginDismissButtonProps, type PluginDocumentPackage, type PluginDomProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFormFieldControlProps, type PluginFormFieldProps, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginInputProps, type PluginKbdChordProps, type PluginKbdProps, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginPaneHeaderProps, type PluginPaneStateProps, type PluginProgressBarProps, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginSwitchProps, type PluginTabItem, type PluginTabsProps, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTruncatedTooltipProps, type PluginVirtualListProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseHostChannelResult, type UseListNavigationOptions, type UseListNavigationResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useCachedHostChannel, useHostChannel, useHostStore, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useThrottledCallback, useVirtualList };
+interface AnimationFrameOptions {
+    /** False stops the loop. Default true. */
+    enabled?: boolean;
+    /**
+     * The view's `disposeSignal` (or a {@link ViewScope}'s `signal`). Once it
+     * aborts no further frame is requested, even before React unmounts the view.
+     */
+    signal?: AbortSignal;
+}
+/**
+ * Called once per frame. `dt` is the time since the previous frame the loop
+ * ran, in ms, and is 0 on the first frame after the loop starts or resumes, so
+ * a simulation never jumps by the time it spent paused. `time` is the frame's
+ * `requestAnimationFrame` timestamp.
+ */
+type AnimationFrameCallback = (dt: number, time: number) => void;
+/**
+ * A `requestAnimationFrame` loop that stops while nobody can see the view and
+ * starts again when someone can.
+ *
+ * It pauses while the document is hidden (the window is minimised or covered)
+ * and while main has cached this project view — the case the DOM cannot see:
+ * a backgrounded project keeps reporting `visibilityState === "visible"` and
+ * keeps firing frames at the full rate. Both come back as a resume, with
+ * `dt` 0 on its first frame.
+ *
+ * ```tsx
+ * useAnimationFrame((dt) => {
+ *   sim.step(dt / 1000);
+ *   sim.draw(ctx);
+ * }, { signal: disposeSignal });
+ * ```
+ *
+ * The latest `callback` is always the one called, so an inline closure does
+ * not restart the loop. A callback that throws is logged and the loop goes on.
+ * Outside a browser (SSR, no `requestAnimationFrame`) it does nothing.
+ */
+declare function useAnimationFrame(callback: AnimationFrameCallback, options?: AnimationFrameOptions): void;
+
+interface StreamBufferOptions {
+    /**
+     * How many items to keep. Beyond it the oldest are dropped and counted in
+     * `dropped`. Default 1000. Values below 1 are treated as 1.
+     */
+    maxItems?: number;
+    /**
+     * When state updates: `"frame"` (default) commits at most once per animation
+     * frame; a number commits at most once per that many ms. Items pushed in
+     * between are all kept, just committed together.
+     */
+    flush?: "frame" | number;
+}
+interface StreamBufferResult<T> {
+    /** The newest `maxItems` items, oldest first. A new array on every commit; treat it as immutable. */
+    items: readonly T[];
+    /** Items dropped off the front since mount or the last `clear()`. */
+    dropped: number;
+    /** Append one item. Stable identity. */
+    push: (item: T) => void;
+    /** Append several items in order. Stable identity. */
+    pushMany: (items: readonly T[]) => void;
+    /** Drop everything, including the `dropped` count, and commit the empty buffer. Stable identity. */
+    clear: () => void;
+}
+/**
+ * A bounded, lossless buffer for streamed items — log lines, progress lines,
+ * events — that commits to React state at most once per frame.
+ *
+ * Every pushed item is kept until `maxItems` is exceeded; then the oldest go,
+ * and `dropped` says how many. That is the difference from
+ * {@link useThrottledCallback}, which keeps only the latest arguments and is
+ * right for replaceable values, not for streams. Appending with
+ * `setLines((prev) => [...prev, line])` per push is the other trap: it copies
+ * the whole array on every line and schedules one update per push.
+ *
+ * ```tsx
+ * const log = useStreamBuffer<string>({ maxItems: 5000 });
+ * usePluginEvent<string>(pluginId, "build-output", log.push);
+ * // render log.items with useVirtualList
+ * ```
+ *
+ * Pushes after unmount are ignored.
+ */
+declare function useStreamBuffer<T>(options?: StreamBufferOptions): StreamBufferResult<T>;
+
+interface SyncedCollectionViewOptions {
+    /** False unsubscribes and stops pulling; the last items stay. Default true. */
+    enabled?: boolean;
+    /** The view's `disposeSignal`. Once it aborts nothing more is pulled or applied. */
+    signal?: AbortSignal;
+}
+interface SyncedCollectionViewResult<T> {
+    /** The mirrored items in the worker's order. A new array on each commit; unchanged items keep their identity. */
+    items: readonly T[];
+    /** The revision `items` reflects; 0 before the first snapshot lands. */
+    revision: number;
+    /** True until the first snapshot lands, and while a resync is in flight. */
+    loading: boolean;
+    /** The last failed pull. Deltas are not applied until a pull succeeds; `resync()` retries. */
+    error: Error | null;
+    /** Pull a fresh snapshot, keeping deltas that arrive meanwhile. */
+    resync: () => void;
+}
+/**
+ * The view half of `createSyncedCollection`: mirrors a worker-owned keyed
+ * collection by pulling a snapshot on mount and applying the deltas pushed
+ * after it.
+ *
+ * Pushes reach the view with no ordering guarantee against invoke results, so
+ * a pull-then-subscribe view can miss a change or apply one twice. This hook
+ * subscribes first, then pulls; deltas that arrive while the pull is in flight
+ * are held, and once the snapshot lands every delta at or below its revision
+ * is dropped as already included. A revision that skips a number, or a delta
+ * from a different worker epoch (the worker restarted), means something was
+ * missed, and the hook pulls again. State commits at most once per frame.
+ *
+ * ```tsx
+ * const { items: calls, loading } = useSyncedCollection<Call>(pluginId, "calls", {
+ *   signal: disposeSignal,
+ * });
+ * ```
+ */
+declare function useSyncedCollection<T>(pluginId: string, channel: string, options?: SyncedCollectionViewOptions): SyncedCollectionViewResult<T>;
+
+/**
+ * The documented plugin-view bridge on `window.electron.plugin`: `invoke`
+ * (request/response), `on` (broadcast subscribe) and `onPanel` (per-instance
+ * subscribe), each subscription returning its disposer.
+ *
+ * `@daintreehq/plugin-sdk/view-globals` declares the same shape as the global
+ * `DaintreePluginViewBridge` for authors (kept React-free, so it cannot import
+ * this one; `viewGlobalsTypes.test.ts` holds the two equal). The SDK resolves
+ * the bridge through a local cast rather than that global because the host app
+ * compiles these hooks too and declares its own, wider `Window.electron`,
+ * which a second global declaration would conflict with.
+ */
+interface PluginHostBridge {
+    invoke(pluginId: string, channel: string, ...args: unknown[]): Promise<unknown>;
+    on(pluginId: string, channel: string, callback: (payload: unknown) => void): () => void;
+    onPanel(pluginId: string, channel: string, panelId: string, callback: (payload: unknown) => void): () => void;
+}
+
+export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type PluginAlign, type PluginBadgeProps, type PluginBadgeTone, type PluginButtonProps, type PluginButtonVariant, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCheckboxProps, type PluginConfirmDialogProps, type PluginCopyButtonProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableSort, type PluginDialogAction, type PluginDialogProps, type PluginDismissButtonProps, type PluginDocumentPackage, type PluginDomProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFormFieldControlProps, type PluginFormFieldProps, type PluginHostBridge, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginInputProps, type PluginKbdChordProps, type PluginKbdProps, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginPaneHeaderProps, type PluginPaneStateProps, type PluginProgressBarProps, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginSwitchProps, type PluginTabItem, type PluginTabsProps, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTruncatedTooltipProps, type PluginVirtualListProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseHostChannelResult, type UseListNavigationOptions, type UseListNavigationResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };

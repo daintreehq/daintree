@@ -183,7 +183,16 @@ function tsconfig(jsx: boolean): string {
     isolatedModules: true,
     esModuleInterop: true,
   };
-  if (jsx) compilerOptions.jsx = "react-jsx";
+  if (jsx) {
+    compilerOptions.jsx = "react-jsx";
+    // A view reaches its worker through `window.electron.plugin` and draws with
+    // the host-served `@daintreehq/plugin-ui`; neither has a module to import,
+    // so without these ambient declarations the first `invoke` fails `tsc`.
+    compilerOptions.types = [
+      "@daintreehq/plugin-sdk/view-globals",
+      "@daintreehq/plugin-sdk/plugin-ui",
+    ];
+  }
   return JSON.stringify({ compilerOptions, include: ["src"] }, null, 2) + "\n";
 }
 

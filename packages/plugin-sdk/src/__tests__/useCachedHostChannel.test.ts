@@ -188,3 +188,115 @@ describe("useCachedHostChannel", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 });
+
+describe("useCachedHostChannel invalidateOn", () => {
+  let subs: Map<string, Set<(p: unknown) => void>>;
+  const push = (channel: string) => {
+    for (const cb of [...(subs.get(channel) ?? [])]) cb(null);
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    subs = new Map();
+    const on = vi.fn((_p: string, channel: string, cb: (p: unknown) => void) => {
+      let set = subs.get(channel);
+      if (!set) subs.set(channel, (set = new Set()));
+      set.add(cb);
+      return () => set.delete(cb);
+    });
+    vi.stubGlobal("electron", { plugin: { invoke, on, onPanel: vi.fn() } });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("refetches once per burst of invalidations", async () => {
+    let n = 0;
+    invoke.mockImplementation(async () => ++n);
+    const { result } = renderHook(() =>
+      useCachedHostChannel("acme", "list-notes", null, { invalidateOn: "notes-changed" })
+    );
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    expect(result.current.data).toBe(1);
+
+    for (let i = 0; i < 200; i++) {
+      push("notes-changed");
+      await act(async () => void (await vi.advanceTimersByTimeAsync(5)));
+    }
+    expect(invoke).toHaveBeenCalledTimes(1);
+    await act(async () => void (await vi.advanceTimersByTimeAsync(100)));
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result.current.data).toBe(2);
+  });
+
+  it("queues one refetch behind a request in flight instead of superseding it", async () => {
+    const first = deferred<number>();
+    invoke.mockResolvedValueOnce(0).mockReturnValueOnce(first.promise).mockResolvedValue(2);
+    const { result } = renderHook(() =>
+      useCachedHostChannel("acme", "q", null, { invalidateOn: "q-changed", debounceMs: 10 })
+    );
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    push("q-changed");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(10)));
+    expect(invoke).toHaveBeenCalledTimes(2);
+    push("q-changed");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(10)));
+    push("q-changed");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(10)));
+    expect(invoke).toHaveBeenCalledTimes(2);
+    await act(async () => first.resolve(1));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(result.current.data).toBe(2);
+  });
+
+  it("drops a scheduled refetch when the only view's signal aborts first", async () => {
+    invoke.mockResolvedValue(1);
+    const controller = new AbortController();
+    renderHook(() =>
+      useCachedHostChannel("acme", "s", null, {
+        invalidateOn: "s-changed",
+        signal: controller.signal,
+      })
+    );
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    push("s-changed");
+    controller.abort();
+    await act(async () => void (await vi.advanceTimersByTimeAsync(200)));
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refetch twice when a push re-arms the timer behind a queued refetch", async () => {
+    const first = deferred<number>();
+    invoke.mockResolvedValueOnce(0).mockReturnValueOnce(first.promise).mockResolvedValue(2);
+    renderHook(() =>
+      useCachedHostChannel("acme", "d", null, { invalidateOn: "d-changed", debounceMs: 10 })
+    );
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    push("d-changed");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(10)));
+    push("d-changed");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(10)));
+    push("d-changed");
+    await act(async () => first.resolve(1));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(50)));
+    expect(invoke).toHaveBeenCalledTimes(3);
+  });
+
+  it("shares one refetch between views on the same key, and unsubscribes on unmount", async () => {
+    invoke.mockResolvedValue("x");
+    const opts = { invalidateOn: "k-changed" };
+    const a = renderHook(() => useCachedHostChannel("acme", "k", 1, opts));
+    const b = renderHook(() => useCachedHostChannel("acme", "k", 1, opts));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    expect(invoke).toHaveBeenCalledTimes(1);
+    push("k-changed");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(100)));
+    expect(invoke).toHaveBeenCalledTimes(2);
+
+    a.unmount();
+    b.unmount();
+    expect(subs.get("k-changed")?.size ?? 0).toBe(0);
+    push("k-changed");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(100)));
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+});
