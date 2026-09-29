@@ -3,6 +3,7 @@ import { SeverityMark } from "@/lib/statusSeverity";
 import { Button } from "@/components/ui/button";
 import { SearchField } from "@/components/ui/SearchField";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import {
   Select,
   SelectContent,
@@ -122,6 +123,11 @@ export function AuditTimeRangeSelect({
       ariaLabel="Filter audit by time range"
     />
   );
+}
+
+/** The label `AuditRecordTime` prints, for callers that skip re-renders when it holds. */
+export function auditAgeLabel(ts: number, now: number): string {
+  return formatRelativeTime(ts, Math.max(now, ts));
 }
 
 /** A record's age, with the exact time one hover (or one screen-reader read) away. */
