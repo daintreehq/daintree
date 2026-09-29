@@ -1796,10 +1796,20 @@ export function getPluginManifestSchema(origin: PluginOrigin): PluginManifestSch
  */
 export function getPluginManifestSchema(isBuiltin: boolean): PluginManifestSchema;
 export function getPluginManifestSchema(origin: PluginOrigin | boolean): PluginManifestSchema {
-  return buildPluginManifestSchema(
-    typeof origin === "boolean" ? (origin ? "builtin" : "user") : origin
-  );
+  const key = typeof origin === "boolean" ? (origin ? "builtin" : "user") : origin;
+  let schema = manifestSchemaCache.get(key);
+  if (!schema) {
+    schema = buildPluginManifestSchema(key);
+    manifestSchemaCache.set(key, schema);
+  }
+  return schema;
 }
+
+/**
+ * One schema per origin. Zod schemas are immutable, and rebuilding the ~800-line
+ * tree per parse also threw away the parser zod compiles on first use.
+ */
+const manifestSchemaCache = new Map<PluginOrigin, PluginManifestSchema>();
 
 /**
  * Parse a manifest for loading, isolating malformed `contributes.tours` entries
@@ -2102,7 +2112,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             // three optional fixed slots are structurally bounded already.
             surfaces: SurfaceContributionsSchema.default({}),
           })
-          .default({
+          // A factory, not a literal: zod only shallow-clones a default value,
+          // so a literal's arrays would be shared by every parse of the cached
+          // schema.
+          .default(() => ({
             panels: [],
             toolbarButtons: [],
             menuItems: [],
@@ -2125,7 +2138,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             tours: [],
             databases: [],
             surfaces: {},
-          })
+          }))
       ),
     })
     .superRefine((manifest, ctx) => {
