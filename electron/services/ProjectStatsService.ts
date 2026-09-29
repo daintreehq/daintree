@@ -5,6 +5,10 @@ import { projectStore } from "./ProjectStore.js";
 import { scratchStore } from "./ScratchStore.js";
 import { computeProjectAgentCounts } from "./projectAgentCounts.js";
 import { helpSessionService } from "./HelpSessionService.js";
+import {
+  getSharedTerminalSnapshot,
+  invalidateSharedTerminalSnapshot,
+} from "./sharedTerminalSnapshot.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { RunAttentionService } from "./RunAttentionService.js";
 import type { ProjectStatusMap } from "../../shared/types/ipc/project.js";
@@ -51,7 +55,12 @@ export class ProjectStatsService {
     // `TerminalProcess.kill()` calls `updateAgentState({type:"kill"})` whenever
     // `getLiveAgentId(terminal)` is set (i.e. any counted terminal).
     const subscribe = (event: Parameters<typeof events.on>[0]) => {
-      this.eventUnsubscribes.push(events.on(event, () => this.debouncedCompute()));
+      this.eventUnsubscribes.push(
+        events.on(event, () => {
+          invalidateSharedTerminalSnapshot(this.ptyClient);
+          this.debouncedCompute();
+        })
+      );
     };
     subscribe("agent:state-changed");
     subscribe("terminal:trashed");
@@ -71,7 +80,9 @@ export class ProjectStatsService {
     }
   }
 
+  /** An explicit recompute, so it reads the host afresh rather than a sibling's snapshot. */
   refresh(): void {
+    invalidateSharedTerminalSnapshot(this.ptyClient);
     void this.computeAndBroadcast();
   }
 
@@ -188,6 +199,49 @@ export class ProjectStatsService {
     return true;
   }
 
+  /**
+   * Live (not exited, not trashed) terminals per workspace — what the host's
+   * `get-project-stats` counts — tallied from the snapshot already in hand
+   * instead of one RPC per workspace.
+   *
+   * The one case still asked of the host per workspace is a live terminal with
+   * no `projectId`. The host attributes it by cwd and stamps the id onto it as a
+   * side effect of the very query being skipped; only the host can resolve it,
+   * and once it has, the snapshot carries the id. Trashed terminals count here
+   * because the host's matcher runs on them before the trash filter does.
+   *
+   * A degraded snapshot is NOT a reason to fall back: the shard that just timed
+   * out on the fan-out would time out again per workspace, after it, and two
+   * back-to-back timeouts outlast the poll that would supersede this compute —
+   * starving every workspace's stats for the length of the outage. A missing
+   * shard reads as zero, which is what its failed per-workspace reads resolved
+   * to before.
+   */
+  private async getTerminalCounts(
+    projectIds: readonly string[],
+    terminals: ReadonlyArray<{ projectId?: string; isExited?: boolean; isTrashed?: boolean }>
+  ): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+    if (terminals.some((t) => !t.projectId && !t.isExited)) {
+      const results = await Promise.allSettled(
+        projectIds.map((id) => this.ptyClient!.getProjectStats(id).then((s) => [id, s] as const))
+      );
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          counts.set(result.value[0], result.value[1].terminalCount);
+        }
+      }
+      return counts;
+    }
+    for (const id of projectIds) counts.set(id, 0);
+    for (const terminal of terminals) {
+      if (terminal.isExited || terminal.isTrashed || !terminal.projectId) continue;
+      const count = counts.get(terminal.projectId);
+      if (count !== undefined) counts.set(terminal.projectId, count + 1);
+    }
+    return counts;
+  }
+
   private async computeAndBroadcast(): Promise<void> {
     if (!this.ptyClient) return;
 
@@ -211,13 +265,9 @@ export class ProjectStatsService {
         return;
       }
 
-      const [allTerminals, statsResults] = await Promise.all([
-        this.ptyClient.getAllTerminalsAsync(),
-        Promise.allSettled(
-          projectIds.map((id) => this.ptyClient!.getProjectStats(id).then((s) => [id, s] as const))
-        ),
-      ]);
-
+      const { terminals: allTerminals } = await getSharedTerminalSnapshot(this.ptyClient);
+      if (this.generation !== gen) return;
+      const terminalCounts = await this.getTerminalCounts(projectIds, allTerminals);
       if (this.generation !== gen) return;
 
       // Acknowledgement watermarks ride the same rows already fetched.
@@ -251,51 +301,48 @@ export class ProjectStatsService {
       );
 
       const statusMap: ProjectStatusMap = {};
-      for (const entry of statsResults) {
-        if (entry.status === "fulfilled") {
-          const [id, ptyStats] = entry.value;
-          const counts = agentCounts.get(id);
-          if (!counts) continue;
-          statusMap[id] = {
-            // Net out the assistant help PTY the host counted but the switcher
-            // must not show; clamp in case stats momentarily lag (#10989).
-            processCount: Math.max(0, ptyStats.terminalCount - counts.helpTerminals),
-            activeAgentCount: counts.active,
-            waitingAgentCount: counts.waiting,
-            blockedAgentCount: counts.blocked,
-            ...(counts.oldestWaitingSince !== null
-              ? { oldestWaitingSince: counts.oldestWaitingSince }
-              : {}),
-            completedAgentCount: counts.completed,
-            unacknowledgedCompletedAgentCount: counts.unacknowledgedCompleted,
-            ...(counts.oldestUnacknowledgedCompletionAt !== null
-              ? { oldestUnacknowledgedCompletionAt: counts.oldestUnacknowledgedCompletionAt }
-              : {}),
-            ...(counts.latestUnacknowledgedCompletionAt !== null
-              ? { latestUnacknowledgedCompletionAt: counts.latestUnacknowledgedCompletionAt }
-              : {}),
-            ...(counts.latestCompletionAt !== null
-              ? { latestCompletionAt: counts.latestCompletionAt }
-              : {}),
-            ...(counts.latestWorkingSince !== null
-              ? { latestWorkingSince: counts.latestWorkingSince }
-              : {}),
-            snoozedAgentCount: counts.snoozed,
-            ...(counts.nextSnoozeWakeAt !== null
-              ? { nextSnoozeWakeAt: counts.nextSnoozeWakeAt }
-              : {}),
-            // Presence, carried beside the tallies and never inside them
-            // (#11806). The bulk stats handler projects these identically —
-            // the two paths answering differently is exactly #10989.
-            ...(counts.assistantState !== null ? { assistantState: counts.assistantState } : {}),
-            ...(counts.assistantWaitingReason !== null
-              ? { assistantWaitingReason: counts.assistantWaitingReason }
-              : {}),
-            ...(counts.assistantStateSince !== null
-              ? { assistantStateSince: counts.assistantStateSince }
-              : {}),
-          };
-        }
+      for (const [id, terminalCount] of terminalCounts) {
+        const counts = agentCounts.get(id);
+        if (!counts) continue;
+        statusMap[id] = {
+          // Net out the assistant help PTY the host counted but the switcher
+          // must not show; clamp in case stats momentarily lag (#10989).
+          processCount: Math.max(0, terminalCount - counts.helpTerminals),
+          activeAgentCount: counts.active,
+          waitingAgentCount: counts.waiting,
+          blockedAgentCount: counts.blocked,
+          ...(counts.oldestWaitingSince !== null
+            ? { oldestWaitingSince: counts.oldestWaitingSince }
+            : {}),
+          completedAgentCount: counts.completed,
+          unacknowledgedCompletedAgentCount: counts.unacknowledgedCompleted,
+          ...(counts.oldestUnacknowledgedCompletionAt !== null
+            ? { oldestUnacknowledgedCompletionAt: counts.oldestUnacknowledgedCompletionAt }
+            : {}),
+          ...(counts.latestUnacknowledgedCompletionAt !== null
+            ? { latestUnacknowledgedCompletionAt: counts.latestUnacknowledgedCompletionAt }
+            : {}),
+          ...(counts.latestCompletionAt !== null
+            ? { latestCompletionAt: counts.latestCompletionAt }
+            : {}),
+          ...(counts.latestWorkingSince !== null
+            ? { latestWorkingSince: counts.latestWorkingSince }
+            : {}),
+          snoozedAgentCount: counts.snoozed,
+          ...(counts.nextSnoozeWakeAt !== null
+            ? { nextSnoozeWakeAt: counts.nextSnoozeWakeAt }
+            : {}),
+          // Presence, carried beside the tallies and never inside them
+          // (#11806). The bulk stats handler projects these identically —
+          // the two paths answering differently is exactly #10989.
+          ...(counts.assistantState !== null ? { assistantState: counts.assistantState } : {}),
+          ...(counts.assistantWaitingReason !== null
+            ? { assistantWaitingReason: counts.assistantWaitingReason }
+            : {}),
+          ...(counts.assistantStateSince !== null
+            ? { assistantStateSince: counts.assistantStateSince }
+            : {}),
+        };
       }
 
       if (!this.shallowEqual(statusMap, this.lastBroadcast)) {

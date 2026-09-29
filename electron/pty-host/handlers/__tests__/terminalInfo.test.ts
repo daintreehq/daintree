@@ -144,6 +144,18 @@ describe("mapTerminalInfo", () => {
     );
   });
 
+  it("reports isExited apart from hasPty, so a kill awaiting its exit still reads as live", () => {
+    // Main's project counts tally from this field and must match the host's own
+    // count, which keeps a killed terminal until its process actually exits.
+    const ctx = createCtx();
+    const killed = mapTerminalInfo(makeTerminal({ wasKilled: true, isExited: false }), ctx);
+    expect(killed.hasPty).toBe(false);
+    expect(killed.isExited).toBe(false);
+    expect(mapTerminalInfo(makeTerminal({ wasKilled: true, isExited: true }), ctx).isExited).toBe(
+      true
+    );
+  });
+
   it("looks up activityTier per-terminal via ptyManager", () => {
     const getActivityTier = vi.fn(() => "background" as const);
     const ctx = createCtx({
