@@ -75,12 +75,13 @@ describe("ContentDock regression test", () => {
     expect(launchIdx).toBeLessThan(trashIdx);
   });
 
-  // Issue #6428 — accent ring on isOver was a restraint violation; replace with neutral.
-  it("uses a neutral ring on dock isOver state (no accent)", () => {
+  // Issue #6428 — accent ring on isOver was a restraint violation; the armed
+  // rail now draws the shared neutral drop-target frame.
+  it("draws the shared drop-target frame on dock isOver state (no accent)", () => {
     const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
 
     expect(content).not.toContain("ring-accent-primary");
-    expect(content).toMatch(/isOver\s*&&\s*[^]*?ring-border-default/);
+    expect(content).toMatch(/isOver\s*&&\s*!isDockDropRejected\s*&&\s*cn\(DROP_TARGET_FRAME/);
   });
 
   // Issue #8162 — drop the ambient in-flight rail tint; the only drag-state cue
@@ -101,7 +102,9 @@ describe("ContentDock regression test", () => {
     // The reject gate folds in the group-aware dock-reject flag from the context.
     expect(content).toContain("activeDragRejectsDock");
     expect(content).toMatch(/isDockDropRejected\s*=\s*isWorktreeSortDragging\s*\|\|/);
-    expect(content).toMatch(/isOver\s*&&\s*[^]*?cursor-copy/);
+    // Rejection is the one drag state the cursor carries; an accepted drop is a
+    // move, so the rail never promises a copy.
+    expect(content).not.toContain("cursor-copy");
   });
 
   // Issue #6590 — handleAddTerminal must rely on the atomic dock activation

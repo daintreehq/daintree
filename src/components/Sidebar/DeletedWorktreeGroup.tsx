@@ -7,6 +7,7 @@ import {
   PanelTopClose,
   Trash2,
 } from "lucide-react";
+import { DRAG_GRIP_CLASS, DRAG_GRIP_ICON_CLASS } from "@/components/ui/dragGripStyles";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
@@ -383,11 +384,11 @@ function DeletedWorktreeTerminalChip({
           ref={dragHandle?.setActivatorNodeRef}
           type="button"
           data-drag-handle
-          className="flex h-6 w-6 shrink-0 items-center justify-center cursor-grab rounded-[var(--radius-md)] text-text-secondary hover:text-text-primary focus-visible:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px] active:cursor-grabbing"
+          className={DRAG_GRIP_CLASS}
           aria-label={`Drag to rescue ${label}`}
           {...(dragHandle?.listeners as React.HTMLAttributes<HTMLElement> | undefined)}
         >
-          <GripVertical className="w-3 h-3" aria-hidden="true" />
+          <GripVertical className={DRAG_GRIP_ICON_CLASS} aria-hidden="true" />
         </button>
         <button
           type="button"

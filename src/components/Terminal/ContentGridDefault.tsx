@@ -7,6 +7,7 @@ import {
 } from "@dnd-kit/sortable";
 import { LayoutGroup } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { DROP_TARGET_FRAME } from "@/components/DragDrop/dropIndicator";
 import { GRID_MIN_PANEL_ROWS, MIN_TERMINAL_WIDTH_PX, pxForRows } from "@/lib/terminalLayout";
 import { GridNotificationBar } from "./GridNotificationBar";
 import { GridPanel } from "./GridPanel";
@@ -211,7 +212,7 @@ export function ContentGridDefault({
                   // divider's 6px track until the canonical close lands.
                   isSplit &&
                     "*:row-start-1 [&>:nth-child(1)]:col-start-1 [&>:nth-child(2)]:col-start-2 [&>:nth-child(3)]:col-start-3",
-                  ctx.isOver && "ring-2 ring-daintree-accent/30 ring-inset"
+                  ctx.isOver && DROP_TARGET_FRAME
                 )}
                 style={{
                   display: "grid",

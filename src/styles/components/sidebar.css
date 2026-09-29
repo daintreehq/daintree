@@ -142,15 +142,17 @@ html[data-dragging="true"]
 }
 
 /* Panel drag-over: the rules above go quiet during drags, so the row a panel
-   would drop into needs its own signal. Hover-tint fill plus a neutral inset
-   ring — border-strong, the same vocabulary as the sort insertion line; accent
-   stays reserved for the active row's right-edge marker. Lives here rather
-   than as a Tailwind ring utility because this unlayered file's base
+   would drop into needs its own signal. It is DROP_TARGET_FRAME
+   (src/components/DragDrop/dropIndicator.ts), the frame every drop container
+   in the app draws: a 1px inset edge in text-primary at 60% over the
+   overlay-subtle fill, the ink of the sort insertion line beside it; accent
+   stays reserved for the active row's right-edge marker. Spelled out here
+   rather than as the utilities because this unlayered file's base
    `.sidebar-worktree-card` background/box-shadow declarations override layered
-   utilities on the same element. */
+   utilities on the same element. The contract test keeps the two in step. */
 .sidebar-worktree-card[data-drop-target="true"] {
-  background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.048));
-  --card-edge: inset 0 0 0 2px var(--theme-border-strong);
+  background: var(--color-overlay-subtle);
+  --card-edge: inset 0 0 0 1px color-mix(in oklab, var(--color-text-primary) 60%, transparent);
 }
 
 /* No focus/cursor ring on the rows: the only visual signals in this list are
@@ -334,11 +336,12 @@ html[data-dragging="true"]
     border-right: 2px solid SelectedItem;
   }
 
-  /* The panel drag-over ring is also an inset box-shadow; restore it as a
-     dashed outline (solid is the focus vocabulary above). */
+  /* The panel drag-over edge is also an inset box-shadow; restore it as the
+     drop frame's own forced-colours form, a dashed CanvasText outline (solid
+     is the focus vocabulary above). */
   .sidebar-worktree-card[data-drop-target="true"] {
-    outline: 2px dashed Highlight;
-    outline-offset: -2px;
+    outline: 1px dashed CanvasText;
+    outline-offset: -3px;
   }
 
   /* The deleted row's bottom separator is a painted 1px element rather than a

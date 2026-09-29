@@ -52,6 +52,7 @@ import {
   sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
+import { POINTER_SENSOR_OPTIONS, TOUCH_SENSOR_OPTIONS } from "@/components/DragDrop/dragActivation";
 import { PanelTabList } from "./PanelTabList";
 import { inlineRenameFieldClassName, inlineRenameFieldInputProps } from "./inlineRenameField";
 import { focusPaneWhenStripCloses, revealTabInStrip } from "@/components/ui/document-tab";
@@ -785,14 +786,11 @@ function PanelHeaderComponent({
     revealTabInStrip(tabListEl, tabEl, prefersReducedMotion() ? "auto" : "smooth");
   }, [activeTabId, isDragging, tabListEl]);
 
-  // Sensors for tab drag-and-drop (require small distance to differentiate from clicks)
+  // The app's one pickup threshold, so a tab and the panel it sits on start a
+  // drag at the same travel.
   const tabSensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 5 },
-    }),
-    useSensor(TouchSensor, {
-      activationConstraint: { delay: 150, tolerance: 5 },
-    }),
+    useSensor(PointerSensor, POINTER_SENSOR_OPTIONS),
+    useSensor(TouchSensor, TOUCH_SENSOR_OPTIONS),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 

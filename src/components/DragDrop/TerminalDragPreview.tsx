@@ -53,7 +53,9 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
         </Badge>
       )}
       <div className="flex h-full flex-col overflow-hidden rounded-lg">
-        {/* Title bar — the panel header's own recipe, so the ghost reads as the lifted panel */}
+        {/* Title bar — the selected panel header's own recipe (the focus lift and
+            the stepped-up border-overlay divider .terminal-selected paints), so
+            the ghost reads as the panel in hand. */}
         <div
           className={cn(
             surfaceHeaderVariants({ density: "compact" }),

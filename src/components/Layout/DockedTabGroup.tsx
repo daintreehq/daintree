@@ -19,6 +19,7 @@ import {
   sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
+import { POINTER_SENSOR_OPTIONS, TOUCH_SENSOR_OPTIONS } from "@/components/DragDrop/dragActivation";
 import { LayoutGroup, AnimatePresence, m } from "framer-motion";
 import { Check, ChevronDown, CopyPlus } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -371,14 +372,11 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     [activeTabId, panels, group.id, setActiveTab, setFocused, trashPanel]
   );
 
-  // Sensors for tab drag-and-drop (require small distance to differentiate from clicks)
+  // The app's one pickup threshold, so a tab and the panel it sits on start a
+  // drag at the same travel.
   const tabSensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 5 },
-    }),
-    useSensor(TouchSensor, {
-      activationConstraint: { delay: 150, tolerance: 5 },
-    }),
+    useSensor(PointerSensor, POINTER_SENSOR_OPTIONS),
+    useSensor(TouchSensor, TOUCH_SENSOR_OPTIONS),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 

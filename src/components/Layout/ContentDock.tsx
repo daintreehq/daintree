@@ -5,6 +5,7 @@ import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortabl
 import { useDndContext, useDroppable } from "@dnd-kit/core";
 import { PanelBottom } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DROP_TARGET_FRAME } from "@/components/DragDrop/dropIndicator";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { usePanelStore, useWorktreeSelectionStore } from "@/store";
 import {
@@ -469,9 +470,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                 "flex items-center gap-[var(--dock-gap)] overflow-x-auto overscroll-x-none flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-px-4 px-1 transition-[color,background-color,box-shadow]",
                 !skipMotion && "scroll-smooth",
                 isDockDropRejected && "cursor-no-drop",
-                isOver &&
-                  !isDockDropRejected &&
-                  "cursor-copy bg-overlay-soft ring-2 ring-border-default ring-inset rounded-[var(--radius-md)]"
+                isOver && !isDockDropRejected && cn(DROP_TARGET_FRAME, "rounded-[var(--radius-md)]")
               )}
             >
               <SortableContext

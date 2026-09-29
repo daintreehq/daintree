@@ -6,6 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
+import { DROP_TARGET_FRAME } from "@/components/DragDrop/dropIndicator";
 import { isMac } from "@/lib/platform";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -476,8 +477,7 @@ export function TrashContainer({
           className={cn(
             compact ? "px-1.5 min-w-0" : "px-3",
             "opacity-70 animate-in fade-in",
-            isOver &&
-              "cursor-copy opacity-100 bg-overlay-soft ring-2 ring-inset ring-border-default"
+            isOver && cn("opacity-100", DROP_TARGET_FRAME)
           )}
         >
           <Trash2 className="w-3.5 h-3.5 text-text-secondary" aria-hidden="true" />
@@ -517,9 +517,7 @@ export function TrashContainer({
                   DOCK_STATUS_PILL_CLASS,
                   compact ? "px-2 min-w-0" : "px-3",
                   isOpen && DOCK_STATUS_PILL_OPEN_CLASS,
-                  isOver &&
-                    isPanelDragging &&
-                    "cursor-copy bg-overlay-soft ring-2 ring-inset ring-border-default"
+                  isOver && isPanelDragging && DROP_TARGET_FRAME
                 )}
                 aria-haspopup="dialog"
                 aria-expanded={isOpen}

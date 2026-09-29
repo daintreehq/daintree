@@ -2,6 +2,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
+import { DRAG_GRIP_CLASS } from "@/components/ui/dragGripStyles";
 
 // Issue #6963 — three interaction states (hover, focus, drop-target) on the
 // worktree row used the same overlay-background axis and stacked into a muddy
@@ -41,13 +42,14 @@ function transitionDurationMs(rule: string, property: string): number {
 }
 
 describe("WorktreeCard interaction-state axes (issue #6963)", () => {
-  it("marks the panel drop-target via data-drop-target, painted as an inset ring in CSS", () => {
+  it("marks the panel drop-target via data-drop-target, painted as an inset edge in CSS", () => {
     expect(cardSource).toMatch(/data-drop-target=\{isPanelDropTarget \? "true" : undefined\}/);
-    // The ring lives in sidebar.css as an inset box-shadow because the
+    // The frame lives in sidebar.css as an inset box-shadow because the
     // unlayered base card declarations override layered Tailwind utilities.
+    // dropTargetFrame.contract.test.ts holds its ink to DROP_TARGET_FRAME.
     expect(cardSource).not.toMatch(/isOver\s*&&\s*!isActive\s*&&\s*"ring-2/);
     expect(sidebarCss).toMatch(
-      /\.sidebar-worktree-card\[data-drop-target="true"\]\s*\{[^}]*inset 0 0 0 2px var\(--theme-border-strong\)/
+      /\.sidebar-worktree-card\[data-drop-target="true"\]\s*\{[^}]*--card-edge:\s*inset 0 0 0 1px/
     );
   });
 
@@ -185,9 +187,10 @@ describe("WorktreeCard row affordances polish (issue #8099)", () => {
       terminalSectionSource.indexOf("data-session-grip"),
       terminalSectionSource.indexOf("data-session-grip") + 400
     );
-    expect(handle).toMatch(/(^|\s)text-text-secondary\b/);
-    expect(handle).toMatch(/(^|\s)hover:text-text-primary\b/);
-    expect(handle).not.toMatch(/text-text-\w+\/\d/);
+    expect(handle).toContain("className={DRAG_GRIP_CLASS}");
+    expect(DRAG_GRIP_CLASS).toMatch(/(^|\s)text-text-secondary\b/);
+    expect(DRAG_GRIP_CLASS).toMatch(/(^|\s)hover:text-text-primary\b/);
+    expect(DRAG_GRIP_CLASS).not.toMatch(/text-text-\w+\/\d/);
   });
 
   it("resource action buttons use outline (not ring-2) for forced-colors survival", () => {

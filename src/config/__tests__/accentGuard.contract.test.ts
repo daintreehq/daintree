@@ -174,7 +174,6 @@ const DURABLE_ALLOWLIST = new Set([
 const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
   "#5978-5986-pre-existing": [
     "src/components/Layout/VoiceRecordingToolbarButton.tsx",
-    "src/components/Terminal/ContentGridDefault.tsx",
     "src/components/Terminal/HybridInputBar.tsx",
     "src/components/Terminal/VoiceInputButton.tsx",
     "src/components/Worktree/WorktreeCard/WorktreeTerminalSection.tsx",

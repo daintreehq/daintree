@@ -78,6 +78,8 @@ import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 
 import { buildPluginToolbarMeta } from "@/components/Layout/pluginToolbarMeta";
 import { cn } from "@/lib/utils";
+import { DROP_TARGET_FRAME } from "@/components/DragDrop/dropIndicator";
+import { DRAG_GRIP_CLASS, DRAG_GRIP_ICON_CLASS } from "@/components/ui/dragGripStyles";
 import { notify } from "@/lib/notify";
 import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { DRAG_GHOST_OPACITY, EASE_OUT_EXPO, UI_ANIMATION_DURATION } from "@/lib/animationUtils";
@@ -215,21 +217,20 @@ function ToolbarButtonCard({
           {/* A row that can't move keeps the grip's slot but not the grip, so every
               icon and label in the column stays on one rail. When interactive,
               gripProps carries dnd-kit's role/tabIndex/describedby — the grip must
-              stay in the accessibility tree and needs an accessible name. */}
+              stay in the accessibility tree and needs an accessible name. The
+              grip's 24px box overhangs the 20px label line rather than growing
+              the row past every other settings row. */}
           {draggable ? (
             <span
               {...(gripProps ?? {})}
-              // The colour sits on the wrapper, not the SVG: forced colours keep an
-              // SVG's own colour (`preserve-parent-color`), so a class on the glyph
-              // would stay theme grey in high-contrast mode.
-              className="shrink-0 cursor-grab rounded-[var(--radius-sm)] text-text-secondary outline-offset-2 active:cursor-grabbing"
+              className={cn(DRAG_GRIP_CLASS, "-my-0.5")}
               aria-hidden={gripProps ? undefined : true}
               aria-label={gripProps ? `Reorder ${metadata.label}` : undefined}
             >
-              <GripVertical aria-hidden="true" className="h-4 w-4" />
+              <GripVertical aria-hidden="true" className={DRAG_GRIP_ICON_CLASS} />
             </span>
           ) : (
-            <span className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className="-my-0.5 h-6 w-6 shrink-0" aria-hidden="true" />
           )}
           <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="truncate">{metadata.label}</span>
@@ -399,7 +400,7 @@ function ToolbarSideColumn({
       <SortableContext items={buttonIds} strategy={rectSortingStrategy}>
         <SettingsGroup
           label={`${label} · ${pluralize(onCount, "button")}`}
-          className={cn("min-h-12", isOver && "ring-1 ring-inset ring-border-strong")}
+          className={cn("min-h-12", isOver && DROP_TARGET_FRAME)}
         >
           {renderedIds.length === 0 ? (
             <SettingsEmptyRow>Drag a button here or use its menu</SettingsEmptyRow>

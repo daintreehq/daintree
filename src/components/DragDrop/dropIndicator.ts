@@ -26,3 +26,20 @@ export const DROP_SLOT_FRAME = cn(
   "border border-text-primary/60 bg-overlay-subtle",
   "forced-colors:border-[CanvasText]"
 );
+
+/**
+ * The same frame drawn inside a container that takes the drop as a whole: the
+ * grid, the dock rail, the trash pill, a toolbar column. An inset outline, not
+ * a border, so arming a target never shifts its layout, and not a ring, which
+ * is a box-shadow that forced colours strip. Dashed there, because solid is the
+ * focus ring's shape and a keyboard-focused container can also be the target,
+ * and stepped in past the container's own edge: pills and settings groups get
+ * a CanvasText border in that mode, and a dashed line drawn on top of it
+ * disappears into it.
+ * The sidebar's worktree card spells the same frame in sidebar.css, where its
+ * unlayered base rules would beat these utilities.
+ */
+export const DROP_TARGET_FRAME = cn(
+  "outline-1 -outline-offset-1 outline-text-primary/60 bg-overlay-subtle",
+  "forced-colors:outline-dashed forced-colors:outline-[CanvasText] forced-colors:-outline-offset-3"
+);
