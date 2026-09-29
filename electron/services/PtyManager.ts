@@ -128,8 +128,16 @@ export class PtyManager extends EventEmitter {
   // and output on the fresh port can beat that. 2 KiB per millisecond of
   // uptime is headroom no terminal's lifetime average approaches, and keeps
   // offsets far inside Number.MAX_SAFE_INTEGER.
+  //
+  // An entry is dropped once the registry lets go of its id, so the map tracks
+  // registered terminals rather than every id this host ever spawned. Its last
+  // offset folds into `retiredStreamHighWater`, which an id with no entry
+  // starts from, so a respawn still lands past any fence the renderer holds
+  // from an earlier incarnation. Only retired terminals feed it — they ran one
+  // after another, so it stays within the same uptime headroom as the origin.
   private streamOffsets = new Map<string, number>();
   private readonly streamOffsetOrigin = Date.now() * 2048;
+  private retiredStreamHighWater = 0;
   private constructionOutput: {
     id: string;
     chunks: Array<{ data: string; streamEnd: number }>;
@@ -150,7 +158,12 @@ export class PtyManager extends EventEmitter {
 
   constructor() {
     super();
-    this.registry = new TerminalRegistry();
+    this.registry = new TerminalRegistry(undefined, (id) => {
+      const streamEnd = this.streamOffsets.get(id);
+      if (streamEnd === undefined) return;
+      this.streamOffsets.delete(id);
+      this.retireStreamOffset(streamEnd);
+    });
     this.agentStateService = new AgentStateService();
   }
 
@@ -364,12 +377,15 @@ export class PtyManager extends EventEmitter {
     return this.activeProjectId;
   }
 
+  private retireStreamOffset(streamEnd: number): void {
+    if (streamEnd > this.retiredStreamHighWater) this.retiredStreamHighWater = streamEnd;
+  }
+
   /**
    * Emit terminal data with project-based filtering.
    * Accepts both string and Uint8Array data for binary optimization.
    */
   private emitData(id: string, data: string, streamEnd: number): void {
-    this.streamOffsets.set(id, streamEnd);
     if (this.constructionOutput?.id === id) {
       this.constructionOutput.chunks.push({ data, streamEnd });
       return;
@@ -377,8 +393,13 @@ export class PtyManager extends EventEmitter {
 
     const terminalProcess = this.registry.get(id);
     if (!terminalProcess) {
+      this.retireStreamOffset(streamEnd);
       return;
     }
+    // Max, not overwrite: a replaced incarnation's late chunk must not pull the
+    // id back below what its successor already emitted.
+    const recorded = this.streamOffsets.get(id);
+    if (recorded === undefined || streamEnd > recorded) this.streamOffsets.set(id, streamEnd);
 
     if (!this.activeProjectId) {
       this.emit("data", id, data, undefined, streamEnd);
@@ -547,7 +568,9 @@ export class PtyManager extends EventEmitter {
         options,
         {
           emitData: (termId, data, streamEnd) => this.emitData(termId, data, streamEnd),
-          streamOffsetBase: this.streamOffsets.get(id) ?? this.streamOffsetOrigin,
+          streamOffsetBase:
+            this.streamOffsets.get(id) ??
+            Math.max(this.streamOffsetOrigin, this.retiredStreamHighWater),
           onExit: (termId, exitCode, signal) => {
             // Guard against stale exit events from previous terminal with same ID
             if (this.registry.get(termId) !== terminalProcess) {
