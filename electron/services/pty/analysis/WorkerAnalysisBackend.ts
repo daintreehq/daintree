@@ -461,7 +461,11 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     if (!wire) return { snapshot: null, persistence: null };
     return {
       snapshot: wire.snapshot,
-      persistence: this.persistSuppressed ? null : wire.persistence,
+      persistence: this.persistSuppressed
+        ? null
+        : wire.persistenceMatchesSnapshot
+          ? wire.snapshot
+          : wire.persistence,
     };
   }
 

@@ -93,6 +93,11 @@ export interface AnalysisFinalSnapshot {
   snapshot: SerializedTerminalSnapshot | null;
   /** Banner-stripped serialize for on-disk session persistence. */
   persistence: SerializedTerminalSnapshot | null;
+  /**
+   * Set when `persistence` would be identical to `snapshot` (no restore banner);
+   * the worker then omits it so the buffer crosses the thread boundary once.
+   */
+  persistenceMatchesSnapshot?: boolean;
 }
 
 /**
