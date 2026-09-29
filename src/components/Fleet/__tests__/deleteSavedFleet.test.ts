@@ -126,7 +126,7 @@ describe("restoreSavedFleet", () => {
     seed([A]);
     let rejectSave: (error: Error) => void = () => {};
     saveSettings.mockImplementationOnce(() => new Promise((_, reject) => (rejectSave = reject)));
-    const restoring = restoreSavedFleet("p1", B, { prevId: "a", nextId: null, index: 1 });
+    const restoring = restoreSavedFleet("p1", B, { order: ["a", "b"] });
     // Another fleet is saved while this write is still in flight.
     useProjectSettingsStore.setState((s) => ({
       settings: { ...s.settings!, fleetSavedScopes: [...scopes(), C] },

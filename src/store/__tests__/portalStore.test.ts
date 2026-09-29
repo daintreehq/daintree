@@ -779,7 +779,7 @@ describe("portalStore restoreLink", () => {
   it("does nothing when the link is already back", () => {
     add("a");
     const before = usePortalStore.getState().links;
-    usePortalStore.getState().restoreLink(before.at(-1)!, positionOf(before, before[0]!.id));
+    usePortalStore.getState().restoreLink(before.at(-1)!, positionOf(before, before.at(-1)!.id));
     expect(usePortalStore.getState().links).toEqual(before);
   });
 });

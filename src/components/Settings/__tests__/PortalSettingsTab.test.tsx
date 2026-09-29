@@ -318,9 +318,7 @@ describe("PortalSettingsTab removing a link", () => {
     expect(payload.action.label).toBe("Undo");
     payload.action.onClick();
     expect(restoreLink).toHaveBeenCalledWith(DOCS, {
-      prevId: DEFAULT_SYSTEM_LINKS.at(-1)!.id,
-      nextId: "handbook",
-      index: DEFAULT_SYSTEM_LINKS.length,
+      order: [...DEFAULT_SYSTEM_LINKS, DOCS, HANDBOOK].map((l) => l.id),
     });
   });
 

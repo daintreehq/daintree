@@ -26,6 +26,7 @@ import { filterEligibleIds } from "@/components/Fleet/fleetExecution";
 import { runManagedFleetBroadcast } from "@/components/Fleet/fleetEnterBroadcast";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { notify } from "@/lib/notify";
+import { positionOf, reinsert } from "@/lib/undoToast";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { supportsSessionIdAssignment } from "@shared/types";
 import type { FleetSavedScope, ProjectSettings } from "@shared/types";
@@ -648,18 +649,30 @@ export function registerFleetActions(actions: ActionRegistry): void {
         if (inMemory && inMemoryScopes.some((s) => s.id === id)) {
           // Optimistic path: the scope is present in the hydrated store (the
           // dropdown that triggers delete is rendered from it). Remove it in
-          // memory first, persist in the background, roll back on failure.
-          const previousSettings = inMemory;
+          // memory first, persist in the background, and on failure put back
+          // only that scope, so an edit made while the save was in flight stays.
+          const removed = inMemoryScopes.find((s) => s.id === id)!;
+          const position = positionOf(inMemoryScopes, id);
           const nextSettings = {
-            ...previousSettings,
+            ...inMemory,
             fleetSavedScopes: inMemoryScopes.filter((s) => s.id !== id),
           };
           settingsState.setSettings(nextSettings);
           try {
             await projectClient.saveSettings(projectId, nextSettings);
           } catch (saveError) {
-            if (useProjectSettingsStore.getState().projectId === projectId) {
-              useProjectSettingsStore.setState({ settings: previousSettings });
+            const latest = useProjectSettingsStore.getState();
+            if (latest.projectId === projectId && latest.settings) {
+              useProjectSettingsStore.setState({
+                settings: {
+                  ...latest.settings,
+                  fleetSavedScopes: reinsert(
+                    latest.settings.fleetSavedScopes ?? [],
+                    removed,
+                    position
+                  ),
+                },
+              });
             }
             throw saveError;
           }
