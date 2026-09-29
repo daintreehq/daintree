@@ -368,10 +368,22 @@ export class AnalysisSession {
   }
 
   captureFinalSnapshot(): Promise<AnalysisFinalSnapshot> {
-    return this.drainThen(() => ({
-      snapshot: this.withGeometry(this.serializeFull()),
-      persistence: this.withGeometry(this.serializeBannerAware()),
-    }));
+    return this.drainThen(() => {
+      const full = this.serializeFull();
+      const snapshot = this.withGeometry(full);
+      if (!this.hasRestoreBanner()) {
+        // Without a banner the persistence form is byte-identical to the full
+        // serialize; flag it instead of serializing and cloning it twice.
+        return { snapshot, persistence: null, persistenceMatchesSnapshot: true };
+      }
+      return { snapshot, persistence: this.withGeometry(this.serializeBannerAware()) };
+    });
+  }
+
+  private hasRestoreBanner(): boolean {
+    const start = this.restoreBannerStart;
+    const end = this.restoreBannerEnd;
+    return !!start && !!end && start.line >= 0 && end.line >= 0;
   }
 
   /**

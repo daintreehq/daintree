@@ -183,6 +183,41 @@ describe("AnalysisWorkerRuntime", () => {
       if (after.type !== "response") throw new Error("expected a response");
       expect(after.result).toMatchObject({ cols: 120, rows: 40 });
     });
+
+    it("serializes the banner-aware persistence form itself when a restore banner exists", async () => {
+      await fsp.writeFile(
+        path.join(userDataDir, "terminal-sessions", "restored.restore"),
+        "DAINTREE_SESSION_v2\n80x24\nrestored payload",
+        "utf8"
+      );
+      runtime.handleMessage({
+        type: "create",
+        terminalId: "restored",
+        cols: 80,
+        rows: 24,
+        scrollback: 1000,
+        restore: true,
+        spawnedAt: 99,
+        epoch: 0,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      runtime.handleMessage({
+        type: "request",
+        requestId: 21,
+        terminalId: "restored",
+        op: "final-snapshot",
+        generation: 1,
+      });
+      const response = await waitFor(() =>
+        emitted.find((m) => m.type === "response" && m.requestId === 21)
+      );
+      if (response.type !== "response") throw new Error("expected a response");
+      const result = response.result as AnalysisFinalSnapshot;
+      expect(result.persistenceMatchesSnapshot).toBeUndefined();
+      expect(result.snapshot?.data).toContain("restored payload");
+      expect(result.persistence?.data).toContain("restored payload");
+    });
   });
 
   it("emits activity-state transitions from the monitor with the session spawnedAt", async () => {
@@ -346,10 +381,10 @@ describe("AnalysisWorkerRuntime", () => {
       expect(typeof response.result).toBe("object");
       const result = response.result as AnalysisFinalSnapshot;
       expect(result.snapshot?.data).toContain("final content");
-      // No restore banner → persistence equals the plain serialize.
-      expect(result.persistence?.data).toContain("final content");
-      // Both halves come off one drain, so they describe one grid.
-      expect(result.persistence).toMatchObject({ cols: 80, rows: 24 });
+      // No restore banner → persistence equals the plain serialize, so the
+      // worker flags it instead of cloning the same buffer a second time.
+      expect(result.persistence).toBeNull();
+      expect(result.persistenceMatchesSnapshot).toBe(true);
       expect(result.snapshot).toMatchObject({ cols: 80, rows: 24 });
     }
 
