@@ -1057,10 +1057,12 @@ export class McpServerService {
    * never connected (or already disconnected).
    */
   disconnectHelpBearer(rawToken: string, helpSessionId: string): void {
-    this.revokeOwnershipPrincipal(helpOwnershipPrincipal(helpSessionId));
-    const tokenHash = this.httpLifecycle.findHelpBearerHash(rawToken);
-    if (tokenHash === null) return;
-    this.disconnectBearer(tokenHash);
+    try {
+      this.revokeOwnershipPrincipal(helpOwnershipPrincipal(helpSessionId));
+    } finally {
+      const tokenHash = this.httpLifecycle.findHelpBearerHash(rawToken);
+      if (tokenHash !== null) this.disconnectBearer(tokenHash);
+    }
   }
 
   /**

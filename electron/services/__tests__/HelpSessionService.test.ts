@@ -1704,16 +1704,22 @@ describe("HelpSessionService", () => {
   it("revokes the bearer's MCP session and ownership principal when the probe fails (#12993)", async () => {
     // The probe connects with the bearer, so a session may already be bound to
     // the help session's principal by the time it fails.
-    mockProbeMcpSseServer.mockRejectedValueOnce(new Error("SSE returned status 401"));
+    let probedToken: string | undefined;
+    let probedSessionId: string | null = null;
+    mockProbeMcpSseServer.mockImplementationOnce(async (_port, token) => {
+      probedToken = token;
+      probedSessionId = service.getSessionIdForToken(token);
+      throw new Error("SSE returned status 401");
+    });
 
     await expect(service.provisionSession(provisionInput())).rejects.toMatchObject({
       code: "MCP_PROBE_FAILED",
     });
 
-    const token = mockProbeMcpSseServer.mock.calls[0]?.[1];
+    expect(probedSessionId).toBeTypeOf("string");
     expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledExactlyOnceWith(
-      token,
-      expect.any(String)
+      probedToken,
+      probedSessionId
     );
   });
 

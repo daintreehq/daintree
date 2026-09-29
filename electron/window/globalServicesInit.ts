@@ -1267,6 +1267,12 @@ export async function initGlobalServices(
           mcpServerService.setHelpSessionIdResolver((token) =>
             helpSessionService.getSessionIdForToken(token)
           );
+          // A help bearer's sessions bind to its ownership principal (#12993),
+          // so the path that lets them authenticate must also be the one that
+          // revokes it — otherwise a revoked help session's records outlive it.
+          helpSessionService.setOnMcpSessionRevoked((token, sessionId) =>
+            mcpServerService.disconnectHelpBearer(token, sessionId)
+          );
           await mcpServerService.start(registryRef);
         } catch (err) {
           console.error("[MAIN] MCP server failed to start:", err);

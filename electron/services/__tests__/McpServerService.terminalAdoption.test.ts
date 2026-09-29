@@ -365,4 +365,26 @@ describe("McpServerService help-bearer revocation (#12993)", () => {
     expect(ledger.creatorOf("worktree", "/repo/wt-2")).toBe(principalOwnerKey(other));
     ledger.revokePrincipal(other);
   });
+
+  it("still tears the bearer's transports down when revoking the principal throws", () => {
+    const lookup = vi
+      .spyOn(
+        (service as unknown as { httpLifecycle: { findHelpBearerHash(t: string): string | null } })
+          .httpLifecycle,
+        "findHelpBearerHash"
+      )
+      .mockReturnValue(null);
+    const revoke = vi.spyOn(service, "revokeOwnershipPrincipal").mockImplementation(() => {
+      throw new Error("ledger failed");
+    });
+    try {
+      expect(() => service.disconnectHelpBearer("help-token", "help-session-3")).toThrow(
+        "ledger failed"
+      );
+      expect(lookup).toHaveBeenCalledWith("help-token");
+    } finally {
+      revoke.mockRestore();
+      lookup.mockRestore();
+    }
+  });
 });

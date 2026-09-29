@@ -3422,7 +3422,11 @@ describe("HttpLifecycle", () => {
           } as unknown as http.IncomingMessage,
           res as unknown as http.ServerResponse
         );
-        return Array.from(deps.sessionStore.sessions.keys()).find((id) => !before.has(id))!;
+        const sessionId = Array.from(deps.sessionStore.sessions.keys()).find(
+          (id) => !before.has(id)
+        );
+        if (sessionId === undefined) throw new Error("the /sse handshake opened no session");
+        return sessionId;
       }
 
       it("keeps a help session's records across a transport reconnect", async () => {
