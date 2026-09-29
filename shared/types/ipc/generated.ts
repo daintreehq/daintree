@@ -376,7 +376,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "diff-media:read-file-versions": {
     args: [payload: import("./diffMedia.js").DiffMediaReadFileVersionsPayload];
-    result: import("./diffMedia.js").DiffMediaFileVersions;
+    result: import("./diffMedia.js").DiffMediaFileVersionsResponse;
   };
   "editor:discover": {
     args: [];

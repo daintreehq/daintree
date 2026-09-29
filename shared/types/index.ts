@@ -279,6 +279,10 @@ export type {
   DiffMediaSide,
   DiffMediaSideError,
   DiffMediaFileVersions,
+  DiffMediaFileVersionsResponse,
+  DiffMediaKnownVersions,
+  DiffMediaUnchangedSide,
+  DiffMediaWireSide,
   // Electron API
   ElectronAPI,
   NotificationSettings,

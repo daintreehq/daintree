@@ -711,6 +711,25 @@ index 1a2b3c4..5d6e7f8 100644
 describe("GitService.readFileAtHead", () => {
   let tempDir: string;
   const binaryCatFileMock = vi.fn();
+  const BLOB_OID = "d".repeat(40);
+
+  function lsTreeRecord(path: string, size: number | "-" = 10, type = "blob", oid = BLOB_OID) {
+    const mode = type === "tree" ? "040000" : "100644";
+    return `${mode} ${type} ${oid} ${String(size).padStart(7)}\t${path}\0`;
+  }
+
+  function lsTreeArgs(treePath: string): string[] {
+    return [
+      "--literal-pathspecs",
+      "ls-tree",
+      "-l",
+      "-z",
+      "--full-tree",
+      "--end-of-options",
+      "HEAD",
+      treePath,
+    ];
+  }
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-git-head-"));
@@ -746,44 +765,32 @@ describe("GitService.readFileAtHead", () => {
     expect(gitClientMock.raw).not.toHaveBeenCalled();
   });
 
-  it("size-probes with --end-of-options and a HEAD: spec so leading-dash names stay inert", async () => {
-    gitClientMock.raw.mockResolvedValue("10\n");
+  it("probes behind --end-of-options and reads by blob id so leading-dash names stay inert", async () => {
+    gitClientMock.raw.mockResolvedValue(lsTreeRecord("-flag.png"));
     binaryCatFileMock.mockResolvedValue(Buffer.from("image-data"));
     const service = new GitService(tempDir);
 
     const result = await service.readFileAtHead("-flag.png", 1024);
 
-    expect(gitClientMock.raw).toHaveBeenCalledWith([
-      "cat-file",
-      "-s",
-      "--end-of-options",
-      "HEAD:-flag.png",
-    ]);
-    // binaryCatFile has no --end-of-options; the HEAD: prefix is what keeps
-    // the spec from ever starting with a dash.
-    expect(binaryCatFileMock).toHaveBeenCalledWith(["blob", "HEAD:-flag.png"]);
-    expect(result).toEqual({ ok: true, content: Buffer.from("image-data") });
+    expect(gitClientMock.raw).toHaveBeenCalledWith(lsTreeArgs("-flag.png"));
+    // binaryCatFile has no --end-of-options; reading by hex id means the
+    // argument can never start with a dash.
+    expect(binaryCatFileMock).toHaveBeenCalledWith(["blob", BLOB_OID]);
+    expect(result).toEqual({ ok: true, content: Buffer.from("image-data"), version: BLOB_OID });
   });
 
-  it("converts backslash separators to git's forward-slash object spec", async () => {
-    gitClientMock.raw.mockResolvedValue("4\n");
+  it("converts backslash separators to git's forward-slash path", async () => {
+    gitClientMock.raw.mockResolvedValue(lsTreeRecord("assets/logo.png"));
     binaryCatFileMock.mockResolvedValue(Buffer.from("data"));
     const service = new GitService(tempDir);
 
     await service.readFileAtHead("assets\\logo.png", 1024);
 
-    expect(gitClientMock.raw).toHaveBeenCalledWith([
-      "cat-file",
-      "-s",
-      "--end-of-options",
-      "HEAD:assets/logo.png",
-    ]);
+    expect(gitClientMock.raw).toHaveBeenCalledWith(lsTreeArgs("assets/logo.png"));
   });
 
-  it("maps a file missing at HEAD to NOT_FOUND", async () => {
-    gitClientMock.raw.mockRejectedValue(
-      new Error("fatal: path 'new.png' does not exist in 'HEAD'")
-    );
+  it("maps a file missing at HEAD (empty listing) to NOT_FOUND", async () => {
+    gitClientMock.raw.mockResolvedValue("");
     const service = new GitService(tempDir);
 
     await expect(service.readFileAtHead("new.png", 1024)).resolves.toEqual({
@@ -793,19 +800,60 @@ describe("GitService.readFileAtHead", () => {
     expect(binaryCatFileMock).not.toHaveBeenCalled();
   });
 
-  it("rejects oversized blobs from the size probe without reading content", async () => {
-    gitClientMock.raw.mockResolvedValue(String(5 * 1024 * 1024) + "\n");
+  it("ignores listing entries for other paths", async () => {
+    gitClientMock.raw.mockResolvedValue(lsTreeRecord("other.png"));
     const service = new GitService(tempDir);
 
-    await expect(service.readFileAtHead("big.png", 1024)).resolves.toEqual({
+    await expect(service.readFileAtHead("img.png", 1024)).resolves.toEqual({
       ok: false,
-      reason: "TOO_LARGE",
+      reason: "NOT_FOUND",
     });
     expect(binaryCatFileMock).not.toHaveBeenCalled();
   });
 
-  it("caps content that slips past a malformed size probe", async () => {
-    gitClientMock.raw.mockResolvedValue("not-a-number\n");
+  it("maps a directory at the path to NOT_FOUND", async () => {
+    gitClientMock.raw.mockResolvedValue(lsTreeRecord("assets", "-", "tree"));
+    const service = new GitService(tempDir);
+
+    await expect(service.readFileAtHead("assets", 1024)).resolves.toEqual({
+      ok: false,
+      reason: "NOT_FOUND",
+    });
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+  });
+
+  it("maps an unborn HEAD to NOT_FOUND", async () => {
+    gitClientMock.raw.mockRejectedValue(new Error("fatal: Not a valid object name HEAD"));
+    const service = new GitService(tempDir);
+
+    await expect(service.readFileAtHead("img.png", 1024)).resolves.toEqual({
+      ok: false,
+      reason: "NOT_FOUND",
+    });
+  });
+
+  it("surfaces unexpected probe failures as git operation errors", async () => {
+    gitClientMock.raw.mockRejectedValue(new Error("git exploded"));
+    const service = new GitService(tempDir);
+
+    await expect(service.readFileAtHead("img.png", 1024)).rejects.toThrow(GitOperationError);
+  });
+
+  it("rejects oversized blobs from the listing size without reading content", async () => {
+    gitClientMock.raw.mockResolvedValue(lsTreeRecord("big.png", 5 * 1024 * 1024));
+    const beforeRead = vi.fn();
+    const service = new GitService(tempDir);
+
+    await expect(service.readFileAtHead("big.png", 1024, { beforeRead })).resolves.toEqual({
+      ok: false,
+      reason: "TOO_LARGE",
+    });
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+    expect(beforeRead).not.toHaveBeenCalled();
+  });
+
+  it("caps content that exceeds the listed size", async () => {
+    gitClientMock.raw.mockResolvedValue(lsTreeRecord("odd.png", 10));
     binaryCatFileMock.mockResolvedValue(Buffer.alloc(2048));
     const service = new GitService(tempDir);
 
@@ -813,6 +861,70 @@ describe("GitService.readFileAtHead", () => {
       ok: false,
       reason: "TOO_LARGE",
     });
+  });
+
+  it("reads a sha256 blob id and a path containing a tab", async () => {
+    const oid256 = "a".repeat(64);
+    gitClientMock.raw.mockResolvedValue(lsTreeRecord("odd\tname.png", 10, "blob", oid256));
+    binaryCatFileMock.mockResolvedValue(Buffer.from("data"));
+    const service = new GitService(tempDir);
+
+    await expect(service.readFileAtHead("odd\tname.png", 1024)).resolves.toEqual({
+      ok: true,
+      content: Buffer.from("data"),
+      version: oid256,
+    });
+    expect(binaryCatFileMock).toHaveBeenCalledWith(["blob", oid256]);
+  });
+
+  it("surfaces unparseable listings as git operation errors instead of NOT_FOUND", async () => {
+    gitClientMock.raw.mockResolvedValue("garbage\0");
+    const service = new GitService(tempDir);
+
+    await expect(service.readFileAtHead("img.png", 1024)).rejects.toThrow(GitOperationError);
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a blob record without a size rather than skipping the size cap", async () => {
+    gitClientMock.raw.mockResolvedValue(lsTreeRecord("img.png", "-"));
+    const service = new GitService(tempDir);
+
+    await expect(service.readFileAtHead("img.png", 1024)).rejects.toThrow(GitOperationError);
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+  });
+
+  it("returns unchanged for a known blob id without reading", async () => {
+    gitClientMock.raw.mockResolvedValue(lsTreeRecord("img.png"));
+    const beforeRead = vi.fn();
+    const service = new GitService(tempDir);
+
+    const result = await service.readFileAtHead("img.png", 1024, {
+      knownVersion: BLOB_OID,
+      beforeRead,
+    });
+
+    expect(result).toEqual({ ok: true, unchanged: true, version: BLOB_OID });
+    expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+    expect(beforeRead).not.toHaveBeenCalled();
+  });
+
+  it("reads a blob whose id moved on, calling beforeRead first", async () => {
+    gitClientMock.raw.mockResolvedValue(lsTreeRecord("img.png"));
+    const order: string[] = [];
+    binaryCatFileMock.mockImplementation(async () => {
+      order.push("read");
+      return Buffer.from("image-data");
+    });
+    const service = new GitService(tempDir);
+
+    const result = await service.readFileAtHead("img.png", 1024, {
+      knownVersion: "e".repeat(40),
+      beforeRead: () => order.push("beforeRead"),
+    });
+
+    expect(result).toEqual({ ok: true, content: Buffer.from("image-data"), version: BLOB_OID });
+    expect(order).toEqual(["beforeRead", "read"]);
   });
 });
 
@@ -881,7 +993,27 @@ describe("GitService.readPreviousFileVersion", () => {
       `${PREVIOUS_SHA}:-flag.png`,
     ]);
     expect(binaryCatFileMock).toHaveBeenCalledWith(["blob", `${PREVIOUS_SHA}:-flag.png`]);
-    expect(result).toEqual({ ok: true, content: Buffer.from("old-bytes") });
+    expect(result).toEqual({
+      ok: true,
+      content: Buffer.from("old-bytes"),
+      version: `commit:${PREVIOUS_SHA}`,
+    });
+  });
+
+  it("returns unchanged for a known prior commit without reading the blob", async () => {
+    mockRevList(`${DELETING_SHA}\n${PREVIOUS_SHA}\n`);
+    const beforeRead = vi.fn();
+    const service = new GitService(tempDir);
+
+    const result = await service.readPreviousFileVersion("img.png", 1024, {
+      knownVersion: `commit:${PREVIOUS_SHA}`,
+      beforeRead,
+    });
+
+    expect(result).toEqual({ ok: true, unchanged: true, version: `commit:${PREVIOUS_SHA}` });
+    expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+    expect(beforeRead).not.toHaveBeenCalled();
   });
 
   it("converts backslash separators to git's forward-slash path", async () => {

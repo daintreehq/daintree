@@ -745,6 +745,12 @@ export const DiffMediaReadFileVersionsPayloadSchema = z.object({
     .max(4096)
     // eslint-disable-next-line no-control-regex
     .regex(/^[^\x00]*$/, "Null bytes not allowed"),
+  known: z
+    .object({
+      head: z.string().max(256).optional(),
+      working: z.string().max(256).optional(),
+    })
+    .optional(),
 });
 
 export const VoiceInputCorrectPayloadSchema = z.object({

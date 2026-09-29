@@ -22,7 +22,40 @@ function escapeRegex(str: string): string {
 }
 
 export type HeadFileReadResult =
-  { ok: true; content: Buffer } | { ok: false; reason: "NOT_FOUND" | "TOO_LARGE" };
+  | { ok: true; content: Buffer; version?: string }
+  | { ok: true; unchanged: true; version: string }
+  | { ok: false; reason: "NOT_FOUND" | "TOO_LARGE" };
+
+export interface HeadFileReadOptions {
+  /** A version the caller already holds; a match returns `unchanged` without reading the blob. */
+  knownVersion?: string;
+  /** Called once the blob is known to need reading, just before its content is fetched. */
+  beforeRead?: () => void;
+}
+
+const OBJECT_ID_RE = /^([0-9a-f]{40}|[0-9a-f]{64})$/i;
+
+// One `ls-tree -l -z` record: `<mode> <type> <oid> <size>\t<path>`, where size
+// is `-` for trees.
+const LS_TREE_ENTRY_RE = /^[0-7]+ ([a-z]+) ([0-9a-f]{40}|[0-9a-f]{64}) +(\d+|-)\t(.*)$/s;
+
+/** The listing's entry for `treePath`, null when absent; throws on output it can't parse. */
+function findTreeEntry(
+  listing: string,
+  treePath: string
+): { type: string; oid: string; size: number | null } | null {
+  for (const record of listing.split("\0")) {
+    if (record === "") continue;
+    const match = LS_TREE_ENTRY_RE.exec(record);
+    if (!match) throw new Error("Unexpected ls-tree output");
+    if (match[4] !== treePath) continue;
+    const type = match[1]!;
+    const size = match[3] === "-" ? null : Number.parseInt(match[3]!, 10);
+    if (type === "blob" && size === null) throw new Error("Unexpected ls-tree output");
+    return { type, oid: match[2]!.toLowerCase(), size };
+  }
+  return null;
+}
 
 // Git error text for a path/revision that cannot resolve to a blob at HEAD:
 // missing path, untracked path, empty repo (unborn HEAD), or a non-blob object.
@@ -362,7 +395,8 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     git: SimpleGit,
     objectSpec: string,
     maxBytes: number,
-    op: string
+    op: string,
+    beforeRead?: () => void
   ): Promise<HeadFileReadResult> {
     let sizeRaw: string;
     try {
@@ -379,6 +413,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       return { ok: false, reason: "TOO_LARGE" };
     }
 
+    beforeRead?.();
     let content: Buffer;
     try {
       content = (await git.binaryCatFile(["blob", objectSpec])) as Buffer;
@@ -396,14 +431,75 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   }
 
   /**
-   * Read a file's blob content at HEAD. Size-checks via `cat-file -s` before
-   * reading so an oversized blob is never loaded, and reads the content with
-   * `binaryCatFile` (Buffer-safe — `raw()` is utf8-lossy for binary blobs).
+   * Read a file's blob content at HEAD. One `ls-tree -l` resolves the blob id
+   * and size, so an oversized blob is never loaded and a caller already
+   * holding that id skips the read entirely; the content is then read by id
+   * with `binaryCatFile` (Buffer-safe — `raw()` is utf8-lossy for binary
+   * blobs), which pins it to exactly the version reported.
    */
-  async readFileAtHead(filePath: string, maxBytes: number): Promise<HeadFileReadResult> {
+  async readFileAtHead(
+    filePath: string,
+    maxBytes: number,
+    options: HeadFileReadOptions = {}
+  ): Promise<HeadFileReadResult> {
     const treePath = this.normalizeTreePath(filePath);
     const git = await this.getGit();
-    return this.readBlobAtSpec(git, `HEAD:${treePath}`, maxBytes, "read-file-at-head");
+    const op = "read-file-at-head";
+
+    // `--literal-pathspecs` so glob metacharacters in a filename match only
+    // that file; `--end-of-options` keeps a leading-dash path inert. No `--`:
+    // after `--end-of-options`, ls-tree would take it as a path.
+    let listing: string;
+    try {
+      listing = await git.raw([
+        "--literal-pathspecs",
+        "ls-tree",
+        "-l",
+        "-z",
+        "--full-tree",
+        "--end-of-options",
+        "HEAD",
+        treePath,
+      ]);
+    } catch (error) {
+      if (MISSING_AT_HEAD_RE.test((error as Error).message ?? "")) {
+        return { ok: false, reason: "NOT_FOUND" };
+      }
+      throw toGitOperationError(error, { cwd: this.rootPath, op });
+    }
+
+    let entry: ReturnType<typeof findTreeEntry>;
+    try {
+      entry = findTreeEntry(listing, treePath);
+    } catch (error) {
+      throw toGitOperationError(error, { cwd: this.rootPath, op });
+    }
+    if (!entry || entry.type !== "blob") {
+      return { ok: false, reason: "NOT_FOUND" };
+    }
+    const version = entry.oid;
+    if (version === options.knownVersion) {
+      return { ok: true, unchanged: true, version };
+    }
+    if (entry.size === null || entry.size > maxBytes) {
+      return { ok: false, reason: "TOO_LARGE" };
+    }
+
+    options.beforeRead?.();
+    let content: Buffer;
+    try {
+      content = (await git.binaryCatFile(["blob", entry.oid])) as Buffer;
+    } catch (error) {
+      if (MISSING_AT_HEAD_RE.test((error as Error).message ?? "")) {
+        return { ok: false, reason: "NOT_FOUND" };
+      }
+      throw toGitOperationError(error, { cwd: this.rootPath, op });
+    }
+
+    if (content.byteLength > maxBytes) {
+      return { ok: false, reason: "TOO_LARGE" };
+    }
+    return { ok: true, content, version };
   }
 
   /**
@@ -412,7 +508,11 @@ ${lines.map((l) => "+" + l).join("\n")}`;
    * Renames are not followed (`rev-list` has no `--follow`), matching
    * `readFileAtHead`'s limitation.
    */
-  async readPreviousFileVersion(filePath: string, maxBytes: number): Promise<HeadFileReadResult> {
+  async readPreviousFileVersion(
+    filePath: string,
+    maxBytes: number,
+    options: HeadFileReadOptions = {}
+  ): Promise<HeadFileReadResult> {
     const treePath = this.normalizeTreePath(filePath);
     const git = await this.getGit();
 
@@ -451,19 +551,27 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }
 
     const previousCommit = commits[1];
-    if (!/^([0-9a-f]{40}|[0-9a-f]{64})$/i.test(previousCommit)) {
+    if (!OBJECT_ID_RE.test(previousCommit)) {
       throw toGitOperationError(new Error("Unexpected rev-list output"), {
         cwd: this.rootPath,
         op: "read-previous-file-version",
       });
     }
 
-    return this.readBlobAtSpec(
+    // A commit is immutable, so commit + path pins the content exactly.
+    const version = `commit:${previousCommit.toLowerCase()}`;
+    if (version === options.knownVersion) {
+      return { ok: true, unchanged: true, version };
+    }
+
+    const result = await this.readBlobAtSpec(
       git,
       `${previousCommit}:${treePath}`,
       maxBytes,
-      "read-previous-file-version"
+      "read-previous-file-version",
+      options.beforeRead
     );
+    return result.ok ? { ...result, version } : result;
   }
 
   async compareWorktrees(

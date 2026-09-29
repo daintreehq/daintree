@@ -3,16 +3,47 @@ export interface DiffMediaReadFileVersionsPayload {
   cwd: string;
   /** Repo-relative path of the image file. */
   filePath: string;
+  /**
+   * Side versions the caller already holds. A side whose content still
+   * matches comes back `unchanged` instead of resending its bytes.
+   */
+  known?: DiffMediaKnownVersions;
+}
+
+export interface DiffMediaKnownVersions {
+  head?: string;
+  working?: string;
 }
 
 export type DiffMediaSideError = "NOT_FOUND" | "TOO_LARGE" | "UNSUPPORTED" | "ERROR";
 
 export type DiffMediaSide =
-  { ok: true; dataUrl: string; byteSize: number } | { ok: false; error: DiffMediaSideError };
+  | {
+      ok: true;
+      dataUrl: string;
+      byteSize: number;
+      /** Opaque content identity for revalidation; absent when it couldn't be pinned. */
+      version?: string;
+    }
+  | { ok: false; error: DiffMediaSideError };
 
 export interface DiffMediaFileVersions {
   head: DiffMediaSide;
   working: DiffMediaSide;
+}
+
+/** Wire-only: the side still matches the caller's `known` version, so its bytes weren't resent. */
+export interface DiffMediaUnchangedSide {
+  ok: true;
+  unchanged: true;
+  version: string;
+}
+
+export type DiffMediaWireSide = DiffMediaSide | DiffMediaUnchangedSide;
+
+export interface DiffMediaFileVersionsResponse {
+  head: DiffMediaWireSide;
+  working: DiffMediaWireSide;
 }
 
 /** Per-side byte cap for image compare payloads. */
