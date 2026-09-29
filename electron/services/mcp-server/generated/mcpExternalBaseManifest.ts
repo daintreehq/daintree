@@ -262,7 +262,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         model: {
           description:
-            "Model for this launch in the agent CLI's own names, overriding its default. No preset needed.",
+            "Model passed to the agent CLI for this launch, in its own names. No preset needed.",
           type: "string",
         },
         presetId: {
@@ -296,7 +296,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         agentLaunchFlags: {
           description:
-            'Extra CLI flags for this launch, verbatim, e.g. Codex effort ["-c", "model_reasoning_effort=high"] (low to xhigh). Bad ones fail at CLI start.',
+            'Extra CLI flags for this launch, verbatim, e.g. Codex effort ["-c", "model_reasoning_effort=high"]. Bad ones fail at CLI start.',
           type: "array",
           items: {
             type: "string",

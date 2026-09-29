@@ -420,10 +420,16 @@ describe("help prompt outputs", () => {
     // the one shape it trusts, so it carries both.
     it("the launch entry shows per-launch Codex model and effort", () => {
       const launch = tasks.split("\n").find((line) => line.startsWith("- Launch:")) ?? "";
+      const call = launch.match(/agent\.launch\(\{[^}]*\}\)/)?.[0] ?? "";
+      expect(call).toContain("model?");
+      expect(call).toContain("agentLaunchFlags?");
       expect(launch).toContain('agentLaunchFlags: ["-c", "model_reasoning_effort=high"]');
       expect(launch).toMatch(/no preset/);
       expect(launch).toMatch(/no per-agent model or flags/);
-      const named = [...launch.matchAll(/`(?:model: ")?(gpt-[\w.-]+)"?`/g)].map((m) => m[1]);
+      const models = launch.match(/`model: "([^"]+)"` \(or ([^)]*)\)/);
+      const named = models
+        ? [models[1], ...[...models[2].matchAll(/`([^`]+)`/g)].map((m) => m[1])]
+        : [];
       expect(named.sort()).toEqual(codexConfig.models.map((m) => m.id).sort());
     });
 

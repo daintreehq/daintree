@@ -406,7 +406,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .string()
         .optional()
         .describe(
-          "Model for this launch in the agent CLI's own names, overriding its default. No preset needed."
+          "Model passed to the agent CLI for this launch, in its own names. No preset needed."
         ),
       presetId: z
         .string()
@@ -439,7 +439,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .array(z.string())
         .optional()
         .describe(
-          'Extra CLI flags for this launch, verbatim, e.g. Codex effort ["-c", "model_reasoning_effort=high"] (low to xhigh). Bad ones fail at CLI start.'
+          'Extra CLI flags for this launch, verbatim, e.g. Codex effort ["-c", "model_reasoning_effort=high"]. Bad ones fail at CLI start.'
         ),
       spawnedBy: TerminalSpawnSourceSchema.optional(),
       focusPolicy: AddPanelFocusPolicySchema.optional(),

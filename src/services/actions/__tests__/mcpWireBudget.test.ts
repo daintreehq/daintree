@@ -532,9 +532,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // (measured at 53_119 B).
   // 53_150 → 53_300 for #12980, measured at 53_292 B: the external hand-over
   // tools name the context-menu path a user hands a terminal over by.
-  // 53_300 → 53_400 for #13045, measured at 53_387 B: `agent.launch`'s `model`
+  // 53_300 → 53_400 for #13045, measured at 53_361 B: `agent.launch`'s `model`
   // and `agentLaunchFlags` say they are per launch and show Codex's effort
-  // flag. Without them an empty preset list read as "no per-launch control".
+  // flag, and the preset listing says a launch sets both without a preset.
+  // Without them an empty preset list read as "no per-launch control".
   const MAX_EXTERNAL_PAYLOAD_BYTES = 53_400;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
@@ -691,9 +692,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // unlisted section starts unchecked, which a caller guessing keys needs.
   // 113_900 → 114_150 for #12980, measured at 114_105 B: the six hand-over
   // tools name the context-menu path a user hands a terminal over by.
-  // 114_150 → 114_250 for #13045, measured at 114_200 B: the same launch
-  // argument prose as the external ceiling above.
-  const MAX_COHORT_PAYLOAD_BYTES = 114_250;
+  // 114_150 → 114_200 for #13045, measured at 114_174 B: the same launch and
+  // preset prose as the external ceiling above.
+  const MAX_COHORT_PAYLOAD_BYTES = 114_200;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
