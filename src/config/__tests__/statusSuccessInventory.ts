@@ -228,14 +228,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Continuity tier shown while deciding the move; leaves with the dialog",
     },
   ],
-  "src/components/Project/RecipesTab.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Recipe-exported confirmation; resets when the export flash times out",
-    },
-  ],
   "src/components/Project/RunningTaskList.tsx": [
     {
       category: "transient",
@@ -617,5 +609,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 70;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 72;
+export const EXPECTED_STATUS_SUCCESS_SITES = 69;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 71;

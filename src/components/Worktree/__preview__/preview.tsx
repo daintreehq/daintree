@@ -116,11 +116,7 @@ function Preview() {
       >
         <FileViewerToolbar.Root label="Diff viewer controls">
           <DiffChangeStepper count={count} index={index} onStep={step} />
-          <FileViewerToolbar.Path
-            path="videos/final/teleprompter.md"
-            copied={false}
-            onCopy={() => {}}
-          />
+          <FileViewerToolbar.Path path="videos/final/teleprompter.md" />
         </FileViewerToolbar.Root>
         <div
           ref={scrollRef}

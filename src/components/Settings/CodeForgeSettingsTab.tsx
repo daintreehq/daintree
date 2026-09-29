@@ -25,7 +25,7 @@ import { logError } from "@/utils/logger";
 
 const GENERAL_ID = "general";
 const CREDENTIAL_RESULT_DISPLAY_MS = 5000;
-const COPY_FEEDBACK_MS = 2000;
+const EXPORT_FEEDBACK_MS = 2000;
 
 interface CodeForgeSettingsTabProps {
   activeSubtab: string | null;
@@ -72,14 +72,12 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
   const [auditMaxRecords, setAuditMaxRecords] = useState(FORGE_AUDIT_DEFAULT_MAX_RECORDS);
   const [auditStats, setAuditStats] = useState<ForgeAuditStats | null>(null);
   const [auditLoading, setAuditLoading] = useState(true);
-  const [auditCopied, setAuditCopied] = useState(false);
   const [auditExported, setAuditExported] = useState(false);
   const [showAuditClearConfirm, setShowAuditClearConfirm] = useState(false);
-  // A failed read is not an empty log, and a failed copy/export/clear is not silence.
+  // A failed read is not an empty log, and a failed export/clear is not silence.
   const [auditRecordsFailed, setAuditRecordsFailed] = useState(false);
   const [auditConfigFailed, setAuditConfigFailed] = useState(false);
   const [auditOpError, setAuditOpError] = useState<string | null>(null);
-  const auditCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditExportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshAuditRecords = useCallback(async (): Promise<void> => {
@@ -152,7 +150,6 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
 
   useEffect(() => {
     return () => {
-      if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
       if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
     };
   }, []);
@@ -170,19 +167,6 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
     }
   }, [auditEnabled]);
 
-  const handleAuditCopy = useCallback(async (toCopy: ForgeAuditRecord[]) => {
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(toCopy, null, 2));
-      setAuditOpError(null);
-      setAuditCopied(true);
-      if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
-      auditCopyTimeoutRef.current = setTimeout(() => setAuditCopied(false), COPY_FEEDBACK_MS);
-    } catch (err) {
-      logError("Failed to copy forge audit log", err);
-      setAuditOpError("Couldn't copy the records");
-    }
-  }, []);
-
   const handleAuditExport = useCallback(async (toExport: ForgeAuditRecord[]) => {
     try {
       const saved = await window.electron.forgeAudit.exportLog(toExport);
@@ -190,7 +174,10 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
       if (saved) {
         setAuditExported(true);
         if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
-        auditExportTimeoutRef.current = setTimeout(() => setAuditExported(false), COPY_FEEDBACK_MS);
+        auditExportTimeoutRef.current = setTimeout(
+          () => setAuditExported(false),
+          EXPORT_FEEDBACK_MS
+        );
       }
     } catch (err) {
       logError("Failed to export forge audit log", err);
@@ -281,10 +268,8 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
               anomalySignals={auditStats?.anomalySignals}
               anomalySuppressed={auditStats?.anomalySuppressed ?? true}
               onRefresh={refreshAuditRecords}
-              onCopy={handleAuditCopy}
               onExport={handleAuditExport}
               onClear={() => setShowAuditClearConfirm(true)}
-              copyFlashActive={auditCopied}
               exportFlashActive={auditExported}
               loadError={
                 auditRecordsFailed ? (

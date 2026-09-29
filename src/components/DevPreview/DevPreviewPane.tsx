@@ -230,24 +230,6 @@ export function DevPreviewPane({
   const [blockedNav, dispatchBlockedNav] = useReducer(blockedNavReducer, null);
   const crashReloadRef = useRef<() => void>(() => {});
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const CLIPBOARD_FEEDBACK_MS = 2000;
-  const [certCopied, setCertCopied] = useState(false);
-  const certCopyTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const handleCopyMkcert = useCallback(async () => {
-    try {
-      await window.electron.clipboard.writeText("mkcert -install");
-      setCertCopied(true);
-      if (certCopyTimerRef.current) clearTimeout(certCopyTimerRef.current);
-      certCopyTimerRef.current = setTimeout(() => setCertCopied(false), CLIPBOARD_FEEDBACK_MS);
-    } catch {
-      // clipboard unavailable — silently ignore
-    }
-  }, []);
-  useEffect(() => {
-    return () => {
-      if (certCopyTimerRef.current) clearTimeout(certCopyTimerRef.current);
-    };
-  }, []);
   // Seed `lastSetUrlRef` to the mount URL so the isWebviewReady navigation
   // effect does not fire a redundant loadURL on first ready (#9940). The
   // hard-restart path resets this to "" explicitly when unconfigured.
@@ -1119,8 +1101,6 @@ export function DevPreviewPane({
                   <DevPreviewWebviewOverlays
                     reconnectAttempt={reconnectAttempt}
                     webviewLoadError={webviewLoadError}
-                    certCopied={certCopied}
-                    onCopyMkcert={handleCopyMkcert}
                     isRestarting={isRestarting}
                     onRestartDevServer={handleRestartDevServer}
                     onHardReload={handleHardReload}

@@ -3,6 +3,7 @@ import { useState } from "react";
 import { act, render, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { BrowserToolbar } from "../BrowserToolbar";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { normalizeBrowserUrl } from "../browserUtils";
 import { getFrecencySuggestions } from "@/store/urlHistoryStore";
 import type { ViewportPresetId } from "@shared/types/panel";
@@ -20,6 +21,8 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 const mockRemoveUrl = vi.fn();
+const notifyMock = vi.hoisted(() => vi.fn(() => "toast-1"));
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
 const STABLE_ENTRIES = [
   {
@@ -375,18 +378,19 @@ describe("BrowserToolbar ARIA semantics", () => {
     expect(onCaptureScreenshot).not.toHaveBeenCalled();
   });
 
-  it("copy success announces in a polite live region", async () => {
-    const { container, getByRole } = renderToolbar();
+  it("copy success announces through the shared live region and swaps its glyph", async () => {
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+    const { getByRole } = renderToolbar();
+    const button = getByRole("button", { name: "Copy URL" });
+    const glyphBefore = button.innerHTML;
 
     await act(async () => {
-      fireEvent.click(getByRole("button", { name: "Copy URL" }));
+      fireEvent.click(button);
     });
 
-    await waitFor(() => {
-      const liveRegions = container.querySelectorAll('[role="status"]');
-      const texts = Array.from(liveRegions).map((node) => node.textContent);
-      expect(texts).toContain("Copied to clipboard");
-    });
+    await waitFor(() => expect(useAnnouncerStore.getState().polite?.msg).toBe("Copied"));
+    expect(button.innerHTML).not.toBe(glyphBefore);
+    expect(button.getAttribute("aria-label")).toBe("Copy URL");
   });
 
   it("screenshot capture announces success in a polite live region and flips to a check", async () => {
@@ -1155,8 +1159,9 @@ describe("BrowserToolbar at compact widths", () => {
     rowWidth.current = 1000;
   });
 
-  it("confirms a copy from More on the More trigger, then settles back", async () => {
-    const { getByLabelText, getByText } = renderToolbar();
+  it("confirms a copy from More with a toast, like every menu copy", async () => {
+    notifyMock.mockClear();
+    const { getByLabelText } = renderToolbar();
     const glyphBefore = getByLabelText("More page actions").innerHTML;
     fireEvent.pointerDown(getByLabelText("More page actions"), { button: 0, ctrlKey: false });
     await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeTruthy());
@@ -1165,12 +1170,12 @@ describe("BrowserToolbar at compact widths", () => {
     )!;
     fireEvent.click(copyItem);
     await waitFor(() =>
-      expect(getByLabelText("More page actions").innerHTML).not.toBe(glyphBefore)
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "info", title: "URL copied" })
+      )
     );
-    expect(getByText("Copied to clipboard")).toBeTruthy();
-    await waitFor(() => expect(getByLabelText("More page actions").innerHTML).toBe(glyphBefore), {
-      timeout: 3000,
-    });
+    // The trigger is not a second confirmation channel.
+    expect(getByLabelText("More page actions").innerHTML).toBe(glyphBefore);
   });
 
   it("moves controls in and out of More as a mounted toolbar is resized", () => {

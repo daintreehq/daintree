@@ -438,15 +438,6 @@ export function DiffPane({
     setPreviewError(null);
   }, [filePath, absolutePath, worktreePath, previewReloadNonce]);
 
-  const [pathCopied, setPathCopied] = useState(false);
-  const handleCopyPath = useCallback(() => {
-    if (!filePath) return;
-    void navigator.clipboard.writeText(filePath).then(() => {
-      setPathCopied(true);
-      window.setTimeout(() => setPathCopied(false), 1500);
-    });
-  }, [filePath]);
-
   // dispatch() resolves an ActionDispatchResult and never rejects, so a failed
   // open would otherwise vanish entirely (the #11114 bug FilePane already hit).
   // Surface it on the pane that owns the button rather than through a toast.
@@ -1023,8 +1014,7 @@ export function DiffPane({
         <FileViewerToolbar.Path
           path={filePath}
           icon={getFileTypeIcon(filePath).Icon}
-          copied={pathCopied}
-          onCopy={handleCopyPath}
+          copyText={filePath || null}
         />
         <FileViewerToolbar.Actions>
           <FileViewerToolbar.Responsive

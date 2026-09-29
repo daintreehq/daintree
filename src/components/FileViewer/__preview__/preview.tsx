@@ -56,11 +56,7 @@ function Preview() {
         style={{ width: `${width}px`, height: "100vh" }}
       >
         <FileViewerToolbar.Root label="File viewer controls">
-          <FileViewerToolbar.Path
-            path="docs/releases/release-plan.md"
-            copied={false}
-            onCopy={() => undefined}
-          />
+          <FileViewerToolbar.Path path="docs/releases/release-plan.md" />
         </FileViewerToolbar.Root>
         <div data-hint-bar-slot>
           <FileEditorHintBar {...fixture} onAction={() => undefined} onDismiss={() => undefined} />

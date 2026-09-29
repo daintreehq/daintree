@@ -21,6 +21,7 @@ import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { COPIED_LABEL } from "@/components/ui/CopyButton";
 import { useFileRowMenuItems } from "@/hooks/useFileRowMenuItems";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
@@ -1272,7 +1273,7 @@ export function FileBrowserPane({
                     {rootHoverPath}
                     {showRootPathCopied && (
                       <span aria-hidden="true" className="block">
-                        Copied!
+                        {COPIED_LABEL}
                       </span>
                     )}
                   </TooltipContent>

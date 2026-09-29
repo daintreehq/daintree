@@ -29,7 +29,6 @@ const SURVIVORS: Record<string, string> = {
   // Pane toolbars: the `toolbar-icon-button` family and its 16px
   // glyphs. Their copy ticks follow the neutral rule; the buttons are the
   // toolbar's own.
-  "src/components/Browser/BrowserToolbar.tsx": "pane toolbar (address-bar copy)",
   "src/components/Portal/PortalToolbar.tsx": "portal toolbar and its tab strip",
   "src/components/Portal/DevServerDashboard.tsx": "portal toolbar family",
   // Tab strips close their tabs with the tab's own control — one shared

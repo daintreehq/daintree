@@ -29,7 +29,6 @@ function renderViewer(records: PluginActionAuditRecord[]) {
       loading={false}
       maxRecords={500}
       onRefresh={vi.fn()}
-      onCopy={vi.fn()}
       onExport={vi.fn()}
       onClear={vi.fn()}
     />

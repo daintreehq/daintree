@@ -65,8 +65,6 @@ function baseProps(
   return {
     reconnectAttempt: 0,
     webviewLoadError: null,
-    certCopied: false,
-    onCopyMkcert: vi.fn(),
     isRestarting: false,
     onRestartDevServer: vi.fn(),
     onHardReload: vi.fn(),

@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { useEffect, useReducer } from "react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+
+const notifyMock = vi.hoisted(() => vi.fn(() => "toast-1"));
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -449,24 +452,27 @@ describe("BlockedNavBanner copy feedback lifetime", () => {
   }
 
   // On an error the copy lives in the overflow menu, which closes before the
-  // copy settles: the outcome has to be readable on the band itself.
-  it("reports a demoted copy's outcome outside the closed menu", () => {
-    for (const result of ["copied", "copy-failed"] as const) {
-      const { container, unmount } = render(
-        <BlockedNavBanner
-          state={timedOutWith(result)}
-          panelId="p-1"
-          webviewElement={null}
-          onDispatch={vi.fn()}
-        />
-      );
-      const menu = screen.getByTestId("overflow-content");
-      const outside = Array.from(bannerRoot(container).querySelectorAll('[role="status"]')).filter(
-        (el) => !menu.contains(el)
-      );
-      expect(outside.map((el) => el.textContent).join(" ")).toMatch(/copied|couldn't copy/i);
-      unmount();
-    }
+  // copy settles: it confirms like every menu copy, with a toast.
+  it("confirms a demoted copy with a toast rather than on the band", async () => {
+    notifyMock.mockClear();
+    const { container } = render(
+      <BlockedNavBanner
+        state={timedOutWith("copied")}
+        panelId="p-1"
+        webviewElement={null}
+        onDispatch={vi.fn()}
+      />
+    );
+    const menu = screen.getByTestId("overflow-content");
+    fireEvent.click(within(menu).getByText("Copy URL"));
+
+    await waitFor(() =>
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "info", title: "URL copied" })
+      )
+    );
+    // The alert band would announce any result written into it a second time.
+    expect(bannerRoot(container).textContent).not.toMatch(/url copied|couldn't copy/i);
   });
 
   // Success fades; a failure stays until the user acts.

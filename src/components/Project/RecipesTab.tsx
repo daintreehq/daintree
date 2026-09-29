@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { AlertTriangle, Check, Download, FileDown, Pencil, Pin, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, FileDown, Pencil, Pin, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import {
   SettingsEmptyRow,
@@ -58,11 +59,9 @@ export function RecipesTab({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
-  const [exportFeedback, setExportFeedback] = useState<string | null>(null);
   // "Clear default" removes the warning it sits in, so focus goes to the next
   // thing a user would do: add or pin another recipe.
   const addRecipeRef = useRef<HTMLButtonElement>(null);
-  const exportTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hasLoadedRecipes = useRef(false);
 
   useEffect(() => {
@@ -82,11 +81,6 @@ export function RecipesTab({
       setDeleteError(null);
       setShowImportDialog(false);
       setExportError(null);
-      setExportFeedback(null);
-      if (exportTimeoutRef.current) {
-        clearTimeout(exportTimeoutRef.current);
-        exportTimeoutRef.current = null;
-      }
       hasLoadedRecipes.current = false;
     }
   }, [isOpen]);
@@ -96,14 +90,6 @@ export function RecipesTab({
       hasLoadedRecipes.current = false;
     }
   }, [projectId, isOpen]);
-
-  useEffect(() => {
-    return () => {
-      if (exportTimeoutRef.current) {
-        clearTimeout(exportTimeoutRef.current);
-      }
-    };
-  }, []);
 
   const handleEditRecipe = (recipe: TerminalRecipe) => {
     setEditingRecipe(recipe);
@@ -138,26 +124,10 @@ export function RecipesTab({
     }
   };
 
-  const handleExportRecipe = async (recipeId: string) => {
-    setExportError(null);
+  const readRecipeJson = (recipeId: string) => {
     const json = exportRecipe(recipeId);
-    if (json) {
-      try {
-        await navigator.clipboard.writeText(json);
-        setExportFeedback(recipeId);
-        setExportError(null);
-        if (exportTimeoutRef.current) {
-          clearTimeout(exportTimeoutRef.current);
-        }
-        exportTimeoutRef.current = setTimeout(() => {
-          setExportFeedback(null);
-          exportTimeoutRef.current = null;
-        }, 2000);
-      } catch (err) {
-        logError("Failed to copy to clipboard", err);
-        setExportError(formatErrorMessage(err, "Failed to copy to clipboard"));
-      }
-    }
+    if (json === null) throw new Error("The recipe couldn't be serialised");
+    return json;
   };
 
   // Falls back to the raw id so an orphaned worktree's recipe stays
@@ -241,7 +211,6 @@ export function RecipesTab({
           ) : (
             <SettingsGroup>
               {recipes.map((recipe) => {
-                const exported = exportFeedback === recipe.id;
                 const isEligibleForDefault = !recipe.worktreeId && !recipe.shadowedBy;
                 const isDefault = recipe.id === defaultWorktreeRecipeId;
                 const isShadowed = !!recipe.shadowedBy;
@@ -321,29 +290,19 @@ export function RecipesTab({
                               <TooltipContent side="bottom">Edit recipe</TooltipContent>
                             </Tooltip>
                           )}
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon-sm"
-                                onClick={() => handleExportRecipe(recipe.id)}
-                                aria-label={
-                                  exported
-                                    ? `Recipe ${recipe.name} exported to clipboard`
-                                    : `Export recipe ${recipe.name} to clipboard`
-                                }
-                              >
-                                {exported ? (
-                                  <Check className="text-status-success" />
-                                ) : (
-                                  <Download />
-                                )}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom">
-                              {exported ? "Exported" : "Export recipe to clipboard"}
-                            </TooltipContent>
-                          </Tooltip>
+                          <CopyButton
+                            size="icon-sm"
+                            text={() => readRecipeJson(recipe.id)}
+                            aria-label={`Copy recipe ${recipe.name} as JSON`}
+                            tooltip="Copy as JSON"
+                            tooltipSide="bottom"
+                            announcement="Recipe copied"
+                            onClick={() => setExportError(null)}
+                            onCopyError={(err) => {
+                              logError("Failed to copy recipe", err);
+                              setExportError(formatErrorMessage(err, "Couldn't copy the recipe"));
+                            }}
+                          />
                           {!fromPlugin && (
                             <Tooltip>
                               <TooltipTrigger asChild>

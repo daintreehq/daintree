@@ -32,6 +32,8 @@ function stubClipboard(writeText: ReturnType<typeof vi.fn>) {
   });
 }
 
+const visibleLabel = (button: HTMLElement) => button.textContent;
+
 describe("DiagnosticCopyButton", () => {
   it("renders nothing when all diagnostic fields are absent", () => {
     const { container } = render(<DiagnosticCopyButton diagnostics={{}} />);
@@ -81,13 +83,15 @@ describe("DiagnosticCopyButton", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByRole("button", { name: /diagnostics copied/i })).toBeTruthy();
+    // The label confirms; the name stays put so it is announced once, by the hook.
+    expect(visibleLabel(button)).toBe("Copied");
+    expect(button.getAttribute("aria-label")).toBe("Copy diagnostics");
 
     await act(async () => {
       vi.advanceTimersByTime(2000);
     });
 
-    expect(screen.getByRole("button", { name: /copy diagnostics/i })).toBeTruthy();
+    expect(visibleLabel(button)).toBe("Copy");
   });
 
   it("does not throw when clipboard.writeText is unavailable", () => {
@@ -126,6 +130,7 @@ describe("DiagnosticCopyButton", () => {
       await Promise.resolve();
     });
 
-    expect(screen.queryByRole("button", { name: /diagnostics copied/i })).toBeNull();
+    const button = screen.getByRole("button", { name: /copy diagnostics/i });
+    expect(visibleLabel(button)).toBe("Copy");
   });
 });

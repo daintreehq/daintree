@@ -3,7 +3,7 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { Callout } from "@/components/ui/Callout";
 import type { ReactNode } from "react";
-import { AlertCircle, AlertTriangle, Check, ChevronRight, Copy, FolderOpen } from "lucide-react";
+import { AlertCircle, AlertTriangle, ChevronRight, FolderOpen } from "lucide-react";
 import * as semver from "semver";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,8 @@ import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
 import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
+import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
 import {
@@ -67,7 +69,7 @@ import {
   HIGH_BLAST_RADIUS_TOOLS,
 } from "@shared/config/helpAssistantTierAllowlists";
 
-const COPY_RESET_DELAY_MS = 2000;
+const EXPORT_FEEDBACK_MS = 2000;
 const CUSTOM_ARGS_DEBOUNCE_MS = 500;
 
 type SaveGroup = "agent" | "launch" | "behavior" | "security" | "privacy" | "content";
@@ -412,7 +414,6 @@ export function DaintreeAssistantSettingsTab() {
   // Unread, the recording switch would show its optimistic default as if it were fact.
   const [auditConfigFailed, setAuditConfigFailed] = useState(false);
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
-  const [copied, setCopied] = useState(false);
   const [showRotateConfirm, setShowRotateConfirm] = useState(false);
   const [isRotating, setIsRotating] = useState(false);
   const [showBlastRadius, setShowBlastRadius] = useState(false);
@@ -420,7 +421,6 @@ export function DaintreeAssistantSettingsTab() {
   const [auditStats, setAuditStats] = useState<McpAuditStats | null>(null);
   const [turnRecords, setTurnRecords] = useState<AssistantTurnRecord[]>([]);
   const [auditLoading, setAuditLoading] = useState(true);
-  const [auditCopied, setAuditCopied] = useState(false);
   const [auditExported, setAuditExported] = useState(false);
   const [isExportingAudit, setIsExportingAudit] = useState(false);
   const [showClearAuditConfirm, setShowClearAuditConfirm] = useState(false);
@@ -433,8 +433,6 @@ export function DaintreeAssistantSettingsTab() {
   // so the Privacy section doesn't surface telemetry on load. Local-only state —
   // no persistence precedent for section collapse in Settings.
   const [advancedDiagnosticsOpen, setAdvancedDiagnosticsOpen] = useState(false);
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const auditCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditExportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // customArgs is a free-form text input; persisting on every keystroke would
@@ -618,7 +616,6 @@ export function DaintreeAssistantSettingsTab() {
     return () => {
       cancelled = true;
       unsubscribe();
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
       if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
     };
   }, []);
@@ -702,7 +699,6 @@ export function DaintreeAssistantSettingsTab() {
     );
     return () => {
       cancelled = true;
-      if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
     };
   }, []);
 
@@ -779,27 +775,6 @@ export function DaintreeAssistantSettingsTab() {
     }
   };
 
-  const handleCopyAuditAsJson = async (records: McpLogRecord[]) => {
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(records, null, 2));
-      setPrivacyError(null);
-      setAuditCopied(true);
-      if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
-      auditCopyTimeoutRef.current = setTimeout(() => setAuditCopied(false), COPY_RESET_DELAY_MS);
-    } catch (err) {
-      setAuditCopied(false);
-      if (auditCopyTimeoutRef.current) {
-        clearTimeout(auditCopyTimeoutRef.current);
-        auditCopyTimeoutRef.current = null;
-      }
-      setPrivacyError({
-        message: formatErrorMessage(err, "Couldn't copy audit log"),
-        retry: () => void handleCopyAuditAsJson(records),
-      });
-      logError("Failed to copy MCP audit log from assistant tab", err);
-    }
-  };
-
   const handleExportAuditAsNdjson = async (records: McpLogRecord[]) => {
     if (isExportingAudit) return;
     setIsExportingAudit(true);
@@ -811,7 +786,7 @@ export function DaintreeAssistantSettingsTab() {
         if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
         auditExportTimeoutRef.current = setTimeout(
           () => setAuditExported(false),
-          COPY_RESET_DELAY_MS
+          EXPORT_FEEDBACK_MS
         );
       }
     } catch (err) {
@@ -1046,14 +1021,14 @@ export function DaintreeAssistantSettingsTab() {
     void actionService.dispatch("help.openCommandsFolder", undefined, { source: "user" });
   };
 
+  // The band's Retry for a failed config copy. The button beside it is the
+  // everyday path; this re-runs the same read and write from the error.
+  const { copy: copyConfig } = useCopyWithFeedback({ announcement: "Config copied" });
   const handleCopyConfig = async () => {
     try {
       const snippet = await window.electron.mcpServer.getConfigSnippet();
-      await navigator.clipboard.writeText(snippet);
-      setConnectionError(null);
-      setCopied(true);
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-      copyTimeoutRef.current = setTimeout(() => setCopied(false), COPY_RESET_DELAY_MS);
+      if (await copyConfig(snippet)) setConnectionError(null);
+      else setConnectionError("Couldn't copy config");
     } catch (err) {
       setConnectionError(formatErrorMessage(err, "Couldn't copy config"));
       logError("Failed to copy MCP config", err);
@@ -1416,9 +1391,7 @@ export function DaintreeAssistantSettingsTab() {
               turnRecords={turnRecords}
               loading={auditLoading}
               onRefresh={refreshAuditRecords}
-              onCopy={handleCopyAuditAsJson}
               onClear={() => setShowClearAuditConfirm(true)}
-              copyFlashActive={auditCopied}
               // Privacy section hides external MCP traffic. Grant-lifecycle
               // events stay visible — they're tied to this Daintree's own
               // help-session bearers, not external API-key clients.
@@ -1578,10 +1551,18 @@ export function DaintreeAssistantSettingsTab() {
                 label="Client config"
                 description={`Paste into an external MCP client to connect it to port ${runtimeSnapshot.port ?? mcpStatus.port ?? "—"}`}
                 control={
-                  <Button variant="outline" size="sm" onClick={handleCopyConfig}>
-                    {copied ? <Check /> : <Copy />}
-                    {copied ? "Copied" : "Copy MCP config"}
-                  </Button>
+                  <CopyButton
+                    label="Copy MCP config"
+                    variant="outline"
+                    size="sm"
+                    text={() => window.electron.mcpServer.getConfigSnippet()}
+                    announcement="Config copied"
+                    onCopied={() => setConnectionError(null)}
+                    onCopyError={(err) => {
+                      setConnectionError(formatErrorMessage(err, "Couldn't copy config"));
+                      logError("Failed to copy MCP config", err);
+                    }}
+                  />
                 }
               />
             </SettingsGroup>

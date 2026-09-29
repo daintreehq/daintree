@@ -343,8 +343,7 @@ export function WorktreeDetails({
           <CopyButton
             text={worktree.path}
             onClick={(e) => e.stopPropagation()}
-            aria-label="Copy path to clipboard"
-            tooltip="Copy full path"
+            aria-label="Copy full path"
             tooltipSide="bottom"
           />
         </div>

@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
-import { Check, Copy, Download, Layers, RefreshCw, ShieldOff } from "lucide-react";
+import { Check, Download, Layers, RefreshCw, ShieldOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import {
@@ -274,11 +275,9 @@ interface McpAuditLogViewerProps {
   turnRecords?: AssistantTurnRecord[];
   loading: boolean;
   onRefresh: () => Promise<void> | void;
-  onCopy: (records: McpLogRecord[]) => Promise<void> | void;
   onClear?: () => void;
   includeRecord?: (record: McpLogRecord) => boolean;
   maxRecords?: number;
-  copyFlashActive?: boolean;
   /** Triggers the NDJSON export via OS save dialog with the filtered records. */
   onExport?: (records: McpLogRecord[]) => Promise<void> | void;
   /** Set when an export succeeded so the UI can flash a confirmation. */
@@ -287,7 +286,7 @@ interface McpAuditLogViewerProps {
   anomalySuppressed?: boolean;
   /** Shown in place of the list when the records couldn't be read. */
   loadError?: React.ReactNode;
-  /** A copy or export that failed, shown beside the actions. */
+  /** An export that failed, shown beside the actions. */
   actionError?: string | null;
   /**
    * What an empty log says. The default is the first-use line; a parent that
@@ -448,11 +447,9 @@ export function McpAuditLogViewer({
   turnRecords,
   loading,
   onRefresh,
-  onCopy,
   onClear,
   includeRecord,
   maxRecords,
-  copyFlashActive,
   onExport,
   exportFlashActive,
   anomalySignals = [],
@@ -581,17 +578,19 @@ export function McpAuditLogViewer({
 
   const relatedEventCount = isFiltering ? filteredRecords.filter(isGrantRecord).length : 0;
 
-  const status = copyFlashActive
-    ? "Copied!"
-    : exportFlashActive
-      ? "Exported!"
-      : isFiltering
-        ? relatedEventCount > 0
-          ? `Showing ${filteredRecords.length - relatedEventCount} of ${visibleRecords.length} · ${plural(relatedEventCount, "related event")}`
-          : `Showing ${filteredRecords.length} of ${visibleRecords.length}`
-        : maxRecords !== undefined
-          ? `${visibleRecords.length} of ${maxRecords}`
-          : plural(visibleRecords.length, "record");
+  // A string, not a thunk: the check then belongs to the records it copied,
+  // and a filter change during the dwell retires it.
+  const recordsJson = useMemo(() => JSON.stringify(filteredRecords, null, 2), [filteredRecords]);
+
+  const status = exportFlashActive
+    ? "Exported!"
+    : isFiltering
+      ? relatedEventCount > 0
+        ? `Showing ${filteredRecords.length - relatedEventCount} of ${visibleRecords.length} · ${plural(relatedEventCount, "related event")}`
+        : `Showing ${filteredRecords.length} of ${visibleRecords.length}`
+      : maxRecords !== undefined
+        ? `${visibleRecords.length} of ${maxRecords}`
+        : plural(visibleRecords.length, "record");
 
   const hasQuickViews = (unauthorizedCount > 0 && resultFilter !== "unauthorized") || canGroup;
 
@@ -752,15 +751,13 @@ export function McpAuditLogViewer({
           <RefreshCw aria-hidden="true" />
           Refresh
         </Button>
-        <Button
+        <CopyButton
+          label={`Copy ${showCopyAll ? "all" : "shown"} as JSON`}
           variant="outline"
           size="sm"
-          onClick={() => void onCopy(filteredRecords)}
+          text={recordsJson}
           disabled={filteredRecords.length === 0}
-        >
-          {copyFlashActive ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-          {`Copy ${showCopyAll ? "all" : "shown"} as JSON`}
-        </Button>
+        />
         {onExport && (
           <Button
             variant="outline"

@@ -28,7 +28,6 @@ import {
   FileViewerToolbar,
   TOOLBAR_ICON_CLASS,
   useFileViewerToolbarCompact,
-  useMenuCopy,
 } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -64,8 +63,7 @@ import {
   type UnavailableReason,
 } from "@/components/FileViewer/FileUnavailableState";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { copyWithToast } from "@/lib/copyWithToast";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -564,11 +562,8 @@ export function FileBrowserViewer({
     // rewritten under the same path, which no other dependency would notice.
   }, [filePath, rootPath, fileChangeCount, surfaceRefreshNonce]);
 
-  // Toolbar state — the path pill's copied flash and the external actions'
-  // pending/error tracking. Reset when the file changes: a failure banner for
+  // Toolbar state — the external actions' pending/error tracking. Reset when the file changes: a failure banner for
   // a file no longer on screen would aim its Retry at the wrong path.
-  const [pathCopied, setPathCopied] = useState(false);
-  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [externalError, setExternalError] = useState<{
     message: string;
     target: ExternalTarget;
@@ -585,14 +580,7 @@ export function FileBrowserViewer({
     externalInFlightRef.current.clear();
     setExternalError(null);
     setPendingTargets([]);
-    setPathCopied(false);
   }, [filePath, folderPath]);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
-    };
-  }, []);
 
   // What the path pill names, absolute: the open file, else the listed folder,
   // else the file that vanished — the three things the pill can identify.
@@ -608,21 +596,6 @@ export function FileBrowserViewer({
       : missingFilePath !== null
         ? join(basePath, missingFilePath)
         : null);
-
-  const handleCopyPath = useCallback(() => {
-    if (!identityAbsolutePath || !navigator.clipboard) return;
-    void navigator.clipboard
-      .writeText(identityAbsolutePath)
-      .then(() => {
-        useAnnouncerStore.getState().announce("Path copied");
-        setPathCopied(true);
-        if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
-        copyTimerRef.current = setTimeout(() => setPathCopied(false), UI_ACTION_SUCCESS_DWELL_MS);
-      })
-      .catch(() => {
-        /* clipboard unavailable — the tooltip simply never flips to Copied */
-      });
-  }, [identityAbsolutePath]);
 
   const handleExternalAction = useCallback(
     async (target: ExternalTarget) => {
@@ -769,8 +742,7 @@ export function FileBrowserViewer({
             path={identityLabel}
             icon={identityIcon}
             copyLabel={filePath || missingFilePath !== null ? "Copy file path" : "Copy folder path"}
-            copied={pathCopied}
-            onCopy={handleCopyPath}
+            copyText={identityAbsolutePath}
           />
         )}
         {/* The right-aligned group, following whatever the viewer is showing:
@@ -1340,14 +1312,10 @@ function FileActions({
   onOpen: () => void;
 }) {
   const compact = useFileViewerToolbarCompact();
-  const menuCopy = useMenuCopy();
 
   if (compact) {
     return (
-      <FileViewerToolbar.MoreActions
-        data-testid="file-browser-more-actions"
-        confirmed={menuCopy.copied}
-      >
+      <FileViewerToolbar.MoreActions data-testid="file-browser-more-actions">
         {textSize && (
           <>
             <MarkdownTextSizeMenuItems
@@ -1369,7 +1337,13 @@ function FileActions({
           </>
         )}
         {contents !== null && (
-          <DropdownMenuItem onSelect={() => menuCopy.copy(contents)}>
+          <DropdownMenuItem
+            onSelect={() =>
+              copyWithToast("File contents", contents, {
+                message: filePath.split(/[/\\]/).pop() ?? filePath,
+              })
+            }
+          >
             <Copy className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
             Copy file contents
           </DropdownMenuItem>

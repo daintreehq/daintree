@@ -1,14 +1,12 @@
-import { useMemo, useCallback, useState, useRef, useEffect } from "react";
+import { useMemo, useCallback, useState } from "react";
 import { cn } from "@/lib/utils";
-import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useErrorStore, type ErrorRecord, type RetryAction, RECURRENCE_THRESHOLD } from "@/store";
-import { Copy, Check, ChevronRight, Lightbulb, RefreshCw, X } from "lucide-react";
+import { ChevronRight, Lightbulb, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { logError } from "@/utils/logger";
 
 const CONTEXT_LABELS: Record<string, string> = {
   worktreeId: "Worktree",
@@ -62,19 +60,7 @@ function ErrorRow({
     onRetry &&
     !error.retryExhausted &&
     (error.occurrenceCount ?? 0) < RECURRENCE_THRESHOLD;
-  const [copied, setCopied] = useState(false);
-  const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimeoutRef.current) {
-        clearTimeout(copyTimeoutRef.current);
-        copyTimeoutRef.current = null;
-      }
-    };
-  }, [error.id]);
-
-  const handleCopyDetails = async () => {
+  const buildDetails = () => {
     const detailsText = [
       `Error: ${error.message}`,
       `Type: ${typeLabel}`,
@@ -93,22 +79,7 @@ function ErrorRow({
         .forEach(([k, v]) => detailsText.push(`  ${k}: ${v}`));
     }
 
-    try {
-      await navigator.clipboard.writeText(detailsText.join("\n"));
-      useAnnouncerStore.getState().announce("Copied", "polite");
-      setCopied(true);
-
-      if (copyTimeoutRef.current) {
-        clearTimeout(copyTimeoutRef.current);
-      }
-
-      copyTimeoutRef.current = setTimeout(() => {
-        setCopied(false);
-        copyTimeoutRef.current = null;
-      }, UI_ACTION_SUCCESS_DWELL_MS);
-    } catch (err) {
-      logError("Failed to copy to clipboard", err);
-    }
+    return detailsText.join("\n");
   };
 
   const contextEntries = error.context
@@ -248,17 +219,11 @@ function ErrorRow({
                     </dl>
                   ) : null}
                 </div>
-                <Button
-                  variant="subtle"
-                  size="xs"
-                  onClick={handleCopyDetails}
-                  // Constant: the live region announces the copy, and a name that
-                  // flips under focus is announced a second time.
-                  aria-label="Copy error details to clipboard"
-                >
-                  {copied ? <Check /> : <Copy />}
-                  {copied ? "Copied" : "Copy details"}
-                </Button>
+                <CopyButton
+                  label="Copy details"
+                  aria-label="Copy error details"
+                  text={buildDetails}
+                />
               </div>
             </div>
           </td>
