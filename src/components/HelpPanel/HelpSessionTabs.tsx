@@ -141,6 +141,7 @@ interface SessionTabChipProps {
   onFocusTab: (slot: number) => void;
   /** Close from the lane's own menu, with focus handed on once the lane is gone. */
   onMenuClose: (slot: number) => void;
+  isSoleLane: boolean;
   canOpenSession: boolean;
   onOpenSession?: () => void;
 }
@@ -160,6 +161,7 @@ function SessionTabChip({
   onClose,
   onFocusTab,
   onMenuClose,
+  isSoleLane,
   canOpenSession,
   onOpenSession,
 }: SessionTabChipProps) {
@@ -254,7 +256,9 @@ function SessionTabChip({
         onCloseAutoFocus={(e) => {
           // Back onto a lane that is closing would read as a cancelled close and
           // stand the handoff down; the strip moves focus once the lane is gone.
-          if (closingFromMenuRef.current) e.preventDefault();
+          // The sole lane survives its close (it resets in place), so it takes
+          // focus back as usual.
+          if (closingFromMenuRef.current && !isSoleLane) e.preventDefault();
           closingFromMenuRef.current = false;
         }}
       >
@@ -462,6 +466,7 @@ export function HelpSessionTabs({
               onClose={handlePointerClose}
               onFocusTab={handleTabFocus}
               onMenuClose={handleMenuClose}
+              isSoleLane={tabs.length === 1}
               canOpenSession={canOpenSession}
               onOpenSession={onOpenSession}
             />

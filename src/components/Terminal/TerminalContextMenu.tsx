@@ -370,13 +370,14 @@ function TerminalContextMenuBody({
       const offsetY = Math.min(Math.max(event.clientY - bounds.top, 0), bounds.height);
       // A panel surface takes focus back itself. A proxy's first child is a
       // row or tab wrapper, so return to the control that was right-clicked.
-      const focusable =
+      const FOCUSABLE = 'button, [tabindex]:not([tabindex="-1"]), [role="tab"]';
+      const hit =
         proxy && event.target instanceof Element
-          ? event.target.closest<HTMLElement>(
-              'button, [tabindex]:not([tabindex="-1"]), [role="tab"]'
-            )
+          ? event.target.closest<HTMLElement>(FOCUSABLE)
           : null;
-      movePickerReturnFocusRef.current = focusable && pane.contains(focusable) ? focusable : pane;
+      const focusable =
+        hit && pane.contains(hit) ? hit : proxy ? pane.querySelector<HTMLElement>(FOCUSABLE) : null;
+      movePickerReturnFocusRef.current = focusable ?? pane;
       capturedMovePickerAnchorRef.current = {
         // Lets Floating UI follow the pane itself when it moves or resizes.
         contextElement: pane,
@@ -656,9 +657,15 @@ function TerminalContextMenuBody({
         case "fleet-arm-worktree":
           // This panel's worktree, which a sidebar row can offer while another
           // worktree is active; `terminal.bulkCommand` arms the active one.
-          useFleetArmingStore
-            .getState()
-            .armIds(collectEligibleIds("current", terminal?.worktreeId ?? null));
+          if (terminal?.worktreeId) {
+            useFleetArmingStore
+              .getState()
+              .armIds(collectEligibleIds("current", terminal.worktreeId));
+          } else {
+            void actionService.dispatch("terminal.bulkCommand", undefined, {
+              source: sourceRef.current,
+            });
+          }
           break;
         case "fleet-clear":
           void actionService.dispatch("terminal.disarmAll", undefined, {
