@@ -6,6 +6,8 @@
  * own better-sqlite3 connection — they do not depend on getSharedDb() or
  * ProjectStore.initialize() (the shared DB is not open yet at this point in
  * boot, and opening it would run migrations on the loadURL-dispatch path).
+ * The identity reader alone also serves later windows, and reuses the shared
+ * connection when it is already open — it never opens it.
  *
  * Read-only throughout.
  *
@@ -17,6 +19,7 @@ import { app } from "electron";
 import fs from "node:fs";
 import path from "path";
 import type { Project } from "../../../shared/types/project.js";
+import { getSharedSqlite } from "./db.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import {
   OPEN_WINDOWS_KEY,
@@ -122,7 +125,8 @@ export function readLastActiveProjectIdSync(): string | null {
  * skeleton so it paints the destination project's accent + name/emoji and
  * matches a cold project switch (#10942). Like readLastActiveProjectIdSync,
  * reads via its own throwaway read-only connection so the shared DB never has
- * to be open — and never gets force-opened — on the boot path.
+ * to be open — and never gets force-opened — on the boot path. Once the shared
+ * DB is open (later windows, crash reloads) it reads through that instead.
  *
  * Returns null when the id is missing, the project row is gone (deleted), or
  * anything throws; the anonymous gray skeleton remains the fallback.
@@ -131,6 +135,20 @@ export function readLastActiveProjectIdentitySync(
   projectId: string
 ): Pick<Project, "name" | "emoji" | "color"> | null {
   try {
+    const readIdentity = (sqlite: InstanceType<typeof Database>) => {
+      const row = sqlite
+        .prepare("SELECT name, emoji, color FROM projects WHERE id = ?")
+        .get(projectId) as { name: string; emoji: string; color: string | null } | undefined;
+      if (!row) return null;
+      return { name: row.name, emoji: row.emoji, color: row.color ?? undefined };
+    };
+
+    // Only the first window's boot runs before the shared DB is open; later
+    // windows and crash reloads read through it rather than open and tear down
+    // a connection of their own.
+    const shared = getSharedSqlite();
+    if (shared) return readIdentity(shared);
+
     const dbPath = path.join(app.getPath("userData"), "daintree.db");
 
     if (!fs.existsSync(dbPath)) {
@@ -139,11 +157,7 @@ export function readLastActiveProjectIdentitySync(
 
     const sqlite = new Database(dbPath, { readonly: true });
     try {
-      const row = sqlite
-        .prepare("SELECT name, emoji, color FROM projects WHERE id = ?")
-        .get(projectId) as { name: string; emoji: string; color: string | null } | undefined;
-      if (!row) return null;
-      return { name: row.name, emoji: row.emoji, color: row.color ?? undefined };
+      return readIdentity(sqlite);
     } finally {
       sqlite.close();
     }

@@ -167,6 +167,9 @@ export class CliAvailabilityService {
 
   private availability: CliAvailability | null = null;
   private details: AgentCliDetails | null = null;
+  private availabilityCheckedAt: number | null = null;
+  private availabilityRegistry: Record<string, AgentConfig> | null = null;
+  private pendingRefreshes = 0;
   private inFlightCheck: Promise<CliAvailability> | null = null;
   private npmPrefixCache: { promise: Promise<string | null>; checkId: number } | null = null;
   private checkId = 0;
@@ -197,7 +200,8 @@ export class CliAvailabilityService {
           await refreshPath();
         }
 
-        const entries = Object.entries(getEffectiveRegistry());
+        const registry = getEffectiveRegistry();
+        const entries = Object.entries(registry);
 
         // Outcomes are recorded as each agent settles, so an agent that
         // outlives the batch budget can't take the ones that already answered
@@ -273,6 +277,10 @@ export class CliAvailabilityService {
         if (this.checkId === currentCheckId) {
           this.availability = availability;
           this.details = details;
+          // A check that ran out of time only partly answered, so it must not
+          // stand in for a later one.
+          this.availabilityCheckedAt = pendingAgentIds.length === 0 ? Date.now() : null;
+          this.availabilityRegistry = registry;
           // Only a published check warns: a superseded one (the setup wizard
           // re-checks every 3s) would otherwise report results nobody sees.
           if (pendingAgentIds.length > 0) {
@@ -299,12 +307,34 @@ export class CliAvailabilityService {
     return this.availability;
   }
 
+  /**
+   * The last published availability when it can stand in for a new check: a
+   * complete check younger than `maxAgeMs`, probed against the registry still
+   * in effect (the memoized registry is replaced on every agent add, removal or
+   * config change), with no check or refresh under way that will replace it.
+   */
+  getFreshAvailability(maxAgeMs: number): CliAvailability | null {
+    if (this.availability === null || this.availabilityCheckedAt === null) return null;
+    if (this.inFlightCheck || this.pendingRefreshes > 0) return null;
+    if (this.availabilityRegistry !== getEffectiveRegistry()) return null;
+    if (Date.now() - this.availabilityCheckedAt >= maxAgeMs) return null;
+    return this.availability;
+  }
+
   getDetails(): AgentCliDetails | null {
     return this.details;
   }
 
   async refresh(): Promise<CliAvailability> {
-    await refreshPath();
+    // Counted across the PATH refresh: an older check can still publish during
+    // it, and must not read as reusable while this one is about to replace it.
+    // From `checkId++` on, the new check's `inFlightCheck` covers the rest.
+    this.pendingRefreshes++;
+    try {
+      await refreshPath();
+    } finally {
+      this.pendingRefreshes--;
+    }
     this.checkId++;
     this.inFlightCheck = null;
     return this.checkAvailability();

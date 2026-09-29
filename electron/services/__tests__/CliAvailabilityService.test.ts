@@ -2573,6 +2573,17 @@ describe("CliAvailabilityService", () => {
       expect(service.getDetails()!.goose).toEqual(blockedGoose);
     });
 
+    it("never offers a timed-out check for reuse", async () => {
+      hangWhichFor("goose");
+      vi.useFakeTimers();
+      const checkPromise = service.checkAvailability();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await checkPromise;
+
+      expect(service.getAvailability()).not.toBeNull();
+      expect(service.getFreshAvailability(60 * 60_000)).toBeNull();
+    });
+
     it("isolates an agent whose check throws from the rest of the batch", async () => {
       mockedExecFileSync.mockImplementation((_file, args) => {
         if (cmdOf(args) === "claude") return Buffer.from("/usr/local/bin/claude\n");
@@ -2592,6 +2603,49 @@ describe("CliAvailabilityService", () => {
         .filter((entry) => entry.level === "error")
         .map((entry) => (entry.context as { agentId?: unknown } | undefined)?.agentId);
       expect(failedAgentIds).toEqual(["goose"]);
+    });
+  });
+
+  describe("getFreshAvailability", () => {
+    it("offers a complete check only while it is younger than the reuse window", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const result = await service.checkAvailability();
+
+      expect(service.getFreshAvailability(1_000)).toBe(result);
+      vi.setSystemTime(Date.now() + 1_000);
+      expect(service.getFreshAvailability(1_000)).toBeNull();
+    });
+
+    it("withdraws reuse once the effective agent registry changes", async () => {
+      const { setUserRegistry } = await import("../../../shared/config/agentRegistry.js");
+      await service.checkAvailability();
+      expect(service.getFreshAvailability(60_000)).not.toBeNull();
+
+      try {
+        setUserRegistry({
+          "fresh-test": {
+            id: "fresh-test",
+            name: "Fresh Test",
+            command: "fresh-test",
+            color: "#abcdef",
+            iconId: "fresh-test",
+            supportsContextInjection: false,
+          },
+        });
+        expect(service.getFreshAvailability(60_000)).toBeNull();
+      } finally {
+        setUserRegistry({});
+      }
+    });
+
+    it("offers nothing before the first check or while a refresh is replacing it", async () => {
+      expect(service.getFreshAvailability(60_000)).toBeNull();
+      await service.checkAvailability();
+
+      const refreshPromise = service.refresh();
+      expect(service.getFreshAvailability(60_000)).toBeNull();
+      const refreshed = await refreshPromise;
+      expect(service.getFreshAvailability(60_000)).toBe(refreshed);
     });
   });
 });
