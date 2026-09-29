@@ -84,29 +84,39 @@ import { WorktreeTerminalSection } from "../WorktreeTerminalSection";
 const CARD_ITEM = "Worktree card item";
 
 /** The sidebar's shape: the section sits inside the card's own trigger. */
-function renderInCard() {
+function renderInCard(onAncestorContextMenu?: () => void) {
   return render(
     <TooltipProvider>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div>
-            <WorktreeTerminalSection
-              worktreeId="wt-1"
-              isExpanded
-              counts={{
-                total: 2,
-                byState: { idle: 2, working: 0, waiting: 0, directing: 0, completed: 0, exited: 0 },
-              }}
-              terminals={sessions}
-              onToggle={() => {}}
-              onTerminalSelect={() => {}}
-            />
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuItem>{CARD_ITEM}</ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
+      {/* Stands in for any non-Radix handler above the card, like the sidebar's. */}
+      <div onContextMenu={onAncestorContextMenu}>
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <div>
+              <WorktreeTerminalSection
+                worktreeId="wt-1"
+                isExpanded
+                counts={{
+                  total: 2,
+                  byState: {
+                    idle: 2,
+                    working: 0,
+                    waiting: 0,
+                    directing: 0,
+                    completed: 0,
+                    exited: 0,
+                  },
+                }}
+                terminals={sessions}
+                onToggle={() => {}}
+                onTerminalSelect={() => {}}
+              />
+            </div>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem>{CARD_ITEM}</ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+      </div>
     </TooltipProvider>
   );
 }
@@ -164,5 +174,23 @@ describe("WorktreeTerminalSection — a session row owns its menu", () => {
     fireEvent.contextMenu(screen.getByRole("button", { name: /sessions?/i, expanded: true }));
 
     expect(await screen.findByRole("menuitem", { name: CARD_ITEM })).toBeTruthy();
+  });
+
+  it("stops the row's right-click at the row", () => {
+    const reached = vi.fn();
+    renderInCard(reached);
+
+    fireEvent.contextMenu(row("two"));
+
+    expect(reached).not.toHaveBeenCalled();
+  });
+
+  it("leaves the panel's keyboard-open marker to the panel itself", () => {
+    renderInCard();
+
+    // `openPanelContextMenu` takes the first `[data-context-trigger]` for an id,
+    // and the sidebar comes before the grid in the document.
+    expect(document.querySelector('[data-context-trigger="two"]')).toBeNull();
+    expect(document.querySelector('[data-context-proxy="two"]')).not.toBeNull();
   });
 });

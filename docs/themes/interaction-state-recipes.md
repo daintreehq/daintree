@@ -284,6 +284,17 @@ One treatment per state, owned by `Button` (`src/components/ui/button.tsx`). A s
 
 ---
 
+## Context Menu Targets
+
+A right-click menu is scoped to the object under the pointer, never to whatever encloses it. Every tab owns its own menu, and so does every row that stands for something (a session, a file, a rescue chip). A tab strip inside the active panel's trigger, or a session row inside a worktree card's, must not fall through to the enclosing menu.
+
+- **Panel stand-ins** — a tab, sidebar session row or rescue chip wraps itself in `TerminalContextMenu` with `proxy`. A proxy stops the event at itself and leaves `data-context-trigger` to the panel's own surface, so `openPanelContextMenu` (Shift+F10) still finds the panel and not a row that stands for it. Grid and dock tabs get this from `TabButton`; pass `menuLocation` so layout commands match the strip.
+- **Any other nested trigger** — pass `stopContextMenuPropagation` from `ui/context-menu` as the inner trigger's `onContextMenu`. Never `preventDefault()` there: Radix skips its own open when the default is already prevented. File rows use `stopFileRowMenuPropagation`, which does the same job.
+- **A chip that stands for a group** (a dock tab-group chip) shows one member's identity, and its menu is that member's.
+- **Canonical:** `PortalToolbar.tsx` (per-tab menu), `TabButton.tsx`, `WorktreeTerminalSection.tsx`, `HelpSessionTabs.tsx`. Pinned by `TabButton.contextMenu.test.tsx`, `WorktreeTerminalSection.contextMenu.test.tsx` and `HelpSessionTabs.contextMenu.test.tsx`.
+
+---
+
 ## Transition Patterns
 
 | Need | Use Instead | Why |
