@@ -1,5 +1,6 @@
 import { app, ipcMain, session } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
+import { types as utilTypes } from "node:util";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { classifyPartition } from "../utils/webviewCsp.js";
 import {
@@ -99,6 +100,109 @@ function sizeGuardReplacer(key: string, value: unknown): unknown {
   return bigintSafeReplacer(key, value);
 }
 
+// Upper bounds on the UTF-8 bytes a value contributes to `JSON.stringify`
+// output. A UTF-16 code unit serialises to at most 6 bytes (`\u001f` for
+// control characters, `\ud800` for lone surrogates); every other unit is at
+// most 3 (a surrogate pair is 4 bytes over 2 units). The longest `String(n)`
+// for a finite number is 25 characters (`-0.0000012345678901234567`); NaN and
+// Infinity serialise as `null`.
+const MAX_JSON_BYTES_PER_CODE_UNIT = 6;
+// Without the units this matches — `\uXXXX`-escaped controls and any
+// surrogate — every unit is at most 3 bytes: short escapes (`\n`, `\"`, `\\`)
+// are 2, U+0080–U+07FF are 2, the rest of the BMP is 3. Only tried on strings
+// too long for the 6-byte bound, where the native scan is far cheaper than
+// stringify.
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
+const WIDE_JSON_CODE_UNIT = /[\x00-\x07\x0b\x0e-\x1f\ud800-\udfff]/;
+const NARROW_MAX_JSON_BYTES_PER_CODE_UNIT = 3;
+const MAX_JSON_NUMBER_BYTES = 25;
+const FAST_PATH_MAX_DEPTH = 64;
+
+const { isProxy, isBoxedPrimitive } = utilTypes;
+
+/**
+ * Budget left after charging `value` its worst-case serialised size, or a
+ * negative number when the walk cannot prove the payload fits: the bound
+ * crossed the budget, or the value is not plain JSON data (BigInt, symbol,
+ * function, Proxy, boxed primitive, anything with a `toJSON`, a prototype
+ * other than Object/Array/null, an array hole, or nesting past
+ * {@link FAST_PATH_MAX_DEPTH}, which also stops cycles).
+ *
+ * The walk reads exactly what `JSON.stringify` reads, in the same order —
+ * own enumerable string keys, array indices up to `length` — and its checks
+ * run no user code. The only user code it can reach is an own accessor
+ * property, which structured-clone deserialisation never produces (it
+ * materialises data properties), so for IPC arguments the walk sees the same
+ * values the exact measurement would. Like that measurement, it trusts the
+ * main process's built-ins (`RegExp`, `Object`, `Array`) to be untampered.
+ */
+function budgetRemainingAfter(value: unknown, remaining: number, depth: number): number {
+  switch (typeof value) {
+    case "string": {
+      const wide = remaining - (value.length * MAX_JSON_BYTES_PER_CODE_UNIT + 2);
+      if (wide >= 0) return wide;
+      const narrow = remaining - (value.length * NARROW_MAX_JSON_BYTES_PER_CODE_UNIT + 2);
+      return narrow >= 0 && !WIDE_JSON_CODE_UNIT.test(value) ? narrow : -1;
+    }
+    case "number":
+      return remaining - MAX_JSON_NUMBER_BYTES;
+    case "boolean":
+      return remaining - 5;
+    case "undefined":
+      return remaining - 4;
+    case "object":
+      break;
+    default:
+      return -1;
+  }
+  if (value === null) return remaining - 4;
+  if (depth >= FAST_PATH_MAX_DEPTH || isProxy(value) || "toJSON" in value) return -1;
+
+  const proto: unknown = Object.getPrototypeOf(value);
+  if (Array.isArray(value)) {
+    if (proto !== Array.prototype) return -1;
+    const length = value.length;
+    // Brackets plus one comma per element (one more than needed).
+    remaining -= 2 + length;
+    for (let i = 0; i < length && remaining >= 0; i++) {
+      // A hole reads through the prototype chain; leave it to the exact path
+      // rather than reach inherited getters or traps.
+      if (!Object.hasOwn(value, i)) return -1;
+      remaining = budgetRemainingAfter(value[i], remaining, depth + 1);
+    }
+    return remaining;
+  }
+  if ((proto !== Object.prototype && proto !== null) || isBoxedPrimitive(value)) return -1;
+  const keys = Object.keys(value);
+  // Braces, plus per entry: key quotes, colon and comma. Entries whose value
+  // stringify omits (undefined) are still charged.
+  remaining -= 2 + keys.length * 4;
+  for (let i = 0; i < keys.length && remaining >= 0; i++) {
+    const key = keys[i];
+    remaining -= key.length * MAX_JSON_BYTES_PER_CODE_UNIT;
+    if (remaining < 0) break;
+    remaining = budgetRemainingAfter((value as Record<string, unknown>)[key], remaining, depth + 1);
+  }
+  return remaining;
+}
+
+/**
+ * True when `args` provably serialises to at most `budget` UTF-8 bytes, so the
+ * exact `JSON.stringify` measurement can be skipped. False means only
+ * "inconclusive" — the caller must fall back to the exact path.
+ *
+ * @internal Exported for testing.
+ */
+export function isProvablyWithinPayloadBudget(args: unknown[], budget: number): boolean {
+  try {
+    return budgetRemainingAfter(args, budget, 0) >= 0;
+  } catch {
+    // Only reachable through an own accessor or an uninitialised module
+    // binding; the exact path keeps the old fail-open handling for those.
+    return false;
+  }
+}
+
 export function validateIpcInvokeEnvelope(channel: string, args: unknown[]): void {
   if (args.length > MAX_IPC_ARG_COUNT) {
     throw new AppError({
@@ -112,15 +216,20 @@ export function validateIpcInvokeEnvelope(channel: string, args: unknown[]): voi
   const category = channelToCategory[channel];
   const budget = category !== undefined ? PAYLOAD_BUDGETS[category] : DEFAULT_PAYLOAD_BUDGET;
 
+  // Structured-clone payloads are almost always small plain data; a bounded
+  // walk proves most of them fit without building the JSON string. When it
+  // cannot, the exact measurement below runs exactly as before.
+  if (isProvablyWithinPayloadBudget(args, budget)) return;
+
   // Binary / Map / Set payloads make `JSON.stringify` an unreliable size
   // estimator: the replacer aborts the measuring pass on the first one (or on
   // stringify's own failures, e.g. circular refs), skipping the byte check so
   // Mojo's 128 MiB ceiling and the handler-level caps (clipboard PNG,
   // artifact patch) act as the backstop. Folding detection into the
-  // serialization keeps this single-traversal on every invoke instead of a
-  // `containsBinary` pre-walk plus a stringify. Unlike the old pre-walk's
-  // depth>32 bail-out (which SKIPPED the byte gate, letting a deeply nested
-  // oversize payload through unmeasured), deep plain objects are now measured
+  // serialization avoids a separate `containsBinary` pre-walk. Unlike the old
+  // pre-walk's depth>32 bail-out (which SKIPPED the byte gate, letting a
+  // deeply nested oversize payload through unmeasured), deep plain objects are
+  // now measured
   // like wide ones always were; past V8's recursion limit stringify throws
   // and the catch below fails open, same as before.
   let bytes: number;
