@@ -19,7 +19,7 @@ import { T_LONG } from "../../helpers/timeouts";
 //   RUN_PERF_STORE_FANOUT=1 npx playwright test --project=full-panels \
 //     e2e/full/panels/store-fanout-perf.spec.ts
 //
-// Four workloads per scale, each in a fresh app instance:
+// Workloads per scale, sharing one fresh app instance per scale:
 //   tick-quiet:  force a git-status poll of one worktree with NO file changes
 //   tick-change: dirty/clean a file, then force the poll (real status delta)
 //   flip:        drive one agent working<->waiting via a fake claude CLI
@@ -27,6 +27,16 @@ import { T_LONG } from "../../helpers/timeouts";
 //   flip-fleet:  two idle agents fleet-armed (ribbon shown) while the other
 //                agents flip working<->waiting together (3+ agents only)
 //   title-fleet: same armed pair while the other agents retitle via OSC 0
+//   activity:    main pumps terminal:activity headline changes into the view
+//                for every agent at PERF_STORE_FANOUT_ACTIVITY_HZ per pane, so
+//                panelStatusBuffer flushes a new panelsById each frame (up to
+//                60/s). `stream` never reaches that path: a live agent emits
+//                activity only on a state transition, and output-driven
+//                activity is for plain shells. Synthetic rate, real renderer
+//                path. Reported per 1s window. PERF_STORE_FANOUT_ONLY=activity
+//                skips the other workloads (ambient floor still runs).
+//   activity-fleet: same pump with the flip-fleet pair armed (3+ agents only);
+//                runs last since nothing disarms a fleet
 //
 // Opt-in only — a measurement harness for local A/B runs, never a CI gate
 // (perf budgets deliberately stay out of PR CI pre-1.0).
@@ -53,9 +63,19 @@ const STREAM_SECONDS = Math.max(
   3,
   Math.floor(Number(process.env.PERF_STORE_FANOUT_STREAM_SECONDS) || 10)
 );
+const ACTIVITY_SECONDS = Math.max(
+  3,
+  Math.floor(Number(process.env.PERF_STORE_FANOUT_ACTIVITY_SECONDS) || 10)
+);
+const ACTIVITY_HZ = Math.min(
+  1000,
+  Math.max(1, Number(process.env.PERF_STORE_FANOUT_ACTIVITY_HZ) || 10)
+);
+const ACTIVITY_ONLY = process.env.PERF_STORE_FANOUT_ONLY === "activity";
 const OUT_PATH = process.env.PERF_STORE_FANOUT_OUT ?? "";
 
 const READY_TOKEN = "FAKE_CLAUDE_READY";
+const SYNTHETIC_HEADLINE = "Fanout synthetic activity";
 const WORK_TOKEN = "__DAINTREE_FAKE_WORK__";
 const IDLE_TOKEN = "__DAINTREE_FAKE_IDLE__";
 const TITLE_TOKEN = "__DAINTREE_FAKE_TITLE__";
@@ -84,6 +104,84 @@ interface ScaleResult {
   ambientCommitsPer10s: number;
   ambientRendersPer10s: number;
   workloads: WorkloadResult[];
+  /** activity workload: headline patches main actually sent per second */
+  activitySentPerSec?: number;
+  activityFleetSentPerSec?: number;
+}
+
+// Components whose per-flush fanout the render PRs (#12998, #12999, #13004,
+// #13005, #13008) target; reported by name so a zero is visible, not omitted.
+const FANOUT_COMPONENTS = [
+  "App",
+  "AppInner",
+  "AppLayout",
+  "ContentGrid",
+  "Toolbar",
+  "TerminalPane",
+  "WorktreeCard",
+];
+const FLEET_COMPONENT = /^Fleet/;
+
+function namedFanout(events: EventSample[]): string {
+  const seconds = events.reduce((a, e) => a + e.windowMs, 0) / 1000 || 1;
+  const merged: Record<string, { n: number; ms: number }> = {};
+  for (const name of [...FANOUT_COMPONENTS, "Fleet*"]) merged[name] = { n: 0, ms: 0 };
+  for (const e of events) {
+    for (const [name, v] of Object.entries(e.byComponent)) {
+      // Some components are defined as `<Name>Component` and exported under
+      // the plain name (TerminalPaneComponent -> TerminalPane).
+      const base = name.replace(/Component$/, "");
+      const key = FANOUT_COMPONENTS.includes(base)
+        ? base
+        : FLEET_COMPONENT.test(name)
+          ? "Fleet*"
+          : null;
+      if (!key) continue;
+      merged[key].n += v.n;
+      merged[key].ms += v.ms;
+    }
+  }
+  return Object.entries(merged)
+    .map(([name, v]) => `${name}=${(v.n / seconds).toFixed(1)}/s(${v.ms.toFixed(1)}ms)`)
+    .join(" ");
+}
+
+function perCommit(events: EventSample[]): string {
+  const commits = events.reduce((a, e) => a + e.commits, 0);
+  const renders = events.reduce((a, e) => a + e.renders, 0);
+  const selfMs = events.reduce((a, e) => a + e.selfMs, 0);
+  const seconds = events.reduce((a, e) => a + e.windowMs, 0) / 1000 || 1;
+  return (
+    `commits/s=${(commits / seconds).toFixed(1)} renders/s=${(renders / seconds).toFixed(0)}` +
+    ` selfMs/s=${(selfMs / seconds).toFixed(2)}` +
+    ` renders/commit=${commits ? (renders / commits).toFixed(1) : "0"}` +
+    ` selfMs/commit=${commits ? (selfMs / commits).toFixed(3) : "0"}`
+  );
+}
+
+function logScale(result: ScaleResult): void {
+  console.log(`──── store fanout @ ${result.scale} worktree(s), ${result.panelCount} agents ────`);
+  console.log(
+    `ambient (10s quiet): commits=${result.ambientCommitsPer10s} renders=${result.ambientRendersPer10s}`
+  );
+  for (const w of result.workloads) console.log(fmtRow(w.name, w.events));
+  for (const w of result.workloads) {
+    const top = topComponents(w.events, 8);
+    if (top.length > 0) {
+      console.log(
+        `top ${w.name}: ` + top.map((t) => `${t.name}×${t.n}(${t.ms.toFixed(1)}ms)`).join(" ")
+      );
+    }
+  }
+  for (const [name, sent] of [
+    ["activity", result.activitySentPerSec],
+    ["activity-fleet", result.activityFleetSentPerSec],
+  ] as const) {
+    const w = result.workloads.find((x) => x.name === name);
+    if (!w) continue;
+    console.log(`${name} sent/s=${sent?.toFixed(0)} ${perCommit(w.events)}`);
+    console.log(`${name} per-component: ${namedFanout(w.events)}`);
+  }
 }
 
 function pct(arr: number[], p: number): number {
@@ -138,8 +236,8 @@ interface Fixture {
 // Fresh repo + (scale-1) sibling git worktrees + a fake `claude` CLI that
 // boots instantly (no trust prompt) and flips working/idle on stdin tokens.
 // The OSC 9;4 heartbeat drives the working state viewport-independently
-// (#8753); WORK mode also streams a short line every 150ms so the stream
-// workload exercises the real output->activity->status-buffer path.
+// (#8753); WORK mode also streams a short line every 150ms, which exercises
+// terminal output but not panelStatusBuffer (see the activity workload).
 function prepareFixture(scale: number): Fixture {
   const dir = mkdtempSync(path.join(tmpdir(), `daintree-e2e-store-fanout-${scale}-`));
   try {
@@ -349,6 +447,23 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
         // fake claude hasn't been probed as installed yet.
         await page.waitForTimeout(3_000);
 
+        // Passive record of each panel's last real activity event, installed
+        // before any agent launches, so the activity workload can put every
+        // panel back afterwards (and prove its own events arrived).
+        await page.evaluate((synthetic) => {
+          const win = window as any;
+          win.__fanoutLastActivity = {};
+          win.electron.terminal.onActivity((payload: any) => {
+            if (typeof payload?.headline === "string" && payload.headline.startsWith(synthetic)) {
+              const delivered = win.__fanoutActivityDelivered;
+              if (delivered)
+                delivered[payload.terminalId] = (delivered[payload.terminalId] ?? 0) + 1;
+            } else {
+              win.__fanoutLastActivity[payload.terminalId] = payload;
+            }
+          });
+        }, SYNTHETIC_HEADLINE);
+
         // One fake agent per worktree. Launches beyond the spawn token bucket
         // (6) queue at 1/s — dispatch sequentially and let the queue drain.
         // Retried because the very first dispatch can race the availability
@@ -456,6 +571,182 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
         }>;
         const ambientCommits = ambient.length;
         const ambientRenders = ambient.reduce((a, c) => a + c.renders, 0);
+
+        // ── Workload: activity — terminal:activity IPC for every agent ──
+        // Synthetic events on the production renderer path: main sends them to
+        // this view's webContents, then preload -> onActivity listener ->
+        // panelStatusBuffer -> one panelsById replacement per rAF. Every patch
+        // carries a fresh headline so the buffer's no-op guard never skips it.
+        // Paced in main (not via Playwright round trips) at a steady total of
+        // agents x ACTIVITY_HZ patches/s. Afterwards each panel gets its last
+        // real activity replayed, so later workloads start from the same state.
+        const measureActivity = async (): Promise<{
+          events: EventSample[];
+          sentPerSec: number;
+        }> => {
+          // Project views share one static URL; the session marker set above
+          // exists only in the measured view.
+          const viewIds = await ctx!.app.evaluate(async ({ webContents }, url) => {
+            const ids: number[] = [];
+            for (const wc of webContents.getAllWebContents()) {
+              if (wc.isDestroyed() || wc.getURL() !== url) continue;
+              if (await wc.executeJavaScript("!!window.__FANOUT_SESSION_MARKER__")) ids.push(wc.id);
+            }
+            return ids;
+          }, page.url());
+          expect(viewIds, "activity pump found exactly the measured view").toHaveLength(1);
+          await page.evaluate(() => {
+            (window as any).__fanoutActivityDelivered = {};
+          });
+          await ctx!.app.evaluate(
+            ({ webContents }, { viewId, ids, rate, headline }) => {
+              const wc = webContents.fromId(viewId)!;
+              const start = Date.now();
+              const pump = {
+                sent: 0,
+                timer: undefined as ReturnType<typeof setInterval> | undefined,
+              };
+              pump.timer = setInterval(() => {
+                if (wc.isDestroyed()) return;
+                const due = Math.floor(((Date.now() - start) / 1000) * rate);
+                while (pump.sent < due) {
+                  const terminalId = ids[pump.sent % ids.length];
+                  pump.sent++;
+                  wc.send("terminal:activity", {
+                    terminalId,
+                    headline: `${headline} ${pump.sent}`,
+                    status: "working",
+                    type: "interactive",
+                    confidence: 1,
+                    timestamp: Date.now(),
+                  });
+                }
+              }, 1000 / 60);
+              (globalThis as any).__fanoutActivityPump = pump;
+            },
+            {
+              viewId: viewIds[0],
+              ids: launched,
+              rate: launched.length * ACTIVITY_HZ,
+              headline: SYNTHETIC_HEADLINE,
+            }
+          );
+          const stopPump = () =>
+            ctx!.app.evaluate(() => {
+              const pump = (globalThis as any).__fanoutActivityPump;
+              if (!pump) return 0;
+              clearInterval(pump.timer);
+              (globalThis as any).__fanoutActivityPump = undefined;
+              return pump.sent as number;
+            });
+          try {
+            // Settle one second so the first samples start in steady state.
+            await page.waitForTimeout(1_000);
+            await probeStart();
+            const windows: Array<{ t0: number; t1: number }> = [];
+            const sentBefore = await ctx!.app.evaluate(
+              () => (globalThis as any).__fanoutActivityPump.sent
+            );
+            const started = Date.now();
+            for (let k = 0; k < ACTIVITY_SECONDS; k++) {
+              const t0 = await page.evaluate(() => performance.now());
+              await page.waitForTimeout(1_000);
+              const t1 = await page.evaluate(() => performance.now());
+              windows.push({ t0, t1 });
+            }
+            const commits = (await probeStop()) as any[];
+            const sentPerSec = ((await stopPump()) - sentBefore) / ((Date.now() - started) / 1000);
+            // windowMs spans the whole 1s window (not trigger->last commit) so
+            // per-second rates divide by real time.
+            const events = windows.map((w) => ({
+              ...collectWindow(commits, w.t0, w.t1),
+              windowMs: w.t1 - w.t0,
+            }));
+            const delivered: Record<string, number> = await page.evaluate(
+              () => (window as any).__fanoutActivityDelivered
+            );
+            expect(
+              launched.filter((id) => !delivered[id]),
+              "every agent's panel received synthetic activity"
+            ).toEqual([]);
+            expect(
+              events.reduce((a, e) => a + e.commits, 0) / ACTIVITY_SECONDS,
+              "activity flushes committed above the ambient commit rate"
+            ).toBeGreaterThan(ambientCommits / 10);
+            return { events, sentPerSec };
+          } finally {
+            await stopPump();
+            // Replay each panel's last real activity (all-undefined when it
+            // never had one, which is what the buffer then writes back).
+            const lastReal: Record<string, unknown> = await page.evaluate(
+              () => (window as any).__fanoutLastActivity
+            );
+            await ctx!.app.evaluate(
+              ({ webContents }, { viewId, restores }) => {
+                const wc = webContents.fromId(viewId);
+                if (!wc || wc.isDestroyed()) return;
+                for (const payload of restores) wc.send("terminal:activity", payload);
+              },
+              {
+                viewId: viewIds[0],
+                restores: launched.map(
+                  (terminalId) => lastReal[terminalId] ?? { terminalId, confidence: 1 }
+                ),
+              }
+            );
+            // Let the replay flush before any later workload starts.
+            await page.waitForTimeout(500);
+          }
+        };
+        const activity = await measureActivity();
+
+        // Two idle agents in side worktrees, armed as a fleet (ribbon + count
+        // chip mounted) for flip-fleet, title-fleet and activity-fleet. There
+        // is no disarm action, so arming happens only after every unarmed
+        // workload has run. Needs 3+ agents.
+        const sideIdx = worktrees
+          .slice(0, scale)
+          .map((wt, i) => (wt.id === mainWt.id ? -1 : i))
+          .filter((i) => i >= 0)
+          .slice(0, 2);
+        const canArmFleet = launched.length >= 3 && sideIdx.length === 2;
+        const armSidePair = async () => {
+          await page.evaluate(
+            (worktreeIds) =>
+              (window as any).__daintreeDispatchAction(
+                "fleet.armMatchingFilter",
+                { worktreeIds },
+                { source: "test" }
+              ),
+            sideIdx.map((i) => worktrees[i].id)
+          );
+          await expect(page.getByTestId("fleet-arming-ribbon")).toBeVisible({ timeout: T_LONG });
+        };
+
+        if (ACTIVITY_ONLY) {
+          const workloads: WorkloadResult[] = [{ name: "activity", events: activity.events }];
+          let fleetSentPerSec: number | undefined;
+          if (canArmFleet) {
+            await armSidePair();
+            await page.waitForTimeout(1_000);
+            const armed = await measureActivity();
+            workloads.push({ name: "activity-fleet", events: armed.events });
+            fleetSentPerSec = armed.sentPerSec;
+          }
+          const onlyResult: ScaleResult = {
+            scale,
+            panelCount: launched.length,
+            ambientCommitsPer10s: ambientCommits,
+            ambientRendersPer10s: ambientRenders,
+            workloads,
+            activitySentPerSec: activity.sentPerSec,
+            activityFleetSentPerSec: fleetSentPerSec,
+          };
+          results.push(onlyResult);
+          logScale(onlyResult);
+          await assertNoReload("after activity");
+          return;
+        }
 
         if (process.env.RUN_BACKGROUND_ENERGY === "1") {
           if (process.env.BACKGROUND_ENERGY_WARM === "1") {
@@ -1188,24 +1479,9 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
         // below that.
         const flipFleet: EventSample[] = [];
         const titleFleet: EventSample[] = [];
-        const sideIdx = worktrees
-          .slice(0, scale)
-          .map((wt, i) => (wt.id === mainWt.id ? -1 : i))
-          .filter((i) => i >= 0)
-          .slice(0, 2);
-        if (launched.length >= 3 && sideIdx.length === 2) {
-          const armedWorktreeIds = sideIdx.map((i) => worktrees[i].id);
+        if (canArmFleet) {
           const flipIds = launched.filter((_, i) => !sideIdx.includes(i));
-          await page.evaluate(
-            (worktreeIds) =>
-              (window as any).__daintreeDispatchAction(
-                "fleet.armMatchingFilter",
-                { worktreeIds },
-                { source: "test" }
-              ),
-            armedWorktreeIds
-          );
-          await expect(page.getByTestId("fleet-arming-ribbon")).toBeVisible({ timeout: T_LONG });
+          await armSidePair();
           const writeAll = (data: string) =>
             page.evaluate(
               ([ids, payload]) => {
@@ -1249,6 +1525,9 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
           const titleCommits = (await probeStop()) as any[];
           titleFleet.push(collectWindow(titleCommits, titleT0, titleT1));
         }
+        // activity-fleet: the flip-fleet pair is still armed. Last, so the
+        // arming never leaks into an earlier workload.
+        const activityFleet = canArmFleet ? await measureActivity() : undefined;
         await assertNoReload("after workloads");
 
         const scaleResult: ScaleResult = {
@@ -1263,21 +1542,14 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
             { name: "stream", events: stream },
             ...(flipFleet.length > 0 ? [{ name: "flip-fleet", events: flipFleet }] : []),
             ...(titleFleet.length > 0 ? [{ name: "title-fleet", events: titleFleet }] : []),
+            { name: "activity", events: activity.events },
+            ...(activityFleet ? [{ name: "activity-fleet", events: activityFleet.events }] : []),
           ],
+          activitySentPerSec: activity.sentPerSec,
+          activityFleetSentPerSec: activityFleet?.sentPerSec,
         };
         results.push(scaleResult);
-
-        console.log(`──── store fanout @ ${scale} worktree(s), ${launched.length} agents ────`);
-        console.log(`ambient (10s quiet): commits=${ambientCommits} renders=${ambientRenders}`);
-        for (const w of scaleResult.workloads) console.log(fmtRow(w.name, w.events));
-        for (const w of scaleResult.workloads) {
-          const top = topComponents(w.events, 8);
-          if (top.length > 0) {
-            console.log(
-              `top ${w.name}: ` + top.map((t) => `${t.name}×${t.n}(${t.ms.toFixed(1)}ms)`).join(" ")
-            );
-          }
-        }
+        logScale(scaleResult);
 
         // Reliability invariants only — fanout itself is reported, not gated.
         // Per-direction so a failed WORK write can't be masked by the panel
@@ -1310,6 +1582,8 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
             changeTicks: CHANGE_TICKS,
             flipCycles: FLIP_CYCLES,
             streamSeconds: STREAM_SECONDS,
+            activitySeconds: ACTIVITY_SECONDS,
+            activityHz: ACTIVITY_HZ,
             results,
           },
           null,

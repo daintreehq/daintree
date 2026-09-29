@@ -309,7 +309,8 @@ export const REGISTRY: Record<string, Command> = {
     build: "build:e2e",
   }),
   "store-fanout": playwrightBench({
-    summary: "React re-renders and render-ms per git tick and agent flip, as worktrees scale",
+    summary:
+      "React re-renders and render-ms per git tick, agent flip and activity flush, as worktrees scale",
     kind: "mechanism",
     project: "full-panels",
     spec: "e2e/full/panels/store-fanout-perf.spec.ts",
