@@ -4,7 +4,7 @@
  * carried completion-banner dismissal alongside its open job (#11243).
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, render, act } from "@testing-library/react";
 
 const panelsById = vi.hoisted(() => ({
   current: {} as Record<string, { kind: string; worktreeId?: string }>,
@@ -28,6 +28,7 @@ vi.mock("@/store/panelStore", async () => {
   };
 });
 
+const { usePanelStore } = await import("@/store/panelStore");
 const { usePanelDialogStore } = await import("@/store/panelDialogStore");
 const { useReviewDialogOpenForWorktree } = await import("../useReviewDialogOpenForWorktree");
 
@@ -102,5 +103,54 @@ describe("useReviewDialogOpenForWorktree", () => {
 
     setStack([]);
     expect(result.current).toBe(false);
+  });
+
+  describe("render fanout", () => {
+    const PANES = 20;
+    const FLUSHES = 60;
+
+    function countRenders(useHook: (id: string) => boolean): number {
+      let renders = 0;
+      function Pane({ id }: { id: string }) {
+        useHook(id);
+        renders++;
+        return null;
+      }
+      render(
+        <>
+          {Array.from({ length: PANES }, (_, i) => (
+            <Pane key={i} id={`wt-${i}`} />
+          ))}
+        </>
+      );
+      const base = renders;
+      for (let f = 0; f < FLUSHES; f++) {
+        act(() => {
+          panelsById.current = { ...panelsById.current, [`t-${f}`]: { kind: "terminal" } };
+          (usePanelStore as unknown as { __notify: () => void }).__notify();
+        });
+      }
+      return renders - base;
+    }
+
+    it("does not re-render on panelsById churn while no dialog is open", () => {
+      expect(countRenders(useReviewDialogOpenForWorktree)).toBe(0);
+    });
+
+    it("the previous whole-map subscription re-rendered on every flush", () => {
+      const useLegacy = (id: string) => {
+        const stack = usePanelDialogStore((s) => s.dialogStack);
+        const byId = usePanelStore((s: { panelsById: typeof panelsById.current }) => s.panelsById);
+        return stack.some((p) => byId[p]?.kind === "review" && byId[p]?.worktreeId === id);
+      };
+      // Each of the PANES panes re-rendered once per flush.
+      expect(countRenders(useLegacy)).toBe(FLUSHES * PANES);
+    });
+
+    it("does not re-render on unrelated churn while a dialog is open for another worktree", () => {
+      panelsById.current = { "review-1": { kind: "review", worktreeId: "other" } };
+      setStack(["review-1"]);
+      expect(countRenders(useReviewDialogOpenForWorktree)).toBe(0);
+    });
   });
 });
