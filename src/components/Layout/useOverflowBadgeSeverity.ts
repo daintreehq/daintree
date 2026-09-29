@@ -67,15 +67,16 @@ export function formatAgentObservations(counts: ReadonlyMap<AgentState, number>)
  * sessions `useOverflowBadgeSeverity` derives its warning from.
  */
 export function useOverflowAgentObservations(overflowIds: readonly AnyToolbarButtonId[]): string[] {
-  const panelsById = usePanelStore(useShallow((s) => s.panelsById));
-  const panelIds = usePanelStore(useShallow((s) => s.panelIds));
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
-  return useMemo(
-    () =>
+  // Derived inside the selector: every activity/headline flush replaces a
+  // panel object, which a shallow `panelsById` subscription treats as a change
+  // and re-renders the whole toolbar for.
+  return usePanelStore(
+    useShallow((s) =>
       formatAgentObservations(
-        countOverflowAgentStates(panelsById, panelIds, activeWorktreeId, overflowIds)
-      ),
-    [panelsById, panelIds, activeWorktreeId, overflowIds]
+        countOverflowAgentStates(s.panelsById, s.panelIds, activeWorktreeId, overflowIds)
+      )
+    )
   );
 }
 
@@ -104,9 +105,13 @@ export function useOverflowBadgeSeverity(
   overflowIds: readonly AnyToolbarButtonId[],
   errorCount: number
 ): OverflowBadgeSeverity {
-  const panelsById = usePanelStore(useShallow((s) => s.panelsById));
-  const panelIds = usePanelStore(useShallow((s) => s.panelIds));
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+  // A boolean, not `panelsById`, so activity/headline flushes that replace
+  // panel objects without changing a dot state don't re-render the toolbar.
+  const hasOverflowAgentState = usePanelStore(
+    (s) =>
+      countOverflowAgentStates(s.panelsById, s.panelIds, activeWorktreeId, overflowIds).size > 0
+  );
 
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
 
@@ -128,7 +133,7 @@ export function useOverflowBadgeSeverity(
     // `getDominantAgentState` would let a `working` panel suppress a sibling
     // `waiting`/`directing` panel for the same agent, which is exactly the
     // silenced state the overflow dot is meant to surface.
-    if (countOverflowAgentStates(panelsById, panelIds, activeWorktreeId, overflowIds).size > 0) {
+    if (hasOverflowAgentState) {
       warning = true;
     }
 
@@ -153,9 +158,7 @@ export function useOverflowBadgeSeverity(
   }, [
     overflowIds,
     errorCount,
-    panelsById,
-    panelIds,
-    activeWorktreeId,
+    hasOverflowAgentState,
     notificationUnreadCount,
     availability,
     onboardingLoaded,
