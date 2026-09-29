@@ -10,6 +10,7 @@ const facts = (overrides: Partial<NotificationDestinationFacts> = {}) => ({
   currentProjectId: "p1",
   panelLocation: undefined,
   panelWorktreeId: undefined,
+  panelWorktreeShown: true,
   worktreeLive: false,
   ...overrides,
 });
@@ -39,6 +40,26 @@ describe("resolveNotificationDestination", () => {
     expect(
       resolveNotificationDestination({ panelId: "pane-1" }, facts({ panelLocation: "dock" }))
     ).toEqual({ kind: "panel", panelId: "pane-1", worktreeId: undefined });
+  });
+
+  it("does not go to a panel whose worktree this view can't show", () => {
+    expect(
+      resolveNotificationDestination(
+        { worktreeId: "wt-1", panelId: "pane-1" },
+        facts({ panelLocation: "grid", panelWorktreeId: "wt-x", panelWorktreeShown: false })
+      )
+    ).toEqual({ kind: "none", reason: "gone" });
+    expect(
+      resolveNotificationDestination(
+        { worktreeId: "wt-1", panelId: "pane-1" },
+        facts({
+          panelLocation: "grid",
+          panelWorktreeId: "wt-x",
+          panelWorktreeShown: false,
+          worktreeLive: true,
+        })
+      )
+    ).toEqual({ kind: "worktree", worktreeId: "wt-1" });
   });
 
   it("falls back to the live worktree when the panel is trashed or gone", () => {

@@ -107,12 +107,11 @@ describe("navigateToNotificationSource", () => {
     expect(dispatchMock.mock.calls).toEqual([["panel.focus", { panelId: "pane-3" }]]);
   });
 
-  it("focuses a panel in place when its worktree is one this view doesn't know", async () => {
+  it("does not go to a panel in a worktree this view doesn't know", async () => {
     seedPanels({ "pane-4": { location: "grid", worktreeId: "wt-unknown" } });
-    await expect(navigateToNotificationSource({ panelId: "pane-4" })).resolves.toBe(true);
+    await expect(navigateToNotificationSource({ panelId: "pane-4" })).resolves.toBe(false);
     expect(trackTerminalFocus).not.toHaveBeenCalled();
-    expect(selectWorktree).not.toHaveBeenCalled();
-    expect(dispatchMock.mock.calls).toEqual([["panel.focus", { panelId: "pane-4" }]]);
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("treats a scratch view's own records as this view's", async () => {

@@ -23,6 +23,11 @@ export interface NotificationDestinationFacts {
   panelLocation: PanelLocation | undefined;
   /** The named panel's worktree now — a panel can have moved since. */
   panelWorktreeId: string | undefined;
+  /**
+   * Whether this view can show the panel's worktree: live, or a deleted one
+   * whose terminals it still keeps. A panel with no worktree always can.
+   */
+  panelWorktreeShown: boolean;
   /** Whether `context.worktreeId` is a worktree this view still has. */
   worktreeLive: boolean;
 }
@@ -66,7 +71,12 @@ export function resolveNotificationDestination(
     return { kind: "none", reason: "other-project" };
   }
   const panelId = context?.panelId;
-  if (panelId && facts.panelLocation !== undefined && facts.panelLocation !== "trash") {
+  if (
+    panelId &&
+    facts.panelLocation !== undefined &&
+    facts.panelLocation !== "trash" &&
+    facts.panelWorktreeShown
+  ) {
     return { kind: "panel", panelId, worktreeId: facts.panelWorktreeId };
   }
   const worktreeId = context?.worktreeId;

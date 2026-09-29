@@ -59,6 +59,23 @@ export function useIsWorktreeLive(worktreeId: string | undefined): boolean {
 }
 
 /**
+ * Whether this view can show a panel's worktree: a live one, or a deleted one
+ * whose surviving terminals it still keeps. The grid shows only the active
+ * worktree's panels, so a panel in a worktree the view doesn't know would
+ * stay invisible however it was focused.
+ */
+function useIsPanelWorktreeShown(worktreeId: string | undefined): boolean {
+  const inView = useWorktreeStoreOptional<boolean>(
+    (s) => (worktreeId ? s.worktrees.has(worktreeId) : false),
+    false
+  );
+  const deleted = useWorktreeSelectionStore((s) =>
+    worktreeId ? s.deletedWorktrees.has(worktreeId) : false
+  );
+  return !worktreeId || inView || deleted;
+}
+
+/**
  * A section's worktree that this view no longer has. Only claimed for the
  * current project: another project's worktrees were never here to lose.
  */
@@ -96,11 +113,13 @@ export function useNotificationDestination(context: NotificationContext): Notifi
   const panelWorktreeId = usePanelStore((s) =>
     panelId ? s.panelsById[panelId]?.worktreeId : undefined
   );
+  const panelWorktreeShown = useIsPanelWorktreeShown(panelWorktreeId);
   const worktreeLive = useIsWorktreeLive(context?.worktreeId);
   return resolveNotificationDestination(context, {
     currentProjectId,
     panelLocation,
     panelWorktreeId,
+    panelWorktreeShown,
     worktreeLive,
   });
 }
