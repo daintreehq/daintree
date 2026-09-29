@@ -103,9 +103,10 @@ const choiceCardVariants = cva(
        * `elevated` lifts one recommended card off the set — a raised surface and
        * the stronger edge, never accent. On light the `/95` alpha makes the lift
        * translucency-inert, so `.light` takes the opaque surface; its hover
-       * lays the same wash over that surface as an inset shadow beside the
-       * ambient one, so it eases like every other hover and the fill it already
-       * has is not what hover has to replace.
+       * lays the same wash over that surface as an inset shadow after the
+       * ambient one — shadows interpolate by position, so the ambient pair lines
+       * up and the wash eases in — and the fill it already has is not what
+       * hover has to replace.
        *
        * `row` is a card in a navigation list of equivalent destinations (the
        * portal launchpad): borderless at rest, since seven outlines in a column
@@ -142,7 +143,7 @@ const choiceCardVariants = cva(
         tone: "elevated",
         selected: false,
         className:
-          "border-border-strong bg-surface-panel-elevated/95 [.light_&]:bg-surface-panel-elevated shadow-[var(--theme-shadow-ambient)] not-disabled:hover:shadow-[inset_0_0_0_100vmax_var(--color-overlay-subtle),var(--theme-shadow-ambient)]",
+          "border-border-strong bg-surface-panel-elevated/95 [.light_&]:bg-surface-panel-elevated shadow-[var(--theme-shadow-ambient)] not-disabled:hover:shadow-[var(--theme-shadow-ambient),inset_0_0_0_100vmax_var(--color-overlay-subtle)]",
       },
     ],
     defaultVariants: {

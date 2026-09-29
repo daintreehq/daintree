@@ -161,7 +161,9 @@ function hoverBorders(classes: string): string[] {
 }
 
 function restBorderColors(classes: string): string[] {
-  return baseUtilities(classes).filter((token) => /^border-((border|text)-|transparent$)/.test(token));
+  return baseUtilities(classes).filter((token) =>
+    /^border-((border|text)-|transparent$)/.test(token)
+  );
 }
 
 describe("choiceCardVariants", () => {
