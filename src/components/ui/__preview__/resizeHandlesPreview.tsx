@@ -14,6 +14,7 @@ import { useDockPopoverResize } from "@/components/Layout/useDockPopoverResize";
 import { DockPopoverResizeHandle } from "@/components/Layout/DockPopoverResizeHandle";
 import { TwoPaneSplitDivider, DIVIDER_WIDTH_PX } from "@/components/Terminal/TwoPaneSplitDivider";
 import { DevPreviewToolDrawerChrome } from "@/components/DevPreview/DevPreviewToolDrawerChrome";
+import { cn } from "@/lib/utils";
 import "@/index.css";
 
 /**
@@ -41,7 +42,14 @@ const { DiagnosticsDock } = await import("@/components/Diagnostics/DiagnosticsDo
 
 function Frame({ children }: { children: React.ReactNode }) {
   return (
-    <div data-preview-scene={scene} className="relative m-6 h-[240px] w-[420px] overflow-hidden">
+    <div
+      data-preview-scene={scene}
+      // The dock caps itself at half its container, so it needs room to grow.
+      className={cn(
+        "relative m-6 w-[420px] overflow-hidden",
+        scene === "diagnostics" ? "h-[420px]" : "h-[240px]"
+      )}
+    >
       {children}
     </div>
   );

@@ -80,16 +80,20 @@ test.afterAll(async () => {
 });
 
 async function openScene(page: Page, scene: string, theme: string): Promise<void> {
-  await page.setViewportSize({ width: 480, height: 300 });
+  await page.setViewportSize({ width: 480, height: 480 });
   const url = `${server!.baseURL}/resize-handles-preview.html?scene=${scene}&theme=${theme}`;
   const frame = page.locator("[data-preview-scene]");
-  try {
-    await page.goto(url);
-    await expect(frame).toBeAttached({ timeout: 30_000 });
-  } catch {
-    await page.goto("about:blank");
-    await page.goto(url, { waitUntil: "load" });
-    await expect(frame).toBeAttached({ timeout: 30_000 });
+  // A cold dev server re-optimises deps the dynamic imports discover, answering 504
+  // "Outdated Optimize Dep" until it settles; reload until the page mounts.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await page.goto("about:blank");
+      await page.goto(url, { waitUntil: "load" });
+      await expect(frame).toBeAttached({ timeout: 15_000 });
+      break;
+    } catch (err) {
+      if (attempt >= 5) throw err;
+    }
   }
   await expect(page.locator(SEPARATOR)).toHaveCount(1);
   await page.addStyleTag({ content: FREEZE_CSS });

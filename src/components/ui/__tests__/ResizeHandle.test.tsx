@@ -30,7 +30,8 @@ function renderHandle(
     />
   );
   const handle = screen.getByRole("separator");
-  const grip = handle.firstElementChild as HTMLElement;
+  const grip = handle.firstElementChild;
+  if (!grip) throw new Error("handle rendered no grip");
   return { handle, grip, onReset };
 }
 
@@ -124,7 +125,11 @@ describe("ResizeHandle", () => {
     for (const placement of PLACEMENTS) {
       const { grip } = renderHandle(placement);
       const axis = vertical(placement.growKey) ? "h" : "w";
-      lengths.add(tokens(grip).find((x) => x.startsWith(`${axis}-`) && !x.includes("px"))!.slice(2));
+      lengths.add(
+        tokens(grip)
+          .find((x) => x.startsWith(`${axis}-`) && !x.includes("px"))!
+          .slice(2)
+      );
       cleanup();
     }
     expect([...lengths]).toHaveLength(1);
