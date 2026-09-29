@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { useDiffViewedStore, selectViewedSet } from "../diffViewedStore";
+import { useWorktreeSelectionStore } from "../worktreeStore";
 
 describe("diffViewedStore", () => {
   beforeEach(() => {
@@ -54,5 +55,21 @@ describe("diffViewedStore", () => {
     clearWorktree("/wt-a");
     expect(selectViewedSet(useDiffViewedStore.getState(), "/wt-a").size).toBe(0);
     expect(selectViewedSet(useDiffViewedStore.getState(), "/wt-b").has("k")).toBe(true);
+  });
+
+  it("clears a worktree's markers when the worktree is recorded as deleted", () => {
+    useDiffViewedStore.getState().setViewed("/wt-gone", "staged:a.ts", true);
+    useDiffViewedStore.getState().setViewed("/wt-keep", "staged:a.ts", true);
+
+    useWorktreeSelectionStore.getState().addDeletedWorktree({
+      id: "/wt-gone",
+      title: "gone",
+      path: "/wt-gone",
+      deletedAt: Date.now(),
+    } as never);
+
+    const state = useDiffViewedStore.getState();
+    expect("/wt-gone" in state.viewedByWorktree).toBe(false);
+    expect("/wt-keep" in state.viewedByWorktree).toBe(true);
   });
 });

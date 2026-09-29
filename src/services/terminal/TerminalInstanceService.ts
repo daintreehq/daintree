@@ -1232,6 +1232,7 @@ class TerminalInstanceService {
     // caller's rejection is handled by prewarmTerminal/XtermAdapter (both
     // catch+log; there is nothing to attach to a removed panel).
     if (this.cancelledCreations.delete(id)) {
+      this.cwdProviders.delete(id);
       terminal.dispose();
       throw new Error(`Terminal ${id} creation cancelled: destroyed before build completed`);
     }

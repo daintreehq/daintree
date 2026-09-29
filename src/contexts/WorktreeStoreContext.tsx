@@ -1,3 +1,4 @@
+import { useDiffViewedStore } from "@/store/diffViewedStore";
 import { createContext, useEffect, useState, startTransition, type ReactNode } from "react";
 import {
   createWorktreeStore,
@@ -438,6 +439,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
 
         // Side effect: invalidate pulse cache
         usePulseStore.getState().invalidate(event.worktreeId);
+        if (worktree?.path) useDiffViewedStore.getState().clearWorktree(worktree.path);
 
         // Side effect: selection handling for the removed worktree. When
         // terminals survive, the id lives on as a ghost row and the user may
@@ -605,6 +607,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           const removed = baseline.get(id);
           if (removed?.isMainWorktree) continue;
           if (removed?.gitDir && incomingGitDirs.has(removed.gitDir)) continue;
+          if (removed?.path) useDiffViewedStore.getState().clearWorktree(removed.path);
           const selectionStore = useWorktreeSelectionStore.getState();
           if (selectionStore.deletedWorktrees.has(id)) continue;
           if (getDeletedWorktreeTerminalIds(id).length === 0) continue;

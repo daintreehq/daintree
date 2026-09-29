@@ -123,6 +123,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     setGPUHardwareAvailable: setGPUHardwareAvailableMock,
     setTargetSize: setTargetSizeMock,
     notifyScrollbackRestoreListeners: vi.fn(),
+    addInstanceDestroyedListener: vi.fn(() => () => {}),
     notifyRestoreSettledWaiters: vi.fn(),
   },
 }));
