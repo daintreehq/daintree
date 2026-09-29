@@ -2,6 +2,7 @@ import { useWallClock } from "@/hooks/useWallClock";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isValidPastTimestamp } from "@/utils/timestamps";
+import { pluralize } from "@/lib/pluralize";
 
 interface LiveTimeAgoProps {
   timestamp?: number | null;
@@ -70,17 +71,17 @@ function formatTimeAgo(diffMs: number): { label: string; fullLabel: string; isAb
     fullLabel = `${seconds} seconds ago`;
   } else if (minutes < 60) {
     label = `${minutes}m`;
-    fullLabel = `${minutes} minute${minutes !== 1 ? "s" : ""} ago`;
+    fullLabel = `${pluralize(minutes, "minute")} ago`;
   } else if (hours < 24) {
     label = `${hours}h`;
-    fullLabel = `${hours} hour${hours !== 1 ? "s" : ""} ago`;
+    fullLabel = `${pluralize(hours, "hour")} ago`;
   } else if (days < 7) {
     label = `${days}d`;
-    fullLabel = `${days} day${days !== 1 ? "s" : ""} ago`;
+    fullLabel = `${pluralize(days, "day")} ago`;
   } else {
     const weeks = Math.floor(days / 7);
     label = `${weeks}w`;
-    fullLabel = `${weeks} week${weeks !== 1 ? "s" : ""} ago`;
+    fullLabel = `${pluralize(weeks, "week")} ago`;
   }
 
   return { label, fullLabel };

@@ -676,7 +676,7 @@ describe("DockLaunchButton", () => {
       // the grid. The heading now states the destination, so they can appear.
       const { getByText, container } = renderButton();
 
-      for (const name of ["Review", "File Browser", "Dev Preview"]) {
+      for (const name of ["Review", "File browser", "Dev preview"]) {
         expect(getByText(name)).toBeTruthy();
       }
       const text = container.textContent ?? "";
@@ -690,7 +690,7 @@ describe("DockLaunchButton", () => {
       const gridAt = text.indexOf("Open in grid");
 
       // Dev Preview joined the dock section when it became dockable (#12397).
-      for (const name of ["Terminal", "Browser", "File Viewer", "Dev Preview"]) {
+      for (const name of ["Terminal", "Browser", "File viewer", "Dev preview"]) {
         const at = text.indexOf(name);
         expect(at).toBeGreaterThan(dockAt);
         expect(at).toBeLessThan(gridAt);
@@ -748,7 +748,7 @@ describe("DockLaunchButton", () => {
       fireEvent.change(input, { target: { value: "claude" } });
       expect(getByText("Claude")).toBeTruthy();
       expect(queryByText("Deploy site")).toBeNull();
-      expect(queryByText("File Browser")).toBeNull();
+      expect(queryByText("File browser")).toBeNull();
 
       fireEvent.change(input, { target: { value: "deploy" } });
       expect(getByText("Deploy site")).toBeTruthy();
@@ -763,7 +763,7 @@ describe("DockLaunchButton", () => {
       // "explorer" is a file-browser alias, not part of its display name.
       const { container, getByText, queryByText } = renderButton();
       fireEvent.change(searchInput(container), { target: { value: "explorer" } });
-      expect(getByText("File Browser")).toBeTruthy();
+      expect(getByText("File browser")).toBeTruthy();
       expect(queryByText("Claude")).toBeNull();
     });
 
@@ -1981,10 +1981,10 @@ describe("DockLaunchButton", () => {
       expect(pinControl(rowFor(container, "Claude"))).toBeTruthy();
       expect(pinControl(rowFor(container, "Terminal"))).toBeTruthy();
       expect(pinControl(rowFor(container, "Browser"))).toBeTruthy();
-      expect(pinControl(rowFor(container, "File Browser"))).toBeTruthy();
+      expect(pinControl(rowFor(container, "File browser"))).toBeTruthy();
       // The kind is `dev-preview`, the button is `dev-server`. Testing the id
       // directly against the toolbar list would drop exactly this row.
-      expect(pinControl(rowFor(container, "Dev Preview"))).toBeTruthy();
+      expect(pinControl(rowFor(container, "Dev preview"))).toBeTruthy();
     });
 
     it("offers a pin on every row the toolbar used to have no id for (#12217)", () => {
@@ -2167,7 +2167,7 @@ describe("DockLaunchButton", () => {
 
     it("writes a panel pin to the toolbar button id, not the panel kind id", () => {
       const { container } = renderButton();
-      fireEvent.click(pinControl(rowFor(container, "Dev Preview"))!);
+      fireEvent.click(pinControl(rowFor(container, "Dev preview"))!);
 
       expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("dev-server", true);
       expect(setAgentPinnedMock).not.toHaveBeenCalled();
@@ -2913,7 +2913,7 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
   describe("disabled rows stay reachable", () => {
     it("marks a gated panel aria-disabled while leaving it selectable and pinnable", () => {
       const { container } = renderButton({ agents: READY, hasWorkspace: false });
-      const row = rowByName(container, "File Browser");
+      const row = rowByName(container, "File browser");
 
       expect(row.getAttribute("aria-disabled")).toBe("true");
       // Reachable: it is still an option, so arrow keys land on it...
@@ -2928,7 +2928,7 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       // runs through `closeLauncher`, which clears it. A press that opened
       // nothing must not read as a launch that closed.
       fireEvent.change(searchInput(container), { target: { value: "file" } });
-      fireEvent.click(rowByName(container, "File Browser"));
+      fireEvent.click(rowByName(container, "File browser"));
 
       expect(addPanelMock).not.toHaveBeenCalled();
       expect(searchInput(container).value).toBe("file");
@@ -2936,7 +2936,7 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
 
     it("still pins a gated row", () => {
       const { container } = renderButton({ agents: READY, hasWorkspace: false });
-      const pin = rowByName(container, "File Browser").querySelector<HTMLElement>(
+      const pin = rowByName(container, "File browser").querySelector<HTMLElement>(
         "[data-launcher-pin]"
       )!;
       fireEvent.click(pin);
@@ -2954,7 +2954,7 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       const { container } = renderButton({ agents: READY });
 
       expect(rowByName(container, "Terminal").textContent).toContain("Ctrl Alt T");
-      expect(rowByName(container, "File Browser").textContent).toContain("Ctrl Alt E");
+      expect(rowByName(container, "File browser").textContent).toContain("Ctrl Alt E");
       // ...and a row with no binding renders no stray hint.
       expect(rowByName(container, "Browser").querySelector("kbd")).toBeNull();
     });
@@ -3240,6 +3240,6 @@ describe("panel origin marker", () => {
     // row's reason, and only a panel can reach either.
     const { container } = renderButton({ hasProject: false });
 
-    expect(qualifierTextOf(rowNamed(container, "Dev Preview"))).toBe("Needs a project");
+    expect(qualifierTextOf(rowNamed(container, "Dev preview"))).toBe("Needs a project");
   });
 });

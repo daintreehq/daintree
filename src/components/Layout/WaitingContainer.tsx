@@ -43,6 +43,7 @@ import {
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
+import { pluralize } from "@/lib/pluralize";
 
 interface WaitingContainerProps {
   compact?: boolean;
@@ -252,7 +253,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
                 aria-expanded={isOpen}
                 aria-controls="waiting-container-popover"
                 onClick={focusHandoff.onTriggerClick}
-                aria-label={`Waiting: ${displayCount} ${displayCount === 1 ? "agent" : "agents"} ${dockStatusScopeDescription(displayCount, hereCount)}`}
+                aria-label={`Waiting: ${pluralize(displayCount, "agent")} ${dockStatusScopeDescription(displayCount, hereCount)}`}
               >
                 <DockStatusPillLabel
                   icon={<WaitingIcon className="text-state-waiting" aria-hidden="true" />}
@@ -293,7 +294,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
             <div className={DOCK_POPOVER_HEADER_CLASS}>
               <span className="text-xs font-medium text-text-secondary">Waiting for input</span>
               <span className="text-3xs font-medium text-text-secondary tabular-nums">
-                {count} {count === 1 ? "agent" : "agents"}
+                {pluralize(count, "agent")}
                 {worktreeCount > 1 && ` across ${worktreeCount} worktrees`}
               </span>
             </div>

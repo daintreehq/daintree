@@ -102,10 +102,10 @@ export function ProjectPluginIndicator() {
     : failed.length > 0
       ? pluralize(failed.length, "project plugin has an error", "project plugins have errors")
       : invalid.length > 0
-        ? `${invalid.length} project plugin${invalid.length === 1 ? "" : "s"} unreadable`
+        ? `${pluralize(invalid.length, "project plugin")} unreadable`
         : blocked.length > 0
-          ? `${blocked.length} project plugin${blocked.length === 1 ? "" : "s"} off`
-          : `${staged.length} project plugin${staged.length === 1 ? "" : "s"} staged`;
+          ? `${pluralize(blocked.length, "project plugin")} off`
+          : `${pluralize(staged.length, "project plugin")} staged`;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>

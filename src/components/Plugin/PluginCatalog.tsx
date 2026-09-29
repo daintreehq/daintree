@@ -160,9 +160,7 @@ export function PluginCatalog({
             <div className="flex items-center gap-2">
               <CategoryIcon className="w-4 h-4 text-text-secondary" aria-hidden="true" />
               <h4 className="text-sm font-medium text-text-primary">{category.label}</h4>
-              <CountBadge
-                label={`${sectionPlugins.length} ${sectionPlugins.length === 1 ? "plugin" : "plugins"}`}
-              >
+              <CountBadge label={`${pluralize(sectionPlugins.length, "plugin")}`}>
                 {sectionPlugins.length}
               </CountBadge>
             </div>

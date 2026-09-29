@@ -90,7 +90,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
         <Stat
           icon={<GitCommit className="w-3.5 h-3.5" />}
           value={pulse.commitsInRange}
-          label={`commit${pulse.commitsInRange !== 1 ? "s" : ""}`}
+          label={pluralNoun(pulse.commitsInRange, "commit")}
           highlight
         />
         <Stat

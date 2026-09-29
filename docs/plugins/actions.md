@@ -504,7 +504,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `workflow.prepBranchForReview` | Inspect branch for review | safe | `cwd?`, `projectId?`, `worktreeId?`, `worktreePath?` |
 | `workflow.startWorkOnIssue` | Start work on issue | safe | `agentId`, `issueNumber`, `assignToSelf?`, `baseBranch?`, `branchName?`, `focusPolicy?`, `injectContext?`, `recipeId?`, `spawnedBy?` |
 | `worktree.bulk.closeSessions` | Close sessions for selected worktrees | confirm | — |
-| `worktree.bulk.remove` | Remove selected worktrees | confirm | — |
+| `worktree.bulk.remove` | Delete selected worktrees | confirm | — |
 | `worktree.compareDiff` | Compare worktree diff | safe | `compareToWorktreeId`, `ignoreWhitespace?`, `limit?`, `offset?`, `useMergeBase?`, `worktreeId?` |
 | `worktree.copyContext` | Copy worktree context (alias) | safe | `format?`, `modified?`, `worktreeId?` |
 | `worktree.copyTree` | Copy worktree context | safe | `format?`, `includePaths?`, `modified?`, `scopeIgnoresIgnoreFiles?`, `scopePaths?`, `worktreeId?` |

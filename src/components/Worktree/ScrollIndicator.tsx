@@ -6,6 +6,7 @@ import { ScrollPill } from "@/components/ui/ScrollPill";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { HollowCircle } from "@/components/icons";
 import { STATE_COLORS } from "./terminalStateConfig";
+import { pluralize } from "@/lib/pluralize";
 
 interface ScrollIndicatorProps {
   direction: "above" | "below";
@@ -26,7 +27,7 @@ interface Shown {
 function describe(direction: "above" | "below", { count, attentionCount }: Shown): string {
   const hidden = `${count} more ${count === 1 ? "worktree" : "worktrees"} ${direction}`;
   if (attentionCount === 0) return hidden;
-  return `${hidden}, ${attentionCount} ${attentionCount === 1 ? "needs" : "need"} attention`;
+  return `${hidden}, ${pluralize(attentionCount, "needs", "need")} attention`;
 }
 
 // What a click does, which differs by state: the pill either jumps to a

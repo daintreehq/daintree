@@ -132,7 +132,7 @@ function rerenderDialog(over: Partial<UseWorktreeBulkRemoveReturn> = {}) {
 /** The primary action, found by its accessible name rather than a testid. */
 function confirmButton(): HTMLButtonElement | null {
   const buttons = Array.from(document.querySelectorAll("button"));
-  return (buttons.find((b) => /^Remove\b/.test(b.textContent ?? "")) ??
+  return (buttons.find((b) => /^Delete\b/.test(b.textContent ?? "")) ??
     null) as HTMLButtonElement | null;
 }
 

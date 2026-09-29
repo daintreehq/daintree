@@ -477,7 +477,7 @@ describe("deriveReviewReadiness", () => {
       }));
       const summary = derive({ status: makeStatus({ staged: [], unstaged }) });
       expect(summary.warnings.find((i) => i.id === "nothing-staged")!.detail).toBe(
-        "2500 changed files"
+        `${(2500).toLocaleString()} changed files`
       );
     });
 

@@ -136,7 +136,7 @@ test.describe.serial("Core: Toolbar launcher (shared component)", () => {
     await openLauncher(ctx.window);
     await searchBox(ctx.window).fill("dev preview");
 
-    const row = ctx.window.locator(`${OPTION}[aria-label^="Dev Preview,"]`).first();
+    const row = ctx.window.locator(`${OPTION}[aria-label^="Dev preview,"]`).first();
     await expect(row).toBeVisible({ timeout: T_MEDIUM });
 
     // Whether it is gated depends on the fixture's project state; what must hold

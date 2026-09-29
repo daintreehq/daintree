@@ -55,7 +55,7 @@ function renderToolbar(onNewTab = vi.fn()) {
       />
     </TooltipProvider>
   );
-  return screen.getByRole("button", { name: "New Tab" });
+  return screen.getByRole("button", { name: "New tab" });
 }
 
 describe("PortalToolbar new-tab menu", () => {

@@ -6,6 +6,7 @@ import type { AgentState, WaitingReason } from "@shared/types/agent";
 import { describeWaiting } from "@shared/utils/waitingReasonDisplay";
 import { isPtyPanel } from "@shared/types/panel";
 import type { PanelLocation, TerminalFlowStatus } from "@shared/types/panel";
+import { pluralize } from "@/lib/pluralize";
 
 // FUTURE_SAB: `flowStatus` in the snapshot is typed as `TerminalFlowStatus`
 // (not `PersistableFlowStatus`) so the formatter below can handle the
@@ -110,7 +111,7 @@ function getQueueCountMessage(title: string, prev: number, next: number): string
   // the AT queue. Mid-range adjustments (3 → 5 queued) are visible in the UI
   // and don't warrant interruption.
   if (prev === 0 && next > 0) {
-    return `${title}: ${next} command${next > 1 ? "s" : ""} queued`;
+    return `${title}: ${pluralize(next, "command")} queued`;
   }
   if (prev > 0 && next === 0) {
     return `${title}: queue cleared`;

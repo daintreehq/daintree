@@ -41,6 +41,7 @@ import { getBuildChannelLabel } from "@shared/config/distribution";
 import { logError } from "@/utils/logger";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { useDistributionStore } from "@/store/distributionStore";
+import { pluralize } from "@/lib/pluralize";
 
 const GENERAL_SUBTABS: SettingsSubtabItem[] = [
   { id: "overview", label: "Overview" },
@@ -248,7 +249,7 @@ export function GeneralTab({
         : `All ${installed.length} installed agents are ready to use`;
     }
     const ready = installed.length - attention.length;
-    return `${ready} of ${installed.length} installed agents are ready — ${attention.length} need${attention.length === 1 ? "s" : ""} attention`;
+    return `${ready} of ${installed.length} installed agents are ready — ${pluralize(attention.length, "needs", "need")} attention`;
   })();
   const [shortcuts, setShortcuts] = useState<ShortcutCategory[]>([]);
   const [updateChannel, setUpdateChannel] = useState<"stable" | "nightly" | null>(null);

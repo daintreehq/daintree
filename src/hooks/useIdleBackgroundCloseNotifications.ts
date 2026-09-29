@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { isElectronAvailable } from "./useElectron";
 import { idleBackgroundAutoCloseClient } from "@/clients/idleBackgroundAutoCloseClient";
 import { notify } from "@/lib/notify";
+import { pluralize } from "@/lib/pluralize";
 
 // One-way latch: app-lifetime, notify-only singleton listener with no teardown.
 // Never reset this — a remount re-subscribing would fire duplicate toasts
@@ -36,11 +37,10 @@ export function useIdleBackgroundCloseNotifications(): void {
           coalesce: {
             key: "idle-background:closed",
             windowMs: 10000,
-            buildMessage: (count) =>
-              `${count} idle project${count === 1 ? "" : "s"} closed to free memory`,
+            buildMessage: (count) => `${pluralize(count, "idle project")} closed to free memory`,
             buildTitle: () => "Projects suspended",
             buildInboxMessage: (count) =>
-              `${count} idle project${count === 1 ? "" : "s"} closed to free memory`,
+              `${pluralize(count, "idle project")} closed to free memory`,
           },
         });
       }

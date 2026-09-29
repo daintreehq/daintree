@@ -35,7 +35,7 @@ export const FILE_LINK_ACTIVATION_COALESCE_KEY = "filelink-activate-fail";
  * inbox. The full path is only exposed on explicit user action.
  *
  * The recovery action branches on the failure code: an OUTSIDE_ROOT failure
- * offers "Reveal in File Manager" (the file is real, just outside the
+ * offers "Reveal in file manager" (the file is real, just outside the
  * project — the user cmd-clicked it with intent, so revealing it in the OS
  * file manager is the discoverable inverse), while every other failure keeps
  * "Copy path". Reveal runs through the unconfined IPC op, which skips roots
@@ -90,7 +90,7 @@ export function reportFileLinkFailure(
   };
   const action = isOutsideRoot
     ? {
-        label: "Reveal in File Manager",
+        label: "Reveal in file manager",
         onClick: () => {
           void systemClient.showItemInFolderUnconfined(absolutePath).catch((revealError) => {
             logError("[FileLinksAddon] Failed to reveal out-of-root file link", revealError, {

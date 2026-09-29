@@ -16,6 +16,7 @@ import {
   sharedScope,
   type ShortcutEntry,
 } from "./shortcutReferenceModel";
+import { pluralize } from "@/lib/pluralize";
 
 // The notation legend's example. Any two-step chord would do; this one opens
 // the dialog the legend sits in.
@@ -199,8 +200,8 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
           {trimmedQuery
             ? rowCount === 0
               ? `No shortcuts match "${trimmedQuery}"`
-              : `${rowCount} shortcut${rowCount !== 1 ? "s" : ""} found for "${trimmedQuery}"`
-            : `${rowCount} shortcut${rowCount !== 1 ? "s" : ""}`}
+              : `${pluralize(rowCount, "shortcut")} found for "${trimmedQuery}"`
+            : `${pluralize(rowCount, "shortcut")}`}
         </div>
 
         {results && results.length === 0 ? (

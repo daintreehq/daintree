@@ -722,7 +722,7 @@ export function McpServerSettingsTab() {
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-xs text-text-primary">{bearer.userAgent}</div>
                       <div className="text-2xs text-text-secondary">
-                        {bearer.sessionCount} {bearer.sessionCount === 1 ? "session" : "sessions"}
+                        {pluralize(bearer.sessionCount, "session")}
                         {" · "}
                         {bearer.requestsSinceLaunch}{" "}
                         {bearer.requestsSinceLaunch === 1 ? "request" : "requests"}

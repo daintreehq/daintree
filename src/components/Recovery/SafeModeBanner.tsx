@@ -126,9 +126,9 @@ export function SafeModeBanner() {
 
   let crashMetaText: string | null = null;
   if (crashes > 0 && crashTimestamp !== null) {
-    crashMetaText = `${crashes} ${crashes === 1 ? "crash" : "crashes"} detected, last ${formatRelativeTime(crashTimestamp)}`;
+    crashMetaText = `${pluralize(crashes, "crash", "crashes")} detected, last ${formatRelativeTime(crashTimestamp)}`;
   } else if (crashes > 0) {
-    crashMetaText = `${crashes} ${crashes === 1 ? "crash" : "crashes"} detected`;
+    crashMetaText = `${pluralize(crashes, "crash", "crashes")} detected`;
   } else if (crashTimestamp !== null) {
     crashMetaText = `Last crash ${formatRelativeTime(crashTimestamp)}`;
   }
@@ -163,8 +163,8 @@ export function SafeModeBanner() {
         ) : (
           skipped > 0 && (
             <p className="text-text-secondary">
-              {skipped} {skipped === 1 ? "panel was" : "panels were"} skipped so you can recover the
-              app. Restart normally to reload them.
+              {pluralize(skipped, "panel was", "panels were")} skipped so you can recover the app.
+              Restart normally to reload them.
             </p>
           )
         )}

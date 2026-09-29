@@ -16,6 +16,7 @@ import { RECIPE_VARIABLE_TOKEN } from "@/components/TerminalRecipe/recipeVariabl
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import type { FleetTargetPreview } from "./fleetExecution";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { pluralize } from "@/lib/pluralize";
 
 export function FleetDraftingPill(): ReactElement | null {
   const armOrder = useFleetArmingStore((s) => s.armOrder);
@@ -94,7 +95,7 @@ export function FleetDraftingPill(): ReactElement | null {
             {hasDivergence && (
               <span
                 data-testid="fleet-drafting-pill-divergence-dot"
-                aria-label={`${overridesCount + skippedCount} per-target edit${overridesCount + skippedCount === 1 ? "" : "s"} pending`}
+                aria-label={`${pluralize(overridesCount + skippedCount, "per-target edit")} pending`}
                 className="min-w-0 truncate tabular-nums"
               >
                 {[

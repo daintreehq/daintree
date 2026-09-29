@@ -9,6 +9,7 @@ import { useShallow } from "zustand/react/shallow";
 import { usePanelLimitStore, shouldShowSoftWarning } from "@/store/panelLimitStore";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
+import { pluralNoun } from "@/lib/pluralize";
 
 interface TerminalCountWarningProps {
   className?: string;
@@ -119,8 +120,8 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
             <Trash2 aria-hidden="true" />
             {/* One text run, so the underline is not broken at the count. */}
             <span>
-              Close <span className="tabular-nums">{completedCount}</span> completed agent
-              {completedCount !== 1 ? "s" : ""}
+              Close <span className="tabular-nums">{completedCount.toLocaleString()}</span>{" "}
+              completed {pluralNoun(completedCount, "agent")}
             </span>
           </Button>
         ) : undefined

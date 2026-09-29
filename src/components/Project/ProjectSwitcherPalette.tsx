@@ -105,6 +105,7 @@ import {
   SCRATCH_CLEANUP_COUNTDOWN_VISIBLE_DAYS,
 } from "@shared/config/scratchCleanup";
 import { PathSegments } from "@/components/ui/PathSegments";
+import { pluralize } from "@/lib/pluralize";
 
 export interface ProjectSwitcherPaletteProps {
   isOpen: boolean;
@@ -554,11 +555,7 @@ function showResumableAgentMark(
  * sentence the project rows do, so the phrasing cannot drift between them.
  */
 function ResumableAgentsLabel({ count }: { count: number }) {
-  return (
-    <span className="sr-only">
-      , {count} {count === 1 ? "agent" : "agents"} will resume
-    </span>
-  );
+  return <span className="sr-only">, {pluralize(count, "agent")} will resume</span>;
 }
 
 /**

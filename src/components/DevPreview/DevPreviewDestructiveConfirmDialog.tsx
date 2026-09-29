@@ -21,6 +21,7 @@ import type {
   DevPreviewDestructivePreviewSizes,
   DevPreviewDirMeta,
 } from "@shared/types/ipc/devPreview";
+import { pluralize } from "@/lib/pluralize";
 
 export type DevPreviewDestructiveTier = "restartAndClearCache" | "reinstallAndRestart";
 
@@ -235,7 +236,7 @@ function settledAnnouncement(
   if (tier === "restartAndClearCache") {
     const total = cacheTotal(present, sizes);
     return typeof total === "number"
-      ? `Preview ready. ${present.length} ${present.length === 1 ? "cache" : "caches"}, ${formatBytes(total)} in all.`
+      ? `Preview ready. ${pluralize(present.length, "cache")}, ${formatBytes(total)} in all.`
       : "Preview ready. Some sizes couldn't be measured.";
   }
   return typeof sizes.nodeModulesSizeBytes === "number"

@@ -9,6 +9,7 @@ import { buildResumeSessionItems } from "@/services/resumeSessionItems";
 import { useResumeAgentSession } from "@/hooks/useResumeAgentSession";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
+import { pluralNoun } from "@/lib/pluralize";
 
 /**
  * First-run-quiet resume affordance for the launcher: one line for the single
@@ -112,9 +113,7 @@ export function ResumeSessionLine() {
           // its accessible name, so a speech-input user can say what they read;
           // "Browse 2 more resumable sessions" contained "2 more" but not
           // "+2 more", and the control they can see is the one they cannot say.
-          aria-label={`+${extraCount} more — browse resumable session${
-            extraCount !== 1 ? "s" : ""
-          }`}
+          aria-label={`+${extraCount} more — browse resumable ${pluralNoun(extraCount, "session")}`}
         >
           +{extraCount} more
         </Button>

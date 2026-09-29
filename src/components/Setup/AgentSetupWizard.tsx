@@ -40,6 +40,7 @@ import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
 import { CountBadge } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 const AGENT_ORDER = LAUNCHABLE_AGENT_IDS;
 
@@ -1357,7 +1358,7 @@ export function CompleteStep({
   hasWorkspace?: boolean;
 }) {
   const hasAgents = installedAgents.length > 0;
-  const readyLine = `You have ${installedAgents.length} agent${installedAgents.length === 1 ? "" : "s"} ready to use.`;
+  const readyLine = `You have ${pluralize(installedAgents.length, "agent")} ready to use.`;
 
   return (
     <div className="space-y-4">

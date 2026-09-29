@@ -313,7 +313,7 @@ export function ImportEnvDialog({
       : !canProceed
         ? "Import"
         : conflicts.length > 0
-          ? `Review ${conflicts.length} conflict${conflicts.length === 1 ? "" : "s"}`
+          ? `Review ${pluralize(conflicts.length, "conflict")}`
           : `Import ${pluralize(newCount, "variable")}`;
 
   /** Why the primary action is dead. A disabled button that explains nothing is a dead end. */
@@ -376,8 +376,8 @@ export function ImportEnvDialog({
               </span>
             ) : (
               <>
-                {pluralize(conflicts.length, "key")} already exist
-                {conflicts.length === 1 ? "s" : ""} with a different value. Choose which one wins.
+                {pluralize(conflicts.length, "key already exists", "keys already exist")} with a
+                different value. Choose which one wins.
               </>
             )}
           </AppDialog.Description>

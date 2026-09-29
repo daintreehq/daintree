@@ -168,7 +168,7 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
         const win = ctx.senderWindow ?? undefined;
         const defaultFilename = safeRecipeFilename(payload.name);
         const dialogOptions: Electron.SaveDialogOptions = {
-          title: "Export Recipe",
+          title: "Export recipe",
           defaultPath: defaultFilename,
           filters: [{ name: "Recipe Files", extensions: ["json"] }],
         };
@@ -186,7 +186,7 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
     typedHandleWithContext(CHANNELS.RECIPE_IMPORT_FILE, async (ctx): Promise<string | null> => {
       const win = ctx.senderWindow ?? undefined;
       const dialogOptions: Electron.OpenDialogOptions = {
-        title: "Import Recipe",
+        title: "Import recipe",
         filters: [{ name: "Recipe Files", extensions: ["json"] }],
         properties: ["openFile"],
       };

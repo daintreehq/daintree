@@ -18,6 +18,7 @@ import {
 } from "@shared/types/plugin";
 import { LIST_LABEL_CLASS, SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge, CountBadge } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 const SECTION_HEADER_CLASS = cn(LIST_LABEL_CLASS, "px-3");
 
@@ -158,10 +159,7 @@ export function ProjectPluginSection({
           drops under Chromium 146 + VoiceOver (LESSON #9006). */}
       <h3 id="plugin-category-this-project" className={SECTION_HEADER_CLASS}>
         This project{" "}
-        <CountBadge
-          className="ml-1.5"
-          label={`${plugins.length} ${plugins.length === 1 ? "plugin" : "plugins"}`}
-        >
+        <CountBadge className="ml-1.5" label={`${pluralize(plugins.length, "plugin")}`}>
           {plugins.length}
         </CountBadge>
       </h3>

@@ -85,6 +85,7 @@ import {
 import { SettingsFlushProvider, SettingsFlushContext } from "./SettingsFlushRegistry";
 import { useProgressiveRenderLimit } from "@/hooks/useProgressiveRenderLimit";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
+import { pluralize, pluralNoun } from "@/lib/pluralize";
 
 let rememberedTab: SettingsTab = "general";
 let rememberedProjectTab: SettingsTab = "project:general";
@@ -787,7 +788,7 @@ function SettingsDialogInner({
             <p aria-live="polite" className="sr-only">
               {searchResults.length === 0
                 ? "No results found"
-                : `${searchResults.length} result${searchResults.length === 1 ? "" : "s"} found`}
+                : `${pluralize(searchResults.length, "result")} found`}
             </p>
           )}
 
@@ -1937,8 +1938,8 @@ export function SearchResults({
     <div>
       <div className={cn("flex items-center justify-between", filteringModified ? "mb-1" : "mb-3")}>
         <p className="text-xs text-text-secondary">
-          <span className="tabular-nums">{results.length}</span> result
-          {results.length === 1 ? "" : "s"}
+          <span className="tabular-nums">{results.length.toLocaleString()}</span>{" "}
+          {pluralNoun(results.length, "result")}
         </p>
         {/* Real instructions, not a placeholder — they take the secondary ramp. */}
         <p className="shrink-0 whitespace-nowrap text-3xs text-text-secondary">

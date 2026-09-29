@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
 import type { KeybindingImportResult } from "@shared/types/ipc/api";
+import { pluralize } from "@/lib/pluralize";
 
 interface KeybindingProfileActionsProps {
   onImportComplete: () => void;
@@ -73,7 +74,7 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
         title: "Shortcuts imported",
         message:
           result.applied > 0
-            ? `Applied ${result.applied} shortcut${result.applied !== 1 ? "s" : ""}`
+            ? `Applied ${pluralize(result.applied, "shortcut")}`
             : "No shortcuts were applied",
         transient: true,
       });

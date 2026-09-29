@@ -11,6 +11,7 @@ import {
   primaryFrame,
   segmentFrames,
 } from "./stackFrames";
+import { pluralize } from "@/lib/pluralize";
 
 interface StackTraceProps {
   stackTrace: CdpStackTrace;
@@ -162,7 +163,7 @@ export function StackTrace({
         <span className="text-text-secondary">
           <span aria-hidden="true">· </span>
           <span className="sr-only">, </span>
-          {frames.length} {frames.length === 1 ? "frame" : "frames"}
+          {pluralize(frames.length, "frame")}
         </span>
       </button>
       <ol

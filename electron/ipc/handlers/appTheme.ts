@@ -135,7 +135,7 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
     typedHandleWithContext(CHANNELS.APP_THEME_IMPORT, async (ctx) => {
       const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
       const dialogOptions = {
-        title: "Import App Theme",
+        title: "Import app theme",
         filters: [
           { name: "Theme Files", extensions: ["json"] },
           { name: "All Files", extensions: ["*"] },
@@ -171,7 +171,7 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
 
         const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
         const dialogOptions = {
-          title: "Export App Theme",
+          title: "Export app theme",
           defaultPath: `${safeName}.json`,
           filters: [
             { name: "Theme Files", extensions: ["json"] },

@@ -12,6 +12,7 @@ import type {
   PluginDiagnosticsLogLine,
   PluginDiagnosticsSnapshot,
 } from "../../../shared/types/ipc/pluginDiagnostics";
+import { pluralize } from "@/lib/pluralize";
 
 // Re-exported so existing importers (and tests) keep a stable surface; the
 // canonical definition now lives in the shared helper.
@@ -276,7 +277,7 @@ function buildStubBody(params: {
   const cappedMessage = capForBudget(message || "Unknown error", STUB_MESSAGE_BUDGET);
   const pluginLine =
     pluginCount > 0
-      ? `\n_${pluginCount} plugin${pluginCount === 1 ? "" : "s"} loaded — full diagnostics in the clipboard payload._\n`
+      ? `\n_${pluralize(pluginCount, "plugin")} loaded — full diagnostics in the clipboard payload._\n`
       : "";
   return (
     `## Error Report\n\n` +

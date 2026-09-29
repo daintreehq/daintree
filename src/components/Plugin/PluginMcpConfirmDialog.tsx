@@ -10,6 +10,7 @@ import type { BuiltInPluginCapability } from "@shared/types/plugin";
 import type { PluginMcpConsentDecision, PluginMcpDangerTier } from "@shared/types/pluginMcpConsent";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge, CountBadge } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 const CONFIRM_COOLDOWN_MS = 1_200;
 
@@ -337,7 +338,7 @@ function CapabilitiesDisclosure({
           What this plugin can do
           <CountBadge
             className="ml-1.5"
-            label={`, ${capabilities.length} ${capabilities.length === 1 ? "capability" : "capabilities"}`}
+            label={`, ${pluralize(capabilities.length, "capability", "capabilities")}`}
           >
             {capabilities.length}
           </CountBadge>
@@ -423,9 +424,7 @@ function GateHint({ queueDepth }: { queueDepth: number }) {
     // "· …". Two lines fit both facts whole.
     return (
       <span aria-live="polite" className="min-w-0 leading-tight">
-        <span className="block">
-          {queueDepth} more request{queueDepth === 1 ? "" : "s"} waiting
-        </span>
+        <span className="block">{pluralize(queueDepth, "more request")} waiting</span>
         <span className="block">remembered until this tool changes</span>
       </span>
     );

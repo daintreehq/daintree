@@ -860,21 +860,17 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
   }
   const parts: string[] = [];
   if (trackedChangeCount > 0) {
-    parts.push(
-      `${trackedChangeCount} uncommitted tracked file${trackedChangeCount === 1 ? "" : "s"}`
-    );
+    parts.push(`${pluralize(trackedChangeCount, "uncommitted tracked file")}`);
   }
   if (untrackedFileCount > 0) {
-    parts.push(`${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`);
+    parts.push(`${pluralize(untrackedFileCount, "untracked file")}`);
   }
   if (pointerOnly.length > 0) {
-    parts.push(`${pointerOnly.length} submodule change${pointerOnly.length === 1 ? "" : "s"}`);
+    parts.push(`${pluralize(pointerOnly.length, "submodule change")}`);
   }
   const listedBelow = submoduleRows.length - pointerOnly.length;
   if (listedBelow > 0) {
-    parts.push(
-      `${listedBelow} submodule${listedBelow === 1 ? "" : "s"} with changes inside, listed below`
-    );
+    parts.push(`${pluralize(listedBelow, "submodule")} with changes inside, listed below`);
   }
   return [
     `${parts.join(" and ")}:`,

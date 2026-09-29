@@ -8,6 +8,7 @@ import { resolveSavedScopeIds } from "@/services/actions/definitions/fleetAction
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useSavedFleets } from "./useSavedFleets";
 import { formatSavedFleetCount, savedFleetAccessibleName } from "./savedFleetMeta";
+import { pluralize } from "@/lib/pluralize";
 
 interface SavedFleetQuickRecallProps {
   /** The picker's commit mode: a saved fleet replaces the armed set or joins it. */
@@ -100,7 +101,7 @@ function SavedFleetChip({
         size="xs"
         aria-label={
           mode === "append"
-            ? `Add ${count} pane${count === 1 ? "" : "s"} from ${scope.name}`
+            ? `Add ${pluralize(count, "pane")} from ${scope.name}`
             : `Arm ${savedFleetAccessibleName(scope, count)}`
         }
         onClick={() => {

@@ -522,7 +522,7 @@ function describeState(
     case "loaded": {
       const failing = state.rows.filter((row) => row.isFailure).length;
       const total = state.rows.length;
-      return `${total} CI check${total === 1 ? "" : "s"}, ${failing} failing`;
+      return `${pluralize(total, "CI check")}, ${failing} failing`;
     }
     default:
       return "";

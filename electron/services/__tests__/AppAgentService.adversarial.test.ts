@@ -197,8 +197,8 @@ describe("AppAgentService adversarial", () => {
     expect(result.valid).toBe(false);
     expect(result.error).toMatch(/^API error: 500 /);
     const providerPart = result.error!.replace("API error: 500 ", "");
-    expect(providerPart.length).toBe(203);
-    expect(providerPart.endsWith("...")).toBe(true);
+    expect(providerPart.length).toBe(201);
+    expect(providerPart.endsWith("…")).toBe(true);
   });
 
   it("testApiKey extracts JSON error.message and truncates when long", async () => {
@@ -218,7 +218,7 @@ describe("AppAgentService adversarial", () => {
     const result = await new AppAgentService().testApiKey("k");
     expect(result.valid).toBe(false);
     const providerPart = result.error!.replace("API error: 500 ", "");
-    expect(providerPart).toBe(longMessage.slice(0, 200) + "...");
+    expect(providerPart).toBe(longMessage.slice(0, 200) + "…");
   });
 
   it("testApiKey uses JSON error.message directly when under 200 chars", async () => {
@@ -271,7 +271,7 @@ describe("AppAgentService adversarial", () => {
     const result = await new AppAgentService().testApiKey("k");
     expect(result.valid).toBe(false);
     const providerPart = result.error!.replace("API error: 500 ", "");
-    expect(providerPart).toBe(notJson.slice(0, 200) + "...");
+    expect(providerPart).toBe(notJson.slice(0, 200) + "…");
   });
 });
 

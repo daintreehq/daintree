@@ -24,6 +24,7 @@ import { TerminalRateLimitBadge } from "./TerminalRateLimitBadge";
 import { TerminalNotifyChip } from "./TerminalNotifyChip";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { describeExitStatus } from "./exitStatus";
+import { pluralize } from "@/lib/pluralize";
 
 export interface TerminalHeaderContentProps {
   id: string;
@@ -294,7 +295,7 @@ export function TerminalHeaderContent({
               Finished, no changes
             </span>
           </TooltipTrigger>
-          <TooltipContent side="bottom">No file changes since the agent started.</TooltipContent>
+          <TooltipContent side="bottom">No file changes since the agent started</TooltipContent>
         </Tooltip>
       );
     }
@@ -395,7 +396,7 @@ export function TerminalHeaderContent({
             </div>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {`${queueCount} command${queueCount > 1 ? "s" : ""} queued`}
+            {`${pluralize(queueCount, "command")} queued`}
           </TooltipContent>
         </Tooltip>
       )}

@@ -645,7 +645,7 @@ export function McpAuditLogViewer({
         >
           <AnomalyMark severity={bannerSeverity} decorative />
           <span>
-            {visibleSignals.length} anomaly signal{visibleSignals.length !== 1 ? "s" : ""}
+            {pluralize(visibleSignals.length, "anomaly signal")}
             {Object.entries(anomalyCountsByKind).length > 0 &&
               ` (${Object.entries(anomalyCountsByKind)
                 .map(([kind, count]) => `${count} ${kind}`)

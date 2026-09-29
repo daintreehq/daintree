@@ -26,6 +26,7 @@ import {
   formatMemory,
   formatProcessLabel,
 } from "./ProjectResourceBadge.utils";
+import { pluralize, pluralNoun } from "@/lib/pluralize";
 
 const MAX_SAMPLES = 12;
 const BADGE_POLL_MS = 10_000;
@@ -751,7 +752,7 @@ export function ProjectResourceBadge({
   // the mark right beside it. Both now come from the same verdict.
   const readoutLabel =
     stats.runningProjects > 0
-      ? `${stats.runningProjects} project${stats.runningProjects !== 1 ? "s" : ""} active`
+      ? `${pluralize(stats.runningProjects, "project")} active`
       : isWorking
         ? "Working"
         : "Idle";
@@ -815,7 +816,7 @@ export function ProjectResourceBadge({
                   <>
                     {stats.runningProjects}
                     <span className="@max-[280px]/footer:hidden">
-                      {` project${stats.runningProjects !== 1 ? "s" : ""}`}
+                      {` ${pluralNoun(stats.runningProjects, "project")}`}
                     </span>
                     {" active"}
                   </>

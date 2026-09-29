@@ -27,7 +27,7 @@ describe("PortalToolbar shortcut tooltips — issue #3819", () => {
     });
 
     it("uses createTooltipContent for New Tab tooltip", () => {
-      expect(source).toContain('createTooltipContent("New Tab", newTabShortcut)');
+      expect(source).toContain('createTooltipContent("New tab", newTabShortcut)');
     });
   });
 

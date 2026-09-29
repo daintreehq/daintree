@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { validatePromptTemplate } from "@shared/utils/promptTemplate";
 import { logError } from "@/utils/logger";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
+import { pluralize } from "@/lib/pluralize";
 
 interface CommandOverridesTabProps {
   projectId: string;
@@ -212,7 +213,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {isLoading
           ? ""
-          : `${filteredCommands.length} ${filteredCommands.length === 1 ? "command" : "commands"}${isFiltered ? "" : " in total"}`}
+          : `${pluralize(filteredCommands.length, "command")}${isFiltered ? "" : " in total"}`}
       </p>
 
       <SettingsGroup>

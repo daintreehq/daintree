@@ -88,6 +88,7 @@ import type { MarkdownDiffFailure } from "@/components/Worktree/markdownBlockDif
 import type { DiffSubject } from "./diffContentCache";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import type { TabInfo } from "@/components/Panel/TabButton";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * The layout segments the toolbar offers. `rendered` is deliberately not a
@@ -166,7 +167,7 @@ const DIFF_SENTINEL_CONTENT: ReadonlySet<string> = new Set([
 ]);
 
 function describeNotesSent(result: Extract<DiffNoteDeliveryResult, { ok: true }>): string {
-  const sent = `Pasted ${result.sent} ${result.sent === 1 ? "note" : "notes"} into ${result.targetTitle}`;
+  const sent = `Pasted ${pluralize(result.sent, "note")} into ${result.targetTitle}`;
   return result.kept > 0 ? `${sent} · ${result.kept} still pending` : sent;
 }
 

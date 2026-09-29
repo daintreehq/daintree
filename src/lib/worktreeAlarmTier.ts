@@ -1,4 +1,5 @@
 import type { CIStatusState } from "@shared/types/forge";
+import { pluralize } from "@/lib/pluralize";
 
 export type AlarmTier = 0 | 1 | 2 | 3;
 
@@ -91,7 +92,7 @@ export interface AlarmDetailInput {
 /** `3 commits behind, 2 ahead` — behind first, because behind is what raised the alarm. */
 function describeDrift(behind: number, ahead: number): string | undefined {
   const parts: string[] = [];
-  if (behind > 0) parts.push(`${behind} commit${behind === 1 ? "" : "s"} behind`);
+  if (behind > 0) parts.push(`${pluralize(behind, "commit")} behind`);
   if (ahead > 0) parts.push(`${ahead} ahead`);
   return parts.length > 0 ? parts.join(", ") : undefined;
 }
@@ -115,7 +116,7 @@ export function formatAlarmDetail(kind: AlarmKind, input: AlarmDetailInput): str
       const failed = input.ciFailed ?? 0;
       const total = input.ciTotal ?? 0;
       if (failed <= 0 || total <= 0) return "Checks failed on the linked pull request";
-      return `${failed} of ${total} check${total === 1 ? "" : "s"} failing`;
+      return `${failed} of ${pluralize(total, "check")} failing`;
     }
     case "auth-failed":
       // Names where the affordance is rather than implying this mark is it:

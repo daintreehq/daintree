@@ -23,6 +23,7 @@ import {
   useTrashCountdown,
   type TrashRemovalRequest,
 } from "./trashCountdown";
+import { pluralize } from "@/lib/pluralize";
 
 interface TrashGroupItemProps {
   groupRestoreId: string;
@@ -98,7 +99,7 @@ export function TrashGroupItem({
     return null;
   })();
 
-  const fallbackName = `Tab group (${tabCount} ${tabCount === 1 ? "tab" : "tabs"})`;
+  const fallbackName = `Tab group (${pluralize(tabCount, "tab")})`;
   const groupName = resolvedActiveTitle
     ? tabCount > 1
       ? `${resolvedActiveTitle} +${tabCount - 1} more`

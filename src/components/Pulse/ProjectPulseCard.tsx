@@ -35,6 +35,7 @@ import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { systemClient } from "@/clients/systemClient";
 import { formatTimeSince } from "@/components/Layout/FreshnessUtils";
 import { formatCompactCount, formatCountExact } from "@/lib/formatCount";
+import { pluralize } from "@/lib/pluralize";
 
 // Collapses paired window.focus + visibilitychange events that fire together
 // on restore-from-minimize. Short enough that legitimate user actions
@@ -215,7 +216,7 @@ function HealthSignals({
       {health.securityAlerts.visible && health.securityAlerts.count > 0 && (
         <HealthChip
           icon={<ShieldAlert className="w-3.5 h-3.5 text-current" />}
-          label={`${health.securityAlerts.count} alert${health.securityAlerts.count !== 1 ? "s" : ""}`}
+          label={`${pluralize(health.securityAlerts.count, "alert")}`}
           onClick={() => openUrl("/security/dependabot")}
           tone="warning"
         />

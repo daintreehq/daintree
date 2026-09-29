@@ -99,6 +99,7 @@ import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { pluralize } from "@/lib/pluralize";
 
 type ToolbarSide = "left" | "right";
 
@@ -397,7 +398,7 @@ function ToolbarSideColumn({
     <div id={id} ref={setNodeRef} className="min-w-0 scroll-mt-6">
       <SortableContext items={buttonIds} strategy={rectSortingStrategy}>
         <SettingsGroup
-          label={`${label} · ${onCount} ${onCount === 1 ? "button" : "buttons"}`}
+          label={`${label} · ${pluralize(onCount, "button")}`}
           className={cn("min-h-12", isOver && "ring-1 ring-inset ring-border-strong")}
         >
           {renderedIds.length === 0 ? (
@@ -1153,7 +1154,7 @@ export function ToolbarSettingsTab() {
                       />
                       {showUninstalledAgents
                         ? "Hide agents that aren't installed"
-                        : `Show ${uninstalledAgentCount} ${uninstalledAgentCount === 1 ? "agent" : "agents"} that aren't installed`}
+                        : `Show ${pluralize(uninstalledAgentCount, "agent")} that aren't installed`}
                     </button>
                   </div>
                 )}

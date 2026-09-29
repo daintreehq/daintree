@@ -26,6 +26,7 @@ import {
   formatGitPushDestination,
   type GitRemoteOperationPreview,
 } from "@/components/Git/gitRemoteOperationPreview";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * D2 confirm for `git.push` dispatched from the action palette or a keybinding
@@ -252,7 +253,7 @@ function GitPushConfirmDialogInner() {
   ) : isLoaded && behind > 0 ? (
     <PreviewNotice
       tone="warning"
-      title={`${destinationLabel} has ${behind} commit${behind === 1 ? "" : "s"} this branch doesn't`}
+      title={`${destinationLabel} has ${pluralize(behind, "commit")} this branch doesn't`}
       testId="git-push-diverged"
     >
       As of the last fetch. Git will refuse this push rather than overwrite them — integrate them

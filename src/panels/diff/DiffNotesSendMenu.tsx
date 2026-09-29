@@ -21,6 +21,7 @@ import {
   type DiffNoteDeliveryResult,
 } from "@/hooks/useDiffNoteDelivery";
 import { PANE_TOOLBAR_TEXT_BUTTON_CLASS } from "@/components/ui/paneToolbarStyles";
+import { pluralize } from "@/lib/pluralize";
 
 export type DiffNoteSendScope = "file" | "all";
 
@@ -86,7 +87,7 @@ export function DiffNotesSendMenu({ worktreePath, filePath, onResult }: DiffNote
         >
           <DropdownMenuRadioItem
             value="file"
-            aria-label={`This file, ${fileCount} ${fileCount === 1 ? "note" : "notes"}`}
+            aria-label={`This file, ${pluralize(fileCount, "note")}`}
             onSelect={(event) => event.preventDefault()}
           >
             This file
@@ -94,7 +95,7 @@ export function DiffNotesSendMenu({ worktreePath, filePath, onResult }: DiffNote
           </DropdownMenuRadioItem>
           <DropdownMenuRadioItem
             value="all"
-            aria-label={`All files, ${allNotes.length} ${allNotes.length === 1 ? "note" : "notes"}`}
+            aria-label={`All files, ${pluralize(allNotes.length, "note")}`}
             onSelect={(event) => event.preventDefault()}
           >
             All files
@@ -103,9 +104,7 @@ export function DiffNotesSendMenu({ worktreePath, filePath, onResult }: DiffNote
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
         <DropdownMenuLabel>
-          {count === 0
-            ? "No notes on this file"
-            : `Paste ${count} ${count === 1 ? "note" : "notes"} into`}
+          {count === 0 ? "No notes on this file" : `Paste ${pluralize(count, "note")} into`}
         </DropdownMenuLabel>
         <DiffNoteTargetItems disabled={count === 0} onSend={send} />
       </DropdownMenuContent>

@@ -9,6 +9,7 @@ import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * Plugins settings tab — a thin entry point into the dedicated plugin manager
@@ -133,7 +134,7 @@ export function PluginsTab() {
       ? null
       : count === 0
         ? "No plugins installed yet"
-        : `${count} plugin${count === 1 ? "" : "s"} installed`;
+        : `${pluralize(count, "plugin")} installed`;
 
   return (
     <div className="space-y-8">

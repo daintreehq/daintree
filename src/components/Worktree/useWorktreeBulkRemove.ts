@@ -139,7 +139,7 @@ export function describeBulkRemoveRisks(target: BulkRemoveTarget): string[] {
   const risks = describeBulkRemoveLosses(target);
   const aheadCount = bulkRemoveAheadCount(target);
   if (aheadCount > 0) {
-    risks.push(`${aheadCount} unpushed commit${aheadCount === 1 ? "" : "s"}`);
+    risks.push(`${pluralize(aheadCount, "unpushed commit")}`);
   }
   return risks;
 }
@@ -170,20 +170,20 @@ export function describeBulkRemoveLosses(target: BulkRemoveTarget): string[] {
     const { files, pointerOnly } = splitDisplayChanges(changes, rootPath, submodules);
     const { trackedChangeCount, untrackedFileCount } = summarizeWorktreeChanges(files);
     if (trackedChangeCount > 0) {
-      risks.push(`${trackedChangeCount} uncommitted file${trackedChangeCount === 1 ? "" : "s"}`);
+      risks.push(`${pluralize(trackedChangeCount, "uncommitted file")}`);
     }
     if (untrackedFileCount > 0) {
-      risks.push(`${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`);
+      risks.push(`${pluralize(untrackedFileCount, "untracked file")}`);
     }
     // The parent's own status collapses every one of these into a single
     // ` M vendor/lib` row, and can be configured not to report it at all, so
     // the nested count cannot be derived from the two above it.
     const nested = submoduleFileCount(submodules);
     if (nested > 0) {
-      risks.push(`${nested} file${nested === 1 ? "" : "s"} inside submodules`);
+      risks.push(`${pluralize(nested, "file")} inside submodules`);
     }
     if (pointerOnly.length > 0) {
-      risks.push(`${pointerOnly.length} submodule change${pointerOnly.length === 1 ? "" : "s"}`);
+      risks.push(`${pluralize(pointerOnly.length, "submodule change")}`);
     }
   }
   return risks;

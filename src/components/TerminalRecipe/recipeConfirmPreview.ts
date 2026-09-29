@@ -1,5 +1,6 @@
 import type { RecipeTerminal, TerminalRecipe } from "@shared/types";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * Preview lines for an agent-initiated dispatch that would run a recipe
@@ -84,8 +85,8 @@ export function formatRecipePreviewLines(
   const lines = [`${recipe.name} — ${recipeOriginLabel(recipe)}`];
   lines.push(
     options.spawns
-      ? `Starts ${total} terminal${total === 1 ? "" : "s"}:`
-      : `Defines ${total} terminal${total === 1 ? "" : "s"}:`
+      ? `Starts ${pluralize(total, "terminal")}:`
+      : `Defines ${pluralize(total, "terminal")}:`
   );
 
   recipe.terminals.forEach((terminal, index) => {

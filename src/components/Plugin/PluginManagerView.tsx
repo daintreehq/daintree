@@ -993,7 +993,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                         {label}{" "}
                         <CountBadge
                           className="ml-1.5"
-                          label={`${groupPlugins.length} ${groupPlugins.length === 1 ? "plugin" : "plugins"}`}
+                          label={`${pluralize(groupPlugins.length, "plugin")}`}
                         >
                           {groupPlugins.length}
                         </CountBadge>

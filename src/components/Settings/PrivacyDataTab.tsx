@@ -19,6 +19,7 @@ import { ANALYTICS_EVENTS } from "@shared/config/telemetry";
 import { actionService } from "@/services/ActionService";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { logError } from "@/utils/logger";
+import { pluralize } from "@/lib/pluralize";
 
 type TelemetryLevel = "off" | "errors" | "full";
 type LogRetention = 7 | 30 | 90 | 0;
@@ -553,7 +554,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   description={
                     hiddenActionCount === 0
                       ? "No commands are hidden from 'Recently used' in the action palette"
-                      : `${hiddenActionCount} ${hiddenActionCount === 1 ? "command is" : "commands are"} hidden from 'Recently used' in the action palette. Resetting restores all of them.`
+                      : `${pluralize(hiddenActionCount, "command is", "commands are")} hidden from 'Recently used' in the action palette. Resetting restores all of them.`
                   }
                   control={
                     <Button

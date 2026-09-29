@@ -2,6 +2,7 @@ import type { ForgeProjectHealthPayload } from "@shared/types/ipc/forge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { formatCompactCount, formatCountExact } from "@/lib/formatCount";
 import { CheckCircle2, XCircle, Clock, CircleMinus, GitPullRequest, CircleDot } from "lucide-react";
+import { pluralNoun } from "@/lib/pluralize";
 
 export interface AggregateCounts {
   worktrees: number;
@@ -79,9 +80,9 @@ export function MainWorktreeSummaryRows({ health }: MainWorktreeSummaryRowsProps
           </div>
         </TooltipTrigger>
         <TooltipContent side="right" className="text-xs">
-          CI: {ciStatusLabel(health.ciStatus)} · {formatCountExact(health.prCount)} open PR
-          {health.prCount !== 1 ? "s" : ""} · {formatCountExact(health.issueCount)} open issue
-          {health.issueCount !== 1 ? "s" : ""}
+          CI: {ciStatusLabel(health.ciStatus)} · {formatCountExact(health.prCount)} open{" "}
+          {pluralNoun(health.prCount, "PR")} · {formatCountExact(health.issueCount)} open{" "}
+          {pluralNoun(health.issueCount, "issue")}
         </TooltipContent>
       </Tooltip>
     </div>

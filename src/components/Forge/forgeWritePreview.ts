@@ -17,6 +17,7 @@
  */
 
 import { MCP_PREVIEW_CAUTION_PREFIX } from "@/lib/mcpPreviewLines";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * How much authored text the card shows before it says so.
@@ -115,7 +116,7 @@ function contentSection(
   if (omitted > 0) {
     lines.push(
       caution(
-        `Shown in part — ${omitted} more character${omitted === 1 ? "" : "s"} will be published than appear above.`
+        `Shown in part — ${pluralize(omitted, "more character")} will be published than appear above.`
       )
     );
   }
@@ -178,9 +179,7 @@ function labelSection(labels: readonly string[] | undefined): string[] {
   ];
   const rest = list.length - shown.length;
   if (rest > 0) {
-    lines.push(
-      caution(`${rest} further label${rest === 1 ? "" : "s"} will be applied but are not listed.`)
-    );
+    lines.push(caution(`${pluralize(rest, "further label")} will be applied but are not listed.`));
   }
   return lines;
 }

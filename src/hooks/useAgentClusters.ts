@@ -7,6 +7,7 @@ import { isFleetArmEligible } from "@/store/fleetArmingStore";
 import { isTerminalErrorClusterEligible } from "@/store/fleetEligibility";
 import { useWorktreeIds } from "@/hooks/useTerminalSelectors";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
+import { pluralize } from "@/lib/pluralize";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -33,14 +34,13 @@ function makeSignature(type: ClusterType, memberIds: string[], latestStateChange
 }
 
 function makeHeadline(type: ClusterType, count: number): string {
-  const noun = count === 1 ? "agent" : "agents";
   switch (type) {
     case "waiting":
-      return `${count} ${noun} need${count === 1 ? "s" : ""} input`;
+      return `${pluralize(count, "agent needs", "agents need")} input`;
     case "error":
-      return `${count} ${noun} exited with errors`;
+      return `${pluralize(count, "agent")} exited with errors`;
     case "completion":
-      return `${count} ${noun} finished`;
+      return `${pluralize(count, "agent")} finished`;
   }
 }
 

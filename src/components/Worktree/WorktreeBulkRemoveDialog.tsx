@@ -388,9 +388,7 @@ function Section({
         <span id={id} role="heading" aria-level={3} className={SECTION_LABEL_CLASS}>
           {label}
         </span>
-        <CountBadge label={`${count} ${count === 1 ? "worktree" : "worktrees"}`}>
-          {count}
-        </CountBadge>
+        <CountBadge label={`${pluralize(count, "worktree")}`}>{count}</CountBadge>
       </div>
       {children}
     </section>

@@ -1558,7 +1558,7 @@ export function PilotView() {
             ? { phrase: reviewPhrase(review), filter: null }
             : live > 0
               ? {
-                  phrase: `Nothing needs you · ${live} ${live === 1 ? "agent" : "agents"} working`,
+                  phrase: `Nothing needs you · ${pluralize(live, "agent")} working`,
                   filter: null,
                 }
               : fleet.total > 0

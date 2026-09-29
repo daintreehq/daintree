@@ -61,7 +61,8 @@ function literalText(n: ts.Node): string | null {
     return n.text;
   }
   if (ts.isTemplateExpression(n)) {
-    return [n.head.text, ...n.templateSpans.map((s) => s.literal.text)].join("\u0000");
+    // `{}` stands in for each interpolation, so "${phase}..." still reads as a trailing ellipsis.
+    return [n.head.text, ...n.templateSpans.map((s) => s.literal.text)].join("{}");
   }
   return null;
 }
@@ -71,7 +72,7 @@ const lineOf = (source: ts.SourceFile, n: ts.Node) =>
 
 /** Three dots used as an ellipsis: after a word or a closing paren, or before one. */
 const THREE_DOT_ELLIPSIS =
-  /[\w)]\.\.\.(?=$|[\s\u0000,;:"')])|^\.\.\.[a-z]+\s|\s\.\.\.(?=$|[\u0000"')])/;
+  /[\w)}-]\.\.\.(?=$|[\s,;:"')])|^\.\.\.(?:$|[a-z]+\s)|\s\.\.\.(?=$|["')])/;
 
 const MENU_LABEL_TAGS = new Set([
   "DropdownMenuLabel",
@@ -92,6 +93,8 @@ const THREE_DOT_ALLOWED = new Set([
   "src/services/actions/definitions/forgeActions.ts",
   // A stack-trace marker in a GitHub issue body, matched verbatim by its own tests.
   "shared/utils/githubIssueUrl.ts",
+  // Matches the dots an agent CLI prints after a truncated status title.
+  "electron/services/pty/HandbackDetector.ts",
 ]);
 
 const IN_APP_BROWSER_FILES = /^src\/components\/(Browser|Portal|DevPreview)\//;
@@ -150,6 +153,19 @@ describe("wording", () => {
         inlinePlurals.push(`${r}:${lineOf(source, n)}`);
       }
 
+      // `noun${n === 1 ? "" : "s"}` — the suffix form of the same thing.
+      if (
+        ts.isConditionalExpression(n) &&
+        ts.isBinaryExpression(n.condition) &&
+        n.condition.right.getText(source) === "1" &&
+        [n.whenTrue, n.whenFalse].every(ts.isStringLiteral) &&
+        [(n.whenTrue as ts.StringLiteral).text, (n.whenFalse as ts.StringLiteral).text]
+          .sort()
+          .join("|") === "|s"
+      ) {
+        inlinePlurals.push(`${r}:${lineOf(source, n)}`);
+      }
+
       if (ts.isJsxElement(n)) {
         const tag = n.openingElement.tagName.getText(source);
         if (MENU_LABEL_TAGS.has(tag)) {
@@ -203,12 +219,18 @@ describe("wording", () => {
 });
 
 describe("wording detectors", () => {
-  it.each(["Loading...", "Filter themes...", "Retrying (1/3)...", "...and 2 more", "a, ..."])(
-    "flags %j as a three-dot ellipsis",
-    (text) => {
-      expect(THREE_DOT_ELLIPSIS.test(text)).toBe(true);
-    }
-  );
+  it.each([
+    "Loading...",
+    "Filter themes...",
+    "Retrying (1/3)...",
+    "...and 2 more",
+    "a, ...",
+    "...",
+    "org-...",
+    "{}...",
+  ])("flags %j as a three-dot ellipsis", (text) => {
+    expect(THREE_DOT_ELLIPSIS.test(text)).toBe(true);
+  });
 
   it.each(["Loading…", "{ ...props }", "[...spread]", 'branchName: "..."'])(
     "leaves %j alone",

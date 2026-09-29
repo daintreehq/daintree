@@ -194,7 +194,7 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
         const url = state.defaultNewTabUrl;
         const link = state.links.find((l) => l.url === url);
         const agentInfo = getAIAgentInfo(url);
-        const title = link?.title ?? agentInfo?.title ?? "New Tab";
+        const title = link?.title ?? agentInfo?.title ?? "New tab";
         const newTabId = state.createTab(url, title);
         if (agentInfo?.icon) {
           state.updateTabIcon(newTabId, agentInfo.icon);
@@ -280,7 +280,7 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
       };
       const state = usePortalStore.getState();
       const agentInfo = getAIAgentInfo(url);
-      const finalTitle = title ?? agentInfo?.title ?? "New Tab";
+      const finalTitle = title ?? agentInfo?.title ?? "New tab";
       const icon = agentInfo?.icon;
 
       if (background) {

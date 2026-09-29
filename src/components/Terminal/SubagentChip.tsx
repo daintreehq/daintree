@@ -39,6 +39,7 @@ import {
   HEADER_CHIP_SURFACE,
 } from "./terminalHeaderChip";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { pluralize } from "@/lib/pluralize";
 
 const TONE_CLASSES: Record<"error" | "waiting" | "muted", string> = {
   error: "text-status-error",
@@ -292,7 +293,7 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
   const label = SUBAGENT_PROVIDERS[result.provider].label;
   const count = subagents.length;
   const waiting = subagents.filter((subagent) => subagent.status.type === "blocked").length;
-  const summary = `${count} ${label} subagent${count === 1 ? "" : "s"}`;
+  const summary = pluralize(count, `${label} subagent`);
   const waitingNote = waiting > 0 ? `${waiting} waiting on you` : null;
   const refreshErrorMessage = refreshError ? subagentUnavailableMessage(refreshError, label) : null;
   // A retry in flight outranks the failure it is retrying; the visible notice

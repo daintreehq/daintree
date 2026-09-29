@@ -761,7 +761,7 @@ export function PortalToolbar({
                       if (e.pointerType !== "mouse") e.stopPropagation();
                     }}
                     className={iconButtonClass}
-                    aria-label="New Tab"
+                    aria-label="New tab"
                     aria-keyshortcuts={newTabAriaShortcut}
                   >
                     <Plus className={PANE_TOOLBAR_ICON_CLASS} />
@@ -769,7 +769,7 @@ export function PortalToolbar({
                 </ContextMenuTrigger>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {createTooltipContent("New Tab", newTabShortcut)}
+                {createTooltipContent("New tab", newTabShortcut)}
               </TooltipContent>
             </Tooltip>
             <ContextMenuContent>

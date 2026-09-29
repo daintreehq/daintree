@@ -39,6 +39,7 @@ import { cn } from "@/lib/utils";
 import { isProtectedBranch as isProtectedBranchName } from "@shared/utils/gitConstants";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { pluralize } from "@/lib/pluralize";
 
 interface WorktreeDeleteDialogProps {
   isOpen: boolean;
@@ -182,7 +183,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // "at least" rather than stating a number the host already knows is short.
   const atRiskCommitsCapped = submodules ? submoduleCommitsAreCapped(submodules) : false;
   const atRiskCommitsPlural = atRiskCommitCount !== 1 || atRiskCommitsCapped;
-  const atRiskCommitLabel = `${atRiskCommitsCapped ? "At least " : ""}${atRiskCommitCount} commit${atRiskCommitCount === 1 ? "" : "s"} ${atRiskCommitsPlural ? "are" : "is"}`;
+  const atRiskCommitLabel = `${atRiskCommitsCapped ? "At least " : ""}${pluralize(atRiskCommitCount, "commit")} ${atRiskCommitsPlural ? "are" : "is"}`;
   // Where the push has to run from. Only paths the inventory bound to a
   // checkout; a commit from an unbound module store has no path to name.
   const atRiskCommitPaths = [
@@ -581,9 +582,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const untrackedFileCount = fileSummary.untrackedFileCount;
   // "Changes to" rather than "N uncommitted files": what a force delete loses
   // from a tracked file is its uncommitted change, not the file's history.
-  const trackedLabel = `uncommitted changes to ${trackedChangeCount} tracked file${trackedChangeCount === 1 ? "" : "s"}`;
-  const untrackedLabel = `${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`;
-  const submoduleEntryLabel = `${submoduleEntryCount} submodule${submoduleEntryCount === 1 ? "" : "s"}`;
+  const trackedLabel = `uncommitted changes to ${pluralize(trackedChangeCount, "tracked file")}`;
+  const untrackedLabel = `${pluralize(untrackedFileCount, "untracked file")}`;
+  const submoduleEntryLabel = `${pluralize(submoduleEntryCount, "submodule")}`;
   /**
    * Never state a count we could not verify.
    *
@@ -604,18 +605,16 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           ? untrackedLabel
           : null;
   const hasFileChanges = fileChangeLabel !== null;
-  const nestedFileLabel = `${nestedFileCount} file${nestedFileCount === 1 ? "" : "s"}`;
+  const nestedFileLabel = `${pluralize(nestedFileCount, "file")}`;
   // The same split as the parent's: a modified tracked file inside a
   // submodule loses its uncommitted change, not its committed history.
   const nestedDirtyCount = submodules?.risk?.dirtyFiles.length ?? 0;
   const nestedUntrackedCount = submodules?.risk?.untrackedFiles.length ?? 0;
   const nestedLossLabel = [
     nestedDirtyCount > 0
-      ? `uncommitted changes to ${nestedDirtyCount} tracked file${nestedDirtyCount === 1 ? "" : "s"}`
+      ? `uncommitted changes to ${pluralize(nestedDirtyCount, "tracked file")}`
       : null,
-    nestedUntrackedCount > 0
-      ? `${nestedUntrackedCount} untracked file${nestedUntrackedCount === 1 ? "" : "s"}`
-      : null,
+    nestedUntrackedCount > 0 ? `${pluralize(nestedUntrackedCount, "untracked file")}` : null,
   ]
     .filter(Boolean)
     .join(" and ");
@@ -659,7 +658,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               row, so ranking a neutral row's first half does not blunt it.
               Rows with no detail stay unweighted: there is no pair to rank. */}
           <span className={cn(runningAgentCount > 0 && "font-medium")}>
-            {terminalCounts.total} terminal{terminalCounts.total === 1 ? "" : "s"} will be closed
+            {pluralize(terminalCounts.total, "terminal")} will be closed
           </span>
           {runningAgentCount > 0 && (
             <span className="ml-1 text-text-secondary">

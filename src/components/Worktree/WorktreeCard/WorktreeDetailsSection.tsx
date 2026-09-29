@@ -40,6 +40,7 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
 } from "@/components/ui/context-menu";
+import { pluralize } from "@/lib/pluralize";
 
 const COUNT_BUMP_EASING = "cubic-bezier(0.4, 0, 0.2, 1)";
 
@@ -429,8 +430,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   ) : hasChanges && worktree.worktreeChanges ? (
                     <span className="flex items-center gap-1.5 text-text-secondary">
                       <span ref={countRef} className="inline-block">
-                        {worktree.worktreeChanges.changedFileCount} file
-                        {worktree.worktreeChanges.changedFileCount !== 1 ? "s" : ""}
+                        {pluralize(worktree.worktreeChanges.changedFileCount, "file")}
                       </span>
                       {((worktree.worktreeChanges.insertions ?? 0) > 0 ||
                         (worktree.worktreeChanges.deletions ?? 0) > 0) && (

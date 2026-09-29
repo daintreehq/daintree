@@ -38,6 +38,7 @@ import {
   KILL_TERMINAL_CONFIRM_LABEL,
   killTerminalDescription,
 } from "./killTerminalStrings";
+import { pluralize } from "@/lib/pluralize";
 
 interface BackgroundContainerProps {
   compact?: boolean;
@@ -266,7 +267,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   // .dock-status-pill exit transition instead of flashing "(0)".
   const displayCount = useExitLaggedCount(count);
   const triggerLabel =
-    `Background: ${displayCount} ${displayCount === 1 ? "panel" : "panels"} ${dockStatusScopeDescription(displayCount, hereCount)}` +
+    `Background: ${pluralize(displayCount, "panel")} ${dockStatusScopeDescription(displayCount, hereCount)}` +
     (waitingCount > 0 ? `, ${waitingCount} waiting` : "");
 
   useEffect(() => {
@@ -587,7 +588,7 @@ function BackgroundGroupItem({
 }) {
   const [isExpanded, setIsExpanded] = useState(true);
   const tabCount = terminals.length;
-  const groupName = `Tab group (${tabCount} ${tabCount === 1 ? "tab" : "tabs"})`;
+  const groupName = `Tab group (${pluralize(tabCount, "tab")})`;
   const groupWaiting = terminals.filter((t) => t.agentState === "waiting").length;
   // Named on the header too, so a collapsed group still says where it lives.
   const groupWorktreeId = groupMetadata.worktreeId ?? terminals[0]?.worktreeId;

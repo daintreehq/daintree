@@ -172,6 +172,7 @@ import {
   isBuiltInAgentId,
   type BuiltInAgentId,
 } from "@shared/config/agentIds";
+import { pluralize } from "@/lib/pluralize";
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
 
@@ -346,7 +347,7 @@ function OverflowMenu({
   const n = overflowIds.length;
   const observations: string[] = [];
   if (overflowIds.includes("problems") && errorCount > 0) {
-    observations.push(`${errorCount} ${errorCount === 1 ? "error" : "errors"}`);
+    observations.push(`${pluralize(errorCount, "error")}`);
   }
   if (overflowIds.includes("notification-center") && notificationUnreadCount > 0) {
     observations.push(`${notificationUnreadCount} unread`);

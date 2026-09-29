@@ -522,7 +522,7 @@ export function VoiceInputSettingsTab() {
                     value={settings.organizationId}
                     onChange={(e) => void update({ organizationId: e.target.value })}
                     onBlur={(e) => void update({ organizationId: e.target.value.trim() })}
-                    placeholder="org-..."
+                    placeholder="org-…"
                     layout="inline"
                     controlWidth="wide"
                     className="font-mono"
