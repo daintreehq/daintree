@@ -76,7 +76,7 @@ export function toBranchOption(branch: BranchInfo): BranchOption {
  * `SHORT_TOKEN_LENGTH`). `ignoreLocation` makes `distance` inert, so it is
  * deliberately absent rather than set.
  */
-const BRANCH_FUSE_OPTIONS: IFuseOptions<BranchOption> = {
+export const BRANCH_FUSE_OPTIONS: IFuseOptions<BranchOption> = {
   keys: [
     { name: "name", weight: 0.8 },
     { name: "searchText", weight: 0.2 },
@@ -111,15 +111,149 @@ function needsLiteralMatch(tokens: readonly string[]): boolean {
   );
 }
 
-const fuseCache = new WeakMap<readonly BranchOption[], Fuse<BranchOption>>();
+interface BranchSearchIndex {
+  fuse: Fuse<BranchOption>;
+  /** Every searched field of each branch, folded the way Fuse folds text before matching. */
+  foldedFields: readonly (readonly string[])[];
+}
 
-function getFuse(branches: readonly BranchOption[]): Fuse<BranchOption> {
-  let fuse = fuseCache.get(branches);
-  if (!fuse) {
-    fuse = new Fuse(branches as BranchOption[], BRANCH_FUSE_OPTIONS);
-    fuseCache.set(branches, fuse);
+const searchIndexCache = new WeakMap<readonly BranchOption[], BranchSearchIndex>();
+
+function getSearchIndex(branches: readonly BranchOption[]): BranchSearchIndex {
+  let index = searchIndexCache.get(branches);
+  if (!index) {
+    index = {
+      fuse: new Fuse(branches, BRANCH_FUSE_OPTIONS),
+      foldedFields: branches.map((b) => [b.name.toLowerCase(), b.searchText.toLowerCase()]),
+    };
+    searchIndexCache.set(branches, index);
   }
-  return fuse;
+  return index;
+}
+
+/** Bitap's hard pattern limit; longer tokens are searched in chunks, which the filter can't bound. */
+const BITAP_MAX_PATTERN_LENGTH = 32;
+
+/**
+ * The most edits Bitap can spend on a token and still score within the
+ * threshold. With `ignoreLocation` its per-level score is `errors / length`.
+ */
+function maxFuzzyErrors(length: number): number {
+  const threshold = BRANCH_FUSE_OPTIONS.threshold!;
+  let errors = 0;
+  while (errors + 1 < length && (errors + 1) / length <= threshold) errors++;
+  return errors;
+}
+
+interface FuzzyPattern {
+  /**
+   * `maxErrors + 1` contiguous pieces. A substring within k edits of the token
+   * must contain at least one of k + 1 disjoint pieces verbatim, since each edit
+   * can break at most one — a cheap rejection before the exact check.
+   */
+  pieces: string[];
+  maxErrors: number;
+  /** Bit i set where the token's code unit i is this one. */
+  peq: Map<number, number>;
+  length: number;
+}
+
+function compileFuzzyPattern(token: string): FuzzyPattern {
+  const maxErrors = maxFuzzyErrors(token.length);
+  const count = maxErrors + 1;
+  const pieces: string[] = [];
+  for (let i = 0; i < count; i++) {
+    pieces.push(
+      token.slice(
+        Math.floor((i * token.length) / count),
+        Math.floor(((i + 1) * token.length) / count)
+      )
+    );
+  }
+  const peq = new Map<number, number>();
+  for (let i = 0; i < token.length; i++) {
+    const code = token.charCodeAt(i);
+    peq.set(code, (peq.get(code) ?? 0) | (1 << i));
+  }
+  return { pieces, maxErrors, peq, length: token.length };
+}
+
+/**
+ * True when some substring of `text` is within `maxErrors` Levenshtein edits of
+ * the token — the condition Bitap's error levels test, so a false here is a
+ * branch Fuse would not match. Myers' bit-parallel search, one pass over `text`.
+ */
+function withinEditDistance(text: string, pattern: FuzzyPattern): boolean {
+  const { peq, length, maxErrors } = pattern;
+  if (!pattern.pieces.some((piece) => text.includes(piece))) return false;
+  const lastBit = 1 << (length - 1);
+  let pv = -1;
+  let mv = 0;
+  let score = length;
+  for (let j = 0; j < text.length; j++) {
+    const eq = peq.get(text.charCodeAt(j)) ?? 0;
+    const xv = eq | mv;
+    const xh = (((eq & pv) + pv) ^ pv) | eq;
+    let ph = mv | ~(xh | pv);
+    let mh = pv & xh;
+    if (ph & lastBit) score++;
+    else if (mh & lastBit) score--;
+    if (score <= maxErrors) return true;
+    ph <<= 1;
+    mh <<= 1;
+    pv = mh | ~(xv | ph);
+    mv = ph & xv;
+  }
+  return false;
+}
+
+/**
+ * The fuzzy patterns Fuse's extended search derives from a query, folded as it
+ * folds them: the whole query lowercased, split on spaces only (a tab stays
+ * inside its token), blank tokens dropped, each token lowercased again by its
+ * Bitap searcher. Returns null when the query could parse into anything else:
+ * an operator; NUL, which Fuse rewrites to `|`; or a line terminator, which its
+ * fuzzy matcher's `/^(.*)$/` can't span, so Fuse silently drops that token.
+ */
+function fuzzyPatterns(query: string): string[] | null {
+  if (EXTENDED_SEARCH_OPERATORS.test(query) || /[\0\n\r\u2028\u2029]/.test(query)) return null;
+  const tokens = query
+    .toLowerCase()
+    .trim()
+    .split(" ")
+    .filter((token) => token && token.trim())
+    .map((token) => token.toLowerCase());
+  if (tokens.length === 0) return null;
+  if (tokens.some((token) => token.length > BITAP_MAX_PATTERN_LENGTH)) return null;
+  return tokens;
+}
+
+/**
+ * Fuse over only the branches that can possibly match, so a keystroke skips the
+ * Bitap scan of every branch the query can't reach. Each surviving branch is
+ * scored by the same index record, and the records keep their original
+ * positions, so scores, match indices and the score-then-position order are
+ * exactly what a search over the full list returns.
+ */
+export function searchBranches(branches: readonly BranchOption[], query: string) {
+  const { fuse, foldedFields } = getSearchIndex(branches);
+  const patterns = fuzzyPatterns(query);
+  if (!patterns) return fuse.search(query);
+
+  const compiled = patterns.map(compileFuzzyPattern);
+  const fieldCanMatch = (field: string) =>
+    compiled.every((pattern) => withinEditDistance(field, pattern));
+
+  const { keys, records } = fuse.getIndex();
+  const candidates = records.filter((record) => foldedFields[record.i]!.some(fieldCanMatch));
+  if (candidates.length === records.length) return fuse.search(query);
+
+  const narrowed = new Fuse(
+    branches,
+    BRANCH_FUSE_OPTIONS,
+    Fuse.parseIndex<BranchOption>({ keys, records: candidates })
+  );
+  return narrowed.search(query);
 }
 
 function toBranchSearchResult(
@@ -313,7 +447,7 @@ function buildFuzzyQueryRows(
 
   // Searched unbounded, then capped here, so `matchedTotal` can report how many
   // actually matched. Fuse's own `limit` would discard that count.
-  const results = getFuse(branches).search(query);
+  const results = searchBranches(branches, query);
 
   return {
     rows: results.slice(0, RESULT_LIMIT).map((result) => {
