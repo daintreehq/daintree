@@ -247,6 +247,15 @@ describe("useDockPopoverResize", () => {
     expect(useDockStore.getState().popoverHeight).toBe(1400 * POPOVER_MAX_HEIGHT_RATIO);
   });
 
+  it("announces the viewport ceiling as the window resizes", () => {
+    const { result } = renderHook(() => useDockPopoverResize());
+    act(() => {
+      Object.defineProperty(window, "innerHeight", { value: 1400, configurable: true });
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(result.current.handleProps.max).toBe(1400 * POPOVER_MAX_HEIGHT_RATIO);
+  });
+
   it("names the panel and leaves the reset hint to the shared handle", () => {
     const { result } = renderHook(() => useDockPopoverResize());
     expect(result.current.handleProps.label).toBe("Resize docked panel");

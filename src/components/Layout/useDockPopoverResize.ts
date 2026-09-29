@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   useDockStore,
   POPOVER_DEFAULT_HEIGHT,
@@ -21,6 +21,17 @@ function clampHeight(height: number): number {
 }
 
 /** What `DockPopoverResizeHandle` passes through to the shared `ResizeHandle`. */
+// The announced ceiling follows the viewport, so a window grown while the popover
+// is open never reports a maximum the keys have already moved past.
+function subscribeViewport(onChange: () => void): () => void {
+  window.addEventListener("resize", onChange);
+  return () => window.removeEventListener("resize", onChange);
+}
+
+function readMaxHeight(): number {
+  return window.innerHeight * POPOVER_MAX_HEIGHT_RATIO;
+}
+
 export interface DockPopoverResizeHandleProps {
   label: string;
   value: number;
@@ -163,6 +174,7 @@ export function useDockPopoverResize(onCommit?: () => void): UseDockPopoverResiz
   );
 
   const height = draftHeight ?? popoverHeight;
+  const maxHeight = useSyncExternalStore(subscribeViewport, readMaxHeight);
 
   return {
     height,
@@ -171,7 +183,7 @@ export function useDockPopoverResize(onCommit?: () => void): UseDockPopoverResiz
       label: "Resize docked panel",
       value: height,
       min: POPOVER_MIN_HEIGHT,
-      max: window.innerHeight * POPOVER_MAX_HEIGHT_RATIO,
+      max: maxHeight,
       "data-testid": "dock-popover-resize-handle",
       onMouseDown: startResizing,
       onKeyDown: handleKeyDown,

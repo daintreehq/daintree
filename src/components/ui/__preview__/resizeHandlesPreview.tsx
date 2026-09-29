@@ -23,7 +23,7 @@ import "@/index.css";
  * handle (or the real component that owns it) in a frame shaped like its home, so
  * rest, hover, focus and drag can be driven with a real mouse and real keys.
  *
- *   ?scene=assistant|dock-popover|two-pane|dev-drawer|diagnostics
+ *   ?scene=sidebar|assistant|dock-popover|two-pane|dev-drawer|diagnostics
  *   ?theme=daintree|bondi|…
  */
 
@@ -40,6 +40,7 @@ useDiagnosticsStore.setState({ isOpen: true, activeTab: "problems", height: 180,
 
 await primeRadix();
 const { DiagnosticsDock } = await import("@/components/Diagnostics/DiagnosticsDock");
+const { Sidebar } = await import("@/components/Layout/Sidebar");
 
 function Frame({ children }: { children: React.ReactNode }) {
   return (
@@ -112,6 +113,24 @@ function Assistant() {
   );
 }
 
+/** The real Sidebar inside a copy of AppLayout's width wrapper, clip margin and all. */
+function SidebarScene() {
+  const [width, setWidth] = useState(220);
+  return (
+    <div className="flex h-full bg-surface-grid">
+      <div
+        className="relative h-full shrink-0"
+        style={{ width, overflowClipMargin: "6px", contain: "layout paint", zIndex: 1 }}
+      >
+        <div className="absolute top-0 left-0 h-full" style={{ width }}>
+          <Sidebar width={width} onResize={(w) => setWidth(Math.min(Math.max(w, 180), 380))} />
+        </div>
+      </div>
+      <main className="min-w-0 flex-1 bg-surface-canvas" />
+    </div>
+  );
+}
+
 function DockPopover() {
   const { height, isResizing, handleProps } = useDockPopoverResize();
   return (
@@ -172,6 +191,7 @@ function Diagnostics() {
 }
 
 const SCENES: Record<string, () => React.ReactElement> = {
+  sidebar: SidebarScene,
   assistant: Assistant,
   "dock-popover": DockPopover,
   "two-pane": TwoPane,

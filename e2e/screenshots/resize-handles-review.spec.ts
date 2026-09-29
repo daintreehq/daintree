@@ -35,7 +35,14 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi")
   .map((t) => t.trim())
   .filter(Boolean);
 
-const ALL_SCENES = ["assistant", "dock-popover", "two-pane", "dev-drawer", "diagnostics"] as const;
+const ALL_SCENES = [
+  "sidebar",
+  "assistant",
+  "dock-popover",
+  "two-pane",
+  "dev-drawer",
+  "diagnostics",
+] as const;
 const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "").split(",").filter(Boolean);
 const SCENES = ALL_SCENES.filter((s) => ONLY.length === 0 || ONLY.includes(s));
 const STATES = ["rest", "hover", "focus", "drag"] as const;
@@ -96,6 +103,8 @@ async function openScene(page: Page, scene: string, theme: string): Promise<void
     }
   }
   await expect(page.locator(SEPARATOR)).toHaveCount(1);
+  if (scene === "sidebar")
+    await expect(page.locator(SEPARATOR)).toHaveAttribute("aria-valuenow", /\d/);
   await page.addStyleTag({ content: FREEZE_CSS });
   await page.evaluate(() => document.fonts.ready);
   await page.mouse.move(0, 0);
