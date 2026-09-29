@@ -541,6 +541,27 @@ describe("listPRs ciStatus", () => {
     expect(page.items[2].ciStatus).toBe("success");
   });
 
+  it("carries a reported merge conflict, with or without a roll-up", async () => {
+    // GitHub skips `pull_request` CI on a conflicted head, so the conflict is
+    // often the only status the row has (#13070).
+    mockGraphQLClient.mockResolvedValueOnce(
+      prListResponse([
+        { ...makePRNode(1, "feature/a"), mergeStateStatus: "DIRTY" },
+        {
+          ...makePRNode(2, "feature/b", undefined, makeCommitsRollup("FAILURE")),
+          mergeStateStatus: "DIRTY",
+        },
+        { ...makePRNode(3, "feature/c"), mergeStateStatus: "UNKNOWN" },
+      ])
+    );
+
+    const page = await githubForgeProvider.listPRs(repo, {});
+    expect(page.items[0]?.mergeState).toBe("conflicts");
+    expect("ciStatus" in page.items[0]!).toBe(false);
+    expect(page.items[1]).toMatchObject({ mergeState: "conflicts", ciStatus: "failure" });
+    expect("mergeState" in page.items[2]!).toBe(false);
+  });
+
   it("drops unrecognized rollup states instead of guessing a mapping", async () => {
     // Non-string and unknown-enum states fall through to "absent" — the
     // conservative behavior if GitHub ever widens the rollup enum.
@@ -1496,6 +1517,16 @@ describe("listPRs search", () => {
       ciStatus: "success",
     });
     expect(page.items[0]?.reviewDecision).toBeNull();
+  });
+
+  it("carries a reported merge conflict from the search fragment", async () => {
+    mockGraphQLClient.mockResolvedValue(
+      prSearchResponse([makePRSearchNode(42, { mergeStateStatus: "DIRTY" })])
+    );
+
+    const page = await githubForgeProvider.listPRs(repo, { state: "open", search: "theme" });
+
+    expect(page.items[0]?.mergeState).toBe("conflicts");
   });
 
   it("discards non-PullRequest nodes an OR fragment can pull in", async () => {

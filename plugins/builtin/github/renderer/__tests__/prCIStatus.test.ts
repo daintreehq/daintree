@@ -16,7 +16,7 @@ describe("getPRStatusVisual / getPRStatusTooltip", () => {
     expect(visual?.ariaLabel).toBe("Merge conflicts");
     expect(visual?.colorClass).toBe("text-status-warning");
     expect(getPRStatusTooltip(ciStatus, "conflicts")).toBe(
-      "Merge conflicts with the base branch — CI won't run until they're resolved"
+      "Merge conflicts with the base branch — GitHub skips pull_request workflows until they're resolved"
     );
   });
 

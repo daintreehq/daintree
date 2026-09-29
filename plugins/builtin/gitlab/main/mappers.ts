@@ -190,16 +190,17 @@ function mergeableFromMR(mr: GitLabMergeRequest): boolean | null {
 
 /**
  * Conflict observation from GitLab's merge status — REST `detailed_merge_status`
- * (lower-case) or GraphQL `detailedMergeStatus` (upper-case). `has_conflicts`
- * is consulted only when no detailed status came back (pre-15.6 instances);
- * a detailed status still being computed says nothing either way.
+ * (lower-case) or GraphQL `detailedMergeStatus` (upper-case), or REST
+ * `has_conflicts`. Either positive report counts on its own: the detailed
+ * status stops at the first blocker it meets, so a conflicted draft reports
+ * `draft_status` while `has_conflicts` still says `true`.
  */
 function mergeStateFromGitLab(
   detailedMergeStatus: unknown,
   hasConflicts?: unknown
 ): PRMergeState | undefined {
-  if (typeof detailedMergeStatus === "string") {
-    return detailedMergeStatus.toLowerCase() === "conflict" ? "conflicts" : undefined;
+  if (typeof detailedMergeStatus === "string" && detailedMergeStatus.toLowerCase() === "conflict") {
+    return "conflicts";
   }
   return hasConflicts === true ? "conflicts" : undefined;
 }

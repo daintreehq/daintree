@@ -329,23 +329,26 @@ describe("merge-conflict observation", () => {
   });
 
   it.each([["checking"], ["unchecked"], ["mergeable"], ["draft_status"], ["ci_must_pass"]])(
-    "REST: %s reports nothing — a blocker or a pending check is not a conflict",
+    "REST: %s alone reports nothing — a blocker or a pending check is not a conflict",
     (status) => {
       const pr = mergeRequestToForgePR(
-        baseMR({ detailed_merge_status: status, has_conflicts: true }),
+        baseMR({ detailed_merge_status: status, has_conflicts: false }),
         HOST
       );
       expect("mergeState" in pr).toBe(false);
     }
   );
 
-  it("REST: falls back to has_conflicts only when no detailed status came back", () => {
+  it("REST: has_conflicts reports conflicts even when an earlier blocker owns the detailed status", () => {
+    const pr = mergeRequestToForgePR(
+      baseMR({ detailed_merge_status: "draft_status", has_conflicts: true }),
+      HOST
+    );
+    expect(pr.mergeState).toBe("conflicts");
     expect(mergeRequestToForgePR(baseMR({ has_conflicts: true }), HOST).mergeState).toBe(
       "conflicts"
     );
-    expect("mergeState" in mergeRequestToForgePR(baseMR({ has_conflicts: false }), HOST)).toBe(
-      false
-    );
+    expect("mergeState" in mergeRequestToForgePR(baseMR(), HOST)).toBe(false);
   });
 
   it("GraphQL: detailedMergeStatus CONFLICT reports conflicts", () => {

@@ -76,13 +76,14 @@ const MERGE_CONFLICT_VISUAL: PRCIStatusVisual = {
 };
 
 // GitHub skips `pull_request` workflows while the head conflicts with the base,
-// so a conflicted PR usually has no roll-up at all — the reason, not a CI verdict.
+// so a conflicted PR usually has no roll-up at all. `pull_request_target`
+// workflows still run, hence naming the event rather than claiming "no CI".
 const MERGE_CONFLICT_TOOLTIP =
-  "Merge conflicts with the base branch — CI won't run until they're resolved";
+  "Merge conflicts with the base branch — GitHub skips pull_request workflows until they're resolved";
 
 /**
  * Status for a forge PR's CI slot. A reported merge conflict takes the slot
- * over any roll-up: it's what blocks the PR, and any roll-up present predates it.
+ * over any roll-up: it has to be resolved before anything else moves.
  */
 export function getPRStatusVisual(
   ciStatus: CIStatusState | undefined,
