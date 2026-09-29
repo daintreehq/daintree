@@ -41,6 +41,7 @@ import { buildDestructivePreview } from "@/utils/destructiveSessionConfirm";
 import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import { useDeletedWorktreeCountdown } from "./useDeletedWorktreeCountdown";
 import { Badge } from "@/components/ui/badge";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 interface GroupMember {
   worktree: DeletedWorktree;
@@ -289,12 +290,11 @@ function DeletedWorktreeRailMember({
   return (
     <div data-deleted-worktree-member={worktree.id}>
       <div className="flex min-h-5 items-center gap-2 pl-1.5">
-        <span
-          className="min-w-0 flex-1 truncate font-mono text-2xs text-text-secondary"
-          title={worktree.title}
-        >
-          {worktree.title}
-        </span>
+        <TruncatedTooltip content={worktree.title}>
+          <span className="min-w-0 flex-1 truncate font-mono text-2xs text-text-secondary">
+            {worktree.title}
+          </span>
+        </TruncatedTooltip>
         {hold !== undefined && (
           <Tooltip>
             <TooltipTrigger asChild>

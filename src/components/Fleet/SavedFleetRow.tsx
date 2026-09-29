@@ -4,6 +4,7 @@ import type { FleetSavedScope } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { describeRule, formatSavedFleetCount, savedFleetAccessibleName } from "./savedFleetMeta";
 
 interface SavedFleetRowProps {
@@ -37,7 +38,6 @@ export function SavedFleetRow({
       // Delete/Backspace is the accelerator to the same delete the manage
       // dialog offers as a button — not advertised on an inert row.
       aria-keyshortcuts={isEmptyRule ? undefined : "Delete"}
-      title={scope.name}
       onSelect={(e) => {
         if (isEmptyRule) {
           e.preventDefault();
@@ -68,14 +68,16 @@ export function SavedFleetRow({
       ) : (
         <RadioTower data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       )}
-      <span
-        className={cn(
-          "min-w-0 flex-1 truncate",
-          isStale || isEmptyRule ? "text-text-secondary" : "text-text-primary"
-        )}
-      >
-        {scope.name}
-      </span>
+      <TruncatedTooltip content={scope.name} focusable={false}>
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate",
+            isStale || isEmptyRule ? "text-text-secondary" : "text-text-primary"
+          )}
+        >
+          {scope.name}
+        </span>
+      </TruncatedTooltip>
       <span aria-hidden="true" className="ml-3 flex shrink-0 items-center gap-3">
         {scope.kind === "predicate" && (
           <span className="text-2xs text-text-secondary">{describeRule(scope)}</span>

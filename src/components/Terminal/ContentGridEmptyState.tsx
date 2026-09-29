@@ -19,6 +19,7 @@ import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
 import { ResumeSessionLine } from "./ResumeSessionLine";
 import { LauncherQuickActions } from "./LauncherQuickActions";
 import { TourInviteCard } from "@/components/Tour/TourInviteCard";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 const PATH_TRUNCATE_LENGTH = 52;
 
@@ -372,12 +373,15 @@ export function ContentGridEmptyState({
                           </div>
                         )}
                         {pathLabel && (
-                          <p
-                            className="text-xs truncate max-w-full"
-                            title={activeWorktreePath ?? undefined}
+                          <TruncatedTooltip
+                            content={activeWorktreePath}
+                            // Middle-truncated and home-abbreviated in JS, which
+                            // overflow detection cannot see: disclose the path
+                            // whenever the label is not the path.
+                            isTruncated={pathLabel !== activeWorktreePath || undefined}
                           >
-                            {pathLabel}
-                          </p>
+                            <p className="text-xs truncate max-w-full">{pathLabel}</p>
+                          </TruncatedTooltip>
                         )}
                       </div>
                     )}

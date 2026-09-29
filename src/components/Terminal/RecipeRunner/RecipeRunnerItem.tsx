@@ -50,6 +50,21 @@ export function RecipeRunnerItem({
   onDelete,
 }: RecipeRunnerItemProps) {
   const recipeSummary = getRecipeTerminalSummary(recipe.terminals);
+  // Radix wires `aria-describedby` to this content while it is open. The
+  // button's own text is already the accessible NAME, so a description that
+  // repeats the name gets announced twice; when there is a summary, describe
+  // with only that — the part the name lacks.
+  const tooltipContent = (
+    <TooltipContent
+      side="top"
+      aria-label={recipeSummary && recipeSummary !== recipe.name ? recipeSummary : undefined}
+    >
+      <span className="font-medium">{recipe.name}</span>
+      {recipeSummary && recipeSummary !== recipe.name && (
+        <span className="ml-1 text-text-secondary">{recipeSummary}</span>
+      )}
+    </TooltipContent>
+  );
   const isPinned = recipe.showInEmptyState === true;
   const scopeLabel = getRecipeScope(recipe).label;
 
@@ -143,113 +158,102 @@ export function RecipeRunnerItem({
             onDelete={onDelete}
           />
         </ContextMenu>
-        {/* Radix wires `aria-describedby` to this content while it is open.
-          The button's own text is already the accessible NAME, so a
-          description that repeats the name gets announced twice; when there
-          is a summary, describe with only that — the part the name lacks. */}
-        <TooltipContent
-          side="top"
-          aria-label={recipeSummary && recipeSummary !== recipe.name ? recipeSummary : undefined}
-        >
-          <span className="font-medium">{recipe.name}</span>
-          {recipeSummary && recipeSummary !== recipe.name && (
-            <span className="ml-1 text-text-secondary">{recipeSummary}</span>
-          )}
-        </TooltipContent>
+        {tooltipContent}
       </Tooltip>
     );
   }
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <button
-          id={id}
-          ref={buttonRef}
-          role="option"
-          aria-selected={isFocused}
-          type="button"
-          onClick={() => onRun(recipe.id)}
-          onFocus={onFocus}
-          onKeyDown={onKeyDown}
-          disabled={disabled}
-          tabIndex={disabled ? -1 : (tabIndex ?? 0)}
-          title={
-            recipeSummary && recipeSummary !== recipe.name
-              ? `${recipe.name} — ${recipeSummary}`
-              : recipe.name
-          }
-          className={cn(
-            // The active option takes the palettes' highlight fill, and — because
-            // these are bordered cards rather than flat rows — steps its card
-            // border to `selection-outline`; not a second accent ring. In list mode DOM focus stays in the filter input,
-            // which paints its own accent ring, so an accent ring here put two
-            // accent anchors in one arrow-key domain and the surface claimed
-            // the keyboard was in two places. The house rule allows exactly one
-            // load-bearing accent per focus region, and in a combobox that one
-            // belongs to the control the user is typing into.
-            //
-            // The fill is `paletteRowStyles.ts`'s `overlay-highlight`, the repo's
-            // one definition of "the row Enter will act on".
-            //
-            // What is NOT lifted is `PALETTE_ROW_CLASS` itself. It paints on
-            // `aria-selected` unconditionally, which is right for a palette
-            // that only exists while focused and wrong for a band that sits on
-            // the canvas all day: it would light the default-focused first row
-            // at rest, the exact thing the grid comment above forbids. Hence the
-            // `group-focus-within` gate stays and only the treatment is shared.
-            //
-            // In a narrow canvas the metadata drops to a second line under the
-            // name instead of squeezing it: the name is what a user chooses by,
-            // and "Migrate remaining Je…" beside an intact "Project-wide" gave
-            // the classification priority over the thing being classified.
-            choiceCardVariants({ padding: "sm" }),
-            "group w-full flex-wrap items-center gap-x-2 gap-y-0.5 focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
-          )}
-        >
-          <Play
-            className="h-3.5 w-3.5 text-text-secondary transition-colors shrink-0"
-            aria-hidden
-          />
-          <span
-            className={cn(
-              // The row Enter will act on shows its whole name while the filter
-              // owns focus: `title` only discloses on hover, and a keyboard
-              // user choosing between two long names needs their endings.
-              "min-w-0 flex-1 text-sm font-medium truncate group-focus-within/recipes:group-aria-selected:whitespace-normal group-focus-within/recipes:group-aria-selected:break-words",
-              recipe.shadowedBy ? "text-text-secondary" : "text-text-primary"
-            )}
-          >
-            {recipe.name}
-          </span>
-          {/* A fixed slot whether or not the recipe is pinned, so the metadata
-              column ends at the same edge on every row. Neutral, not accent:
-              pinning is membership, and the accent is the one signal that
-              means "this is where the keyboard is". */}
-          <span className="order-last flex w-3 shrink-0 justify-end @max-[30rem]/launcher:order-none">
-            {isPinned && (
-              <>
-                <Pin className="h-3 w-3 text-text-secondary" aria-hidden />
-                <span className="sr-only">Pinned</span>
-              </>
-            )}
-          </span>
-          <span className="flex min-w-0 max-w-[55%] items-center gap-1.5 text-xs text-text-secondary @max-[30rem]/launcher:max-w-none @max-[30rem]/launcher:basis-full @max-[30rem]/launcher:pl-5.5">
-            <RecipeMeta recipe={recipe} scopeLabel={scopeLabel} summary={recipeSummary} />
-          </span>
-        </button>
-      </ContextMenuTrigger>
-      <RecipeContextMenu
-        recipe={recipe}
-        isPinned={isPinned}
-        onRun={onRun}
-        onEdit={onEdit}
-        onDuplicate={onDuplicate}
-        onPin={onPin}
-        onUnpin={onUnpin}
-        onDelete={onDelete}
-      />
-    </ContextMenu>
+    // Same composition as the grid card: the list row's name truncates too.
+    <Tooltip autoDismiss={false} disableHoverableContent={false}>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <TooltipTrigger asChild>
+            <button
+              id={id}
+              ref={buttonRef}
+              role="option"
+              aria-selected={isFocused}
+              type="button"
+              onClick={() => onRun(recipe.id)}
+              onFocus={onFocus}
+              onKeyDown={onKeyDown}
+              disabled={disabled}
+              tabIndex={disabled ? -1 : (tabIndex ?? 0)}
+              className={cn(
+                // The active option takes the palettes' highlight fill, and — because
+                // these are bordered cards rather than flat rows — steps its card
+                // border to `selection-outline`; not a second accent ring. In list mode DOM focus stays in the filter input,
+                // which paints its own accent ring, so an accent ring here put two
+                // accent anchors in one arrow-key domain and the surface claimed
+                // the keyboard was in two places. The house rule allows exactly one
+                // load-bearing accent per focus region, and in a combobox that one
+                // belongs to the control the user is typing into.
+                //
+                // The fill is `paletteRowStyles.ts`'s `overlay-highlight`, the repo's
+                // one definition of "the row Enter will act on".
+                //
+                // What is NOT lifted is `PALETTE_ROW_CLASS` itself. It paints on
+                // `aria-selected` unconditionally, which is right for a palette
+                // that only exists while focused and wrong for a band that sits on
+                // the canvas all day: it would light the default-focused first row
+                // at rest, the exact thing the grid comment above forbids. Hence the
+                // `group-focus-within` gate stays and only the treatment is shared.
+                //
+                // In a narrow canvas the metadata drops to a second line under the
+                // name instead of squeezing it: the name is what a user chooses by,
+                // and "Migrate remaining Je…" beside an intact "Project-wide" gave
+                // the classification priority over the thing being classified.
+                choiceCardVariants({ padding: "sm" }),
+                "group w-full flex-wrap items-center gap-x-2 gap-y-0.5 focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
+              )}
+            >
+              <Play
+                className="h-3.5 w-3.5 text-text-secondary transition-colors shrink-0"
+                aria-hidden
+              />
+              <span
+                className={cn(
+                  // The row Enter will act on shows its whole name while the filter
+                  // owns focus: the tooltip only discloses on hover, and a keyboard
+                  // user choosing between two long names needs their endings.
+                  "min-w-0 flex-1 text-sm font-medium truncate group-focus-within/recipes:group-aria-selected:whitespace-normal group-focus-within/recipes:group-aria-selected:break-words",
+                  recipe.shadowedBy ? "text-text-secondary" : "text-text-primary"
+                )}
+              >
+                {recipe.name}
+              </span>
+              {/* A fixed slot whether or not the recipe is pinned, so the metadata
+                column ends at the same edge on every row. Neutral, not accent:
+                pinning is membership, and the accent is the one signal that
+                means "this is where the keyboard is". */}
+              <span className="order-last flex w-3 shrink-0 justify-end @max-[30rem]/launcher:order-none">
+                {isPinned && (
+                  <>
+                    <Pin className="h-3 w-3 text-text-secondary" aria-hidden />
+                    <span className="sr-only">Pinned</span>
+                  </>
+                )}
+              </span>
+              <span className="flex min-w-0 max-w-[55%] items-center gap-1.5 text-xs text-text-secondary @max-[30rem]/launcher:max-w-none @max-[30rem]/launcher:basis-full @max-[30rem]/launcher:pl-5.5">
+                <RecipeMeta recipe={recipe} scopeLabel={scopeLabel} summary={recipeSummary} />
+              </span>
+            </button>
+          </TooltipTrigger>
+        </ContextMenuTrigger>
+        <RecipeContextMenu
+          recipe={recipe}
+          isPinned={isPinned}
+          onRun={onRun}
+          onEdit={onEdit}
+          onDuplicate={onDuplicate}
+          onPin={onPin}
+          onUnpin={onUnpin}
+          onDelete={onDelete}
+        />
+      </ContextMenu>
+      {tooltipContent}
+    </Tooltip>
   );
 }
 

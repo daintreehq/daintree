@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useSavedFleets } from "./useSavedFleets";
 import { deleteSavedFleetWithUndo } from "./deleteSavedFleet";
 import { describeRule, formatSavedFleetCount, savedFleetAccessibleName } from "./savedFleetMeta";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 interface SavedFleetsDialogProps {
   isOpen: boolean;
@@ -76,15 +77,16 @@ export function SavedFleetsDialog({
         className="flex h-9 items-center gap-3 border-t border-border-subtle first:border-t-0"
         data-testid="fleet-saved-manage-row"
       >
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate text-sm",
-            unavailable ? "text-text-secondary" : "text-text-primary"
-          )}
-          title={scope.name}
-        >
-          {scope.name}
-        </span>
+        <TruncatedTooltip content={scope.name}>
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate text-sm",
+              unavailable ? "text-text-secondary" : "text-text-primary"
+            )}
+          >
+            {scope.name}
+          </span>
+        </TruncatedTooltip>
         <span className="flex shrink-0 items-center gap-3 text-xs text-text-secondary">
           {scope.kind === "predicate" && <span>{describeRule(scope)}</span>}
           <span className="tabular-nums">{formatSavedFleetCount(scope, count)}</span>

@@ -55,6 +55,7 @@ import { useNotificationSource } from "./notificationSource";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUIStore } from "@/store/uiStore";
 import { CountBadge } from "@/components/ui/badge";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 const snoozedUntilFormatter = new Intl.DateTimeFormat(undefined, {
   weekday: "short",
@@ -399,16 +400,17 @@ export function NotificationCenterEntry({
           </p>
         )}
         {metaSource && (
-          <p
-            data-testid="notification-source"
-            title={metaSource}
-            className={cn(
-              "col-span-2 mt-0.5 min-w-0 truncate text-2xs text-text-secondary",
-              showSnoozeLine ? "row-start-4" : "row-start-3"
-            )}
-          >
-            {metaSource}
-          </p>
+          <TruncatedTooltip content={metaSource} focusable={false}>
+            <p
+              data-testid="notification-source"
+              className={cn(
+                "col-span-2 mt-0.5 min-w-0 truncate text-2xs text-text-secondary",
+                showSnoozeLine ? "row-start-4" : "row-start-3"
+              )}
+            >
+              {metaSource}
+            </p>
+          </TruncatedTooltip>
         )}
         {entry.actions && entry.actions.length > 0 && (
           <div

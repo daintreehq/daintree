@@ -23,6 +23,7 @@ Check `src/components/ui/` before you hand-roll anything. A surface built from t
 | `card`, `badge` | A bounded content block and its status pill. `Card` is the frame (`interactive` for one that holds controls); `ChoiceCard` / `choiceCardVariants` is a card that is itself the control — quick actions, recovery choices, agent pickers, radio cards. See [Choice Cards](./interaction-state-recipes.md#choice-cards). |
 | `SurfaceHeader` | A panel or dialog header, at either density. |
 | `Kbd`, `ShortcutHint`, `HighlightedText`, `TruncatedTooltip` | Chrome details that already exist and are easy to reinvent slightly differently. |
+| `ROW_CONTROL_CLASS`, `RowControlTooltip` (`RowControl.tsx`) | An inline control inside a list, palette or menu row (pin, hide, launch in dock, set default). See [Row Controls](./interaction-state-recipes.md#row-controls). |
 | `CopyButton`, `copyWithToast` | Anything that puts text on the clipboard. See [Copy feedback](#copy-feedback) for which one. |
 | `ResizeHandle` + `useSplitterKeys` | Any draggable edge between two regions. The primitive owns the 12px target, the grip, the focus outline, the ARIA and the "(double-click to reset)" label suffix; the hook owns the keyboard contract. You own the drag. `src/config/__tests__/resizeHandle.contract.test.ts` fails on any `role="separator"` rendered anywhere else. |
 

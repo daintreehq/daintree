@@ -15,6 +15,7 @@ import {
   Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import type { ResourceEnvironment } from "@shared/types/project";
@@ -113,21 +114,24 @@ function IconPickerButton({ currentIcon, onChange }: IconPickerButtonProps) {
             const IconComp = ICON_COMPONENTS[name];
             const isSelected = (currentIcon ?? "Server") === name;
             return (
-              <Button
-                key={name}
-                type="button"
-                variant="ghost"
-                size="icon"
-                pressed={isSelected}
-                aria-label={label}
-                title={label}
-                onClick={() => {
-                  onChange(name);
-                  setIsOpen(false);
-                }}
-              >
-                <IconComp />
-              </Button>
+              <Tooltip key={name}>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    pressed={isSelected}
+                    aria-label={label}
+                    onClick={() => {
+                      onChange(name);
+                      setIsOpen(false);
+                    }}
+                  >
+                    <IconComp />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{label}</TooltipContent>
+              </Tooltip>
             );
           })}
         </div>

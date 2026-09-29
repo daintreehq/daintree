@@ -45,6 +45,16 @@ vi.mock("@/components/Pulse", () => ({
 
 import { ContentGridEmptyState } from "../ContentGridEmptyState";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 const PROJECT_PROPS = {
   hasLaunchTarget: true,
@@ -99,7 +109,7 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
       render(<ContentGridEmptyState {...SCRATCH_PROPS} />);
 
       expect(screen.getByText(SCRATCH_PROPS.workspaceName)).toBeTruthy();
-      expect(screen.getByTitle(SCRATCH_PROPS.activeWorktreePath)).toBeTruthy();
+      expect(screen.getByText(SCRATCH_PROPS.activeWorktreePath)).toBeTruthy();
     });
 
     it("hides project settings — a scratch has no settings tab to open", () => {

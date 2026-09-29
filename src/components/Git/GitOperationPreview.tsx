@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge, COUNT_BADGE_CLASS } from "@/components/ui/badge";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 /**
  * The parts every git confirm preview is built from — push, pull-and-rebase,
@@ -320,21 +321,19 @@ export function CommitRows({
             </span>
             {/* The full subject on hover. Two long subjects sharing a prefix are
                 otherwise indistinguishable once both are clipped. */}
-            <span
-              className="flex-1 min-w-0 truncate text-text-primary group-focus-visible/commits:whitespace-normal group-focus-visible/commits:break-words"
-              title={commit.message}
-            >
-              {commit.message}
-            </span>
+            <TruncatedTooltip content={commit.message} focusable={false}>
+              <span className="flex-1 min-w-0 truncate text-text-primary group-focus-visible/commits:whitespace-normal group-focus-visible/commits:break-words">
+                {commit.message}
+              </span>
+            </TruncatedTooltip>
             {/* Bounded, unlike the rest of the row: an author is the least
                 important column, and left unbounded a long name took 45% of the
                 width and truncated the subject to twenty characters. */}
-            <span
-              className="text-2xs text-text-secondary shrink-0 max-w-[7rem] truncate group-focus-visible/commits:whitespace-normal"
-              title={commit.author}
-            >
-              {commit.author}
-            </span>
+            <TruncatedTooltip content={commit.author} focusable={false}>
+              <span className="text-2xs text-text-secondary shrink-0 max-w-[7rem] truncate group-focus-visible/commits:whitespace-normal">
+                {commit.author}
+              </span>
+            </TruncatedTooltip>
           </li>
         ))}
         {hidden > 0 && (

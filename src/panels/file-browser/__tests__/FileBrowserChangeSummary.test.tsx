@@ -4,6 +4,16 @@ import { describe, expect, it, vi } from "vitest";
 import type { GitStatus } from "@shared/types/git";
 import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { FileBrowserChangeSummary } from "../FileBrowserChangeSummary";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 function change(
   relativePath: string,
@@ -32,7 +42,9 @@ describe("FileBrowserChangeSummary", () => {
       change("docs/notes.md", "added"),
     ]);
 
-    const rendered = screen.getAllByRole("button").map((button) => button.getAttribute("title"));
+    const rendered = screen
+      .getAllByRole("button")
+      .map((button) => /^Read (.+),/.exec(button.getAttribute("aria-label") ?? "")?.[1]);
 
     expect(rendered).toEqual(["src/big.ts", "src/small.ts", "docs/notes.md"]);
   });
