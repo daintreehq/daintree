@@ -8,6 +8,7 @@ import { getETagCacheVersion, REVIEW_THREADS_TTL_MS } from "./GitHubCaches.js";
 import { getPRReviewThreads } from "./GitHubPRs.js";
 
 const SCOPE_PREFIX = "worktree-diff:";
+const WORKTREE_CHANGE_OPTIONS = { debounceMs: 300 };
 
 /**
  * Built-in GitHub `fileDecorationProvider` for the `worktree-diff:*` scope.
@@ -125,6 +126,9 @@ export async function registerReviewDecorationProvider(
 
   // `onDidChangeWorktrees` fires after `activate()` resolves; that is exactly
   // why `invalidateFileDecorations` is not revoke-guarded on the host side.
+  // Every callback costs the host a full worktree-state read, and under
+  // multi-agent load updates stream at 10-50/s while only PR linkage matters
+  // here, so coalesce them.
   const disposeWatch = await host.onDidChangeWorktrees((snapshots) => {
     const previous = linkedByPath;
     const next = new Map<string, PluginWorktreeLinked | null>();
@@ -155,7 +159,7 @@ export async function registerReviewDecorationProvider(
     for (const path of lastInvalidatedAt.keys()) {
       if (!next.has(path)) lastInvalidatedAt.delete(path);
     }
-  });
+  }, WORKTREE_CHANGE_OPTIONS);
 
   let disposed = false;
   return () => {

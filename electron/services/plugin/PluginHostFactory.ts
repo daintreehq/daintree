@@ -158,6 +158,13 @@ const MAX_FILE_DECORATION_PATHS = 1000;
  */
 const MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS = 50;
 /**
+ * Bound on how long a debounced `onDidChangeWorktrees` burst may defer its
+ * callback, as a multiple of the plugin's `debounceMs`. Multi-agent churn can
+ * stream worktree updates with no quiet gap for as long as agents are working,
+ * and a pure trailing debounce would withhold the snapshot for that whole time.
+ */
+const PLUGIN_SUBSCRIPTION_MAX_WAIT_FACTOR = 4;
+/**
  * Ceiling for a `host.fs.watch` `debounceMs`. Node clamps any timer delay past
  * 2^31-1 ms to 1 ms, so an unbounded value would turn "almost never" into
  * "immediately"; a minute is already far past any useful coalescing window.
@@ -1266,18 +1273,29 @@ export function createHost(
         }
       };
       let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+      let burstDeadline = 0;
       // A foreign project's churn is dropped before the debounce timer is even
       // armed, so a bound host's trailing callback can't be pushed out
-      // indefinitely by worktree traffic in a project it cannot see.
+      // indefinitely by worktree traffic in a project it cannot see. Churn in
+      // its own project can't either: each burst fires by its deadline.
       const emit =
         debounceMs > 0
           ? (event?: PluginWorktreeEventPayload): void => {
               if (!isEventForBoundProject(event)) return;
-              if (debounceTimer) clearTimeout(debounceTimer);
-              debounceTimer = setTimeout(() => {
-                debounceTimer = null;
-                void runEmit();
-              }, debounceMs);
+              // Monotonic: a wall-clock rollback must not push the deadline out.
+              const now = performance.now();
+              if (debounceTimer) {
+                clearTimeout(debounceTimer);
+              } else {
+                burstDeadline = now + debounceMs * PLUGIN_SUBSCRIPTION_MAX_WAIT_FACTOR;
+              }
+              debounceTimer = setTimeout(
+                () => {
+                  debounceTimer = null;
+                  void runEmit();
+                },
+                Math.max(0, Math.min(debounceMs, burstDeadline - now))
+              );
             }
           : (event?: PluginWorktreeEventPayload): void => {
               if (!isEventForBoundProject(event)) return;

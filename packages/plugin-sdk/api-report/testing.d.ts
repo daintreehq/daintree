@@ -1849,7 +1849,8 @@ interface PluginHostCallOptions {
  * {@link PluginActivationApi.onDidChangeWorktrees}). `debounceMs` coalesces a
  * burst of change events into a single trailing callback fired `debounceMs`
  * after the last event — the host re-emits the worktree set on every git-status
- * poll, so a UI-updating plugin can opt into far fewer callbacks. Values below a
+ * poll, so a UI-updating plugin can opt into far fewer callbacks. A burst that
+ * never goes quiet still fires at least every few `debounceMs`. Values below a
  * small floor (~50ms) are clamped up; `0` / omitted means no debounce (fire on
  * every change). The coalesced callback receives the most recent snapshot list.
  */

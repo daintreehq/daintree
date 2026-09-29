@@ -472,6 +472,81 @@ describe("createHost worktree subscriptions", () => {
   });
 });
 
+describe("createHost debounced onDidChangeWorktrees", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("coalesces a burst into one trailing callback", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    await host.onDidChangeWorktrees(callback, { debounceMs: 300 });
+
+    for (let i = 0; i < 5; i++) {
+      emit(h, "worktree-update", { projectPath: ROOT_A });
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    expect(callback).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(h.ambientFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("still fires by the burst deadline while updates never go quiet", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const start = performance.now();
+    const firedAt: number[] = [];
+    await host.onDidChangeWorktrees(() => firedAt.push(performance.now() - start), {
+      debounceMs: 300,
+    });
+
+    // 3 s of updates every 20 ms: a pure trailing debounce would never fire.
+    for (let i = 0; i < 150; i++) {
+      emit(h, "worktree-update", { projectPath: ROOT_A });
+      await vi.advanceTimersByTimeAsync(20);
+    }
+    expect(firedAt).toEqual([1_200, 2_400]);
+
+    // The last burst started at 2400 ms; once quiet it trails the final event.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(firedAt).toEqual([1_200, 2_400, 3_280]);
+  });
+
+  it("keeps the burst deadline when the wall clock jumps backwards", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    await host.onDidChangeWorktrees(callback, { debounceMs: 300 });
+
+    for (let i = 0; i < 60; i++) {
+      emit(h, "worktree-update", { projectPath: ROOT_A });
+      if (i === 10) vi.setSystemTime(Date.now() - 60_000);
+      await vi.advanceTimersByTimeAsync(20);
+    }
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fetch for a burst disposed before it fires", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    const dispose = await host.onDidChangeWorktrees(callback, { debounceMs: 300 });
+
+    emit(h, "worktree-update", { projectPath: ROOT_A });
+    emit(h, "worktree-removed", { projectPath: ROOT_A });
+    dispose();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.ambientFetch).not.toHaveBeenCalled();
+    expect(callback).not.toHaveBeenCalled();
+  });
+});
+
 describe("createHost renderer pushes", () => {
   it("routes toast, broadcast and panel posts to the bound project's views", async () => {
     const h = makeHarness();
