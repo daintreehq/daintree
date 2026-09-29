@@ -25,6 +25,7 @@ import { useAudioDevices, SYSTEM_DEFAULT_VALUE } from "@/hooks/useAudioDevices";
 import { useTabLoad } from "@/hooks";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { VOICE_LANGUAGES } from "@shared/config/voiceLanguages";
 import { CORE_CORRECTION_PROMPT, VOICE_DICTATION_AI_MODEL } from "@shared/config/voiceCorrection";
 import type {
   VoiceInputSettings,
@@ -34,19 +35,6 @@ import type {
   VoiceTranscriptionProvider,
   VoiceRecordingMode,
 } from "@shared/types";
-
-const LANGUAGES = [
-  { code: "en", label: "English" },
-  { code: "es", label: "Spanish" },
-  { code: "fr", label: "French" },
-  { code: "de", label: "German" },
-  { code: "ja", label: "Japanese" },
-  { code: "zh", label: "Chinese" },
-  { code: "ko", label: "Korean" },
-  { code: "pt", label: "Portuguese" },
-  { code: "it", label: "Italian" },
-  { code: "ru", label: "Russian" },
-];
 
 const PROVIDER_NAME: Record<VoiceTranscriptionProvider, string> = {
   openai: "OpenAI",
@@ -607,7 +595,7 @@ export function VoiceInputSettingsTab() {
               description="The language you dictate in"
               value={settings.language}
               onValueChange={(v) => void update({ language: v })}
-              options={LANGUAGES.map(({ code, label }) => ({ value: code, label }))}
+              options={VOICE_LANGUAGES.map(({ code, label }) => ({ value: code, label }))}
               isModified={settings.language !== DEFAULT_SETTINGS.language}
               onReset={() => void update({ language: DEFAULT_SETTINGS.language })}
             />

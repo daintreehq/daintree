@@ -246,6 +246,16 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.stop();
   });
 
+  it("maps auto language to language=multi, never detect_language", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    void provider.start({ ...BASE_SETTINGS, deepgramApiKey: "dg-abc", language: "auto" });
+    await Promise.resolve();
+    const url = new URL(latestInstance().url);
+    expect(url.searchParams.get("language")).toBe("multi");
+    expect(url.searchParams.has("detect_language")).toBe(false);
+    provider.stop();
+  });
+
   // ── Keyterm URL injection ─────────────────────────────────────────────────
 
   it("appends one repeated keyterm= param per term (not comma-joined)", async () => {

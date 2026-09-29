@@ -11,7 +11,16 @@ import {
 } from "./TranscriptionProvider.js";
 import type { VadWorkerOutbound } from "./openaiVadWorkerProtocol.js";
 import { OpenAIVadProcess, type VadRetireReason } from "./openaiVadProcess.js";
-import { formatKeytermPrompt, sanitizeOpenAIKeywords } from "../voiceContextKeyterms.js";
+import {
+  formatKeytermPrompt,
+  MAX_PROMPT_CHARS,
+  sanitizeOpenAIKeywords,
+} from "../voiceContextKeyterms.js";
+import {
+  normalizeVoiceLanguage,
+  VOICE_LANGUAGE_AUTO,
+  voiceLanguageName,
+} from "../../../shared/config/voiceLanguages.js";
 
 const P = "[VoiceTranscription:openai]";
 
@@ -28,7 +37,7 @@ type OpenAITranscriptionDelay = "minimal" | "low" | "medium" | "high" | "xhigh";
 
 interface OpenAITranscriptionConfig {
   model: string;
-  languages: string[];
+  languages?: string[];
   delay: OpenAITranscriptionDelay;
   keywords?: string[];
   prompt?: string;
@@ -411,7 +420,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     logInfo(`${P} Opening OpenAI realtime WebSocket`, {
       url: OPENAI_REALTIME_URL,
       model: OPENAI_TRANSCRIPTION_MODEL,
-      language: settings.language || "en",
+      language: normalizeVoiceLanguage(settings.language),
       customDictionaryTerms: settings.customDictionary.length,
       reconnectAttempt: this.isReconnecting ? this.reconnectAttempt : 0,
     });
@@ -472,14 +481,23 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       // bounded free-form context. Both derive from ONE sanitized list so a term
       // rejected from `keywords` can't sneak back in via `prompt`.
       const keywords = sanitizeOpenAIKeywords(settings.keyterms ?? []);
-      const keytermPrompt = formatKeytermPrompt(keywords);
       // `languages` (array) supersedes the deprecated singular `language`. Never
       // send both. Our settings hold a single code, so this is a 1-element array.
       // Type-checked, not just nullish-checked: persisted settings are cast, not
       // validated, and the setter takes an arbitrary patch — a non-string here
       // would throw inside this `open` handler, outside any try/catch.
-      const language = typeof settings.language === "string" ? settings.language.trim() : "";
-      const languages = [language || "en"];
+      const language = normalizeVoiceLanguage(settings.language);
+      const autoLanguage = language === VOICE_LANGUAGE_AUTO;
+      // `languages` is a bias hint, not a constraint, so a fixed language also
+      // gets an explicit directive in the transcription prompt. Auto omits both.
+      const languageDirective = autoLanguage
+        ? ""
+        : `Transcribe in ${voiceLanguageName(language)}. Do not translate.`;
+      const keytermPrompt = formatKeytermPrompt(
+        keywords,
+        MAX_PROMPT_CHARS - (languageDirective ? languageDirective.length + 1 : 0)
+      );
+      const prompt = [languageDirective, keytermPrompt].filter(Boolean).join(" ");
       // `turn_detection` MUST be explicitly `null`. It is not enough to omit it:
       // when absent the server applies a default VAD, and then silently produces
       // no transcription — it still acks `input_audio_buffer.committed` but
@@ -491,11 +509,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       // path. Revisit only as its own change, with the error response checked.
       const transcription: OpenAITranscriptionConfig = {
         model: OPENAI_TRANSCRIPTION_MODEL,
-        languages,
+        ...(autoLanguage ? {} : { languages: [language] }),
         delay: OPENAI_TRANSCRIPTION_DELAY,
         // Omit rather than send `[]` / `""` when nothing survived sanitization.
         ...(keywords.length > 0 ? { keywords } : {}),
-        ...(keytermPrompt ? { prompt: keytermPrompt } : {}),
+        ...(prompt ? { prompt } : {}),
       };
       const sessionUpdate = {
         type: "session.update",
@@ -523,7 +541,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         languages: transcription.languages,
         delay: transcription.delay,
         biasTermCount: keywords.length,
-        hasPrompt: keytermPrompt.length > 0,
+        hasPrompt: prompt.length > 0,
         turnDetectionNull: sessionUpdate.session.audio.input.turn_detection === null,
       });
       try {

@@ -1,3 +1,5 @@
+import { VOICE_LANGUAGE_AUTO, voiceLanguageName } from "./voiceLanguages.js";
+
 /** Skip LLM correction entirely when every word exceeds this confidence. */
 export const CONFIDENCE_SKIP_THRESHOLD = 0.85;
 
@@ -169,6 +171,7 @@ export interface CorrectionPromptContext {
   projectPath?: string;
   customDictionary?: string[];
   customInstructions?: string;
+  language?: string;
 }
 
 /**
@@ -206,6 +209,14 @@ export function buildCorrectionSystemPrompt(context: CorrectionPromptContext): s
   if (context.customDictionary && context.customDictionary.length > 0) {
     parts.push(
       `PREFERRED TERMS (prefer these exact forms when the audio plausibly matches, but do not force them over a transcribed word that already fits the context):\n${context.customDictionary.map((term) => `"${term}"`).join(" | ")}`
+    );
+  }
+
+  if (context.language) {
+    parts.push(
+      context.language === VOICE_LANGUAGE_AUTO
+        ? "LANGUAGE:\nThe speaker may dictate in more than one language. Keep every part of the text in the language and script it was spoken in. Never translate or transliterate it."
+        : `LANGUAGE:\nThe speaker dictates in ${voiceLanguageName(context.language)}. Keep the corrected text in ${voiceLanguageName(context.language)}. Never translate it into another language or switch scripts, whatever the history, dictionary, or custom context says. Code, identifiers, paths, and proper names stay as spoken.`
     );
   }
 
