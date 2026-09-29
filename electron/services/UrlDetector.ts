@@ -1,5 +1,13 @@
-import { extractLocalhostUrls, stripAnsiAndOscCodes } from "../../shared/utils/urlUtils.js";
-import { detectDevServerError, type DevServerError } from "../../shared/utils/devServerErrors.js";
+import {
+  extractLocalhostUrls,
+  LOCALHOST_HINT_LITERALS,
+  stripAnsiAndOscCodes,
+} from "../../shared/utils/urlUtils.js";
+import {
+  DEV_SERVER_ERROR_TRIGGERS,
+  detectDevServerError,
+  type DevServerError,
+} from "../../shared/utils/devServerErrors.js";
 
 export interface ScanResult {
   url: string | null;
@@ -97,15 +105,63 @@ function matchesAcrossBoundary(patterns: RegExp[], window: string, boundary: num
   return false;
 }
 
+const BUFFER_MAX = 8192;
+
+interface LiteralSet {
+  pattern: RegExp;
+  carry: number;
+}
+
+function literalSet(literals: readonly string[]): LiteralSet {
+  return {
+    pattern: new RegExp(
+      literals.map((literal) => literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
+      "i"
+    ),
+    carry: Math.max(...literals.map((literal) => literal.length)) - 1,
+  };
+}
+
+const HINTS = literalSet(LOCALHOST_HINT_LITERALS);
+const TRIGGERS = literalSet(DEV_SERVER_ERROR_TRIGGERS);
+const LITERAL_CARRY = Math.max(HINTS.carry, TRIGGERS.carry);
+
+/**
+ * What is known about a buffer this detector returned. Each bound is an offset
+ * no literal occurrence in the buffer starts at or past, so 0 means the buffer
+ * holds none at all. A bound only has to be safe, not tight: when a scan finds
+ * a literal, the end of the scanned text serves, which lets the scan stop at
+ * the first match instead of walking to the last.
+ */
+interface BufferFacts {
+  buffer: string;
+  hintBound: number;
+  triggerBound: number;
+}
+
+// One slot per concurrently running dev server is plenty; a miss only costs a
+// full scan of the buffer, never a different answer.
+const FACT_SLOTS = 4;
+
 export class UrlDetector {
+  private readonly facts: BufferFacts[] = [];
+
   scanOutput(data: string, buffer: string): ScanResult {
     const newBuffer =
-      data.length < 8192
-        ? buffer.slice(Math.max(0, buffer.length - 8192 + data.length)) + data
-        : data.slice(-8192);
+      data.length < BUFFER_MAX
+        ? buffer.slice(Math.max(0, buffer.length - BUFFER_MAX + data.length)) + data
+        : data.slice(-BUFFER_MAX);
+
+    // Re-running URL extraction and error detection over the whole buffer on
+    // every chunk is the expensive part of this scan, and after startup it is
+    // almost always wasted: neither can find anything in a buffer that holds
+    // none of their literals. So track where the last one sits and only pay for
+    // the full scan while one is still inside the window — the answers are
+    // exactly those of scanning every time.
+    const facts = this.factsFor(data, buffer, newBuffer);
 
     let urls = extractLocalhostUrls(data);
-    if (urls.length === 0) {
+    if (urls.length === 0 && facts.hintBound > 0) {
       const bufferUrls = extractLocalhostUrls(newBuffer);
       if (bufferUrls.length > 0) {
         urls = [bufferUrls[bufferUrls.length - 1]];
@@ -113,25 +169,21 @@ export class UrlDetector {
     }
 
     const preferredUrl = urls.length > 0 ? this.selectPreferredUrl(urls) : null;
-    const error = detectDevServerError(newBuffer);
+    const error = facts.triggerBound > 0 ? detectDevServerError(newBuffer) : null;
 
     // Strip the joined window, not each half: an escape sequence can itself be
     // split by the transport ("\x1b[3" + "2m"), and stripping the halves apart
     // leaves that residue sitting inside the very marker we are trying to match.
     //
-    // When nothing straddles, the two halves strip independently and their
-    // lengths give the boundary exactly. When something does, the joined strip
-    // is shorter, and deriving the boundary from the intact chunk side puts it
-    // slightly early — which re-reports a marker rather than losing one. That is
-    // the right direction to err, and it is now confined to actual straddles.
+    // When nothing straddles, the two halves strip independently and the
+    // boundary falls exactly where the carry ends. When something does, the
+    // joined strip is shorter, and deriving the boundary from the intact chunk
+    // side puts it slightly early — which re-reports a marker rather than losing
+    // one. That is the right direction to err, and it is confined to actual
+    // straddles. Both cases are the window length less the stripped chunk.
     const carry = buffer.slice(-MARKER_CARRY_MAX);
     const strippedWindow = stripAnsiAndOscCodes(carry + data);
-    const strippedChunk = stripAnsiAndOscCodes(data);
-    const strippedCarry = stripAnsiAndOscCodes(carry);
-    const boundary =
-      strippedCarry.length + strippedChunk.length === strippedWindow.length
-        ? strippedCarry.length
-        : Math.max(0, strippedWindow.length - strippedChunk.length);
+    const boundary = Math.max(0, strippedWindow.length - stripAnsiAndOscCodes(data).length);
     const readyMarker = matchesAcrossBoundary(READY_MARKERS_GLOBAL, strippedWindow, boundary);
     const compileMarker = matchesAcrossBoundary(COMPILE_MARKERS_GLOBAL, strippedWindow, boundary);
 
@@ -142,6 +194,46 @@ export class UrlDetector {
       readyMarker,
       compileMarker,
     };
+  }
+
+  private factsFor(data: string, buffer: string, newBuffer: string): BufferFacts {
+    const slot = buffer === "" ? -1 : this.facts.findIndex((entry) => entry.buffer === buffer);
+    const known = buffer === "" ? { hintBound: 0, triggerBound: 0 } : this.facts[slot];
+
+    let next: BufferFacts;
+    if (!known || data.length >= BUFFER_MAX) {
+      next = {
+        buffer: newBuffer,
+        hintBound: HINTS.pattern.test(newBuffer) ? newBuffer.length : 0,
+        triggerBound: TRIGGERS.pattern.test(newBuffer) ? newBuffer.length : 0,
+      };
+    } else {
+      // Occurrences inside the retained part of the old buffer keep their old
+      // bound, shifted by what was dropped. Anything new must end in `data`, so
+      // it starts at most LITERAL_CARRY chars before it: scanning that window
+      // is enough to catch it.
+      const retained = newBuffer.length - data.length;
+      const dropped = buffer.length - retained;
+      const carryLength = Math.min(LITERAL_CARRY, retained);
+      const window = buffer.slice(buffer.length - carryLength) + data;
+      next = {
+        buffer: newBuffer,
+        hintBound: HINTS.pattern.test(window)
+          ? newBuffer.length
+          : Math.max(0, known.hintBound - dropped),
+        triggerBound: TRIGGERS.pattern.test(window)
+          ? newBuffer.length
+          : Math.max(0, known.triggerBound - dropped),
+      };
+    }
+
+    if (slot >= 0) {
+      this.facts[slot] = next;
+    } else {
+      this.facts.push(next);
+      if (this.facts.length > FACT_SLOTS) this.facts.shift();
+    }
+    return next;
   }
 
   private selectPreferredUrl(urls: string[]): string | null {

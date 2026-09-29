@@ -201,7 +201,19 @@ export function stripAnsiAndOscCodes(text: string): string {
   );
 }
 
-const LOCALHOST_HINT_REGEX = /localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|::1/i;
+/**
+ * `extractLocalhostUrls` finds nothing in text that contains none of these.
+ * UrlDetector relies on that to skip re-scanning its buffer, so the hint test
+ * below is built from this list rather than kept beside it.
+ */
+export const LOCALHOST_HINT_LITERALS = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"];
+
+const LOCALHOST_HINT_REGEX = new RegExp(
+  LOCALHOST_HINT_LITERALS.map((literal) => literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(
+    "|"
+  ),
+  "i"
+);
 
 function hasLocalhostHint(text: string): boolean {
   return LOCALHOST_HINT_REGEX.test(text);
