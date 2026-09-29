@@ -18,13 +18,14 @@ import { usePanelDialogStore } from "@/store/panelDialogStore";
  * match last.
  */
 export function useReviewDialogOpenForWorktree(worktreeId: string | undefined): boolean {
+  // Selecting the boolean (not `panelsById`) keeps every mounted pane from re-rendering on each
+  // panelStatusBuffer flush, which replaces `panelsById` several times a second while agents stream.
   const dialogStack = usePanelDialogStore((state) => state.dialogStack);
-  const panelsById = usePanelStore((state) => state.panelsById);
-
-  if (!worktreeId) return false;
-
-  return dialogStack.some((panelId) => {
-    const panel = panelsById[panelId];
-    return panel?.kind === "review" && panel.worktreeId === worktreeId;
+  return usePanelStore((state) => {
+    if (!worktreeId || dialogStack.length === 0) return false;
+    return dialogStack.some((panelId) => {
+      const panel = state.panelsById[panelId];
+      return panel?.kind === "review" && panel.worktreeId === worktreeId;
+    });
   });
 }
