@@ -171,6 +171,14 @@ export interface ManagedTerminal {
   resizeDebounceTimer?: number;
   latestCols: number;
   latestRows: number;
+  /**
+   * The grid this renderer last sent the PTY, or undefined when unknown. Lets
+   * `fit()` skip a commit only when the PTY is known to be on the grid already;
+   * `invalidatePtyGrid` clears it wherever the PTY may have been replaced or
+   * moved out of sight (host restart, pane restart, wake).
+   */
+  ptyCols?: number;
+  ptyRows?: number;
   latestWasAtBottom: boolean;
   isUserScrolledBack: boolean;
 

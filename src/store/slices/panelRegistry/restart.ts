@@ -897,6 +897,9 @@ export const createRestartActions = (
       // before the record existed would be lost for good without this.
       reconcileWorktreeAfterSpawn(id, spawnWorktreeId, get().panelsById[id]);
 
+      // The new PTY was spawned from a grid read before the await; a resize
+      // sent in between reached no PTY, so re-assert rather than trust it.
+      terminalInstanceService.invalidatePtyGrid(id);
       if (targetLocation === "dock") {
         optimizeForDock(id);
       } else {
@@ -1488,6 +1491,9 @@ export const createRestartActions = (
 
       reconcileWorktreeAfterSpawn(id, fallbackWorktreeId, get().panelsById[id]);
 
+      // The new PTY was spawned from a grid read before the await; a resize
+      // sent in between reached no PTY, so re-assert rather than trust it.
+      terminalInstanceService.invalidatePtyGrid(id);
       if (terminal.location === "dock") {
         optimizeForDock(id);
       } else {
