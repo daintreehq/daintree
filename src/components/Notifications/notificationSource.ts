@@ -1,4 +1,7 @@
 import { useProjectStore } from "@/store/projectStore";
+import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import {
@@ -7,6 +10,11 @@ import {
   formatNotificationSource,
   worktreeNameFromId,
 } from "@/lib/notificationSourceLabel";
+import {
+  isOtherProjectContext,
+  resolveNotificationDestination,
+  type NotificationDestination,
+} from "@/lib/notificationDestination";
 
 type NotificationContext = NotificationHistoryEntry["context"];
 
@@ -33,4 +41,85 @@ export function useNotificationSource(context: NotificationContext): string {
       worktreeId ? worktreeName?.trim() || worktreeNameFromId(worktreeId) : undefined
     ) ?? APP_SOURCE_LABEL
   );
+}
+
+/**
+ * Whether this view still has the worktree: present in its inventory and not
+ * one of the deleted worktrees whose terminals outlived them.
+ */
+export function useIsWorktreeLive(worktreeId: string | undefined): boolean {
+  const inView = useWorktreeStoreOptional<boolean>(
+    (s) => (worktreeId ? s.worktrees.has(worktreeId) : false),
+    false
+  );
+  const deleted = useWorktreeSelectionStore((s) =>
+    worktreeId ? s.deletedWorktrees.has(worktreeId) : false
+  );
+  return inView && !deleted;
+}
+
+/**
+ * Whether this view can show a panel's worktree: a live one, or a deleted one
+ * whose surviving terminals it still keeps. The grid shows only the active
+ * worktree's panels, so a panel in a worktree the view doesn't know would
+ * stay invisible however it was focused.
+ */
+function useIsPanelWorktreeShown(worktreeId: string | undefined): boolean {
+  const inView = useWorktreeStoreOptional<boolean>(
+    (s) => (worktreeId ? s.worktrees.has(worktreeId) : false),
+    false
+  );
+  const deleted = useWorktreeSelectionStore((s) =>
+    worktreeId ? s.deletedWorktrees.has(worktreeId) : false
+  );
+  return !worktreeId || inView || deleted;
+}
+
+/**
+ * A section's worktree that this view no longer has. Only claimed for the
+ * current project: another project's worktrees were never here to lose.
+ */
+export function useIsWorktreeUnavailable(
+  worktreeId: string | undefined,
+  projectId: string | undefined
+): boolean {
+  const live = useIsWorktreeLive(worktreeId);
+  const ownerId = useViewOwnerId();
+  if (!worktreeId || live) return false;
+  return !isOtherProjectContext({ projectId }, ownerId);
+}
+
+/**
+ * The workspace this view belongs to: its project, or a scratch workspace,
+ * which has no `currentProject` but still owns the panels it records against
+ * its own id.
+ */
+function useViewOwnerId(): string | undefined {
+  const currentProjectId = useProjectStore((s) => s.currentProject?.id);
+  return getViewWorkspaceId() ?? currentProjectId;
+}
+
+/**
+ * The row's destination as it stands now, re-derived whenever the panel is
+ * trashed or restored or the worktree comes or goes. Click time re-reads it
+ * live (see notificationNavigation.ts) rather than trusting this render.
+ */
+export function useNotificationDestination(context: NotificationContext): NotificationDestination {
+  const panelId = context?.panelId;
+  const currentProjectId = useViewOwnerId();
+  const panelLocation = usePanelStore((s) =>
+    panelId ? s.panelsById[panelId]?.location : undefined
+  );
+  const panelWorktreeId = usePanelStore((s) =>
+    panelId ? s.panelsById[panelId]?.worktreeId : undefined
+  );
+  const panelWorktreeShown = useIsPanelWorktreeShown(panelWorktreeId);
+  const worktreeLive = useIsWorktreeLive(context?.worktreeId);
+  return resolveNotificationDestination(context, {
+    currentProjectId,
+    panelLocation,
+    panelWorktreeId,
+    panelWorktreeShown,
+    worktreeLive,
+  });
 }

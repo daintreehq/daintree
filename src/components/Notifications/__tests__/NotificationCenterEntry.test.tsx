@@ -6,6 +6,8 @@ import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { NotificationCenterEntry, formatSnoozeWake } from "../NotificationCenterEntry";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUIStore } from "@/store/uiStore";
+import { usePanelStore } from "@/store/panelStore";
+import { useProjectStore } from "@/store/projectStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
 
@@ -832,22 +834,6 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
     expect(screen.getByText("Copy correlation ID")).toBeTruthy();
   });
 
-  it("renders Go to source only when context.panelId is set", async () => {
-    render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-1" } })} />);
-    await openMenu();
-    expect(screen.getByText("Go to source")).toBeTruthy();
-  });
-
-  it("dispatches panel.focus when Go to source is selected", async () => {
-    render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-42" } })} />);
-    await openMenu();
-    const item = screen.getByText("Go to source");
-    await act(async () => {
-      fireEvent.click(item);
-    });
-    expect(dispatchMock).toHaveBeenCalledWith("panel.focus", { panelId: "pane-42" });
-  });
-
   it("closes the inbox when Report on GitHub hands off to the browser", async () => {
     useUIStore.setState({ notificationCenterOpen: true });
     render(
@@ -858,28 +844,6 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
       fireEvent.click(screen.getByText("Report on GitHub"));
     });
     expect(useUIStore.getState().notificationCenterOpen).toBe(false);
-  });
-
-  it("closes the inbox when Go to source takes you to the panel", async () => {
-    useUIStore.setState({ notificationCenterOpen: true });
-    render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-42" } })} />);
-    await openMenu();
-    await act(async () => {
-      fireEvent.click(screen.getByText("Go to source"));
-    });
-    expect(useUIStore.getState().notificationCenterOpen).toBe(false);
-  });
-
-  it("swallows the panel.focus rejection when the source panel is gone", async () => {
-    dispatchMock.mockRejectedValueOnce(new Error("Terminal panel no longer exists"));
-    render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "stale-pane" } })} />);
-    await openMenu();
-    const item = screen.getByText("Go to source");
-    await expect(
-      act(async () => {
-        fireEvent.click(item);
-      })
-    ).resolves.toBeUndefined();
   });
 
   it("writes the correlation ID to the clipboard when Copy is selected", async () => {
@@ -1117,5 +1081,210 @@ describe("NotificationCenterEntry forced-colors action hook", () => {
     expect(screen.getByRole("button", { name: "Open review" }).dataset.notificationAction).not.toBe(
       "primary"
     );
+  });
+});
+
+function seedPanel(id: string, location: string, worktreeId?: string) {
+  usePanelStore.setState({
+    panelsById: { [id]: { id, kind: "terminal", location, worktreeId } },
+    focusedId: null,
+  } as never);
+}
+
+describe("NotificationCenterEntry — go to source", () => {
+  beforeEach(() => {
+    usePanelStore.setState({ panelsById: {}, focusedId: null } as never);
+    useProjectStore.setState({ currentProject: { id: "p1" } } as never);
+    useUIStore.setState({ notificationCenterOpen: true });
+  });
+
+  async function openMenu() {
+    const trigger = screen.getByLabelText(/^Options for /);
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+  }
+
+  function getRow(container: HTMLElement) {
+    return container.firstElementChild as HTMLElement;
+  }
+
+  it("goes to a live panel when the row body is clicked, then closes the inbox", async () => {
+    seedPanel("pane-42", "grid");
+    const { container } = render(
+      <NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-42" } })} />
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hello"));
+    });
+    expect(dispatchMock).toHaveBeenCalledWith("panel.focus", { panelId: "pane-42" });
+    expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+    expect(getRow(container).className).toMatch(/cursor-pointer/);
+    expect(getRow(container).className).toMatch(/hover:bg-overlay-subtle/);
+  });
+
+  it("does not navigate from a click on the row's own controls", async () => {
+    seedPanel("pane-42", "grid");
+    getMock.mockReturnValue({ enabled: true });
+    const onDismiss = vi.fn();
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({
+          context: { panelId: "pane-42" },
+          actions: [{ actionId: "test.retry", label: "Retry" }],
+        })}
+        onDismiss={onDismiss}
+      />
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText(/^Dismiss /));
+      fireEvent.click(screen.getByText("Retry"));
+    });
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).toHaveBeenCalledWith("test.retry", undefined);
+    expect(dispatchMock).not.toHaveBeenCalledWith("panel.focus", expect.anything());
+  });
+
+  it("does not navigate from clicks inside the portalled row menu", async () => {
+    seedPanel("pane-42", "grid");
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({ correlationId: "c1", context: { panelId: "pane-42" } })}
+      />
+    );
+    await openMenu();
+    // The menu's own surface matches no nested-control selector: only the
+    // row's DOM-containment check keeps a React-bubbled click from counting.
+    const menu = screen.getByRole("menu");
+    const separator = menu.querySelector('[role="separator"]');
+    await act(async () => {
+      fireEvent.click(menu);
+      if (separator) fireEvent.click(separator);
+      fireEvent.click(screen.getByText("Copy correlation ID"));
+    });
+    expect(dispatchMock).not.toHaveBeenCalledWith("panel.focus", expect.anything());
+  });
+
+  it("navigates exactly once from Go to source", async () => {
+    seedPanel("pane-42", "grid");
+    render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-42" } })} />);
+    await openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Go to source"));
+    });
+    // Navigation starts from the menu's close-autofocus, which Radix defers.
+    await waitFor(() => {
+      expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+    });
+    const focusCalls = dispatchMock.mock.calls.filter(([id]) => id === "panel.focus");
+    expect(focusCalls).toEqual([["panel.focus", { panelId: "pane-42" }]]);
+  });
+
+  it("keeps the inbox open when panel.focus fails", async () => {
+    seedPanel("pane-42", "grid");
+    dispatchMock.mockResolvedValueOnce({ ok: false, error: { message: "gone" } });
+    render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-42" } })} />);
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hello"));
+    });
+    expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+  });
+
+  it("makes a row whose panel is gone inert, readable, and says so", async () => {
+    const { container } = render(
+      <NotificationCenterEntry
+        entry={makeEntry({ context: { projectId: "p1", panelId: "stale-pane" } })}
+      />
+    );
+    const row = getRow(container);
+    expect(row.className).toMatch(/cursor-default/);
+    expect(row.className).not.toMatch(/cursor-pointer/);
+    expect(row.className).not.toMatch(/hover:bg-overlay-subtle/);
+    expect(
+      container.querySelector('[data-testid="notification-destination-unavailable"]')?.textContent
+    ).toContain("Source unavailable");
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hello"));
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+  });
+
+  it("says a trashed panel is in the trash and disables Go to source with that reason", async () => {
+    seedPanel("pane-42", "trash");
+    const { container } = render(
+      <NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-42" } })} />
+    );
+    expect(
+      container.querySelector('[data-testid="notification-destination-unavailable"]')?.textContent
+    ).toContain("Panel in trash");
+    await openMenu();
+    const item = screen.getByText("Go to source").closest('[role="menuitem"]') as HTMLElement;
+    expect(item.getAttribute("data-disabled")).not.toBeNull();
+    expect(item.getAttribute("aria-label")).toBe("Go to source, panel in trash");
+    expect(item.textContent).toContain("Panel in trash");
+    await act(async () => {
+      fireEvent.click(item);
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("updates an open row when its panel is trashed", () => {
+    seedPanel("pane-42", "grid");
+    const { container } = render(
+      <NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-42" } })} />
+    );
+    expect(getRow(container).getAttribute("data-navigable")).toBe("true");
+    act(() => {
+      seedPanel("pane-42", "trash");
+    });
+    expect(getRow(container).getAttribute("data-navigable")).toBeNull();
+    expect(
+      container.querySelector('[data-testid="notification-destination-unavailable"]')?.textContent
+    ).toContain("Panel in trash");
+  });
+
+  it("ignores a click that ends a text selection inside the row", async () => {
+    seedPanel("pane-42", "grid");
+    render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-42" } })} />);
+    const text = screen.getByText("Hello");
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+    try {
+      await act(async () => {
+        fireEvent.click(text);
+      });
+      expect(dispatchMock).not.toHaveBeenCalled();
+    } finally {
+      window.getSelection()?.removeAllRanges();
+    }
+  });
+
+  it("offers Go to source for a worktree-only record", async () => {
+    render(<NotificationCenterEntry entry={makeEntry({ context: { worktreeId: "wt-1" } })} />);
+    await openMenu();
+    expect(screen.getByText("Go to source")).toBeTruthy();
+  });
+
+  it("does not repeat another project's name as a status", () => {
+    const { container } = render(
+      <NotificationCenterEntry
+        entry={makeEntry({ context: { projectId: "p2", panelId: "pane-1" } })}
+      />
+    );
+    expect(
+      container.querySelector('[data-testid="notification-destination-unavailable"]')
+    ).toBeNull();
+    expect(getRow(container).className).toMatch(/cursor-default/);
+  });
+
+  it("gives a row with no address no link affordance", () => {
+    const { container } = render(<NotificationCenterEntry entry={makeEntry()} />);
+    expect(getRow(container).className).not.toMatch(/cursor-pointer/);
+    expect(getRow(container).getAttribute("data-navigable")).toBeNull();
   });
 });
