@@ -20,6 +20,56 @@ vi.mock("@/lib/platform", () => ({
   isMac: () => mac,
 }));
 
+const dispatchMock = vi.fn();
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: (...args: unknown[]) => dispatchMock(...args) },
+}));
+
+let viewWorkspaceId: string | null = "project-1";
+vi.mock("@/store/viewWorkspaceId", () => ({
+  getViewWorkspaceId: () => viewWorkspaceId,
+}));
+
+let projectState: { projects: unknown[]; currentProject: unknown } = {
+  projects: [],
+  currentProject: null,
+};
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: { getState: () => projectState },
+}));
+
+let scratchState: { scratches: unknown[]; currentScratch: unknown } = {
+  scratches: [],
+  currentScratch: null,
+};
+vi.mock("@/store/scratchStore", () => ({
+  useScratchStore: { getState: () => scratchState },
+}));
+
+let cliState: { availability: Record<string, unknown>; hasRealData: boolean } = {
+  availability: {},
+  hasRealData: true,
+};
+vi.mock("@/store/cliAvailabilityStore", () => ({
+  useCliAvailabilityStore: { getState: () => cliState },
+}));
+
+let defaultAgent: string | undefined = "claude";
+vi.mock("@/store/agentPreferencesStore", () => ({
+  useAgentPreferencesStore: { getState: () => ({ defaultAgent }) },
+}));
+
+const PROJECT = { id: "project-1", name: "App", path: "/work/app" };
+const SCRATCH = { id: "scratch-1", name: "Scratch", path: "/scratch/1" };
+
+function setEligible() {
+  viewWorkspaceId = "project-1";
+  projectState = { projects: [PROJECT], currentProject: PROJECT };
+  scratchState = { scratches: [], currentScratch: null };
+  cliState = { availability: { claude: "ready" }, hasRealData: true };
+  defaultAgent = "claude";
+}
+
 const eventsOnMock = vi.fn();
 let captured: ((payload: SystemMemoryPressurePayload) => void) | null = null;
 
@@ -99,6 +149,45 @@ describe("formatSystemMemoryPressureMessage", () => {
   });
 });
 
+describe("buildSystemMemoryDiagnosisPrompt", () => {
+  it("asks why, dates the readings, and keeps the investigation read-only", async () => {
+    const { buildSystemMemoryDiagnosisPrompt } = await load();
+
+    const prompt = buildSystemMemoryDiagnosisPrompt(DEGRADED, "Sep 29, 2026, 9:14 AM", true)!;
+
+    expect(prompt.startsWith("Why is my system under memory pressure?")).toBe(true);
+    expect(prompt).toContain(
+      "at Sep 29, 2026, 9:14 AM. Swap is 91% full and the fseventsd process is using 36 GB of memory."
+    );
+    expect(prompt).toContain("check the current state first");
+    expect(prompt).toContain("If the pressure has already cleared, say so.");
+    expect(prompt).toContain("vm_stat");
+    expect(prompt).not.toMatch(/[`\n]/);
+    expect(prompt).toContain("without asking me first");
+    // The restart advice is the notice's, not a reading for the agent to act on.
+    expect(prompt).not.toContain("Restarting");
+  });
+
+  it("keeps commit wording and drops the macOS commands off macOS", async () => {
+    const { buildSystemMemoryDiagnosisPrompt } = await load();
+
+    const prompt = buildSystemMemoryDiagnosisPrompt(
+      { ...DEGRADED, swapKind: "commit", fseventsdRssMb: null },
+      "noon",
+      false
+    )!;
+
+    expect(prompt).toContain("Committed memory is at 91% of its limit.");
+    expect(prompt).not.toContain("vm_stat");
+    expect(prompt).toContain("your platform's read-only memory and process tools");
+  });
+
+  it("returns null when no figure was over threshold", async () => {
+    const { buildSystemMemoryDiagnosisPrompt } = await load();
+    expect(buildSystemMemoryDiagnosisPrompt(NORMAL, "noon", true)).toBeNull();
+  });
+});
+
 describe("useSystemMemoryPressureNotice", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -106,6 +195,11 @@ describe("useSystemMemoryPressureNotice", () => {
     notifyMock.mockReturnValue("notice-1");
     removeNotificationMock.mockReset();
     eventsOnMock.mockReset();
+    dispatchMock.mockReset();
+    dispatchMock.mockResolvedValue({ ok: true, result: { launched: true } });
+    setEligible();
+    viewWorkspaceId = null;
+    projectState = { projects: [], currentProject: null };
     mac = true;
     captured = null;
     eventsOnMock.mockImplementation(
@@ -136,7 +230,7 @@ describe("useSystemMemoryPressureNotice", () => {
     expect(eventsOnMock).toHaveBeenCalledWith("system:memory-pressure", expect.any(Function));
   });
 
-  it("raises one quiet, dismissible grid-bar warning with no accent-bearing action", async () => {
+  it("raises one quiet, dismissible grid-bar warning with no action outside a workspace", async () => {
     await mountAndCapture();
 
     act(() => captured!(DEGRADED));
@@ -155,6 +249,141 @@ describe("useSystemMemoryPressureNotice", () => {
     expect(payload.message).toContain("Swap is 91% full");
     expect(payload.action).toBeUndefined();
     expect(payload.actions).toBeUndefined();
+  });
+
+  it("offers one agent diagnosis in a project view without changing the notice copy", async () => {
+    setEligible();
+    await mountAndCapture();
+
+    act(() => captured!(DEGRADED));
+
+    const payload = notifyMock.mock.calls[0]![0];
+    expect(payload.title).toBe("High system memory use");
+    expect(payload.message).toBe(
+      "Swap is 91% full and the fseventsd process is using 36 GB of memory. Restarting your Mac clears this."
+    );
+    expect(payload.actions).toHaveLength(1);
+    const [action] = payload.actions;
+    expect(action).toMatchObject({
+      label: "Ask agent about memory",
+      actionId: "agent.launch",
+      actionArgs: {
+        agentId: "claude",
+        name: "Memory pressure",
+        prompt: expect.stringContaining("Why is my system under memory pressure?"),
+      },
+    });
+    expect(action.actionArgs.prompt).toContain("Swap is 91% full");
+    expect(Object.keys(action.actionArgs).sort()).toEqual(["agentId", "name", "prompt"]);
+    // Offered, never launched on its own.
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("offers it in a Scratch view, where there is no current project", async () => {
+    setEligible();
+    viewWorkspaceId = "scratch-1";
+    projectState = { projects: [PROJECT], currentProject: null };
+    scratchState = { scratches: [SCRATCH], currentScratch: SCRATCH };
+    await mountAndCapture();
+
+    act(() => captured!(DEGRADED));
+
+    expect(notifyMock.mock.calls[0]![0].actions).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      "the view's project is closed",
+      () => {
+        projectState = {
+          projects: [{ ...PROJECT, status: "closed" }],
+          currentProject: null,
+        };
+      },
+    ],
+    ["the view names no known workspace", () => (viewWorkspaceId = "gone")],
+    [
+      "no agent CLI is launchable",
+      () => (cliState = { availability: { claude: "missing" }, hasRealData: true }),
+    ],
+    [
+      "CLI availability has not been probed yet",
+      () => (cliState = { availability: { claude: "ready" }, hasRealData: false }),
+    ],
+  ])("hides the action but still warns when %s", async (_label, arrange) => {
+    setEligible();
+    arrange();
+    await mountAndCapture();
+
+    act(() => captured!(DEGRADED));
+
+    const payload = notifyMock.mock.calls[0]![0];
+    expect(payload.type).toBe("warning");
+    expect(payload.actions).toBeUndefined();
+  });
+
+  it("launches once on click and clears the live bar only after a successful launch", async () => {
+    setEligible();
+    await mountAndCapture();
+    act(() => captured!(DEGRADED));
+    const [action] = notifyMock.mock.calls[0]![0].actions;
+
+    await act(async () => {
+      await Promise.all([action.onClick(), action.onClick()]);
+    });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).toHaveBeenCalledWith("agent.launch", action.actionArgs, {
+      source: "user",
+    });
+    expect(removeNotificationMock).toHaveBeenCalledWith("notice-1");
+  });
+
+  it.each([
+    ["the dispatch is refused", { ok: false, error: { code: "EXECUTION_ERROR", message: "x" } }],
+    ["the launcher declines", { ok: true, result: { launched: false } }],
+  ])("keeps the bar when %s", async (_label, result) => {
+    setEligible();
+    dispatchMock.mockResolvedValue(result);
+    await mountAndCapture();
+    act(() => captured!(DEGRADED));
+    const [action] = notifyMock.mock.calls[0]![0].actions;
+
+    await act(async () => {
+      await action.onClick();
+    });
+
+    expect(removeNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it("never removes a later episode's bar when a launch outlives its own", async () => {
+    setEligible();
+    let resolveLaunch!: (value: unknown) => void;
+    dispatchMock.mockReturnValueOnce(new Promise((resolve) => (resolveLaunch = resolve)));
+    notifyMock
+      .mockReturnValueOnce("notice-1")
+      .mockReturnValueOnce("")
+      .mockReturnValueOnce("notice-2");
+    await mountAndCapture();
+    act(() => captured!(DEGRADED));
+    const [action] = notifyMock.mock.calls[0]![0].actions;
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = action.onClick();
+    });
+    act(() => captured!(NORMAL));
+    act(() => captured!(DEGRADED));
+    removeNotificationMock.mockClear();
+    await act(async () => {
+      resolveLaunch({ ok: true, result: { launched: true } });
+      await pending;
+    });
+
+    expect(removeNotificationMock).not.toHaveBeenCalled();
+    // The second episode still owns its bar, so its recovery clears it.
+    act(() => captured!(NORMAL));
+    expect(removeNotificationMock).toHaveBeenCalledWith("notice-2");
   });
 
   it("ignores a repeated degraded edge for the same episode", async () => {
