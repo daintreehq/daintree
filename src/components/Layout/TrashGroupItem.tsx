@@ -295,7 +295,11 @@ export function TrashGroupItem({
                           </Button>
                         </span>
                       </TooltipTrigger>
-                      <TooltipContent side="bottom">{`Restore ${terminalName} only`}</TooltipContent>
+                      <TooltipContent side="bottom">
+                        {canRestore
+                          ? `Restore ${terminalName} only`
+                          : "No active worktree - select a worktree first"}
+                      </TooltipContent>
                     </Tooltip>
                     <Tooltip>
                       <TooltipTrigger asChild>
