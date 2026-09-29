@@ -83,7 +83,17 @@ function lucideImports(sf: ts.SourceFile): string[] {
   return names;
 }
 
-type Holder = { tag: string; icon: string | null; severity: string | null; line: number };
+type Holder = { tag: string; icons: string[]; severity: string | null; line: number };
+
+/** Every glyph an `icon` expression can resolve to: a name, an element, either branch of a ternary. */
+function iconNames(expr: ts.Expression, sf: ts.SourceFile): string[] {
+  if (ts.isParenthesizedExpression(expr)) return iconNames(expr.expression, sf);
+  if (ts.isIdentifier(expr)) return [expr.text];
+  if (ts.isJsxSelfClosingElement(expr)) return [expr.tagName.getText(sf)];
+  if (ts.isConditionalExpression(expr))
+    return [...iconNames(expr.whenTrue, sf), ...iconNames(expr.whenFalse, sf)];
+  return [];
+}
 
 function holders(sf: ts.SourceFile): Holder[] {
   const found: Holder[] = [];
@@ -91,22 +101,19 @@ function holders(sf: ts.SourceFile): Holder[] {
     if (ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) {
       const tag = node.tagName.getText(sf);
       if (HOLDERS.has(tag)) {
-        let icon: string | null = null;
+        let icons: string[] = [];
         let severity: string | null = null;
         for (const attr of node.attributes.properties) {
           if (!ts.isJsxAttribute(attr) || !attr.initializer) continue;
           const name = attr.name.getText(sf);
           const init = attr.initializer;
           if (name === "icon" && ts.isJsxExpression(init) && init.expression) {
-            if (ts.isIdentifier(init.expression)) icon = init.expression.text;
-            // `icon={<TriangleAlert className="…" />}`, the element form.
-            else if (ts.isJsxSelfClosingElement(init.expression))
-              icon = init.expression.tagName.getText(sf);
+            icons = iconNames(init.expression, sf);
           }
           if (name === "severity" && ts.isStringLiteral(init)) severity = init.text;
         }
         const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
-        found.push({ tag, icon, severity, line });
+        found.push({ tag, icons, severity, line });
       }
     }
     ts.forEachChild(node, visit);
@@ -175,12 +182,13 @@ describe("severity glyph contract", () => {
     const offenders: string[] = [];
     for (const { rel, sf } of FILES) {
       for (const h of holders(sf)) {
-        if (!h.icon) continue;
-        const glyph = lucideGlyph(sf, h.icon);
-        if (!SEVERITY_FAMILY.has(glyph)) continue;
-        const level = h.severity ? LEVEL_OF[h.severity] : undefined;
-        if (!level || glyph !== SEVERITY_GLYPH[level]) {
-          offenders.push(`${rel}:${h.line} <${h.tag} severity=${h.severity} icon=${h.icon}>`);
+        for (const icon of h.icons) {
+          const glyph = lucideGlyph(sf, icon);
+          if (!SEVERITY_FAMILY.has(glyph)) continue;
+          const level = h.severity ? LEVEL_OF[h.severity] : undefined;
+          if (!level || glyph !== SEVERITY_GLYPH[level]) {
+            offenders.push(`${rel}:${h.line} <${h.tag} severity=${h.severity} icon=${icon}>`);
+          }
         }
       }
     }
@@ -191,7 +199,7 @@ describe("severity glyph contract", () => {
     const offenders: string[] = [];
     for (const { rel, sf } of FILES) {
       for (const h of holders(sf)) {
-        if (h.tag === "Callout" && h.icon && h.severity !== "neutral") {
+        if (h.tag === "Callout" && h.icons.length > 0 && h.severity !== "neutral") {
           offenders.push(`${rel}:${h.line} severity=${h.severity}`);
         }
       }
@@ -249,8 +257,6 @@ describe("severity glyph contract", () => {
       // An agent row in the setup list washed for its failed install; the row is
       // the control, and its "Failed" pill carries the glyph.
       "src/components/Setup/AgentCliStep.tsx",
-      // A dismissable pane notice in its own plugin, drawing SEVERITY_GLYPH.
-      "plugins/builtin/sveltekit-builder/renderer/InspectorNotice.tsx",
     ]);
     const pair =
       /border-status-([a-z]+)\/\d+\b[^"'`]*\bbg-status-\1\/\d+|bg-status-([a-z]+)\/\d+\b[^"'`]*\bborder-status-\2\/\d+/;

@@ -95,7 +95,7 @@ export function BrowserLoadErrorOverlay({
 }) {
   return (
     <PaneState
-      live="alert"
+      live={loadError.kind === "cancelled" ? "status" : "alert"}
       className="z-30"
       icon={
         // A load the user stopped is not a failure: it keeps the neutral mark.

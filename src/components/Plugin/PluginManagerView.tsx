@@ -903,7 +903,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               </button>
             )}
             {pm.notice && (
-              <Callout severity="neutral" size="compact">
+              <Callout severity={pm.noticeTone} size="compact">
                 <p>{pm.notice}</p>
               </Callout>
             )}
