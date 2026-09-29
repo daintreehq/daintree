@@ -337,7 +337,7 @@ html[data-dragging="true"]
      right-edge vocabulary (#9711 round 3) and read as a second, different
      selection signal for exactly the high-contrast users least able to
      absorb one. */
-  .sidebar-worktree-card[data-active="true"] {
+  .sidebar-worktree-card[data-active="true"]:not([data-drop-target="true"]) {
     border-right: 2px solid SelectedItem;
   }
 

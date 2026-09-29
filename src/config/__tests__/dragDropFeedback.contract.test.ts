@@ -40,6 +40,12 @@ const SIDEBAR_CSS = fs.readFileSync(
 // The worktree card is the one droppable whose frame cannot be a utility: the
 // unlayered sidebar.css base rules beat layered utilities on that element, so
 // it sets data-drop-target and sidebar.css draws the frame (checked below).
+const FORCED_COLORS_BLOCK = [
+  ...SIDEBAR_CSS.matchAll(/@media \(forced-colors: active\)\s*\{([^]*?)\n\}/g),
+]
+  .map((m) => m[1])
+  .join("\n");
+
 const CSS_FRAMED_DROPPABLES = new Set(["src/components/Worktree/WorktreeCard.tsx"]);
 
 // Droppables registered in a hook and painted by the component that renders it.
@@ -116,8 +122,17 @@ describe("drag and drop feedback contract", () => {
       }))
       .filter(({ selector }) => selector.includes(".sidebar-worktree-card"))
       .filter(({ selector }) => selector !== DROP_RULE)
-      .filter(({ body }) => /(--card-edge|background|outline)\s*:/.test(body))
-      .filter(({ selector }) => /\.sidebar-root|:has\(/.test(selector));
+      .filter(({ body }) => /(--card-edge|background|outline|border(-\w+)?)\s*:/.test(body))
+      .filter(
+        ({ selector }) =>
+          /\.sidebar-root|:has\(/.test(selector) ||
+          // Forced colours: the selection mark is a real border there, and it
+          // would sit beside the armed card's frame as a second edge.
+          (selector.includes("[data-active") &&
+            new RegExp(`${selector.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{`).test(
+              FORCED_COLORS_BLOCK
+            ))
+      );
     expect(outranking.length).toBeGreaterThan(0);
     const offenders = outranking
       .filter(({ selector }) =>
