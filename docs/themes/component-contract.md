@@ -262,7 +262,7 @@ Text that clips reveals its full form through `TruncatedTooltip`, never a native
 - **The shared `Tooltip`** when the tooltip adds something the text does not say — a symlink target, a caller's user agent, a dev server's last log line, the prompt behind a suggestion chip.
 - **Neither** inside a surface that is already the disclosure. The commit hover card wraps its co-author byline and names everyone rather than hiding the rest behind "and 2 others".
 
-A Radix `SelectItem` keeps its `title`: a styled tooltip inside a listbox fights the popup's own pointer and focus handling. `src/components/ui/__tests__/truncatedTextTitle.contract.test.ts` fails on any DOM element that is both `truncate` and titled.
+A Radix `SelectItem` keeps its `title`: a styled tooltip inside a listbox fights the popup's own pointer and focus handling. `src/components/ui/__tests__/rowControlsTooltips.contract.test.ts` fails on any DOM element that is both `truncate` and titled, with no baseline left, and on a `TruncatedTooltip` that adds a tab stop inside a focus host.
 
 ## Bundled plugins
 
