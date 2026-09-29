@@ -1,5 +1,6 @@
-import { useCallback, useMemo } from "react";
-import { Virtuoso } from "react-virtuoso";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import { useRovingRows, type UseRovingRowsResult } from "@/hooks/useRovingRows";
 import { FileSymlink, Folder, FolderSymlink } from "lucide-react";
 import { join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
@@ -8,7 +9,11 @@ import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { FILE_DRAG_MIME, encodeFileDragPaths } from "@/lib/fileDragPayload";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
-import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
+import {
+  LIST_ROW_HOVER_CLASS,
+  PALETTE_ROW_FOCUS_CLASS,
+  ROW_MENU_TARGET_CLASS,
+} from "@/components/ui/paletteRowStyles";
 import type { FileEntryLike, FolderListingRow } from "./fileBrowserTree";
 import { FILE_TREE_ICON_CLASS, FILE_TREE_ICON_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
 
@@ -75,21 +80,38 @@ export function FolderListingView({
   basePath,
   label,
 }: FolderListingViewProps) {
+  const virtuosoRef = useRef<VirtuosoHandle | null>(null);
+  const rovingKeys = useMemo(() => rows.map((row) => row.path), [rows]);
+  const revealRow = useCallback((position: number) => {
+    virtuosoRef.current?.scrollIntoView({ index: position, behavior: "auto" });
+  }, []);
+  // One tab stop for the listing, moved by the arrows over the whole `rows`
+  // list rather than whichever rows the virtualizer happens to have mounted.
+  const roving = useRovingRows({ keys: rovingKeys, reveal: revealRow, windowed: true });
+  const { tabStopKey, onRowFocus, rowRef, reportTabStopMounted } = roving;
+
   const context: ListingContext = useMemo(
-    () => ({ onSelect, rowContextMenu, basePath }),
-    [onSelect, rowContextMenu, basePath]
+    () => ({
+      onSelect,
+      rowContextMenu,
+      basePath,
+      tabStopKey,
+      onRowFocus,
+      rowRef,
+      reportTabStopMounted,
+    }),
+    [onSelect, rowContextMenu, basePath, tabStopKey, onRowFocus, rowRef, reportTabStopMounted]
   );
 
   return (
     // A labelled group rather than a `listbox`: Virtuoso renders an element
     // between its scroller and the rows, so `option` children would not be
-    // owned by the list that claimed them — and this surface has no roving
-    // focus or arrow-key navigation to back the role up either. The tree next
-    // to it is the keyboard-navigable view of the same data; this one states
-    // what it is and marks the current row, and promises nothing more.
+    // owned by the list that claimed them. The rows are buttons that rove one
+    // tab stop between them instead, the same contract as the other file lists.
     <div
       role="group"
       aria-label={label}
+      onKeyDown={roving.onKeyDown}
       // A size container, so the Modified column can step aside at a narrow
       // width and give its room to the names — the column a reader scans.
       className="@container/listing flex min-h-0 w-full flex-1 flex-col overflow-hidden"
@@ -110,8 +132,9 @@ export function FolderListingView({
         <span className="w-20 shrink-0 text-right">Size</span>
         <span className={cn("w-24 shrink-0 text-right", MODIFIED_COLUMN_CLASS)}>Modified</span>
       </div>
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1" {...roving.containerProps}>
         <Virtuoso<FolderListingRow, ListingContext>
+          ref={virtuosoRef}
           data={rows}
           context={context}
           computeItemKey={computeRowKey}
@@ -129,6 +152,10 @@ interface ListingContext {
   onSelect: (path: string, isDirectory: boolean, viaKeyboard?: boolean) => void;
   rowContextMenu?: ((row: FileEntryLike) => React.ReactNode) | undefined;
   basePath: string;
+  tabStopKey: string | null;
+  onRowFocus: UseRovingRowsResult["onRowFocus"];
+  rowRef: UseRovingRowsResult["rowRef"];
+  reportTabStopMounted: UseRovingRowsResult["reportTabStopMounted"];
 }
 
 /**
@@ -150,7 +177,15 @@ interface FolderListingRowViewProps {
 }
 
 function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
-  const { onSelect } = context;
+  const { onSelect, reportTabStopMounted } = context;
+  const isTabStop = context.tabStopKey === row.path;
+  // The listing windows its rows; it has to know when the row holding the tab
+  // stop has scrolled out of the DOM so the list can stand in for it.
+  useEffect(() => {
+    if (!isTabStop) return;
+    reportTabStopMounted(true);
+    return () => reportTabStopMounted(false);
+  }, [isTabStop, reportTabStopMounted]);
 
   // Single click selects, and selecting is the whole gesture here: a folder
   // re-points this listing at itself (the flat equivalent of the tree's
@@ -198,47 +233,42 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
           : `Symlink to ${row.symlink.target}`
     : null;
 
-  // Enter and Space do what a click does, and Up/Down walk the rows, so the
-  // listing is usable without the tree — which matters most when the tree
-  // column is collapsed and this is the only navigator on screen.
+  // Enter and Space do what a click does, and the arrows (on the listing,
+  // `useRovingRows`) walk the rows, so the listing is usable without the tree —
+  // which matters most when the tree column is collapsed and this is the only
+  // navigator on screen.
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       // Flagged so the host can hand focus to whatever replaces this row —
       // activating it is what unmounts it.
       onSelect(row.path, row.isDirectory, true);
-      return;
     }
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-    const group = event.currentTarget.closest('[role="group"]');
-    if (!group) return;
-    const rows = Array.from(group.querySelectorAll<HTMLElement>("[data-listing-row]"));
-    const index = rows.indexOf(event.currentTarget);
-    const next = rows[index + (event.key === "ArrowDown" ? 1 : -1)];
-    if (!next) return;
-    event.preventDefault();
-    next.focus();
   };
 
   const menuItems = context.rowContextMenu?.(row);
   const rowSurface = (
     <div
       role="button"
-      tabIndex={0}
+      ref={context.rowRef(row.path)}
+      tabIndex={isTabStop ? 0 : -1}
+      onFocus={() => context.onRowFocus(row.path)}
       data-listing-row=""
+      data-roving-row=""
       onKeyDown={handleKeyDown}
       aria-label={row.name}
       draggable={context.basePath !== ""}
       onDragStart={handleDragStart}
       onClick={handleClick}
       className={cn(
-        "flex h-7 w-full cursor-default select-none items-center gap-3 rounded-lg px-2 text-xs",
+        "flex h-7 w-full cursor-default select-none items-center gap-3 rounded-[var(--radius-md)] px-2 text-xs",
         PALETTE_ROW_FOCUS_CLASS,
         // Neutral hover, no selected state: clicking a row always replaces what
         // this listing is showing, so no row is ever the standing selection —
         // a highlight would only ever paint for the frame before it unmounts.
-        "text-text-secondary transition-colors duration-150 ease-out hover:bg-tint/5",
-        "data-[state=open]:bg-overlay-raised data-[state=open]:text-text-primary"
+        "text-text-secondary transition-colors duration-150 ease-out",
+        LIST_ROW_HOVER_CLASS,
+        ROW_MENU_TARGET_CLASS
       )}
     >
       <span className="flex min-w-0 flex-1 items-center gap-1.5">

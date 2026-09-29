@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
+import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { FILE_DRAG_MIME, encodeFileDragPaths } from "@/lib/fileDragPayload";
 import { Spinner } from "@/components/ui/Spinner";
@@ -675,24 +676,15 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
       className={cn(
         // System UI font like every editor's explorer: chrome stays off the bundled
         // web font's raster path, where the post-switch wrong glyphs lived.
-        "flex h-6 w-full cursor-default select-none items-center gap-1 rounded pr-2 text-xs",
-        // Selection is a neutral surface lift, not an accent fill: the tree has
-        // hover, selection and container focus all live at once, and the accent
-        // is reserved for a single load-bearing signal per focus region.
-        "transition-colors duration-150 ease-out",
-        isSelected
-          ? "bg-overlay-subtle text-text-primary"
-          : // Full-strength text, no fill: enough to find the open row at a
-            // glance without reading as a second selection.
-            isOpen
-            ? "text-text-primary"
-            : "text-text-secondary",
-        !isSelected && "hover:bg-tint/5",
-        // The row whose context menu is open lifts to a distinct neutral tier
-        // (raised, not the selection's subtle) so it reads as "the menu targets
-        // this row" without masquerading as the selection. Radix forwards
-        // data-state onto this surface through the asChild trigger below.
-        "data-[state=open]:bg-overlay-raised data-[state=open]:text-text-primary"
+        "flex h-6 w-full cursor-default select-none items-center gap-1 rounded-[var(--radius-md)] pr-2 text-xs",
+        // The list-detail language: the cursor row takes the neutral highlight,
+        // the pointer a lighter step, the row whose menu is open a ring. No
+        // accent — the tree has hover, selection and container focus all live
+        // at once, and the accent is the container's focus ring.
+        LIST_DETAIL_ROW_CLASS,
+        // The open row gets full-strength text and no fill: enough to find it
+        // at a glance without reading as a second selection.
+        isSelected || isOpen ? "text-text-primary" : "text-text-secondary"
       )}
     >
       {row.isDirectory ? (

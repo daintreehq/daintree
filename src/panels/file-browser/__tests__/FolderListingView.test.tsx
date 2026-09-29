@@ -268,11 +268,12 @@ describe("FolderListingView keyboard use", () => {
     ]);
   });
 
-  it("keeps every row reachable by focus, and walks them with the arrow keys", () => {
+  it("is one tab stop, and walks the rows with the arrow keys", () => {
     renderListing([row("src/a.ts"), row("src/b.ts"), row("src/c.ts")]);
     const rows = ["a.ts", "b.ts", "c.ts"].map((name) => screen.getByLabelText(name));
 
-    for (const element of rows) expect(element.tabIndex).toBe(0);
+    // A long folder is one Tab to cross, not one per entry.
+    expect(rows.filter((element) => element.tabIndex === 0)).toEqual([rows[0]]);
 
     rows[0]!.focus();
     fireEvent.keyDown(rows[0]!, { key: "ArrowDown" });
@@ -282,5 +283,9 @@ describe("FolderListingView keyboard use", () => {
     // The ends hold rather than wrapping or escaping the list.
     fireEvent.keyDown(rows[0]!, { key: "ArrowUp" });
     expect(document.activeElement).toBe(rows[0]);
+    fireEvent.keyDown(rows[0]!, { key: "End" });
+    expect(document.activeElement).toBe(rows[2]);
+    // The stop follows focus, so Tab back in lands where the user left off.
+    expect(rows.filter((element) => element.tabIndex === 0)).toEqual([rows[2]]);
   });
 });

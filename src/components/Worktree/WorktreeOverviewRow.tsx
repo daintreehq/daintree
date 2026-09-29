@@ -16,7 +16,11 @@ import type { AgentState, WorktreeState } from "@/types";
 import type { PtyPanelData } from "@shared/types/panel";
 import { cn } from "@/lib/utils";
 import { CheckboxGlyph } from "@/components/ui/checkbox";
-import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
+import {
+  LIST_ROW_HOVER_CLASS,
+  PALETTE_SECTION_LABEL_CLASS,
+  ROW_MENU_TARGET_CLASS,
+} from "@/components/ui/paletteRowStyles";
 import { getWorktreeBranchLabel, getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
@@ -387,7 +391,12 @@ export function WorktreeOverviewRow({
               OVERVIEW_ROW_INSET,
               !isLast && "border-b border-divider",
               "transition-colors duration-150 ease-out",
-              isSelected ? "bg-overlay-medium" : "hover:bg-overlay-soft",
+              // The highlight step and the lighter list hover, keyed on the
+              // cell's own `aria-selected`. Not `PALETTE_ROW_CLASS` itself: its
+              // transparent border would fight the row divider above.
+              "aria-selected:bg-overlay-highlight",
+              LIST_ROW_HOVER_CLASS,
+              ROW_MENU_TARGET_CLASS,
               // Cursor only while the grid holds focus — see the modal for why.
               isCursor &&
                 "group-focus/overview-grid:outline group-focus/overview-grid:outline-2 group-focus/overview-grid:-outline-offset-2 group-focus/overview-grid:outline-accent-primary"

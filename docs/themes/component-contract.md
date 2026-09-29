@@ -90,7 +90,7 @@ Everything else is `cn()`. A component with one appearance, or whose only variat
 
 The signal to convert is a component growing a third or fourth `isX && "…"` branch that callers are choosing between by prop. At that point name them.
 
-Extract shared class strings the way `src/components/ui/paletteRowStyles.ts` does — one exported `cn()` constant, so five palettes cannot grow five spellings of the same row.
+Extract shared class strings the way `src/components/ui/paletteRowStyles.ts` does — one exported `cn()` constant, so five palettes cannot grow five spellings of the same row. The same file holds `LIST_DETAIL_ROW_CLASS` for every list-detail and file-list row: selection, a lighter hover and the open-menu ring keyed off the row's own attributes, so no site picks its selected fill with a ternary of its own.
 
 ## Action glyphs
 

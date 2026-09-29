@@ -171,7 +171,7 @@ export function ObjectInspector({
         aria-expanded={isExpanded}
         aria-busy={isLoading || undefined}
         className={cn(
-          "inline text-left hover:bg-tint/5 rounded px-0.5 -mx-0.5 transition-colors",
+          "inline text-left hover:bg-overlay-subtle rounded-[var(--radius-xs)] px-0.5 -mx-0.5 transition-colors",
           isExpanded ? "text-text-primary" : "text-text-secondary"
         )}
       >

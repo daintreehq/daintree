@@ -1614,7 +1614,7 @@ export function FileBrowserPane({
             <button
               type="button"
               onClick={revealSelection}
-              className="shrink-0 truncate border-t border-border-default px-3 py-1 text-left text-2xs text-text-secondary transition-colors duration-150 ease-out hover:bg-tint/5 hover:text-text-primary"
+              className="shrink-0 truncate border-t border-border-default px-3 py-1 text-left text-2xs text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary"
             >
               Reveal {selectedFileName}
             </button>
