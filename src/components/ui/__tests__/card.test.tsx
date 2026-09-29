@@ -4,9 +4,11 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { cn } from "@/lib/utils";
-import { Card, cardVariants } from "../card";
+import { CARD_HOVER_PAINT, Card, ChoiceCard, cardVariants, choiceCardVariants } from "../card";
+import { basePressTreatment } from "@/components/Terminal/__tests__/launcherMotionContract";
 import { SurfaceHeader, SurfaceHeaderTitle } from "../SurfaceHeader";
 import {
+  baseUtilities,
   expectAtMostOneWinner,
   expectNarrowTransition,
   expectNoUnfocusedAccent,
@@ -146,5 +148,127 @@ describe("cardVariants", () => {
     const merged = cn(cardVariants({ padding: "md" }), "p-8");
     expect(utilitiesInGroup(merged, "paddingX")).toEqual(["p-8"]);
     expect(utilitiesInGroup(merged, "paddingY")).toEqual(["p-8"]);
+  });
+});
+
+const TONES = ["default", "elevated"] as const;
+const CHOICE_PADDINGS = ["sm", "md"] as const;
+
+function hoverBorders(classes: string): string[] {
+  return classes.split(/\s+/).filter((token) => /(^|:)hover:border-/.test(token));
+}
+
+function restBorderColors(classes: string): string[] {
+  return baseUtilities(classes).filter((token) => /^border-(border|text)-/.test(token));
+}
+
+describe("choiceCardVariants", () => {
+  it("resolves every combination to one radius, one padding and one resting edge", () => {
+    for (const tone of TONES) {
+      for (const selected of [false, true]) {
+        for (const padding of CHOICE_PADDINGS) {
+          const classes = cn(choiceCardVariants({ tone, selected, padding }));
+          expectSingleWinner(classes, ["radius", "paddingX", "paddingY"]);
+          expect(restBorderColors(classes), `${tone}/${selected}/${padding}`).toHaveLength(1);
+        }
+      }
+    }
+  });
+
+  it("shares its radius with the Card frame", () => {
+    expect(utilitiesInGroup(choiceCardVariants(), "radius")).toEqual(
+      utilitiesInGroup(cardVariants(), "radius")
+    );
+  });
+
+  // A resting wash is what hover paints, so a filled card reads as already
+  // hovered; only the one lifted card may carry a surface at rest.
+  it("rests unfilled unless lifted or selected", () => {
+    const fills = (classes: string) =>
+      baseUtilities(classes).filter((token) => /^bg-/.test(token) && !token.startsWith("bg-["));
+    expect(fills(choiceCardVariants({ tone: "default" }))).toEqual([]);
+    expect(fills(choiceCardVariants({ tone: "elevated" }))).not.toEqual([]);
+    expect(fills(choiceCardVariants({ selected: true }))).not.toEqual([]);
+  });
+
+  it("hovers exactly like an interactive Card frame", () => {
+    const strip = (classes: string) =>
+      classes
+        .split(/\s+/)
+        .filter((token) => token.includes("hover:"))
+        .map((token) => token.replace(/^.*hover:/, ""))
+        .sort();
+    expect(strip(choiceCardVariants({ tone: "default" }))).toEqual(
+      strip(cardVariants({ interactive: true }))
+    );
+    expect(strip(choiceCardVariants({ tone: "default" }))).toEqual([...CARD_HOVER_PAINT].sort());
+  });
+
+  // Hover must never step a selected card's edge down to the hover tier, or a
+  // hovered option and the chosen one read alike.
+  it("keeps the selected edge distinct from the hover edge", () => {
+    const selected = choiceCardVariants({ selected: true });
+    expect(hoverBorders(selected)).toEqual([]);
+    const hoverEdge = hoverBorders(choiceCardVariants())[0]?.replace(/^.*hover:/, "");
+    expect(restBorderColors(selected)[0]).not.toBe(hoverEdge);
+  });
+
+  it("never paints hover on a disabled card", () => {
+    const classes = choiceCardVariants();
+    const hovers = classes.split(/\s+/).filter((token) => token.includes("hover:"));
+    expect(hovers.length).toBeGreaterThan(0);
+    for (const token of hovers) expect(token.startsWith("not-disabled:"), token).toBe(true);
+    expect(classes).toContain("disabled:opacity-50");
+  });
+
+  // Exactly the Button snap, and marked so reduced motion can remove it:
+  // `active:scale-*` sets the individual `scale` property, which the
+  // reduced-motion `transform: none` reset cannot reach.
+  it("snaps on press exactly like Button, behind the reduced-motion hook", () => {
+    const press = (classes: string) =>
+      classes
+        .split(/\s+/)
+        .filter((token) => token.startsWith("active:"))
+        .sort();
+    const classes = choiceCardVariants();
+    expect(press(classes)).toEqual([...basePressTreatment()].sort());
+    expect(press(classes).length).toBeGreaterThan(0);
+    expect(classes.split(/\s+/)).toContain("press-scale");
+    expectNarrowTransition(classes, /^transition-\[[a-z,-]+\]$/);
+    expect(utilitiesInGroup(classes, "transition")[0]).not.toMatch(/scale|transform/);
+  });
+
+  it("owns a focus ring and spends accent nowhere else", () => {
+    for (const tone of TONES) {
+      for (const selected of [false, true]) {
+        const classes = choiceCardVariants({ tone, selected });
+        expect(classes).toContain("focus-visible:outline-accent-primary");
+        expectNoUnfocusedAccent(classes);
+      }
+    }
+  });
+});
+
+describe("ChoiceCard", () => {
+  it("renders a type=button that forwards ref, props and clicks", () => {
+    const ref = createRef<HTMLButtonElement>();
+    const onClick = vi.fn();
+    render(
+      <ChoiceCard ref={ref} tone="elevated" onClick={onClick} aria-label="Open project">
+        Open project
+      </ChoiceCard>
+    );
+    const card = screen.getByRole("button", { name: "Open project" });
+    expect(ref.current).toBe(card);
+    expect(card.getAttribute("type")).toBe("button");
+    expect(card.getAttribute("data-tone")).toBe("elevated");
+    fireEvent.click(card);
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a consumer class win its property group outright", () => {
+    render(<ChoiceCard className="p-4">Body</ChoiceCard>);
+    const card = screen.getByRole("button");
+    expect(utilitiesInGroup(card.className, "paddingX")).toEqual(["p-4"]);
   });
 });

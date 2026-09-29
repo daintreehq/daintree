@@ -12,6 +12,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card, ChoiceCard } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { KbdChord } from "@/components/ui/Kbd";
@@ -228,32 +229,19 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                   // color — that load-bearing signal is owned by the checklist.
                   const lifted = primary && !hasProjects;
                   const card = (
-                    <button
+                    <ChoiceCard
                       key={id}
-                      type="button"
                       onClick={onClick}
+                      tone={lifted ? "elevated" : "default"}
                       // Title is the accessible name; the description is announced
                       // once via aria-describedby. aria-label keeps the name clean
                       // so the in-button description text isn't double-announced.
                       aria-label={title}
                       aria-describedby={`qa-desc-${id}`}
                       className={cn(
-                        "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left cursor-pointer @min-[1800px]/welcome:p-4",
+                        "flex-col items-start gap-1 @min-[1800px]/welcome:p-4",
                         // Room for the secondary action pinned in the corner.
-                        secondary && "h-full w-full pr-10 @min-[1800px]/welcome:pr-11",
-                        "transition-colors duration-150",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                        lifted
-                          ? // Correct elevate-to-select inversion (ring-border-strong
-                            // + elevated fill). Dark keeps its /95 wash; on light the
-                            // alpha makes the elevated lift translucency-inert (RC-9),
-                            // so .light forces the fully opaque elevated surface to
-                            // preserve the real ~0.03-0.04 dL lift over the panel.
-                            "ring-1 ring-border-strong bg-surface-panel-elevated/95 [.light_&]:bg-surface-panel-elevated hover:bg-surface-panel-elevated"
-                          : // Idle hover: overlay-soft already clears the JND on dark
-                            // but composites sub-JND over the light panel, so .light
-                            // steps it up to overlay-medium.
-                            "ring-1 ring-border-strong/40 hover:bg-overlay-soft [.light_&]:hover:bg-overlay-medium"
+                        secondary && "h-full w-full pr-10 @min-[1800px]/welcome:pr-11"
                       )}
                     >
                       <span className="flex items-center gap-2 text-sm font-medium text-text-primary @min-[1920px]/welcome:text-base">
@@ -266,7 +254,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                       >
                         {description}
                       </span>
-                    </button>
+                    </ChoiceCard>
                   );
                   if (!secondary) return card;
                   // A sibling of the card rather than a child: a button can't
@@ -515,7 +503,11 @@ function AgentSetupBannerCard() {
 
   return (
     <div className="w-full" data-testid="agent-setup-banner">
-      <div className="relative w-full rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4">
+      <Card
+        variant="subtle"
+        padding="none"
+        className="relative w-full px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4"
+      >
         <DismissButton
           onClick={handleDismiss}
           aria-label="Dismiss agent setup banner"
@@ -559,7 +551,7 @@ function AgentSetupBannerCard() {
             </div>
           </div>
         </div>
-      </div>
+      </Card>
     </div>
   );
 }
@@ -618,7 +610,11 @@ function AgentWelcomeCard() {
 
   return (
     <div className="w-full">
-      <div className="relative w-full rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4">
+      <Card
+        variant="subtle"
+        padding="none"
+        className="relative w-full px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4"
+      >
         <DismissButton
           onClick={handleDismiss}
           aria-label="Dismiss welcome card"
@@ -688,7 +684,7 @@ function AgentWelcomeCard() {
             )}
           </div>
         </div>
-      </div>
+      </Card>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { choiceCardVariants } from "@/components/ui/card";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { AgentCliStep } from "./AgentCliStep";
@@ -1153,12 +1154,10 @@ function AppearanceStep({
             <label
               key={scheme.id}
               className={cn(
-                "flex flex-col gap-2 p-3 rounded-[var(--radius-md)] border transition-colors text-left cursor-pointer",
+                choiceCardVariants({ selected: isSelected }),
+                "flex-col gap-2",
                 // The ring rides the card, not the visually hidden radio.
-                "has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent-primary",
-                isSelected
-                  ? "border-border-strong bg-overlay-selected"
-                  : "border-border-default bg-surface-canvas hover:border-text-secondary"
+                "has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent-primary"
               )}
             >
               <input

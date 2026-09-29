@@ -80,6 +80,21 @@ ROW_MENU_TARGET_CLASS; // data-[state=open]: a 1px inset border-strong outline, 
 
 ---
 
+### Choice Cards
+
+**Role:** A whole card that is itself the control — a quick action, a recovery choice, an agent to pick, a starter prompt, a recipe, a portal link, a plugin, a theme radio.
+
+```tsx
+<ChoiceCard onClick={run} padding="sm">…</ChoiceCard>
+<label className={cn(choiceCardVariants({ selected }), "flex-col")}><input type="radio" className="sr-only" />…</label>
+```
+
+**Usage:** `ChoiceCard` / `choiceCardVariants` in `src/components/ui/card.tsx` own the whole recipe; never respell it on a raw `<button>`. Rest is outlined and unfilled (`radius-lg`, `border-border-default`), because a resting wash is what hover paints and a filled card reads as already hovered. Hover is the `Card interactive` hover — `overlay-subtle` plus the border stepping to `border-strong` — and the border step is what carries it on light themes, so there is no per-theme override. Press is the Button snap (`active:scale-[0.98]`, 1ms in) behind the `press-scale` class, which is what removes it under reduced motion; `motion-reduce:` cannot, because the utility sets the individual `scale` property. Two sizes: `md` (`p-3`) for a card with a title and description, `sm` (`px-3 py-2`) for a single line or a row of chips. `tone="elevated"` lifts the one recommended card in a set (the welcome screen's first step for a new user) with a raised surface and the strong edge, never accent. A radio card is a `<label>` over a native radio, painted with `choiceCardVariants({ selected })`: its selected edge is `text-secondary` over `overlay-selected`, the Pressed Toggle edge, so a hovered option never reads as the chosen one. An action card acts on click and carries no radio puck — a circle promises select-then-submit. A read-only block that merely looks like a card is `Card variant="subtle"`, never an `overlay-subtle` wash with a border, which is the hover state. When the choice is a plain confirm or dismiss, it is a dialog footer instead (below). Pinned by `src/components/ui/__tests__/card.test.tsx` and `src/config/__tests__/choiceCards.contract.test.ts`.
+
+**Inline answers:** a pair of actions that answers something — a dialog footer, an inline report or add form — puts the safe answer leading and the one `contrast` primary trailing, whether it sits in `AppDialog.Footer` or inline beside a field. The safe answer is `ghost`, except in Settings, where row actions and `SettingsActions` draw it `outline` (`.claude/rules/settings-pages.md`). A panel list or other form inside a dialog answers from `AppDialog.Footer`, not from a button row in the body.
+
+---
+
 ### Settings Nav Active
 
 **Role:** Active tab in settings subtabs, navigation bars with bottom-border indicators.

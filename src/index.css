@@ -1482,13 +1482,14 @@ body,
     transform: none;
   }
 
-  /* Launcher press controls (recipe cards, quick actions). `active:scale-*`
-   * emits the individual `scale` property, so the `transform: none` button
-   * reset below cannot neutralize it — see the Tailwind v4 trap in
-   * `docs/themes/interaction-state-recipes.md`. That reset also excludes these
-   * recipe cards outright: they are Radix context-menu triggers, so they carry
-   * a `data-state` attribute. Kill the press scale explicitly. */
-  .launcher-press {
+  /* Press-snap controls outside `Button` (choice cards, recipe cards, launcher
+   * quick actions). `active:scale-*` emits the individual `scale` property, so
+   * the `transform: none` button reset below cannot neutralize it — see the
+   * Tailwind v4 trap in `docs/themes/interaction-state-recipes.md`. That reset
+   * also excludes the recipe cards outright: they are Radix context-menu
+   * triggers, so they carry a `data-state` attribute. Kill the press scale
+   * explicitly. */
+  .press-scale {
     scale: none !important;
   }
 

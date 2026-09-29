@@ -2,6 +2,7 @@ import { ChevronRight, SquareTerminal } from "lucide-react";
 import { BrandMark } from "@/components/icons/BrandMark";
 import { BrandSurface } from "@/components/icons/BrandSurface";
 import { getAgentConfig } from "@/config/agents";
+import { ChoiceCard } from "@/components/ui/card";
 
 interface HelpAssistantAgentChooserProps {
   agentIds: readonly string[];
@@ -32,12 +33,12 @@ export function HelpAssistantAgentChooser({ agentIds, onChoose }: HelpAssistantA
           const Icon = config.icon ?? SquareTerminal;
           const description = config.tooltip;
           return (
-            <button
+            <ChoiceCard
               key={agentId}
-              type="button"
+              padding="sm"
               onClick={() => onChoose(agentId)}
               data-testid={`help-choose-agent-${agentId}`}
-              className="group flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-[var(--radius-md)] border border-border-default text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              className="group items-center gap-3 w-full text-text-primary"
             >
               <BrandMark brandColor={config.color}>
                 <Icon className="w-5 h-5 shrink-0" aria-hidden="true" />
@@ -50,7 +51,7 @@ export function HelpAssistantAgentChooser({ agentIds, onChoose }: HelpAssistantA
                 className="w-3.5 h-3.5 shrink-0 text-text-secondary group-hover:text-text-primary transition-colors"
                 aria-hidden="true"
               />
-            </button>
+            </ChoiceCard>
           );
         })}
         <p className="text-2xs text-text-secondary">Saved as your default</p>

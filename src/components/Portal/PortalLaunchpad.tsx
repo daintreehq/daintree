@@ -5,6 +5,7 @@ import { PortalIcon } from "./PortalIcon";
 import { isMac } from "@/lib/platform";
 import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
+import { ChoiceCard } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/EmptyState";
 
 interface PortalLaunchpadProps {
@@ -65,11 +66,11 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
             Manage
           </button>
         </div>
-        <ul className="flex flex-col gap-0.5">
+        <ul className="flex flex-col gap-1.5">
           {links.map((link) => (
             <li key={link.id}>
-              <button
-                type="button"
+              <ChoiceCard
+                padding="sm"
                 onClick={(e) => {
                   const modifierBackground = mac ? e.metaKey : e.ctrlKey;
                   onOpenUrl(link.url, link.title, modifierBackground);
@@ -81,7 +82,7 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
                     onOpenUrl(link.url, link.title, true);
                   }
                 }}
-                className="group flex w-full items-center gap-3 h-10 px-3 rounded-[var(--radius-lg)] text-left transition-colors duration-150 hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
+                className="group w-full items-center gap-3"
               >
                 <span className="flex w-6 h-6 shrink-0 items-center justify-center text-text-secondary">
                   <PortalIcon icon={link.icon} size="launchpad" />
@@ -97,7 +98,7 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
                     {linkHost(link.url)}
                   </span>
                 </span>
-              </button>
+              </ChoiceCard>
             </li>
           ))}
         </ul>

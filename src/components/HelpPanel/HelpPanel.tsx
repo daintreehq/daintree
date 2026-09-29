@@ -14,6 +14,7 @@ import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 import { ExternalLink, MessageCircle, Settings2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ChoiceCard } from "@/components/ui/card";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { MissingCliGate } from "@/components/Terminal/MissingCliGate";
@@ -1727,15 +1728,18 @@ export function HelpPanel({
                     <div className="flex flex-col gap-1.5 w-full">
                       <p className="text-2xs text-text-secondary">Or start with a question</p>
                       {STARTER_PROMPTS.map((prompt) => (
-                        <button
+                        <ChoiceCard
                           key={prompt}
-                          type="button"
+                          padding="sm"
                           onClick={() => handleStartAssistant(prompt)}
-                          className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs rounded-[var(--radius-md)] border border-border-default text-daintree-text/80 hover:text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                          className="items-center gap-2 w-full text-xs text-text-primary"
                         >
-                          <MessageCircle className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" />
+                          <MessageCircle
+                            className="w-3.5 h-3.5 shrink-0 text-text-secondary"
+                            aria-hidden="true"
+                          />
                           <span>{prompt}</span>
-                        </button>
+                        </ChoiceCard>
                       ))}
                     </div>
                   )}

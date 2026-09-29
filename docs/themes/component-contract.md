@@ -20,7 +20,7 @@ Check `src/components/ui/` before you hand-roll anything. A surface built from t
 | `EmptyState` | An empty region. The `user-cleared` variant deliberately nulls its action so completed-work states stay quiet. |
 | `Skeleton`, `Spinner` | Loading, under the 400ms Doherty gate in `CLAUDE.md` — skeleton when the layout shape is predictable, `Spinner` when it is not. |
 | `field`, `input`, `textarea`, `checkbox`, `switch` | Any form control. `field` owns the label/description/error wiring and the `aria-describedby` and `aria-invalid` plumbing that hand-rolled forms get wrong. |
-| `card`, `badge` | A bounded content block and its status pill. |
+| `card`, `badge` | A bounded content block and its status pill. `Card` is the frame (`interactive` for one that holds controls); `ChoiceCard` / `choiceCardVariants` is a card that is itself the control — quick actions, recovery choices, agent pickers, radio cards. See [Choice Cards](./interaction-state-recipes.md#choice-cards). |
 | `SurfaceHeader` | A panel or dialog header, at either density. |
 | `Kbd`, `ShortcutHint`, `HighlightedText`, `TruncatedTooltip` | Chrome details that already exist and are easy to reinvent slightly differently. |
 | `CopyButton`, `copyWithToast` | Anything that puts text on the clipboard. See [Copy feedback](#copy-feedback) for which one. |
