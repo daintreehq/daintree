@@ -382,7 +382,7 @@ export function TwoPaneSplitLayout({
             style={{
               position: "fixed",
               inset: 0,
-              zIndex: 9999,
+              zIndex: "var(--z-drag-shield)",
               cursor: "col-resize",
             }}
             aria-hidden="true"

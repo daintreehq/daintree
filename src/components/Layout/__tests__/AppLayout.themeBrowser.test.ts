@@ -114,7 +114,7 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
   });
 
   it("offsets the panel by the toolbar height PLUS the banner height — issue #11893", () => {
-    // A global banner pushes the z-[60] toolbar below 48px, so the old static
+    // A global banner pushes the --z-toolbar toolbar below 48px, so the old static
     // top-12 left the panel's top strip (hero ✕ close) painted under it. The
     // offset must ADD the measured banner height to the toolbar's own height —
     // replacing one with the other would just move the clipping around. The

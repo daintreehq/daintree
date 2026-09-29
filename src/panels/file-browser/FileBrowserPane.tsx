@@ -1430,7 +1430,7 @@ export function FileBrowserPane({
           // through this element; `fixed` keeps it out of the flex layout.
           <div
             data-testid="file-browser-resize-shield"
-            className="fixed inset-0 z-50 cursor-col-resize"
+            className="fixed inset-0 z-[var(--z-drag-shield)] cursor-col-resize"
           />
         )}
       </div>

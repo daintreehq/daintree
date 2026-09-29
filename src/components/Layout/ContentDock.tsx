@@ -446,7 +446,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             "border-t border-[var(--dock-border)]",
             "shadow-[var(--dock-shadow)]",
             "flex items-center px-[var(--dock-padding-x)] py-[var(--dock-padding-y)] gap-[var(--dock-gap)]",
-            "z-40 shrink-0 @container/dock"
+            "z-[var(--z-panel)] shrink-0 @container/dock"
           )}
           data-dock-density={density}
         >

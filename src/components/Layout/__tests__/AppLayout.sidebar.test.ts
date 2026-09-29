@@ -392,7 +392,7 @@ describe("AppLayout portal viewport coverage — issue #6629", () => {
     // plus the measured global-banner height) rather than a static top-12, which
     // a banner-shifted toolbar painted over.
     expect(source).toMatch(
-      /<div(?=[^>]*className="(?=[^"]*\bfixed\b)(?=[^"]*\bright-0\b)(?=[^"]*\bbottom-0\b)(?=[^"]*\bz-50\b)[^"]*")(?=[^>]*style=\{\{[\s\S]{0,200}?\btop:\s*OVERLAY_TOP_OFFSET\b)[^>]*>[\s\S]{0,100}?<LazyPortalDock\s*\/>/
+      /<div(?=[^>]*className=\{cn\(\s*"(?=[^"]*\bfixed\b)(?=[^"]*\bright-0\b)(?=[^"]*\bbottom-0\b)(?=[^"]*z-\[var\(--z-portal\)\])[^"]*",\s*OVERLAY_SHEET_SHADOW_CLASS\s*\)\})(?=[^>]*style=\{\{[\s\S]{0,200}?\btop:\s*OVERLAY_TOP_OFFSET\b)[^>]*>[\s\S]{0,100}?<LazyPortalDock\s*\/>/
     );
     expect(source).not.toContain("fixed top-12 right-0 bottom-0");
     // The portal target must be document.body to escape the inert subtrees and
@@ -411,7 +411,7 @@ describe("AppLayout portal viewport coverage — issue #6629", () => {
     // Body-portaling moved the PortalDock out of the inert main-content
     // wrapper, so the inert prop must be applied directly to the new wrapper.
     // Without this, the Portal tabs / toolbar / resize handle remain clickable
-    // through the ThemeBrowser overlay (Portal is z-50, ThemeBrowser is z-40).
+    // through the ThemeBrowser overlay (Portal is --z-portal, ThemeBrowser is --z-panel).
     // Since #9558 the same guard also covers the plugin-manager overlay via the
     // shared `chromeInert` signal.
     expect(source).toMatch(

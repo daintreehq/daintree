@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef, Suspense, lazy, type ReactNod
 import { LazyPortalDock } from "@/lazyPanels";
 import { createPortal, flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
+import { OVERLAY_SHEET_SHADOW_CLASS } from "@/components/ui/floatingSurface";
 import { Toolbar } from "./Toolbar";
 import { Sidebar } from "./Sidebar";
 import { TerminalDockRegion } from "./TerminalDockRegion";
@@ -150,7 +151,7 @@ export const DEFAULT_SIDEBAR_WIDTH = 350;
 const SIDEBAR_HYDRATION_UNLOCK_FALLBACK_MS = 5000;
 
 // #11893: top edge for the body-portaled full-height overlays (ThemeBrowser,
-// PortalDock). They are position:fixed and paint under the z-[60] toolbar, so a
+// PortalDock). They are position:fixed and paint under the --z-toolbar toolbar, so a
 // static top-12 clipped their top strip the moment a global banner pushed the
 // toolbar down. `3rem` is the toolbar's own h-12; the var carries the banner
 // height, which is content-driven (description length, action count) and so has
@@ -1141,7 +1142,7 @@ export function AppLayout({
               componentName="ThemeBrowser"
               onError={() => useThemeBrowserStore.getState().close()}
             >
-              {/* Offset the panel below the top toolbar. The toolbar is z-[60]
+              {/* Offset the panel below the top toolbar. The toolbar is --z-toolbar
                   / h-12 (Toolbar.tsx) and paints over the viewport's top 48px, so
                   a top-0 panel had its top strip (hero ✕ close, any top bar) hidden
                   behind it. OVERLAY_TOP_OFFSET adds the measured global-banner
@@ -1152,7 +1153,7 @@ export function AppLayout({
               <div
                 inert={!themeBrowserOpen || undefined}
                 data-visible={themeBrowserVisible}
-                className="fixed bottom-0 z-40 pointer-events-auto transition-[translate,opacity] starting:translate-x-[100%] starting:opacity-0 data-[visible=false]:pointer-events-none data-[visible=false]:translate-x-[100%] data-[visible=false]:opacity-0 motion-reduce:transition-opacity motion-reduce:translate-none data-[visible=false]:motion-reduce:translate-none"
+                className="fixed bottom-0 z-[var(--z-panel)] pointer-events-auto transition-[translate,opacity] starting:translate-x-[100%] starting:opacity-0 data-[visible=false]:pointer-events-none data-[visible=false]:translate-x-[100%] data-[visible=false]:opacity-0 motion-reduce:transition-opacity motion-reduce:translate-none data-[visible=false]:motion-reduce:translate-none"
                 style={{
                   top: OVERLAY_TOP_OFFSET,
                   right: "var(--right-obstruction-offset, 0px)",
@@ -1177,7 +1178,10 @@ export function AppLayout({
                 WebContentsView is already hidden via PortalVisibilityController. */}
             <div
               {...(chromeInert ? { inert: true } : {})}
-              className="fixed right-0 bottom-0 z-50 shadow-2xl border-l border-border-default"
+              className={cn(
+                "fixed right-0 bottom-0 z-[var(--z-portal)] border-l border-border-default",
+                OVERLAY_SHEET_SHADOW_CLASS
+              )}
               style={{ top: OVERLAY_TOP_OFFSET }}
             >
               <Suspense fallback={null}>

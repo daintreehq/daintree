@@ -10,6 +10,7 @@ import {
 } from "@/lib/animationUtils";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { cn } from "@/lib/utils";
+import { FLOATING_CARD_CLASS } from "@/components/ui/floatingSurface";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { DismissButton } from "@/components/ui/DismissButton";
@@ -194,9 +195,8 @@ export function GettingStartedChecklist({
         }}
         className={cn(
           "pointer-events-auto relative w-full",
-          "rounded-[var(--radius-sm)] border border-border-default bg-surface-panel",
+          FLOATING_CARD_CLASS,
           "text-sm text-text-primary",
-          "shadow-[var(--theme-shadow-floating)]",
           "transition-[translate,opacity]",
           "motion-reduce:transition-opacity motion-reduce:translate-none",
           isVisible ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"

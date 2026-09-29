@@ -7,7 +7,7 @@ export const GLOBAL_BANNER_HEIGHT_VAR = "--global-banner-height";
  * Publishes the height of whatever `GlobalBannerCoordinator` is rendering above
  * the toolbar as `--global-banner-height` on `documentElement` — `0px` when no
  * banner is up. Body-portaled `position: fixed` overlays compose it with the
- * toolbar's own height so they still clear the `z-[60]` toolbar after a banner
+ * toolbar's own height so they still clear the `--z-toolbar` toolbar after a banner
  * has pushed it down (#11893).
  *
  * `bannerEl` must be the wrapper that holds the coordinator and nothing else, so

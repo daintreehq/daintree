@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { AlertTriangle, Check, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { OVERLAY_SHEET_SHADOW_CLASS } from "@/components/ui/floatingSurface";
 import { pluralize } from "@/lib/pluralize";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
@@ -523,7 +524,10 @@ export function ThemeBrowser() {
 
   return (
     <div
-      className="flex flex-col h-full bg-surface-canvas border-l border-border-default shadow-2xl"
+      className={cn(
+        "flex flex-col h-full bg-surface-canvas border-l border-border-default",
+        OVERLAY_SHEET_SHADOW_CLASS
+      )}
       style={{ width: PANEL_WIDTH }}
       role="dialog"
       aria-modal="true"

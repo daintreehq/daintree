@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { FLOATING_CARD_CLASS } from "@/components/ui/floatingSurface";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
@@ -20,8 +21,7 @@ import {
  */
 
 /** The floating panel. Placement and stacking stay with each host. */
-export const FIND_BAR_CLASS =
-  "flex items-center gap-1 rounded-[var(--radius-md)] border border-border-default bg-surface-panel-elevated px-2 py-1 shadow-[var(--theme-shadow-floating)]";
+export const FIND_BAR_CLASS = `flex items-center gap-1 px-2 py-1 ${FLOATING_CARD_CLASS}`;
 
 /** Glyph size for the bar's icon buttons. */
 export const FIND_BAR_ICON_CLASS = PANE_TOOLBAR_ICON_CLASS;
