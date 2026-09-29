@@ -17,6 +17,8 @@ import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import { actionService } from "@/services/ActionService";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Textarea } from "@/components/ui/textarea";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
@@ -505,9 +507,11 @@ export function AgentComposer({
     <div role="group" aria-label="Ask an agent" className="flex flex-col gap-2">
       {retargetable && current ? (
         <div className="flex min-w-0 items-center justify-between gap-2 text-xs">
-          <span className="min-w-0 truncate text-text-secondary" title={subjectLabel}>
-            {`Still about ${subjectLabel}`}
-          </span>
+          <TruncatedTooltip content={`Still about ${subjectLabel}`}>
+            <span className="min-w-0 truncate text-text-secondary">
+              {`Still about ${subjectLabel}`}
+            </span>
+          </TruncatedTooltip>
           <Button variant="ghost" size="xs" onClick={() => setPinned(current)}>
             Use current selection
           </Button>
@@ -682,20 +686,26 @@ export function AgentComposer({
         ) : (
           <span />
         )}
-        <Button
-          variant="contrast"
-          size="xs"
-          disabled={!canSend}
-          onClick={() => send()}
-          aria-label="Send to agent"
-          title="Send to agent (Enter)"
-          // Disabled is quiet, not faded: a faded contrast fill is still the
-          // heaviest object in the drawer (and white-on-grey on a light theme).
-          className="gap-1.5 disabled:bg-overlay-subtle disabled:text-text-secondary disabled:opacity-100 disabled:shadow-none disabled:ring-0"
-        >
-          Send
-          <kbd className={cn(KBD_COMPACT_CLASS, "bg-transparent text-inherit opacity-70")}>⏎</kbd>
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="contrast"
+              size="xs"
+              disabled={!canSend}
+              onClick={() => send()}
+              aria-label="Send to agent"
+              // Disabled is quiet, not faded: a faded contrast fill is still the
+              // heaviest object in the drawer (and white-on-grey on a light theme).
+              className="gap-1.5 disabled:bg-overlay-subtle disabled:text-text-secondary disabled:opacity-100 disabled:shadow-none disabled:ring-0"
+            >
+              Send
+              <kbd className={cn(KBD_COMPACT_CLASS, "bg-transparent text-inherit opacity-70")}>
+                ⏎
+              </kbd>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">Send to agent</TooltipContent>
+        </Tooltip>
       </div>
 
       {queue}
@@ -718,18 +728,21 @@ export function AgentComposer({
               idea. Prose, so proportional — the class tokens stay monospace
               because they are code. */}
           {intents.map((intent) => (
-            <Button
-              key={intent.label}
-              variant="pill"
-              size="xs"
-              // The words that will actually land in the draft, for anyone who
-              // wants them before committing.
-              title={intent.prompt}
-              className="min-w-0 justify-start font-normal text-text-secondary"
-              onClick={() => applyIntent(intent.prompt)}
-            >
-              <span className="truncate">{intent.label}</span>
-            </Button>
+            // The words that will actually land in the draft, for anyone who
+            // wants them before committing.
+            <Tooltip key={intent.label}>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="pill"
+                  size="xs"
+                  className="min-w-0 justify-start font-normal text-text-secondary"
+                  onClick={() => applyIntent(intent.prompt)}
+                >
+                  <span className="truncate">{intent.label}</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{intent.prompt}</TooltipContent>
+            </Tooltip>
           ))}
         </div>
       ) : null}

@@ -23,6 +23,8 @@ import { KeyRound, ListChecks } from "@/components/icons";
 import { GitHubIcon } from "@/components/icons/brands";
 import { isTokenRelatedError, isTransientNetworkError } from "@/lib/forgeErrors";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/Spinner";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SearchField } from "@/components/ui/SearchField";
 import {
   SegmentedRadioGroup,
@@ -215,7 +217,7 @@ function LoadMoreFooter({ context }: { context?: LoadMoreFooterContext }) {
           >
             {showLoadingMoreSpinner ? (
               <>
-                <RefreshCw className="animate-spin" />
+                <Spinner />
                 {isSlowLoadingMore ? "Still working…" : "Loading…"}
               </>
             ) : (
@@ -395,9 +397,11 @@ export function GitHubResourceList({
   }, [loading, refreshing]);
 
   const handleManualRefreshClick = useCallback(() => {
+    // The button stays focusable while busy, so the press is vetoed here.
+    if (loading || refreshing) return;
     isManualRefreshRef.current = true;
     handleManualRefresh();
-  }, [handleManualRefresh]);
+  }, [handleManualRefresh, loading, refreshing]);
 
   const selection = useIssueSelection(type, projectPath);
 
@@ -1133,24 +1137,23 @@ export function GitHubResourceList({
           />
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
-                type="button"
+              {/* aria-disabled, not disabled: a disabled button drops keyboard
+                  focus mid-refresh. Busy, not unavailable, so no dim — the
+                  spinner is the whole signal. */}
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={handleManualRefreshClick}
-                disabled={loading || refreshing}
+                aria-disabled={loading || refreshing || undefined}
                 aria-label={
                   showSpinner
                     ? "Refreshing…"
                     : `Refresh ${type === "issue" ? "issues" : "pull requests"}`
                 }
-                className={cn(
-                  "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0",
-                  "text-text-secondary hover:text-text-primary hover:bg-overlay-medium",
-                  "transition-[background-color,color] duration-150 ease-out disabled:cursor-default",
-                  showSpinner && "text-status-info"
-                )}
+                className="shrink-0 aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-disabled:hover:text-text-secondary [&_svg]:size-3.5"
               >
-                <RefreshCw className={cn("w-3.5 h-3.5", showSpinner && "animate-spin")} />
-              </button>
+                <SpinningIcon icon={RefreshCw} active={showSpinner} aria-hidden="true" />
+              </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
               {showSpinner ? (
@@ -1171,25 +1174,24 @@ export function GitHubResourceList({
             <Tooltip>
               <TooltipTrigger asChild>
                 <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     aria-label={
                       sortOrder === "created"
                         ? `Sort ${type === "issue" ? "issues" : "pull requests"}`
                         : `Sort ${type === "issue" ? "issues" : "pull requests"}, sorted by recently updated`
                     }
                     className={cn(
-                      "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0",
-                      "text-text-secondary hover:text-text-primary hover:bg-overlay-medium",
-                      "transition-[background-color,color] duration-150 ease-out",
+                      "shrink-0 [&_svg]:size-3.5",
                       // A non-default sort is a neutral lifted state, not a badge.
                       // The old blue dot read as unread activity and said nothing
                       // about which order was in force.
                       sortOrder !== "created" && "bg-overlay-soft text-text-primary"
                     )}
                   >
-                    <ArrowUpDown className="w-3.5 h-3.5" />
-                  </button>
+                    <ArrowUpDown />
+                  </Button>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
               <TooltipContent side="bottom">
@@ -1235,23 +1237,18 @@ export function GitHubResourceList({
             <Tooltip>
               <TooltipTrigger asChild>
                 <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
+                  {/* No lift while a selection is live: the bulk bar already
+                      states the count, and a second membership signal here
+                      would say the same thing twice. */}
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     disabled={loading || data.length === 0}
                     aria-label={`Select ${type === "issue" ? "issues" : "pull requests"}`}
-                    className={cn(
-                      "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0",
-                      "text-text-secondary hover:text-text-primary hover:bg-overlay-medium",
-                      "transition-[background-color,color] duration-150 ease-out",
-                      // No lift while a selection is live: the bulk bar already
-                      // states the count, and a second membership signal here
-                      // would say the same thing twice.
-                      "disabled:cursor-default disabled:opacity-50",
-                      "disabled:hover:bg-transparent disabled:hover:text-text-secondary"
-                    )}
+                    className="shrink-0 [&_svg]:size-3.5"
                   >
-                    <ListChecks className="w-3.5 h-3.5" />
-                  </button>
+                    <ListChecks />
+                  </Button>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
               <TooltipContent side="bottom">Select</TooltipContent>

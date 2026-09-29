@@ -1,6 +1,8 @@
 import { ChevronRight } from "lucide-react";
 import type { AncestryEntry, SelectedNode } from "../shared/model.js";
+import type { ReactElement } from "react";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /**
  * One definition of "where this element sits", shared by the strip and the
@@ -180,28 +182,28 @@ export function SelectionTrail({
               {index > 0 ? (
                 <ChevronRight aria-hidden="true" className="h-3 w-3 shrink-0 text-text-secondary" />
               ) : null}
-              {selectable ? (
-                <button
-                  type="button"
-                  title={crumb.file ?? undefined}
-                  // Reads as the text it replaces until pointed at: the trail is
-                  // a sentence first and a row of controls second. A hover lift
-                  // to the primary ink is the whole affordance — an underline
-                  // on every step made the strip read as a row of links.
-                  className="min-w-0 cursor-pointer truncate rounded-xs text-left transition-colors duration-150 ease-out hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
-                  onClick={() => onSelect(crumb)}
-                >
-                  {crumb.label}
-                </button>
-              ) : (
-                <span
-                  {...(last ? { "aria-current": "true" as const } : {})}
-                  title={crumb.file ?? undefined}
-                  className={cn("truncate", last && "font-medium text-text-primary")}
-                >
-                  {crumb.label}
-                </span>
-              )}
+              <CrumbFile file={crumb.file}>
+                {selectable ? (
+                  <button
+                    type="button"
+                    // Reads as the text it replaces until pointed at: the trail is
+                    // a sentence first and a row of controls second. A hover lift
+                    // to the primary ink is the whole affordance — an underline
+                    // on every step made the strip read as a row of links.
+                    className="min-w-0 cursor-pointer truncate rounded-xs text-left transition-colors duration-150 ease-out hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+                    onClick={() => onSelect(crumb)}
+                  >
+                    {crumb.label}
+                  </button>
+                ) : (
+                  <span
+                    {...(last ? { "aria-current": "true" as const } : {})}
+                    className={cn("truncate", last && "font-medium text-text-primary")}
+                  >
+                    {crumb.label}
+                  </span>
+                )}
+              </CrumbFile>
             </li>
           );
         })}
@@ -212,5 +214,22 @@ export function SelectionTrail({
         )}
       </ol>
     </nav>
+  );
+}
+
+/**
+ * Names the file a crumb's component is written in. The shared tooltip rather
+ * than a native title, so it opens on keyboard focus for a crumb that is a
+ * button and matches every other disclosure in the drawer.
+ */
+function CrumbFile({ file, children }: { file: string | null; children: ReactElement }) {
+  if (!file) return children;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="bottom" align="start">
+        {file}
+      </TooltipContent>
+    </Tooltip>
   );
 }
