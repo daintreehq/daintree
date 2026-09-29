@@ -7,12 +7,10 @@ import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   buildFolderListingRows,
-  countHiddenRows,
   NO_HIDDEN_ROWS,
   createVisibilityFilter,
   DEFAULT_FILE_SORT,
   findNodeInListings,
-  flattenTree,
   isRowPathVisible,
   parentDirectoryOf,
   listingsFromSnapshot,
@@ -27,6 +25,7 @@ import {
   type FolderListingRow,
   type HiddenRowCounts,
 } from "./fileBrowserTree";
+import { countHiddenRowsMemo, flattenTreeMemo } from "./fileTreeDerivations";
 
 /**
  * Shared empty expansion set for the single-directory listing count. A fresh
@@ -1214,7 +1213,7 @@ export function useFileBrowserTree({
   ]);
 
   const rows = useMemo(
-    () => flattenTree(listings, expandedSet, loadingPaths, rootPath, isVisible, sortKeyed),
+    () => flattenTreeMemo(listings, expandedSet, loadingPaths, rootPath, isVisible, sortKeyed),
     [listings, expandedSet, loadingPaths, rootPath, isVisible, sortKeyed]
   );
 
@@ -1262,7 +1261,8 @@ export function useFileBrowserTree({
   // the view-options badge. Walks only loaded, expanded folders, so the number
   // never counts rows behind a collapsed parent — see `countHiddenRows`.
   const hiddenCounts = useMemo(
-    () => countHiddenRows(listings, expandedSet, rootPath, { hideDotfiles, alwaysHiddenPatterns }),
+    () =>
+      countHiddenRowsMemo(listings, expandedSet, rootPath, { hideDotfiles, alwaysHiddenPatterns }),
     [listings, expandedSet, rootPath, hideDotfiles, alwaysHiddenPatterns]
   );
 
@@ -1274,7 +1274,7 @@ export function useFileBrowserTree({
     () =>
       listingPath === null
         ? NO_HIDDEN_ROWS
-        : countHiddenRows(listings, EMPTY_EXPANDED, listingPath, {
+        : countHiddenRowsMemo(listings, EMPTY_EXPANDED, listingPath, {
             hideDotfiles,
             alwaysHiddenPatterns,
           }),
