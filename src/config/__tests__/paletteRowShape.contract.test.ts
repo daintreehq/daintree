@@ -135,6 +135,8 @@ function boxViolations(rel: string, source: string, family: Family): string[] {
         // Geometry never changes with state: a row that grows or reshapes
         // under the cursor or the pointer shoves the list.
         /:(rounded(-|$)|p[xytblrse]?-)/.test(t) ||
+        // `p-*` sets both axes, so it silently replaces the family's inset.
+        /^p-/.test(t) ||
         (/^rounded(-|$)/.test(t) && t !== box.radius) ||
         (/^px-/.test(t) && t !== box.inset) ||
         (/^py-/.test(t) && !heights.includes(t))
@@ -186,7 +188,12 @@ const SOMETIMES_TWO_LINE_FILES = [
   "src/components/ActionPalette/ActionPaletteItem.tsx",
   "src/components/QuickSwitcher/QuickSwitcherItem.tsx",
   "src/components/ThemePalette/ThemePalette.tsx",
+  "src/components/Terminal/ResumeSessionsPalette.tsx",
+  "src/components/Plugin/PluginQuickPickDialog.tsx",
 ];
+
+/** Palettes whose rows never carry a second line. */
+const ONE_LINE_FILES = ["src/components/Terminal/PromptHistoryPalette.tsx"];
 
 const files = ROOTS.flatMap(sourceFiles).map((file) => ({
   rel: path.relative(REPO_ROOT, file).split(path.sep).join("/"),
@@ -242,6 +249,11 @@ describe("palette and picker row shape — the checks catch what they claim to",
       "a radius that changes with selection",
       "popover",
       row('"px-2 py-1.5 rounded-[var(--radius-sm)] aria-selected:rounded-lg"'),
+    ],
+    [
+      "an all-sides padding that replaces the inset",
+      "palette",
+      row('"px-3 py-2 rounded-[var(--radius-md)] p-20"'),
     ],
     [
       "an allowed box overridden by a later utility",
@@ -314,6 +326,15 @@ describe("palette and picker row shape", () => {
       expect(call.classes, `${rel}:${call.line}`).toEqual(
         expect.arrayContaining(["py-1.5", "py-2"])
       );
+    }
+  });
+
+  it.each(ONE_LINE_FILES)("gives %s's one-line rows the one-line height", (rel) => {
+    const rows = rowCalls(read(rel), rel).filter((c) => c.kind === "row");
+    expect(rows.length).toBeGreaterThan(0);
+    for (const call of rows) {
+      expect(call.classes, `${rel}:${call.line}`).toContain("py-1.5");
+      expect(call.classes, `${rel}:${call.line}`).not.toContain("py-2");
     }
   });
 

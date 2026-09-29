@@ -88,7 +88,7 @@ export function PromptHistoryRow({
       aria-selected={isSelected}
       className={cn(
         PALETTE_ROW_CLASS,
-        "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
+        "w-full flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] text-left",
         "text-text-secondary"
       )}
       onClick={() => onSelect(item)}
