@@ -104,7 +104,7 @@ const POLISH_CSS = `
 
 const SETTINGS_DIALOG = '[role="dialog"]:has(.settings-sidebar)';
 const ASSISTANT_PANEL = 'aside[aria-label="Daintree Assistant"]';
-const DRAG_OVERLAY = '[class*="shadow-md"][class*="cursor-grabbing"]';
+const DRAG_OVERLAY = '[class*="shadow-"][class*="cursor-grabbing"]';
 
 type Fixture = InjectToastOptions & { expect: string };
 
