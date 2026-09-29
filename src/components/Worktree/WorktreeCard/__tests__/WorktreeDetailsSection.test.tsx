@@ -35,7 +35,6 @@ vi.mock("framer-motion", () => {
     domMax: {},
     m: { div: MotionDiv },
     motion: { div: MotionDiv },
-    useAnimate: () => [{ current: null } as unknown as React.RefObject<HTMLElement>, mockAnimate],
     useReducedMotion: () => mockReducedMotion,
   };
 });
@@ -112,14 +111,20 @@ function renderSection(overrides: Partial<WorktreeDetailsSectionProps> = {}) {
 }
 
 describe("WorktreeDetailsSection count pill bump", () => {
+  // jsdom has no Web Animations API; the bump calls element.animate().
+  const originalAnimate = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "animate");
+
   beforeEach(() => {
     mockAnimate.mockClear();
     mockReducedMotion = false;
     delete document.body.dataset.performanceMode;
+    HTMLElement.prototype.animate = mockAnimate;
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    if (originalAnimate) Object.defineProperty(HTMLElement.prototype, "animate", originalAnimate);
+    else delete (HTMLElement.prototype as { animate?: unknown }).animate;
   });
 
   it("renders file count without calling animate on initial mount", () => {
@@ -140,7 +145,15 @@ describe("WorktreeDetailsSection count pill bump", () => {
     );
 
     expect(mockAnimate).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/5 files/)).toBeDefined();
+    expect(mockAnimate.mock.contexts[0]).toBe(screen.getByText(/5 files/));
+    expect(mockAnimate).toHaveBeenCalledWith(
+      [
+        { transform: "scale(1)", easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
+        { transform: "scale(1.06)", easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
+        { transform: "scale(1)" },
+      ],
+      { duration: 200 }
+    );
   });
 
   it("coalesces rapid changes within 200ms gate", () => {
