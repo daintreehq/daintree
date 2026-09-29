@@ -1509,3 +1509,58 @@ describe("supervised run status line (#10930)", () => {
     expect(screen.queryByTestId("fleet-run-status")).toBeNull();
   });
 });
+
+describe("FleetArmingRibbon — panel-map write fanout", () => {
+  beforeEach(() => {
+    resetStores();
+    useFleetPickerSessionStore.setState({ activeOwner: null });
+  });
+
+  function renderCounted(): { commits: () => number } {
+    let commits = 0;
+    render(
+      <React.Profiler id="ribbon" onRender={() => commits++}>
+        <FleetArmingRibbon />
+      </React.Profiler>
+    );
+    return { commits: () => commits };
+  }
+
+  function patchPanel(id: string, patch: Partial<PtyPanelData>): void {
+    act(() => {
+      const { panelsById } = usePanelStore.getState();
+      usePanelStore.setState({
+        panelsById: { ...panelsById, [id]: { ...panelsById[id], ...patch } as PtyPanelData },
+      });
+    });
+  }
+
+  it("skips a write that changes no preset count or armed-pane field", () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working"), makeAgent("t3", "waiting")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const probe = renderCounted();
+    const before = probe.commits();
+
+    patchPanel("t3", { title: "renamed" });
+    patchPanel("t3", { title: "renamed again" });
+
+    expect(probe.commits()).toBe(before);
+  });
+
+  it("re-renders with the new counts when an agent state flips", () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working"), makeAgent("t3", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const probe = renderCounted();
+    const before = probe.commits();
+    const waitingItem = () =>
+      screen
+        .getAllByRole("menuitem")
+        .find((el) => /All waiting — this worktree/.test(el.textContent ?? ""))!;
+    expect(waitingItem().textContent).toContain("0");
+
+    patchPanel("t3", { agentState: "waiting" });
+
+    expect(probe.commits()).toBeGreaterThan(before);
+    expect(waitingItem().textContent).toContain("1");
+  });
+});

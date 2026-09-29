@@ -163,6 +163,22 @@ function FleetRunStatusLine({
   );
 }
 
+interface PresetCounts {
+  waitingCurrent: number;
+  waitingAll: number;
+  workingCurrent: number;
+  workingAll: number;
+  eligibleCurrent: number;
+}
+
+const EMPTY_PRESET_COUNTS: PresetCounts = {
+  waitingCurrent: 0,
+  waitingAll: 0,
+  workingCurrent: 0,
+  workingAll: 0,
+  eligibleCurrent: 0,
+};
+
 export function FleetArmingRibbon(): ReactElement | null {
   const armedCount = useFleetArmingStore((s) => s.armedIds.size);
   const clear = useFleetArmingStore((s) => s.clear);
@@ -410,13 +426,24 @@ export function FleetArmingRibbon(): ReactElement | null {
   );
 
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId) ?? null;
-  // Panel-store re-render triggers keep the selection-menu preset counts
-  // fresh, but only while the ribbon is actually visible — when it isn't,
-  // return a constant so agent ticks don't re-render the hidden ribbon.
-  // Hook order stays stable; only the subscription payload is gated.
+  // Selection-menu preset counts, derived inside the selector so the ribbon
+  // re-renders only when a count changes rather than on every panel-map
+  // write (status flushes land up to once per frame). Gated on visibility so
+  // the five O(panels) scans don't run for a hidden ribbon.
   const ribbonActive = armedCount >= 2;
-  usePanelStore((s) => (ribbonActive ? s.panelIds : null));
-  usePanelStore((s) => (ribbonActive ? s.panelsById : null));
+  const presetCounts = usePanelStore(
+    useShallow((s): PresetCounts =>
+      ribbonActive
+        ? {
+            waitingCurrent: computeArmByStateIds("waiting", "current", activeWorktreeId, s).length,
+            waitingAll: computeArmByStateIds("waiting", "all", activeWorktreeId, s).length,
+            workingCurrent: computeArmByStateIds("working", "current", activeWorktreeId, s).length,
+            workingAll: computeArmByStateIds("working", "all", activeWorktreeId, s).length,
+            eligibleCurrent: collectEligibleIds("current", activeWorktreeId, s).length,
+          }
+        : EMPTY_PRESET_COUNTS
+    )
+  );
 
   // Bare Esc on the ribbon → exit the fleet. Scoped to ribbon-owned
   // controls (the bar's own keydown handler) so terminals' Esc handling
@@ -534,16 +561,6 @@ export function FleetArmingRibbon(): ReactElement | null {
   if (armedCount < 2) {
     return <>{fleetDialogs}</>;
   }
-
-  // Below the early returns so the five O(panels) scans and the menu JSX
-  // only run while the ribbon is actually visible.
-  const presetCounts = {
-    waitingCurrent: computeArmByStateIds("waiting", "current", activeWorktreeId).length,
-    waitingAll: computeArmByStateIds("waiting", "all", activeWorktreeId).length,
-    workingCurrent: computeArmByStateIds("working", "current", activeWorktreeId).length,
-    workingAll: computeArmByStateIds("working", "all", activeWorktreeId).length,
-    eligibleCurrent: collectEligibleIds("current", activeWorktreeId).length,
-  };
 
   const selectionMenuItems = (
     <>

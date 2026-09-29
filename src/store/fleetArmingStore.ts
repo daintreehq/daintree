@@ -88,11 +88,13 @@ export function isFleetArmEligible(
  * Collect eligible terminal ids, ordered by panelIds (DOM/sidebar order),
  * optionally scoped to the currently active worktree.
  */
+type PanelListState = Pick<ReturnType<typeof usePanelStore.getState>, "panelIds" | "panelsById">;
+
 export function collectEligibleIds(
   scope: FleetArmScope,
-  activeWorktreeId: string | null
+  activeWorktreeId: string | null,
+  state: PanelListState = usePanelStore.getState()
 ): string[] {
-  const state = usePanelStore.getState();
   const ids: string[] = [];
   for (const id of state.panelIds) {
     const t = getNarrowPanel(state.panelsById, id);
@@ -113,9 +115,9 @@ export function collectEligibleIds(
 export function computeArmByStateIds(
   preset: FleetArmStatePreset,
   scope: FleetArmScope,
-  activeWorktreeId: string | null
+  activeWorktreeId: string | null,
+  state: PanelListState = usePanelStore.getState()
 ): string[] {
-  const state = usePanelStore.getState();
   const ids: string[] = [];
   for (const id of state.panelIds) {
     const t = getNarrowPanel(state.panelsById, id);
