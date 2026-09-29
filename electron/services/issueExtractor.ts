@@ -1,8 +1,25 @@
 const ISSUE_PATTERNS = [/issue-(\d+)/i, /issues?\/(\d+)/i, /#(\d+)/, /gh-(\d+)/i, /jira-(\d+)/i];
 
+// A pure memo keyed by every branch name the workspace host has seen, so it is
+// capped: the oldest entry goes first and is simply recomputed if seen again.
+const ISSUE_CACHE_MAX_ENTRIES = 1000;
 const issueCache = new Map<string, number | null>();
 
+function cacheIssue(key: string, value: number | null): number | null {
+  if (issueCache.size >= ISSUE_CACHE_MAX_ENTRIES) {
+    const oldest = issueCache.keys().next().value;
+    if (oldest !== undefined) issueCache.delete(oldest);
+  }
+  issueCache.set(key, value);
+  return value;
+}
+
 const SKIP_BRANCHES = ["main", "master", "develop", "staging", "production", "release", "hotfix"];
+
+/** Test-only: the memo's current entry count. */
+export function getIssueCacheSizeForTest(): number {
+  return issueCache.size;
+}
 
 export function extractIssueNumberSync(branchName: string, folderName?: string): number | null {
   if (!branchName || typeof branchName !== "string") {
@@ -22,8 +39,7 @@ export function extractIssueNumberSync(branchName: string, folderName?: string):
 
   const lowerBranch = trimmedBranch.toLowerCase();
   if (SKIP_BRANCHES.some((skip) => lowerBranch === skip || lowerBranch.startsWith(`${skip}/`))) {
-    issueCache.set(cacheKey, null);
-    return null;
+    return cacheIssue(cacheKey, null);
   }
 
   for (const pattern of ISSUE_PATTERNS) {
@@ -31,8 +47,7 @@ export function extractIssueNumberSync(branchName: string, folderName?: string):
     if (match?.[1]) {
       const num = parseInt(match[1], 10);
       if (!isNaN(num) && num > 0) {
-        issueCache.set(cacheKey, num);
-        return num;
+        return cacheIssue(cacheKey, num);
       }
     }
   }
@@ -44,15 +59,13 @@ export function extractIssueNumberSync(branchName: string, folderName?: string):
       if (match?.[1]) {
         const num = parseInt(match[1], 10);
         if (!isNaN(num) && num > 0) {
-          issueCache.set(cacheKey, num);
-          return num;
+          return cacheIssue(cacheKey, num);
         }
       }
     }
   }
 
-  issueCache.set(cacheKey, null);
-  return null;
+  return cacheIssue(cacheKey, null);
 }
 
 export async function extractIssueNumber(

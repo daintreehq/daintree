@@ -3,6 +3,7 @@ import {
   deriveIssueTitleFromBranch,
   extractIssueNumber,
   extractIssueNumberSync,
+  getIssueCacheSizeForTest,
 } from "../issueExtractor.js";
 
 let seed = 0;
@@ -12,6 +13,15 @@ function unique(value: string): string {
 }
 
 describe("issueExtractor", () => {
+  it("still answers correctly for a branch whose memo entry was evicted", () => {
+    const first = unique("feature/issue-77");
+    expect(extractIssueNumberSync(first)).toBe(77);
+    for (let i = 0; i < 1500; i++) extractIssueNumberSync(unique(`feature/issue-${i + 1}`));
+    expect(getIssueCacheSizeForTest()).toBe(1000);
+    expect(extractIssueNumberSync(first)).toBe(77);
+    expect(getIssueCacheSizeForTest()).toBe(1000);
+  });
+
   it("returns null for invalid or empty branch names", () => {
     expect(extractIssueNumberSync("" as unknown as string)).toBeNull();
     expect(extractIssueNumberSync("   ")).toBeNull();
