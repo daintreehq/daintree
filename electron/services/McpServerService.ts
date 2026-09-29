@@ -12,6 +12,7 @@ import type {
   DisconnectBearerResult,
   HelpSessionBearerRecord,
   McpAuditRecord,
+  McpAuditRecordQuery,
   McpAuditStats,
   McpGrantLifecyclePayload,
   McpIssueGrantResult,
@@ -847,8 +848,8 @@ export class McpServerService {
     return this.httpLifecycle.getConfigSnippet();
   }
 
-  getAuditRecords(): McpAuditRecord[] {
-    return this.auditService.getRecords();
+  getAuditRecords(query?: McpAuditRecordQuery): McpAuditRecord[] {
+    return this.auditService.getRecords(query);
   }
 
   /**

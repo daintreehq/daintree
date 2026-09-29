@@ -90,10 +90,15 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
 
     void (async () => {
       try {
-        const all = await window.electron.mcpServer.getAuditRecords();
-        if (fetchSeq.current !== seq) return;
         // Audit records carry the MCP transport id in `sessionId`; the help
         // session id the renderer holds only ever matches `helpSessionId`.
+        // Main narrows the ring so only these few records cross IPC; the
+        // local pass is a no-op on that answer.
+        const all = await window.electron.mcpServer.getAuditRecords({
+          helpSessionId: sessionId,
+          limit: MAX_RECENT_CALLS,
+        });
+        if (fetchSeq.current !== seq) return;
         const mine = all.filter((r) => r.helpSessionId === sessionId).slice(0, MAX_RECENT_CALLS);
         hasRecords.current = mine.length > 0;
         setRecords(mine);

@@ -919,7 +919,7 @@ export interface GeneratedIpcInvokeMap {
     result: { enabled: boolean; maxRecords: number };
   };
   "mcp-server:get-audit-records": {
-    args: [];
+    args: [query?: import("./mcpServer.js").McpAuditRecordQuery | undefined];
     result: import("./mcpServer.js").McpAuditRecord[];
   };
   "mcp-server:get-audit-stats": {

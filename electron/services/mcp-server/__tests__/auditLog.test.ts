@@ -34,6 +34,49 @@ const successOutcome: AuditOutcome = {
 
 const unauthorizedOutcome: AuditOutcome = { kind: "unauthorized" };
 
+describe("AuditService.getRecords query", () => {
+  // Stored oldest first, as the ring persists them.
+  const stored = [
+    { id: "a1", timestamp: 1, helpSessionId: "a" },
+    { id: "b1", timestamp: 2, helpSessionId: "b" },
+    { id: "g1", timestamp: 3, type: "grant.used", sessionId: "s", toolId: "t" },
+    { id: "a2", timestamp: 4, helpSessionId: "a" },
+    { id: "n1", timestamp: 5 },
+    { id: "a3", timestamp: 6, helpSessionId: "a" },
+  ].map((r) =>
+    "type" in r
+      ? r
+      : {
+          toolId: "t",
+          sessionId: "s",
+          tier: "external",
+          argsSummary: "{}",
+          result: "success",
+          durationMs: 1,
+          ...r,
+        }
+  );
+  const ids = (records: { id: string }[]) => records.map((r) => r.id);
+
+  it("matches the unqualified read, narrowed, newest first", () => {
+    const { service } = makeFixture({}, stored);
+    expect(ids(service.getRecords())).toEqual(["a3", "n1", "a2", "b1", "a1"]);
+    expect(ids(service.getRecords({ helpSessionId: "a" }))).toEqual(["a3", "a2", "a1"]);
+    expect(ids(service.getRecords({ helpSessionId: "a", limit: 2 }))).toEqual(["a3", "a2"]);
+    expect(ids(service.getRecords({ limit: 3 }))).toEqual(["a3", "n1", "a2"]);
+    expect(service.getRecords({ helpSessionId: "missing" })).toEqual([]);
+  });
+
+  it("never counts a grant toward the limit, and a limit past the matches returns them all", () => {
+    const { service } = makeFixture({}, [
+      ...stored,
+      { id: "g2", timestamp: 7, type: "grant.used", sessionId: "s", toolId: "t" },
+    ]);
+    expect(ids(service.getRecords({ limit: 2 }))).toEqual(["a3", "n1"]);
+    expect(ids(service.getRecords({ helpSessionId: "a", limit: 50 }))).toEqual(["a3", "a2", "a1"]);
+  });
+});
+
 describe("AuditService.appendRecord", () => {
   it("stores the caller-provided argsSummary verbatim", () => {
     // Redaction lives in the call-site `summarizeMcpArgs` pipeline; the
