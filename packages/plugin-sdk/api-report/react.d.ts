@@ -681,7 +681,9 @@ interface PluginConfirmDialogProps {
  *
  * The DOM props land on the element that directly holds the rows. Spread
  * `useListNavigation().containerProps` here to make it a keyboard listbox; the
- * rows are then options (`getRowProps(index)` on each `ListRow`). Without a
+ * rows are then options (`getRowProps(index)` on each `ListRow`), and the DOM
+ * props land on the scroller instead, which takes the keyboard. Either way that
+ * element carries your `id` and `data-*` (a `data-testid` included). Without a
  * `role` it is a plain `list` and each row is a `listitem`.
  */
 interface PluginVirtualListProps<T = unknown> extends PluginDomProps<HTMLDivElement> {

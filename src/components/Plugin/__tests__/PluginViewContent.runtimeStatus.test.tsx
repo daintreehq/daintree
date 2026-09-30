@@ -6,6 +6,7 @@ import type { PluginRuntimeStatus, PluginWorkerStatus } from "@shared/types/plug
 import { PLUGIN_WORKER_STALL_MS } from "../pluginWorkerPresentation";
 import type { PluginViewContentConfig } from "../PluginViewContent";
 import type { ReactNode } from "react";
+import { settlePluginViewLoad } from "./settlePluginViewLoad";
 
 // The app root supplies the TooltipProvider. Triggers render inline; the
 // content is left out so a disclosed label is not counted twice.
@@ -30,6 +31,13 @@ vi.mock("@/components/ui/tooltip", () => ({
  */
 
 vi.mock("@/pluginUi", () => ({ whenPluginUiReady: () => Promise.resolve() }));
+// A settled load renders its view at once; the gate is loadPath's subject.
+// See settlePluginViewLoad for why it is off here.
+vi.mock("@/hooks/useDeferredLoading", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useDeferredLoading")>()),
+  useSkeletonGate: () => false,
+  useSkeletonFloor: (isShowing: boolean) => isShowing,
+}));
 vi.mock("@/services/plugin/pluginStyleContract", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/services/plugin/pluginStyleContract")>()),
   preparePluginStyles: () => Promise.resolve(),
@@ -193,7 +201,7 @@ async function mountContent(props: Record<string, unknown> = {}) {
   const { makePluginViewContent } = await import("../PluginViewContent");
   const Content = makePluginViewContent(makeContentConfig());
   const utils = render(<Content panelId="panel-1" {...props} />);
-  await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+  await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
   return utils;
 }
 
@@ -282,7 +290,7 @@ describe("mounted panel learns its backend died (#12278)", () => {
 
     // Every panel of the instance runs this off the SAME broadcast, which is
     // what makes them move together without a main-side panel registry.
-    await waitFor(() => expect(screen.getByTestId("plugin-view")).not.toBe(before));
+    await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).not.toBe(before));
   });
 
   it("does not remount when the same generation reports ready again", async () => {
@@ -338,13 +346,13 @@ describe("mounted panel learns its backend died (#12278)", () => {
     const { makePluginViewContent } = await import("../PluginViewContent");
     const Content = makePluginViewContent(makeContentConfig());
     render(<Content panelId="panel-rebind" />);
-    await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+    await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
     await pushStatus(worker({ generation: 1, state: "ready" }));
     const mountsBefore = mounts.length;
 
     await pushStatus(worker({ generation: 2, state: "ready" }));
 
-    await waitFor(() => expect(mounts.length).toBeGreaterThan(mountsBefore));
+    await settlePluginViewLoad(() => expect(mounts.length).toBeGreaterThan(mountsBefore));
   });
 
   it("replaces a failed view when a healthy backend appears for the first time", async () => {
@@ -359,10 +367,10 @@ describe("mounted panel learns its backend died (#12278)", () => {
 
     await pushStatus(worker({ generation: 4, state: "ready" }));
 
-    await waitFor(() =>
+    await settlePluginViewLoad(() =>
       expect(activateForViewMock.mock.calls.length).toBeGreaterThan(callsAfterThrow)
     );
-    await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+    await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
   });
 
   it("rebinds an import-stage failure onto a fresh main-minted specifier (#12996)", async () => {
@@ -396,7 +404,7 @@ describe("mounted panel learns its backend died (#12278)", () => {
       });
 
       await pushStatus(worker({ generation: 1, state: "ready" }));
-      await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+      await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
       expect(activateForViewMock.mock.calls.at(-1)).toEqual(["acme.dashboard", true]);
 
       // A view that threw while rendering is not a poisoned specifier: the next
@@ -404,7 +412,7 @@ describe("mounted panel learns its backend died (#12278)", () => {
       act(() => boundaryCallbacks.onError?.(new Error("view exploded")));
       const callsBeforeRebind = activateForViewMock.mock.calls.length;
       await pushStatus(worker({ generation: 2, state: "ready" }));
-      await waitFor(() =>
+      await settlePluginViewLoad(() =>
         expect(activateForViewMock.mock.calls.length).toBeGreaterThan(callsBeforeRebind)
       );
       expect(activateForViewMock.mock.calls.at(-1)).toEqual(["acme.dashboard"]);

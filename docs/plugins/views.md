@@ -275,9 +275,10 @@ export default function Notes({ pluginId, disposeSignal }) {
   return createElement(
     "div",
     { className: "flex flex-col flex-1 min-h-0" },
+    // The panel's own title and icon are already in the host's chrome above
+    // this view; the header says what only the view knows.
     createElement(PaneHeader, {
-      icon: "notebook",
-      title: "Notes",
+      title: `${data.length} notes`,
       actions: createElement(
         Button,
         { variant: "ghost", size: "sm", onClick: () => setDiscarding(true) },
@@ -333,7 +334,7 @@ Nothing of the kit loads at startup. Importing `@daintreehq/plugin-ui` costs a f
 
 ### Versioning
 
-`PLUGIN_UI_VERSION` is the kit's semver contract, `"1.0.0"` today. A minor version adds components, optional props, icon names and theme token keys; within a major version no export, prop, accepted value or core token key is removed or narrowed. Every component validates its props at runtime, so a value outside the types — from an older or newer plugin — is ignored rather than thrown on. The kit comes from the running app, so check `PLUGIN_UI_VERSION` before relying on a component a later minor added, and declare an `engines.daintree` that has it.
+`PLUGIN_UI_VERSION` is the kit's semver contract, `"1.0.0"` today. A minor version adds components, optional props, icon names and theme token keys; within a major version no export, prop, accepted value or core token key is removed or narrowed. Every component validates its props at runtime, so a value outside the types — from an older or newer plugin — is ignored rather than thrown on. The kit comes from the running app, so check `PLUGIN_UI_VERSION` before relying on a component a later minor added, and declare an `engines.daintree` that has it: `>=0.41.0` for anything beyond `Markdown`, which is all Daintree 0.40 serves. `engines` is advisory (an unmet range warns and still loads), so read the version through a namespace import rather than trusting the range ([UI kit → Feature detection](./ui-kit.md#versioning-and-stability)).
 
 ### Styling kit components
 
@@ -509,9 +510,10 @@ A plugin view shares the renderer — and the main thread — with the whole app
 | --- | --- | --- |
 | `rows.map(…)` over a large result | `DataTable` or `VirtualList` from the kit; `useProgressiveList` for a few hundred rows of your own markup | 10,000 rows: 1.5 s to first paint and 130,027 DOM nodes naive; 490 nodes and a 19 ms sort with `DataTable` |
 | One push per item, `setState([...prev, line])` per push | Batch in the worker on a timer; `useStreamBuffer` in the view; `LogView` to render | 20,000 pushes and 20,000 log rows in the DOM naive; 7 pushes and 180 log nodes ported |
-| Re-pushing the whole list on every change | `createSyncedCollection` in the worker, `useSyncedCollection` in the view | 100 tool calls: 1.1 MB in 200 pushes naive; 23 KB in 13 |
+| Re-pushing the whole list on every change | `createSyncedCollection` in the worker, `useSyncedCollection` in the view; items that hold what the row shows, a large field fetched on open | 100 tool calls: 1.1 MB in 200 pushes naive; 23 KB in 13 |
 | Refetching everything on each change push | `useCachedHostChannel(…, { invalidateOn })`: one refetch per burst | 200 database writes: about 200 full refetches naive |
-| A `setInterval` per timestamp | `useNow` and the kit's `formatTimeAgo` | — |
+| A `setInterval` per timestamp | `useNow` and the kit's `formatTimeAgo`; for a seconds tick, `useNow({ intervalMs: 1000 })` and `formatDuration` | — |
+| `"activationEvents": ["onStartupFinished"]` for a panel plugin | No `activationEvents`: the worker starts when the panel first opens | an eager dashboard's worker: 72 MB from boot, with no panel open |
 | A `requestAnimationFrame` loop and colours read once | `useAnimationFrame` and `useDaintreeTheme` | the naive canvas kept its old background after a theme switch |
 | A `readdir` and `readFile` per entry | `host.fs.walk` and `host.fs.readFiles` in the worker | a 2,045-file search: 960 ms naive, 335 ms ported |
 

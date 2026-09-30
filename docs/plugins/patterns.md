@@ -96,6 +96,8 @@ export default function Calls({ pluginId, disposeSignal }) {
 
 Nothing is pushed until a view has pulled, so a plugin whose panel was never opened sends no deltas, and on a host that reports listeners, deltas stop while every view is closed; the next view to open pulls a snapshot that carries them. In the lab, an agent-tools panel that re-sent its whole call log on each tool call pushed 1.1 MB in 200 messages for 100 calls; the synced collection sent 23 KB in 13. `syncedCollectionSnapshotChannel(channel)` names the snapshot channel (`<channel>-snapshot`) if something else needs to call it.
 
+A delta names changed items by key but carries each one whole: `upsert(item)` resends every field of `item`, not the one that changed. In the lab, four status flips on a review queue sent about 1.1 KB, because each delta carried its whole item. Keep collection items to what the list renders — ids, titles, status, counts — and fetch a large field (a body, a diff, a log) with its own `invoke` when the row is opened.
+
 ## Per-instance pushes
 
 Two open instances of the same panel kind both receive a broadcast. When each instance shows something different (a reader panel per file, say), target the push with the instance's `panelId` and subscribe with `onPanel`:
@@ -423,6 +425,20 @@ function Updated({ at }) {
 
 The kit's formatters — `formatTimeAgo`, `formatRelativeTime`, `formatDuration`, `formatBytes`, `formatCount` — are the host's own, so a plugin's times and sizes read like the rest of the app.
 
+`formatTimeAgo` is minute-grained: "just now" for the first 60 seconds, then "1m ago". A time that has to move every second — "12s ago" on a feed, the elapsed time of a running job — takes a one-second clock and `formatDuration`, which reads "12s" under a minute, then "3m" and "1h 5m":
+
+```js
+import { useNow } from "@daintreehq/plugin-sdk/react";
+import { formatDuration } from "@daintreehq/plugin-ui";
+
+function Elapsed({ since }) {
+  const now = useNow({ intervalMs: 1000 });
+  return `${formatDuration(now - since)} ago`;
+}
+```
+
+Use the one-second clock only where seconds matter; every component on it re-renders once a second while the view is visible.
+
 ## Draw on a canvas
 
 A chart, a graph, a simulation. Two things go wrong in a hand-rolled canvas view: its `requestAnimationFrame` loop keeps running at full rate in a backgrounded project (the DOM cannot tell it the project was switched away), and the colours it read once from `getComputedStyle` stay wrong after a theme switch — the lab's canvas kept painting a dark background under a light theme.
@@ -636,7 +652,9 @@ await host.registerAction(
 );
 ```
 
-`dispatch` resolves `{ ok: false }` instead of throwing, so a command that ignores the result opens nothing and says nothing. `kind` is the registered kind id. `host.panelKindId` qualifies your bare panel id for whichever origin you load under (`project:{projectId}/{manifestId}/{kindId}` for a project plugin). A `contextMenus` entry at `location: "file"` dispatches your command with `{ path, worktreePath, status }`, which is how "Show in Video Manager" appears on every file row.
+`dispatch` resolves `{ ok: false }` instead of throwing, so a command that ignores the result opens nothing and says nothing. `kind` is the registered kind id.
+
+`reuseExisting` defaults to `true`: if a panel of this kind is already open in the target worktree (`worktreeId`, or the active worktree when you pass none) and not in the trash, the action focuses that panel where it is, grid or dock, and resolves with its `panelId`. It does **not** hand it the new `initialArgs` — the open panel keeps the state it has — so "Show in Video Manager" on a second file only brings the manager forward. To act on the new argument, keep it where the view pulls from — worker state the view reads with an `invoke` on mount — and then push a "changed" notice (`host.postToPanel(channel, payload, panelId)`) so an open view pulls again; a push alone can be lost, because the action returns before a view has necessarily subscribed and pushes are not buffered. Or pass `reuseExisting: false`, which always adds a new panel to the grid with these `initialArgs`. A panel in another worktree is never reused. `host.panelKindId` qualifies your bare panel id for whichever origin you load under (`project:{projectId}/{manifestId}/{kindId}` for a project plugin). A `contextMenus` entry at `location: "file"` dispatches your command with `{ path, worktreePath, status }`, which is how "Show in Video Manager" appears on every file row.
 
 ## Look like the app: the kit first, Tailwind for the rest
 

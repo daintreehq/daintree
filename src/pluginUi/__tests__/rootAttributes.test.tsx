@@ -151,3 +151,37 @@ describe("kit root attributes", () => {
     expect(root.getAttribute("data-ok")).toBe("yes");
   });
 });
+
+describe("VirtualList test ids", () => {
+  const list = (extra: object) =>
+    mount(
+      createElement(kit.VirtualList, {
+        items: ["a", "b"],
+        renderItem: (_index: number, item: unknown) => createElement("span", null, String(item)),
+        "aria-label": "Queue",
+        id: "queue",
+        "data-testid": "rq-list",
+        "data-extra": 3,
+        ...extra,
+      })
+    );
+
+  it("keeps the plugin's test id on a focusable list over the virtualiser's own", () => {
+    list({ role: "listbox", tabIndex: 0 });
+    const hit = screen.getByTestId("rq-list");
+    // The scroller, which is the element holding the role, name and keyboard.
+    expect(hit).toBe(screen.getByRole("listbox", { name: "Queue" }));
+    expect(hit.id).toBe("queue");
+    expect(hit.getAttribute("data-extra")).toBe("3");
+    expect(hit.hasAttribute("data-virtuoso-scroller")).toBe(true);
+    expect(screen.queryByTestId("virtuoso-scroller")).toBeNull();
+  });
+
+  it("puts the test id on the list element of a plain list", () => {
+    list({});
+    const hit = screen.getByTestId("rq-list");
+    expect(hit).toBe(screen.getByRole("list", { name: "Queue" }));
+    expect(hit.id).toBe("queue");
+    expect(hit.getAttribute("data-extra")).toBe("3");
+  });
+});

@@ -706,9 +706,15 @@ function KitCopyButton(props: PluginCopyButtonProps) {
   };
   const label = nonEmpty(props.label);
   if (label) {
+    // The label slot is as wide as "Couldn't copy" so the button holds its width
+    // through the confirmation, and a button centres its text by default: a
+    // short label ("Copy log") then sat mid-slot, far enough from its glyph to
+    // read as two controls. Left-aligned, the glyph and label keep a Button's
+    // own gap and the spare width trails after the label.
     return (
       <CopyButton
         {...shared}
+        className={cn("text-left", shared.className)}
         label={label}
         aria-label={str(props["aria-label"])}
         variant={oneOf("variant" in props ? props.variant : undefined, [

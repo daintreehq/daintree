@@ -80,6 +80,12 @@ interface ListContext {
    */
   listFocusable: boolean;
   itemRole: "listitem" | "none";
+  /**
+   * The plugin's `id` and `data-*`, re-applied after the virtualiser's props
+   * on a focusable scroller: Virtuoso stamps its own `data-testid` there, which
+   * would otherwise overwrite a plugin's test id without a word.
+   */
+  identity: Record<string, string | number | boolean>;
 }
 
 function ListScroller({
@@ -88,8 +94,9 @@ function ListScroller({
   ...props
 }: ScrollerProps & { context: ListContext; ref?: Ref<HTMLDivElement> }) {
   if (!context.listFocusable) return <div {...props} ref={ref} tabIndex={0} />;
-  // The virtualiser's own props go last so its scroll wiring and sizing win.
-  return <div {...context.listProps} {...props} ref={ref} />;
+  // The virtualiser's own props go after the plugin's so its scroll wiring and
+  // sizing win; only the plugin's identity goes after those.
+  return <div {...context.listProps} {...props} {...context.identity} ref={ref} />;
 }
 
 function ListElement({
@@ -158,6 +165,7 @@ function KitVirtualList(props: PluginVirtualListProps) {
     listProps: { ...dom, role: role ?? "list", ...descendant },
     listFocusable: typeof dom.tabIndex === "number" && dom.tabIndex >= 0,
     itemRole: role ? "none" : "listitem",
+    identity: pickRootProps(dom),
   };
 
   const handle = useRef<VirtuosoHandle>(null);
