@@ -31,6 +31,8 @@ import {
   runTerminalCommand,
   waitForTerminalText,
   getTerminalTextById,
+  getTerminalViewport,
+  typeTerminalCommand,
 } from "../../helpers/terminal";
 import { getGridPanelCount, getGridPanelIds, getPanelById } from "../../helpers/panels";
 import { dismissBlockingPalette } from "../../helpers/overlays";
@@ -363,9 +365,43 @@ test.describe.serial("Agent lifecycle ledger and LRU project-view eviction", () 
     // returns a fresh Page bound to the active view.
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
 
+    // Markers are assembled at runtime by node (the same under POSIX shells and
+    // PowerShell), so the echoed command line alone never contains them.
+    const nonce = Date.now().toString(36);
+    const beforeMarker = `LRU_BEFORE_${nonce}_42`;
+    const afterMarker = `LRU_AFTER_${nonce}_42`;
+
     const initialPanel: Locator = await spawnTerminalAndVerify(ctx.window);
-    await runTerminalCommand(ctx.window, initialPanel, "echo LRU_BEFORE_EVICT");
-    await waitForTerminalText(initialPanel, "LRU_BEFORE_EVICT");
+    await runTerminalCommand(
+      ctx.window,
+      initialPanel,
+      `node -e "console.log('LRU_BEFORE_'+'${nonce}'+'_'+(40+2))"`
+    );
+    await waitForTerminalText(initialPanel, beforeMarker);
+    // Push the marker well above the screen, so the revive has to bring back
+    // scrollback history and not merely the visible rows.
+    const lastFill = "LRU_FILL_119";
+    await runTerminalCommand(
+      ctx.window,
+      initialPanel,
+      `node -e "for(let i=0;i<120;i++)console.log('LRU_FILL_'+i)"`
+    );
+    await waitForTerminalText(initialPanel, lastFill);
+    await expect
+      .poll(
+        async () =>
+          (
+            await getTerminalViewport(
+              ctx.window,
+              (await initialPanel.getAttribute("data-panel-id")) ?? ""
+            )
+          )?.text ?? "",
+        {
+          timeout: T_MEDIUM,
+          message: "pre-eviction marker should have scrolled off screen",
+        }
+      )
+      .not.toContain(beforeMarker);
     const ptyPidBefore = await getPtyPid(ctx.window, initialPanel);
 
     // A→B→C with cache=2: B's switch caches A; C's switch caches B and evicts
@@ -388,13 +424,30 @@ test.describe.serial("Agent lifecycle ledger and LRU project-view eviction", () 
 
     // History written before the eviction must survive it, on the same live
     // process — not a respawned shell with a blank screen.
-    const revivedId = await findPanelContaining(ctx.window, "LRU_BEFORE_EVICT");
+    const revivedId = await findPanelContaining(ctx.window, beforeMarker);
     const revivedPanel = getPanelById(ctx.window, revivedId);
     expect(await getPtyPid(ctx.window, revivedPanel)).toBe(ptyPidBefore);
     expect(isPidAlive(ptyPidBefore)).toBe(true);
 
-    await runTerminalCommand(ctx.window, revivedPanel, "echo LRU_AFTER_REVIVE");
-    await waitForTerminalText(revivedPanel, "LRU_AFTER_REVIVE");
+    // The older marker came back as scrollback (findPanelContaining reads the
+    // whole buffer); the screen shows the newest pre-eviction output.
+    await expect
+      .poll(async () => (await getTerminalViewport(ctx.window, revivedId))?.text ?? "", {
+        timeout: T_LONG,
+        message: "revived terminal should show its latest pre-eviction output on screen",
+      })
+      .toContain(lastFill);
+
+    // Real keystrokes into the revived view reach the same shell and come back.
+    await typeTerminalCommand(
+      ctx.window,
+      revivedId,
+      `node -e "console.log('LRU_AFTER_'+'${nonce}'+'_'+(40+2))"`,
+      {
+        expectOutput: afterMarker,
+        timeout: T_LONG,
+      }
+    );
   });
 
   test("worktree state reflects git changes made while the view was evicted", async () => {
