@@ -173,11 +173,24 @@ const DEFAULT_AVATAR_MAX = 4;
 // channel of 300 members is not a tooltip taller than the window.
 const OVERFLOW_NAMES_SHOWN = 10;
 
-const GROUP_OVERLAP = {
-  xs: "-space-x-1",
+// Each disc's right side is covered by the next disc's overlap plus its
+// cut-out ring; what is left must still hold the initials centred in it, or
+// "GH" reads "G(". The overlap is sized from that, per size: the disc's edge
+// in px, the initials `Avatar` draws at that size and their type size. Pinned
+// by the kit tests, which read the classes below back as pixels.
+export const AVATAR_GROUP_FIT = {
+  xs: { px: 16, overlap: 2, initials: 1, fontPx: 10 },
+  sm: { px: 20, overlap: 4, initials: 1, fontPx: 10 },
+  md: { px: 24, overlap: 2, initials: 2, fontPx: 10 },
+  lg: { px: 32, overlap: 4, initials: 2, fontPx: 11 },
+} as const;
+export const AVATAR_CUTOUT_PX = 2;
+
+export const GROUP_OVERLAP = {
+  xs: "-space-x-0.5",
   sm: "-space-x-1",
-  md: "-space-x-1.5",
-  lg: "-space-x-2",
+  md: "-space-x-0.5",
+  lg: "-space-x-1",
 } as const;
 
 const OVERFLOW_SIZE = {
@@ -188,8 +201,10 @@ const OVERFLOW_SIZE = {
 } as const;
 
 // The cut-out between overlapping discs is the pane's own canvas, the same
-// ring the fleet dots draw.
-const CUTOUT = "ring-2 ring-surface-canvas";
+// ring the fleet dots draw. The strong hairline inside it is each disc's own
+// edge: the initials' neutral fill barely steps off a dark canvas, so without
+// it the discs and the gaps between them read as one smudge.
+const CUTOUT = "ring-2 ring-surface-canvas border border-border-strong";
 
 interface GroupAvatar {
   name: string;
