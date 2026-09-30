@@ -8,11 +8,14 @@ import type {
   PluginAvatarProps,
   PluginBadgeProps,
   PluginButtonProps,
+  PluginCalendarProps,
   PluginCalloutProps,
   PluginCheckboxProps,
   PluginConfirmDialogProps,
   PluginCopyButtonProps,
   PluginDataTableProps,
+  PluginDatePickerProps,
+  PluginDateRangePickerProps,
   PluginDialogProps,
   PluginDismissButtonProps,
   PluginDropdownMenuProps,
@@ -52,6 +55,7 @@ import type {
   PluginSwitchProps,
   PluginTabsProps,
   PluginTextareaProps,
+  PluginTimeAgoProps,
   PluginToolbarButtonProps,
   PluginToolbarProps,
   PluginTooltipProps,
@@ -260,6 +264,22 @@ export const FormFieldGroup: ComponentType<PluginFormFieldGroupProps> = fromKit(
   (kit) => kit.FormFieldGroup
 );
 
+// Calendars, date fields and live ages.
+
+export const Calendar: ComponentType<PluginCalendarProps> = fromKit(
+  "Calendar",
+  (kit) => kit.Calendar
+);
+export const DatePicker: ComponentType<PluginDatePickerProps> = fromKit(
+  "DatePicker",
+  (kit) => kit.DatePicker
+);
+export const DateRangePicker: ComponentType<PluginDateRangePickerProps> = fromKit(
+  "DateRangePicker",
+  (kit) => kit.DateRangePicker
+);
+export const TimeAgo: ComponentType<PluginTimeAgoProps> = fromKit("TimeAgo", (kit) => kit.TimeAgo);
+
 export type {
   PluginMarkdownProps as MarkdownProps,
   PluginButtonProps as ButtonProps,
@@ -340,4 +360,15 @@ export type {
   PluginStatCardProps as StatCardProps,
   PluginSparklineProps as SparklineProps,
   PluginFormFieldGroupProps as FormFieldGroupProps,
+  PluginIsoDate as IsoDate,
+  PluginDateRange as DateRange,
+  PluginCalendarProps as CalendarProps,
+  PluginCalendarBaseProps as CalendarBaseProps,
+  PluginCalendarSingleProps as CalendarSingleProps,
+  PluginCalendarRangeProps as CalendarRangeProps,
+  PluginDateFieldBaseProps as DateFieldBaseProps,
+  PluginDatePickerProps as DatePickerProps,
+  PluginDateRangePickerProps as DateRangePickerProps,
+  PluginDateRangePreset as DateRangePreset,
+  PluginTimeAgoProps as TimeAgoProps,
 } from "@shared/types/plugin-sdk-react";

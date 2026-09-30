@@ -308,6 +308,51 @@ export const badAlign = createElement(ui.Markdown, { source: "x", align: "right"
 const growColumn: ui.DataTableColumn<{ id: string }> = { id: "id", header: "Id", grow: true };
 void growColumn;
 
+// Calendars, date fields and live ages.
+export const calendar = createElement(ui.Calendar, {
+  value: "2026-09-30",
+  onValueChange: (day: string) => void day,
+  min: "2026-01-01",
+  isDateDisabled: (day: ui.IsoDate) => day.endsWith("-01"),
+  numberOfMonths: 2,
+  weekStartsOn: 1,
+});
+const pickedRange: ui.DateRange = { start: "2026-09-01", end: "2026-09-30" };
+export const rangeCalendar = createElement(ui.Calendar, {
+  mode: "range",
+  value: pickedRange,
+  onValueChange: (range: ui.DateRange) => void range.end,
+  month: "2026-09",
+  onMonthChange: (month: string) => void month,
+});
+// @ts-expect-error a range calendar's value is a range
+export const rangeWithDay = createElement(ui.Calendar, { mode: "range", value: "2026-09-30" });
+// @ts-expect-error a single calendar's value is a day
+export const dayWithRange = createElement(ui.Calendar, { value: pickedRange });
+// @ts-expect-error weeks start on a weekday 0-6
+export const badWeekStart = createElement(ui.Calendar, { weekStartsOn: 7 });
+export const picker = createElement(ui.DatePicker, {
+  value: null,
+  onValueChange: (day: string | null) => void day,
+  "aria-label": "Due date",
+  clearable: false,
+  density: "compact",
+  name: "due",
+});
+const lastWeek: ui.DateRangePreset = { label: "Last 7 days", range: pickedRange };
+export const rangePicker = createElement(ui.DateRangePicker, {
+  value: pickedRange,
+  onValueChange: (range: ui.DateRange | null) => void range,
+  presets: [lastWeek],
+  "aria-labelledby": "when",
+});
+// @ts-expect-error densities are a closed set
+export const badPickerDensity = createElement(ui.DatePicker, { density: "large" });
+export const ago = createElement(ui.TimeAgo, { value: Date.now(), verbose: true, prefix: "Updated ", tooltip: false, "data-testid": "age" });
+export const agoFromDate = createElement(ui.TimeAgo, { value: new Date() });
+// @ts-expect-error a TimeAgo needs a value
+export const agoNoValue = createElement(ui.TimeAgo, {});
+
 // Root attributes: \`id\` and \`data-*\` everywhere, \`aria-*\` where the root is the control.
 export const selectId = createElement(ui.Select, { options: [], "aria-label": "Pick", "data-testid": "pick" });
 export const segmentedId = createElement(ui.SegmentedControl, { options: [], value: "", onValueChange: () => {}, "aria-label": "Mode", "data-testid": "mode", "aria-describedby": "hint" });
