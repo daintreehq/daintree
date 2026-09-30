@@ -348,6 +348,27 @@ ${devLine}
 
 The **${recipeName}** recipe in \`.daintree/recipes/\` starts the same watcher, so
 Daintree can bring it up alongside the rest of the project environment.
+
+## Building a view
+
+If the plugin has a view, draw it with \`@daintreehq/plugin-ui\`, Daintree's
+own components served by the host: \`Button\`, \`Input\`, \`Select\`,
+\`DataTable\` and \`VirtualList\` for lists, \`Dialog\` and \`ConfirmDialog\`,
+\`EmptyState\` and \`PaneState\`, \`Icon\`. Get data with the hooks in \`@daintreehq/plugin-sdk/react\` —
+\`useSyncedCollection\` for a list the worker changes, \`useStreamBuffer\` for
+progress and logs, \`useNow\` for relative times. Style anything else with
+Tailwind classes on Daintree's tokens.
+
+Before committing, run:
+
+\`\`\`bash
+npx daintree-plugin lint
+\`\`\`
+
+It flags the patterns that make a panel slow or look foreign — a list pushed
+whole on every change, polling in the view, hand-rolled buttons and inputs,
+stock Tailwind colours — and names the fix. The plugin's Performance section
+in Project settings → Plugins shows what Daintree measured while it ran.
 `;
 }
 
@@ -415,7 +436,10 @@ function panelComponent(ctx: ScaffoldContext): string {
 
 /**
  * Panel view for ${c(ctx.displayName)}. Rendered by Daintree when the user opens
- * the contributed view.
+ * the contributed view. Draw it with \`@daintreehq/plugin-ui\` (Button, Input,
+ * DataTable, PaneState, Icon, …) and get data with the hooks in
+ * \`@daintreehq/plugin-sdk/react\`. tsconfig's \`types\` declares the kit and
+ * \`window.electron.plugin\`.
  */
 export default function Panel(): React.ReactElement {
   return <div style={{ padding: 16 }}>{${q(`Hello from ${ctx.displayName}`)}}</div>;
