@@ -16,13 +16,12 @@ export async function openProject(
   await openFolder.click();
 }
 
-export async function dismissTelemetryConsent(window: Page): Promise<void> {
-  const dialog = window.getByRole("dialog", { name: "Help improve Daintree" });
-  if (await dialog.isVisible().catch(() => false)) {
-    await dialog.getByRole("button", { name: "Disable" }).click();
-    await expect(dialog).not.toBeVisible({ timeout: 3_000 });
-  }
-}
+/**
+ * @deprecated No-op. The telemetry consent dialog this dismissed no longer
+ * exists — the question is a step inside the agent setup wizard — so there is
+ * nothing to dismiss. Kept only until the remaining spec callers are removed.
+ */
+export async function dismissTelemetryConsent(_window: Page): Promise<void> {}
 
 export async function openAndOnboardProject(
   app: ElectronApplication,
@@ -38,6 +37,5 @@ export async function openAndOnboardProject(
     projectBasename
   );
   await dismissBlockingPalette(newWindow);
-  await dismissTelemetryConsent(newWindow);
   return newWindow;
 }

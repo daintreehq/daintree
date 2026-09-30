@@ -67,6 +67,8 @@ export default defineConfig({
   // it in CI. full-* buckets keep retries without a flake gate for PR velocity.
   failOnFlakyTests: process.env.FAIL_ON_FLAKY_TESTS === "true",
   expect: { timeout: expectTimeout },
+  globalSetup: "./e2e/global-setup.ts",
+  globalTeardown: "./e2e/global-teardown.ts",
   outputDir: "./test-results",
   ...(reporter ? { reporter } : {}),
   use: {

@@ -287,18 +287,17 @@ export function createAgentDataProject(
 
 /**
  * Remove the plugin's per-machine data for a project. A project plugin's data
- * directory lives under the real home, not the test profile, so a run that
- * does not clean up leaves a database behind for every project id it used.
+ * directory lives under the app's HOME, not the test profile — pass the
+ * launch's `homeDir`; the default is this process's own home, which is only
+ * right for a launch that opted out of HOME isolation.
  */
-export function removeExpensesPluginData(projectId: string | null | undefined): void {
+export function removeExpensesPluginData(
+  projectId: string | null | undefined,
+  homeDir: string = os.homedir()
+): void {
   if (!projectId || !/^[0-9a-f]{64}$/.test(projectId)) return;
   rmSync(
-    path.join(
-      os.homedir(),
-      ".daintree",
-      "plugin-data",
-      `project__${projectId}__${EXPENSES_PLUGIN_ID}`
-    ),
+    path.join(homeDir, ".daintree", "plugin-data", `project__${projectId}__${EXPENSES_PLUGIN_ID}`),
     { recursive: true, force: true }
   );
 }

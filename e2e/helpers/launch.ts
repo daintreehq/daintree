@@ -1,10 +1,11 @@
 import { _electron as electron, test, type ElectronApplication, type Page } from "@playwright/test";
-import { mkdtempSync, mkdirSync, unlinkSync, readdirSync, appendFileSync } from "fs";
-import { tmpdir } from "os";
+import { mkdtempSync, mkdirSync, unlinkSync, readdirSync, appendFileSync, writeFileSync } from "fs";
+import { homedir, tmpdir } from "os";
 import { execSync } from "child_process";
 import path from "path";
 import { getDescendantPids } from "./stress";
 import { removePathSync } from "./fixtures";
+import { E2E_TEMP_PREFIX, isRemovableTempPath, recordTempDir } from "./tempDirs";
 import {
   install as installTelemetry,
   beginAttempt,
@@ -33,6 +34,12 @@ export interface AppContext {
   app: ElectronApplication;
   window: Page;
   userDataDir: string;
+  /**
+   * The HOME the app ran with. Read the app's `~/.daintree`, agent config dirs
+   * and anything else home-relative from here, never from this process's own
+   * `os.homedir()`. The real home when the launch opted out of isolation.
+   */
+  homeDir: string;
 }
 
 export interface LaunchOptions {
@@ -74,6 +81,170 @@ export interface LaunchOptions {
    * are always headed.
    */
   headed?: boolean;
+  /**
+   * Run the app with a throwaway HOME (plus USERPROFILE, APPDATA/LOCALAPPDATA,
+   * XDG dirs, CODEX_HOME, CLAUDE_CONFIG_DIR and ZDOTDIR pointing into it), so
+   * nothing a spec does reaches the real `~/.daintree`, agent configs or shell
+   * profile. Default `true`. Opt out only for specs that drive real agent CLIs
+   * and need the user's own login.
+   */
+  isolateHome?: boolean;
+  /**
+   * Use this HOME instead of a fresh one. Relaunching on an existing
+   * `userDataDir` already gets the HOME the first launch made, so this is only
+   * for a spec that prepared a HOME itself.
+   */
+  homeDir?: string;
+}
+
+const HOME_DIR_PREFIX = `${E2E_TEMP_PREFIX}home-`;
+
+// Keyed so a restart journey — launchApp({ userDataDir }) after closeApp — comes
+// back to the same HOME, the way a real user's relaunch would.
+const homeDirByUserDataDir = new Map<string, string>();
+
+/**
+ * Login-profile body that appends any `pathEntries` entry the system profile
+ * dropped (Debian's /etc/profile resets PATH) after the system's own, so node,
+ * git and fake-agent bins the runner could see still resolve in the app's
+ * login-shell PATH probe and its terminals. Prints nothing.
+ */
+export function pathRestoreProfile(pathEntries: string[]): string {
+  const entries = [...new Set(pathEntries.filter(Boolean))];
+  if (entries.length === 0) return "";
+  const quoted = entries.map((entry) => `'${entry.replace(/'/g, "'\\''")}'`).join(" ");
+  return [
+    `for __daintree_e2e_p in ${quoted}; do`,
+    '  case ":$PATH:" in *":$__daintree_e2e_p:"*) ;; *) PATH="$PATH:$__daintree_e2e_p" ;; esac',
+    "done",
+    "unset __daintree_e2e_p",
+    "export PATH",
+    "",
+  ].join("\n");
+}
+
+/**
+ * A fresh HOME with just enough in it: empty interactive rc files so shells
+ * start quiet (and zsh skips its new-user wizard), login profiles that only
+ * restore dropped PATH entries, a git identity with signing off for commits the
+ * app makes itself, a Claude sign-in marker, and the agent config dirs the
+ * redirected env vars name.
+ */
+export function createIsolatedHome(
+  root: string = tmpdir(),
+  pathValue: string | undefined = process.env.PATH
+): string {
+  const home = mkdtempSync(path.join(root, HOME_DIR_PREFIX));
+  for (const rc of [".zshrc", ".zshenv", ".bashrc"]) {
+    writeFileSync(path.join(home, rc), "");
+  }
+  const profile =
+    process.platform === "win32" ? "" : pathRestoreProfile((pathValue ?? "").split(path.delimiter));
+  for (const rc of [".zprofile", ".bash_profile", ".profile"]) {
+    writeFileSync(path.join(home, rc), profile);
+  }
+  writeFileSync(path.join(home, ".hushlogin"), "");
+  // Claude reads as signed in, as it does on the machines these specs were
+  // written against: availability only checks this file exists. The fake
+  // `claude` never reads it, and nothing real can authenticate with it.
+  writeFileSync(path.join(home, ".claude.json"), "{}\n");
+  writeFileSync(
+    path.join(home, ".gitconfig"),
+    [
+      "[user]",
+      "\tname = Daintree Test",
+      "\temail = test@daintree.dev",
+      "[commit]",
+      "\tgpgsign = false",
+      "[tag]",
+      "\tgpgsign = false",
+      "",
+    ].join("\n")
+  );
+  for (const dir of isolatedHomeDirs(home, process.platform)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  return home;
+}
+
+function isolatedHomeDirs(home: string, platform: NodeJS.Platform): string[] {
+  const env = isolatedHomeEnv(home, platform);
+  return [
+    env.XDG_CONFIG_HOME,
+    env.XDG_DATA_HOME,
+    env.XDG_CACHE_HOME,
+    env.XDG_STATE_HOME,
+    env.CODEX_HOME,
+    env.CLAUDE_CONFIG_DIR,
+    ...(platform === "win32" ? [env.APPDATA, env.LOCALAPPDATA] : []),
+  ];
+}
+
+/** The env that points everything home-relative at `home`. */
+export function isolatedHomeEnv(
+  home: string,
+  platform: NodeJS.Platform = process.platform
+): Record<string, string> {
+  const env: Record<string, string> = {
+    HOME: home,
+    USERPROFILE: home,
+    XDG_CONFIG_HOME: path.join(home, ".config"),
+    XDG_DATA_HOME: path.join(home, ".local", "share"),
+    XDG_CACHE_HOME: path.join(home, ".cache"),
+    XDG_STATE_HOME: path.join(home, ".local", "state"),
+    CODEX_HOME: path.join(home, ".codex"),
+    CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
+    ZDOTDIR: home,
+    // macOS /etc/zshrc otherwise saves per-tab session history into ZDOTDIR.
+    SHELL_SESSIONS_DISABLE: "1",
+  };
+  if (platform === "win32") {
+    const parsed = path.win32.parse(home);
+    env.APPDATA = path.win32.join(home, "AppData", "Roaming");
+    env.LOCALAPPDATA = path.win32.join(home, "AppData", "Local");
+    env.HOMEDRIVE = parsed.root.replace(/[\\/]+$/, "");
+    env.HOMEPATH = home.slice(env.HOMEDRIVE.length);
+  }
+  return env;
+}
+
+/**
+ * Merge env layers, later ones winning. Keys are case-insensitive on Windows,
+ * so there an inherited `Path` or `appdata` must not survive next to a later
+ * layer's `PATH` or `APPDATA` and win or lose by accident: a later key drops
+ * every case variant before it.
+ */
+export function mergeEnvLayers(
+  layers: ReadonlyArray<Readonly<Record<string, string | undefined>> | undefined>,
+  platform: NodeJS.Platform = process.platform
+): Record<string, string | undefined> {
+  const merged: Record<string, string | undefined> = {};
+  const spelling = new Map<string, string>();
+  for (const layer of layers) {
+    if (!layer) continue;
+    for (const [key, value] of Object.entries(layer)) {
+      if (platform === "win32") {
+        const folded = key.toUpperCase();
+        const previous = spelling.get(folded);
+        if (previous !== undefined && previous !== key) delete merged[previous];
+        spelling.set(folded, key);
+      }
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+function resolveHomeDir(options: LaunchOptions): string | null {
+  if (options.isolateHome === false) return null;
+  if (options.homeDir) return options.homeDir;
+  // A spec that hands in its own HOME has already chosen what the app sees.
+  if (options.env?.HOME || options.env?.USERPROFILE) return null;
+  const known = options.userDataDir ? homeDirByUserDataDir.get(options.userDataDir) : undefined;
+  if (known) return known;
+  const home = createIsolatedHome(tmpdir(), options.env?.PATH ?? process.env.PATH);
+  recordTempDir(home);
+  return home;
 }
 
 function resolveHeaded(options: LaunchOptions): boolean {
@@ -301,9 +472,16 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
   registerExitCleanupHandlers();
   installTelemetry();
 
+  const isolatedHome = resolveHomeDir(options);
+  const homeEnv = isolatedHome ? isolatedHomeEnv(isolatedHome) : {};
+  if (options.userDataDir && isRemovableTempPath(options.userDataDir)) {
+    recordTempDir(options.userDataDir);
+  }
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     beginAttempt(attempt, maxAttempts);
-    const userDataDir = options.userDataDir ?? mkdtempSync(path.join(tmpdir(), "daintree-e2e-"));
+    const userDataDir = options.userDataDir ?? mkdtempSync(path.join(tmpdir(), E2E_TEMP_PREFIX));
+    if (!options.userDataDir) recordTempDir(userDataDir);
     launchedUserDataDirs.add(userDataDir);
     const args = [`--user-data-dir=${userDataDir}`, ROOT];
     args.unshift(E2E_MODE_ARG);
@@ -383,33 +561,36 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
 
     let app: ElectronApplication | null = null;
     try {
-      const launchEnv: NodeJS.ProcessEnv = {
-        ...process.env,
-        ...options.env,
-        NODE_ENV: "production",
-        DAINTREE_E2E_MODE: "1",
-        DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS:
-          options.env?.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS ?? "1",
-        DAINTREE_DISABLE_WEBGL: options.enableWebgl ? "0" : "1",
-        // CI E2E keeps the BrowserWindow sentinel as the only early CDP target
-        // until Playwright's electron.launch handshake resolves. Under runner
-        // load, concurrent WebContentsView target creation can leave launch
-        // waiting even after the app reaches steady state.
-        ...(isCI
-          ? {
-              DAINTREE_E2E_DEFER_RENDERER_LOAD: "1",
-            }
-          : {}),
-        ...(isWindowsCI
-          ? {
-              // Playwright already owns CDP sessions for WebContentsView
-              // targets on Windows CI. The cached-view CDP memory purge and
-              // CPU-rate reset are optimizations only; skip them in e2e so LRU
-              // tests don't collide with Playwright's debugger attachment.
-              DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE: "1",
-            }
-          : {}),
-      };
+      const launchEnv: NodeJS.ProcessEnv = mergeEnvLayers([
+        process.env,
+        homeEnv,
+        options.env,
+        {
+          NODE_ENV: "production",
+          DAINTREE_E2E_MODE: "1",
+          DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS:
+            options.env?.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS ?? "1",
+          DAINTREE_DISABLE_WEBGL: options.enableWebgl ? "0" : "1",
+          // CI E2E keeps the BrowserWindow sentinel as the only early CDP target
+          // until Playwright's electron.launch handshake resolves. Under runner
+          // load, concurrent WebContentsView target creation can leave launch
+          // waiting even after the app reaches steady state.
+          ...(isCI
+            ? {
+                DAINTREE_E2E_DEFER_RENDERER_LOAD: "1",
+              }
+            : {}),
+          ...(isWindowsCI
+            ? {
+                // Playwright already owns CDP sessions for WebContentsView
+                // targets on Windows CI. The cached-view CDP memory purge and
+                // CPU-rate reset are optimizations only; skip them in e2e so LRU
+                // tests don't collide with Playwright's debugger attachment.
+                DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE: "1",
+              }
+            : {}),
+        },
+      ]);
       // The launch arg above is the only switch; an inherited env var must not
       // override a headed launch.
       delete launchEnv.DAINTREE_E2E_BACKGROUND_WINDOWS;
@@ -538,7 +719,9 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       }
 
       disposeTelemetry();
-      return { app, window, userDataDir };
+      const homeDir = launchEnv.HOME ?? launchEnv.USERPROFILE ?? homedir();
+      if (isolatedHome) homeDirByUserDataDir.set(userDataDir, isolatedHome);
+      return { app, window, userDataDir, homeDir };
     } catch (error) {
       lastError = error;
       if (app) {

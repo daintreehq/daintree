@@ -198,7 +198,7 @@ async function launchOpenCodeReady(): Promise<Locator> {
     // to restart before the new CLI process will accept input. CI pins the CLI
     // and sets OPENCODE_DISABLE_AUTOUPDATE, so this path is for local runs.
     await closeApp(ctx.app);
-    ctx = await launchApp();
+    ctx = await launchApp({ isolateHome: false });
     await openFixtureProject();
   }
 
@@ -229,7 +229,7 @@ test.describe("OpenCode Online Flow", () => {
     );
 
     await test.step("launch app", async () => {
-      ctx = await launchApp();
+      ctx = await launchApp({ isolateHome: false });
     });
 
     await test.step("open folder", async () => {

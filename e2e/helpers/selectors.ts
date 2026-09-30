@@ -12,7 +12,7 @@ export const SEL = {
   portal: {
     region: 'aside[aria-label="Portal"]',
     resizeHandle: '[aria-label^="Resize portal panel"]',
-    launchpadHeading: 'h2:has-text("New Chat")',
+    launchpadHeading: 'h2:text-is("New chat")',
     container: '[aria-label="Portal"]',
     tab: '[role="tab"]',
     tabList: '[role="tablist"]',
@@ -28,7 +28,9 @@ export const SEL = {
     aside: 'aside[aria-label="Sidebar"]',
   },
   settings: {
-    heading: 'h2:has-text("Settings")',
+    // With a project open the heading is the scope menu ("Global settings" /
+    // "Project settings"); with none it reads "Settings".
+    heading: 'h2:text-is("Settings"), h2:has([data-settings-scope-trigger])',
     closeButton: '[aria-label="Close settings"]',
     navSidebar: ".settings-sidebar",
     projectAutomationTab: '.settings-sidebar [data-tab="project:automation"]',
@@ -41,9 +43,9 @@ export const SEL = {
     shortcutsSearchInput: 'input[aria-label="Search shortcuts"]',
     shortcutRow: '[data-testid="shortcut-row"]',
     shortcutRecordPrompt: '[data-testid="shortcut-capture-field"]',
-    shortcutCancelButton: 'button:has-text("Cancel")',
+    shortcutCancelButton: 'button:has(:text-is("Cancel"))',
     shortcutResetButton: '[aria-label^="Reset "][aria-label$=" to default"]',
-    shortcutResetAllButton: 'button:has-text("Reset All")',
+    shortcutResetAllButton: 'button:has(:text-is("Reset all"))',
     fontSizeInput: '[aria-label="Terminal font size"]',
     developerModeToggle: '[aria-label="Developer Mode Toggle"]',
     agentDropdownTrigger: '[data-testid="agent-selector-trigger"]',
@@ -52,19 +54,19 @@ export const SEL = {
     notifWaitingCheckbox: "#notif-waiting",
     notifEscalationCheckbox: "#notif-waiting-escalation",
     notifSoundToggle: '[aria-label="Play sound for notifications"]',
-    soundPreviewButton: 'button:has-text("Preview")',
+    soundPreviewButton: 'button:has(:text-is("Preview"))',
     themeBrowserDialog: '[role="dialog"][aria-label="Theme browser"]',
     themeListbox: '[role="listbox"][aria-label="Theme list"]',
-    changeThemeButton: 'button:has-text("Change theme")',
+    changeThemeButton: 'button:has(:text-is("Change theme…"))',
     accentColorInput: '[data-testid="accent-color-override-input"]',
     accentColorReset: '[data-testid="accent-color-override-reset"]',
-    accentContrastWarning: '[role="status"]:has-text("Low contrast")',
-    randomThemeButton: 'button:has-text("Random theme")',
+    accentContrastWarning: '[role="status"]:has(:text-is("Low contrast accent"))',
+    randomThemeButton: 'button:has(:text-is("Random theme"))',
     shortcutConflictWarning: '[data-testid="shortcut-capture-conflicts"]',
     mcpServerToggle: '[aria-label="Enable MCP server"]',
-    mcpConnectionMarker: "text=The server binds to 127.0.0.1",
+    mcpConnectionMarker: "text=/^The server binds to 127\\.0\\.0\\.1/",
     scopeControl: "[data-settings-scope-trigger]",
-    scopeOption: (label: string) => `[role="menuitemradio"]:has-text("${label} settings")`,
+    scopeOption: (label: string) => `[role="menuitemradio"]:has(:text-is("${label} settings"))`,
     searchResultsRegion: '[role="region"][aria-label="Search results"]',
   },
   panel: {
@@ -111,7 +113,8 @@ export const SEL = {
     branchNameInput: '[data-testid="branch-name-input"]',
     createButton: '[data-testid="create-worktree-button"]',
     deleteDialog: '[data-testid="delete-worktree-dialog"]',
-    deleteConfirm: '[role="dialog"] button:has-text("delete worktree")',
+    deleteConfirm:
+      '[role="dialog"] button[data-confirm-role="confirm"]:has(:text-matches("^(Force delete|Delete) worktree$"))',
     deleteConfirmInput: '[data-testid="delete-worktree-confirm-input"]',
     searchInput: '[aria-label="Search worktrees"]',
     searchClear: '[aria-label="Clear search"]',
@@ -187,8 +190,7 @@ export const SEL = {
   projectSwitcher: {
     palette: '[data-testid="project-switcher-palette"]',
     addButton: '[data-testid="project-add-button"]',
-    projectSettings: 'button:has-text("Project Settings")',
-    projectSettingsAlt: 'button:has-text("Settings")',
+    projectSettings: 'button:has(:text-is("Project settings…"))',
     closeButton: '[aria-label="Close project"]',
   },
   trash: {
@@ -215,7 +217,7 @@ export const SEL = {
     // The staged count lives in the composer's status line, not the label; the
     // primary carries it as data so a count assertion still pins the state.
     commitButton: (count: number) =>
-      `[data-testid="review-hub-commit-primary"][data-staged-count="${count}"]:has-text("Commit")`,
+      `[data-testid="review-hub-commit-primary"][data-staged-count="${count}"]:has(:text-matches("^Commit( & push)?$"))`,
     cleanState: 'text="Working tree clean"',
     stageButton: (path: string) => `[aria-label="Stage ${path}"]`,
     unstageButton: (path: string) => `[aria-label="Unstage ${path}"]`,
@@ -225,7 +227,7 @@ export const SEL = {
     noStagedFiles: 'text="Nothing staged"',
     noUnstagedChanges: 'text="All changes staged"',
     commitAndPushButton: (count: number) =>
-      `[data-testid="review-hub-commit-primary"][data-staged-count="${count}"]:has-text("Commit & push")`,
+      `[data-testid="review-hub-commit-primary"][data-staged-count="${count}"]:has(:text-is("Commit & push"))`,
     fileDiffButton: (path: string) => `[aria-label="View diff: ${path}"]`,
     // CommitPanel push confirm dialog (rendered in a portal, locate on `window`).
     pushConfirmMessage: '[data-testid="commit-panel-push-confirm-message"]',
@@ -260,10 +262,10 @@ export const SEL = {
     cancel: '[data-confirm-role="cancel"]',
   },
   welcome: {
-    openFolder: '[data-testid="quick-actions"] button:has-text("Open project")',
+    openFolder: '[data-testid="quick-actions"] button[aria-label="Open project"]',
   },
   firstRun: {
-    welcomeTitle: 'h1:has-text("Welcome to Daintree")',
+    welcomeTitle: 'h1:text-is("Welcome to Daintree")',
     agentTitle: 'text="Choose your AI agents"',
     agentSetupDialog: '[data-testid="agent-setup-wizard"]',
     agentSetupBanner: '[data-testid="agent-setup-banner"]',
@@ -313,10 +315,10 @@ export const SEL = {
     suspectBadge: (id: string) => `[data-testid="suspect-badge-${id}"]`,
   },
   projectSettings: {
-    heading: 'h2:has-text("Settings")',
+    heading: 'h2:has([data-settings-scope-trigger] :text-is("Project settings"))',
     closeButton: '[aria-label="Close settings"]',
-    recipesTab: '.settings-sidebar button:has-text("Recipes")',
-    addRecipeButton: 'button:has-text("Add Recipe")',
+    recipesTab: '.settings-sidebar button[data-tab="project:recipes"]:has(:text-is("Recipes"))',
+    addRecipeButton: 'button:has(:text-is("Add recipe"))',
     editRecipeButton: (name: string) => `[aria-label^="Edit recipe ${name}"]`,
     deleteRecipeButton: (name: string) => `[aria-label="Delete recipe ${name}"]`,
   },
@@ -327,10 +329,10 @@ export const SEL = {
     terminalTitle: (i: number) => `#terminal-title-${i}`,
     terminalCommand: (i: number) => `#terminal-command-${i}`,
     terminalExitBehavior: (i: number) => `#terminal-exit-behavior-${i}`,
-    addTerminalButton: 'button:has-text("Add terminal")',
-    createButton: 'button:has-text("Create recipe")',
-    updateButton: 'button:has-text("Update recipe")',
-    cancelButton: 'button:has-text("Cancel")',
+    addTerminalButton: 'button:has(:text-is("Add terminal"))',
+    createButton: 'button[data-confirm-role="confirm"]:has(:text-is("Create recipe"))',
+    updateButton: 'button[data-confirm-role="confirm"]:has(:text-is("Update recipe"))',
+    cancelButton: 'button[data-confirm-role="cancel"]:has(:text-is("Cancel"))',
   },
   diagnostics: {
     dock: '[aria-label="Diagnostics dock"]',
@@ -343,8 +345,7 @@ export const SEL = {
   notifications: {
     bellButton: 'button[aria-label^="Notifications"]',
     emptyState: 'text="No notifications yet"',
-    configureButton: 'button:has-text("Configure")',
-    clearAllButton: 'button:has-text("Clear all")',
+    clearAllButton: '[role="menuitem"]:text-is("Clear all…")',
     // Toast surfaces (toaster.tsx)
     toastRegion: '[role="region"][aria-label="Notifications"]',
     toastDismissButton: 'button[aria-label="Dismiss notification"]',
@@ -359,8 +360,8 @@ export const SEL = {
     center: '[data-testid="notification-center"]',
     centerList: '[role="list"][aria-label="Notifications"]',
     centerRow: '[role="listitem"]',
-    centerFilter: (label: string) => `button[aria-pressed]:has-text("${label}")`,
-    markAllReadButton: 'button:has-text("Mark all read")',
+    centerFilter: (label: string) => `button[aria-pressed]:text-is("${label}")`,
+    markAllReadButton: 'button:text-is("Mark all read")',
     mutedPill: '[data-testid="notification-muted-pill"]',
     mutedEmptyState: '[data-testid="notification-muted-empty-state"]',
   },
@@ -460,10 +461,10 @@ export const SEL = {
     tabOverview: '[role="tab"][data-tab="overview"]',
     tabSettings: '[role="tab"][data-tab="settings"]',
     tabPermissions: '[role="tab"][data-tab="capabilities"]',
-    installFromUrlButton: '[role="menuitem"]:has-text("Install from URL")',
-    urlDialog: '[role="dialog"]:has-text("Install from URL")',
+    installFromUrlButton: '[role="menuitem"]:text-is("Install from URL")',
+    urlDialog: '[role="dialog"]:has(h2:text-is("Install from URL"))',
     httpWarningDialog:
-      '[role="dialog"]:has-text("Install over HTTP?"), [role="alertdialog"]:has-text("Install over HTTP?")',
+      '[role="dialog"]:has(h2:text-is("Install over HTTP?")), [role="alertdialog"]:has(h2:text-is("Install over HTTP?"))',
   },
   fleet: {
     ribbon: '[data-testid="fleet-arming-ribbon"]',
@@ -486,7 +487,7 @@ export const SEL = {
     savedRow: '[data-testid="fleet-saved-row"]',
     savedManageOpen: '[data-testid="fleet-saved-manage-open"]',
     savedManageDialog: '[data-testid="fleet-saved-manage-dialog"]',
-    failureBanner: '[role="alert"]:has-text("Broadcast failed")',
+    failureBanner: '[role="alert"]:has(:text-is("Broadcast failed"))',
   },
   events: {
     timeline: '[role="log"][aria-label="Event timeline"]',
@@ -551,32 +552,33 @@ export const SEL = {
     promptHistoryDialog: '[role="dialog"][aria-label="Prompt history search"]',
   },
   recipeManager: {
-    dialog: '[role="dialog"]:has-text("Recipe manager")',
-    teamSection: 'h3:has-text("Team recipes")',
-    globalSection: 'h3:has-text("Global recipes")',
+    dialog: '[role="dialog"]:has(h2:text-is("Recipe manager"))',
+    teamSection: 'h3:text-is("Team recipes")',
+    globalSection: 'h3:text-is("Global recipes")',
     // The section header's "New" button carries the full name as its label;
     // the all-empty state spells it out as visible text.
     newProjectRecipeButton:
-      'button[aria-label="New project recipe"], button:has-text("New project recipe")',
+      'button[aria-label="New project recipe"], button:has(:text-is("New project recipe"))',
     // Present only in the all-empty state; a populated manager files import
     // under the toolbar's Import menu (`importMenuTrigger`).
-    importButton: 'button:has-text("Import from clipboard")',
-    importMenuTrigger: 'button[aria-haspopup="menu"]:has-text("Import")',
-    importFromClipboardItem: '[role="menuitem"]:has-text("Import from clipboard")',
-    importDialog: '[role="dialog"]:has-text("Import recipe")',
+    importButton: 'button:has(:text-is("Import from clipboard"))',
+    importMenuTrigger: 'button[aria-haspopup="menu"]:has(:text-is("Import"))',
+    importFromClipboardItem: '[role="menuitem"]:text-is("Import from clipboard…")',
+    importDialog: '[role="dialog"]:has(h2:text-is("Import recipe"))',
     importTextarea: '[data-testid="recipe-import-textarea"]',
     // Scope this with the importDialog locator in specs — the import dialog's
     // footer has only "Cancel" and "Import recipe".
-    importConfirmButton: 'button[data-confirm-role="confirm"]:has-text("Import recipe")',
+    importConfirmButton: 'button[data-confirm-role="confirm"]:has(:text-is("Import recipe"))',
     overriddenBadge: 'text="Overridden by team recipe"',
     moreButton: (name: string) => `[aria-label="More actions for recipe ${name}"]`,
-    copyJsonItem: '[role="menuitem"]:has-text("Copy as JSON")',
+    copyJsonItem: '[role="menuitem"]:text-is("Copy as JSON")',
   },
   recipeConflict: {
-    dialog: '[role="dialog"]:has-text("changed on disk")',
+    dialog: '[role="dialog"]:has(h2:text-matches("changed on disk$"))',
     reloadButton:
-      '[role="dialog"] button[data-confirm-role="confirm"]:has-text("Reload from disk")',
-    overwriteButton: '[role="dialog"] button[data-confirm-role="leading"]:has-text("Overwrite")',
+      '[role="dialog"] button[data-confirm-role="confirm"]:has(:text-is("Reload from disk"))',
+    overwriteButton:
+      '[role="dialog"] button[data-confirm-role="leading"]:has(:text-matches("^Overwrite( recipe| and discard)$"))',
   },
   recipeRunner: {
     emptyState: '[data-testid="recipe-runner-empty"]',
@@ -589,7 +591,7 @@ export const SEL = {
     item: (id: string) => `[data-checklist-item="${id}"]`,
   },
   recovery: {
-    watchdogDisabledBanner: '[role="status"]:has-text("Crash watchdog disabled")',
-    watchdogRestartButton: 'button:has-text("Restart watchdog")',
+    watchdogDisabledBanner: '[role="status"]:has(:text-is("Crash watchdog disabled"))',
+    watchdogRestartButton: 'button:has(:text-is("Restart watchdog"))',
   },
 } as const;

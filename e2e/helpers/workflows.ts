@@ -7,7 +7,6 @@ import {
   refreshActiveWindow,
   waitForActiveProject,
 } from "./launch";
-import { dismissTelemetryConsent } from "./project";
 import { waitForTerminalPty, waitForTerminalReady, waitForTerminalText } from "./terminal";
 import { getGridPanelIds, getPanelById, openTerminal } from "./panels";
 import { SEL } from "./selectors";
@@ -88,7 +87,6 @@ export async function addAndSwitchToProject(
     { box: true }
   );
   await dismissProjectSwitcherPalette(newWindow);
-  await dismissTelemetryConsent(newWindow);
   return newWindow;
 }
 

@@ -25,6 +25,8 @@ export default defineConfig({
   retries: 0,
   failOnFlakyTests: process.env.FAIL_ON_FLAKY_TESTS === "true",
   expect: { timeout: expectTimeout },
+  globalSetup: "./e2e/global-setup.ts",
+  globalTeardown: "./e2e/global-teardown.ts",
   outputDir: "./test-results",
   ...(reporter ? { reporter } : {}),
   use: {

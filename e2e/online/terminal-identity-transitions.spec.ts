@@ -505,7 +505,7 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
     test.setTimeout(process.platform === "win32" ? 600_000 : 300_000);
 
     await test.step("launch app + open project", async () => {
-      ctx = await launchApp({ env: { DAINTREE_IDENTITY_DEBUG_PASS: "1" } });
+      ctx = await launchApp({ env: { DAINTREE_IDENTITY_DEBUG_PASS: "1" }, isolateHome: false });
       diagnostics = createIdentityDiagnostics(ctx);
       ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir);
     });

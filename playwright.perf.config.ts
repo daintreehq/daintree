@@ -16,6 +16,8 @@ export default defineConfig({
   // ones that do not (fixture-heavy beforeAll plus a multi-sample loop).
   timeout: 600_000,
   expect: { timeout: isWindowsCI ? 15_000 : isCI ? 10_000 : 5_000 },
+  globalSetup: "./e2e/global-setup.ts",
+  globalTeardown: "./e2e/global-teardown.ts",
   outputDir: "./test-results/perf",
   use: {
     trace: "retain-on-failure",

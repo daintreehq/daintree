@@ -82,6 +82,7 @@ export function createFixtureRepo(options: FixtureRepoOptions = {}): FixtureRepo
   git("init -b main", dir);
   git('config user.email "test@daintree.dev"', dir);
   git('config user.name "Daintree Test"', dir);
+  git("config commit.gpgsign false", dir);
   if (withGitHubRemote) {
     git("remote add origin https://github.com/daintreehq/daintree.git", dir);
   }
@@ -189,6 +190,7 @@ export function createDivergedRemoteFixture(name = "review-hub-diverged"): Fixtu
   git("init -b main", dir);
   git('config user.email "test@daintree.dev"', dir);
   git('config user.name "Daintree Test"', dir);
+  git("config commit.gpgsign false", dir);
 
   writeFileSync(path.join(dir, "README.md"), `# ${name}\n`);
   git("add -A", dir);
@@ -212,6 +214,7 @@ export function createDivergedRemoteFixture(name = "review-hub-diverged"): Fixtu
   git(`clone "${bareDir}" "${cloneDir}"`, dir);
   git('config user.email "test@daintree.dev"', cloneDir);
   git('config user.name "Daintree Test"', cloneDir);
+  git("config commit.gpgsign false", cloneDir);
   writeFileSync(path.join(cloneDir, "remote-only.txt"), "added on the remote\n");
   git("add -A", cloneDir);
   git('commit -m "remote: add remote-only file"', cloneDir);
@@ -252,6 +255,7 @@ export function createConflictFixtureRepo(
   git("init -b main", dir);
   git('config user.email "test@daintree.dev"', dir);
   git('config user.name "Daintree Test"', dir);
+  git("config commit.gpgsign false", dir);
 
   writeFileSync(path.join(dir, "README.md"), `# ${name}\n`);
   writeFileSync(path.join(dir, "conflict.txt"), "line one\nshared base line\nline three\n");

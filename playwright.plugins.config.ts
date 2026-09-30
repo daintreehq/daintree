@@ -23,6 +23,8 @@ export default defineConfig({
   fullyParallel: false,
   retries: 0,
   reporter: [["list"]],
+  globalSetup: "./e2e/global-setup.ts",
+  globalTeardown: "./e2e/global-teardown.ts",
   outputDir: "./test-results-plugins",
   use: { trace: "retain-on-failure", screenshot: "only-on-failure" },
 });

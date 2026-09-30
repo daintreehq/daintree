@@ -21,6 +21,8 @@ export default defineConfig({
   // A workflow that only works on a retry is a finding, not a flake.
   retries: 0,
   reporter: [["list"]],
+  globalSetup: "./e2e/global-setup.ts",
+  globalTeardown: "./e2e/global-teardown.ts",
   outputDir: "./test-results-assistant",
   use: { trace: "retain-on-failure" },
 });

@@ -1,15 +1,17 @@
 import { writeFileSync, mkdirSync, rmSync, existsSync, mkdtempSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { SEL } from "./selectors";
 import { dismissBlockingPalette } from "./overlays";
+import { E2E_TEMP_PREFIX, recordTempDir } from "./tempDirs";
 
 // Each test process gets its own CCR config file so parallel workers don't
 // clobber each other via the shared `~/.claude-code-router/config.json`.
 // Pair with launchApp({ env: { DAINTREE_CCR_CONFIG_PATH: CCR_CONFIG_PATH } })
 // so the main process under test reads from the same file.
-const CCR_DIR = mkdtempSync(join(tmpdir(), "daintree-ccr-"));
+const CCR_DIR = mkdtempSync(join(tmpdir(), `${E2E_TEMP_PREFIX}ccr-`));
+recordTempDir(CCR_DIR);
 const CCR_CONFIG_PATH = join(CCR_DIR, "config.json");
 // Pre-seed the env so launchApp's `{ ...process.env, ... }` picks it up
 // without every preset spec needing to thread the variable by hand.
@@ -32,6 +34,25 @@ export function removeCcrConfig(): void {
   if (existsSync(CCR_CONFIG_PATH)) {
     rmSync(CCR_CONFIG_PATH);
   }
+}
+
+/**
+ * Wait up to `timeout` for `locator` to be visible and report whether it got
+ * there. `locator.isVisible({ timeout })` looks like this but returns at once —
+ * Playwright ignores that timeout — so a retry loop built on it never waits.
+ */
+async function becomesVisible(locator: Locator, timeout: number): Promise<boolean> {
+  return locator.waitFor({ state: "visible", timeout }).then(
+    () => true,
+    () => false
+  );
+}
+
+async function becomesHidden(locator: Locator, timeout: number): Promise<boolean> {
+  return locator.waitFor({ state: "hidden", timeout }).then(
+    () => true,
+    () => false
+  );
 }
 
 /** Deleting a custom preset confirms first; accept that confirm. */
@@ -80,7 +101,7 @@ export async function navigateToAgentSettings(
         await expect(cliButton).toBeVisible({ timeout: 10000 });
         await cliButton.click({ timeout: 5000, force: true, noWaitAfter: true }).catch(() => {});
 
-        if (!(await dropdownTrigger.isVisible({ timeout: 5000 }).catch(() => false))) {
+        if (!(await becomesVisible(dropdownTrigger, 5000))) {
           await window.waitForTimeout(500);
           continue;
         }
@@ -100,7 +121,7 @@ export async function navigateToAgentSettings(
             await expect(listbox).not.toBeVisible({ timeout: 5000 });
           }
 
-          if (await presetSection.isVisible({ timeout: 5000 }).catch(() => false)) {
+          if (await becomesVisible(presetSection, 5000)) {
             return;
           }
         } catch {
@@ -155,11 +176,11 @@ async function openPresetSelector(window: Page) {
     await trigger.click({ force: true, noWaitAfter: true, timeout: 5_000 }).catch(async () => {
       await trigger.dispatchEvent("click").catch(() => undefined);
     });
-    if (await listbox.isVisible({ timeout: 2_000 }).catch(() => false)) {
+    if (await becomesVisible(listbox, 2_000)) {
       return listbox;
     }
     await trigger.press("Enter").catch(() => undefined);
-    if (await listbox.isVisible({ timeout: 2_000 }).catch(() => false)) {
+    if (await becomesVisible(listbox, 2_000)) {
       return listbox;
     }
     await trigger.click({ force: true, noWaitAfter: true, timeout: 2_000 }).catch(() => undefined);
@@ -202,7 +223,7 @@ export async function getPresetRowByName(
       await option.click({ force: true, noWaitAfter: true, timeout: 5_000 }).catch(async () => {
         await option.dispatchEvent("click").catch(() => undefined);
       });
-      if (await listbox.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      if (!(await becomesHidden(listbox, 2_000))) {
         await option.dispatchEvent("click").catch(() => undefined);
       }
       await expect(listbox).not.toBeVisible({ timeout: 5000 });
@@ -243,64 +264,6 @@ async function getCustomPresetState(window: Page, agentId: string): Promise<Cust
   }, agentId);
 }
 
-async function persistCustomPresetDirectly(window: Page, agentId: string): Promise<void> {
-  await window.evaluate(async (targetAgentId) => {
-    type Preset = {
-      id: string;
-      name: string;
-      args?: string[];
-      env?: Record<string, string>;
-    };
-    type AgentEntry = {
-      customPresets?: Preset[];
-      presetId?: string;
-    } & Record<string, unknown>;
-    type AgentSettings = {
-      agents?: Record<string, AgentEntry | undefined>;
-    };
-    type DispatchResult = { ok?: boolean; error?: { message?: string } };
-    type Dispatch = (
-      actionId: string,
-      args?: unknown,
-      options?: { source?: string }
-    ) => Promise<DispatchResult>;
-
-    const settings = (await globalThis.window.electron.agentSettings.get()) as AgentSettings;
-    const entry = settings.agents?.[targetAgentId] ?? {};
-    const existing = Array.isArray(entry.customPresets) ? entry.customPresets : [];
-    const presetId = `e2e-preset-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const nextEntry: AgentEntry = {
-      ...entry,
-      customPresets: [
-        ...existing,
-        {
-          id: presetId,
-          name: `Custom Preset ${existing.length + 1}`,
-          args: [],
-          env: {},
-        },
-      ],
-      presetId,
-    };
-
-    const dispatch = (window as unknown as { __daintreeDispatchAction?: Dispatch })
-      .__daintreeDispatchAction;
-    if (dispatch) {
-      const result = await dispatch(
-        "agentSettings.set",
-        { agentId: targetAgentId, settings: nextEntry },
-        { source: "test" }
-      );
-      if (result?.ok === false) {
-        throw new Error(result.error?.message ?? "agentSettings.set failed");
-      }
-      return;
-    }
-
-    await globalThis.window.electron.agentSettings.set(targetAgentId, nextEntry);
-  }, agentId);
-}
-
 export async function addCustomPreset(
   window: import("@playwright/test").Page,
   agentId = "claude"
@@ -312,38 +275,16 @@ export async function addCustomPreset(
       await expect(section).toBeVisible({ timeout: 5000 });
       const stateBefore = await getCustomPresetState(window, agentId);
       await section.locator(SEL.preset.addButton).click({ force: true, noWaitAfter: true });
-      // The Add button now opens an "Add Preset" dialog with a Start-from chooser.
-      // Click Create to accept the default "Blank" choice and create the preset.
+      // The Add button opens an "Add preset" dialog with a Start-from chooser;
+      // Create accepts the default "Blank" choice. A dialog that never opens or
+      // never closes is the bug this step exists to catch, so it fails here.
       const dialog = window.locator('[data-testid="add-preset-dialog"]');
-      if (!(await dialog.isVisible({ timeout: 5000 }).catch(() => false))) {
-        const stateAfterClick = await getCustomPresetState(window, agentId);
-        if (stateAfterClick.customCount < stateBefore.customCount + 1) {
-          await persistCustomPresetDirectly(window, agentId);
-        }
-      } else {
-        const createButton = dialog.locator('button:has-text("Create")');
-        await expect(createButton).toBeEnabled({ timeout: 5000 });
-        await createButton.click({ force: true, noWaitAfter: true });
-        if (await dialog.isVisible({ timeout: 5000 }).catch(() => false)) {
-          await createButton.click().catch(() => undefined);
-          await window.keyboard.press("Enter").catch(() => undefined);
-        }
-        if (await dialog.isVisible({ timeout: 5000 }).catch(() => false)) {
-          const stateAfterClick = await getCustomPresetState(window, agentId);
-          if (stateAfterClick.customCount < stateBefore.customCount + 1) {
-            await persistCustomPresetDirectly(window, agentId);
-          }
-          await dialog
-            .getByRole("button", { name: "Cancel" })
-            .click({ force: true })
-            .catch(() => undefined);
-          if (await dialog.isVisible({ timeout: 500 }).catch(() => false)) {
-            await window.keyboard.press("Escape").catch(() => undefined);
-          }
-        }
-        await expect(dialog).not.toBeVisible({ timeout: process.env.CI ? 10_000 : 5000 });
-      }
-      if (!(await section.isVisible({ timeout: 1000 }).catch(() => false))) {
+      await expect(dialog).toBeVisible({ timeout: 5000 });
+      const createButton = dialog.getByRole("button", { name: "Create preset", exact: true });
+      await expect(createButton).toBeEnabled({ timeout: 5000 });
+      await createButton.click({ force: true, noWaitAfter: true });
+      await expect(dialog).not.toBeVisible({ timeout: process.env.CI ? 10_000 : 5000 });
+      if (!(await becomesVisible(section, 1000))) {
         await navigateToAgentSettings(window, agentId);
       }
       // Poll the persisted settings directly. On Windows the Radix popover can

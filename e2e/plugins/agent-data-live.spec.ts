@@ -104,7 +104,7 @@ test.describe("Plugin agent data: real agents", () => {
     stripAgentSessionEnv();
     const project = createAgentDataProject("agent-data-live");
     cleanup = project.cleanup;
-    ctx = await launchApp({ env: liveLaunchEnv() });
+    ctx = await launchApp({ env: liveLaunchEnv(), isolateHome: false });
     const page = await openAndOnboardProject(ctx.app, ctx.window, project.dir, "Agent data live");
     ctx.window = page;
     projectId = (await page.evaluate(() => window.electron.project.getCurrent()))!.id;

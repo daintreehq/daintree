@@ -72,6 +72,7 @@ export class Director {
     const userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-intro-ud-"));
     const ctx = await launchApp({
       userDataDir,
+      isolateHome: false,
       extraArgs: ["--demo-mode"],
       env: {
         ...(REAL_CLAUDE ? {} : fakeClaudeEnv(bin)),
