@@ -29,6 +29,8 @@ type FieldOrientation = "vertical" | "horizontal";
 interface FieldContextValue {
   controlId: string;
   labelId: string | undefined;
+  /** The label text's id in either orientation, for a control `htmlFor` cannot name. */
+  labelTextId: string | undefined;
   descriptionId: string | undefined;
   errorId: string | undefined;
   invalid: boolean;
@@ -71,7 +73,18 @@ function idList(...sources: Array<string | undefined>): string | undefined {
  * Spread the result AFTER the caller's own props: the field owns the id its
  * label points at, so a stray `id` at the call site cannot orphan the label.
  */
-export function useFieldControl(own: ControlAria, invalidOverride?: boolean) {
+export function useFieldControl(
+  own: ControlAria,
+  invalidOverride?: boolean,
+  options: {
+    /**
+     * `false` for a control a `<label htmlFor>` cannot name — a `radiogroup`,
+     * a composite widget on a `div` — so a vertical field names it through
+     * `aria-labelledby` as a horizontal one does.
+     */
+    labelable?: boolean;
+  } = {}
+) {
   const field = React.useContext(FieldContext);
   const invalid = invalidOverride ?? field?.invalid ?? false;
 
@@ -95,7 +108,11 @@ export function useFieldControl(own: ControlAria, invalidOverride?: boolean) {
       // clickable, which would otherwise fold the description and error into
       // the accessible name as one run-on string. Naming the label element
       // explicitly keeps the name to the label text alone.
-      "aria-labelledby": namedByCaller ? own["aria-labelledby"] : field.labelId,
+      "aria-labelledby": namedByCaller
+        ? own["aria-labelledby"]
+        : options.labelable === false
+          ? field.labelTextId
+          : field.labelId,
       // Error first, then the field's own hint, then anything the caller added:
       // a screen reader should reach the problem before the explanation.
       "aria-describedby": idList(field.errorId, field.descriptionId, own["aria-describedby"]),
@@ -229,19 +246,30 @@ function Field({
   const errorId = hasError ? `${generatedId}error` : undefined;
   // Vertical fields name the control through `htmlFor`, which already scopes
   // the name to the label's own text — only the wrapped row needs this.
-  const labelId = orientation === "horizontal" && hasLabel ? `${generatedId}label` : undefined;
+  const labelTextId = hasLabel ? `${generatedId}label` : undefined;
+  const labelId = orientation === "horizontal" ? labelTextId : undefined;
 
   const value = React.useMemo<FieldContextValue>(
     () => ({
       controlId: resolvedControlId,
       labelId,
+      labelTextId,
       descriptionId,
       errorId,
       invalid: resolvedInvalid,
       disabled,
       orientation,
     }),
-    [resolvedControlId, labelId, descriptionId, errorId, resolvedInvalid, disabled, orientation]
+    [
+      resolvedControlId,
+      labelId,
+      labelTextId,
+      descriptionId,
+      errorId,
+      resolvedInvalid,
+      disabled,
+      orientation,
+    ]
   );
 
   // A label root makes the entire row clickable, and the named text living in
@@ -303,7 +331,8 @@ export interface FieldLabelProps extends Omit<React.HTMLAttributes<HTMLElement>,
 }
 
 function FieldLabel({ accessory, tinted = false, className, children, ...props }: FieldLabelProps) {
-  const { controlId, labelId, orientation, disabled, invalid } = useFieldContext("FieldLabel");
+  const { controlId, labelId, labelTextId, orientation, disabled, invalid } =
+    useFieldContext("FieldLabel");
   const labelClasses = cn(
     fieldLabelVariants({ orientation, disabled, invalid: tinted && invalid }),
     className
@@ -319,7 +348,7 @@ function FieldLabel({ accessory, tinted = false, className, children, ...props }
           {children}
         </span>
       ) : (
-        <label htmlFor={controlId} className={labelClasses} {...props}>
+        <label htmlFor={controlId} className={labelClasses} {...props} id={labelTextId}>
           {children}
         </label>
       )}

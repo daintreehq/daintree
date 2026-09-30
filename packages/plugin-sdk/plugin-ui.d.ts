@@ -115,6 +115,16 @@ declare module "@daintreehq/plugin-ui" {
     PluginTooltipProps,
     PluginTruncatedTooltipProps,
     PluginVirtualListProps,
+    PluginRadioGroupProps,
+    PluginRadioOption,
+    PluginNumberInputProps,
+    PluginSliderProps,
+    PluginPickerBaseProps,
+    PluginComboboxProps,
+    PluginMultiSelectProps,
+    PluginTagInputProps,
+    PluginFileDropzoneProps,
+    PluginEmojiPickerProps,
     UseListNavigationOptions as PluginUseListNavigationOptions,
     UseListNavigationResult as PluginUseListNavigationResult,
   } from "@daintreehq/plugin-sdk/react";
@@ -199,6 +209,16 @@ declare module "@daintreehq/plugin-ui" {
   export type StatCardProps = PluginStatCardProps;
   export type SparklineProps = PluginSparklineProps;
   export type FormFieldGroupProps = PluginFormFieldGroupProps;
+  export type RadioGroupProps = PluginRadioGroupProps;
+  export type RadioOption = PluginRadioOption;
+  export type NumberInputProps = PluginNumberInputProps;
+  export type SliderProps = PluginSliderProps;
+  export type PickerBaseProps = PluginPickerBaseProps;
+  export type ComboboxProps = PluginComboboxProps;
+  export type MultiSelectProps = PluginMultiSelectProps;
+  export type TagInputProps = PluginTagInputProps;
+  export type FileDropzoneProps = PluginFileDropzoneProps;
+  export type EmojiPickerProps = PluginEmojiPickerProps;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -348,6 +368,23 @@ declare module "@daintreehq/plugin-ui" {
   export const Sparkline: ComponentType<SparklineProps>;
   /** One label, at a field label's size, over a set of controls such as checkboxes. */
   export const FormFieldGroup: ComponentType<FormFieldGroupProps>;
+
+  /** Exactly one of a few options, as bordered cards or plain radios, with native radio keys. */
+  export const RadioGroup: ComponentType<RadioGroupProps>;
+  /** A number field with a unit, steppers, arrow-key steps, clamping and rounding; commits on blur or Enter. */
+  export const NumberInput: ComponentType<NumberInputProps>;
+  /** One value on a neutral track, with `aria-valuetext` from `formatValue`. */
+  export const Slider: ComponentType<SliderProps>;
+  /** A searchable single choice: a `Select`-style trigger over a virtualised, filterable list. */
+  export const Combobox: ComponentType<ComboboxProps>;
+  /** Any number of choices from a searchable, virtualised list, shown as chips on the trigger. */
+  export const MultiSelect: ComponentType<MultiSelectProps>;
+  /** Free-text tags: Enter or a comma adds, Backspace removes the last, duplicates are skipped. */
+  export const TagInput: ComponentType<TagInputProps>;
+  /** A drop target and a button for the system file dialog, handing you `File` objects. */
+  export const FileDropzone: ComponentType<FileDropzoneProps>;
+  /** Daintree's emoji picker in a popover opened from `trigger`. The trigger shows while the kit loads. */
+  export const EmojiPicker: ComponentType<EmojiPickerProps>;
 
   /**
    * The keyboard model of a list: one tab stop, Up/Down/Home/End move the
