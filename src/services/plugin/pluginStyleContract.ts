@@ -190,29 +190,33 @@ export async function getPluginStyleReportForRoots(
   roots: readonly Element[]
 ): Promise<PluginStyleReport | null> {
   if (roots.length === 0) return null;
-  const classes = new Set<string>();
+  const elementsByClass = new Map<string, Element[]>();
   const addClasses = (element: Element) => {
     const lucideIcon = element instanceof SVGElement && element.classList.contains("lucide");
     for (const token of element.classList) {
       // Lucide stamps `lucide` and `lucide-<icon>` on the icons it draws; the
       // same prefix on any other element is the author's and gets checked.
       if (lucideIcon && (token === "lucide" || token.startsWith("lucide-"))) continue;
-      classes.add(token);
+      if (isMarkerClass(token)) continue;
+      const elements = elementsByClass.get(token);
+      if (elements) elements.push(element);
+      else elementsByClass.set(token, [element]);
     }
   };
   for (const root of roots) {
     addClasses(root);
     for (const element of root.querySelectorAll("[class]")) addClasses(element);
   }
-  const doc = roots[0]!.ownerDocument;
-  const styled = documentClassSelectors(doc);
+  // Kit components render host component classes (`search-field`,
+  // `palette-row`, …) that the host's own stylesheet styles, not the plugin's
+  // Tailwind. A class counts as styled by the host only where one of the
+  // host's rules naming it actually selects the element carrying it, so a
+  // plugin class that merely shares a name with a host class used elsewhere
+  // (`.toolbar .status`) is still the author's to fix.
+  const styled = classesStyledByDocument(roots[0]!.ownerDocument, elementsByClass);
   const generated: string[] = [];
   const candidates: string[] = [];
-  for (const token of classes) {
-    if (isMarkerClass(token)) continue;
-    // Kit components render host component classes (`search-field`,
-    // `palette-row`, …) that the host's own stylesheet styles, not the
-    // plugin's Tailwind; they are styled, so they are not the author's problem.
+  for (const token of elementsByClass.keys()) {
     if (styled.has(token)) generated.push(token);
     else candidates.push(token);
   }
@@ -232,59 +236,182 @@ function isMarkerClass(token: string): boolean {
 }
 
 /**
- * Class names per stylesheet, keyed by sheet object and re-read when its
- * top-level rule count changes, which covers `replaceSync()` and rule inserts
- * and deletes. A sheet whose `<style>` text is replaced is a new object anyway.
+ * The classes in `elementsByClass` that some document stylesheet rule applies
+ * to on an element carrying them. Sheets are read afresh on every call: the
+ * check runs only on demand, and constructed sheets are `replaceSync()`ed in
+ * place, so no revision of a cached read would be trustworthy.
  */
-const sheetClassCache = new WeakMap<
-  CSSStyleSheet,
-  { ruleCount: number; names: ReadonlySet<string> }
->();
-
-function documentClassSelectors(doc: Document): ReadonlySet<string> {
-  const sheets = [...doc.styleSheets, ...(doc.adoptedStyleSheets ?? [])];
-  if (sheets.length === 1) return classesInSheet(sheets[0]!);
-  const all = new Set<string>();
-  for (const sheet of sheets) {
-    for (const name of classesInSheet(sheet)) all.add(name);
+function classesStyledByDocument(
+  doc: Document,
+  elementsByClass: ReadonlyMap<string, readonly Element[]>
+): ReadonlySet<string> {
+  const selectorsByClass = new Map<string, Set<string>>();
+  for (const sheet of [...doc.styleSheets, ...(doc.adoptedStyleSheets ?? [])]) {
+    let rules: CSSRuleList;
+    try {
+      rules = sheet.cssRules;
+    } catch {
+      // A cross-origin sheet hides its rules; it cannot be the host's own CSS.
+      continue;
+    }
+    collectClassSelectors(rules, null, elementsByClass, selectorsByClass);
   }
-  return all;
-}
-
-function classesInSheet(sheet: CSSStyleSheet): ReadonlySet<string> {
-  let rules: CSSRuleList;
-  try {
-    rules = sheet.cssRules;
-  } catch {
-    // A cross-origin sheet hides its rules; it cannot be the host's own CSS.
-    return new Set();
+  const styled = new Set<string>();
+  const verdicts = new Map<string, boolean>();
+  for (const [name, selectors] of selectorsByClass) {
+    const elements = elementsByClass.get(name)!;
+    search: for (const selector of selectors) {
+      for (const complex of splitSelectorList(selector)) {
+        for (const prefix of prefixesThroughClass(complex, name)) {
+          if (elements.some((element) => selectsElement(element, prefix, verdicts))) {
+            styled.add(name);
+            break search;
+          }
+        }
+      }
+    }
   }
-  const cached = sheetClassCache.get(sheet);
-  if (cached && cached.ruleCount === rules.length) return cached.names;
-  const names = new Set<string>();
-  collectRuleClasses(rules, names);
-  sheetClassCache.set(sheet, { ruleCount: rules.length, names });
-  return names;
+  return styled;
 }
 
 const CLASS_SELECTOR = /\.((?:\\[0-9a-fA-F]{1,6}\s?|\\[^\n0-9a-fA-F]|[\w-])+)/g;
 const CSS_ESCAPE = /\\(?:([0-9a-fA-F]{1,6})\s?|([^\n]))/g;
 
-function collectRuleClasses(rules: CSSRuleList, names: Set<string>): void {
+function unescapeClass(raw: string): string {
+  return raw.replace(CSS_ESCAPE, (_, hex: string | undefined, char: string | undefined) =>
+    hex ? String.fromCodePoint(parseInt(hex, 16)) : char!
+  );
+}
+
+function collectClassSelectors(
+  rules: CSSRuleList,
+  parentSelector: string | null,
+  wanted: ReadonlyMap<string, unknown>,
+  out: Map<string, Set<string>>
+): void {
   for (const rule of rules) {
     const selectorText = (rule as Partial<CSSStyleRule>).selectorText;
+    let selector = parentSelector;
     if (typeof selectorText === "string") {
-      for (const match of selectorText.matchAll(CLASS_SELECTOR)) {
-        names.add(
-          match[1]!.replace(CSS_ESCAPE, (_, hex: string | undefined, char: string | undefined) =>
-            hex ? String.fromCodePoint(parseInt(hex, 16)) : char!
-          )
-        );
+      selector =
+        parentSelector === null ? selectorText : nestSelector(selectorText, parentSelector);
+      for (const match of selector.matchAll(CLASS_SELECTOR)) {
+        const name = unescapeClass(match[1]!);
+        if (!wanted.has(name)) continue;
+        let selectors = out.get(name);
+        if (!selectors) out.set(name, (selectors = new Set()));
+        selectors.add(selector);
       }
     }
     const nested = (rule as Partial<CSSGroupingRule>).cssRules;
-    if (nested) collectRuleClasses(nested, names);
+    if (nested) collectClassSelectors(nested, selector, wanted, out);
   }
+}
+
+/** A nested style rule's selector, resolved against its parent's. */
+function nestSelector(selector: string, parent: string): string {
+  return selector.includes("&")
+    ? selector.replaceAll("&", `:is(${parent})`)
+    : `:is(${parent}) ${selector}`;
+}
+
+/** Split a selector list on its top-level commas. */
+function splitSelectorList(selector: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < selector.length; i++) {
+    const char = selector[i];
+    if (char === "\\") i++;
+    else if (char === "(" || char === "[") depth++;
+    else if (char === ")" || char === "]") depth--;
+    else if (char === "," && depth === 0) {
+      parts.push(selector.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  parts.push(selector.slice(start).trim());
+  return parts.filter(Boolean);
+}
+
+/**
+ * For each place `name` appears in a complex selector, the selector cut after
+ * the compound that holds it: `.bar .status:hover > span` gives
+ * `.bar .status:hover`. Whatever follows styles descendants or siblings, so the
+ * class does its work if the element carrying it matches the part up to here.
+ */
+function prefixesThroughClass(complex: string, name: string): string[] {
+  const prefixes: string[] = [];
+  for (const match of complex.matchAll(CLASS_SELECTOR)) {
+    if (unescapeClass(match[1]!) !== name) continue;
+    let depth = 0;
+    let inAttribute = false;
+    for (let i = 0; i < match.index; i++) {
+      const char = complex[i];
+      if (char === "\\") i++;
+      else if (inAttribute && (char === '"' || char === "'")) {
+        // A quoted attribute value can hold `]`, `(` or `.name`; skip it whole.
+        const close = complex.indexOf(char, i + 1);
+        if (close === -1 || close >= match.index) break;
+        i = close;
+      } else if (char === "(" || char === "[") depth++;
+      else if (char === ")" || char === "]") depth--;
+      if (char === "[") inAttribute = true;
+      else if (char === "]") inAttribute = false;
+    }
+    // `[data-kind=".status"]` is an attribute value, not the class.
+    if (inAttribute) continue;
+    let end = match.index + match[0].length;
+    for (; end < complex.length; end++) {
+      const char = complex[end]!;
+      if (char === "\\") end++;
+      else if (char === '"' || char === "'") {
+        const close = complex.indexOf(char, end + 1);
+        end = close === -1 ? complex.length : close;
+      } else if (char === "(" || char === "[") depth++;
+      else if (char === ")" || char === "]") depth--;
+      else if (depth <= 0 && /[\s>+~]/.test(char)) break;
+    }
+    prefixes.push(complex.slice(0, end));
+  }
+  return prefixes;
+}
+
+// Pseudo-elements never match an element, and these states are ones the
+// element passes in and out of; the rule still styles it in that state.
+const PSEUDO_ELEMENT =
+  /(?<!\\)::?(?:before|after|first-line|first-letter|marker|placeholder|selection|backdrop|file-selector-button|-webkit-[\w-]+|-moz-[\w-]+)(?:\([^)]*\))?/g;
+const TRANSIENT_STATE_NAMES =
+  "hover|focus|focus-visible|focus-within|active|visited|target|checked|indeterminate|disabled|enabled|placeholder-shown|open|popover-open|autofill|invalid|valid|user-invalid|user-valid";
+const TRANSIENT_STATE = new RegExp(`(?<!\\\\):(?:${TRANSIENT_STATE_NAMES})(?![\\w-])`, "g");
+// A negated state (`:not(:hover)`) is equally a state the element passes
+// through, so the whole negation goes rather than leaving an empty `:not()`.
+const NEGATED_TRANSIENT_STATE = new RegExp(
+  `(?<!\\\\):not\\(\\s*(?::(?:${TRANSIENT_STATE_NAMES})\\s*,?\\s*)+\\)`,
+  "g"
+);
+
+function selectsElement(
+  element: Element,
+  selector: string,
+  verdicts: Map<string, boolean>
+): boolean {
+  const relaxed = selector
+    .replace(PSEUDO_ELEMENT, "")
+    .replace(NEGATED_TRANSIENT_STATE, "")
+    .replace(TRANSIENT_STATE, "")
+    .trim();
+  for (const candidate of relaxed === selector ? [selector] : [relaxed, selector]) {
+    if (candidate === "" || verdicts.get(candidate) === false) continue;
+    try {
+      if (element.matches(candidate)) return true;
+    } catch {
+      // A selector this engine cannot parse (or one emptied by the relaxing
+      // above) never counts; remember it so the next element skips it.
+      verdicts.set(candidate, false);
+    }
+  }
+  return false;
 }
 
 /** Test seam: drop the document's runtime and every memoised preparation. */

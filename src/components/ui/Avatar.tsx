@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { RootAttributes } from "@/components/ui/rootAttributes";
 
 interface AvatarProps {
   src: string;
@@ -11,6 +12,8 @@ interface AvatarProps {
   shape?: "circle" | "square";
   /** Drawn in place of the person glyph when there is no picture (initials). */
   fallback?: ReactNode;
+  /** `id`, `data-*` or `aria-*` on the root; the component's own attributes win. */
+  rootAttributes?: RootAttributes;
 }
 
 type AvatarStatus = "loading" | "loaded" | "failed";
@@ -42,7 +45,15 @@ export function avatarUrlAtSize(url: string | undefined, px: number): string {
   return `${url}${url.includes("?") ? "&" : "?"}s=${px}`;
 }
 
-export function Avatar({ src, alt, title, className, shape = "circle", fallback }: AvatarProps) {
+export function Avatar({
+  src,
+  alt,
+  title,
+  className,
+  shape = "circle",
+  fallback,
+  rootAttributes,
+}: AvatarProps) {
   const [state, setState] = useState(() => ({ src, status: initialStatus(src) }));
 
   // Status belongs to one src. On a swap it is re-derived during render, so the
@@ -65,6 +76,7 @@ export function Avatar({ src, alt, title, className, shape = "circle", fallback 
 
   const avatarContent = (
     <span
+      {...rootAttributes}
       className={cn("relative inline-block shrink-0", className)}
       aria-hidden={decorative ? true : undefined}
       role={!decorative && status === "failed" ? "img" : undefined}

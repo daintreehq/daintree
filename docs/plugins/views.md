@@ -97,43 +97,43 @@ Prefer **container queries** (`@container`, `@sm:`, `@md:`) over viewport breakp
 
 <!-- BEGIN generated: plugin-style-vocabulary -->
 
-**Surfaces** — `bg-`, `border-`, `text-`
+**Surfaces** — shown with `bg-`; `border-` and `text-` take the same names
 
-`surface-canvas` `surface-sidebar` `surface-toolbar` `surface-panel` `surface-panel-elevated` `surface-dialog` `surface-grid` `surface-input` `surface-inset` `surface-hover` `surface-active` `surface-disabled` `surface-highlight`
+`bg-surface-canvas` `bg-surface-sidebar` `bg-surface-toolbar` `bg-surface-panel` `bg-surface-panel-elevated` `bg-surface-dialog` `bg-surface-grid` `bg-surface-input` `bg-surface-inset` `bg-surface-hover` `bg-surface-active` `bg-surface-disabled` `bg-surface-highlight`
 
-**Text** — `text-`
+**Text**
 
-`text-primary` `text-secondary` `text-muted` `text-placeholder` `text-inverse` `text-link`
+`text-text-primary` `text-text-secondary` `text-text-muted` `text-text-placeholder` `text-text-inverse` `text-text-link`
 
-**Borders** — `border-`, `divide-`, `ring-`
+**Borders** — shown with `border-`; `divide-` and `ring-` take the same names
 
-`border-default` `border-subtle` `border-strong` `border-divider` `border-interactive` `border-input`
+`border-border-default` `border-border-subtle` `border-border-strong` `border-border-divider` `border-border-interactive` `border-border-input`
 
-**Status** — `bg-`, `text-`, `border-`
+**Status** — shown with `bg-`; `text-` and `border-` take the same names
 
-`status-success` `status-warning` `status-danger` `status-info` `status-danger-surface` `status-success-surface` `status-warning-surface` `status-info-surface` `status-error` `status-error-surface`
+`bg-status-success` `bg-status-warning` `bg-status-danger` `bg-status-info` `bg-status-danger-surface` `bg-status-success-surface` `bg-status-warning-surface` `bg-status-info-surface` `bg-status-error` `bg-status-error-surface`
 
-**Accent** — `bg-`, `text-`, `border-`
+**Accent** — shown with `bg-`; `text-` and `border-` take the same names
 
-`accent-primary` `accent-hover` `accent-foreground` `accent-primary-foreground` `accent-soft` `accent-muted` `accent-secondary` `accent-secondary-soft` `accent-secondary-muted`
+`bg-accent-primary` `bg-accent-hover` `bg-accent-foreground` `bg-accent-primary-foreground` `bg-accent-soft` `bg-accent-muted` `bg-accent-secondary` `bg-accent-secondary-soft` `bg-accent-secondary-muted`
 
-**Radii** — `rounded-`
+**Radii**
 
-`xs` `sm` `md` `lg` `xl` `2xl` `3xl` `4xl`
+`rounded-xs` `rounded-sm` `rounded-md` `rounded-lg` `rounded-xl` `rounded-2xl` `rounded-3xl` `rounded-4xl`
 
-**Type scale below Tailwind's floor** — `text-`
+**Type scale below Tailwind's floor**
 
-`2xs` `3xs` `4xs`
+`text-2xs` `text-3xs` `text-4xs`
 
-**Durations** — `duration-`
+**Durations**
 
-`75` `100` `120` `150` `200` `250` `300`
+`duration-75` `duration-100` `duration-120` `duration-150` `duration-200` `duration-250` `duration-300`
 
-**Easings** — `ease-`
+**Easings**
 
-`snappy` `spring-critical` `out-expo` `exit` `panel-minimize`
+`ease-snappy` `ease-spring-critical` `ease-out-expo` `ease-exit` `ease-panel-minimize`
 
-**Category hues** — `bg-`, `text-`, `border-`, as `category-<hue>` plus a variant suffix
+**Category hues** — `bg-`, `text-` or `border-`, then `category-<hue>` and a variant suffix: `bg-category-blue-subtle`, `text-category-teal-text`
 
 hues: `blue` `purple` `cyan` `green` `amber` `orange` `teal` `indigo` `rose` `pink` `violet` `slate`
 
@@ -309,8 +309,9 @@ export default function Notes({ pluginId, disposeSignal }) {
 | For | Components |
 | --- | --- |
 | Actions | `Button` (variants `default` — the accent primary, and the default — `secondary`, `outline`, `ghost`, `subtle`, `contrast`, `destructive`, `ghost-danger`, `link`, `pill`), `IconButton`, `CopyButton`, `DismissButton`, `DropdownMenu` |
-| Forms | `Input` (text, search, email, url, password, number, tel, date, time, datetime-local), `Textarea`, `Select` (an `options` array; `value={null}` shows the placeholder again), `Checkbox`, `Switch`, `SegmentedControl`, `SearchField`, `FormField` (label, description and error wired to the control) |
-| Lists and tables | `VirtualList`, `DataTable`, `LogView`, `ListRow` with `useListNavigation`, `ScrollShadow` |
+| Forms | `Input` (text, search, email, url, password, number, tel, date, time, datetime-local), `Textarea`, `Select` (an `options` array; `value={null}` shows the placeholder again), `Checkbox`, `Switch`, `SegmentedControl`, `SearchField`, `FormField` (label, description and error wired to the control), `FormFieldGroup` (one label over a set of controls) |
+| Lists and tables | `VirtualList`, `DataTable`, `LogView`, `ListRow` with `useListNavigation`, `ScrollShadow`, `FileTree` |
+| Figures | `StatCard` (a labelled figure with an optional change), `Sparkline` |
 | Pane chrome | `PaneHeader`, `Toolbar`, `ToolbarButton`, `Tabs` |
 | States and status | `PaneState` (a whole pane's `loading`, `empty` or `error`), `EmptyState`, `Callout` (an inline message; `severity="error"` with a Retry `action` is the error banner, `variant="strip"` the pane-wide band), `Badge`, `Spinner`, `SpinningIcon`, `ProgressBar`, `Skeleton`, `SkeletonBone`, `SkeletonText`, `SkeletonHint`, `SeverityIcon` |
 | Overlays | `Dialog`, `ConfirmDialog` (including the destructive typed-name gate), `Popover`, `PopoverSearchField`, `Tooltip`, `TruncatedTooltip` |
@@ -319,7 +320,7 @@ export default function Notes({ pluginId, disposeSignal }) {
 
 One status vocabulary runs through `Badge` `tone`, `Callout` `severity` and `SeverityIcon`: `error` (the same colour as `danger`, which `Badge` also accepts), `warning`, `success`, `info` and `neutral`.
 
-Not in the kit yet, so draw them with tokens: a file tree (the SDK's `/files` model is headless, and worker-only), charts and sparklines, a stat card, and a tooltip anchored to a point rather than an element.
+Not in the kit yet, so draw them with tokens: charts beyond a sparkline, and a tooltip anchored to a point rather than an element.
 
 **Never `window.confirm`, `alert` or `prompt` in a view.** A native dialog ignores the theme, blocks the whole window and takes focus from every other panel. `ConfirmDialog` is the view-side confirm; `host.showConfirm` is the worker's.
 
@@ -332,7 +333,7 @@ Nothing of the kit loads at startup. Importing `@daintreehq/plugin-ui` costs a f
 
 ### Versioning
 
-`PLUGIN_UI_VERSION` is the kit's semver contract, `"1.2.0"` today. A minor version adds components, optional props, icon names and theme token keys; within a major version no export, prop, accepted value or core token key is removed or narrowed. Every component validates its props at runtime, so a value outside the types — from an older or newer plugin — is ignored rather than thrown on. The kit comes from the running app, so check `PLUGIN_UI_VERSION` before relying on a component a later minor added, and declare an `engines.daintree` that has it.
+`PLUGIN_UI_VERSION` is the kit's semver contract, `"1.0.0"` today. A minor version adds components, optional props, icon names and theme token keys; within a major version no export, prop, accepted value or core token key is removed or narrowed. Every component validates its props at runtime, so a value outside the types — from an older or newer plugin — is ignored rather than thrown on. The kit comes from the running app, so check `PLUGIN_UI_VERSION` before relying on a component a later minor added, and declare an `engines.daintree` that has it.
 
 ### Styling kit components
 

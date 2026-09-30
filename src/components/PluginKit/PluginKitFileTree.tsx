@@ -25,7 +25,7 @@ import {
 } from "@/panels/file-browser/fileTypeIcons";
 import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { cn } from "@/lib/utils";
-import { field, fn, hasContent, node, nonEmpty, str } from "./kitProps";
+import { field, fn, hasContent, node, nonEmpty, pickRootProps, str } from "./kitProps";
 
 // The host browser's geometry (FileTreeView), so a plugin tree lines up with it.
 const INDENT_PER_DEPTH_PX = 12;
@@ -342,8 +342,13 @@ function KitFileTree(props: PluginFileTreeProps) {
   };
 
   const label = str(ariaLabel) ?? "";
+  const rootAttributes = pickRootProps(props, { aria: true });
   if (rows.length === 0 && hasContent(empty)) {
-    return <div className={cn("h-full", str(className))}>{node(empty)}</div>;
+    return (
+      <div {...pickRootProps(props)} className={cn("h-full", str(className))}>
+        {node(empty)}
+      </div>
+    );
   }
 
   const mounted =
@@ -355,6 +360,7 @@ function KitFileTree(props: PluginFileTreeProps) {
 
   return (
     <div
+      {...rootAttributes}
       ref={container}
       role="tree"
       aria-label={label}

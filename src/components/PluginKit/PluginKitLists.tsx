@@ -28,7 +28,17 @@ import type {
 import { LIST_ROW_HOVER_CLASS, PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { cn } from "@/lib/utils";
-import { field, fn, node, nonEmpty, oneOf, pickDomProps, positive, str } from "./kitProps";
+import {
+  field,
+  fn,
+  node,
+  nonEmpty,
+  oneOf,
+  pickDomProps,
+  pickRootProps,
+  positive,
+  str,
+} from "./kitProps";
 import { severityGlyph } from "./PluginKitPatterns";
 
 const DEFAULT_ROW_PX = 28;
@@ -366,7 +376,10 @@ function KitDataTable({
   onEndReached,
   "aria-label": ariaLabel,
   className,
+  ...rest
 }: PluginDataTableProps) {
+  // `aria-*` belongs on the grid inside, which names itself; the root takes `id` and `data-*`.
+  const rootAttributes = pickRootProps(rest);
   const cols = readColumns(columns);
   const data: readonly unknown[] = Array.isArray(rows) ? rows : [];
   const current = readSort(sort);
@@ -476,7 +489,11 @@ function KitDataTable({
   };
 
   if (data.length === 0 && empty !== undefined && empty !== null) {
-    return <div className={cn("h-full", str(className))}>{node(empty)}</div>;
+    return (
+      <div {...rootAttributes} className={cn("h-full", str(className))}>
+        {node(empty)}
+      </div>
+    );
   }
 
   const header = () => (
@@ -536,6 +553,7 @@ function KitDataTable({
 
   return (
     <TableVirtuoso
+      {...rootAttributes}
       ref={handle}
       scrollerRef={(element) => setScroller(element instanceof HTMLElement ? element : null)}
       className={cn(SCROLLER_RING_INSET, str(className))}
@@ -611,6 +629,7 @@ function KitLogView({
   wrap,
   "aria-label": ariaLabel,
   className,
+  ...rest
 }: PluginLogViewProps) {
   const all: readonly unknown[] = Array.isArray(lines) ? lines : [];
   const max =
@@ -622,6 +641,7 @@ function KitLogView({
   const wrapped = wrap !== false;
   return (
     <Virtuoso
+      {...pickRootProps(rest, { aria: true })}
       // A live region would read out every line of a busy job; the log is
       // there to be read on demand, from the keyboard as well as the wheel.
       role="log"

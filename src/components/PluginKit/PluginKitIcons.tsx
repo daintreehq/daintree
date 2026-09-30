@@ -159,6 +159,7 @@ import { forwardRef, isValidElement, type ReactNode } from "react";
 import type { LucideIcon, LucideProps } from "lucide-react";
 import type { PluginIconName, PluginIconProps } from "@shared/types/plugin-sdk-react";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
+import { pickRootProps } from "./kitProps";
 
 export type PluginKitGlyph = LucideIcon;
 
@@ -374,13 +375,20 @@ function sanitizeSize(size: unknown, fallback: number): number {
     : fallback;
 }
 
-export function PluginKitIcon({ name, size, className, "aria-label": ariaLabel }: PluginIconProps) {
+export function PluginKitIcon({
+  name,
+  size,
+  className,
+  "aria-label": ariaLabel,
+  ...rest
+}: PluginIconProps) {
   const Glyph = resolvePluginKitIcon(name);
   if (!Glyph) return null;
   const px = sanitizeSize(size, 16);
   const label = typeof ariaLabel === "string" && ariaLabel ? ariaLabel : undefined;
   return (
     <Glyph
+      {...pickRootProps(rest)}
       width={px}
       height={px}
       className={typeof className === "string" ? className : undefined}

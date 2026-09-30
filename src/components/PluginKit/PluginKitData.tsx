@@ -5,7 +5,16 @@ import type {
   PluginStatCardProps,
 } from "@shared/types/plugin-sdk-react";
 import { cn } from "@/lib/utils";
-import { hasContent, node, nonEmpty, oneOf, pickDomProps, positive, str } from "./kitProps";
+import {
+  hasContent,
+  node,
+  nonEmpty,
+  oneOf,
+  pickDomProps,
+  pickRootProps,
+  positive,
+  str,
+} from "./kitProps";
 import { severityGlyph } from "./PluginKitPatterns";
 
 const TONES = [
@@ -164,15 +173,19 @@ function KitSparkline({
   min,
   max,
   className,
+  ...rest
 }: PluginSparklineProps) {
   const px = Math.round(positive(height, 1000) ?? DEFAULT_SPARK_HEIGHT);
   const list: readonly unknown[] = Array.isArray(values) ? values : [];
   const runs = sparklineRuns(list, px, min, max);
-  const lastRun = runs[runs.length - 1];
+  // The dot marks the newest sample, so a missing final sample draws none
+  // rather than promoting an older one.
+  const lastRun = finite(list[list.length - 1]) ? runs[runs.length - 1] : undefined;
   const lastPoint = lastRun?.[lastRun.length - 1];
   const label = nonEmpty(ariaLabel);
   return (
     <svg
+      {...pickRootProps(rest)}
       viewBox={`0 0 ${VIEW_WIDTH} ${px}`}
       preserveAspectRatio="none"
       width="100%"

@@ -33,6 +33,9 @@ function installHostStyles(): void {
     SEARCH_FIELD_CSS,
     "@layer components { .toolbar-icon-button { display: inline-flex; } .palette-row { display: flex; } }",
     ".border-divider { border-color: var(--border-divider); }",
+    // A host class that styles only inside host chrome; a plugin class of the
+    // same name elsewhere is not styled by it.
+    ".host-toolbar .status { color: red; } .status.host-only::before { content: ''; }",
   ]) {
     const style = document.createElement("style");
     style.textContent = css;
@@ -110,5 +113,71 @@ describe("getPluginStyleReportForRoots with kit markup", () => {
     sheet.deleteRule(0);
     expect((await getPluginStyleReportForRoots([root]))?.notGenerated).toEqual(["late-host-class"]);
     style.remove();
+  });
+
+  it("still reports a plugin class that collides with a host class the host styles elsewhere", async () => {
+    const root = renderPluginRoot();
+    const mine = document.createElement("span");
+    mine.className = "status";
+    root.appendChild(mine);
+    await vi.waitFor(() => {
+      if (!root.querySelector(".search-field")) throw new Error("kit not rendered");
+    });
+    const report = await getPluginStyleReportForRoots([root]);
+    expect(report?.notGenerated).toContain("status");
+    expect(report?.generated).toContain("search-field");
+  });
+
+  it("counts a host class where the host's rule selects the element carrying it", async () => {
+    const toolbar = document.createElement("div");
+    toolbar.className = "host-toolbar";
+    const status = document.createElement("span");
+    status.className = "status";
+    toolbar.appendChild(status);
+    document.body.appendChild(toolbar);
+    const report = await getPluginStyleReportForRoots([status]);
+    expect(report?.generated).toEqual(["status"]);
+    toolbar.remove();
+  });
+
+  it("reads classes as selector tokens and relaxes negated states", async () => {
+    const style = document.createElement("style");
+    style.textContent =
+      '[data-kind=".quoted-class"] { color: red; } [data-kind="] .quoted-class"] { color: red; } .calm-class:not(:hover) { color: red; }';
+    document.head.appendChild(style);
+    try {
+      const quoted = document.createElement("span");
+      quoted.className = "quoted-class";
+      quoted.setAttribute("data-kind", ".quoted-class");
+      const calm = document.createElement("span");
+      calm.className = "calm-class";
+      const report = await getPluginStyleReportForRoots([quoted, calm]);
+      expect(report?.notGenerated).toContain("quoted-class");
+      expect(report?.generated).toContain("calm-class");
+    } finally {
+      style.remove();
+    }
+  });
+
+  it("re-reads a constructed sheet replaced in place with the same rule count", async () => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(".replaced-host-class { color: red; }");
+    Object.defineProperty(document, "adoptedStyleSheets", {
+      configurable: true,
+      value: [sheet],
+    });
+    try {
+      const root = document.createElement("div");
+      root.className = "replaced-host-class";
+      expect((await getPluginStyleReportForRoots([root]))?.generated).toEqual([
+        "replaced-host-class",
+      ]);
+      sheet.replaceSync(".some-other-class { color: red; }");
+      expect((await getPluginStyleReportForRoots([root]))?.notGenerated).toEqual([
+        "replaced-host-class",
+      ]);
+    } finally {
+      delete (document as { adoptedStyleSheets?: unknown }).adoptedStyleSheets;
+    }
   });
 });

@@ -2,6 +2,7 @@ import { useId } from "react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import type { RootAttributes } from "@/components/ui/rootAttributes";
 
 interface SettingsSectionProps {
   title: string;
@@ -16,6 +17,8 @@ interface SettingsSectionProps {
   /** Section-level control pinned to the right of the heading (a wizard, an "Add" button). */
   action?: ReactNode;
   className?: string;
+  /** `id`, `data-*` or `aria-*` on the root; the component's own attributes win. */
+  rootAttributes?: RootAttributes;
 }
 
 /**
@@ -34,6 +37,7 @@ export function SettingsSection({
   badge,
   action,
   className,
+  rootAttributes,
 }: SettingsSectionProps) {
   const headingId = useId();
 
@@ -41,6 +45,7 @@ export function SettingsSection({
     // A group, not a <section>: a named section is a region landmark, and thirty of
     // them per page would bury the dialog's real landmarks for screen-reader users.
     <div
+      {...rootAttributes}
       className={cn("settings-section grid grid-cols-[minmax(0,1fr)] gap-3 scroll-mt-6", className)}
       id={id}
       role="group"

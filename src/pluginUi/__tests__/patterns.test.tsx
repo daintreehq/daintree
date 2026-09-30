@@ -45,7 +45,7 @@ function renderLoose<P extends object>(component: ComponentType<P>, looseProps: 
 
 const TEN_THOUSAND = Array.from({ length: 10_000 }, (_, i) => ({ id: `r${i}`, name: `Row ${i}` }));
 
-describe("@daintreehq/plugin-ui 1.1 lists", () => {
+describe("@daintreehq/plugin-ui lists", () => {
   it("mounts only the visible window of a 10k-item VirtualList", () => {
     const { container } = render(
       inViewport(
@@ -318,7 +318,7 @@ describe("@daintreehq/plugin-ui 1.1 lists", () => {
   });
 });
 
-describe("@daintreehq/plugin-ui 1.1 pane chrome and states", () => {
+describe("@daintreehq/plugin-ui pane chrome and states", () => {
   it("renders a PaneHeader with a roving Toolbar of ToolbarButtons", () => {
     const onRefresh = vi.fn();
     render(
@@ -423,7 +423,7 @@ describe("@daintreehq/plugin-ui 1.1 pane chrome and states", () => {
   });
 });
 
-describe("@daintreehq/plugin-ui 1.1 forms and settings", () => {
+describe("@daintreehq/plugin-ui forms and settings", () => {
   it("wires a FormField's label, description and error to kit controls", () => {
     render(
       createElement(

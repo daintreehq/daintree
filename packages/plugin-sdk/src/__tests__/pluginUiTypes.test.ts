@@ -204,7 +204,7 @@ export const labels: string[] = [
   formatDuration(90_000),
 ];
 
-// Added in 1.2.
+// Avatars, popovers and hints.
 import * as ui from "@daintreehq/plugin-ui";
 
 export const ready: Promise<void> = ui.whenPluginUiReady();
@@ -277,7 +277,7 @@ export const bone = createElement(ui.SkeletonBone, { immediate: true });
 const newIcon: ui.IconName = "user-plus";
 export const newIcons = createElement(ui.Icon, { name: newIcon });
 
-// 1.3
+// File trees, stat cards, sparklines and field groups.
 const walked: ui.FileTreeEntry[] = [{ path: "src/a.ts", type: "file" }, { path: "src", type: "dir" }];
 export const tree = createElement(ui.FileTree, {
   entries: walked,
@@ -307,6 +307,17 @@ export const startMarkdown = createElement(ui.Markdown, { source: "x", align: "s
 export const badAlign = createElement(ui.Markdown, { source: "x", align: "right" });
 const growColumn: ui.DataTableColumn<{ id: string }> = { id: "id", header: "Id", grow: true };
 void growColumn;
+
+// Root attributes: \`id\` and \`data-*\` everywhere, \`aria-*\` where the root is the control.
+export const selectId = createElement(ui.Select, { options: [], "aria-label": "Pick", "data-testid": "pick" });
+export const segmentedId = createElement(ui.SegmentedControl, { options: [], value: "", onValueChange: () => {}, "aria-label": "Mode", "data-testid": "mode", "aria-describedby": "hint" });
+export const emptyId = createElement(ui.EmptyState, { title: "None", id: "empty", "data-testid": "empty" });
+export const logId = createElement(ui.LogView, { lines: [], "aria-label": "Log", "data-testid": "log" });
+export const progressId = createElement(ui.ProgressBar, { label: "Build", "data-testid": "build", "aria-describedby": "hint" });
+export const copyId = createElement(ui.CopyButton, { text: "x", "aria-label": "Copy", "data-testid": "copy" });
+export const labelledCopyId = createElement(ui.CopyButton, { text: "x", label: "Copy path", "data-testid": "copy-path" });
+// @ts-expect-error an EmptyState's root is not the control; it takes no aria-*
+export const emptyAria = createElement(ui.EmptyState, { title: "None", "aria-describedby": "hint" });
 `;
 
 let consumerDir: string;

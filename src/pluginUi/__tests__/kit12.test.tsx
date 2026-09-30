@@ -30,7 +30,7 @@ function withTooltips(child: ReturnType<typeof createElement>) {
   return createElement(TooltipProvider, null, child);
 }
 
-describe("@daintreehq/plugin-ui 1.2 readiness", () => {
+describe("@daintreehq/plugin-ui readiness", () => {
   it("resolves whenPluginUiReady and renders synchronously after it", async () => {
     kit.preloadPluginUi();
     await expect(kit.whenPluginUiReady()).resolves.toBeUndefined();
@@ -40,7 +40,7 @@ describe("@daintreehq/plugin-ui 1.2 readiness", () => {
   });
 });
 
-describe("@daintreehq/plugin-ui 1.2 additions", () => {
+describe("@daintreehq/plugin-ui avatars, popovers and hints", () => {
   it("adds the icons the builtin migrations needed", () => {
     for (const name of [
       "user-plus",

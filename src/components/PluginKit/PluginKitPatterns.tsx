@@ -65,6 +65,7 @@ import {
   nonEmpty,
   oneOf,
   pickDomProps,
+  pickRootProps,
   PluginStyleScope,
   positive,
   str,
@@ -84,10 +85,21 @@ function sizedIcon(source: unknown, className: string): ReactNode {
   ) : null;
 }
 
-function KitPaneHeader({ title, icon, subtitle, actions, className }: PluginPaneHeaderProps) {
+function KitPaneHeader({
+  title,
+  icon,
+  subtitle,
+  actions,
+  className,
+  ...rest
+}: PluginPaneHeaderProps) {
   const trailing = content(actions);
   return (
-    <SurfaceHeader density="compact" className={cn("gap-2", str(className))}>
+    <SurfaceHeader
+      {...pickRootProps(rest)}
+      density="compact"
+      className={cn("gap-2", str(className))}
+    >
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
         {sizedIcon(icon, "h-4 w-4 text-text-secondary")}
         <h2 className="min-w-0 truncate text-xs font-medium text-text-primary">{node(title)}</h2>
@@ -102,11 +114,18 @@ function KitPaneHeader({ title, icon, subtitle, actions, className }: PluginPane
   );
 }
 
-function KitToolbar({ children, "aria-label": ariaLabel, variant, className }: PluginToolbarProps) {
+function KitToolbar({
+  children,
+  "aria-label": ariaLabel,
+  variant,
+  className,
+  ...rest
+}: PluginToolbarProps) {
   const ref = useRef<HTMLDivElement>(null);
   const onKeyDown = useToolbarRoving(ref);
   return (
     <div
+      {...pickRootProps(rest, { aria: true })}
       ref={ref}
       role="toolbar"
       aria-label={str(ariaLabel) ?? ""}
@@ -134,6 +153,7 @@ function KitToolbarButton({
   disabled,
   tooltip,
   tooltipSide,
+  ...rest
 }: PluginToolbarButtonProps) {
   const overlayZ = useKitOverlayZClass();
   const text = nonEmpty(label);
@@ -143,6 +163,7 @@ function KitToolbarButton({
   const isToggle = typeof pressed === "boolean";
   const button = (
     <button
+      {...pickRootProps(rest, { aria: true })}
       type="button"
       aria-label={text ? name : (name ?? "")}
       aria-pressed={isToggle ? pressed : undefined}
@@ -187,12 +208,15 @@ function KitPaneState({
   retryLabel,
   onCancel,
   className,
+  ...rest
 }: PluginPaneStateProps) {
+  const rootAttributes = pickRootProps(rest);
   const state = oneOf(kind, ["loading", "empty", "error"] as const) ?? "empty";
   const heading = str(title) ?? "";
   if (state === "loading") {
     return (
       <PaneLoadingState
+        rootAttributes={rootAttributes}
         variant="full"
         isLoading
         phaseLabel={heading || "Loading"}
@@ -211,6 +235,7 @@ function KitPaneState({
   );
   return (
     <PaneState
+      rootAttributes={rootAttributes}
       inFlow
       className={cn("h-full", str(className))}
       live={isError ? "alert" : "status"}
@@ -269,6 +294,7 @@ function KitFormField({
   disabled,
   children,
   className,
+  ...rest
 }: PluginFormFieldProps) {
   const layout = oneOf(orientation, ["vertical", "horizontal"] as const) ?? "vertical";
   const control =
@@ -288,6 +314,7 @@ function KitFormField({
   );
   return (
     <Field
+      {...pickRootProps(rest)}
       orientation={layout}
       controlId={nonEmpty(htmlFor)}
       disabled={disabled === true}
@@ -316,6 +343,7 @@ function KitFormFieldGroup({
   layout,
   children,
   className,
+  ...rest
 }: PluginFormFieldGroupProps) {
   const baseId = useId();
   const labelId = `${baseId}label`;
@@ -327,6 +355,7 @@ function KitFormFieldGroup({
   const describedBy = [errorId, requiredId, descriptionId].filter(Boolean).join(" ") || undefined;
   return (
     <fieldset
+      {...pickRootProps(rest)}
       disabled={inert}
       aria-labelledby={labelId}
       aria-describedby={describedBy}
@@ -438,6 +467,7 @@ function KitTabs({
   density,
   className,
   panelClassName,
+  ...rest
 }: PluginTabsProps) {
   const baseId = useId();
   const tabs = readTabs(items);
@@ -462,7 +492,7 @@ function KitTabs({
   const panel =
     typeof children === "function" ? node(children(active)) : (mapped ?? node(children));
   return (
-    <div className={cn("flex min-h-0 flex-col", str(className))}>
+    <div {...pickRootProps(rest)} className={cn("flex min-h-0 flex-col", str(className))}>
       <div className="border-b border-border-default">
         <UnderlineTabs
           tabs={strip}
@@ -494,6 +524,7 @@ function KitProgressBar({
   valueText,
   size,
   className,
+  ...rest
 }: PluginProgressBarProps) {
   const fraction =
     indeterminate !== true && typeof value === "number" && Number.isFinite(value)
@@ -501,6 +532,7 @@ function KitProgressBar({
       : null;
   return (
     <ProgressBar
+      rootAttributes={pickRootProps(rest, { aria: true })}
       value={fraction === null ? null : fraction * 100}
       max={100}
       label={nonEmpty(label) ?? "Progress"}
@@ -518,9 +550,11 @@ function KitSettingsSection({
   badge,
   id,
   children,
+  ...rest
 }: PluginSettingsSectionProps) {
   return (
     <SettingsSection
+      rootAttributes={pickRootProps(rest)}
       title={str(title) ?? ""}
       description={content(description)}
       action={content(action)}
@@ -532,9 +566,9 @@ function KitSettingsSection({
   );
 }
 
-function KitSettingsGroup({ label, id, children }: PluginSettingsGroupProps) {
+function KitSettingsGroup({ label, id, children, ...rest }: PluginSettingsGroupProps) {
   return (
-    <SettingsGroup label={nonEmpty(label)} id={nonEmpty(id)}>
+    <SettingsGroup rootAttributes={pickRootProps(rest)} label={nonEmpty(label)} id={nonEmpty(id)}>
       {node(children)}
     </SettingsGroup>
   );
@@ -552,6 +586,7 @@ function KitSettingsRow({
   isModified,
   onReset,
   id,
+  ...rest
 }: PluginSettingsRowProps) {
   const renderControl =
     typeof control === "function"
@@ -559,6 +594,7 @@ function KitSettingsRow({
       : content(control);
   return (
     <SettingsRow
+      rootAttributes={pickRootProps(rest)}
       label={node(label)}
       labelText={str(label)}
       description={content(description)}
@@ -575,8 +611,12 @@ function KitSettingsRow({
   );
 }
 
-function KitSettingsActions({ children, status }: PluginSettingsActionsProps) {
-  return <SettingsActions status={content(status)}>{node(children)}</SettingsActions>;
+function KitSettingsActions({ children, status, ...rest }: PluginSettingsActionsProps) {
+  return (
+    <SettingsActions rootAttributes={pickRootProps(rest)} status={content(status)}>
+      {node(children)}
+    </SettingsActions>
+  );
 }
 
 const LIST_ROW_BOX =
@@ -685,12 +725,14 @@ function KitSeverityIcon({
   size,
   "aria-label": ariaLabel,
   className,
+  ...rest
 }: PluginSeverityIconProps) {
   const { Icon, toneClass } = SEVERITY_ICON[oneOf(severity, SEVERITIES) ?? "neutral"];
   const px = positive(size, 512) ?? 16;
   const label = nonEmpty(ariaLabel);
   return (
     <Icon
+      {...pickRootProps(rest)}
       width={px}
       height={px}
       className={cn("shrink-0", toneClass, str(className))}

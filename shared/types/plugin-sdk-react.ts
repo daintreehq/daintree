@@ -82,7 +82,7 @@ export interface PluginMarkdownProps {
    * `center` (the default) centres the document's reading measure in its
    * container, as Daintree's own document views do. `start` keeps the measure
    * but sets it against the leading edge, in line with the controls above it:
-   * for a preview inside a form or an editor. Added in 1.3.
+   * for a preview inside a form or an editor.
    */
   align?: "center" | "start";
 }
@@ -106,6 +106,23 @@ export interface PluginDomProps<T extends Element = HTMLElement>
   [dataAttribute: `data-${string}`]: string | number | boolean | undefined;
   ref?: Ref<T>;
 }
+
+/**
+ * What every other non-portalled kit component forwards to its root element:
+ * an `id` and any `data-*` attribute (`data-testid`, say). The component's own
+ * attributes win where they overlap.
+ */
+export interface PluginRootAttributes {
+  id?: string;
+  [dataAttribute: `data-${string}`]: string | number | boolean | undefined;
+}
+
+/**
+ * {@link PluginRootAttributes} plus any `aria-*` attribute, for a component
+ * whose root is the control itself. An attribute the component sets (its
+ * name, its state) wins over one passed here.
+ */
+export interface PluginAriaRootAttributes extends PluginRootAttributes, AriaAttributes {}
 
 /**
  * The icon names `Icon` (and every kit prop that takes an icon) can draw.
@@ -271,7 +288,7 @@ export type PluginIconName =
   | "zap";
 
 /** Props of `Icon`. */
-export interface PluginIconProps {
+export interface PluginIconProps extends PluginRootAttributes {
   name: PluginIconName;
   /** Square size in px. Defaults to 16. Inside a kit `Button` the button sizes it. */
   size?: number;
@@ -296,7 +313,7 @@ export type PluginButtonVariant =
   | "destructive"
   | "ghost-danger"
   | "link"
-  /** A rounded, quiet chip-shaped button: a floating toolbar or a status strip's control. Added in 1.2. */
+  /** A rounded, quiet chip-shaped button: a floating toolbar or a status strip's control. */
   | "pill";
 
 /** Props of `Button`. */
@@ -369,7 +386,6 @@ export interface PluginTruncatedTooltipProps {
   /**
    * Overrides the overflow check, for text your code shortens itself (a
    * middle-elided path): `true` always offers the tooltip, `false` never does.
-   * Added in 1.2.
    */
   isTruncated?: boolean;
 }
@@ -377,13 +393,13 @@ export interface PluginTruncatedTooltipProps {
 export type PluginSpinnerSize = "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
 
 /** Props of `Spinner`. Decorative: say what is loading in text beside it. */
-export interface PluginSpinnerProps {
+export interface PluginSpinnerProps extends PluginRootAttributes {
   size?: PluginSpinnerSize;
   className?: string;
 }
 
 /** Props of `SpinningIcon`: an icon that finishes its current turn before it stops. */
-export interface PluginSpinningIconProps {
+export interface PluginSpinningIconProps extends PluginRootAttributes {
   icon: PluginIconName;
   /** True while the operation runs. It always plays at least one full turn. */
   active: boolean;
@@ -429,7 +445,7 @@ export interface PluginCheckboxProps extends PluginDomProps<HTMLButtonElement> {
 /** Props of `Input`, a single-line text field. */
 export interface PluginInputProps extends PluginDomProps<HTMLInputElement> {
   /**
-   * `date`, `time` and `datetime-local` (added in 1.2) use the platform's
+   * `date`, `time` and `datetime-local` use the platform's
    * picker, drawn in the active theme's light or dark scheme; `value` is the
    * ISO form (`"2026-09-30"`, `"14:05"`, `"2026-09-30T14:05"`).
    */
@@ -495,7 +511,7 @@ export interface PluginSelectOption {
   label: string;
   /** A second line under the label (`Select` only). */
   description?: string;
-  /** A leading glyph, shown in the list and on the trigger (`Select` only). Added in 1.2. */
+  /** A leading glyph, shown in the list and on the trigger (`Select` only). */
   icon?: PluginIconName;
   disabled?: boolean;
 }
@@ -507,7 +523,7 @@ export interface PluginSelectOptionGroup {
 }
 
 /** Props of `Select`. The list opens in a host overlay, so only the trigger takes classes. */
-export interface PluginSelectProps {
+export interface PluginSelectProps extends PluginAriaRootAttributes {
   options: readonly (PluginSelectOption | PluginSelectOptionGroup)[];
   /**
    * The chosen value, controlled. Passing the prop at all makes the Select
@@ -543,7 +559,7 @@ export interface PluginSegmentedOption {
 }
 
 /** Props of `SegmentedControl`: pick exactly one of a few options. */
-export interface PluginSegmentedControlProps {
+export interface PluginSegmentedControlProps extends PluginAriaRootAttributes {
   options: readonly PluginSegmentedOption[];
   value: string;
   onValueChange: (value: string) => void;
@@ -558,15 +574,15 @@ export interface PluginSegmentedControlProps {
 }
 
 /** Props of `Kbd`: one literal key cap. */
-export interface PluginKbdProps {
+export interface PluginKbdProps extends PluginRootAttributes {
   children: ReactNode;
-  /** `compact` for a dense one-line row, the same box `KbdChord` draws. Added in 1.2. */
+  /** `compact` for a dense one-line row, the same box `KbdChord` draws. */
   density?: "default" | "compact";
   className?: string;
 }
 
 /** Props of `KbdChord`: a shortcut drawn the platform's way. */
-export interface PluginKbdChordProps {
+export interface PluginKbdChordProps extends PluginRootAttributes {
   /** The canonical combo, e.g. `"Cmd+Shift+P"` or a two-step `"Cmd+K T"`. */
   shortcut: string;
   /** `compact` for dense rows; `bare` drops the key boxes where every row has a binding. */
@@ -577,7 +593,7 @@ export interface PluginKbdChordProps {
   className?: string;
 }
 
-interface PluginCopyButtonBaseProps {
+interface PluginCopyButtonBaseProps extends PluginAriaRootAttributes {
   /** The text to copy, or a function read at click time. A throw counts as a failed copy. */
   text: string | (() => string | Promise<string>);
   tooltip?: ReactNode;
@@ -585,7 +601,7 @@ interface PluginCopyButtonBaseProps {
   onCopied?: () => void;
   /** Report the failure yourself; the button then stays quiet about it. */
   onCopyError?: (error: unknown) => void;
-  /** Spoken politely after a successful copy ("Path copied"). Defaults to "Copied". Added in 1.2. */
+  /** Spoken politely after a successful copy ("Path copied"). Defaults to "Copied". */
   announcement?: string;
   disabled?: boolean;
   className?: string;
@@ -607,7 +623,7 @@ export type PluginCopyButtonProps =
     });
 
 /** Props of `DismissButton`, the X that closes a card, banner or hint. */
-export interface PluginDismissButtonProps {
+export interface PluginDismissButtonProps extends PluginAriaRootAttributes {
   /** Names what goes away ("Dismiss tip"), not just "Dismiss". */
   "aria-label": string;
   onClick: () => void;
@@ -622,8 +638,8 @@ export type PluginCalloutSeverity = "error" | "warning" | "danger" | "success" |
 
 /**
  * Props of `Callout`, an inline message box. The glyph follows the severity.
- * DOM props (`id`, `role`, `aria-*`, `data-*`, handlers) land on its root; since
- * 1.2 that includes `role="alert"` or `role="status"` for a message that should
+ * DOM props (`id`, `role`, `aria-*`, `data-*`, handlers) land on its root,
+ * including `role="alert"` or `role="status"` for a message that should
  * be announced.
  */
 export interface PluginCalloutProps extends Omit<PluginDomProps<HTMLDivElement>, "title"> {
@@ -634,19 +650,19 @@ export interface PluginCalloutProps extends Omit<PluginDomProps<HTMLDivElement>,
   action?: ReactNode;
   /**
    * `inline` (the default) puts `action` beside the message; `below` puts it
-   * under the text, for a long message or more than one control. Added in 1.2.
+   * under the text, for a long message or more than one control.
    */
   actionPlacement?: "inline" | "below";
-  /** Draws the dismiss X, which calls this. Added in 1.2. */
+  /** Draws the dismiss X, which calls this. */
   onDismiss?: () => void;
-  /** Names the dismiss X ("Dismiss warning"). Defaults to "Dismiss". Added in 1.2. */
+  /** Names the dismiss X ("Dismiss warning"). Defaults to "Dismiss". */
   dismissLabel?: string;
   /**
    * `box` (the default) sits among content. `strip` is the full-width band
    * across the top of a pane or popover, Daintree's pane banner: `title` is its
    * headline and `children` one line under it. A strip never stands green:
    * `success` draws as a neutral strip with the check glyph. A strip forwards
-   * `role`, `aria-live` and `data-testid` only. Added in 1.2.
+   * `role`, `aria-live` and `data-testid` only.
    */
   variant?: "box" | "strip";
   /** A domain glyph in place of the info mark, for `neutral` only. */
@@ -656,7 +672,7 @@ export interface PluginCalloutProps extends Omit<PluginDomProps<HTMLDivElement>,
 }
 
 /** Props of `EmptyState`. */
-export interface PluginEmptyStateProps {
+export interface PluginEmptyStateProps extends PluginRootAttributes {
   title: string;
   /**
    * `zero-data`: nothing here yet (invites an action). `filtered-empty`: a
@@ -674,7 +690,7 @@ export interface PluginEmptyStateProps {
 }
 
 /** Props of `Skeleton`, the accessible loading region that holds skeleton bones. */
-export interface PluginSkeletonProps {
+export interface PluginSkeletonProps extends PluginRootAttributes {
   children?: ReactNode;
   /** Spoken while loading. Defaults to "Loading". */
   label?: string;
@@ -682,21 +698,21 @@ export interface PluginSkeletonProps {
 }
 
 /** Props of `SkeletonBone`, one placeholder shape. Appears after a short delay to avoid flicker. */
-export interface PluginSkeletonBoneProps {
+export interface PluginSkeletonBoneProps extends PluginRootAttributes {
   className?: string;
   /** Fixed height, so nothing shifts when the content arrives. */
   heightPx?: number;
   shimmer?: boolean;
-  /** Skip the anti-flicker delay: for a placeholder that replaces content already on screen. Added in 1.2. */
+  /** Skip the anti-flicker delay: for a placeholder that replaces content already on screen. */
   immediate?: boolean;
 }
 
 /** Props of `SkeletonText`, ragged placeholder lines. */
-export interface PluginSkeletonTextProps {
+export interface PluginSkeletonTextProps extends PluginRootAttributes {
   /** Defaults to 3. */
   lines?: number;
   shimmer?: boolean;
-  /** As on `SkeletonBone`. Added in 1.2. */
+  /** As on `SkeletonBone`. */
   immediate?: boolean;
   className?: string;
 }
@@ -705,9 +721,9 @@ export interface PluginSkeletonTextProps {
  * Props of `SkeletonHint`, the companion to a `Skeleton` for a long load: it
  * stays invisible for 8 seconds, then says "Still working…", escalates, and
  * offers Cancel and later Retry when you pass them. Place it beside the
- * `Skeleton`, never inside it (both are live regions). Added in 1.2.
+ * `Skeleton`, never inside it (both are live regions).
  */
-export interface PluginSkeletonHintProps {
+export interface PluginSkeletonHintProps extends PluginRootAttributes {
   /** Your own progress line ("Fetching 3 of 12 files…") in place of the generic copy. */
   message?: string;
   /** Surfaces Cancel with the first hint. */
@@ -725,7 +741,7 @@ export interface PluginSkeletonHintProps {
 
 /**
  * Props of `ScrollShadow`: a vertical scroller with fades that show there is
- * more. Since 1.2 the DOM props (`id`, `role`, `tabIndex`, `aria-*`, `data-*`,
+ * more. The DOM props (`id`, `role`, `tabIndex`, `aria-*`, `data-*`,
  * handlers) land on the scrolling element, so it can be a listbox. For a
  * windowed list, use `VirtualList` with `shadows` instead.
  */
@@ -780,7 +796,7 @@ export type PluginDropdownMenuEntry =
       disabled?: boolean;
     }
   | {
-      /** One choice from several, each a radio row with a check on the chosen one. Added in 1.2. */
+      /** One choice from several, each a radio row with a check on the chosen one. */
       type: "radio-group";
       value: string;
       onValueChange: (value: string) => void;
@@ -812,14 +828,13 @@ export interface PluginDropdownMenuProps {
   /**
    * Runs as the menu closes, before focus returns to the trigger. Call
    * `event.preventDefault()` to keep focus where your handler moved it.
-   * Added in 1.2.
    */
   onCloseAutoFocus?: (event: Event) => void;
   /**
    * Stops clicks, pointer and key events inside the menu from reaching the
    * view's own handlers. React events travel up through the overlay to the
    * trigger's ancestors, so a menu on a clickable row would otherwise also
-   * activate the row. Added in 1.2.
+   * activate the row.
    */
   stopPropagation?: boolean;
 }
@@ -833,12 +848,12 @@ export interface PluginDialogAction {
   /**
    * `primaryAction` only: why it is unavailable. Shown as the footer's hint
    * while `disabled` (when the dialog has no `hint` of its own) and read with
-   * the button. Added in 1.2.
+   * the button.
    */
   disabledReason?: ReactNode;
   loading?: boolean;
   intent?: "default" | "destructive";
-  /** A leading glyph. Added in 1.2. */
+  /** A leading glyph. */
   icon?: PluginIconSource;
 }
 
@@ -855,7 +870,7 @@ export interface PluginDialogProps {
   title: ReactNode;
   /**
    * The title's glyph: a name, or your own element (a kit `Spinner` while it
-   * works, a status-coloured `Icon` when it is done). An element since 1.2.
+   * works, a status-coloured `Icon` when it is done).
    */
   icon?: PluginIconSource;
   description?: ReactNode;
@@ -868,14 +883,13 @@ export interface PluginDialogProps {
   /**
    * Your own footer controls in place of `primaryAction`/`secondaryAction`,
    * right-aligned after the `hint`: kit `Button`s, the primary last and
-   * `contrast`. Added in 1.2.
+   * `contrast`.
    */
   footer?: ReactNode;
   /** False blocks Escape, the backdrop and the close button. Defaults to true. */
   dismissible?: boolean;
-  /** Added in 1.2. */
   layer?: PluginDialogLayer;
-  /** On the dialog's root, for tests. Added in 1.2. */
+  /** On the dialog's root, for tests. */
   "data-testid"?: string;
 }
 
@@ -891,20 +905,19 @@ export interface PluginConfirmDialogProps {
   confirmLabel: string;
   cancelLabel?: string;
   variant?: "default" | "destructive" | "info";
-  /** A name, or your own element since 1.2. */
+  /** A name, or your own element. */
   icon?: PluginIconSource;
   /** The confirm is running: spinner on the button, dialog locked. */
   loading?: boolean;
   confirmDisabled?: boolean;
   /** `destructive` only: the user must type this exact text to enable the confirm. */
   typedNameTarget?: string;
-  /** A subdued line beside the buttons: why the confirm is unavailable, say. Added in 1.2. */
+  /** A subdued line beside the buttons: why the confirm is unavailable, say. */
   hint?: ReactNode;
-  /** Added in 1.2. */
   layer?: PluginDialogLayer;
 }
 
-// Kit 1.1: lists, pane chrome, forms, settings grammar and severity.
+// Lists, pane chrome, forms, settings grammar and severity.
 
 /**
  * Props of `VirtualList`: a windowed list that mounts only the rows in view,
@@ -936,7 +949,7 @@ export interface PluginVirtualListProps<T = unknown> extends PluginDomProps<HTML
   /**
    * Edge fades that show there is more above or below, as `ScrollShadow`
    * draws. The list then sits in a positioned wrapper that fills its
-   * container. Added in 1.2.
+   * container.
    */
   shadows?: boolean;
   /** Required: names the list for assistive tech. */
@@ -953,13 +966,13 @@ export interface PluginDataTableColumn<T = unknown> {
   /**
    * Fixed width: px as a number, or any CSS length. Columns without one share
    * the rest, up to 480px each; space beyond that is left at the table's
-   * trailing edge rather than stretching one column across it (since 1.3).
+   * trailing edge rather than stretching one column across it.
    */
   width?: number | string;
   /**
    * Takes all the width the other columns leave, with no cap: for the one
    * column that should run to the edge (a message, a path). Give the other
-   * columns widths, or they share the space with it. Added in 1.3.
+   * columns widths, or they share the space with it.
    */
   grow?: boolean;
   align?: "start" | "center" | "end";
@@ -989,7 +1002,7 @@ export interface PluginDataTableSort {
  * With `onRowClick` the table is a keyboard grid: one tab stop, Up/Down/Home/End
  * move the cursor and Enter activates the row.
  */
-export interface PluginDataTableProps<T = unknown> {
+export interface PluginDataTableProps<T = unknown> extends PluginRootAttributes {
   columns: readonly PluginDataTableColumn<T>[];
   rows: readonly T[];
   /** A stable key per row: a function, or the name of a string or number field. */
@@ -1025,7 +1038,7 @@ export interface PluginLogEntry {
  * batches (per animation frame, not per line) and drop old lines yourself if
  * you keep them in state; the view bounds the DOM, not your array.
  */
-export interface PluginLogViewProps {
+export interface PluginLogViewProps extends PluginAriaRootAttributes {
   lines: readonly (string | PluginLogEntry)[];
   /** The newest lines shown. Defaults to 5000; older lines are dropped from the view. */
   maxLines?: number;
@@ -1042,7 +1055,7 @@ export interface PluginLogViewProps {
 }
 
 /** Props of `PaneHeader`: a pane's compact title bar. */
-export interface PluginPaneHeaderProps {
+export interface PluginPaneHeaderProps extends PluginRootAttributes {
   title: ReactNode;
   icon?: PluginIconSource;
   /** One quiet line after the title: a count, a path, a filter in effect. */
@@ -1058,7 +1071,7 @@ export interface PluginPaneHeaderProps {
  * pane's toolbar strip; `inline` (the default) is the bare group, for inside a
  * `PaneHeader`.
  */
-export interface PluginToolbarProps {
+export interface PluginToolbarProps extends PluginAriaRootAttributes {
   children?: ReactNode;
   /** Required: two toolbars on screen must be told apart. */
   "aria-label": string;
@@ -1070,7 +1083,7 @@ export interface PluginToolbarProps {
  * Props of `ToolbarButton`, the in-pane toolbar control: icon-only (its
  * `aria-label` doubles as the tooltip) or, with `label`, an icon and a word.
  */
-export interface PluginToolbarButtonProps {
+export interface PluginToolbarButtonProps extends PluginAriaRootAttributes {
   icon?: PluginIconSource;
   /** Visible text. Omitted, the button is icon-only and `aria-label` names it. */
   label?: string;
@@ -1094,7 +1107,7 @@ export interface PluginToolbarButtonProps {
  * when `onRetry` is given. For an error inside content that still renders,
  * use `Callout` with `severity="error"` and a Retry `action` instead.
  */
-export interface PluginPaneStateProps {
+export interface PluginPaneStateProps extends PluginRootAttributes {
   kind: "loading" | "empty" | "error";
   /** For `loading`, the phase in words ("Loading issues"). */
   title: string;
@@ -1128,7 +1141,7 @@ export interface PluginFormFieldControlProps {
  * a control of your own, pass `children` as a function and spread the props
  * it receives onto the control; `htmlFor` alone links the label only.
  */
-export interface PluginFormFieldProps {
+export interface PluginFormFieldProps extends PluginRootAttributes {
   label: ReactNode;
   description?: ReactNode;
   /** Shown under the control, and marks the control invalid. */
@@ -1172,7 +1185,7 @@ export interface PluginTabItem {
  * Supply the active pane as `children` (a node, or a function of the value)
  * or as a `content` map by value.
  */
-export interface PluginTabsProps {
+export interface PluginTabsProps extends PluginRootAttributes {
   items: readonly PluginTabItem[];
   value: string;
   onValueChange: (value: string) => void;
@@ -1190,7 +1203,7 @@ export interface PluginTabsProps {
  * Props of `ProgressBar`. Always neutral: progress is status, not a call to
  * action, so it never takes the accent or a status colour.
  */
-export interface PluginProgressBarProps {
+export interface PluginProgressBarProps extends PluginAriaRootAttributes {
   /** 0 to 1. Omitted or `null` is indeterminate. */
   value?: number | null;
   /** Forces the indeterminate pulse whatever `value` says. */
@@ -1209,7 +1222,7 @@ export interface PluginProgressBarProps {
  * stack of sections, a section holds `SettingsGroup`s, a group holds
  * `SettingsRow`s. Sentence-case titles, no icons.
  */
-export interface PluginSettingsSectionProps {
+export interface PluginSettingsSectionProps extends PluginRootAttributes {
   title: string;
   /** What the section is for, when the title does not say it. */
   description?: ReactNode;
@@ -1222,7 +1235,7 @@ export interface PluginSettingsSectionProps {
 }
 
 /** Props of `SettingsGroup`: one surface of related rows split by hairlines. */
-export interface PluginSettingsGroupProps {
+export interface PluginSettingsGroupProps extends PluginRootAttributes {
   /** A sub-label above the surface, for a section with more than one group. */
   label?: string;
   id?: string;
@@ -1238,7 +1251,7 @@ export interface PluginSettingsRowControlIds {
 }
 
 /** Props of `SettingsRow`: one setting, its words on the left and its control on the rail. */
-export interface PluginSettingsRowProps {
+export interface PluginSettingsRowProps extends PluginRootAttributes {
   label: ReactNode;
   /** Adds information (a consequence, a default); never restates the label. */
   description?: ReactNode;
@@ -1262,7 +1275,7 @@ export interface PluginSettingsRowProps {
 }
 
 /** Props of `SettingsActions`: the last row of a group with an explicit Save. */
-export interface PluginSettingsActionsProps {
+export interface PluginSettingsActionsProps extends PluginRootAttributes {
   /** The actions, right-aligned: `contrast` Save, `outline` others, all `size="sm"`. */
   children?: ReactNode;
   /** Status on the left ("Saved"), announced politely. */
@@ -1346,7 +1359,7 @@ export type PluginSeverity = PluginCalloutSeverity;
  * error ✕-circle, warning triangle, danger octagon, success check, info and
  * neutral `i`. Pass `aria-label` when the glyph is the only statement of it.
  */
-export interface PluginSeverityIconProps {
+export interface PluginSeverityIconProps extends PluginRootAttributes {
   severity: PluginSeverity;
   /** Square size in px. Defaults to 16. */
   size?: number;
@@ -1354,13 +1367,13 @@ export interface PluginSeverityIconProps {
   className?: string;
 }
 
-// Kit 1.2: avatars, popovers and the gaps the builtin plugins hit.
+// Avatars, popovers and the gaps the builtin plugins hit.
 
 /**
  * Props of `Avatar`: a person's or bot's picture, falling back to their
  * initials when there is no `src` or it fails to load.
  */
-export interface PluginAvatarProps {
+export interface PluginAvatarProps extends PluginRootAttributes {
   /** The picture's URL. Empty or omitted draws the initials. */
   src?: string;
   /** Who it is. The accessible name, and where the initials come from. */
@@ -1418,7 +1431,7 @@ export interface PluginPopoverSearchFieldProps extends PluginDomProps<HTMLInputE
   disabled?: boolean;
 }
 
-// Kit 1.3: file trees, stat cards, sparklines and field groups.
+// File trees, stat cards, sparklines and field groups.
 
 /** One entry of a flat `FileTree` listing: the shape `host.fs.walk` returns. */
 export interface PluginFileTreeEntry {
@@ -1454,7 +1467,7 @@ export interface PluginFileTreeItem {
  * Left closes it or steps out to the parent, Enter activates, and typing
  * jumps to a matching name.
  */
-export interface PluginFileTreeProps {
+export interface PluginFileTreeProps extends PluginAriaRootAttributes {
   entries?: readonly PluginFileTreeEntry[];
   nodes?: readonly PluginFileTreeNode[];
   /** Required: names the tree for assistive tech. */
@@ -1510,7 +1523,7 @@ export interface PluginStatCardProps extends PluginDomProps<HTMLDivElement> {
  * colour. It fills its container's width. Fewer than two finite values draw
  * an empty box of the same size; a non-finite value is a gap.
  */
-export interface PluginSparklineProps {
+export interface PluginSparklineProps extends PluginRootAttributes {
   values: readonly number[];
   /** Required: the trend in words ("Events per second, last 60 s"). Empty hides it from assistive tech. */
   "aria-label": string;
@@ -1533,7 +1546,7 @@ export interface PluginSparklineProps {
  * together, such as a row of checkboxes. The label matches a `FormField`'s;
  * each control inside is its own horizontal `FormField`.
  */
-export interface PluginFormFieldGroupProps {
+export interface PluginFormFieldGroupProps extends PluginRootAttributes {
   label: ReactNode;
   description?: ReactNode;
   /** Shown under the controls. */

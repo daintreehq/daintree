@@ -74,7 +74,7 @@ export {
 } from "./format";
 
 /** The kit's contract version: additive minors, no prop removed within a major. */
-export const PLUGIN_UI_VERSION = "1.3.0";
+export const PLUGIN_UI_VERSION = "1.0.0";
 
 // Tooltips fall back to their trigger, so the control is there from the first
 // frame and only the hover card waits on the kit chunk.
@@ -165,7 +165,7 @@ export const ConfirmDialog: ComponentType<PluginConfirmDialogProps> = fromKit(
 );
 export const Icon: ComponentType<PluginIconProps> = fromKit("Icon", (kit) => kit.Icon);
 
-// 1.1: lists, pane chrome, forms, settings grammar and severity.
+// Lists, pane chrome, forms, settings grammar and severity.
 
 // The list components are generic over the row type in the public types; the
 // runtime is the same adapter whatever the rows are.
@@ -223,7 +223,7 @@ export const SeverityIcon: ComponentType<PluginSeverityIconProps> = fromKit(
   (kit) => kit.SeverityIcon
 );
 
-// 1.2: avatars, popovers and the long-load hint.
+// Avatars, popovers and the long-load hint.
 
 export const Avatar: ComponentType<PluginAvatarProps> = fromKit("Avatar", (kit) => kit.Avatar);
 export const Popover: ComponentType<PluginPopoverProps> = fromKit(
@@ -241,7 +241,7 @@ export const SkeletonHint: ComponentType<PluginSkeletonHintProps> = fromKit(
   (kit) => kit.SkeletonHint
 );
 
-// 1.3: file trees, stat cards, sparklines and field groups.
+// File trees, stat cards, sparklines and field groups.
 
 export const FileTree: ComponentType<PluginFileTreeProps> = fromKit(
   "FileTree",

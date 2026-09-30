@@ -33,9 +33,9 @@ function rowNames(container: HTMLElement): string[] {
   );
 }
 
-describe("@daintreehq/plugin-ui 1.3", () => {
-  it("reports version 1.3.0", () => {
-    expect(kit.PLUGIN_UI_VERSION).toBe("1.3.0");
+describe("@daintreehq/plugin-ui file trees, stat cards, sparklines and field groups", () => {
+  it("reports version 1.0.0", () => {
+    expect(kit.PLUGIN_UI_VERSION).toBe("1.0.0");
   });
 });
 
@@ -286,6 +286,19 @@ describe("StatCard and Sparkline", () => {
     expect(sparklineRuns([7], 24)).toEqual([]);
   });
 
+  it("draws the newest-value dot only when the final sample is present", () => {
+    const { container } = render(
+      createElement(kit.Sparkline, { values: [1, 2, Number.NaN], "aria-label": "Gap" })
+    );
+    expect(container.querySelector("polyline")).not.toBeNull();
+    expect(container.querySelector("[data-sparkline-dot]")).toBeNull();
+    cleanup();
+    const { container: present } = render(
+      createElement(kit.Sparkline, { values: [1, Number.NaN, 2, 3], "aria-label": "Recovered" })
+    );
+    expect(present.querySelector("[data-sparkline-dot]")).not.toBeNull();
+  });
+
   it("renders a labelled SVG trend in a theme colour, never accent", () => {
     const { container } = render(
       createElement(kit.Sparkline, { values: [1, 3, 2], "aria-label": "Events", height: 32 })
@@ -305,7 +318,7 @@ describe("StatCard and Sparkline", () => {
   });
 });
 
-describe("1.3 polish", () => {
+describe("kit polish", () => {
   it("centres a switch on its label line in a horizontal FormField", () => {
     const { container } = render(
       createElement(kit.FormField, {
