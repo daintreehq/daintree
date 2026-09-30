@@ -447,14 +447,22 @@ function statusFacts(value: unknown): unknown[] {
   return out;
 }
 
-// Text on a yielding side truncates when the strip runs short; an element (a
-// Button, a Tooltip target) keeps its size, so a focus ring is never clipped.
+// A yielding side gives up width from its end, as the file pane's metadata
+// run does: the earlier facts keep their words and the last text ellipsizes,
+// rather than every fact shrinking to a stub at once. An element (a Button, a
+// Tooltip target) keeps its size, so a focus ring is never clipped.
 function statusSlot(facts: unknown[], yields: boolean): ReactNode {
+  let lastText = -1;
+  facts.forEach((fact, index) => {
+    if (typeof fact === "string" || typeof fact === "number") lastText = index;
+  });
   return facts.map((fact, index) => (
     <Fragment key={index}>
       {index > 0 ? <StatusDot /> : null}
       {typeof fact === "string" || typeof fact === "number" ? (
-        <span className={yields ? "min-w-0 truncate" : undefined}>{fact}</span>
+        <span className={yields && index === lastText ? "min-w-0 truncate" : "shrink-0"}>
+          {fact}
+        </span>
       ) : (
         node(fact)
       )}
@@ -482,6 +490,10 @@ function KitStatusBar({
   const rightFacts = statusFacts(right);
   const hasCenter = centerFacts.length > 0;
   const frame = comfortable ? FILE_METADATA_STRIP_CLASS : PANE_STATUS_FOOTER_CLASS;
+  // The compact strip's 24px floor already holds a line of its text; its
+  // padding would only add height around an `xs` control, so it goes, as the
+  // host drops it on strips that carry buttons.
+  const pad = comfortable ? undefined : "py-0";
   // Each geometry keeps its own hairline ink; placement only picks the edge.
   const ink = comfortable ? "border-border-default" : "border-divider";
   return (
@@ -490,6 +502,7 @@ function KitStatusBar({
       data-status-bar=""
       className={cn(
         frame,
+        pad,
         top ? "border-t-0 border-b" : "border-b-0 border-t",
         ink,
         "min-w-0",
@@ -499,7 +512,7 @@ function KitStatusBar({
       <div
         data-status-bar-slot="left"
         className={cn(
-          "flex min-w-0 items-center gap-1.5 whitespace-nowrap",
+          "flex min-w-0 items-center gap-1.5 overflow-clip whitespace-nowrap [overflow-clip-margin:4px]",
           hasCenter ? "flex-1 basis-0" : "flex-1"
         )}
       >
@@ -508,7 +521,7 @@ function KitStatusBar({
       {hasCenter ? (
         <div
           data-status-bar-slot="center"
-          className="flex min-w-0 shrink items-center justify-center gap-1.5 whitespace-nowrap"
+          className="flex min-w-0 shrink items-center justify-center gap-1.5 overflow-clip whitespace-nowrap [overflow-clip-margin:4px]"
         >
           {statusSlot(centerFacts, true)}
         </div>
@@ -854,6 +867,9 @@ function KitOverflowToolbar({
   const moreRef = useRef<HTMLButtonElement>(null);
   const foldedRef = useRef<ReadonlySet<string>>(new Set());
   const pendingFocus = useRef<PendingFocus | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const skipCloseFocus = useRef(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const onKeyDown = useToolbarRoving(rootRef);
   const overlayZ = useKitOverlayZClass();
   const owner = useKitOwnerAttributes();
@@ -911,7 +927,24 @@ function KitOverflowToolbar({
     // because everything fits again, would drop focus to the page: hand it
     // to where that control now lives.
     const active = document.activeElement;
-    if (active instanceof HTMLElement && region.contains(active)) {
+    const inMenu = active instanceof HTMLElement && menuRef.current?.contains(active) === true;
+    if (inMenu) {
+      // Focus is in the open menu. When the row it sits on (or the whole
+      // menu) returns to the strip, the menu closes and focus follows the
+      // control there instead of falling to the page with the unmounted row.
+      const menuId = active.closest<HTMLElement>("[data-overflow-menu-id]")?.dataset.overflowMenuId;
+      const back =
+        menuId !== undefined && !nextFolded.has(menuId)
+          ? menuId
+          : nextFolded.size === 0
+            ? ids.find((id) => previous.has(id))
+            : undefined;
+      if (back !== undefined) {
+        pendingFocus.current = { kind: "action", id: back };
+        skipCloseFocus.current = true;
+        setMenuOpen(false);
+      }
+    } else if (active instanceof HTMLElement && region.contains(active)) {
       const focusedId = active.dataset.overflowId;
       if (focusedId !== undefined && nextFolded.has(focusedId)) {
         pendingFocus.current = { kind: "more" };
@@ -999,7 +1032,7 @@ function KitOverflowToolbar({
         ref={regionRef}
         data-overflow-region=""
         className={cn(
-          "flex min-w-0 flex-1 items-center overflow-hidden",
+          "toolbar-measured-row flex min-w-0 flex-1 items-center",
           bar ? "gap-1.5" : "gap-0.5"
         )}
       >
@@ -1025,7 +1058,7 @@ function KitOverflowToolbar({
           )
         )}
         {hidden.length > 0 ? (
-          <DropdownMenu>
+          <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
             <Tooltip>
               <TooltipTrigger asChild>
                 <DropdownMenuTrigger asChild>
@@ -1046,6 +1079,15 @@ function KitOverflowToolbar({
             </Tooltip>
             <DropdownMenuContent
               {...owner}
+              ref={menuRef}
+              onCloseAutoFocus={(event) => {
+                // A handoff closed the menu and already put focus on the
+                // control; Radix would restore to the trigger after the exit
+                // animation and pull it back.
+                if (!skipCloseFocus.current) return;
+                skipCloseFocus.current = false;
+                event.preventDefault();
+              }}
               align="end"
               aria-label={moreName}
               className={cn("min-w-[200px]", overlayZ)}
@@ -1065,6 +1107,7 @@ function KitOverflowToolbar({
                   return (
                     <DropdownMenuCheckboxItem
                       key={entry.id}
+                      data-overflow-menu-id={entry.id}
                       checked={entry.pressed}
                       disabled={entry.disabled}
                       onCheckedChange={() => entry.onSelect?.()}
@@ -1077,6 +1120,7 @@ function KitOverflowToolbar({
                 return (
                   <DropdownMenuItem
                     key={entry.id}
+                    data-overflow-menu-id={entry.id}
                     disabled={entry.disabled}
                     destructive={entry.destructive}
                     onSelect={() => entry.onSelect?.()}
