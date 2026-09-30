@@ -1563,6 +1563,253 @@ export interface PluginFormFieldGroupProps extends PluginRootAttributes {
   className?: string;
 }
 
+// Inputs: radio groups, numbers, sliders, pickers, tags, file drops and emoji.
+// Each joins an enclosing `FormField` on its own; in a `SettingsRow`, pass the
+// row's `labelId` and `descriptionId` as `aria-labelledby` / `aria-describedby`.
+
+/** One choice in a `RadioGroup`. */
+export interface PluginRadioOption {
+  /** Non-empty and unique within the group. */
+  value: string;
+  label: string;
+  /** A second line under the label, announced as the option's description. */
+  description?: string;
+  disabled?: boolean;
+}
+
+/**
+ * Props of `RadioGroup`: exactly one of a few options, each shown with its
+ * label and an optional description. Native radios, so the group is one tab
+ * stop and the arrow keys move the choice.
+ */
+export interface PluginRadioGroupProps extends PluginRootAttributes {
+  options: readonly PluginRadioOption[];
+  /**
+   * The chosen value, controlled. Passing the prop at all makes the group
+   * controlled: `""`, `null` or `undefined` then leaves nothing chosen. Leave
+   * it out entirely for an uncontrolled group.
+   */
+  value?: string | null;
+  defaultValue?: string;
+  onValueChange?: (value: string) => void;
+  /** `vertical` (the default) stacks the options; `horizontal` sets them side by side. */
+  orientation?: "vertical" | "horizontal";
+  /** `card` (the default) draws each option as a bordered, clickable card; `plain` as a bare radio and label. */
+  variant?: "card" | "plain";
+  /** The radios' form name. Generated when omitted. */
+  name?: string;
+  disabled?: boolean;
+  required?: boolean;
+  /** Names the group when no `FormField` label does. */
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  className?: string;
+}
+
+/**
+ * Props of `NumberInput`: a number field with optional stepper buttons. Typing
+ * is free; the value commits on blur, Enter, a stepper press or an arrow key,
+ * clamped to `min`/`max` and rounded to `precision`. Text that is not a number
+ * marks the field invalid while you type and reverts on commit.
+ */
+export interface PluginNumberInputProps extends PluginAriaRootAttributes {
+  /**
+   * The value, controlled. Passing the prop at all makes the field controlled;
+   * `null` is an empty field. Leave it out for an uncontrolled field.
+   */
+  value?: number | null;
+  defaultValue?: number | null;
+  /** The committed value. `null` when the field is cleared (never, with `required`). */
+  onValueChange?: (value: number | null) => void;
+  min?: number;
+  max?: number;
+  /** What an arrow key or a stepper press adds. Shift, Page Up and Page Down step ten times. Defaults to 1. */
+  step?: number;
+  /** Decimal places the value is rounded to and shown with. Defaults to the step's own. */
+  precision?: number;
+  /** A suffix drawn inside the field ("ms", "px", "%") and spoken with the value. */
+  unit?: string;
+  /** The decrease and increase buttons. Defaults to `true`. */
+  stepper?: boolean;
+  placeholder?: string;
+  name?: string;
+  disabled?: boolean;
+  readOnly?: boolean;
+  /** An empty field reverts to the last value rather than committing `null`. */
+  required?: boolean;
+  invalid?: boolean;
+  autoFocus?: boolean;
+  density?: "default" | "compact";
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  /** Classes for the field's outer box. */
+  className?: string;
+}
+
+/**
+ * Props of `Slider`: one value on a track, for a setting where the rough
+ * position matters more than the exact figure. The track is neutral. Arrow
+ * keys step, Page Up/Down step ten times, Home/End jump to the ends.
+ */
+export interface PluginSliderProps extends PluginAriaRootAttributes {
+  /** The value, controlled. A number makes the slider controlled. */
+  value?: number;
+  defaultValue?: number;
+  /** Every move of the thumb. */
+  onValueChange?: (value: number) => void;
+  /** Once a drag or a key press ends: the moment to save. */
+  onValueCommit?: (value: number) => void;
+  /** Defaults to 0. */
+  min?: number;
+  /** Defaults to 100. */
+  max?: number;
+  /** Defaults to 1. */
+  step?: number;
+  /** The value in words, spoken as `aria-valuetext` and shown by `showValue` ("40%", "2 s"). */
+  formatValue?: (value: number) => string;
+  /** Shows the formatted value beside the track. */
+  showValue?: boolean;
+  name?: string;
+  disabled?: boolean;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  className?: string;
+}
+
+/**
+ * The props `Combobox` and `MultiSelect` share: a trigger that looks like a
+ * `Select`'s, opening a searchable, virtualised list.
+ */
+export interface PluginPickerBaseProps extends PluginAriaRootAttributes {
+  /** Values non-empty and unique, as for `Select`. */
+  options: readonly (PluginSelectOption | PluginSelectOptionGroup)[];
+  /** Shown on the trigger while nothing is chosen. */
+  placeholder?: string;
+  /** The search field's placeholder. Defaults to "Search…". */
+  searchPlaceholder?: string;
+  /** The query on every keystroke, for options you load as the user types. */
+  onSearchChange?: (query: string) => void;
+  /**
+   * `contains` (the default) filters `options` by label and description as the
+   * user types. `none` shows `options` as given: for options you filter or
+   * fetch yourself from `onSearchChange`.
+   */
+  filter?: "contains" | "none";
+  /** Options are on their way: the list says so rather than "No matches". */
+  loading?: boolean;
+  /** What the list says when nothing matches. Defaults to "No matches". */
+  emptyMessage?: ReactNode;
+  disabled?: boolean;
+  density?: "default" | "compact";
+  name?: string;
+  id?: string;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  /** Classes for the trigger. */
+  className?: string;
+}
+
+/** Props of `Combobox`: a single choice from a list long enough to want a search. */
+export interface PluginComboboxProps extends PluginPickerBaseProps {
+  /**
+   * The chosen value, controlled. Passing the prop at all makes it controlled:
+   * `""`, `null` or `undefined` then shows the placeholder again.
+   */
+  value?: string | null;
+  defaultValue?: string;
+  onValueChange?: (value: string) => void;
+  /** Offers the typed text as a value of its own when no option's label matches it exactly. */
+  allowCustomValue?: boolean;
+}
+
+/** Props of `MultiSelect`: any number of choices, such as labels or assignees. */
+export interface PluginMultiSelectProps extends PluginPickerBaseProps {
+  /** The chosen values, controlled. Passing the prop at all makes it controlled. */
+  value?: readonly string[];
+  defaultValue?: readonly string[];
+  /** The whole new selection, in the order the values were chosen. */
+  onValueChange?: (value: string[]) => void;
+  /** At most this many; the rest of the list is disabled once it is reached. */
+  max?: number;
+  /** Chips on the trigger before the rest collapse into "+N". Defaults to 3. */
+  maxChips?: number;
+}
+
+/**
+ * Props of `TagInput`: free-text tags. Enter or a comma adds the text, a
+ * pasted list is split on commas and new lines, Backspace in the empty field
+ * removes the last tag, and a tag already there (ignoring case) is not added
+ * twice.
+ */
+export interface PluginTagInputProps extends PluginAriaRootAttributes {
+  /** The tags, controlled. Passing the prop at all makes it controlled. */
+  value?: readonly string[];
+  defaultValue?: readonly string[];
+  onValueChange?: (value: string[]) => void;
+  /** Refuse a tag by returning `false`: the text stays in the field, marked invalid. */
+  validate?: (tag: string, tags: readonly string[]) => boolean;
+  /** At most this many tags. */
+  max?: number;
+  placeholder?: string;
+  disabled?: boolean;
+  invalid?: boolean;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  className?: string;
+}
+
+/**
+ * Props of `FileDropzone`: a drop target with a button that opens the
+ * system's file dialog. You get `File` objects: name, size, type and contents
+ * (`file.text()`, `file.arrayBuffer()`), never a path on disk.
+ */
+export interface PluginFileDropzoneProps extends PluginRootAttributes {
+  /** The accepted files from a drop or the dialog. Never called with an empty list. */
+  onFiles: (files: File[]) => void;
+  /** Dropped files `accept` ruled out. The dialog only offers accepted ones. */
+  onReject?: (files: File[]) => void;
+  /** As on `<input type="file">`: extensions (`.md`) and MIME types (`image/*`), comma-separated. */
+  accept?: string;
+  /** More than one file at a time. Without it, a drop of several keeps the first. */
+  multiple?: boolean;
+  disabled?: boolean;
+  /** The headline. Defaults to "Drop files here" (or "Drop a file here"). */
+  label?: ReactNode;
+  /** One quiet line under it: what fits ("Markdown or text, up to 1 MB"). */
+  description?: ReactNode;
+  /** Defaults to `upload`. */
+  icon?: PluginIconSource;
+  /** The button's label. Defaults to "Choose files…" (or "Choose file…"). */
+  browseLabel?: string;
+  /** Replaces the headline, description and icon; the button stays. */
+  children?: ReactNode;
+  className?: string;
+}
+
+/**
+ * Props of `EmojiPicker`: Daintree's emoji picker in a popover opened from
+ * `trigger`, with search, categories and the keyboard grid. Picking closes it.
+ */
+export interface PluginEmojiPickerProps {
+  /** The element that opens it; it must accept a ref and DOM props (a kit `Button` does). */
+  trigger: ReactElement;
+  onSelect: (emoji: string) => void;
+  /** The emoji you hold now, marked in the grid. */
+  value?: string;
+  open?: boolean;
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  side?: PluginSide;
+  align?: PluginAlign;
+  /** Names the panel. Defaults to "Choose emoji". */
+  "aria-label"?: string;
+}
+
 /**
  * Keys of {@link PluginThemeTokens}: Daintree's semantic theme tokens, the
  * same names as the `--theme-*` CSS variables without the prefix. The surface,
