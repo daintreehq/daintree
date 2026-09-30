@@ -1060,3 +1060,80 @@ describe("DeepgramTranscriptionProvider", () => {
     expect(events.length).toBe(lengthAtDestroy);
   });
 });
+
+describe("DeepgramTranscriptionProvider start timing diagnostics", () => {
+  let now = 0;
+
+  beforeEach(() => {
+    instances.length = 0;
+    throwOnConstruct = false;
+    constructError = null;
+    vi.useFakeTimers();
+    vi.mocked(logInfo).mockClear();
+    now = 5_000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function logDetails(fragment: string): Record<string, unknown>[] {
+    return vi
+      .mocked(logInfo)
+      .mock.calls.filter(([message]) => message.includes(fragment))
+      .map(([, details]) => details as Record<string, unknown>);
+  }
+
+  it("times socket open from provider start and reports buffered chunks", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const startPromise = provider.start(BASE_SETTINGS);
+    await Promise.resolve();
+    provider.sendAudioChunk(new Int16Array(2400).buffer);
+    const socket = latestInstance();
+    now = 5_320;
+    socket.simulateOpen();
+    await startPromise;
+
+    expect(logDetails("WebSocket opened — session ready")).toEqual([
+      expect.objectContaining({ connectMs: 320, sinceStartMs: 320, bufferedChunks: 1 }),
+    ]);
+    provider.stop();
+  });
+
+  it("times a keyterm-free retry from its own socket while keeping the session origin", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha"] });
+    await Promise.resolve();
+    now = 5_300;
+    latestInstance().simulateUnexpectedResponse(400);
+    now = 5_450;
+    latestInstance().simulateOpen();
+    await startPromise;
+
+    expect(logDetails("WebSocket opened — session ready")).toEqual([
+      expect.objectContaining({ connectMs: 150, sinceStartMs: 450 }),
+    ]);
+    provider.stop();
+  });
+
+  it("logs the first final transcript once, by length only", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const { socket } = await bringSessionReady(provider);
+
+    now = 6_000;
+    socket.simulateMessage(resultsMessage("interim words", { is_final: false }));
+    expect(logDetails("First transcript")).toHaveLength(0);
+
+    socket.simulateMessage(resultsMessage("PRIVATE_DICTATION", { is_final: true }));
+    socket.simulateMessage(resultsMessage("second", { is_final: true }));
+
+    const first = logDetails("First transcript");
+    expect(first).toEqual([
+      expect.objectContaining({ eventType: "complete", length: 17, sinceStartMs: 1_000 }),
+    ]);
+    expect(JSON.stringify(vi.mocked(logInfo).mock.calls)).not.toContain("PRIVATE_DICTATION");
+    provider.stop();
+  });
+});

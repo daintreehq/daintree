@@ -8,6 +8,9 @@ type VoidCleanup = () => void;
 
 interface MockTrack {
   stop: ReturnType<typeof vi.fn>;
+  muted?: boolean;
+  readyState?: string;
+  addEventListener?: (type: string, listener: () => void) => void;
 }
 
 interface MockStream {
@@ -129,7 +132,10 @@ const runtime = vi.hoisted(() => ({
   >,
   stopQueue: [] as Array<Promise<void> | void>,
   createdStreams: [] as MockStream[],
+  audioContextInitialState: "running",
+  audioContextListeners: new Map<string, () => void>(),
   createdAudioContexts: [] as Array<{
+    state: string;
     close: ReturnType<typeof vi.fn>;
     audioWorklet: { addModule: ReturnType<typeof vi.fn> };
   }>,
@@ -189,6 +195,8 @@ function resetRuntime(): void {
   runtime.startQueue = [];
   runtime.stopQueue = [];
   runtime.createdStreams = [];
+  runtime.audioContextInitialState = "running";
+  runtime.audioContextListeners.clear();
   runtime.createdAudioContexts = [];
   runtime.createdWorkletNodes = [];
   Object.values(runtime.voiceInput).forEach((fn) => fn.mockReset());
@@ -428,9 +436,14 @@ function setupGlobals(): void {
       }
     });
     const context = {
-      state: "running",
+      state: runtime.audioContextInitialState,
       destination: {},
-      resume: vi.fn().mockResolvedValue(undefined),
+      resume: vi.fn(async () => {
+        context.state = "running";
+      }),
+      addEventListener: vi.fn((type: string, listener: () => void) => {
+        runtime.audioContextListeners.set(type, listener);
+      }),
       close: vi.fn().mockResolvedValue(undefined),
       createGain: vi.fn(() => ({ gain: { value: 1 }, connect: vi.fn(), disconnect: vi.fn() })),
       createOscillator: vi.fn(() => ({
@@ -1111,6 +1124,295 @@ describe("VoiceRecordingService adversarial", () => {
       expect(runtime.voiceFns.finishSession).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+describe("VoiceRecordingService start diagnostics", () => {
+  type Service = (typeof import("../VoiceRecordingService"))["voiceRecordingService"];
+  let service: Service | null = null;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    resetRuntime();
+    setupGlobals();
+    const { logInfo } = await import("@/utils/logger");
+    vi.mocked(logInfo).mockClear();
+    service = null;
+  });
+
+  afterEach(async () => {
+    // The elapsed-time interval is real; leaving a session running would keep
+    // this module instance ticking into later tests.
+    if (service) {
+      await service.stop(undefined, { announce: false });
+      service.destroy();
+    }
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function loadService() {
+    const mod = await import("../VoiceRecordingService");
+    service = mod.voiceRecordingService;
+    const { logInfo } = await import("@/utils/logger");
+    const infoCalls = () => vi.mocked(logInfo).mock.calls;
+    const detailsFor = (fragment: string) =>
+      infoCalls()
+        .filter(([message]) => message.includes(fragment))
+        .map(([, details]) => details ?? {});
+    const steps = () => detailsFor("Start step");
+    const openingLogs = () => detailsFor("Opening audio");
+    const sendChunk = (samples: Int16Array<ArrayBuffer>, nodeIndex = 0) => {
+      const handler = runtime.createdWorkletNodes[nodeIndex]?.port.onmessage;
+      if (!handler) throw new Error("worklet handler not attached");
+      handler(new MessageEvent<ArrayBuffer>("message", { data: samples.buffer }));
+    };
+    return {
+      voiceRecordingService: mod.voiceRecordingService,
+      infoCalls,
+      steps,
+      openingLogs,
+      sendChunk,
+    };
+  }
+
+  async function startWithLogger() {
+    const loaded = await loadService();
+    await loaded.voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+    return loaded;
+  }
+
+  function expectInOrder(actual: unknown[], expected: string[]) {
+    const positions = expected.map((step) => actual.indexOf(step));
+    expect(positions.every((p) => p >= 0)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+  }
+
+  it("logs the start steps in order with monotonic elapsed time", async () => {
+    const { steps } = await startWithLogger();
+
+    const logged = steps();
+    const names = logged.map((s) => s.step);
+    expectInOrder(names, [
+      "start",
+      "audio_context_create",
+      "get_user_media",
+      "source_attach",
+      "backend_start",
+      "startup_audio_flush",
+    ]);
+    // Settings and permission reads run together, as do the microphone open
+    // and the worklet load, so each pair is pinned only to its bracketing steps.
+    expectInOrder(names, ["start", "settings", "audio_context_create"]);
+    expectInOrder(names, ["start", "permission_check", "audio_context_create"]);
+    expectInOrder(names, ["audio_context_create", "worklet_load", "source_attach"]);
+    expect(new Set(logged.map((s) => s.startRequestId)).size).toBe(1);
+    const elapsed = logged.map((s) => Number(s.elapsedMs));
+    for (let i = 1; i < elapsed.length; i++) {
+      expect(elapsed[i]).toBeGreaterThanOrEqual(elapsed[i - 1]!);
+    }
+  });
+
+  it("logs the conditional permission-request and resume steps when those paths run", async () => {
+    runtime.micPermissionQueue.push("not-determined");
+    runtime.audioContextInitialState = "suspended";
+
+    const { steps } = await startWithLogger();
+
+    const logged = steps();
+    expectInOrder(
+      logged.map((s) => s.step),
+      ["permission_check", "permission_request", "audio_context_create", "audio_context_resume"]
+    );
+    expect(logged.find((s) => s.step === "audio_context_create")).toMatchObject({
+      state: "suspended",
+    });
+    expect(logged.find((s) => s.step === "audio_context_resume")).toMatchObject({
+      state: "running",
+    });
+  });
+
+  it("separates zero-filled, dithered and above-threshold opening chunks", async () => {
+    const { sendChunk, steps, openingLogs } = await startWithLogger();
+
+    sendChunk(new Int16Array(2400));
+    sendChunk(new Int16Array(2400));
+    sendChunk(Int16Array.from({ length: 2400 }, (_, i) => (i % 2 ? 1 : -1)));
+    for (let i = 0; i < 17; i++) sendChunk(new Int16Array(2400).fill(3000));
+
+    const chunkSteps = steps().filter((s) => String(s.step).startsWith("first_"));
+    expect(chunkSteps.map((s) => [s.step, s.chunk])).toEqual([
+      ["first_chunk", undefined],
+      ["first_nonzero_chunk", 3],
+      ["first_signal_chunk", 4],
+    ]);
+
+    const opening = openingLogs();
+    expect(opening).toHaveLength(1);
+    expect(opening[0]).toMatchObject({ chunks: 20, allZeroChunks: 2 });
+    expect(opening[0]!.zeroFraction).toEqual([1, 1, 0, ...new Array<number>(17).fill(0)]);
+
+    sendChunk(new Int16Array(2400));
+    expect(openingLogs()).toHaveLength(1);
+    expect(runtime.voiceInput.sendAudioChunk).toHaveBeenCalledTimes(21);
+  });
+
+  it("reports a partial opening window when the session stops early", async () => {
+    const { voiceRecordingService, sendChunk, openingLogs } = await startWithLogger();
+
+    sendChunk(new Int16Array(2400));
+    sendChunk(new Int16Array(2400).fill(3000));
+    expect(openingLogs()).toHaveLength(0);
+
+    await voiceRecordingService.stop();
+
+    expect(openingLogs()).toEqual([expect.objectContaining({ chunks: 2, allZeroChunks: 1 })]);
+  });
+
+  it("reports the partial window of a failed backend start without leaking it into the next session", async () => {
+    const backendStart = deferred<{ ok: boolean; error?: string }>();
+    runtime.startQueue.push(backendStart.promise);
+    const { voiceRecordingService, sendChunk, openingLogs, steps } = await loadService();
+
+    const firstStart = voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+    await vi.waitFor(() =>
+      expect(runtime.createdWorkletNodes[0]?.port.onmessage).toBeTypeOf("function")
+    );
+    sendChunk(new Int16Array(2400));
+    sendChunk(new Int16Array(2400));
+    backendStart.resolve({ ok: false, error: "boom" });
+    await firstStart;
+
+    const failedId = steps()[0]!.startRequestId;
+    expect(openingLogs()).toEqual([
+      expect.objectContaining({ startRequestId: failedId, chunks: 2, allZeroChunks: 2 }),
+    ]);
+
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+    sendChunk(new Int16Array(2400).fill(3000), 1);
+    await voiceRecordingService.stop();
+
+    const logs = openingLogs();
+    expect(logs).toHaveLength(2);
+    expect(logs[1]).toMatchObject({ chunks: 1, allZeroChunks: 0 });
+    expect(logs[1]!.startRequestId).not.toBe(failedId);
+  });
+
+  it("measures audio held before the backend is ready on arrival and logs its flush", async () => {
+    const backendStart = deferred<{ ok: boolean }>();
+    runtime.startQueue.push(backendStart.promise);
+    const { voiceRecordingService, sendChunk, steps } = await loadService();
+
+    const starting = voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+    await vi.waitFor(() => expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1));
+    sendChunk(new Int16Array(2400));
+    sendChunk(new Int16Array(2400).fill(3000));
+
+    const arrivalSteps = steps().filter((s) => String(s.step).startsWith("first_"));
+    expect(arrivalSteps).toEqual([
+      expect.objectContaining({ step: "first_chunk", held: true }),
+      expect.objectContaining({ step: "first_nonzero_chunk", chunk: 2 }),
+      expect.objectContaining({ step: "first_signal_chunk", chunk: 2 }),
+    ]);
+    expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+
+    backendStart.resolve({ ok: true });
+    await starting;
+
+    expect(steps().find((s) => s.step === "startup_audio_flush")).toMatchObject({
+      chunks: 2,
+      droppedChunks: 0,
+    });
+    expect(runtime.voiceInput.sendAudioChunk).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a retarget's opening window out of the previous session's stop", async () => {
+    const { voiceRecordingService, sendChunk, openingLogs, steps } = await startWithLogger();
+    const firstId = steps()[0]!.startRequestId;
+
+    const previousStop = deferred<void>();
+    runtime.stopQueue.push(previousStop.promise);
+    const retarget = voiceRecordingService.start({ panelId: "panel-2", panelTitle: "Panel Two" });
+    await vi.waitFor(() => expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1));
+
+    // The new attempt's capture is already attached while the old session drains.
+    sendChunk(new Int16Array(2400).fill(3000), 1);
+    sendChunk(new Int16Array(2400).fill(3000), 1);
+    previousStop.resolve();
+    await retarget;
+
+    expect(openingLogs()).toEqual([]);
+    await voiceRecordingService.stop();
+
+    const logs = openingLogs();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ chunks: 2, allZeroChunks: 0 });
+    expect(logs[0]!.startRequestId).not.toBe(firstId);
+  });
+
+  it("logs track mute/unmute/ended and AudioContext state changes", async () => {
+    const trackListeners: Record<string, () => void> = {};
+    const track = {
+      stop: vi.fn(),
+      muted: true,
+      readyState: "live",
+      addEventListener: vi.fn((type: string, cb: () => void) => {
+        trackListeners[type] = cb;
+      }),
+    };
+    runtime.getUserMediaQueue.push({
+      track,
+      getTracks: () => [track],
+      getAudioTracks: () => [track],
+    });
+
+    const { steps } = await startWithLogger();
+
+    track.muted = false;
+    trackListeners.unmute?.();
+    track.readyState = "ended";
+    trackListeners.ended?.();
+    runtime.createdAudioContexts[0]!.state = "interrupted";
+    runtime.audioContextListeners.get("statechange")?.();
+
+    const events = steps().filter(
+      (s) => String(s.step).startsWith("track_") || s.step === "audio_context_statechange"
+    );
+    expect(events).toEqual([
+      expect.objectContaining({ step: "track_unmute", muted: false, readyState: "live" }),
+      expect.objectContaining({ step: "track_ended", readyState: "ended" }),
+      expect.objectContaining({ step: "audio_context_statechange", state: "interrupted" }),
+    ]);
+    expect(Object.keys(trackListeners).sort()).toEqual(["ended", "mute", "unmute"]);
+  });
+
+  it("keeps capturing when a start diagnostic fails to log", async () => {
+    const { logInfo } = await import("@/utils/logger");
+    vi.mocked(logInfo).mockImplementation((message: string) => {
+      if (message.includes("Start step") || message.includes("Opening audio")) {
+        throw new Error("logger down");
+      }
+    });
+    try {
+      const { sendChunk } = await startWithLogger();
+      expect(runtime.createdWorkletNodes).toHaveLength(1);
+      for (let i = 0; i < 20; i++) sendChunk(new Int16Array(2400).fill(3000));
+      expect(runtime.voiceInput.sendAudioChunk).toHaveBeenCalledTimes(20);
+    } finally {
+      vi.mocked(logInfo).mockReset();
+    }
+  });
+
+  it("never puts raw samples or buffers in log payloads", async () => {
+    const { sendChunk, infoCalls } = await startWithLogger();
+    for (let i = 0; i < 20; i++) sendChunk(new Int16Array(2400).fill(1234));
+
+    for (const [, details] of infoCalls()) {
+      for (const value of Object.values(details ?? {})) {
+        expect(value instanceof ArrayBuffer || ArrayBuffer.isView(value)).toBe(false);
+        if (Array.isArray(value)) expect(value.length).toBeLessThanOrEqual(20);
+      }
     }
   });
 });

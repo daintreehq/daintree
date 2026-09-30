@@ -2456,3 +2456,105 @@ describe("summarizeEchoedSession", () => {
     expect(summarizeEchoedSession({ id: "sess_1" })).toEqual({ sessionShape: "(no audio.input)" });
   });
 });
+
+describe("OpenAITranscriptionProvider start timing diagnostics", () => {
+  let now = 0;
+
+  beforeEach(() => {
+    instances.length = 0;
+    throwOnConstruct = false;
+    constructError = null;
+    vadWorkers.length = 0;
+    throwOnVadConstruct = false;
+    logCalls.length = 0;
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.useFakeTimers();
+    now = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+  });
+
+  afterEach(() => {
+    for (const worker of vadWorkers) worker.emitExit(0);
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function logDetails(fragment: string): Record<string, unknown>[] {
+    return logCalls
+      .filter(([message]) => typeof message === "string" && message.includes(fragment))
+      .map(([, details]) => details as Record<string, unknown>);
+  }
+
+  it("times socket open and session.updated from provider start", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const startPromise = service.start(BASE_SETTINGS);
+    await Promise.resolve();
+    const socket = latestInstance();
+    now = 1_250;
+    socket.simulateOpen();
+    now = 1_400;
+    socket.simulateMessage("session.updated");
+    await startPromise;
+
+    expect(logDetails("WebSocket opened")).toEqual([
+      expect.objectContaining({ connectMs: 250, sinceStartMs: 250 }),
+    ]);
+    expect(logDetails("session.updated — session ready")).toEqual([
+      expect.objectContaining({ sinceStartMs: 400 }),
+    ]);
+    service.stop();
+  });
+
+  it("logs the first transcript once per session, by length only", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+
+    now = 3_000;
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", { delta: " " });
+    expect(logDetails("First transcript")).toHaveLength(0);
+
+    now = 3_100;
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      delta: "PRIVATE_DICTATION",
+    });
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      delta: " more",
+    });
+
+    expect(logDetails("First transcript")).toEqual([
+      expect.objectContaining({ eventType: "delta", length: 17, sinceStartMs: 2_100 }),
+    ]);
+    expect(loggedText()).not.toContain("PRIVATE_DICTATION");
+
+    const { socket: nextSocket } = await bringSessionReady(service);
+    nextSocket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      delta: "again",
+    });
+    expect(logDetails("First transcript")).toHaveLength(2);
+    service.stop();
+  });
+
+  it("keeps session timing and the first-transcript marker across a reconnect", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", { delta: "one" });
+
+    now = 10_000;
+    socket.simulateClose(1006, Buffer.from("abnormal"));
+    vi.advanceTimersByTime(3_000);
+    const socket2 = latestInstance();
+    expect(socket2).not.toBe(socket);
+    now = 10_200;
+    socket2.simulateOpen();
+    socket2.simulateMessage("session.updated");
+    socket2.simulateMessage("conversation.item.input_audio_transcription.delta", { delta: "two" });
+
+    expect(logDetails("WebSocket opened").at(-1)).toMatchObject({
+      connectMs: 200,
+      sinceStartMs: 9_200,
+    });
+    expect(logDetails("First transcript")).toHaveLength(1);
+    service.stop();
+  });
+});
