@@ -12,6 +12,7 @@ import * as kit from "@daintreehq/plugin-ui";
 import { compareTreeNames } from "@/components/PluginKit/PluginKitFileTree";
 import { FLEX_COLUMN_MAX_PX, layoutColumns } from "@/components/PluginKit/PluginKitLists";
 import { sparklineRuns } from "@/components/PluginKit/PluginKitData";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
@@ -486,5 +487,40 @@ describe("kit polish", () => {
       if (!centred.querySelector(".markdown-document")) throw new Error("not rendered");
     });
     expect(centred.querySelector(".markdown-document")?.className).not.toContain("mx-0!");
+  });
+});
+
+describe("CopyButton with a label", () => {
+  it("keeps the label beside its glyph, with the spare slot width after it", () => {
+    render(
+      createElement(kit.CopyButton, {
+        text: "log",
+        label: "Copy log",
+        size: "sm",
+        className: "ml-auto",
+      })
+    );
+    const button = screen.getByRole("button", { name: "Copy log" });
+    // The button's own gap between glyph and label, and nothing else between them.
+    expect(button.className).toContain("gap-1.5");
+    expect(button.className).toContain("text-left");
+    expect(button.className).toContain("ml-auto");
+    expect(button.className).not.toMatch(/\b(?:w-full|flex-1|justify-between)\b/);
+    const content = button.querySelector('[data-slot="button-content"]') ?? button;
+    const [glyph, slot] = [...content.children];
+    expect(glyph?.tagName.toLowerCase()).toBe("svg");
+    expect(slot?.tagName.toLowerCase()).toBe("span");
+    expect(slot?.firstElementChild?.textContent).toBe("Copy log");
+  });
+
+  it("leaves the icon-only form as it was", () => {
+    render(
+      createElement(
+        TooltipProvider,
+        null,
+        createElement(kit.CopyButton, { text: "log", "aria-label": "Copy log" })
+      )
+    );
+    expect(screen.getByRole("button", { name: "Copy log" }).className).not.toContain("text-left");
   });
 });

@@ -3,6 +3,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import type { PluginViewContentConfig } from "../PluginViewContent";
+import { settlePluginViewLoad } from "./settlePluginViewLoad";
 
 // Stub presentational deps — the content's behavioral contract is the view
 // import + AbortController wiring, not the skeleton or fade-in.
@@ -17,6 +18,13 @@ vi.mock("@/services/plugin/pluginStyleContract", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/services/plugin/pluginStyleContract")>()),
   preparePluginStyles: () => Promise.resolve(),
   registerPluginStyleRoot: () => () => {},
+}));
+// A settled load renders its view at once; the gate is loadPath's subject.
+// See settlePluginViewLoad for why it is off here.
+vi.mock("@/hooks/useDeferredLoading", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useDeferredLoading")>()),
+  useSkeletonGate: () => false,
+  useSkeletonFloor: (isShowing: boolean) => isShowing,
 }));
 vi.mock("@/components/ui/ContentFadeIn", () => ({
   ContentFadeIn: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -178,7 +186,7 @@ describe("makePluginViewContent", () => {
 
       const { container } = render(<Content panelId="panel-1" />);
 
-      await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+      await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
       expect(container.querySelector("[data-panel-id]")).toBeNull();
       expect(container.querySelector("[data-pane-chrome]")).toBeNull();
       expect(screen.queryByTestId("panel-close")).toBeNull();
@@ -203,7 +211,7 @@ describe("makePluginViewContent", () => {
       const initialArgs = { path: "/repo/src/index.ts", line: 12 };
       render(<Content panelId="panel-args" initialArgs={initialArgs} worktreeId="wt-7" />);
 
-      await waitFor(() => expect(screen.queryByTestId("plugin-view")).toBeTruthy());
+      await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
       const props = capturedProps[capturedProps.length - 1]!;
       expect(props.panelId).toBe("panel-args");
       expect(props.pluginId).toBe("acme");
@@ -234,7 +242,7 @@ describe("makePluginViewContent", () => {
 
       const spawned = { root: "src" };
       const { rerender } = render(<Content panelId="panel-frozen" initialArgs={spawned} />);
-      await waitFor(() => expect(screen.queryByTestId("plugin-view")).toBeTruthy());
+      await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
 
       // `extensionState` reaches this component straight off the panel record,
       // so once a view can WRITE that record through `persistState` the prop
@@ -295,7 +303,7 @@ describe("makePluginViewContent", () => {
       render(<Content panelId="panel-7" />);
 
       await waitFor(() => expect(onPanelKindsChangedMock).toHaveBeenCalled());
-      await waitFor(() => expect(signals).not.toHaveLength(0));
+      await settlePluginViewLoad(() => expect(signals).not.toHaveLength(0));
       const signal = signals[0]!;
 
       const registered: PanelKindConfig[] = [
@@ -354,7 +362,7 @@ describe("makePluginViewContent", () => {
 
       // Activation rejects, so the load short-circuits before `import()` and
       // the boundary receives the activation's own error.
-      await waitFor(() => expect(boundaryProps.caught).toHaveLength(1));
+      await settlePluginViewLoad(() => expect(boundaryProps.caught).toHaveLength(1));
       expect(String(boundaryProps.caught[0])).toMatch("ACTIVATION_FAILED");
       expect(activateForView).toHaveBeenCalledWith("acme.dashboard");
       expect(importViewModule).not.toHaveBeenCalled();
@@ -387,7 +395,7 @@ describe("makePluginViewContent", () => {
 
       // The very error main rejected with reaches the boundary — not a wrapper,
       // and not the `plugin://` import failure the unmocked module would give.
-      await waitFor(() => expect(boundaryProps.caught).toEqual([activationError]));
+      await settlePluginViewLoad(() => expect(boundaryProps.caught).toEqual([activationError]));
       expect(activateForView).toHaveBeenCalledWith("acme.dashboard");
     } finally {
       vi.doUnmock(VIEW_MODULE);
@@ -411,7 +419,7 @@ describe("makePluginViewContent", () => {
 
       render(<Content panelId="panel-noact" />);
 
-      await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+      await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
       expect(boundaryProps.caught).toEqual([]);
     } finally {
       vi.doUnmock(VIEW_MODULE);
@@ -454,7 +462,7 @@ describe("makePluginViewContent", () => {
 
       // First attempt: plain activation (no recovery flag), then an import that
       // cannot resolve — exactly the shape of the bug.
-      await waitFor(() => expect(boundaryProps.caught).toHaveLength(1));
+      await settlePluginViewLoad(() => expect(boundaryProps.caught).toHaveLength(1));
       expect(boundaryProps.caught[0]).toBeInstanceOf(Error);
       expect(activateForView.mock.calls).toEqual([["acme.dashboard"]]);
 
@@ -462,7 +470,7 @@ describe("makePluginViewContent", () => {
       act(() => boundaryProps.last!.onReset!());
 
       // The retry asks main for a replacement specifier...
-      await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+      await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
       expect(activateForView.mock.calls.at(-1)).toEqual(["acme.dashboard", true]);
 
       // Now the other half of the classification. A view that throws during
@@ -471,11 +479,11 @@ describe("makePluginViewContent", () => {
       const callsBeforeRenderRetry = activateForView.mock.calls.length;
       act(() => boundaryProps.last!.onError!(new Error("view exploded"), { componentStack: "" }));
       act(() => boundaryProps.last!.onReset!());
-      await waitFor(() =>
+      await settlePluginViewLoad(() =>
         expect(activateForView.mock.calls.length).toBeGreaterThan(callsBeforeRenderRetry)
       );
       expect(activateForView.mock.calls.at(-1)).toEqual(["acme.dashboard"]);
-      await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+      await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
     } finally {
       vi.doUnmock(recoveryPath);
     }
@@ -505,7 +513,7 @@ describe("makePluginViewContent", () => {
 
     render(<Content panelId="panel-primitive" />);
 
-    await waitFor(() => expect(boundaryProps.caught).toHaveLength(1));
+    await settlePluginViewLoad(() => expect(boundaryProps.caught).toHaveLength(1));
     const thrown = boundaryProps.caught[0];
     // Wrapped, not passed through raw — a bare string would also render badly
     // in the diagnostics fallback.
@@ -516,7 +524,7 @@ describe("makePluginViewContent", () => {
 
     // The classification survived the wrap, so recovery is requested, and the
     // replacement module loads without another failure.
-    await waitFor(() =>
+    await settlePluginViewLoad(() =>
       expect(activateForView.mock.calls.at(-1)).toEqual(["acme.dashboard", true])
     );
     await act(async () => {
@@ -567,7 +575,7 @@ describe("makePluginViewContent", () => {
 
       render(<Content panelId="panel-9" />);
 
-      await waitFor(() => expect(signals).not.toHaveLength(0));
+      await settlePluginViewLoad(() => expect(signals).not.toHaveLength(0));
       const first = signals[0]!;
       expect(first.aborted).toBe(false);
       const callsBeforeReset = activateForView.mock.calls.length;
@@ -585,7 +593,7 @@ describe("makePluginViewContent", () => {
       act(() => onReset!());
 
       // The retry mints a genuinely fresh controller for the replacement view.
-      await waitFor(() => expect(signals.length).toBeGreaterThan(1));
+      await settlePluginViewLoad(() => expect(signals.length).toBeGreaterThan(1));
       const second = signals[1]!;
       expect(second).not.toBe(first);
       // The discarded view's signal aborted at swap time, not at unmount.
@@ -629,7 +637,7 @@ describe("makePluginViewContent", () => {
 
       render(<Content panelId="panel-abort-on-error" />);
 
-      await waitFor(() => expect(signals).not.toHaveLength(0));
+      await settlePluginViewLoad(() => expect(signals).not.toHaveLength(0));
       const signal = signals[0]!;
       expect(signal.aborted).toBe(false);
 
@@ -661,7 +669,7 @@ describe("makePluginViewContent", () => {
       const Content = makePluginViewContent(makeContentConfig());
 
       const { unmount } = render(<Content panelId="panel-unmount" />);
-      await waitFor(() => expect(signals).not.toHaveLength(0));
+      await settlePluginViewLoad(() => expect(signals).not.toHaveLength(0));
       const signal = signals[signals.length - 1]!;
       expect(signal.aborted).toBe(false);
 
@@ -693,7 +701,7 @@ describe("makePluginViewContent", () => {
       const Content = makePluginViewContent(makeContentConfig());
 
       const { unmount } = render(<Content panelId="panel-removal-signal" />);
-      await waitFor(() => expect(captured).not.toHaveLength(0));
+      await settlePluginViewLoad(() => expect(captured).not.toHaveLength(0));
       const { disposeSignal, panelRemovedSignal } = captured[captured.length - 1]!;
 
       expect(panelRemovedSignal).toBeInstanceOf(AbortSignal);
@@ -729,11 +737,11 @@ describe("makePluginViewContent", () => {
       const Content = makePluginViewContent(makeContentConfig());
 
       render(<Content panelId="panel-removal-retry" />);
-      await waitFor(() => expect(captured).not.toHaveLength(0));
+      await settlePluginViewLoad(() => expect(captured).not.toHaveLength(0));
       const first = captured[0]!;
 
       act(() => boundaryProps.last!.onReset!());
-      await waitFor(() =>
+      await settlePluginViewLoad(() =>
         expect(captured.some((p) => p.disposeSignal !== first.disposeSignal)).toBe(true)
       );
       const second = captured.find((p) => p.disposeSignal !== first.disposeSignal)!;
