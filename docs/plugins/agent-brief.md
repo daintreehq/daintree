@@ -251,6 +251,8 @@ What the no-build path costs, and what it doesn't: the worker cannot import npm 
 | A file tree | `FileTree` (takes `host.fs.walk` entries as they come) |
 | A headline number, a trend | `StatCard`, `Sparkline` |
 | Pane chrome | `PaneHeader`, `Toolbar` with `ToolbarButton`, `Tabs` |
+| Page structure | `Card` for a grouped block (`onClick` makes the whole card a button), `SectionLabel` over a group, `Divider`, `Accordion` or `Disclosure` for sections that fold |
+| A list beside its detail | `ResizableSplit`, with a `DescriptionList` for the record's fields |
 | Loading, empty, error | `PaneState` for the whole pane, `EmptyState`, `Callout` (`severity="error"` with a Retry `action` is the error banner), `Skeleton`, `Spinner`, `ProgressBar` |
 | A status chip | `Badge` |
 | A confirm or a modal | `ConfirmDialog`, `Dialog` |

@@ -5,16 +5,22 @@
 // statically; the host components load through `fromKit`.
 import { isValidElement, type ComponentType, type ReactNode } from "react";
 import type {
+  PluginAccordionProps,
   PluginAvatarProps,
   PluginBadgeProps,
   PluginButtonProps,
   PluginCalloutProps,
+  PluginCardProps,
   PluginCheckboxProps,
   PluginConfirmDialogProps,
   PluginCopyButtonProps,
   PluginDataTableProps,
+  PluginDescriptionListItemProps,
+  PluginDescriptionListProps,
   PluginDialogProps,
+  PluginDisclosureProps,
   PluginDismissButtonProps,
+  PluginDividerProps,
   PluginDropdownMenuProps,
   PluginEmptyStateProps,
   PluginFileTreeProps,
@@ -32,8 +38,10 @@ import type {
   PluginPopoverProps,
   PluginPopoverSearchFieldProps,
   PluginProgressBarProps,
+  PluginResizableSplitProps,
   PluginScrollShadowProps,
   PluginSearchFieldProps,
+  PluginSectionLabelProps,
   PluginSegmentedControlProps,
   PluginSelectProps,
   PluginSettingsActionsProps,
@@ -260,6 +268,35 @@ export const FormFieldGroup: ComponentType<PluginFormFieldGroupProps> = fromKit(
   (kit) => kit.FormFieldGroup
 );
 
+// Cards, dividers, section labels, splits, accordions and description lists.
+
+export const Card: ComponentType<PluginCardProps> = fromKit("Card", (kit) => kit.Card);
+export const Divider: ComponentType<PluginDividerProps> = fromKit("Divider", (kit) => kit.Divider);
+export const SectionLabel: ComponentType<PluginSectionLabelProps> = fromKit(
+  "SectionLabel",
+  (kit) => kit.SectionLabel
+);
+export const ResizableSplit: ComponentType<PluginResizableSplitProps> = fromKit(
+  "ResizableSplit",
+  (kit) => kit.ResizableSplit
+);
+export const Accordion: ComponentType<PluginAccordionProps> = fromKit(
+  "Accordion",
+  (kit) => kit.Accordion
+);
+export const Disclosure: ComponentType<PluginDisclosureProps> = fromKit(
+  "Disclosure",
+  (kit) => kit.Disclosure
+);
+export const DescriptionList: ComponentType<PluginDescriptionListProps> = fromKit(
+  "DescriptionList",
+  (kit) => kit.DescriptionList
+);
+export const DescriptionListItem: ComponentType<PluginDescriptionListItemProps> = fromKit(
+  "DescriptionListItem",
+  (kit) => kit.DescriptionListItem
+);
+
 export type {
   PluginMarkdownProps as MarkdownProps,
   PluginButtonProps as ButtonProps,
@@ -340,4 +377,14 @@ export type {
   PluginStatCardProps as StatCardProps,
   PluginSparklineProps as SparklineProps,
   PluginFormFieldGroupProps as FormFieldGroupProps,
+  PluginCardProps as CardProps,
+  PluginDividerProps as DividerProps,
+  PluginSectionLabelProps as SectionLabelProps,
+  PluginResizableSplitProps as ResizableSplitProps,
+  PluginAccordionProps as AccordionProps,
+  PluginAccordionItem as AccordionItem,
+  PluginDisclosureProps as DisclosureProps,
+  PluginDescriptionListProps as DescriptionListProps,
+  PluginDescriptionListItemProps as DescriptionListItemProps,
+  PluginDescriptionItem as DescriptionItem,
 } from "@shared/types/plugin-sdk-react";
