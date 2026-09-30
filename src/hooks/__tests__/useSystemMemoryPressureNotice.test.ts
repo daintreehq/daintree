@@ -292,7 +292,7 @@ describe("useSystemMemoryPressureNotice", () => {
     });
     expect(action.actionArgs.prompt).toContain("Swap is 91% full");
     expect(Object.keys(action.actionArgs).sort()).toEqual(["agentId", "name", "prompt"]);
-    // The row and the inbox record carry the same action.
+    // The row offers the same launch the inbox record does.
     expect(store.getState().notice?.action).toBe(action);
     // Offered, never launched on its own.
     expect(dispatchMock).not.toHaveBeenCalled();

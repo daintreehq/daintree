@@ -137,8 +137,7 @@ function buildDiagnosisAction(payload: SystemMemoryPressurePayload): Notificatio
       if (launching) return;
       const store = useSystemMemoryNoticeStore.getState();
       // Captured now: recovery and a new episode can both land mid-launch, and
-      // an inbox row from an episode long gone still launches but must never
-      // clear a later episode's row.
+      // a launch must never clear a later episode's row.
       const clickedNotice = store.notice?.action === action ? store.notice : null;
       launching = true;
       try {
@@ -146,7 +145,8 @@ function buildDiagnosisAction(payload: SystemMemoryPressurePayload): Notificatio
           source: "user",
         });
         // The row stays until recovery otherwise, so each click would start
-        // another agent. The inbox row keeps its normal lifecycle.
+        // another agent. The inbox row dispatches its own copy of the action
+        // and keeps its normal lifecycle.
         if (
           result.ok &&
           result.result?.launched &&
