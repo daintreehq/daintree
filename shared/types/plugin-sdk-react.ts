@@ -788,6 +788,8 @@ export type PluginDropdownMenuEntry =
       shortcut?: string;
       disabled?: boolean;
       destructive?: boolean;
+      /** A quiet second line under the label saying what the item does. */
+      description?: string;
     }
   | {
       type: "checkbox";
@@ -795,6 +797,23 @@ export type PluginDropdownMenuEntry =
       checked: boolean;
       onCheckedChange: (checked: boolean) => void;
       disabled?: boolean;
+      /** A quiet second line under the label. */
+      description?: string;
+    }
+  | {
+      /**
+       * A row with a chevron that opens `items` in a nested menu: hovering
+       * or Right Arrow opens it, Left Arrow or Escape closes it, and typing
+       * jumps between its rows. The nested rows take every entry type,
+       * submenus included.
+       */
+      type: "submenu";
+      label: string;
+      items: readonly PluginDropdownMenuEntry[];
+      icon?: PluginIconName;
+      disabled?: boolean;
+      /** A quiet second line under the label. */
+      description?: string;
     }
   | {
       /** One choice from several, each a radio row with a check on the chosen one. */
@@ -1351,6 +1370,12 @@ export interface PluginListRowProps extends Omit<PluginDomProps<HTMLElement>, "t
   meta?: ReactNode;
   /** The selected record in a list-detail list (outside a listbox). */
   selected?: boolean;
+  /**
+   * The keyboard cursor in a multi-select listbox, where `aria-selected` marks
+   * the selection rather than the cursor: an outline while the list has
+   * keyboard focus. Pass `index === activeIndex`.
+   */
+  active?: boolean;
   onSelect?: () => void;
   /**
    * Dimmed and not clickable. In a `useListNavigation` listbox, report the same
@@ -1364,8 +1389,18 @@ export interface PluginListRowProps extends Omit<PluginDomProps<HTMLElement>, "t
 export interface UseListNavigationOptions {
   /** Rows in the list. */
   count: number;
-  /** Enter, Space or a click on a row. */
-  onSelect?: (index: number) => void;
+  /**
+   * Enter, Space or a click on a row. `event` is the key or click that did it
+   * (absent when `getRowProps(i).onClick()` is called without one), so a
+   * multi-select list can read its modifiers (see `useSelection`).
+   */
+  onSelect?: (index: number, event?: KeyboardEvent<HTMLElement> | MouseEvent<HTMLElement>) => void;
+  /**
+   * The cursor moved by keyboard (arrows, Home/End, typeahead), with the key
+   * that moved it. With `useSelection`, pass `handleNavigate` here so
+   * Shift+Arrow extends the selection.
+   */
+  onActiveIndexChange?: (index: number, event: KeyboardEvent<HTMLElement>) => void;
   /** Past either end, go round to the other. Defaults to false. */
   loop?: boolean;
   /** Where the cursor starts. Defaults to 0. */
@@ -1395,7 +1430,8 @@ export interface PluginListNavigationRowProps {
   "aria-selected": boolean;
   /** Set on rows `isDisabled` reports. */
   "aria-disabled"?: true;
-  onClick: () => void;
+  /** Takes the click, when there is one, so `onSelect` can read its modifiers. */
+  onClick: (event?: MouseEvent<HTMLElement>) => void;
   onPointerMove: () => void;
 }
 
@@ -2811,4 +2847,252 @@ export interface PluginDaintreeTheme {
   /** The active theme's id (a built-in such as `"daintree"`, or a custom theme's id). */
   readonly themeId: string;
   readonly tokens: PluginThemeTokens;
+}
+
+// Selection, hotkeys, history, disclosure, debouncing, remembered view state,
+// toasts and inline confirms.
+
+/** The id type `useSelection` keys rows by. */
+export type PluginSelectionKey = string | number;
+
+/**
+ * A click or key that changes a selection. Only the modifiers and `key` are
+ * read, so a DOM event, a React event or a plain object all work.
+ */
+export interface PluginSelectionGesture {
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  shiftKey?: boolean;
+  /** `" "` (Space) toggles the row rather than replacing the selection. */
+  key?: string;
+}
+
+export interface UseSelectionOptions<K extends PluginSelectionKey = string> {
+  /**
+   * Every row's id, in the order the rows are shown. Ranges and "select all"
+   * walk this order, and `selected` only ever holds ids in it: a row filtered
+   * out of view drops out of `selected` until it is back.
+   */
+  ids: readonly K[];
+  /** `multiple` (the default) or `single`, where choosing a row replaces the last. */
+  mode?: "single" | "multiple";
+  /** Controlled selection. Pair with `onSelectedChange`. */
+  selected?: readonly K[];
+  /** The starting selection when uncontrolled. */
+  defaultSelected?: readonly K[];
+  /** Every change, as the new ids in row order. */
+  onSelectedChange?: (selected: K[]) => void;
+  /** Rows that cannot be selected: ranges and "select all" skip them. */
+  isDisabled?: (id: K) => boolean;
+}
+
+/** Props `useSelection().getItemProps(id)` hands a row that has no `useListNavigation`. */
+export interface PluginSelectionItemProps {
+  "aria-selected": boolean;
+  onClick: (event: MouseEvent<HTMLElement>) => void;
+}
+
+export interface UseSelectionResult<K extends PluginSelectionKey = string> {
+  /** The selected ids, in row order. */
+  selected: K[];
+  /** How many rows are selected. */
+  count: number;
+  /** The row the next Shift-click or Shift+Arrow extends from, or null. */
+  anchor: K | null;
+  isSelected: (id: K) => boolean;
+  /** Every selectable row is selected (false for an empty list). */
+  allSelected: boolean;
+  /** Adds or removes one row, and makes it the anchor. */
+  toggle: (id: K) => void;
+  /** Replaces the selection with these rows; the first becomes the anchor. */
+  select: (ids: K | readonly K[]) => void;
+  /**
+   * Selects from the anchor to `id`, replacing the last range but keeping
+   * rows Cmd/Ctrl-clicked before it. `additive` keeps the whole current
+   * selection as well. With no anchor it selects `id` alone.
+   */
+  selectRange: (id: K, options?: { additive?: boolean }) => void;
+  selectAll: () => void;
+  clear: () => void;
+  /**
+   * A click or Enter/Space on a row, read the platform way: plain replaces
+   * the selection, Cmd (Ctrl elsewhere) or Space toggles, Shift selects a
+   * range from the anchor and Shift with Cmd/Ctrl adds the range. Pass it as
+   * `useListNavigation`'s `onSelect` (mapping the index to an id).
+   */
+  handleSelect: (id: K, gesture?: PluginSelectionGesture) => void;
+  /**
+   * The keyboard cursor arrived on `id`. With Shift held it selects the range
+   * from the anchor; otherwise it does nothing, so the cursor moves without
+   * changing the selection. Pass it as `useListNavigation`'s
+   * `onActiveIndexChange`.
+   */
+  handleNavigate: (id: K, gesture?: PluginSelectionGesture) => void;
+  /** `aria-selected` and a click handler for a row you draw without `useListNavigation`. */
+  getItemProps: (id: K) => PluginSelectionItemProps;
+}
+
+/** One view-scoped shortcut: a canonical combo and what it does. */
+export interface PluginHotkey {
+  /**
+   * The app's chord notation, as `KbdChord` draws it: `"Delete"`,
+   * `"Cmd+A"`, `"Cmd+Shift+Z"`. `Cmd` is Command on macOS and Ctrl
+   * elsewhere; `Ctrl` is the Control key everywhere; `Alt` is Option on
+   * macOS. Single combos only, not two-step chords.
+   */
+  combo: string;
+  /** Runs on the key. The default is prevented unless you return `false`. */
+  handler: (event: globalThis.KeyboardEvent) => void | boolean;
+  /** Also fires while focus is in a text field. Defaults to false. */
+  allowInInput?: boolean;
+  /** Skips the binding without re-rendering to remove it. */
+  disabled?: boolean;
+}
+
+export interface UseHotkeysOptions {
+  /**
+   * Where the keys work: while focus is inside this element. Omitted, they
+   * work anywhere in your view.
+   */
+  scope?: { readonly current: HTMLElement | null };
+  /** Turns every binding off at once. Defaults to true. */
+  enabled?: boolean;
+}
+
+export interface UseUndoRedoOptions {
+  /** Most undo steps kept; older ones fall off. Defaults to 100. */
+  limit?: number;
+  /**
+   * How long, in ms, pushes with the same `coalesce` key keep merging into
+   * one step. Defaults to 1000.
+   */
+  coalesceMs?: number;
+}
+
+export interface PluginUndoRedoPushOptions {
+  /**
+   * Pushes with the same key inside `coalesceMs` of each other make one undo
+   * step, so typing a word is one undo rather than one per letter.
+   */
+  coalesce?: string;
+}
+
+export interface UseUndoRedoResult<T> {
+  /** The current value. */
+  value: T;
+  /** Records a new value as a step. A function gets the current value. */
+  push: (next: T | ((current: T) => T), options?: PluginUndoRedoPushOptions) => void;
+  /** Steps back and returns the value it restored, or undefined when there is none. */
+  undo: () => T | undefined;
+  /** Steps forward again and returns the value, or undefined when there is none. */
+  redo: () => T | undefined;
+  canUndo: boolean;
+  canRedo: boolean;
+  /** Forgets every step and starts again from `value` (the current one when omitted). */
+  reset: (value?: T) => void;
+}
+
+export interface UseDisclosureOptions {
+  /** Controlled. Pair with `onOpenChange`. */
+  open?: boolean;
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}
+
+export interface UseDisclosureResult {
+  open: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+  onToggle: () => void;
+  /** The kit overlays' own callback: spread `{ open, onOpenChange }` onto a `Popover`. */
+  onOpenChange: (open: boolean) => void;
+}
+
+export interface UseDebouncedCallbackOptions {
+  /** Also run on the first call of a burst. Defaults to false (trailing only). */
+  leading?: boolean;
+  /** The longest a burst can hold a call back, in ms. */
+  maxWait?: number;
+}
+
+/** A debounced function from `useDebouncedCallback`. Identity is stable for the life of the component. */
+export type PluginDebouncedCallback<A extends unknown[]> = ((...args: A) => void) & {
+  /** Drops the pending call. */
+  cancel: () => void;
+  /** Runs the pending call now, if there is one. */
+  flush: () => void;
+  /** Whether a call is waiting. */
+  isPending: () => boolean;
+};
+
+/** The tone of a view toast, which picks its glyph and colour. */
+export type PluginToastTone = "info" | "success" | "warning" | "error";
+
+export interface PluginViewToastOptions {
+  /** One or two sentences. Daintree prefixes your plugin's name. */
+  message: string;
+  /** Defaults to `info`. */
+  tone?: PluginToastTone;
+  /**
+   * How long it stays up, in ms; longer than 60 seconds is 60 seconds.
+   * Defaults to the app's time for the tone, or, with an `action`, until the
+   * user answers it.
+   */
+  durationMs?: number;
+  /**
+   * One button on the toast. It closes the toast. A toast with an action
+   * stays up until the user answers it unless you pass `durationMs`.
+   */
+  action?: { label: string; onClick: () => void };
+}
+
+export interface PluginUndoToastOptions {
+  /** What just happened, past tense: `"3 snippets deleted"`. */
+  message: string;
+  /** Puts it back. Runs at most once, and only while the toast is up. */
+  onUndo: () => void;
+  /** Defaults to the app's Undo window, 5 seconds. */
+  durationMs?: number;
+}
+
+/** A toast `useToast` put up. */
+export interface PluginToastHandle {
+  /** Takes it down if it is still up. */
+  dismiss: () => void;
+}
+
+export interface UseToastResult {
+  show: (options: PluginViewToastOptions) => PluginToastHandle;
+  /** A success toast with an Undo button. A plugin has one up at a time; a new one replaces the last. */
+  showUndo: (options: PluginUndoToastOptions) => PluginToastHandle;
+}
+
+/**
+ * Props of `ConfirmPopover`: a small "are you sure" anchored to its trigger,
+ * for an action that is cheap to undo or easy to redo. For anything that
+ * cannot be taken back, use `ConfirmDialog`.
+ */
+export interface PluginConfirmPopoverProps {
+  /** The element that opens it; it must accept a ref and DOM props (a kit `Button` does). */
+  trigger: ReactElement;
+  /** The question, naming what it acts on: `"Clear all 12 snippets?"`. */
+  message: string;
+  /** The consequence, in a quieter line under the question. */
+  description?: string;
+  onConfirm: () => void;
+  onCancel?: () => void;
+  /** A verb-noun ("Clear snippets"). Defaults to "Confirm". */
+  confirmLabel?: string;
+  /** Defaults to "Cancel". */
+  cancelLabel?: string;
+  /**
+   * `danger` draws the confirm as destructive and puts focus on Cancel when
+   * it opens; `default` focuses the confirm.
+   */
+  tone?: "default" | "danger";
+  open?: boolean;
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  side?: PluginSide;
+  align?: PluginAlign;
 }

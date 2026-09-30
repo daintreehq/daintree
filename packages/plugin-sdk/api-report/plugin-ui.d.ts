@@ -183,6 +183,26 @@ declare module "@daintreehq/plugin-ui" {
     PluginVirtualListProps,
     UseListNavigationOptions as PluginUseListNavigationOptions,
     UseListNavigationResult as PluginUseListNavigationResult,
+    PluginConfirmPopoverProps,
+    PluginDebouncedCallback,
+    PluginHotkey,
+    PluginSelectionGesture,
+    PluginSelectionItemProps,
+    PluginSelectionKey,
+    PluginToastHandle,
+    PluginToastTone,
+    PluginUndoRedoPushOptions,
+    PluginUndoToastOptions,
+    PluginViewToastOptions,
+    UseDebouncedCallbackOptions as PluginUseDebouncedCallbackOptions,
+    UseDisclosureOptions as PluginUseDisclosureOptions,
+    UseDisclosureResult as PluginUseDisclosureResult,
+    UseHotkeysOptions as PluginUseHotkeysOptions,
+    UseSelectionOptions as PluginUseSelectionOptions,
+    UseSelectionResult as PluginUseSelectionResult,
+    UseToastResult as PluginUseToastResult,
+    UseUndoRedoOptions as PluginUseUndoRedoOptions,
+    UseUndoRedoResult as PluginUseUndoRedoResult,
   } from "@daintreehq/plugin-sdk/react";
 
   export type MarkdownProps = PluginMarkdownProps;
@@ -326,6 +346,26 @@ declare module "@daintreehq/plugin-ui" {
   export type BarChartProps = PluginBarChartProps;
   export type LineChartProps = PluginLineChartProps;
   export type DonutChartProps = PluginDonutChartProps;
+  export type SelectionKey = PluginSelectionKey;
+  export type SelectionGesture = PluginSelectionGesture;
+  export type SelectionItemProps = PluginSelectionItemProps;
+  export type UseSelectionOptions<K extends SelectionKey = string> = PluginUseSelectionOptions<K>;
+  export type UseSelectionResult<K extends SelectionKey = string> = PluginUseSelectionResult<K>;
+  export type Hotkey = PluginHotkey;
+  export type UseHotkeysOptions = PluginUseHotkeysOptions;
+  export type UseUndoRedoOptions = PluginUseUndoRedoOptions;
+  export type UseUndoRedoResult<T> = PluginUseUndoRedoResult<T>;
+  export type UndoRedoPushOptions = PluginUndoRedoPushOptions;
+  export type UseDisclosureOptions = PluginUseDisclosureOptions;
+  export type UseDisclosureResult = PluginUseDisclosureResult;
+  export type UseDebouncedCallbackOptions = PluginUseDebouncedCallbackOptions;
+  export type DebouncedCallback<A extends unknown[]> = PluginDebouncedCallback<A>;
+  export type ToastTone = PluginToastTone;
+  export type ToastOptions = PluginViewToastOptions;
+  export type UndoToastOptions = PluginUndoToastOptions;
+  export type ToastHandle = PluginToastHandle;
+  export type UseToastResult = PluginUseToastResult;
+  export type ConfirmPopoverProps = PluginConfirmPopoverProps;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -629,4 +669,47 @@ declare module "@daintreehq/plugin-ui" {
   export function getDaintreeTheme(): DaintreeTheme;
   /** Calls `listener` after every theme change. Returns a function that stops it. */
   export function onDidChangeDaintreeTheme(listener: (theme: DaintreeTheme) => void): () => void;
+
+  /**
+   * Single, multi and range selection for a list or table, keyed by row id:
+   * plain click replaces, Cmd/Ctrl-click toggles, Shift-click selects from the
+   * anchor. Pair with `useListNavigation` through `handleSelect` (its
+   * `onSelect`) and `handleNavigate` (its `onActiveIndexChange`).
+   */
+  export function useSelection<K extends SelectionKey = string>(
+    options: UseSelectionOptions<K>
+  ): UseSelectionResult<K>;
+  /**
+   * Shortcuts for your view, or for one element of it, in the app's chord
+   * notation (`"Cmd+Shift+Z"`). A key Daintree is bound to stays Daintree's.
+   * Keys typed into a text field are left alone unless `allowInInput`.
+   */
+  export function useHotkeys(hotkeys: readonly Hotkey[], options?: UseHotkeysOptions): void;
+  /** A value with an undo history: `push`, `undo`, `redo`, optional coalescing and a step limit. */
+  export function useUndoRedo<T>(
+    initial: T | (() => T),
+    options?: UseUndoRedoOptions
+  ): UseUndoRedoResult<T>;
+  /** Open/closed state, controlled or not, shaped to spread onto a kit overlay. */
+  export function useDisclosure(options?: UseDisclosureOptions): UseDisclosureResult;
+  /** `value` once it has stopped changing for `delayMs` (300 by default). */
+  export function useDebouncedValue<T>(value: T, delayMs?: number): T;
+  /** `callback`, run once calls stop for `delayMs`, with `cancel`, `flush` and `isPending`. */
+  export function useDebouncedCallback<A extends unknown[]>(
+    callback: (...args: A) => void,
+    delayMs?: number,
+    options?: UseDebouncedCallbackOptions
+  ): DebouncedCallback<A>;
+  /**
+   * `useState` the view remembers across unmounts, reloads and restarts,
+   * stored on the panel through the host. Values must be JSON.
+   */
+  export function usePersistentViewState<T>(
+    key: string,
+    initial: T | (() => T)
+  ): [T, (next: T | ((current: T) => T)) => void];
+  /** Toasts in the app's toaster, named for your plugin, with an optional action or Undo. */
+  export function useToast(): UseToastResult;
+  /** A small confirm anchored to `trigger`, for actions that are cheap to undo. The trigger shows while the kit loads. */
+  export const ConfirmPopover: ComponentType<ConfirmPopoverProps>;
 }
