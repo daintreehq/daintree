@@ -4,7 +4,10 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { logDebug, logInfo, logWarn, logError } from "../../utils/logger.js";
 import {
+  AUDIO_BUFFER_MAX_BYTES,
+  AUDIO_BUFFER_MAX_CHUNKS,
   STUB_CONFIDENCE,
+  createAudioBufferOverflowError,
   type TranscriptionProvider,
   type VoiceStartResult,
   type VoiceTranscriptionEvent,
@@ -65,11 +68,6 @@ const CONNECT_TIMEOUT_MS = 10_000;
 // never arrives (server error, dropped frame), force-close after this long
 // rather than hanging the stop.
 const DRAIN_TIMEOUT_MS = 3_000;
-const PRE_CONNECT_BUFFER_MAX = 100;
-// Hard byte ceiling for buffered-but-not-yet-sent audio (pre-connect and during
-// a reconnect window). 24kHz mono PCM16 ≈ 48KB/s, so ~150KB ≈ 3s — the point
-// past which voice context is lost anyway. Caps memory if chunks are large.
-const PRE_CONNECT_BUFFER_MAX_BYTES = 150_000;
 // Client-side ping/pong heartbeat. The OpenAI Realtime server sends its own
 // pings (auto-ponged by `ws`), but a half-open TCP connection on our side —
 // server alive, our socket silently dead — is only detectable by us pinging
@@ -1059,22 +1057,23 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   /**
    * Appends a chunk to the pre-connect / reconnect buffer, enforcing both a
    * chunk-count cap and a byte cap. Oldest-wins: once either ceiling is hit the
-   * chunk is dropped (warned once) — a voice gap past ~3s is unrecoverable
+   * chunk is dropped (warned and reported once) — a voice gap past ~3s is unrecoverable
    * anyway, so there's no value in retaining unbounded audio.
    */
   private bufferPreConnectChunk(chunk: ArrayBuffer): void {
     if (
-      this.preConnectBuffer.length >= PRE_CONNECT_BUFFER_MAX ||
-      this.preConnectBufferBytes + chunk.byteLength > PRE_CONNECT_BUFFER_MAX_BYTES
+      this.preConnectBuffer.length >= AUDIO_BUFFER_MAX_CHUNKS ||
+      this.preConnectBufferBytes + chunk.byteLength > AUDIO_BUFFER_MAX_BYTES
     ) {
       if (!this.preConnectBufferOverflowWarned) {
         this.preConnectBufferOverflowWarned = true;
         logWarn(`${P} Pre-connect buffer full, dropping audio`, {
           chunks: this.preConnectBuffer.length,
           bytes: this.preConnectBufferBytes,
-          maxChunks: PRE_CONNECT_BUFFER_MAX,
-          maxBytes: PRE_CONNECT_BUFFER_MAX_BYTES,
+          maxChunks: AUDIO_BUFFER_MAX_CHUNKS,
+          maxBytes: AUDIO_BUFFER_MAX_BYTES,
         });
+        this.emitError(createAudioBufferOverflowError());
       }
       return;
     }

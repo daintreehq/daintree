@@ -468,6 +468,8 @@ describe("DeepgramTranscriptionProvider", () => {
 
   it("enforces the pre-connect byte cap independently of chunk count", async () => {
     const provider = new DeepgramTranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    provider.onEvent((e) => events.push(e));
     const startPromise = provider.start(BASE_SETTINGS);
     await Promise.resolve();
     const socket = latestInstance();
@@ -482,6 +484,12 @@ describe("DeepgramTranscriptionProvider", () => {
 
     // 3 × 40KB = 120KB fits; a 4th would push to 160KB > 150KB, so it's dropped.
     expect(socket.binaryFrames()).toHaveLength(3);
+    // Two chunks dropped, one transient report.
+    const overflows = events.filter(
+      (e) => e.type === "error" && e.error.code === "audio_buffer_overflow"
+    );
+    expect(overflows).toHaveLength(1);
+    expect(overflows[0]).toMatchObject({ error: { severity: "transient" } });
     provider.stop();
   });
 

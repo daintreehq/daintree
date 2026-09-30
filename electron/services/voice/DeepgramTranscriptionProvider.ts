@@ -7,7 +7,10 @@ import {
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { logDebug, logInfo, logWarn, logError } from "../../utils/logger.js";
 import {
+  AUDIO_BUFFER_MAX_BYTES,
+  AUDIO_BUFFER_MAX_CHUNKS,
   STUB_CONFIDENCE,
+  createAudioBufferOverflowError,
   type TranscriptionProvider,
   type VoiceStartResult,
   type VoiceTranscriptionEvent,
@@ -27,10 +30,6 @@ const DRAIN_TIMEOUT_MS = 3_000;
 // error. A periodic KeepAlive text frame resets that timer; well under 10s
 // gives margin even if a tick is delayed.
 const KEEPALIVE_INTERVAL_MS = 5_000;
-const PRE_CONNECT_BUFFER_MAX = 100;
-// 24kHz mono PCM16 ≈ 48KB/s, so ~150KB ≈ 3s of audio — past which voice
-// context is lost anyway. Matches the OpenAI provider's ceiling.
-const PRE_CONNECT_BUFFER_MAX_BYTES = 150_000;
 
 // Deepgram caps Nova-3 keyterms at 100 terms and 500 aggregate tokens. The
 // tokenizer is syllable-based (~5 tokens per single-word term), so the term
@@ -535,17 +534,18 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
 
   private bufferPreConnectChunk(chunk: ArrayBuffer): void {
     if (
-      this.preConnectBuffer.length >= PRE_CONNECT_BUFFER_MAX ||
-      this.preConnectBufferBytes + chunk.byteLength > PRE_CONNECT_BUFFER_MAX_BYTES
+      this.preConnectBuffer.length >= AUDIO_BUFFER_MAX_CHUNKS ||
+      this.preConnectBufferBytes + chunk.byteLength > AUDIO_BUFFER_MAX_BYTES
     ) {
       if (!this.preConnectBufferOverflowWarned) {
         this.preConnectBufferOverflowWarned = true;
         logWarn(`${P} Pre-connect buffer full, dropping audio`, {
           chunks: this.preConnectBuffer.length,
           bytes: this.preConnectBufferBytes,
-          maxChunks: PRE_CONNECT_BUFFER_MAX,
-          maxBytes: PRE_CONNECT_BUFFER_MAX_BYTES,
+          maxChunks: AUDIO_BUFFER_MAX_CHUNKS,
+          maxBytes: AUDIO_BUFFER_MAX_BYTES,
         });
+        this.emit({ type: "error", error: createAudioBufferOverflowError() });
       }
       return;
     }
