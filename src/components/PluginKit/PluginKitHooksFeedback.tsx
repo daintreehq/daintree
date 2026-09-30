@@ -112,22 +112,19 @@ export function showPluginViewUndoToast(owner: string | null, options: unknown):
   const undo = () => {
     Reflect.apply(onUndo, undefined, []);
   };
-  const id = showUndoNotification(owner, message, undo, field(options, "durationMs"));
+  const id = showUndoNotification(owner, message, undo);
   liveUndoToasts.set(slot, id);
   return id;
 }
 
-function showUndoNotification(
-  owner: string | null,
-  message: string,
-  onUndo: () => void,
-  durationMs: unknown
-): string {
+function showUndoNotification(owner: string | null, message: string, onUndo: () => void): string {
   // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
   return notify({
     type: "success",
     message: owner ? `${pluginDisplayName(owner)}: ${message}` : message,
-    duration: readDuration(durationMs) ?? UNDO_TOAST_DURATION_MS,
+    // The app's one Undo window: every site shares it, so a plugin cannot
+    // shorten the only way back or leave a stale Undo up for a minute.
+    duration: UNDO_TOAST_DURATION_MS,
     // The change is already visible where the user made it; the inbox would
     // only keep an Undo that no longer works.
     transient: true,
