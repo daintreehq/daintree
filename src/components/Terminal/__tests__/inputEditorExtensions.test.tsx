@@ -301,6 +301,109 @@ describe("createAutoSize integration", () => {
     });
   });
 
+  /**
+   * Interim dictation is a widget after an empty doc (#9172), so the doc
+   * alone says "empty" while wrapped transcript is on screen (#13103).
+   */
+  describe("interim dictation", () => {
+    function mountInterim(initialHeight: number) {
+      let contentHeight = initialHeight;
+      const parent = document.createElement("div");
+      const view = new EditorView({
+        parent,
+        state: EditorState.create({
+          doc: "",
+          extensions: [interimWidgetField, createAutoSize({ lineHeightPx: 10, maxHeightPx: 30 })],
+        }),
+      });
+      Object.defineProperty(view, "contentHeight", {
+        get: () => contentHeight,
+        configurable: true,
+      });
+      const originalRequestMeasure = view.requestMeasure.bind(view);
+      vi.spyOn(view, "requestMeasure").mockImplementation((measure) => {
+        if (measure?.write) {
+          measure.write(measure.read(view), view);
+        } else {
+          originalRequestMeasure(measure);
+        }
+      });
+      return {
+        view,
+        setHeight: (h: number) => {
+          contentHeight = h;
+        },
+      };
+    }
+
+    it("grows with wrapped interim text on an empty doc", () => {
+      const { view } = mountInterim(25);
+      view.dispatch({ effects: setInterimText.of("a long dictated sentence") });
+
+      expect(view.state.doc.length).toBe(0);
+      expect(view.dom.style.height).toBe("30px");
+      expect(view.scrollDOM.style.overflowY).toBe("hidden");
+      expect(view.dom.dataset.composerMultiline).toBe("true");
+
+      view.destroy();
+    });
+
+    it("scrolls once interim text passes the max height", () => {
+      const { view } = mountInterim(50);
+      view.dispatch({ effects: setInterimText.of("a very long dictated passage") });
+
+      expect(view.dom.style.height).toBe("30px");
+      expect(view.scrollDOM.style.overflowY).toBe("auto");
+
+      view.destroy();
+    });
+
+    it("holds the mark while interim text is showing and releases it when cleared", () => {
+      const { view, setHeight } = mountInterim(25);
+      view.dispatch({ effects: setInterimText.of("a long dictated sentence") });
+      expect(view.dom.dataset.composerMultiline).toBe("true");
+
+      // The rail widened the canvas and the ghost now fits one line: still
+      // content on screen, so the latch must hold.
+      setHeight(11);
+      view.dispatch({ effects: setInterimText.of("a long dictated sentence and") });
+      expect(view.dom.dataset.composerMultiline).toBe("true");
+
+      setHeight(0);
+      view.dispatch({ effects: setInterimText.of("") });
+      expect(view.dom.style.height).toBe("10px");
+      expect(view.dom.dataset.composerMultiline).toBeUndefined();
+
+      view.destroy();
+    });
+
+    it("leaves a single line of interim text unmarked", () => {
+      const { view } = mountInterim(11);
+      view.dispatch({ effects: setInterimText.of("hi") });
+
+      expect(view.dom.style.height).toBe("10px");
+      expect(view.dom.dataset.composerMultiline).toBeUndefined();
+
+      view.destroy();
+    });
+
+    it("keeps the mark when interim text is committed to the draft", () => {
+      const { view } = mountInterim(25);
+      view.dispatch({ effects: setInterimText.of("a long dictated sentence") });
+      expect(view.dom.dataset.composerMultiline).toBe("true");
+
+      view.dispatch({
+        changes: { from: 0, insert: "a long dictated sentence" },
+        effects: setInterimText.of(""),
+      });
+
+      expect(view.dom.style.height).toBe("30px");
+      expect(view.dom.dataset.composerMultiline).toBe("true");
+
+      view.destroy();
+    });
+  });
+
   it("caps height and shows overflow for large content", () => {
     const parent = document.createElement("div");
     const view = new EditorView({
