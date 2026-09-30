@@ -32,6 +32,24 @@ export const PLUGIN_STYLE_ROOT_PROPS: Readonly<Record<string, string>> = Object.
 });
 
 /**
+ * Names the plugin instance a style root belongs to. The host stamps it on a
+ * view's root and hands it to the view inside `styleRootAttributes`, so a
+ * portal the view spreads them onto carries it too. That is how diagnostics
+ * find a plugin's portalled content (the Styles check) and the UI events
+ * dispatched inside it (long-frame attribution), neither of which a panel
+ * lookup can reach. Diagnostic only: it grants nothing.
+ */
+export const PLUGIN_STYLE_OWNER_ATTRIBUTE = "data-daintree-plugin-owner";
+
+/** {@link PLUGIN_STYLE_ROOT_PROPS} tagged with the owning plugin instance. */
+export function pluginStyleRootPropsFor(pluginId: string): Readonly<Record<string, string>> {
+  return Object.freeze({
+    [PLUGIN_STYLE_ROOT_ATTRIBUTE]: "",
+    [PLUGIN_STYLE_OWNER_ATTRIBUTE]: pluginId,
+  });
+}
+
+/**
  * How long the speculative source-text read may take before the mount stops
  * waiting on it. Short on purpose: this pass only buys first-paint styling, and
  * the DOM observer produces the same CSS a microtask later either way. A wedged

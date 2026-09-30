@@ -11,6 +11,7 @@ import {
   MAX_TRACKED_PLUGINS,
   MAX_VIEW_LOADS,
   MEMORY_SAMPLE_INTERVAL_MS,
+  ON_DEMAND_SAMPLE_MIN_INTERVAL_MS,
   PluginMetricsService,
   classifyInvokeFailure,
   type PluginMetricsHost,
@@ -180,6 +181,7 @@ describe("PluginMetricsService", () => {
             activateMs: 200,
             importMs: 150,
             stylesMs: 20,
+            loadMs: b.viewLoadMs + 1,
             firstPaintMs: 100,
             retry: false,
             at: 1,
@@ -194,6 +196,63 @@ describe("PluginMetricsService", () => {
     expect(over).toEqual(["activationMs", "viewLoadMs", "viewCommitP95Ms", "invokeP95Ms"]);
   });
 
+  it("keeps an invoke that overlapped a prompt out of the latency window", () => {
+    fx.service.recordInvoke("acme.demo", 5, "ok", fx.service.markInvokeStart("acme.demo"));
+
+    // A prompt opened and answered during the call.
+    const mark = fx.service.markInvokeStart("acme.demo");
+    fx.service.beginPromptWait("acme.demo")();
+    fx.service.recordInvoke("acme.demo", 1_258, "ok", mark);
+
+    // A call that started while one was already open.
+    const end = fx.service.beginPromptWait("acme.demo");
+    fx.service.recordInvoke("acme.demo", 900, "error", fx.service.markInvokeStart("acme.demo"));
+    end();
+    end();
+
+    fx.service.recordInvoke("acme.demo", 7, "ok", fx.service.markInvokeStart("acme.demo"));
+
+    const invokes = fx.service.getSnapshot("acme.demo")!.invokes;
+    expect(invokes).toMatchObject({ count: 4, promptWaits: 2, errors: 1, maxMs: 7 });
+    expect(fx.service.getSnapshot("acme.demo")!.overBudget).not.toContain("invokeP95Ms");
+  });
+
+  it("does not judge invoke latency when every call waited on a prompt", () => {
+    const end = fx.service.beginPromptWait("acme.demo");
+    fx.service.recordInvoke("acme.demo", 5_000, "ok", fx.service.markInvokeStart("acme.demo"));
+    end();
+    const snap = fx.service.getSnapshot("acme.demo")!;
+    expect(snap.invokes).toMatchObject({ count: 1, promptWaits: 1, p95Ms: 0 });
+    expect(snap.overBudget).toEqual([]);
+  });
+
+  it("reports the busiest second beside the sustained push rate, judging only the sustained", () => {
+    fx.service.recordPushes("acme.demo", 20_000, 2_000);
+    vi.advanceTimersByTime(9_000);
+    fx.service.recordPushes("acme.demo", 10, 1);
+    const pushes = fx.service.getSnapshot("acme.demo")!.pushes;
+    expect(pushes.peakPerSecond).toBe(20_000);
+    expect(pushes.peakBytesPerSecond).toBe(2_000);
+    expect(pushes.perSecond).toBeLessThan(pushes.peakPerSecond);
+    // The burst's bucket has left the window; the later one has not.
+    vi.advanceTimersByTime(5_000);
+    expect(fx.service.getSnapshot("acme.demo")!.pushes.peakPerSecond).toBe(10);
+  });
+
+  it("samples worker memory when a snapshot is read, without a subscriber, at most every couple of seconds", () => {
+    fx.pids.set("acme.demo", 42);
+    fx.memory.push({ pid: 42, rssBytes: 90 * 1024 * 1024 });
+    expect(fx.service.getSnapshot("acme.demo")!.workerMemory).toEqual({
+      rssBytes: 90 * 1024 * 1024,
+      at: 1_000_000,
+    });
+    expect(fx.service.getAll()[0]!.workerMemory).not.toBeNull();
+    expect(fx.sampleProcessMemory).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(ON_DEMAND_SAMPLE_MIN_INTERVAL_MS);
+    fx.service.getAll();
+    expect(fx.sampleProcessMemory).toHaveBeenCalledTimes(2);
+  });
+
   it("does not flag budgets with no measurement", () => {
     expect(fx.service.getSnapshot("acme.demo")!.overBudget).toEqual([]);
     fx.service.recordActivation("acme.demo", 1);
@@ -206,6 +265,7 @@ describe("PluginMetricsService", () => {
       activateMs: 1,
       importMs: 1,
       stylesMs: 1,
+      loadMs: 1,
       firstPaintMs: 1,
       retry: false,
       at: 1,

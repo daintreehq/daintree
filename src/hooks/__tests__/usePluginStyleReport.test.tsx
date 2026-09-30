@@ -24,7 +24,10 @@ const getPluginStyleReportForRoots = vi.hoisted(() =>
     roots.length === 0 ? null : { generated: ["p-4"], notGenerated: ["bg-red-500"] }
   )
 );
-vi.mock("@/services/plugin/pluginStyleContract", () => ({ getPluginStyleReportForRoots }));
+vi.mock("@/services/plugin/pluginStyleContract", () => ({
+  getPluginStyleReportForRoots,
+  PLUGIN_STYLE_OWNER_ATTRIBUTE: "data-daintree-plugin-owner",
+}));
 
 const { findPluginStyleRoots, usePluginStyleReport } = await import("../usePluginStyleReport");
 
@@ -58,11 +61,27 @@ describe("findPluginStyleRoots", () => {
     expect(findPluginStyleRoots("acme.demo")).toEqual([mine]);
   });
 
-  it("does not count a root outside any panel, such as a body portal", () => {
+  it("does not count an untagged root outside any panel, such as a body portal", () => {
     const portal = document.createElement("div");
     portal.setAttribute(PLUGIN_STYLE_ROOT_ATTRIBUTE, "");
     document.body.appendChild(portal);
     expect(findPluginStyleRoots("acme.demo")).toEqual([]);
+  });
+
+  it("counts a portal tagged with the plugin as its owner, and only for that plugin", () => {
+    const portal = document.createElement("div");
+    portal.setAttribute(PLUGIN_STYLE_ROOT_ATTRIBUTE, "");
+    portal.setAttribute("data-daintree-plugin-owner", "acme.demo");
+    document.body.appendChild(portal);
+    expect(findPluginStyleRoots("acme.demo")).toEqual([portal]);
+    expect(findPluginStyleRoots("other.plugin")).toEqual([]);
+  });
+
+  it("attributes a root inside a panel by the panel, whatever owner it claims", () => {
+    const root = mountPanel("p1", "acme.demo.main", "acme.demo");
+    root.setAttribute("data-daintree-plugin-owner", "other.plugin");
+    expect(findPluginStyleRoots("other.plugin")).toEqual([]);
+    expect(findPluginStyleRoots("acme.demo")).toHaveLength(1);
   });
 
   it("keeps project instances of the same manifest apart", () => {

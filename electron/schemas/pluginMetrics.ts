@@ -37,6 +37,7 @@ const ViewLoadSampleSchema = z.object({
   activateMs: durationMs,
   importMs: durationMs,
   stylesMs: durationMs,
+  loadMs: durationMs,
   firstPaintMs: durationMs,
   retry: z.boolean(),
   at: epochMs,
@@ -45,7 +46,7 @@ const ViewLoadSampleSchema = z.object({
 const LongFrameSchema = z.object({
   durationMs,
   blockingMs: durationMs,
-  source: z.enum(["script", "commit"]),
+  source: z.enum(["script", "commit", "input", "push"]),
   at: epochMs,
 });
 

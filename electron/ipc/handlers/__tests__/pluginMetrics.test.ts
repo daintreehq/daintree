@@ -63,6 +63,7 @@ function validReport(pluginId = "acme.demo") {
         activateMs: 10,
         importMs: 20,
         stylesMs: 5,
+        loadMs: 25,
         firstPaintMs: 40,
         retry: false,
         at: 1,

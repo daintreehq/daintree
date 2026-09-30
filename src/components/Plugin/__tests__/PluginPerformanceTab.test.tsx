@@ -27,6 +27,7 @@ function makeSnapshot(overrides: Partial<PluginPerfSnapshot> = {}): PluginPerfSn
         activateMs: 20,
         importMs: 40,
         stylesMs: 90,
+        loadMs: 110,
         firstPaintMs: 180,
         retry: false,
         at: Date.now(),
@@ -42,8 +43,17 @@ function makeSnapshot(overrides: Partial<PluginPerfSnapshot> = {}): PluginPerfSn
       errors: 2,
       timeouts: 0,
       oversized: 1,
+      promptWaits: 0,
     },
-    pushes: { messages: 0, bytes: 0, perSecond: 0, bytesPerSecond: 0, oversized: 0 },
+    pushes: {
+      messages: 0,
+      bytes: 0,
+      perSecond: 0,
+      bytesPerSecond: 0,
+      peakPerSecond: 0,
+      peakBytesPerSecond: 0,
+      oversized: 0,
+    },
     longFrames: { count: 0, totalBlockingMs: 0, lastAt: null },
     workerMemory: { rssBytes: 64 * 1024 * 1024, at: Date.now() },
     overBudget: ["activationMs"],
@@ -113,7 +123,15 @@ describe("PluginPerformanceSection", () => {
     render(
       <PluginPerformanceSection
         snapshot={makeSnapshot({
-          pushes: { messages: 900, bytes: 2048, perSecond: 90, bytesPerSecond: 512, oversized: 0 },
+          pushes: {
+            messages: 900,
+            bytes: 2048,
+            perSecond: 90,
+            bytesPerSecond: 512,
+            peakPerSecond: 400,
+            peakBytesPerSecond: 1024,
+            oversized: 0,
+          },
           overBudget: ["pushesPerSecond"],
         })}
         developmentBuild={false}
@@ -124,6 +142,76 @@ describe("PluginPerformanceSection", () => {
     );
     expect(lines.find((line) => line.startsWith("Budget 60/s"))).toContain("above");
     expect(lines.find((line) => line.includes("MB/s"))).not.toContain("above");
+  });
+
+  it("shows the busiest second beside the sustained push rate", () => {
+    render(
+      <PluginPerformanceSection
+        snapshot={makeSnapshot({
+          pushes: {
+            messages: 900,
+            bytes: 2048,
+            perSecond: 90,
+            bytesPerSecond: 512,
+            peakPerSecond: 400,
+            peakBytesPerSecond: 1024,
+            oversized: 0,
+          },
+        })}
+        developmentBuild={false}
+      />
+    );
+    const text = row("Messages to views").textContent ?? "";
+    expect(text).toContain("90/s");
+    expect(text).toContain("busiest second 400/s");
+  });
+
+  it("reports the measured view load, not a sum of overlapping phases", () => {
+    render(
+      <PluginPerformanceSection
+        snapshot={makeSnapshot({
+          viewLoads: [
+            {
+              kindId: "acme.demo.main",
+              activateMs: 80,
+              importMs: 40,
+              stylesMs: 90,
+              loadMs: 95,
+              firstPaintMs: 180,
+              retry: false,
+              at: Date.now(),
+            },
+          ],
+        })}
+        developmentBuild={false}
+      />
+    );
+    expect(row("Last view load").querySelector("dd")?.textContent).toContain("95ms");
+  });
+
+  it("keeps prompt waits out of the call timings and says so", () => {
+    render(
+      <PluginPerformanceSection
+        snapshot={makeSnapshot({
+          invokes: {
+            count: 3,
+            p50Ms: 0,
+            p95Ms: 0,
+            maxMs: 0,
+            lastMs: 0,
+            errors: 0,
+            timeouts: 0,
+            oversized: 0,
+            promptWaits: 3,
+          },
+        })}
+        developmentBuild={false}
+      />
+    );
+    const text = row("Calls to the plugin").textContent ?? "";
+    expect(text).toContain("Not timed");
+    expect(text).toContain("3 waited on a prompt");
+    expect(text).not.toContain("p50");
   });
 
   it("lists invoke failures only when there are some", () => {

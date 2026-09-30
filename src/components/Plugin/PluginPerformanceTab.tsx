@@ -25,12 +25,12 @@ function formatRate(perSecond: number): string {
 }
 
 /**
- * What the view waited on before it could render: activation, then the longer
- * of the module import and style preparation, which run side by side. The same
- * figure main compares against `viewLoadMs`.
+ * Open → module imported and styles ready, as the renderer measured it: the
+ * figure main compares against `viewLoadMs`. The phases overlap (styles start
+ * before activation), so they are shown as a breakdown, never summed.
  */
 function viewLoadMsOf(sample: PluginViewLoadSample): number {
-  return sample.activateMs + Math.max(sample.importMs, sample.stylesMs);
+  return sample.loadMs;
 }
 
 interface MetricRowProps {
@@ -106,7 +106,12 @@ export function PluginPerformanceSection({
     invokes.errors > 0 ? pluralize(invokes.errors, "error") : null,
     invokes.timeouts > 0 ? `${invokes.timeouts.toLocaleString()} timed out` : null,
     invokes.oversized > 0 ? `${invokes.oversized.toLocaleString()} oversized` : null,
+    invokes.promptWaits > 0
+      ? `${invokes.promptWaits.toLocaleString()} waited on a prompt, not in the timings`
+      : null,
   ].filter((part): part is string => part !== null);
+  // Every call waited on a prompt: there is no latency to show.
+  const timedInvokes = invokes.count - invokes.promptWaits;
 
   return (
     <div className="space-y-3">
@@ -180,13 +185,20 @@ export function PluginPerformanceSection({
 
         <MetricRow
           label="Calls to the plugin"
-          value={invokes.count > 0 ? `p95 ${measured(invokes.p95Ms)}` : "None yet"}
+          value={
+            timedInvokes > 0
+              ? `p95 ${measured(invokes.p95Ms)}`
+              : invokes.count > 0
+                ? "Not timed"
+                : "None yet"
+          }
           detail={
             invokes.count > 0
               ? [
                   pluralize(invokes.count, "call"),
-                  `p50 ${measured(invokes.p50Ms)}`,
-                  `max ${measured(invokes.maxMs)}`,
+                  ...(timedInvokes > 0
+                    ? [`p50 ${measured(invokes.p50Ms)}`, `max ${measured(invokes.maxMs)}`]
+                    : []),
                   ...invokeExtras,
                 ].join(" · ")
               : undefined
@@ -205,6 +217,9 @@ export function PluginPerformanceSection({
           detail={
             pushes.messages > 0
               ? [
+                  `Averaged over the last 10 seconds · busiest second ${formatRate(
+                    pushes.peakPerSecond
+                  )}/s, ${formatBytes(pushes.peakBytesPerSecond)}/s`,
                   `${pluralize(pushes.messages, "message")} · ${formatBytes(pushes.bytes)} in total`,
                   ...(pushes.oversized > 0
                     ? [`${pushes.oversized.toLocaleString()} oversized`]
@@ -236,7 +251,7 @@ export function PluginPerformanceSection({
                 {" · the plugin was active during these frames"}
               </>
             ) : (
-              "Slow frames during which this plugin's view rendered or its code ran"
+              "Slow frames during which this plugin's code ran, its view rendered or received input, or a message reached it"
             )
           }
         />
@@ -252,7 +267,9 @@ export function PluginPerformanceSection({
             detail={
               snapshot.workerMemory ? (
                 <TimeAgo timestamp={snapshot.workerMemory.at} verbose prefix="Sampled " />
-              ) : undefined
+              ) : (
+                "The worker isn't running, or hasn't been sampled yet"
+              )
             }
             budget={`Budget ${formatBytes(budgets.workerRssBytes)}`}
             aboveBudget={over(snapshot, "workerRssBytes")}
@@ -365,7 +382,7 @@ export function PluginStylesSection({ pluginId }: { pluginId: string }) {
       <div className="flex items-start justify-between gap-3">
         <p className="text-xs text-text-secondary">
           Classes in this plugin&rsquo;s open panels that Daintree&rsquo;s plugin styles generate no
-          CSS for. Popups a panel opens outside itself aren&rsquo;t included.
+          CSS for, including popups a panel opens with its style-root attributes.
         </p>
         <Button
           variant="ghost"

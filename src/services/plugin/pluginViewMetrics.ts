@@ -52,6 +52,20 @@ const MAX_TRACKED_AUTHORITIES = 64;
  * and a fixed one keeps `recordCommit` allocation-free.
  */
 const COMMIT_WINDOW_RING = 64;
+/**
+ * Recent UI events dispatched inside plugin style roots, kept for long-frame
+ * attribution the same way. Events for one plugin that land within
+ * {@link INPUT_COALESCE_MS} of the previous one extend it instead of taking a
+ * slot, so a scroll does not flush the ring.
+ */
+const INPUT_WINDOW_RING = 64;
+const INPUT_COALESCE_MS = 4;
+/**
+ * How long long-frame attribution stays on after the last plugin view closes.
+ * The observer delivers a frame after it ends, so a click that closed the last
+ * view during a long frame would otherwise see tracking already off.
+ */
+const TRACKING_GRACE_MS = 1_000;
 /** Replaced generations remembered per plugin, so a straggler from one is dropped. */
 const MAX_RETIRED_GENERATIONS = 8;
 
@@ -124,6 +138,7 @@ export function createPluginViewMetrics() {
   const dirty = new Set<string>();
   const listeners = new Set<() => void>();
   const drainRequestListeners = new Set<() => void>();
+  const viewLoadListeners = new Set<() => void>();
   let drainRequested = false;
   /** `plugin://` authority → plugin id, learned from the URLs views load from. */
   const authorities = new Map<string, string>();
@@ -133,9 +148,18 @@ export function createPluginViewMetrics() {
   let windowCursor = 0;
   let windowCount = 0;
 
+  // Each slot is an interval: coalesced events stretch its end.
+  const inputStarts = new Float64Array(INPUT_WINDOW_RING);
+  const inputEnds = new Float64Array(INPUT_WINDOW_RING);
+  const inputPlugins: (string | undefined)[] = new Array(INPUT_WINDOW_RING);
+  let inputCursor = 0;
+  let inputCount = 0;
+
   /** Mounted plugin views, per plugin. Long frames are only attributed while any are open. */
   const openViews = new Map<string, number>();
   let openViewCount = 0;
+  /** performance.now() when the last open view closed; -Infinity while any is open or none ever was. */
+  let lastViewClosedAt = Number.NEGATIVE_INFINITY;
   /** Bumped by `reset()`, so a release closure from before it cannot touch the new counts. */
   let resetEpoch = 0;
   /** Generations each plugin has moved past, newest last. */
@@ -227,6 +251,9 @@ export function createPluginViewMetrics() {
     for (let i = 0; i < COMMIT_WINDOW_RING; i++) {
       if (windowPlugins[i] === pluginId) windowPlugins[i] = undefined;
     }
+    for (let i = 0; i < INPUT_WINDOW_RING; i++) {
+      if (inputPlugins[i] === pluginId) inputPlugins[i] = undefined;
+    }
   }
 
   /**
@@ -303,6 +330,42 @@ export function createPluginViewMetrics() {
     markDirty(pluginId, entry);
     // Last, so a listener that drains synchronously sees a finished record.
     if (entry.pendingLoads.length >= VIEW_LOAD_HIGH_WATER) requestDrain();
+    notify(viewLoadListeners);
+  }
+
+  /**
+   * A UI event reached a plugin style root (its view or a portal it tagged),
+   * at `at` on the `performance.now()` clock. Runs from a capture listener on
+   * every such event, so it is O(1) and allocation-free: a burst for one
+   * plugin extends the newest slot rather than filling the ring.
+   */
+  function recordInput(pluginId: string, at: number): void {
+    if (inputCount > 0) {
+      const newest = (inputCursor - 1 + INPUT_WINDOW_RING) % INPUT_WINDOW_RING;
+      if (inputPlugins[newest] === pluginId && at - inputEnds[newest]! <= INPUT_COALESCE_MS) {
+        if (at > inputEnds[newest]!) inputEnds[newest] = at;
+        return;
+      }
+    }
+    inputStarts[inputCursor] = at;
+    inputEnds[inputCursor] = at;
+    inputPlugins[inputCursor] = pluginId;
+    inputCursor = (inputCursor + 1) % INPUT_WINDOW_RING;
+    if (inputCount < INPUT_WINDOW_RING) inputCount++;
+  }
+
+  /** Plugins that received a UI event in `[start, end]` (performance.now() clock). */
+  function pluginsWithInputDuring(start: number, end: number): string[] {
+    if (inputCount === 0) return [];
+    const found: string[] = [];
+    for (let i = 0; i < inputCount; i++) {
+      const pluginId = inputPlugins[i];
+      if (pluginId === undefined) continue;
+      if (inputEnds[i]! >= start && inputStarts[i]! <= end && !found.includes(pluginId)) {
+        found.push(pluginId);
+      }
+    }
+    return found;
   }
 
   /**
@@ -397,6 +460,7 @@ export function createPluginViewMetrics() {
       // A view retained before `reset()` was already forgotten by it.
       if (retainedIn !== resetEpoch) return;
       openViewCount--;
+      if (openViewCount === 0) lastViewClosedAt = performance.now();
       const remaining = (openViews.get(pluginId) ?? 1) - 1;
       if (remaining > 0) {
         openViews.set(pluginId, remaining);
@@ -428,9 +492,12 @@ export function createPluginViewMetrics() {
     return found;
   }
 
-  /** Whether any plugin view is mounted here — the long-frame fast path. */
+  /**
+   * Whether any plugin view is mounted here, or the last one closed within
+   * {@link TRACKING_GRACE_MS} — the long-frame fast path.
+   */
   function isTracking(): boolean {
-    return openViewCount > 0;
+    return openViewCount > 0 || performance.now() - lastViewClosedAt < TRACKING_GRACE_MS;
   }
 
   function drainReports(): PluginRendererMetricsReport[] {
@@ -507,6 +574,18 @@ export function createPluginViewMetrics() {
     };
   }
 
+  /**
+   * Fires on every view load recorded. A load is one sample per open, and the
+   * number a developer is waiting to see, so the drainer sends it sooner than
+   * the commit and frame stream it otherwise batches with.
+   */
+  function onViewLoadRecorded(listener: () => void): () => void {
+    viewLoadListeners.add(listener);
+    return () => {
+      viewLoadListeners.delete(listener);
+    };
+  }
+
   function getLocalSnapshot(pluginId: string): PluginViewLocalSnapshot | null {
     const entry = plugins.get(pluginId);
     if (!entry) return null;
@@ -540,27 +619,34 @@ export function createPluginViewMetrics() {
     authorities.clear();
     openViews.clear();
     openViewCount = 0;
+    lastViewClosedAt = Number.NEGATIVE_INFINITY;
     resetEpoch++;
     retiredGenerations.clear();
     drainRequested = false;
     windowPlugins.fill(undefined);
     windowCursor = 0;
     windowCount = 0;
+    inputPlugins.fill(undefined);
+    inputCursor = 0;
+    inputCount = 0;
   }
 
   return {
     recordViewLoad,
     recordCommit,
     recordLongFrame,
+    recordInput,
     registerViewOrigin,
     retainView,
     pluginIdForScriptUrl,
     pluginsCommittingDuring,
+    pluginsWithInputDuring,
     isTracking,
     drainReports,
     drainTaggedReports,
     subscribe,
     onDrainRequested,
+    onViewLoadRecorded,
     getLocalSnapshot,
     reset,
   };

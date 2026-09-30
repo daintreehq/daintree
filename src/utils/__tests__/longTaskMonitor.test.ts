@@ -401,9 +401,12 @@ describe("attributeLongFrameToPlugins", () => {
   });
 
   it("does nothing once no plugin view is mounted", () => {
+    let now = 5_000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const metrics = createPluginViewMetrics();
     metrics.registerViewOrigin("acme", "plugin://acme/v.js");
     metrics.retainView("acme")();
+    now += 2_000;
     const recordLongFrame = vi.spyOn(metrics, "recordLongFrame");
     attributeLongFrameToPlugins(
       makeLoafEntry({
@@ -487,5 +490,120 @@ describe("attributeLongFrameToPlugins", () => {
     emitLoafEntry({ duration: 80, startTime: 0 });
     expect(logWarn).not.toHaveBeenCalled();
     expect(pluginViewMetrics.drainReports()[0]!.longFrames).toHaveLength(1);
+  });
+});
+
+describe("production long-frame attribution", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+    vi.restoreAllMocks();
+  });
+
+  it("attributes a frame to the plugin whose style root received input during it", () => {
+    const metrics = createPluginViewMetrics();
+    metrics.retainView("acme");
+    metrics.recordInput("acme", 1_050);
+    metrics.recordInput("beta", 3_000);
+    attributeLongFrameToPlugins(
+      makeLoafEntry({ duration: 1_642, blockingDuration: 1_592, startTime: 1_000 }),
+      metrics,
+      () => []
+    );
+    const reports = metrics.drainReports();
+    expect(reports.map((r) => r.pluginId)).toEqual(["acme"]);
+    expect(reports[0]!.longFrames).toEqual([
+      { durationMs: 1_642, blockingMs: 1_592, source: "input", at: expect.any(Number) },
+    ]);
+  });
+
+  it("still attributes a frame delivered just after its input closed the last view", () => {
+    let now = 5_000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const metrics = createPluginViewMetrics();
+    const release = metrics.retainView("acme");
+    metrics.recordInput("acme", 4_900);
+    release();
+    now += 200;
+    attributeLongFrameToPlugins(
+      makeLoafEntry({ duration: 400, startTime: 4_800 }),
+      metrics,
+      () => []
+    );
+    expect(metrics.drainReports()[0]?.longFrames[0]?.source).toBe("input");
+  });
+
+  it("does not attribute input that landed outside the frame", () => {
+    const metrics = createPluginViewMetrics();
+    metrics.retainView("acme");
+    metrics.recordInput("acme", 900);
+    attributeLongFrameToPlugins(
+      makeLoafEntry({ duration: 100, startTime: 1_000 }),
+      metrics,
+      () => []
+    );
+    expect(metrics.drainReports()).toEqual([]);
+  });
+
+  it("attributes a frame to plugins the preload delivered pushes to during it", () => {
+    const metrics = createPluginViewMetrics();
+    metrics.retainView("acme");
+    const reader = vi.fn(() => ["acme"]);
+    attributeLongFrameToPlugins(
+      makeLoafEntry({ duration: 300, blockingDuration: 250, startTime: 2_000 }),
+      metrics,
+      reader
+    );
+    expect(reader).toHaveBeenCalledWith(2_000, 2_300);
+    const [report] = metrics.drainReports();
+    expect(report!.longFrames[0]!.source).toBe("push");
+  });
+
+  it("records a plugin once per frame, under the strongest observation", () => {
+    const metrics = createPluginViewMetrics();
+    metrics.retainView("acme");
+    metrics.recordCommit("acme", 10, 1_010);
+    metrics.recordInput("acme", 1_020);
+    metrics.drainReports();
+    attributeLongFrameToPlugins(makeLoafEntry({ duration: 100, startTime: 1_000 }), metrics, () => [
+      "acme",
+    ]);
+    const [report] = metrics.drainReports();
+    expect(report!.longFrames.map((frame) => frame.source)).toEqual(["commit"]);
+  });
+
+  it("notes UI events dispatched inside an owner-tagged root, including a portal", async () => {
+    const { startPluginInputTracking } = await import("../longTaskMonitor");
+    const metrics = createPluginViewMetrics();
+    metrics.retainView("acme");
+    const recordInput = vi.spyOn(metrics, "recordInput");
+    const portal = document.createElement("div");
+    portal.setAttribute("data-daintree-plugin-owner", "acme");
+    const button = document.createElement("button");
+    portal.appendChild(button);
+    const outside = document.createElement("button");
+    document.body.append(portal, outside);
+
+    const stop = startPluginInputTracking(document, metrics);
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    outside.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(recordInput).toHaveBeenCalledTimes(1);
+    expect(recordInput).toHaveBeenCalledWith("acme", expect.any(Number));
+
+    stop();
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(recordInput).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores UI events while no plugin view is open", async () => {
+    const { startPluginInputTracking } = await import("../longTaskMonitor");
+    const metrics = createPluginViewMetrics();
+    const recordInput = vi.spyOn(metrics, "recordInput");
+    const root = document.createElement("div");
+    root.setAttribute("data-daintree-plugin-owner", "acme");
+    document.body.appendChild(root);
+    const stop = startPluginInputTracking(document, metrics);
+    root.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
+    stop();
+    expect(recordInput).not.toHaveBeenCalled();
   });
 });

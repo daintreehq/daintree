@@ -573,3 +573,30 @@ describe("runtime-status on unload", () => {
     service.dispose();
   });
 });
+
+describe("app quit — plugin workers", () => {
+  it("disposes every worker supervisor, so the quit's exits are expected rather than crashes", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const first = { workerHost: { dispose: vi.fn() } };
+    const second = {
+      workerHost: {
+        dispose: vi.fn(() => {
+          throw new Error("already gone");
+        }),
+      },
+    };
+    const third = { workerHost: { dispose: vi.fn() } };
+    internals(service).pluginWorkers.set("acme.one", first);
+    internals(service).pluginWorkers.set("acme.two", second);
+    internals(service).pluginWorkers.set("acme.three", third);
+
+    await service.shutdownManagedProcesses();
+
+    expect(first.workerHost.dispose).toHaveBeenCalledTimes(1);
+    expect(second.workerHost.dispose).toHaveBeenCalledTimes(1);
+    // One supervisor failing to stop must not keep the rest running.
+    expect(third.workerHost.dispose).toHaveBeenCalledTimes(1);
+
+    service.dispose();
+  });
+});

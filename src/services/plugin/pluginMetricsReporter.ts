@@ -9,19 +9,24 @@ import {
  * Drains this renderer's plugin view observations to main in batches.
  *
  * Lazy by construction: nothing runs until the registry reports its first
- * delta after a drain, so a project view with no plugin views open costs two
- * idle listeners. The registry's early drain request (a buffer at 75% of its
- * cap) and the page going hidden or away drain immediately, so a report is
- * neither sampled nor lost with the page.
+ * delta after a drain, so a project view with no plugin views open costs
+ * three idle listeners. A view load drains after a short debounce, since it is
+ * one sample per open and the number someone opening a view is waiting for.
+ * The registry's early drain request (a buffer at 75% of its cap) and the page
+ * going hidden or away drain immediately, so a report is neither sampled nor
+ * lost with the page.
  */
 
 /** Delay between the first delta after a drain and the drain itself. */
 export const REPORT_DRAIN_DELAY_MS = 2_000;
+/** Delay between a view load and the drain that carries it (and anything else pending). */
+export const VIEW_LOAD_DRAIN_DELAY_MS = 250;
 
 type DrainRegistry = Pick<
   PluginViewMetrics,
   "subscribe" | "onDrainRequested" | "drainTaggedReports"
->;
+> &
+  Partial<Pick<PluginViewMetrics, "onViewLoadRecorded">>;
 
 interface ListenerTarget {
   addEventListener(type: string, listener: () => void): void;
@@ -54,6 +59,7 @@ export function startPluginMetricsReporter(options: PluginMetricsReporterOptions
   const microtask = options.queueMicrotask ?? ((fn) => queueMicrotask(fn));
 
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let viewLoadTimer: ReturnType<typeof setTimeout> | null = null;
   let microtaskQueued = false;
   let stopped = false;
 
@@ -61,6 +67,10 @@ export function startPluginMetricsReporter(options: PluginMetricsReporterOptions
     if (timer !== null) {
       cancel(timer);
       timer = null;
+    }
+    if (viewLoadTimer !== null) {
+      cancel(viewLoadTimer);
+      viewLoadTimer = null;
     }
     if (stopped) return;
     let tagged: TaggedPluginReport[];
@@ -87,6 +97,14 @@ export function startPluginMetricsReporter(options: PluginMetricsReporterOptions
     timer = schedule(drain, REPORT_DRAIN_DELAY_MS);
   });
 
+  // A debounce rather than a drain per load, so several panels opening together
+  // still go out as one message.
+  const offViewLoad =
+    registry.onViewLoadRecorded?.(() => {
+      if (viewLoadTimer !== null || stopped) return;
+      viewLoadTimer = schedule(drain, VIEW_LOAD_DRAIN_DELAY_MS);
+    }) ?? (() => {});
+
   // Requested from inside the recording call (a React commit); leave that
   // stack before draining.
   const offDrainRequested = registry.onDrainRequested(() => {
@@ -109,6 +127,7 @@ export function startPluginMetricsReporter(options: PluginMetricsReporterOptions
     drain();
     stopped = true;
     offSubscribe();
+    offViewLoad();
     offDrainRequested();
     doc?.removeEventListener("visibilitychange", onVisibilityChange);
     page?.removeEventListener("pagehide", drain);
