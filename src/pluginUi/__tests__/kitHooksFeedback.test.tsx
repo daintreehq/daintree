@@ -396,3 +396,90 @@ describe("hotkeys and the host's own bindings", () => {
     warn.mockRestore();
   });
 });
+
+describe("ListRow in a multi-select list", () => {
+  function row(props: Record<string, unknown>) {
+    return createElement(kit.ListRow, {
+      id: "r1",
+      role: "option",
+      "aria-selected": false,
+      title: "Rebase onto develop",
+      icon: "star",
+      ...props,
+    });
+  }
+  const mark = (root: ParentNode) => root.querySelector('[data-slot="checkbox-glyph"]');
+
+  it("draws the host checkbox glyph for membership, ticked when checked", () => {
+    const { container, rerender } = render(row({ checked: false }));
+    expect(mark(container)?.getAttribute("data-state")).toBe("unchecked");
+    rerender(row({ checked: true }));
+    expect(mark(container)?.getAttribute("data-state")).toBe("checked");
+    // Outside a multi-select list the row keeps its icon alone.
+    rerender(row({}));
+    expect(mark(container)).toBeNull();
+  });
+
+  it("gives the icon's slot to the checkbox while anything is selected", () => {
+    const { container, rerender } = render(row({ checked: false }));
+    expect(container.querySelector("svg.lucide-star, svg")).not.toBeNull();
+    rerender(row({ checked: false, selecting: true }));
+    // Only the glyph's own check path may remain; the row icon is gone.
+    const icons = [...container.querySelectorAll("svg")].filter(
+      (svg) => !svg.closest('[data-slot="checkbox-glyph"]')
+    );
+    expect(icons).toHaveLength(0);
+  });
+
+  it("toggles from the checkbox without the row's own click", () => {
+    const onToggle = vi.fn();
+    const onClick = vi.fn();
+    const { container } = render(row({ checked: false, onToggle, onClick }));
+    fireEvent.click(container.querySelector("[data-kit-row-checkbox]")!);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("keeps the host lists' ring on the row a context menu is open on", async () => {
+    const { ROW_MENU_TARGET_CLASS } = await import("@/components/ui/paletteRowStyles");
+    const { container } = render(row({ checked: false, "data-state": "open" }));
+    const option = container.querySelector('[role="option"]')!;
+    expect(option.getAttribute("data-state")).toBe("open");
+    for (const token of ROW_MENU_TARGET_CLASS.split(/\s+/).filter(Boolean)) {
+      expect(option.classList.contains(token)).toBe(true);
+    }
+  });
+});
+
+describe("two-line menu rows", () => {
+  it("sets the key column and the submenu chevron on the label's line", async () => {
+    render(
+      createElement(kit.DropdownMenu, {
+        open: true,
+        trigger: createElement(kit.Button, { children: "Actions" }),
+        items: [
+          {
+            label: "Delete",
+            description: "Undo from the toast",
+            shortcut: "Delete",
+            onSelect: () => {},
+          },
+          { label: "Copy", shortcut: "Cmd+C", onSelect: () => {} },
+          {
+            type: "submenu",
+            label: "Export",
+            description: "Pick a format",
+            items: [{ label: "As JSON", onSelect: () => {} }],
+          },
+        ],
+      })
+    );
+    const twoLine = await screen.findByRole("menuitem", { name: /Delete/ });
+    const oneLine = screen.getByRole("menuitem", { name: /Copy/ });
+    const keyColumn = (item: Element) => item.lastElementChild?.getAttribute("class") ?? "";
+    expect(keyColumn(twoLine)).toContain("self-start");
+    expect(keyColumn(oneLine)).not.toContain("self-start");
+    const trigger = screen.getByRole("menuitem", { name: /Export/ });
+    expect(trigger.className).toContain("items-start");
+  });
+});
