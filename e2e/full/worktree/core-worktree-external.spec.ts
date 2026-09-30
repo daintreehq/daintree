@@ -8,7 +8,7 @@ import { SEL } from "../../helpers/selectors";
 import { T_LONG, T_MEDIUM } from "../../helpers/timeouts";
 import { execSync } from "child_process";
 import path from "path";
-import { existsSync } from "fs";
+import { existsSync, writeFileSync } from "fs";
 
 const FEATURE_BRANCH = "feature/test-branch";
 const EXTERNAL_BRANCH = "feature/external-added";
@@ -19,7 +19,12 @@ let fixtureCleanup: (() => void) | undefined;
 let featureWorktreePath: string;
 let externalWorktreePath: string;
 
-test.describe.serial("Core: External Worktree Detection", () => {
+/**
+ * Git activity performed outside the app — file edits, commits, and
+ * `git worktree add/remove` — must reach the sidebar through the workspace
+ * host's watchers alone. Nothing here asks the app to refresh.
+ */
+test.describe.serial("Core: External Git and Worktree Detection", () => {
   test.beforeAll(async () => {
     ({ dir: fixtureDir, cleanup: fixtureCleanup } = createFixtureRepo({
       name: "worktree-external",
@@ -70,18 +75,59 @@ test.describe.serial("Core: External Worktree Detection", () => {
     await expect(featureCard).toBeVisible({ timeout: T_LONG });
   });
 
+  test("initial state shows clean main worktree with initial commit", async () => {
+    const { window } = ctx;
+    const mainCard = window.locator(SEL.worktree.mainCard);
+
+    await expect(mainCard).toBeVisible({ timeout: T_LONG });
+    await expect
+      .poll(() => mainCard.getAttribute("aria-label"), {
+        timeout: T_LONG,
+        message: "Main card should not have uncommitted changes",
+      })
+      .not.toContain("has uncommitted changes");
+
+    await expect(mainCard).toContainText("initial commit", { timeout: T_LONG });
+  });
+
+  test("detects external file creation as uncommitted changes", async () => {
+    const { window } = ctx;
+    const mainCard = window.locator(SEL.worktree.mainCard);
+
+    writeFileSync(path.join(fixtureDir, "external-change.txt"), "hello\n");
+
+    await expect
+      .poll(() => mainCard.getAttribute("aria-label"), {
+        timeout: T_LONG,
+        message: "Main card should detect uncommitted changes from external file",
+      })
+      .toContain("has uncommitted changes");
+  });
+
+  test("detects external commit and updates last commit message", async () => {
+    const { window } = ctx;
+    const mainCard = window.locator(SEL.worktree.mainCard);
+
+    execSync('git add -A && git commit -m "external-commit"', {
+      cwd: fixtureDir,
+      stdio: "ignore",
+    });
+
+    await expect(mainCard).toContainText("external-commit", { timeout: T_LONG });
+
+    await expect
+      .poll(() => mainCard.getAttribute("aria-label"), {
+        timeout: T_LONG,
+        message: "Card should be clean after committing all changes",
+      })
+      .not.toContain("has uncommitted changes");
+  });
+
   test("detects external worktree removal and auto-switches to main", async () => {
     const { window } = ctx;
 
     // Switch to the feature worktree so it's active
     await switchWorktree(window, FEATURE_BRANCH);
-
-    // Wait for monitor's self-trigger cooldown (GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS = 1000ms)
-    // to expire. The cooldown is measured from `lastGitStatusCompletedAt`, not from the
-    // start of this wait — keep a generous buffer so loaded CI scheduling can't compress
-    // timing into the cooldown window. There is no observable signal for cooldown expiry,
-    // so a fixed wait is required.
-    await window.waitForTimeout(1500);
 
     // Remove the worktree externally via git CLI
     execSync("git worktree remove --force " + JSON.stringify(featureWorktreePath), {
@@ -104,15 +150,8 @@ test.describe.serial("Core: External Worktree Detection", () => {
     });
   });
 
-  test("detects external worktree addition after refresh", async () => {
+  test("detects external worktree addition without a manual refresh", async () => {
     const { window } = ctx;
-
-    // Wait for monitor's self-trigger cooldown (GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS = 1000ms)
-    // to expire. The cooldown is measured from `lastGitStatusCompletedAt`, not from the
-    // start of this wait — keep a generous buffer so loaded CI scheduling can't compress
-    // timing into the cooldown window. There is no observable signal for cooldown expiry,
-    // so a fixed wait is required.
-    await window.waitForTimeout(1500);
 
     // Add a new worktree externally via git CLI
     execSync(
@@ -120,16 +159,13 @@ test.describe.serial("Core: External Worktree Detection", () => {
       { cwd: fixtureDir, stdio: "ignore" }
     );
 
-    // Trigger refresh so the app discovers the new worktree
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await window.evaluate(() => (window as any).electron.worktree.refresh());
-
+    // No refresh: TopologyWatcher sees `.git/worktrees/` change on its own.
     // New worktree card should appear
     const externalCard = window.locator(SEL.worktree.card(EXTERNAL_BRANCH));
     await expect
       .poll(() => externalCard.count(), {
         timeout: T_LONG,
-        message: "Externally added worktree card should appear after refresh",
+        message: "Externally added worktree card should appear via the topology watcher",
       })
       .toBe(1);
   });

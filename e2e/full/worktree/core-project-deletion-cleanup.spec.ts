@@ -68,7 +68,10 @@ async function stopActiveProjectViaSwitcher(
     .poll(
       async () => {
         await option.click({ button: "right" });
-        const visible = await stopItem.isVisible({ timeout: T_SHORT }).catch(() => false);
+        const visible = await stopItem
+          .waitFor({ state: "visible", timeout: T_SHORT })
+          .then(() => true)
+          .catch(() => false);
         if (visible) return true;
         // Menu opened but lacks "Stop all agents" (processCount not yet
         // propagated). Dismiss and retry — palette stays open.
@@ -86,9 +89,9 @@ async function stopActiveProjectViaSwitcher(
   await stopItem.click();
 }
 
-// ── Scenario 1: Active project close clears UI ──────────
+// ── Scenario 1: Stopping the active project clears its UI ──
 
-test.describe.serial("Deletion Cleanup: Active project close clears UI", () => {
+test.describe.serial("Deletion Cleanup: Stopping the active project clears UI", () => {
   let ctx: AppContext;
   let fixtureDir: string;
   let fixtureCleanup: (() => void) | undefined;
@@ -98,23 +101,6 @@ test.describe.serial("Deletion Cleanup: Active project close clears UI", () => {
   test.beforeAll(async () => {
     ({ dir: fixtureDir, cleanup: fixtureCleanup } = createFixtureRepo({ name: "active-close" }));
     ctx = await launchApp();
-
-    // Disable two-pane split mode: spawning exactly 2 terminals triggers a
-    // race condition where the split layout momentarily activates during the
-    // tab-group intermediate state, causing the Electron process to exit.
-    await ctx.window.evaluate(() => {
-      localStorage.setItem(
-        "daintree-two-pane-split",
-        JSON.stringify({
-          state: {
-            config: { enabled: false, defaultRatio: 0.5, preferPreview: false },
-            ratioByWorktreeId: {},
-          },
-          version: 1,
-        })
-      );
-    });
-
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, PROJECT_NAME);
 
     const panel1 = await spawnTerminalAndVerify(ctx.window);
@@ -132,7 +118,7 @@ test.describe.serial("Deletion Cleanup: Active project close clears UI", () => {
     fixtureCleanup?.();
   });
 
-  test("active project removal shows Close Project dialog", async () => {
+  test("Stop all agents on the active project shows the Stop project dialog", async () => {
     const { window } = ctx;
 
     await stopActiveProjectViaSwitcher(window, PROJECT_NAME);
@@ -150,7 +136,7 @@ test.describe.serial("Deletion Cleanup: Active project close clears UI", () => {
     await expect(trigger).toContainText(PROJECT_NAME, { timeout: T_SHORT });
   });
 
-  test("confirming close shows welcome state with no panels", async () => {
+  test("confirming stop shows welcome state with no panels", async () => {
     const { window } = ctx;
 
     await stopActiveProjectViaSwitcher(window, PROJECT_NAME);
@@ -167,7 +153,7 @@ test.describe.serial("Deletion Cleanup: Active project close clears UI", () => {
         async () => {
           for (const w of ctx.app.windows()) {
             const openFolder = w.locator(SEL.welcome.openFolder);
-            if (await openFolder.isVisible({ timeout: 500 }).catch(() => false)) {
+            if (await openFolder.isVisible().catch(() => false)) {
               ctx.window = w;
               return true;
             }
@@ -183,33 +169,29 @@ test.describe.serial("Deletion Cleanup: Active project close clears UI", () => {
     expect(await getDockPanelCount(ctx.window)).toBe(0);
   });
 
-  test("PTY processes are killed after active close", async () => {
-    test.info().annotations.push({
-      type: "platform-skip",
-      description: "PTY PID checks not available on Windows",
-    });
+  test("PTY processes are killed after stopping the project", async () => {
+    if (process.platform === "win32") {
+      test.info().annotations.push({
+        type: "platform-skip",
+        description: "PTY PID checks not available on Windows",
+      });
+      test.skip(true, "PTY PID checks not available on Windows");
+    }
 
-    test.skip(process.platform === "win32", "PTY PID checks not available on Windows");
-    test.info().annotations.push({
-      type: "conditional-skip",
-      description: "Condition not met",
-    });
-
-    test.skip(ptyPids.length === 0, "No PTY PIDs captured");
-
+    expect(ptyPids).toHaveLength(2);
     for (const pid of ptyPids) {
       await waitForProcessDeath(pid, T_LONG);
     }
   });
 
-  test("closed project still appears in switcher list", async () => {
+  test("stopped project still appears in switcher list", async () => {
     const { window } = ctx;
 
     await window.locator(SEL.toolbar.projectSwitcherTrigger).click();
     const palette = window.locator(SEL.projectSwitcher.palette);
     await expect(palette).toBeVisible({ timeout: T_MEDIUM });
 
-    // Active close does NOT remove from the list — project should still be there
+    // Stopping does NOT remove the project from the list — project should still be there
     await expect(palette.getByText(PROJECT_NAME, { exact: false })).toBeVisible({
       timeout: T_SHORT,
     });
@@ -219,10 +201,11 @@ test.describe.serial("Deletion Cleanup: Active project close clears UI", () => {
   });
 });
 
-// ── Scenario 2: Background project removal isolation ────
+// ── Scenario 2: Background project removal — isolation and persistence ──
 
-test.describe.serial("Deletion Cleanup: Background project removal isolation", () => {
-  let ctx: AppContext;
+test.describe.serial("Deletion Cleanup: Background project removal", () => {
+  let ctx: AppContext | null = null;
+  let userDataDir: string;
   let fixtureA: string;
   let fixtureB: string;
   let cleanupA: (() => void) | undefined;
@@ -232,10 +215,11 @@ test.describe.serial("Deletion Cleanup: Background project removal isolation", (
   let ptyPidB: number | null = null;
 
   test.beforeAll(async () => {
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-deletion-persist-"));
     ({ dir: fixtureA, cleanup: cleanupA } = createFixtureRepo({ name: "bg-active" }));
     ({ dir: fixtureB, cleanup: cleanupB } = createFixtureRepo({ name: "bg-remove" }));
 
-    ctx = await launchApp();
+    ctx = await launchApp({ userDataDir });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureA, PROJECT_A);
 
     // Spawn a terminal in A so it has panels when we switch back
@@ -259,13 +243,19 @@ test.describe.serial("Deletion Cleanup: Background project removal isolation", (
   });
 
   test.afterAll(async () => {
-    if (ctx?.app) await closeApp(ctx.app);
+    if (ctx?.app) {
+      const pid = ctx.app.process().pid;
+      await closeApp(ctx.app);
+      if (pid) await waitForProcessExit(pid).catch(() => {});
+      ctx = null;
+    }
+    removePathSync(userDataDir);
     cleanupA?.();
     cleanupB?.();
   });
 
-  test("background removal shows Remove Project dialog", async () => {
-    const { window } = ctx;
+  test("background removal shows Remove Project dialog; cancel keeps it listed", async () => {
+    const { window } = ctx!;
 
     await removeProjectViaSwitcher(window, PROJECT_B);
 
@@ -274,14 +264,30 @@ test.describe.serial("Deletion Cleanup: Background project removal isolation", (
       .last();
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
     await expect(dialog.getByRole("button", { name: "Remove project" })).toBeVisible();
+    // The confirmation names the project being removed.
+    await expect(dialog.getByText(PROJECT_B, { exact: false }).first()).toBeVisible();
 
     // Cancel first
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
+
+    // The cancel flow returns to the underlying switcher when it remains open.
+    // Only click the trigger if the dialog teardown closed the switcher too.
+    const palette = window.locator(SEL.projectSwitcher.palette);
+    if (!(await palette.isVisible().catch(() => false))) {
+      await window.locator(SEL.toolbar.projectSwitcherTrigger).click();
+    }
+    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
+    await expect(palette.getByText(PROJECT_B, { exact: false })).toBeVisible({
+      timeout: T_SHORT,
+    });
+
+    await dismissBlockingPalette(window);
+    await expect(palette).not.toBeVisible({ timeout: T_SHORT });
   });
 
   test("confirming removal leaves active project intact", async () => {
-    const { window } = ctx;
+    const { window } = ctx!;
 
     await removeProjectViaSwitcher(window, PROJECT_B);
 
@@ -321,90 +327,26 @@ test.describe.serial("Deletion Cleanup: Background project removal isolation", (
   });
 
   test("background project PTY processes are killed", async () => {
-    test.info().annotations.push({
-      type: "platform-skip",
-      description: "PTY PID checks not available on Windows",
-    });
-
-    test.skip(process.platform === "win32", "PTY PID checks not available on Windows");
-    test.info().annotations.push({
-      type: "conditional-skip",
-      description: "Condition not met",
-    });
-
-    test.skip(ptyPidB === null, "No PTY PID captured");
-
-    await waitForProcessDeath(ptyPidB!, T_LONG);
-  });
-});
-
-// ── Scenario 3: Background removal persists across restart ──
-
-test.describe.serial("Deletion Cleanup: Background removal persists across restart", () => {
-  let userDataDir: string;
-  let fixtureA: string;
-  let fixtureB: string;
-  let cleanupA: (() => void) | undefined;
-  let cleanupB: (() => void) | undefined;
-  let ctx: AppContext | null = null;
-  const PROJECT_A = "persist-active";
-  const PROJECT_B = "persist-remove";
-
-  test.beforeAll(async () => {
-    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-deletion-persist-"));
-    ({ dir: fixtureA, cleanup: cleanupA } = createFixtureRepo({ name: "persist-active" }));
-    ({ dir: fixtureB, cleanup: cleanupB } = createFixtureRepo({ name: "persist-remove" }));
-  });
-
-  test.afterAll(async () => {
-    if (ctx?.app) {
-      const pid = ctx.app.process().pid;
-      await closeApp(ctx.app);
-      if (pid) await waitForProcessExit(pid).catch(() => {});
-      ctx = null;
+    if (process.platform === "win32") {
+      test.info().annotations.push({
+        type: "platform-skip",
+        description: "PTY PID checks not available on Windows",
+      });
+      test.skip(true, "PTY PID checks not available on Windows");
     }
-    removePathSync(userDataDir);
-    cleanupA?.();
-    cleanupB?.();
+
+    expect(ptyPidB).not.toBeNull();
+    await waitForProcessDeath(ptyPidB!, T_LONG);
   });
 
   test("removed project stays gone after app restart", async () => {
-    // Session 1: Launch, onboard both projects, remove B
-    ctx = await launchApp({ userDataDir });
-    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureA, PROJECT_A);
-    ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, fixtureB, PROJECT_B);
-
-    // Switch to A so B is background
-    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
-    await expect(ctx.window.locator("[data-worktree-branch]").first()).toBeVisible({
-      timeout: T_LONG,
-    });
-
-    // Remove B from the list
-    await removeProjectViaSwitcher(ctx.window, PROJECT_B);
-    const dialog = ctx.window
-      .getByRole("alertdialog", { name: /^Remove '.+' from the list\?$/ })
-      .last();
-    await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
-    await dialog.getByRole("button", { name: "Remove project" }).click();
-    await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
-
-    // Verify B is gone
-    await ctx.window.locator(SEL.toolbar.projectSwitcherTrigger).click();
-    const palette1 = ctx.window.locator(SEL.projectSwitcher.palette);
-    await expect(palette1).toBeVisible({ timeout: T_MEDIUM });
-    await expect(palette1.getByText(PROJECT_B, { exact: false })).not.toBeVisible({
-      timeout: T_SHORT,
-    });
-    await dismissBlockingPalette(ctx.window);
-
-    // Graceful close
-    const pid = ctx.app.process().pid!;
-    await closeApp(ctx.app);
+    // Graceful close so the removal is flushed, then relaunch on the same
+    // userData.
+    const pid = ctx!.app.process().pid!;
+    await closeApp(ctx!.app);
     await waitForProcessExit(pid);
     ctx = null;
 
-    // Session 2: Relaunch with same userDataDir
     ctx = await launchApp({ userDataDir });
     const { window: w2 } = ctx;
 

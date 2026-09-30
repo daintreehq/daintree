@@ -323,6 +323,7 @@ test.describe.serial("Startup: agent terminals across multiple worktrees", () =>
     // makes any regression change the distribution instead of no-opping.
     await selectWorktreeAndAwaitPanels(w, wtA.id, savedCounts.get(wtA.id) ?? 1);
     // Let the debounced panel/selection persistence flush before quitting.
+    // timer: PanelPersistence debounceMs (500ms) flush before quit
     await w.waitForTimeout(T_SETTLE * 2);
 
     const pid1 = ctx.app.process().pid!;
@@ -375,6 +376,7 @@ test.describe.serial("Startup: agent terminals across multiple worktrees", () =>
 
     // Orphan cleanup (gated by #11235 on a trustworthy worktree list) must
     // not have killed anything after the workspace finished loading.
+    // timer: negative-assertion dwell for a late orphan-cleanup kill
     await w.waitForTimeout(T_SETTLE * 2);
     expect((await listTerminals(w)).length).toBe(savedTerminals.length);
   });

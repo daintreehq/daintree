@@ -2,9 +2,10 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { getGridPanelCount } from "../../helpers/panels";
+import { getGridPanelCount, getDockPanelCount } from "../../helpers/panels";
+import { spawnTerminalAndVerify } from "../../helpers/workflows";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 let ctx: AppContext;
 const FEATURE = "feature/test-branch";
@@ -105,6 +106,99 @@ test.describe.serial("Core: Worktree Cards", () => {
         "true",
         { timeout: T_LONG }
       );
+    });
+  });
+
+  // -- Session Bulk Actions --
+
+  test.describe.serial("Session Bulk Actions", () => {
+    async function openSessionsSubmenu() {
+      const { window } = ctx;
+      const featureCard = window.locator(SEL.worktree.card(FEATURE));
+      await featureCard.locator(SEL.worktree.actionsMenu).click();
+
+      const sessionsTrigger = window.getByRole("menuitem", { name: "Sessions" });
+      await expect(sessionsTrigger).toBeVisible({ timeout: T_SHORT });
+      // Hover doesn't reliably open Radix submenus on Linux CI. Click the
+      // trigger so the submenu opens on all platforms.
+      await sessionsTrigger.click();
+    }
+
+    async function expectWorktreeSessionSummary(count: number) {
+      const featureCard = ctx.window.locator(SEL.worktree.card(FEATURE));
+      await expect
+        .poll(
+          async () => {
+            const text = (await featureCard.textContent()) ?? "";
+            return text.replace(/\s+/g, "").toLowerCase();
+          },
+          { timeout: T_LONG }
+        )
+        .toContain(`${count}active`);
+    }
+
+    // Two assertions because there are two channels: the count reaches assistive
+    // tech through the item's accessible name, and a sighted user through the
+    // aria-hidden trailing slot. `exact` is load-bearing — Playwright string
+    // names match as substrings, so a bare ", 3" would also accept ", 30".
+    async function expectSessionsItemCount(label: string, count: number) {
+      const item = ctx.window.getByRole("menuitem", { name: `${label}, ${count}`, exact: true });
+      await expect(item).toBeVisible({ timeout: T_LONG });
+      await expect(item).not.toHaveAttribute("aria-disabled", "true", { timeout: T_LONG });
+      await expect(item).toContainText(String(count));
+    }
+
+    async function clickSessionsItem(name: string) {
+      const item = ctx.window.getByRole("menuitem", { name, exact: true });
+      await expect(item).toBeVisible({ timeout: T_SHORT });
+      await expect(item).not.toHaveAttribute("aria-disabled", "true", { timeout: T_LONG });
+      await item.click();
+    }
+
+    test("select feature worktree and spawn 3 terminals", async () => {
+      const { window } = ctx;
+
+      const featureCard = window.locator(SEL.worktree.card(FEATURE));
+      await featureCard.click({ position: { x: 10, y: 10 } });
+      await expect(window.locator(SEL.worktree.row(FEATURE))).toHaveAttribute(
+        "aria-current",
+        "true",
+        { timeout: T_LONG }
+      );
+
+      await spawnTerminalAndVerify(window);
+      await spawnTerminalAndVerify(window);
+      await spawnTerminalAndVerify(window);
+
+      await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(3);
+      await expect.poll(() => getDockPanelCount(window), { timeout: T_LONG }).toBe(0);
+      await expectWorktreeSessionSummary(3);
+    });
+
+    test("dock all sessions", async () => {
+      const { window } = ctx;
+
+      await expectWorktreeSessionSummary(3);
+      await openSessionsSubmenu();
+      await expectSessionsItemCount("Dock all panels", 3);
+      await clickSessionsItem("Dock all panels, 3");
+
+      await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(0);
+      await expect.poll(() => getDockPanelCount(window), { timeout: T_LONG }).toBe(3);
+      await expectWorktreeSessionSummary(3);
+    });
+
+    test("move all sessions back to the grid", async () => {
+      const { window } = ctx;
+
+      await expect(window.locator('[role="menu"]')).toHaveCount(0, { timeout: T_SHORT });
+      await expectWorktreeSessionSummary(3);
+      await openSessionsSubmenu();
+      await expectSessionsItemCount("Move all to grid", 3);
+      await clickSessionsItem("Move all to grid, 3");
+
+      await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(3);
+      await expect.poll(() => getDockPanelCount(window), { timeout: T_LONG }).toBe(0);
     });
   });
 
@@ -274,8 +368,6 @@ test.describe.serial("Core: Worktree Cards", () => {
     test("Escape dismisses the menu without side effects", async () => {
       const { window } = ctx;
 
-      // Wait for any panel creation from prior test to settle
-      await window.waitForTimeout(T_SETTLE);
       const panelsBefore = await getGridPanelCount(window);
 
       const featureCard = window.locator(SEL.worktree.card(FEATURE));
@@ -304,7 +396,7 @@ test.describe.serial("Core: Worktree Cards", () => {
       const mainCard = window.locator(SEL.worktree.mainCard);
 
       await test.step("Select feature worktree and confirm panels are present", async () => {
-        // Feature card should have at least 1 panel from the Launch ▸ Terminal test
+        // Feature card has the session-bulk terminals and the Launch ▸ Terminal panel
         await featureCard.click({ position: { x: 10, y: 10 } });
         await expect(window.locator(SEL.worktree.row(FEATURE))).toHaveAttribute(
           "aria-current",
