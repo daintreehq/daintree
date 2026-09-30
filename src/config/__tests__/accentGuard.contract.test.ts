@@ -149,6 +149,12 @@ const DURABLE_ALLOWLIST = new Set([
   // (.claude/rules/settings-pages.md). One underline per page, never more.
   "src/components/Settings/SettingsSubjectPicker.tsx",
 
+  // Plugin kit Text's `accent` tone: the public colour role a plugin draws its
+  // one load-bearing signal in. The kit cannot know the region, so the
+  // restraint is documented on the prop (plugin-sdk-react.ts, ui-kit.md) and
+  // nothing in the kit applies it on its own.
+  "src/components/PluginKit/PluginKitTypography.tsx",
+
   // Document tab family (grid, dock, portal and assistant strips): the selected
   // tab's 2px underline, the documented "Settings Nav Active" / "Document Tab"
   // recipe. It is the strip's one selection mark; the other accent in the

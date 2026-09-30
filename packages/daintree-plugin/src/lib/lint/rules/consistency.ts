@@ -419,6 +419,37 @@ const nativeDialogInView: LintRule = {
   },
 };
 
+const rawPortal: LintRule = {
+  id: "raw-portal",
+  severity: "warn",
+  appliesTo: "view",
+  message: "createPortal in a view",
+  hint: "prefer `Portal` from @daintreehq/plugin-ui — it marks the container as your style root, which a bare createPortal leaves unstyled",
+  check(file) {
+    // Only a file that imports react-dom can be calling its createPortal, which
+    // keeps an unrelated method of the same name quiet; an aliased import
+    // (`createPortal as portal`) is followed to its local name.
+    if (
+      !/from\s*["']react-dom(?:\/client)?["']|require\(\s*["']react-dom["']\s*\)/.test(file.code)
+    ) {
+      return [];
+    }
+    const names = ["createPortal"];
+    for (const m of file.code.matchAll(/\bcreatePortal\s+as\s+([A-Za-z_$][\w$]*)/g)) {
+      names.push(m[1]!);
+    }
+    const hits: RuleHit[] = [];
+    const call = new RegExp(`(?<![\\w$])(?:${names.join("|")})\\s*\\(`, "g");
+    for (const m of file.masked.matchAll(call)) {
+      // `createPortal(…) { … }` is a method being declared, not called.
+      const close = matchClose(file.masked, m.index + m[0].length - 1);
+      if (close > 0 && /^\s*\{/.test(file.masked.slice(close + 1, close + 40))) continue;
+      hits.push({ offset: m.index, message: "createPortal renders outside the view's style root" });
+    }
+    return hits;
+  },
+};
+
 export const CONSISTENCY_RULES: LintRule[] = [
   stockColour,
   darkVariant,
@@ -438,4 +469,5 @@ export const CONSISTENCY_RULES: LintRule[] = [
   lucideImport,
   selfContainerQuery,
   nativeDialogInView,
+  rawPortal,
 ];

@@ -38,7 +38,7 @@ The host mounts it in your settings home, below the generated fields, inside a s
 
 **What it doesn't get.** There is no panel record behind it, so `initialArgs`, `persistState`, `stateVersion`, `worktreeId`, `requestReload` and `setHasUnsavedChanges` are absent. `pluginId`, `panelId`, `disposeSignal`, `panelRemovedSignal` and `styleRootAttributes` behave as they do in a panel.
 
-**Containment.** The surface is contained like a project surface (`contain: layout paint`, overflow clipped, its own stacking context), so a `position: fixed` descendant stays inside it; portal anything that has to float, spreading `styleRootAttributes` onto the portal container.
+**Containment.** The surface is contained like a project surface (`contain: layout paint`, overflow clipped, its own stacking context), so a `position: fixed` descendant stays inside it; portal anything that has to float with the kit's `Portal`, which marks its container as your style root.
 
 **Lifecycle.** Mounting the section activates a loaded plugin that hasn't activated yet, as opening a panel does; it never starts a stopped one. While the plugin is disabled or stopped, the section shows as a single row saying it's available once the plugin runs. When the plugin stops, is muted or reloads, the section is unmounted and its `disposeSignal` and `panelRemovedSignal` abort. After a reload an open settings page shows "Reloading…" until the new module is being served, then mounts it — it never runs the retired one. A render error shows the same diagnostics pane with Try again that a panel gets.
 
@@ -161,20 +161,21 @@ Everything else Tailwind ships that does not name a colour works too — this li
 <div className="px-3 pt-3 pb-1 text-2xs font-medium uppercase text-text-muted">
 ```
 
-Buttons, badges, inputs and spinners are not on this list on purpose: they are `Button`, `Badge`, `Input` and `Spinner` in the kit, and a hand-rolled copy is what the `raw-button`, `hand-rolled-badge`, `raw-form-control` and `hand-rolled-spinner` lint rules report.
+Buttons, badges, inputs and spinners are not on this list on purpose: they are `Button`, `Badge`, `Input` and `Spinner` in the kit (and text sizes and colours are `Text` and `Heading`, status dots `StatusDot`), and a hand-rolled copy is what the `raw-button`, `hand-rolled-badge`, `raw-form-control` and `hand-rolled-spinner` lint rules report.
 
 **Conditional classes must be complete strings.** `isActive ? "bg-surface-active" : ""` works. `` `bg-surface-${tone}` `` does not — the compiler sees the class in your source or in the DOM, and a name assembled from fragments exists in neither until it is too late to matter. The same rule applies to a lookup table, which is fine, and to string concatenation, which is not.
 
-**Portals need a marked container.** Anything you render with `createPortal` leaves your style root, so its classes generate CSS that never matches. Kit overlays — `Dialog`, `ConfirmDialog`, `Popover`, `DropdownMenu`, `Tooltip` — portal for you and re-mark the content you pass them, so your classes still apply inside a dialog body. For a portal of your own, spread `styleRootAttributes` from `PanelViewProps` onto the container:
+**Portals need a marked container.** Anything you render with `createPortal` leaves your style root, so its classes generate CSS that never matches. Kit overlays — `Dialog`, `ConfirmDialog`, `Popover`, `DropdownMenu`, `Tooltip` — portal for you and re-mark the content you pass them, so your classes still apply inside a dialog body. For a portal of your own, use the kit's `Portal`, which marks its container for you:
 
 ```jsx
-createPortal(
-  <div {...styleRootAttributes} className="p-4 bg-surface-dialog">
-    …
-  </div>,
-  document.body
-);
+import { Portal } from "@daintreehq/plugin-ui";
+
+<Portal>
+  <div className="fixed right-4 bottom-4 p-4 bg-surface-dialog">…</div>
+</Portal>;
 ```
+
+A raw `plugin://` view that renders without the kit spreads `styleRootAttributes` from `PanelViewProps` onto its own `createPortal` container instead.
 
 **A `<style>` element still works**, for the things utilities do not cover — a keyframe, a complex selector, a third-party widget's stylesheet. Scope your selectors under a class on your root so you don't restyle the host. Do not ship compiled Tailwind CSS: `@daintreehq/plugin-vite` fails the build if you wire Tailwind into it, because two independently-compiled copies of the same utilities lose Tailwind's own ordering rules.
 
