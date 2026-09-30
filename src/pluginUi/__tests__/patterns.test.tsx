@@ -574,7 +574,7 @@ describe("@daintreehq/plugin-ui forms and settings", () => {
     expect(closed.getAttribute("aria-controls")).toBe(panel.id);
   });
 
-  it("draws Tabs as the app's divided document-tab cells, the selected one filled, never accent", () => {
+  it("draws Tabs as the app's divided document-tab cells, the selected one filled and underlined", () => {
     render(
       createElement(kit.Tabs, {
         "aria-label": "Sections",
@@ -594,10 +594,16 @@ describe("@daintreehq/plugin-ui forms and settings", () => {
     for (const tab of tabs) expect(classes(tab)).toContain("border-divider");
     const selected = screen.getByRole("tab", { selected: true });
     const others = tabs.filter((tab) => tab !== selected);
-    // The selected cell differs by its fill, and nothing on the strip is accent.
+    // The selected cell differs by its fill and carries the strip's one accent
+    // mark, an underline; no other tab carries either.
     expect(classes(selected)).toContain("bg-overlay-selected");
     for (const tab of others) expect(classes(tab)).not.toContain("bg-overlay-selected");
-    expect(screen.getByRole("tablist").innerHTML).not.toMatch(/(bg|border|text)-accent/);
+    const marks = screen.getByRole("tablist").querySelectorAll("[data-kit-tab-indicator]");
+    expect(marks).toHaveLength(1);
+    expect(selected.contains(marks[0]!)).toBe(true);
+    expect(marks[0]!.className).toContain("bg-accent-primary");
+    // Tagged as a document tab, so forced colours keep a selected-item underline.
+    for (const tab of tabs) expect(tab.hasAttribute("data-document-tab")).toBe(true);
     // Only the selected tab is a tab stop.
     expect(tabs.map((tab) => tab.tabIndex)).toEqual([-1, 0, -1]);
   });

@@ -514,9 +514,8 @@ function KitTabs({
   };
   return (
     <div {...pickRootProps(rest)} className={cn("flex min-h-0 flex-col", str(className))}>
-      {/* The app's document-tab cells, divided by hairlines, with the selected
-          cell filled rather than underlined: several plugin tab strips can sit
-          in one window, and the accent stays free for the pane's one signal. */}
+      {/* The app's document-tab cells, divided by hairlines: the selected cell
+          is filled and carries the accent underline native tab groups use. */}
       <div
         role="tablist"
         aria-label={str(ariaLabel) ?? ""}
@@ -536,6 +535,7 @@ function KitTabs({
               aria-controls={panelId(tab.value)}
               tabIndex={selected ? 0 : -1}
               data-tab={tab.value}
+              data-document-tab=""
               onClick={(event) => {
                 const strip = event.currentTarget.parentElement;
                 if (strip) revealTabInStrip(strip, event.currentTarget, "smooth");
@@ -553,6 +553,13 @@ function KitTabs({
                 : sizedIcon(tab.icon, compact ? "h-3.5 w-3.5" : "h-4 w-4")}
               <span>{tab.label}</span>
               {tabBadge(tab.badge) ?? null}
+              {selected ? (
+                <span
+                  aria-hidden="true"
+                  data-kit-tab-indicator=""
+                  className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-accent-primary"
+                />
+              ) : null}
             </button>
           );
         })}
