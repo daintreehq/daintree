@@ -39,6 +39,7 @@ function getPortalBoundary() {
   return boundary;
 }
 
+// PopoverContent's default collisionPadding; the menu-family contract reads that literal.
 const DEFAULT_COLLISION_PADDING = 8;
 
 /**
@@ -267,7 +268,7 @@ const PopoverContent = React.forwardRef<
       className,
       align = "center",
       sideOffset = OVERLAY_SIDE_OFFSET,
-      collisionPadding = DEFAULT_COLLISION_PADDING,
+      collisionPadding = 8,
       collisionBoundary,
       style,
       onPointerDown,
