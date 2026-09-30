@@ -44,6 +44,7 @@ import {
   fileMatchesAccept,
   parseNumberText,
   pickerRows,
+  snapToStep,
 } from "@/components/PluginKit/PluginKitInputs";
 import { normalizeSelectOptions } from "@/components/PluginKit/kitOptions";
 
@@ -127,6 +128,21 @@ describe("RadioGroup", () => {
     expect((screen.getByRole("radio", { name: "Squash" }) as HTMLInputElement).checked).toBe(true);
   });
 
+  it("makes an empty required group fail native form validation", () => {
+    const { container } = render(
+      createElement(
+        "form",
+        null,
+        createElement(kit.RadioGroup, { options, required: true, "aria-label": "Merge method" })
+      )
+    );
+    const radios = screen.getAllByRole("radio") as HTMLInputElement[];
+    expect(radios.every((radio) => radio.required)).toBe(true);
+    expect(container.querySelector("form")!.checkValidity()).toBe(false);
+    fireEvent.click(screen.getByRole("radio", { name: "Squash" }));
+    expect(container.querySelector("form")!.checkValidity()).toBe(true);
+  });
+
   it("drops malformed options and props without throwing", () => {
     renderLoose(kit.RadioGroup, {
       options: [{ value: "" }, "nope", { value: "a", label: "A" }, { value: "a", label: "Again" }],
@@ -205,6 +221,43 @@ describe("NumberInput", () => {
     expect(increase.tabIndex).toBe(-1);
     fireEvent.click(screen.getByRole("button", { name: "Decrease" }));
     expect(onValueChange).toHaveBeenLastCalledWith(19);
+  });
+
+  it("keeps a rounded commit inside a bound finer than the step", () => {
+    const onValueChange = vi.fn();
+    render(
+      createElement(kit.NumberInput, {
+        "aria-label": "Scale",
+        defaultValue: 1,
+        min: 0.25,
+        step: 1,
+        onValueChange,
+      })
+    );
+    const field = screen.getByRole("spinbutton", { name: "Scale" });
+    fireEvent.keyDown(field, { key: "Home" });
+    expect(onValueChange).toHaveBeenLastCalledWith(0.25);
+    fireEvent.keyDown(field, { key: "ArrowDown" });
+    expect(onValueChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("sets the stepper limits from the typed value it steps from", () => {
+    const onValueChange = vi.fn();
+    render(
+      createElement(kit.NumberInput, {
+        "aria-label": "Workers",
+        defaultValue: 10,
+        max: 10,
+        onValueChange,
+      })
+    );
+    const field = screen.getByRole("spinbutton", { name: "Workers" });
+    const increase = screen.getByRole("button", { name: "Increase" }) as HTMLButtonElement;
+    expect(increase.disabled).toBe(true);
+    fireEvent.change(field, { target: { value: "5" } });
+    expect(increase.disabled).toBe(false);
+    fireEvent.click(increase);
+    expect(onValueChange).toHaveBeenLastCalledWith(6);
   });
 
   it("commits an empty field as null unless required", () => {
@@ -287,6 +340,31 @@ describe("Slider", () => {
     expect(onValueCommit).toHaveBeenCalledWith(70);
     // The track stays neutral: the primary ink, never the accent.
     expect(slider.className).toContain("accent-[var(--color-text-primary)]");
+  });
+
+  it("snaps to the step the way the native range does", () => {
+    expect(snapToStep(50, 0, 100, 20)).toBe(60);
+    expect(snapToStep(49, 0, 100, 20)).toBe(40);
+    expect(snapToStep(95, 0, 100, 30)).toBe(90);
+    expect(snapToStep(0.45, 0.1, 1, 0.2)).toBe(0.5);
+    expect(snapToStep(0.2, 0.1, 1, 0.2)).toBe(0.3);
+    expect(snapToStep(-4, 0, 100, 20)).toBe(0);
+  });
+
+  it("describes the value the thumb is on, not an off-step default", () => {
+    render(
+      createElement(kit.Slider, {
+        "aria-label": "Zoom",
+        defaultValue: 50,
+        step: 20,
+        showValue: true,
+        formatValue: (value: number) => `${value}%`,
+      })
+    );
+    const slider = screen.getByRole("slider", { name: "Zoom" }) as HTMLInputElement;
+    expect(slider.value).toBe("60");
+    expect(slider.getAttribute("aria-valuetext")).toBe("60%");
+    expect(screen.getByText("60%")).toBeTruthy();
   });
 
   it("joins a FormField and falls back to 0–100 on a bad range", () => {
@@ -457,6 +535,49 @@ describe("Combobox", () => {
     expect(screen.getByRole("combobox", { name: "Assignee" }).textContent).toContain("Ada");
   });
 
+  it("submits nothing while disabled, as a native field does", () => {
+    const { container } = render(
+      createElement(
+        "form",
+        null,
+        createElement(kit.Combobox, {
+          "aria-label": "Assignee",
+          name: "assignee",
+          value: "u1",
+          options: [{ value: "u1", label: "Ada" }],
+          disabled: true,
+        }),
+        createElement(kit.MultiSelect, {
+          "aria-label": "Labels",
+          name: "labels",
+          value: ["bug"],
+          options: [{ value: "bug", label: "bug" }],
+          disabled: true,
+        })
+      )
+    );
+    const data = new FormData(container.querySelector("form")!);
+    expect(data.has("assignee")).toBe(false);
+    expect(data.has("labels")).toBe(false);
+  });
+
+  it("closes its list and takes no picks once disabled while open", async () => {
+    const onValueChange = vi.fn();
+    const props = {
+      "aria-label": "Labels",
+      options: [{ value: "bug", label: "bug" }],
+      onValueChange,
+    };
+    const { rerender } = render(inViewport(createElement(kit.MultiSelect, props)));
+    const search = await openPicker("Labels");
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    rerender(inViewport(createElement(kit.MultiSelect, { ...props, disabled: true })));
+    fireEvent.keyDown(search, { key: "Enter" });
+    expect(onValueChange).not.toHaveBeenCalled();
+    await act(async () => {});
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
   it("degrades bad props rather than throwing", () => {
     renderLoose(kit.Combobox, { "aria-label": "Loose", options: "nope", density: 3, value: 7 });
     expect(screen.getByRole("combobox", { name: "Loose" })).toBeTruthy();
@@ -489,6 +610,7 @@ describe("MultiSelect", () => {
     expect(trigger.textContent).toContain("+1");
     expect(trigger.querySelector(".sr-only")?.textContent).toBe("bug, docs, perf");
     await openPicker("Labels");
+    expect(screen.getByRole("listbox").getAttribute("aria-multiselectable")).toBe("true");
     const bug = screen.getByRole("option", { name: "bug" });
     expect(bug.getAttribute("aria-checked")).toBe("true");
     await act(async () => {
@@ -500,6 +622,42 @@ describe("MultiSelect", () => {
       fireEvent.click(screen.getByRole("option", { name: "bug" }));
     });
     expect(onValueChange).toHaveBeenLastCalledWith(["docs", "perf", "ui"]);
+  });
+
+  it("marks membership with aria-checked alone and draws the cursor from data-selected", async () => {
+    render(
+      inViewport(
+        createElement(kit.MultiSelect, {
+          "aria-label": "Labels",
+          options,
+          defaultValue: ["bug", "docs"],
+        })
+      )
+    );
+    const search = await openPicker("Labels");
+    fireEvent.keyDown(search, { key: "End" });
+    const ci = screen.getByRole("option", { name: "ci" });
+    expect(search.getAttribute("aria-activedescendant")).toBe(ci.id);
+    expect(ci.getAttribute("data-selected")).toBe("true");
+    expect(ci.getAttribute("aria-checked")).toBe("false");
+    for (const option of screen.getAllByRole("option")) {
+      expect(option.hasAttribute("aria-selected")).toBe(false);
+    }
+    const bug = screen.getByRole("option", { name: "bug" });
+    expect(bug.getAttribute("aria-checked")).toBe("true");
+    expect(bug.hasAttribute("data-selected")).toBe(false);
+  });
+
+  it("shows a value named like an Object.prototype key as text", () => {
+    render(
+      createElement(kit.MultiSelect, {
+        "aria-label": "Keys",
+        options: [],
+        value: ["__proto__", "constructor"],
+      })
+    );
+    const trigger = screen.getByRole("combobox", { name: "Keys" });
+    expect(trigger.querySelector(".sr-only")?.textContent).toBe("__proto__, constructor");
   });
 
   it("disables the rest of the list once max is reached", async () => {
@@ -556,6 +714,31 @@ describe("TagInput", () => {
     expect(onValueChange).toHaveBeenLastCalledWith(["a@x.dev", "b@x.dev"]);
     expect(field.value).toBe("nope");
     expect(field.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("pastes a list over the selected text rather than after it", () => {
+    const onValueChange = vi.fn();
+    render(createElement(kit.TagInput, { "aria-label": "Tags", onValueChange }));
+    const field = screen.getByRole("textbox", { name: "Tags" }) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "old" } });
+    field.setSelectionRange(0, 3);
+    fireEvent.paste(field, { clipboardData: { getData: () => "alpha,beta" } });
+    expect(onValueChange).toHaveBeenLastCalledWith(["alpha", "beta"]);
+    fireEvent.change(field, { target: { value: "ab" } });
+    field.setSelectionRange(1, 1);
+    fireEvent.paste(field, { clipboardData: { getData: () => "x,y" } });
+    expect(onValueChange).toHaveBeenLastCalledWith(["alpha", "beta", "ax", "yb"]);
+  });
+
+  it("moves focus to the next tag, then the field, as the focused remove button goes", () => {
+    render(createElement(kit.TagInput, { "aria-label": "Tags", defaultValue: ["a", "b"] }));
+    const removeA = screen.getByRole("button", { name: "Remove a" });
+    removeA.focus();
+    fireEvent.click(removeA);
+    const removeB = screen.getByRole("button", { name: "Remove b" });
+    expect(document.activeElement).toBe(removeB);
+    fireEvent.click(removeB);
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Tags" }));
   });
 
   it("joins a FormField and honours max", () => {

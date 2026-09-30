@@ -186,6 +186,7 @@ function KitRadioGroup(props: PluginRadioGroupProps) {
           label={choice.label}
           description={choice.description}
           disabled={inert || choice.disabled === true}
+          required={required === true}
           bare={plain}
           className={cn(horizontal && !plain && "min-w-32 flex-1", plain && PLAIN_RADIO_ROW)}
         />
@@ -266,10 +267,16 @@ function KitNumberInput(props: PluginNumberInputProps) {
   const format = (n: number | null) =>
     n === null ? "" : places !== undefined ? n.toFixed(places) : String(n);
   const parsed = draft === null ? current : parseNumberText(draft, suffix);
+  // What stepping starts from, and so what the buttons' limits read: the
+  // typed number when there is one.
+  const shownValue = typeof parsed === "number" ? parsed : current;
 
   const commit = (next: number | null) => {
     setDraft(null);
-    const resolved = next === null ? null : Number(clamp(next, lo, hi).toFixed(digits));
+    // Rounded, then held in bounds again: rounding can step past a bound that
+    // is finer than the precision.
+    const resolved =
+      next === null ? null : clamp(Number(clamp(next, lo, hi).toFixed(digits)), lo, hi);
     if (resolved === current) return;
     if (!controlled) setOwn(resolved);
     onChange?.(resolved);
@@ -286,8 +293,7 @@ function KitNumberInput(props: PluginNumberInputProps) {
   };
   const stepBySteps = (steps: number) => {
     if (inert) return;
-    const base = typeof parsed === "number" ? parsed : current;
-    commit(base === null ? (lo ?? 0) : base + steps * stepBy);
+    commit(shownValue === null ? (lo ?? 0) : shownValue + steps * stepBy);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -336,8 +342,8 @@ function KitNumberInput(props: PluginNumberInputProps) {
     }
   };
 
-  const atMin = current !== null && lo !== undefined && current <= lo;
-  const atMax = current !== null && hi !== undefined && current >= hi;
+  const atMin = shownValue !== null && lo !== undefined && shownValue <= lo;
+  const atMax = shownValue !== null && hi !== undefined && shownValue >= hi;
   const stepperButton = (direction: 1 | -1) => (
     <Button
       type="button"
@@ -434,6 +440,18 @@ const SLIDER_KEYS = new Set([
 const SLIDER_CLASS =
   "h-5 min-w-0 flex-1 cursor-pointer rounded-full accent-[var(--color-text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary disabled:cursor-not-allowed disabled:opacity-50";
 
+/**
+ * A value as the native range holds it: in bounds and on a step from `lo`,
+ * the nearer step winning and a tie going up, as the HTML range state does.
+ */
+export function snapToStep(value: number, lo: number, hi: number, step: number): number {
+  const places = Math.min(Math.max(decimalsOf(step), decimalsOf(lo)), 12);
+  const at = (n: number) => Number((lo + n * step).toFixed(places));
+  const steps = Math.round((clamp(value, lo, hi) - lo) / step);
+  const out = at(steps);
+  return out > hi ? at(Math.floor((hi - lo) / step)) : out;
+}
+
 function KitSlider(props: PluginSliderProps) {
   const {
     value,
@@ -454,8 +472,10 @@ function KitSlider(props: PluginSliderProps) {
   const [lo, hi] = rawHi > rawLo ? [rawLo, rawHi] : [0, 100];
   const stepBy = positive(step, hi - lo) ?? 1;
   const controlled = finite(value) !== undefined;
-  const [own, setOwn] = useState(() => clamp(finite(defaultValue) ?? lo, lo, hi));
-  const current = clamp(controlled ? (finite(value) ?? lo) : own, lo, hi);
+  const [own, setOwn] = useState(() => finite(defaultValue) ?? lo);
+  // Snapped here rather than left to the input, so the readout and the spoken
+  // value describe the value the thumb is actually on.
+  const current = snapToStep(controlled ? (finite(value) ?? lo) : own, lo, hi, stepBy);
   const onChange = fn(onValueChange);
   const onCommit = fn(onValueCommit);
   const formatter = fn(formatValue);
@@ -602,6 +622,8 @@ function Picker({
   const loading = base.loading === true;
   const showLoading = useDohertyGate(loading);
   const inert = base.disabled === true;
+  // Disabled while open (say, during a save): the list goes with it.
+  if (inert && open) setOpen(false);
 
   const trimmed = query.trim();
   const options = allOptions(entries);
@@ -655,7 +677,7 @@ function Picker({
   };
 
   const pick = (row: PickerRow) => {
-    if (row.kind === "label") return;
+    if (inert || row.kind === "label") return;
     if (row.kind === "custom") onPick(row.value, row.value);
     else onPick(row.option.value, row.option.label);
     if (multi) {
@@ -694,7 +716,7 @@ function Picker({
         <div
           role="option"
           aria-disabled="true"
-          aria-selected="false"
+          aria-selected={multi ? undefined : "false"}
           aria-label={row.label}
           className={cn("px-2 pt-2.5 pb-1", PALETTE_SECTION_LABEL_CLASS)}
         >
@@ -712,9 +734,13 @@ function Picker({
       <div
         id={optionId(index)}
         role="option"
-        aria-selected={index === active}
+        // One list, one selection attribute: a single pick follows the cursor
+        // through `aria-selected`; a multiple one is membership through
+        // `aria-checked`, with the cursor drawn from `data-selected` alone.
+        aria-selected={multi ? undefined : index === active}
         aria-checked={multi ? checked : undefined}
         aria-current={!multi && checked ? "true" : undefined}
+        data-selected={multi && index === active ? "true" : undefined}
         aria-disabled={blocked ? true : undefined}
         // Move, not enter: a list opening under a resting pointer must not
         // light the row beneath it before the pointer does anything.
@@ -822,7 +848,12 @@ function Picker({
           aria-controls={listId}
           aria-activedescendant={activeMounted ? optionId(active) : undefined}
         />
-        <div id={listId} role="listbox" aria-label={ariaLabel}>
+        <div
+          id={listId}
+          role="listbox"
+          aria-label={ariaLabel}
+          aria-multiselectable={multi ? true : undefined}
+        >
           {rows.length > 0 ? (
             <Virtuoso
               ref={handle}
@@ -864,9 +895,16 @@ function Picker({
   );
 }
 
-function hiddenInputs(name: string | undefined, values: readonly string[]): ReactNode {
+function hiddenInputs(
+  name: string | undefined,
+  values: readonly string[],
+  disabled: unknown
+): ReactNode {
   if (!name) return null;
-  return values.map((value) => <input key={value} type="hidden" name={name} value={value} />);
+  // A disabled control submits nothing, as a disabled native field does not.
+  return values.map((value) => (
+    <input key={value} type="hidden" name={name} value={value} disabled={disabled === true} />
+  ));
 }
 
 function OptionLabel({ option, label }: { option: PluginSelectOption | undefined; label: string }) {
@@ -921,7 +959,7 @@ function KitCombobox(props: PluginComboboxProps) {
           onChange?.(next);
         }}
       />
-      {hiddenInputs(str(name), current ? [current] : [])}
+      {hiddenInputs(str(name), current ? [current] : [], props.disabled)}
     </>
   );
 }
@@ -931,13 +969,14 @@ function KitMultiSelect(props: PluginMultiSelectProps) {
   const controlled = Object.hasOwn(props, "value");
   const [own, setOwn] = useState(() => readStrings(defaultValue));
   const current = controlled ? readStrings(value) : own;
-  const [labels, setLabels] = useState<Record<string, string>>({});
+  // A Map, not an object: values are the plugin's strings, `__proto__` included.
+  const [labels, setLabels] = useState<ReadonlyMap<string, string>>(() => new Map());
   const onChange = fn(onValueChange);
   const limit = count(max);
   const chipLimit = count(maxChips) ?? 3;
   const entries = normalizeSelectOptions(options);
   const byValue = new Map(allOptions(entries).map((option) => [option.value, option]));
-  const labelOf = (v: string) => byValue.get(v)?.label ?? labels[v] ?? v;
+  const labelOf = (v: string) => byValue.get(v)?.label ?? labels.get(v) ?? v;
   const shown = current.slice(0, chipLimit);
   const overflow = current.length - shown.length;
   return (
@@ -976,12 +1015,12 @@ function KitMultiSelect(props: PluginMultiSelectProps) {
           const next = current.includes(picked)
             ? current.filter((v) => v !== picked)
             : [...current, picked];
-          setLabels((known) => ({ ...known, [picked]: pickedLabel }));
+          setLabels((known) => new Map(known).set(picked, pickedLabel));
           if (!controlled) setOwn(next);
           onChange?.(next);
         }}
       />
-      {hiddenInputs(str(name), current)}
+      {hiddenInputs(str(name), current, props.disabled)}
     </>
   );
 }
@@ -1006,6 +1045,7 @@ function KitTagInput(props: PluginTagInputProps) {
   const [draft, setDraft] = useState("");
   const [refused, setRefused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
   const onChange = fn(onValueChange);
   const check = fn(validate);
   const limit = count(max);
@@ -1051,15 +1091,30 @@ function KitTagInput(props: PluginTagInputProps) {
     }
   };
 
+  const remove = (index: number, button: HTMLButtonElement) => {
+    // The focused button is about to go; focus moves to the next tag's, or
+    // to the text after the last, rather than falling to the document.
+    if (button.ownerDocument.activeElement === button) {
+      const buttons = boxRef.current?.querySelectorAll<HTMLButtonElement>("[data-tag-remove]");
+      (buttons?.[index + 1] ?? inputRef.current)?.focus();
+    }
+    update(tags.filter((_, at) => at !== index));
+  };
+
   const onPaste = (event: ClipboardEvent<HTMLInputElement>) => {
     const text = event.clipboardData.getData("text");
     if (!TAG_SEPARATOR.test(text)) return;
     event.preventDefault();
-    add(`${draft}${text}`.split(TAG_SEPARATOR));
+    // The paste lands where a plain paste would: over the selection, at the caret.
+    const input = event.currentTarget;
+    const start = input.selectionStart ?? draft.length;
+    const end = input.selectionEnd ?? start;
+    add(`${draft.slice(0, start)}${text}${draft.slice(end)}`.split(TAG_SEPARATOR));
   };
 
   return (
     <div
+      ref={boxRef}
       className={cn(
         inputVariants({ invalid: shownInvalid }),
         "flex min-w-0 flex-wrap items-center gap-1 px-1.5 py-1",
@@ -1082,7 +1137,8 @@ function KitTagInput(props: PluginTagInputProps) {
             type="button"
             aria-label={`Remove ${tag}`}
             disabled={inert}
-            onClick={() => update(tags.filter((_, at) => at !== index))}
+            data-tag-remove=""
+            onClick={(event) => remove(index, event.currentTarget)}
             className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[var(--radius-xs)] text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-medium hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary disabled:pointer-events-none"
           >
             <X aria-hidden="true" />
