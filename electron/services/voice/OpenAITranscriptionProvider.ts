@@ -237,6 +237,12 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private preConnectBufferBytes = 0;
   private isReady = false;
 
+  // Start-path timings on the main-process clock, so a log can show whether
+  // lost opening words sat behind the socket, the handshake, or the model.
+  private sessionStartedAt = 0;
+  private connectStartedAt = 0;
+  private firstTranscriptLogged = false;
+
   // Heartbeat (half-open detection) for the current connection. `isAlive` is
   // set on every pong and on open; the interval terminates the socket if a full
   // cycle elapses with no pong.
@@ -333,6 +339,19 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         message: event.error.message,
       });
     }
+    if (
+      !this.firstTranscriptLogged &&
+      (event.type === "delta" || event.type === "complete") &&
+      event.text.trim()
+    ) {
+      this.firstTranscriptLogged = true;
+      logInfo(`${P} First transcript`, {
+        sessionId: this.sessionId,
+        eventType: event.type,
+        length: event.text.length,
+        sinceStartMs: this.sinceStartMs(),
+      });
+    }
     for (const listener of this.listeners) {
       listener(event);
     }
@@ -356,6 +375,10 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     resolve(result);
   }
 
+  private sinceStartMs(): number {
+    return Math.round(performance.now() - this.sessionStartedAt);
+  }
+
   async start(settings: VoiceInputSettings): Promise<VoiceStartResult> {
     if (!settings.openaiApiKey) {
       logWarn(`${P} No OpenAI API key configured`);
@@ -369,6 +392,8 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     });
     this.cleanupPreviousSession();
     this.sessionId = mySessionId;
+    this.sessionStartedAt = performance.now();
+    this.firstTranscriptLogged = false;
     this.isReady = false;
     this.preConnectBuffer = [];
     this.preConnectBufferBytes = 0;
@@ -394,6 +419,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
    * construct/timeout failure reschedules instead of surfacing a fatal error.
    */
   private connect(mySessionId: number, settings: VoiceInputSettings): void {
+    this.connectStartedAt = performance.now();
     let connection: WebSocket;
     try {
       connection = new WebSocket(OPENAI_REALTIME_URL, {
@@ -474,7 +500,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         return;
       }
       this.startHeartbeat(connection, mySessionId);
-      logInfo(`${P} WebSocket opened, sending session.update`);
+      logInfo(`${P} WebSocket opened, sending session.update`, {
+        sessionId: mySessionId,
+        connectMs: Math.round(performance.now() - this.connectStartedAt),
+        sinceStartMs: this.sinceStartMs(),
+      });
       // Keyterm biasing, assembled at session start and frozen on the settings
       // snapshot, so a reconnect deterministically rebuilds the same fields.
       // `keywords` takes the literal terms; `prompt` carries the same terms as
@@ -797,7 +827,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         // Log the session config the server actually applied — this is ground
         // truth for whether `turn_detection`, model, and format took effect.
         // Summarized, not raw: the echo replays our `prompt`/`keywords`.
-        logInfo(`${P} ← session.updated — session ready`, summarizeEchoedSession(payload.session));
+        logInfo(`${P} ← session.updated — session ready`, {
+          ...summarizeEchoedSession(payload.session),
+          sinceStartMs: this.sinceStartMs(),
+          bufferedChunks: this.preConnectBuffer.length,
+        });
         if (this.preConnectBuffer.length > 0 && this.connection) {
           logInfo(`${P} Flushing ${this.preConnectBuffer.length} buffered audio chunks`);
           // Detach the buffer before flushing so its state stays consistent even

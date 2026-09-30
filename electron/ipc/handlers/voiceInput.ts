@@ -11,7 +11,7 @@ import type {
   VoiceInputSettings,
   VoiceTranscriptionProvider,
 } from "../../../shared/types/ipc/api.js";
-import { logDebug, logWarn } from "../../utils/logger.js";
+import { logDebug, logInfo, logWarn } from "../../utils/logger.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { applyDictationCommands } from "../../services/voiceDictationCommands.js";
@@ -388,9 +388,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // armed in the same synchronous prefix, before any chunk of this capture
     // can arrive.
     const myNonce = ++voiceStartNonce;
+    // Main-process clock only; correlate with renderer start steps by wall time.
+    const startedAt = performance.now();
     preStartAudio = { nonce: myNonce, chunks: [], bytes: 0, overflowed: false };
     try {
-      return await startSession(ctx, myNonce);
+      return await startSession(ctx, myNonce, startedAt);
     } finally {
       // Superseded, failed, or threw before the handoff — the held audio
       // belongs to no session.
@@ -398,8 +400,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     }
   };
 
-  const startSession = async (ctx: IpcContext, myNonce: number) => {
+  const startSession = async (ctx: IpcContext, myNonce: number, startedAt: number) => {
     const svc = await getService();
+    const serviceReadyAt = performance.now();
     // The renderer went away during the import — nothing is left to record for.
     if (ctx.event.sender.isDestroyed()) {
       return { ok: false, error: "Voice session superseded" };
@@ -568,6 +571,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // has its own internal timeouts, so this await is bounded and never blocks the
     // session start indefinitely.
     let keyterms: string[] = [];
+    const termsWaitStartedAt = performance.now();
     try {
       keyterms = await keytermsPromise;
     } catch (err) {
@@ -575,6 +579,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         message: formatErrorMessage(err, "Unknown error during keyterm assembly"),
       });
     }
+    const keytermsReadyAt = performance.now();
     // A newer start (or a stop) superseded this one while we awaited assembly
     // (checked on both the success and failure paths) — bail before wiring up a
     // session that's already stale. A superseding start has already run
@@ -593,12 +598,27 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       }
       return { ok: false, error: "Voice session superseded" };
     }
+    // Field names avoid "key": the logger blanks any field containing it.
+    logInfo("[VoiceInput] Start timing — provider start", {
+      startNonce: myNonce,
+      serviceLoadMs: Math.round(serviceReadyAt - startedAt),
+      biasTermsWaitMs: Math.round(keytermsReadyAt - termsWaitStartedAt),
+      elapsedMs: Math.round(keytermsReadyAt - startedAt),
+      heldChunks: preStartAudio?.nonce === myNonce ? preStartAudio.chunks.length : 0,
+    });
     // Not awaited before the flush: start() installs the provider and enters its
     // pending-start state synchronously, so the held audio lands in the
     // provider's own connect buffer, ahead of any chunk that arrives next.
     const startPromise = svc.start({ ...settings, keyterms });
     flushPreStartAudio(myNonce, svc);
     const result = await startPromise;
+    const providerSettledAt = performance.now();
+    logInfo("[VoiceInput] Start timing — provider settled", {
+      startNonce: myNonce,
+      ok: result.ok,
+      providerStartMs: Math.round(providerSettledAt - keytermsReadyAt),
+      elapsedMs: Math.round(providerSettledAt - startedAt),
+    });
     if (!result.ok) {
       // Failed to start — clean up subscription immediately
       if (activeEventUnsubscribe === unsubscribe) {

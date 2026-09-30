@@ -107,6 +107,12 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private preConnectBufferBytes = 0;
   private isReady = false;
 
+  // Start-path timings on the main-process clock, so a log can show whether
+  // lost opening words sat behind the socket, the handshake, or the model.
+  private sessionStartedAt = 0;
+  private connectStartedAt = 0;
+  private firstTranscriptLogged = false;
+
   private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
   // Set on graceful/fatal teardown so the trailing `close` event isn't treated
@@ -153,6 +159,19 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         message: event.error.message,
       });
     }
+    if (
+      !this.firstTranscriptLogged &&
+      (event.type === "delta" || event.type === "complete") &&
+      event.text.trim()
+    ) {
+      this.firstTranscriptLogged = true;
+      logInfo(`${P} First transcript`, {
+        sessionId: this.sessionId,
+        eventType: event.type,
+        length: event.text.length,
+        sinceStartMs: this.sinceStartMs(),
+      });
+    }
     for (const listener of this.listeners) {
       listener(event);
     }
@@ -172,6 +191,10 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     resolve(result);
   }
 
+  private sinceStartMs(): number {
+    return Math.round(performance.now() - this.sessionStartedAt);
+  }
+
   async start(settings: VoiceInputSettings): Promise<VoiceStartResult> {
     if (!settings.deepgramApiKey) {
       logWarn(`${P} No Deepgram API key configured`);
@@ -182,6 +205,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     logInfo(`${P} Starting session ${mySessionId}`, { language: settings.language });
     this.cleanupPreviousSession();
     this.sessionId = mySessionId;
+    this.sessionStartedAt = performance.now();
+    this.firstTranscriptLogged = false;
     this.isReady = false;
     this.preConnectBuffer = [];
     this.preConnectBufferBytes = 0;
@@ -200,6 +225,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     settings: VoiceInputSettings,
     retryWithoutKeyterms = false
   ): void {
+    this.connectStartedAt = performance.now();
     // On a keyterm-overflow retry, strip keyterms from the URL but keep every
     // other setting identical.
     const effectiveSettings = retryWithoutKeyterms
@@ -305,7 +331,12 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       // model config lives in the URL query string, so there's no session
       // handshake to await (unlike OpenAI's `session.update`).
       this.clearConnectTimeout();
-      logInfo(`${P} WebSocket opened — session ready`);
+      logInfo(`${P} WebSocket opened — session ready`, {
+        sessionId: mySessionId,
+        connectMs: Math.round(performance.now() - this.connectStartedAt),
+        sinceStartMs: this.sinceStartMs(),
+        bufferedChunks: this.preConnectBuffer.length,
+      });
       if (this.preConnectBuffer.length > 0) {
         logInfo(`${P} Flushing ${this.preConnectBuffer.length} buffered audio chunks`);
         const buffered = this.preConnectBuffer;
