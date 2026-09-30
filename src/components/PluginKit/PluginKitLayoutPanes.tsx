@@ -549,9 +549,22 @@ function KitSplitGroup({
   const isCollapsed = (pane: SplitPaneEntry) =>
     pane.collapsible && layout.collapsed.includes(pane.id);
 
+  const paneElementId = (index: number) => `${baseId}pane-${index}`;
+
   const commit = (pane: SplitPaneEntry, next: { size: number; collapsed: boolean }) => {
     const wasCollapsed = isCollapsed(pane);
     const sizes = next.collapsed ? layout.sizes : { ...layout.sizes, [pane.id]: next.size };
+    // In a group too small for every size the siblings are squeezed; they are
+    // saved at what they are drawn at, or their larger sizes would take the
+    // step back as the flexbox shares the shortfall out again.
+    if (!next.collapsed) {
+      entries.forEach((other, otherIndex) => {
+        if (other.id === pane.id || other.fill || isCollapsed(other)) return;
+        const rect = document.getElementById(paneElementId(otherIndex))?.getBoundingClientRect();
+        const drawn = rect ? Math.round(horizontal ? rect.width : rect.height) : 0;
+        if (drawn > 0 && drawn < sizeOf(other)) sizes[other.id] = Math.max(other.min, drawn);
+      });
+    }
     const collapsedIds =
       next.collapsed === wasCollapsed
         ? layout.collapsed
@@ -564,8 +577,6 @@ function KitSplitGroup({
     if (next.collapsed !== wasCollapsed) handleCollapsedChange?.(collapsedIds);
     handleLayoutChange?.(nextLayout);
   };
-
-  const paneElementId = (index: number) => `${baseId}pane-${index}`;
 
   // The most a pane can take: its max, or what the group leaves once every
   // other pane has its size and the filling pane its floor.
