@@ -302,6 +302,8 @@ describe("hasRateLimitMessage (#12797)", () => {
     "You've hit your limit · resets 2pm (America/New_York)",
     "Session limit reached ∙ resets 6pm",
     "  ⎿  You’ve been rate limited",
+    "  ⎿  You've hit your weekly limit",
+    "You've hit your Opus limit. Try again at 3am.",
   ])("sees a rate-limit banner: %s", (line) => {
     expect(hasRateLimitMessage(["some output", line, "> "])).toBe(true);
   });
@@ -324,6 +326,8 @@ describe("hasRateLimitMessage (#12797)", () => {
     "  ⎿  You've hit your limit of 5 retries · resets Oct 2",
     "The banner says you've hit your weekly limit · resets Oct 2",
     "If you've hit your weekly limit · resets Oct 2",
+    "You have reached your session limit of 10 tool calls; increase maxIterations.",
+    "- You've hit your weekly limit without a reset is detected — passed",
   ])("does not treat other failures or prose as a rate limit: %s", (line) => {
     expect(hasRateLimitMessage([line])).toBe(false);
   });

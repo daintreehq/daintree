@@ -74,8 +74,10 @@ const RATE_LIMIT_PATTERNS: RegExp[] = [
   // ("You've hit your weekly limit · resets Oct 2 at 9pm", "…your Opus
   // limit…"). The window word is what makes it a quota; a bare "your limit"
   // only counts with the "· resets" tail, since "you've hit your limit of 5
-  // retries" is prose.
-  /^[\s•●■▪*>❯›⟩│┃╎╭╰─⚠⎿-]*you(?:['’]ve|\s+have)?\s+(?:hit|reached)\s+your\s+(?:(?:\d+[ -]?hour|hourly|daily|weekly|monthly|session|opus|sonnet)\s+limit\b|limit\s*[·∙•|-]\s*resets\b)/i,
+  // retries" is prose. A qualified limit may also end the row (a narrow pane
+  // wraps the reset time) or run into "Try again"/"Upgrade", but nothing else:
+  // "your session limit of 10 tool calls" is an execution budget.
+  /^[\s•●■▪*>❯›⟩│┃╎╭╰─⚠⎿-]*you(?:['’]ve|\s+have)?\s+(?:hit|reached)\s+your\s+(?:(?:\d+[ -]?hour|hourly|daily|weekly|monthly|session|opus|sonnet)\s+limit(?:[.!]?\s*$|[.!]?\s+(?:resets|try again|upgrade)\b|\s*[·∙•|-]\s*resets\b)|limit\s*[·∙•|-]\s*resets\b)/i,
   // Older Claude Code builds lead with the window ("5-hour limit reached ∙
   // resets 3pm", "Session limit reached ∙ resets 6pm").
   /^[\s•●■▪*>❯›⟩│┃╎╭╰─⚠⎿-]*(?:\d+[ -]?hour|session)\s+limit\s+reached\s*[·∙•|-]\s*resets\b/i,
