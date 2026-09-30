@@ -580,6 +580,13 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "Parent shows focus: the diff search bar wrapper has `focus-within:border-accent-primary focus-within:ring-1`",
   },
   {
+    file: "src/components/PluginKit/PluginKitEditors.tsx",
+    fragment:
+      "block w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary outline-hidden",
+    reason:
+      "Parent shows focus: the kit MarkdownEditor's frame wraps its Write/Preview strip and this text area as one field and paints the ring once via has-[textarea:focus-visible], as TagInput does",
+  },
+  {
     file: "src/components/PluginKit/PluginKitInputs.tsx",
     fragment: "h-6 min-w-24 flex-1 bg-transparent px-1 text-text-primary outline-hidden",
     reason:

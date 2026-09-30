@@ -161,6 +161,13 @@ const DURABLE_ALLOWLIST = new Set([
   // nothing in the kit applies it on its own.
   "src/components/PluginKit/PluginKitTypography.tsx",
 
+  // Kit CodeEditor and MarkdownEditor: the field's focus ring, drawn on the
+  // frame through `has-[.cm-focused]:` / `has-[textarea:focus-visible]:`
+  // because the focused element (CodeMirror's content, the text area) sits
+  // inside a frame it shares with gutters or a tab strip. It is a focus
+  // ring, which the exclusion above only recognises on `focus-visible:`.
+  "src/components/PluginKit/PluginKitEditors.tsx",
+
   // Document tab family (grid, dock, portal and assistant strips): the selected
   // tab's 2px underline, the documented "Settings Nav Active" / "Document Tab"
   // recipe. It is the strip's one selection mark; the other accent in the

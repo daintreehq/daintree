@@ -403,6 +403,15 @@
   opacity: 1;
 }
 
+/* A host's own hunk controls (the plugin kit's Stage, Revert, Comment). Always
+   drawn, unlike the copy button: they are what the hunk is for, not a spare. */
+.diff-viewer .diff-hunk-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-block: -2px;
+}
+
 /* Keyboard hunk nav target: keep the hunk header clear of the sticky dialog
    header when scrollIntoView lands a hunk at block: "start". */
 .diff-viewer tbody.diff-hunk {

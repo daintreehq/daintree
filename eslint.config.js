@@ -793,6 +793,17 @@ export default tseslint.config(
     rules: { "no-restricted-imports": "off" },
   },
 
+  // Allowlist — the plugin kit's CodeEditor and DiffView chunks. Each is
+  // reached only through React.lazy in PluginKitEditors.tsx, so the kit chunk
+  // itself never carries CodeMirror or react-diff-view.
+  {
+    files: [
+      "src/components/PluginKit/kitCodeEditor.tsx",
+      "src/components/PluginKit/kitDiffView.tsx",
+    ],
+    rules: { "no-restricted-imports": "off" },
+  },
+
   // Allowlist — radix-ui UI primitives (button, popover, tooltip, etc.) and
   // their direct consumers.
   {

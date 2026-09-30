@@ -242,6 +242,44 @@ describe("lucide-react-import", () => {
   });
 });
 
+describe("editor-library-import", () => {
+  it("flags a view bundling CodeMirror or a diff library and passes one using the kit", async () => {
+    for (const specifier of [
+      "@codemirror/view",
+      "@codemirror/lang-json",
+      "codemirror",
+      "@uiw/react-codemirror",
+      "react-diff-view",
+      "diff2html/lib/ui/js/diff2html-ui",
+    ]) {
+      expect(
+        await lintFor("editor-library-import", view(`<X />`, `import { X } from "${specifier}";\n`))
+      ).toHaveLength(1);
+    }
+    expect(
+      await lintFor(
+        "editor-library-import",
+        view(`<X />`, `const cm = await import("@codemirror/state");\n`)
+      )
+    ).toHaveLength(1);
+    expect(
+      await lintFor(
+        "editor-library-import",
+        view(`<CodeEditor />`, `import { CodeEditor, DiffView } from "@daintreehq/plugin-ui";\n`)
+      )
+    ).toEqual([]);
+  });
+
+  it("ignores a similar name that is not the library", async () => {
+    expect(
+      await lintFor(
+        "editor-library-import",
+        view(`<X />`, `import { X } from "./codemirror-notes";\n// from "@codemirror/view"\n`)
+      )
+    ).toEqual([]);
+  });
+});
+
 describe("dnd-library-import", () => {
   it("flags a view importing a drag-and-drop library and passes one using the kit", async () => {
     for (const specifier of [
