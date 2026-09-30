@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { choiceCardVariants } from "@/components/ui/card";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { AgentCliStep } from "./AgentCliStep";
@@ -40,6 +41,7 @@ import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
 import { CountBadge } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 const AGENT_ORDER = LAUNCHABLE_AGENT_IDS;
 
@@ -1152,12 +1154,10 @@ function AppearanceStep({
             <label
               key={scheme.id}
               className={cn(
-                "flex flex-col gap-2 p-3 rounded-[var(--radius-md)] border transition-colors text-left cursor-pointer",
+                choiceCardVariants({ selected: isSelected }),
+                "flex-col gap-2",
                 // The ring rides the card, not the visually hidden radio.
-                "has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent-primary",
-                isSelected
-                  ? "border-border-strong bg-overlay-selected"
-                  : "border-border-default bg-surface-canvas hover:border-text-secondary"
+                "has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent-primary"
               )}
             >
               <input
@@ -1168,7 +1168,11 @@ function AppearanceStep({
                 onChange={() => onThemeSelect(scheme.id)}
                 className="sr-only"
               />
-              <ThemeMockup scheme={scheme} />
+              {/* A picture of the theme, not its name: the preview's sample code
+                  would otherwise be read out as part of the radio's label. */}
+              <span aria-hidden="true" className="block">
+                <ThemeMockup scheme={scheme} />
+              </span>
               <div className="flex items-center justify-between px-0.5">
                 <div className="flex items-center gap-1.5">
                   {isDark ? (
@@ -1357,7 +1361,7 @@ export function CompleteStep({
   hasWorkspace?: boolean;
 }) {
   const hasAgents = installedAgents.length > 0;
-  const readyLine = `You have ${installedAgents.length} agent${installedAgents.length === 1 ? "" : "s"} ready to use.`;
+  const readyLine = `You have ${pluralize(installedAgents.length, "agent")} ready to use.`;
 
   return (
     <div className="space-y-4">

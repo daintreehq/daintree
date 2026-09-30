@@ -340,6 +340,21 @@ export interface WorktreeSnapshot {
   head?: string;
 }
 
+/**
+ * The volatile stamps of a {@link WorktreeSnapshot} whose every other field
+ * matches the last snapshot sent for the same monitor incarnation. See
+ * `shared/utils/worktreeSnapshotTick.ts`.
+ */
+export interface WorktreeTick {
+  worktreeId: string;
+  path: string;
+  generation?: number;
+  timestamp?: number;
+  lastGitStatusCheckedAt?: number;
+  workingTreeChangedAt?: number;
+  workingTreeChangedDirs?: readonly string[] | null;
+}
+
 /** Monitor configuration for polling intervals */
 export interface MonitorConfig {
   pollIntervalActive?: number;
@@ -423,6 +438,12 @@ export interface WorkspaceFetchResult {
    * state, not a fetch failure.
    */
   hasRemote?: boolean;
+  /**
+   * Oldest success timestamp among the remotes the call planned that settled
+   * on a success (fetched now or reused); absent when none did. The
+   * background fetch cadence anchors its next timer to it.
+   */
+  freshSince?: number;
   /**
    * True when a NON-primary remote of the same call failed. The rest of this
    * result speaks only for the primary remote — deliberately, because an
@@ -886,6 +907,10 @@ export type WorkspaceHostEvent =
     }
   // Spontaneous updates (no requestId - these are pushed events)
   | { type: "worktree-update"; worktree: WorktreeSnapshot; epoch: string; seq: number }
+  // Sent instead of `worktree-update` when the snapshot differs from the last
+  // one sent for that monitor only in its volatile stamps. Consumers rebuild
+  // the full snapshot from their copy of the last one (`applyWorktreeTick`).
+  | { type: "worktree-tick"; tick: WorktreeTick; epoch: string; seq: number }
   // `generation` is the removed monitor's incarnation stamp — the renderer
   // records it on the tombstone so a later update can be compared against it
   // (#11994). See `WorktreeSnapshot.generation`.

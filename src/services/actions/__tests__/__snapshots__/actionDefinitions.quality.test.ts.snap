@@ -380,6 +380,9 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
       "new",
       "agents",
       "task",
+      "model",
+      "effort",
+      "reasoning",
     ],
     "kind": "command",
     "requiresArgs": true,
@@ -418,7 +421,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List one agent's launch presets, merged across user settings, repository preset files and CCR discovery as the launcher does, so every id is launchable. Identity only: no env or flags. A false completeness flag means a source is still loading.",
+    "description": "List one agent's launchable presets, merged from user settings, repository preset files and CCR as the launcher does. Identity only, no env or flags; a launch can set model and flags without one. A false completeness flag means a source is loading.",
     "examples": [
       {
         "args": {
@@ -5067,7 +5070,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Write the active worktree's prepared context into a terminal this connection created or was handed, to give its agent a large codebase context. Any other panel is refused. Target an idle terminal.",
+    "description": "Write the active worktree's prepared context into a terminal this connection created or was handed (right-click > Hand to orchestrator), to give its agent a large codebase context. Any other panel is refused. Target an idle terminal.",
     "examples": undefined,
     "id": "terminal.injectOwned",
     "keywords": [
@@ -5095,7 +5098,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Interrupt the turn an agent is running in a panel this connection created or was handed, keeping the panel and conversation. Sends cancel keystrokes, not prompt text. An idle agent, or one binding a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
+    "description": "Interrupt the turn an agent is running in a panel this connection created or was handed (right-click > Hand to orchestrator), keeping the panel and conversation. Sends cancel keystrokes, not prompt text. An idle agent, or one binding a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
     "examples": undefined,
     "id": "terminal.interruptOwned",
     "keywords": [
@@ -5379,7 +5382,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Read an agent's last transcript reply and unanswered tool calls, e.g. a question and its options. Agents this connection launched or was handed; Daintree's assistant: any in its project. Claude Code only. Not proof the agent is waiting; permission prompts are screen-only.",
+    "description": "Read an agent's last transcript reply and unanswered tool calls, e.g. a question and its options. Agents this connection launched or was handed (right-click > Hand to orchestrator); Daintree's assistant: any in its project. Claude Code only. Not proof the agent is waiting; permission prompts are screen-only.",
     "examples": [
       {
         "args": {
@@ -5519,7 +5522,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Bring the user to a panel this session created or was handed, switching workspace and raising the window if needed. No other panel can be revealed. Use it when the user asked to be taken there, not to report progress.",
+    "description": "Bring the user to a panel this session created or was handed (right-click > Hand to orchestrator), switching workspace and raising the window if needed. No other panel can be revealed. Use it when the user asked to be taken there, not to report progress.",
     "examples": undefined,
     "id": "terminal.revealOwned",
     "keywords": [
@@ -5579,7 +5582,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Queue text as one submission to a terminal this connection created or was handed: a shell runs it, an agent pane takes it as its next prompt. Any other panel is refused. Returns once queued, not delivered or run; pass the returned \`submissionToken\` to a status read to check.",
+    "description": "Queue text as one submission to a terminal this connection created or was handed (right-click > Hand to orchestrator): a shell runs it, an agent pane takes it as its next prompt. Any other panel is refused. Returns once queued, not delivered or run; pass the returned \`submissionToken\` to a status read to check.",
     "examples": undefined,
     "id": "terminal.sendCommandOwned",
     "keywords": [
@@ -5617,7 +5620,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Answer a CLI's own dialog (trust, permission, a list) by option label or named keys, in a terminal this connection created or was handed.",
+    "description": "Answer a CLI's own dialog (trust, permission, a list) by option label or named keys, in a terminal this connection created or was handed (right-click > Hand to orchestrator).",
     "examples": undefined,
     "id": "terminal.sendKeysOwned",
     "keywords": [
@@ -6290,14 +6293,14 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   {
     "category": "worktree",
     "danger": "confirm",
-    "dangerRationale": "Permanently removes every selected worktree directory. Untracked work is lost. Main worktrees are excluded inside the confirm step.",
+    "dangerRationale": "Permanently deletes every selected worktree directory. Untracked work is lost. Main worktrees are excluded inside the confirm step.",
     "description": "Delete every selected worktree from disk with a typed-name confirmation",
     "examples": undefined,
     "id": "worktree.bulk.remove",
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Remove selected worktrees",
+    "title": "Delete selected worktrees",
   },
   {
     "category": "worktree",

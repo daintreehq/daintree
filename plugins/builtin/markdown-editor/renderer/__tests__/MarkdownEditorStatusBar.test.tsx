@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { readFileSync } from "fs";
 import path from "path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { MarkdownEditorStatusBar } from "../MarkdownEditorStatusBar";
 import { FILE_METADATA_STRIP_CLASS } from "@/components/FileViewer/fileMetadataStrip";
 
@@ -100,13 +101,20 @@ describe("MarkdownEditorStatusBar", () => {
     expect(actions.className).toContain("whitespace-nowrap");
   });
 
-  it("states the destination of the line-ending conversion, and never truncates it away", () => {
-    render(<MarkdownEditorStatusBar {...BASE} mixedEol eolLabel="CRLF" />);
+  it("states the destination of the line-ending conversion, and never truncates it away", async () => {
+    render(
+      <TooltipProvider>
+        <MarkdownEditorStatusBar {...BASE} mixedEol eolLabel="CRLF" />
+      </TooltipProvider>
+    );
     const warning = screen.getByTestId("markdown-editor-mixed-eol");
     // The destination is the actionable half — a warning that says only
     // "mixed line endings" tells the user nothing about what saving will do.
     expect(warning.textContent).toContain("CRLF");
-    expect(warning.getAttribute("title")).toContain("CRLF");
+    // Explained through the shared tooltip, never the OS one.
+    expect(warning.hasAttribute("title")).toBe(false);
+    fireEvent.focus(warning);
+    expect((await screen.findByRole("tooltip")).textContent).toContain("CRLF");
     expect(warning.className).toContain("shrink-0");
     expect(warning.className).toContain("whitespace-nowrap");
   });

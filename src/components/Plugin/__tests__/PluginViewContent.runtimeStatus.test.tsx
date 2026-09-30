@@ -5,6 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntimeStatus, PluginWorkerStatus } from "@shared/types/plugin";
 import { PLUGIN_WORKER_STALL_MS } from "../pluginWorkerPresentation";
 import type { PluginViewContentConfig } from "../PluginViewContent";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 /**
  * Host-owned backend health on a mounted plugin panel (#12278).
@@ -362,6 +372,85 @@ describe("mounted panel learns its backend died (#12278)", () => {
       await pushStatus(worker({ generation: 4, state: "ready" }));
 
       await waitFor(() => expect(lazyCalls.count).toBeGreaterThan(callsAfterThrow));
+    } finally {
+      vi.doUnmock("react");
+    }
+  });
+
+  it("rebinds an import-stage failure onto a fresh main-minted specifier (#12996)", async () => {
+    // The worker can report `ready` after the view's import already failed —
+    // the relaunch race this regression comes from. Remounting on the SAME
+    // specifier re-imports an entry the module map holds as failed forever, so
+    // the rebind has to ask main for the recovery generation, exactly as
+    // "Try again" would. A non-import failure keeps the plain remount.
+    const recoveryPath = "data:text/javascript,export default () => null";
+    const activateForView = vi.fn((_kindId: string, recover?: boolean) =>
+      Promise.resolve(recover === true ? recoveryPath : undefined)
+    );
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: {
+        events: {
+          on: (name: string, cb: Listener) => {
+            if (name === "plugin:runtime-status-changed") emit = cb;
+            return () => {};
+          },
+        },
+        plugin: {
+          onPanelKindsChanged: vi.fn(() => () => {}),
+          restartWorker: restartWorkerMock,
+          getRuntimeStatuses: getRuntimeStatusesMock,
+          activateForView,
+        },
+      },
+    });
+    const factories: Array<() => Promise<unknown>> = [];
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: (factory: () => Promise<unknown>) => {
+          factories.push(factory);
+          return function StubView() {
+            return <div data-testid="plugin-view" />;
+          };
+        },
+      };
+    });
+
+    try {
+      const { makePluginViewContent } = await import("../PluginViewContent");
+      const Content = makePluginViewContent(makeContentConfig());
+      render(<Content panelId="panel-import-rebind" />);
+      await waitFor(() => expect(factories).not.toHaveLength(0));
+
+      // `plugin://` cannot resolve under jsdom, which is the 404 of the bug.
+      const importError = await factories.at(-1)!().then(
+        () => null,
+        (err: unknown) => err
+      );
+      if (!(importError instanceof Error)) throw new Error("the first import did not fail");
+      expect(activateForView.mock.calls.at(-1)).toEqual(["acme.dashboard"]);
+
+      act(() => boundaryCallbacks.onError?.(importError));
+      const countBeforeReady = factories.length;
+      await pushStatus(worker({ generation: 1, state: "ready" }));
+      await waitFor(() => expect(factories.length).toBeGreaterThan(countBeforeReady));
+
+      const recovered = await factories.at(-1)!();
+      expect(activateForView.mock.calls.at(-1)).toEqual(["acme.dashboard", true]);
+      expect(recovered).toHaveProperty("default");
+
+      // A view that threw while rendering is not a poisoned specifier: the next
+      // backend rebind remounts in place rather than asking for a namespace.
+      act(() => boundaryCallbacks.onError?.(new Error("view exploded")));
+      const countBeforeRebind = factories.length;
+      await pushStatus(worker({ generation: 2, state: "ready" }));
+      await waitFor(() => expect(factories.length).toBeGreaterThan(countBeforeRebind));
+
+      await factories.at(-1)!().catch(() => {});
+      expect(activateForView.mock.calls.at(-1)).toEqual(["acme.dashboard"]);
     } finally {
       vi.doUnmock("react");
     }

@@ -7,6 +7,8 @@ import {
   readGitErrorFields,
   resolveBulkScope,
   sortFiles,
+  matchesFilter,
+  compileFilter,
 } from "../reviewHubUtils";
 
 function file(
@@ -336,5 +338,32 @@ describe("countNonDefaultView", () => {
 
   it("ignores the filter query, which has its own always-visible field", () => {
     expect(countNonDefaultView({ ...DEFAULT_SECTION_STATE, filterQuery: "src" })).toBe(0);
+  });
+});
+
+describe("matchesFilter / compileFilter", () => {
+  it("re-compiles when the query changes between calls", () => {
+    expect(matchesFilter("src/a.test.ts", "src/*.ts")).toBe(true);
+    expect(matchesFilter("src/a.test.ts", "docs/*")).toBe(false);
+    expect(matchesFilter("src/a.test.ts", "A.TEST")).toBe(true);
+    expect(matchesFilter("src/a.test.ts", "  ")).toBe(true);
+  });
+
+  it("normalizes backslashes and treats globs case-insensitively", () => {
+    const m = compileFilter("src\\*\\File?.ts");
+    expect(m("src/x/file1.ts")).toBe(true);
+    expect(m("src\\x\\FILE1.ts")).toBe(true);
+    expect(m("src/x/y/file1.ts")).toBe(false);
+  });
+});
+
+describe("sortFiles unknown status", () => {
+  it("ranks unknown statuses last and tie-breaks by path", () => {
+    const files = [
+      { path: "z.ts", status: "constructor" },
+      { path: "a.ts", status: "constructor" },
+      { path: "m.ts", status: "modified" },
+    ] as unknown as StagingFileEntry[];
+    expect(sortFiles(files, "status", "asc").map((f) => f.path)).toEqual(["m.ts", "a.ts", "z.ts"]);
   });
 });

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as fsModule from "fs";
 import { promises as fsp, watch } from "fs";
 import os from "os";
 import path from "path";
@@ -50,16 +51,46 @@ describe("ProjectPluginWatcher sentinel recovery", () => {
     await watcher.ensure("project", root);
     const daintreeDir = path.join(root, ".daintree");
     await fsp.mkdir(daintreeDir);
-    await vi.advanceTimersByTimeAsync(10_000);
+    // A live native sentinel leaves only the slow backstop poll running.
+    await vi.advanceTimersByTimeAsync(30_000);
     expect(vi.mocked(watch).mock.calls.some(([dir]) => dir === daintreeDir)).toBe(true);
 
     const pluginsRoot = path.join(daintreeDir, "plugins");
     await fsp.mkdir(pluginsRoot);
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(30_000);
     await vi.waitFor(() => expect(watcher.isWatching("project")).toBe(true));
     await vi.waitFor(() => expect(reload).toHaveBeenCalledWith("project", root, []));
     expect(subscribeParcelWatcher).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("polls on the fast cadence only when the native sentinel is unavailable", async () => {
+    const statSpy = vi.spyOn(fsModule, "existsSync");
+    try {
+      await watcher.ensure("project", root);
+      statSpy.mockClear();
+      await vi.advanceTimersByTimeAsync(60_000);
+      const watched = statSpy.mock.calls.length;
+      watcher.stop("project");
+
+      const available = vi.mocked(watch).getMockImplementation()!;
+      vi.mocked(watch).mockImplementation(() => {
+        throw new Error("watch unavailable");
+      });
+      try {
+        await watcher.ensure("project", root);
+        statSpy.mockClear();
+        await vi.advanceTimersByTimeAsync(60_000);
+      } finally {
+        vi.mocked(watch).mockImplementation(available);
+      }
+      const unwatched = statSpy.mock.calls.length;
+
+      expect(watched).toBeGreaterThan(0);
+      expect(watched * 3).toBeLessThan(unwatched);
+    } finally {
+      statSpy.mockRestore();
+    }
   });
 
   it("recovers when the native sentinel cannot be opened", async () => {

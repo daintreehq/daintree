@@ -269,7 +269,108 @@ describe("WorkspaceService adversarial", () => {
         firstStatusAt: [1_000, 2_000],
         monitorCount: 3,
       });
-      expect(sentEvents.filter((e) => e.type === "worktree-update")).toHaveLength(5);
+      // A repeat of an unchanged snapshot goes out as a tick, but still goes out.
+      expect(sentEvents.filter((e) => e.type === "worktree-update")).toHaveLength(3);
+      expect(sentEvents.filter((e) => e.type === "worktree-tick")).toHaveLength(2);
+    });
+  });
+
+  describe("worktree-tick emission", () => {
+    type Snap = Record<string, unknown>;
+    function fakeMonitor(initial: Snap) {
+      let current: Snap = { id: "wt-a", worktreeId: "wt-a", generation: 1, ...initial };
+      return {
+        set(next: Snap) {
+          current = { ...current, ...next };
+        },
+        getSnapshot: () => ({ ...current }),
+      };
+    }
+    function emit(monitor: ReturnType<typeof fakeMonitor>) {
+      (service as unknown as { emitUpdate: (m: unknown) => void })["emitUpdate"](monitor);
+    }
+    const types = () => sentEvents.map((e) => e.type);
+
+    it("sends a stamp-only change as a tick and a content change whole", () => {
+      const monitor = fakeMonitor({ modifiedCount: 1, lastGitStatusCheckedAt: 1 });
+      (service["monitors"] as Map<string, unknown>).set("wt-a", monitor);
+
+      emit(monitor);
+      monitor.set({ lastGitStatusCheckedAt: 2 });
+      emit(monitor);
+      monitor.set({ modifiedCount: 2 });
+      emit(monitor);
+
+      expect(types()).toEqual(["worktree-update", "worktree-tick", "worktree-update"]);
+      expect(sentEvents[1]).toMatchObject({
+        tick: { worktreeId: "wt-a", lastGitStatusCheckedAt: 2 },
+      });
+    });
+
+    it.each(["getSnapshotsSync", "getAllStates", "getMonitor"] as const)(
+      "sends the next emit whole after %s hands out content the last emit did not carry",
+      (method) => {
+        const monitor = fakeMonitor({ modifiedCount: 1 });
+        (service["monitors"] as Map<string, unknown>).set("wt-a", monitor);
+        emit(monitor);
+        monitor.set({ modifiedCount: 2 });
+
+        if (method === "getSnapshotsSync") service.getSnapshotsSync();
+        else if (method === "getAllStates") service.getAllStates("req");
+        else service.getMonitor("req", "wt-a");
+        sentEvents.length = 0;
+        emit(monitor);
+
+        expect(types()).toEqual(["worktree-update"]);
+      }
+    );
+
+    it("keeps ticking after a hydration that matched the last emit", () => {
+      const monitor = fakeMonitor({ modifiedCount: 1, lastGitStatusCheckedAt: 1 });
+      (service["monitors"] as Map<string, unknown>).set("wt-a", monitor);
+      emit(monitor);
+      monitor.set({ lastGitStatusCheckedAt: 2 });
+      service.getSnapshotsSync();
+      sentEvents.length = 0;
+      emit(monitor);
+
+      expect(types()).toEqual(["worktree-tick"]);
+    });
+
+    it("sends the next emit whole after a renderer port attaches", () => {
+      const monitor = fakeMonitor({ modifiedCount: 1 });
+      (service["monitors"] as Map<string, unknown>).set("wt-a", monitor);
+      emit(monitor);
+      service.resetEmitGate();
+      sentEvents.length = 0;
+      emit(monitor);
+
+      expect(types()).toEqual(["worktree-update"]);
+    });
+
+    it("sends the next emit whole when main never received the last full snapshot", async () => {
+      const workspaceModule = await import("../WorkspaceService.js");
+      let deliver = false;
+      const events: WorkspaceHostEvent[] = [];
+      const failing = new workspaceModule.WorkspaceService((event: WorkspaceHostEvent) => {
+        events.push(event);
+        return deliver;
+      });
+      const monitor = fakeMonitor({ modifiedCount: 1 });
+      (failing["monitors"] as Map<string, unknown>).set("wt-a", monitor);
+      const emitTo = () =>
+        (failing as unknown as { emitUpdate: (m: unknown) => void })["emitUpdate"](monitor);
+
+      emitTo();
+      deliver = true;
+      emitTo();
+      emitTo();
+
+      expect(events.map((e) => e.type)).toEqual([
+        "worktree-update",
+        "worktree-update",
+        "worktree-tick",
+      ]);
     });
   });
 
@@ -1161,6 +1262,179 @@ describe("WorkspaceService adversarial", () => {
         | undefined;
       expect(prDetected?.prState).toBe("closed");
       expect(prDetected?.linked?.pr?.state).toBe("declined");
+    });
+  });
+
+  describe("onPRDetected unchanged re-announcements", () => {
+    type OnPRDetected = (worktreeId: string, data: Record<string, unknown>) => void;
+    type OnPRCleared = (worktreeId: string, data: Record<string, unknown>) => void;
+    type Callbacks = { onPRDetected: OnPRDetected; onPRCleared: OnPRCleared };
+    type Snapshot = ReturnType<import("../WorktreeMonitor.js").WorktreeMonitor["getSnapshot"]>;
+
+    const WT = "/repo/wt-noop";
+    const BRANCH = "feature/noop";
+
+    function callbacks(): Callbacks {
+      return (service as unknown as { prService: { callbacks: Callbacks } }).prService.callbacks;
+    }
+
+    async function installMonitor(initialStatus = true): Promise<{ getSnapshot(): Snapshot }> {
+      const { WorktreeMonitor } = await import("../WorktreeMonitor.js");
+      const monitor = new WorktreeMonitor(
+        {
+          id: WT,
+          path: WT,
+          name: BRANCH,
+          branch: BRANCH,
+          isCurrent: false,
+          isMainWorktree: false,
+        },
+        {
+          basePollingInterval: 2000,
+          adaptiveBackoff: false,
+          pollIntervalMax: 10000,
+          circuitBreakerThreshold: 5,
+          gitWatchEnabled: false,
+        },
+        { onUpdate: () => {}, onRemoved: () => {}, onError: () => {} },
+        "main"
+      );
+      (monitor as unknown as { _hasInitialStatus: boolean })._hasInitialStatus = initialStatus;
+      (service as unknown as { monitors: Map<string, unknown> }).monitors.set(WT, monitor);
+      return monitor;
+    }
+
+    function ci(state: "success" | "failure" | "pending", passed = 3) {
+      return { state, total: 3, passed, failed: 3 - passed, pending: 0, rawData: null };
+    }
+
+    function event(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+      return {
+        prNumber: 42,
+        prUrl: "https://example.test/pr/42",
+        prState: "open",
+        prCiStatus: "success",
+        ciStatus: ci("success"),
+        prTitle: "Add thing",
+        branchName: BRANCH,
+        providerId: "p",
+        owner: "o",
+        repo: "r",
+        baseRef: "develop",
+        prLastUpdatedAt: 1_000,
+        ...overrides,
+      };
+    }
+
+    function prEvents(): WorkspaceHostEvent[] {
+      return sentEvents.filter((e) => e.type === "pr-detected" || e.type === "worktree-update");
+    }
+
+    it("sends nothing and keeps prLastUpdatedAt when an identical detection repeats", async () => {
+      const monitor = await installMonitor();
+      callbacks().onPRDetected(WT, event());
+      expect(prEvents().map((e) => e.type)).toEqual(["worktree-update", "pr-detected"]);
+      sentEvents.length = 0;
+
+      callbacks().onPRDetected(WT, event({ prLastUpdatedAt: 2_000 }));
+      // Phase-1 of a refresh for the same PR preserves the held CI rollup.
+      callbacks().onPRDetected(
+        WT,
+        event({
+          isCiStatusLoading: true,
+          prCiStatus: undefined,
+          ciStatus: undefined,
+          prLastUpdatedAt: 3_000,
+        })
+      );
+
+      expect(prEvents()).toEqual([]);
+      expect(monitor.getSnapshot().prLastUpdatedAt).toBe(1_000);
+      expect(monitor.getSnapshot().linked?.pr?.ciStatus).toEqual(ci("success"));
+    });
+
+    it.each<[string, Record<string, unknown>, (s: Snapshot) => unknown, unknown]>([
+      ["title", { prTitle: "Renamed" }, (s) => s.linked?.pr?.title, "Renamed"],
+      ["state", { prState: "merged" }, (s) => s.linked?.pr?.state, "merged"],
+      [
+        "url",
+        { prUrl: "https://example.test/pr/42b" },
+        (s) => s.prUrl,
+        "https://example.test/pr/42b",
+      ],
+      ["PR number", { prNumber: 43, prUrl: "https://example.test/pr/43" }, (s) => s.prNumber, 43],
+      [
+        "CI state",
+        { prCiStatus: "failure", ciStatus: ci("failure", 1) },
+        (s) => s.prCiStatus,
+        "failure",
+      ],
+      [
+        "CI counts under the same state",
+        { ciStatus: ci("success", 2) },
+        (s) => s.linked?.pr?.ciStatus?.passed,
+        2,
+      ],
+      [
+        "CI checks disappearing",
+        { prCiStatus: undefined, ciStatus: undefined },
+        (s) => s.linked?.pr?.ciStatus,
+        undefined,
+      ],
+      ["base branch", { baseRef: "main" }, (s) => s.linked?.pr?.baseRef, "main"],
+      ["provider", { providerId: "q" }, (s) => s.linked?.providerId, "q"],
+      ["issue title", { issueTitle: "Tracked issue" }, (s) => s.issueTitle, "Tracked issue"],
+    ])("still propagates a %s change", async (_label, overrides, read, expected) => {
+      const monitor = await installMonitor();
+      callbacks().onPRDetected(WT, event());
+      sentEvents.length = 0;
+
+      callbacks().onPRDetected(WT, event({ ...overrides, prLastUpdatedAt: 2_000 }));
+
+      expect(prEvents().map((e) => e.type)).toEqual(["worktree-update", "pr-detected"]);
+      expect(read(monitor.getSnapshot())).toEqual(expected);
+      const update = sentEvents.find((e) => e.type === "worktree-update") as
+        (WorkspaceHostEvent & { worktree: Snapshot }) | undefined;
+      expect(read(update!.worktree)).toEqual(expected);
+      expect(monitor.getSnapshot().prLastUpdatedAt).toBe(2_000);
+    });
+
+    it("before the first status pass, sends the overlay for a change and nothing for a repeat", async () => {
+      await installMonitor(false);
+      callbacks().onPRDetected(WT, event());
+      expect(prEvents().map((e) => e.type)).toEqual(["pr-detected"]);
+      sentEvents.length = 0;
+
+      callbacks().onPRDetected(WT, event({ prLastUpdatedAt: 2_000 }));
+      expect(prEvents()).toEqual([]);
+
+      callbacks().onPRDetected(WT, event({ prTitle: "Renamed" }));
+      expect(prEvents().map((e) => e.type)).toEqual(["pr-detected"]);
+    });
+
+    it("re-announces the same PR after it was cleared", async () => {
+      const monitor = await installMonitor();
+      callbacks().onPRDetected(WT, event());
+      callbacks().onPRCleared(WT, { branchName: BRANCH, providerId: "p" });
+      expect(monitor.getSnapshot().linked).toBeNull();
+      sentEvents.length = 0;
+
+      callbacks().onPRDetected(WT, event());
+
+      expect(prEvents().map((e) => e.type)).toEqual(["worktree-update", "pr-detected"]);
+      expect(monitor.getSnapshot().prNumber).toBe(42);
+    });
+
+    it("announces the PR to a monitor recreated at the same path", async () => {
+      await installMonitor();
+      callbacks().onPRDetected(WT, event());
+      const recreated = await installMonitor();
+      sentEvents.length = 0;
+
+      callbacks().onPRDetected(WT, event());
+
+      expect(prEvents().map((e) => e.type)).toEqual(["worktree-update", "pr-detected"]);
+      expect(recreated.getSnapshot().linked?.pr?.baseRef).toBe("develop");
     });
   });
 });

@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -94,6 +95,7 @@ import {
   DiffNoteComposer,
   type DiffNoteCardPlacement,
 } from "./DiffNoteWidgets";
+import { pluralize } from "@/lib/pluralize";
 
 export { _resetLangStateForTests, _flushLangLoadsForTests } from "./diffRefractor";
 
@@ -704,7 +706,7 @@ function HunkHeader({ hunk, gapStart, hiddenCount, onExpand }: HunkHeaderProps) 
           {hiddenCount <= EXPAND_ALL_MAX ? (
             <button type="button" onClick={() => onExpand(gapStart, hunk.oldStart)}>
               <UnfoldVertical className="w-3 h-3" />
-              Expand {hiddenCount} {hiddenCount === 1 ? "line" : "lines"}
+              Expand {pluralize(hiddenCount, "line")}
             </button>
           ) : (
             <>
@@ -1392,7 +1394,7 @@ function FileDiff({
                   onClick={() => handleExpandContext(trailingGapStart, oldTotalLines + 1)}
                 >
                   <UnfoldVertical className="w-3 h-3" />
-                  Expand {trailingHiddenCount} {trailingHiddenCount === 1 ? "line" : "lines"}
+                  Expand {pluralize(trailingHiddenCount, "line")}
                 </button>
               ) : (
                 <>
@@ -1512,12 +1514,7 @@ function FileDiff({
             </span>
           )}
           <div className="flex items-center gap-2 shrink-0 text-text-secondary">
-            {(additions > 0 || deletions > 0) && (
-              <span className="flex items-center gap-1">
-                {additions > 0 && <span className="text-status-success">+{additions}</span>}
-                {deletions > 0 && <span className="text-status-danger">-{deletions}</span>}
-              </span>
-            )}
+            <DiffStat insertions={additions} deletions={deletions} />
             {notesEnabled && (
               <Tooltip>
                 <TooltipTrigger asChild>

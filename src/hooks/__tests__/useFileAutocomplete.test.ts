@@ -199,4 +199,20 @@ describe("useFileAutocomplete", () => {
     expect(result.current.resultsQuery).toBe("zzz");
     expect(result.current.isLoading).toBe(false);
   });
+
+  // A pending debounce lands a same-value setState that re-renders the whole
+  // composer shortly after it mounts, so only a real query change may arm one.
+  it("arms no debounce timer until the query actually changes", () => {
+    const { rerender } = renderHook(
+      ({ query }) => useFileAutocomplete({ cwd: "/repo", query, enabled: false }),
+      { initialProps: { query: "" } }
+    );
+    expect(vi.getTimerCount()).toBe(0);
+
+    rerender({ query: "a" });
+    expect(vi.getTimerCount()).toBe(1);
+
+    rerender({ query: "" });
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

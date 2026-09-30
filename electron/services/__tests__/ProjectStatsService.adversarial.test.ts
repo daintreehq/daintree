@@ -49,6 +49,7 @@ vi.mock("../AgentAvailabilityStore.js", () => ({
 vi.mock("../HelpSessionService.js", () => ({ helpSessionService: helpSessionMock }));
 
 import { ProjectStatsService } from "../ProjectStatsService.js";
+import { FleetSnapshotService } from "../FleetSnapshotService.js";
 import {
   ASSISTANT_PROJECTION_PARITY,
   PARITY_ASSISTANT_TERMINAL,
@@ -56,12 +57,22 @@ import {
 
 type FakePtyClient = {
   getAllTerminalsAsync: ReturnType<typeof vi.fn>;
+  getAllTerminalsWithCompletenessAsync: ReturnType<typeof vi.fn>;
   getProjectStats: ReturnType<typeof vi.fn>;
 };
 
+// Fixtures set the terminal list on `getAllTerminalsAsync`; the service reads
+// it through the completeness-aware call, which forwards here.
 function makePtyClient(): FakePtyClient {
+  const getAllTerminalsAsync = vi.fn().mockResolvedValue([]);
   return {
-    getAllTerminalsAsync: vi.fn().mockResolvedValue([]),
+    getAllTerminalsAsync,
+    getAllTerminalsWithCompletenessAsync: vi.fn(async () => ({
+      terminals: await getAllTerminalsAsync(),
+      degraded: false,
+      shardsTotal: 1,
+      shardsFailed: 0,
+    })),
     getProjectStats: vi.fn(async (id: string) => ({
       projectId: id,
       terminalCount: 0,
@@ -134,6 +145,9 @@ describe("ProjectStatsService adversarial", () => {
       { id: "fail" },
       { id: "ok-2" },
     ]);
+    // Per-project reads only happen when the snapshot can't answer — here, a
+    // live terminal the host has yet to attribute.
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([{ id: "unowned", kind: "terminal" }]);
     ptyClient.getProjectStats.mockImplementation(async (id: string) => {
       if (id === "fail") throw new Error("transport down");
       return { projectId: id, terminalCount: 3 };
@@ -147,6 +161,8 @@ describe("ProjectStatsService adversarial", () => {
     expect(lastCall).toBeDefined();
     const [, payload] = lastCall as [string, Record<string, unknown>];
     expect(Object.keys(payload).sort()).toEqual(["ok-1", "ok-2"]);
+    expect(payload["ok-1"]).toMatchObject({ processCount: 3 });
+    expect(payload["ok-2"]).toMatchObject({ processCount: 3 });
     svc.stop();
   });
 
@@ -425,6 +441,9 @@ describe("ProjectStatsService adversarial", () => {
         launchAgentId: "daintree-assistant",
         agentState: "idle",
       },
+      // An unowned live terminal sends the count to the host, which is the
+      // only path where the host's answer and the snapshot can disagree.
+      { id: "unowned", kind: "terminal" },
     ]);
     // Stats lag: main process sees the help PTY but the host reports 0.
     ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 0 });
@@ -437,6 +456,7 @@ describe("ProjectStatsService adversarial", () => {
       string,
       { p1: { processCount: number } },
     ];
+    expect(ptyClient.getProjectStats).toHaveBeenCalledWith("p1");
     expect(payload.p1.processCount).toBe(0);
     svc.stop();
   });
@@ -444,7 +464,7 @@ describe("ProjectStatsService adversarial", () => {
   it("does not subtract a trashed or hasPty:false help terminal from processCount (#10989)", async () => {
     const ptyClient = makePtyClient();
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
-    availabilityMock.isHelpTerminal.mockReturnValue(true);
+    availabilityMock.isHelpTerminal.mockImplementation((id) => id.startsWith("help-"));
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       // Trashed → the PTY host already excludes it from terminalCount, so it
       // must not be subtracted (double-counting would drive processCount negative).
@@ -456,9 +476,18 @@ describe("ProjectStatsService adversarial", () => {
         agentState: "idle",
       },
       // No live PTY → likewise not part of terminalCount.
-      { id: "help-nopty", projectId: "p1", hasPty: false, kind: "terminal", agentState: "idle" },
+      {
+        id: "help-nopty",
+        projectId: "p1",
+        hasPty: false,
+        isExited: true,
+        kind: "terminal",
+        agentState: "idle",
+      },
+      { id: "shell-1", projectId: "p1", kind: "terminal" },
+      { id: "shell-2", projectId: "p1", kind: "terminal" },
+      { id: "shell-3", projectId: "p1", kind: "terminal" },
     ]);
-    ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 3 });
 
     const svc = new ProjectStatsService(ptyClient as never);
     svc.refresh();
@@ -701,12 +730,8 @@ describe("ProjectStatsService adversarial", () => {
       .mockReturnValueOnce(oldTerminalsPromise)
       .mockReturnValueOnce(newTerminalsPromise);
 
-    let statsCallCount = 0;
-    ptyClient.getProjectStats.mockImplementation(async (id: string) => {
-      statsCallCount += 1;
-      // First call carries stale data (terminalCount: 99), second the truth (1)
-      return { projectId: id, terminalCount: statsCallCount === 1 ? 99 : 1 };
-    });
+    // The older read carries stale data (three live terminals), the newer the truth (one).
+    const liveTerminal = (id: string) => ({ id, projectId: "p1", kind: "terminal" });
 
     const svc = new ProjectStatsService(ptyClient as never);
     svc.refresh(); // older compute — generation 1
@@ -715,7 +740,7 @@ describe("ProjectStatsService adversarial", () => {
     await Promise.resolve();
 
     // Resolve newer first → newer broadcast commits
-    resolveNewTerminals([]);
+    resolveNewTerminals([liveTerminal("t1")]);
     await vi.runAllTimersAsync();
     await Promise.resolve();
 
@@ -727,8 +752,8 @@ describe("ProjectStatsService adversarial", () => {
     >;
     expect(lastPayload.p1.processCount).toBe(1);
 
-    // Now resolve the older compute — it must NOT broadcast the stale 99
-    resolveOldTerminals([]);
+    // Now resolve the older compute — it must NOT broadcast the stale 3
+    resolveOldTerminals([liveTerminal("t1"), liveTerminal("t2"), liveTerminal("t3")]);
     await vi.runAllTimersAsync();
     await Promise.resolve();
 
@@ -738,7 +763,9 @@ describe("ProjectStatsService adversarial", () => {
 
   it("empty broadcast resets lastBroadcast so a same-shape non-empty result still fires", async () => {
     const ptyClient = makePtyClient();
-    ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 3 });
+    ptyClient.getAllTerminalsAsync.mockResolvedValue(
+      ["t1", "t2", "t3"].map((id) => ({ id, projectId: "p1", kind: "terminal" }))
+    );
 
     const svc = new ProjectStatsService(ptyClient as never);
 
@@ -1118,5 +1145,159 @@ describe("ProjectStatsService assistant presence (#11806)", () => {
       processCount: p1.processCount,
     }).toEqual(ASSISTANT_PROJECTION_PARITY);
     svc.stop();
+  });
+});
+
+describe("ProjectStatsService terminal counts from the shared snapshot", () => {
+  function payload(): Record<string, { processCount: number }> {
+    return broadcastMock.mock.calls.at(-1)![1] as Record<string, { processCount: number }>;
+  }
+
+  it("counts live, untrashed terminals per workspace without a per-project read", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      { id: "a", projectId: "p1", kind: "terminal" },
+      { id: "b", projectId: "p1", kind: "terminal", hasPty: false },
+      { id: "exited", projectId: "p1", kind: "terminal", hasPty: false, isExited: true },
+      { id: "trashed", projectId: "p1", kind: "terminal", isTrashed: true },
+      { id: "c", projectId: "p2", kind: "terminal" },
+      { id: "elsewhere", projectId: "closed-project", kind: "terminal" },
+    ]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    // A killed terminal still awaiting its exit is counted, as the host counts it.
+    expect(payload().p1.processCount).toBe(2);
+    expect(payload().p2.processCount).toBe(1);
+    expect(ptyClient.getProjectStats).not.toHaveBeenCalled();
+    svc.stop();
+  });
+
+  it("asks the host per workspace while a live terminal has no projectId", async () => {
+    // The host attributes such a terminal by cwd and stamps the id onto it as a
+    // side effect of `get-project-stats` — skipping the call would skip that.
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      { id: "owned", projectId: "p1", kind: "terminal" },
+      { id: "unowned", kind: "terminal", cwd: "/repo/p2" },
+    ]);
+    // The host's answer wins, including the unowned terminal it attributed to p2.
+    ptyClient.getProjectStats.mockImplementation(async (id: string) => ({
+      terminalCount: id === "p2" ? 1 : 4,
+    }));
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(ptyClient.getProjectStats.mock.calls.map(([id]) => id)).toEqual(["p1", "p2"]);
+    expect(payload().p1.processCount).toBe(4);
+    expect(payload().p2.processCount).toBe(1);
+    svc.stop();
+  });
+
+  it("asks the host for a trashed unowned terminal, which its matcher still attributes", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      { id: "binned", kind: "terminal", isTrashed: true },
+    ]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(ptyClient.getProjectStats).toHaveBeenCalledWith("p1");
+    svc.stop();
+  });
+
+  it("reads a shard missing from a degraded snapshot as zero, without a per-project retry", async () => {
+    // The shard that timed out on the fan-out would time out again per
+    // workspace; queuing that behind the first timeout outlasts the poll.
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+    ptyClient.getAllTerminalsWithCompletenessAsync.mockResolvedValue({
+      terminals: [{ id: "a", projectId: "p1", kind: "terminal" }],
+      degraded: true,
+      shardsTotal: 2,
+      shardsFailed: 1,
+    });
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(ptyClient.getProjectStats).not.toHaveBeenCalled();
+    expect(payload().p1.processCount).toBe(1);
+    expect(payload().p2.processCount).toBe(0);
+    svc.stop();
+  });
+
+  it("does not fall back for an unowned terminal that has exited", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      { id: "gone", kind: "terminal", hasPty: false, isExited: true },
+    ]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(ptyClient.getProjectStats).not.toHaveBeenCalled();
+    expect(payload().p1.processCount).toBe(0);
+    svc.stop();
+  });
+
+  it("shares one host read with the fleet poller, and re-reads after an agent transition", async () => {
+    vi.setSystemTime(1_830_000_000_000 - 100);
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      {
+        id: "t1",
+        projectId: "p1",
+        kind: "terminal",
+        agentState: "working",
+        launchAgentId: "claude",
+      },
+    ]);
+
+    const stats = new ProjectStatsService(ptyClient as never);
+    const fleet = new FleetSnapshotService(ptyClient as never);
+    stats.start();
+    fleet.start();
+
+    // Both pollers land on the same aligned tick.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(ptyClient.getAllTerminalsWithCompletenessAsync).toHaveBeenCalledTimes(1);
+
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      {
+        id: "t1",
+        projectId: "p1",
+        kind: "terminal",
+        agentState: "waiting",
+        launchAgentId: "claude",
+      },
+    ]);
+    await vi.advanceTimersByTimeAsync(100);
+    eventEmitter.emit("agent:state-changed");
+    await vi.advanceTimersByTimeAsync(250);
+
+    // Inside the TTL, but the transition invalidated the read: one fresh fan-out.
+    expect(ptyClient.getAllTerminalsWithCompletenessAsync).toHaveBeenCalledTimes(2);
+    const statsPayload = broadcastMock.mock.calls
+      .filter(([channel]) => channel === "project:stats-updated")
+      .at(-1)![1] as Record<string, { waitingAgentCount: number }>;
+    expect(statsPayload.p1.waitingAgentCount).toBe(1);
+    expect(fleet.getLastBroadcast()?.runs[0]?.agentState).toBe("waiting");
+
+    stats.stop();
+    fleet.stop();
   });
 });

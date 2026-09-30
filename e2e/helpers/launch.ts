@@ -1,4 +1,4 @@
-import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
+import { _electron as electron, test, type ElectronApplication, type Page } from "@playwright/test";
 import { mkdtempSync, mkdirSync, unlinkSync, readdirSync, appendFileSync } from "fs";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
@@ -24,6 +24,7 @@ const E2E_MODE_ARG = "--daintree-e2e-mode";
 const E2E_SKIP_FIRST_RUN_DIALOGS_ARG = "--daintree-e2e-skip-first-run-dialogs";
 const E2E_FAULT_MODE_ARG = "--daintree-e2e-fault-mode";
 const E2E_DEFER_RENDERER_LOAD_ARG = "--daintree-e2e-defer-renderer-load";
+const E2E_BACKGROUND_WINDOWS_ARG = "--daintree-e2e-background-windows";
 const E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE_ARG = "--daintree-e2e-disable-cached-view-cpu-throttle";
 const E2E_CRASH_DUMPS_DIR_ARG = "--daintree-e2e-crash-dumps-dir=";
 const E2E_SIDELOAD_PLUGIN_DIR_ARG = "--daintree-e2e-sideload-plugin-dir=";
@@ -64,6 +65,28 @@ export interface LaunchOptions {
    * `process.env.CI` runners where GPU is unavailable.
    */
   enableWebgl?: boolean;
+  /**
+   * Show the app on screen. Local macOS runs default to background windows —
+   * invisible, click-through, never taking OS focus — so a suite can run while
+   * you keep working. `--headed`, `--debug`/`PWDEBUG` or `DAINTREE_E2E_HEADED=1`
+   * shows every launch that doesn't pass this; pass `true` for a run a human
+   * has to watch or that measures on-screen behaviour. CI and other platforms
+   * are always headed.
+   */
+  headed?: boolean;
+}
+
+function resolveHeaded(options: LaunchOptions): boolean {
+  // Only macOS has a background implementation: Linux ignores setOpacity and
+  // Windows lets an invisible window take keyboard focus.
+  if (process.env.CI || process.platform !== "darwin") return true;
+  if (options.headed !== undefined) return options.headed;
+  if (process.env.DAINTREE_E2E_HEADED === "1" || process.env.PWDEBUG) return true;
+  try {
+    return test.info().project.use.headless === false;
+  } catch {
+    return false;
+  }
 }
 
 function cleanupWindowsElectronProcesses(): void {
@@ -299,6 +322,9 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     if (isWindowsCI) {
       args.unshift(E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE_ARG);
     }
+    if (!resolveHeaded(options)) {
+      args.unshift(E2E_BACKGROUND_WINDOWS_ARG);
+    }
 
     if (process.env.CI) {
       // CI runners lack real GPUs — disable GPU to prevent hangs.
@@ -384,6 +410,9 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
             }
           : {}),
       };
+      // The launch arg above is the only switch; an inherited env var must not
+      // override a headed launch.
+      delete launchEnv.DAINTREE_E2E_BACKGROUND_WINDOWS;
       delete launchEnv.ELECTRON_RUN_AS_NODE;
       delete launchEnv.ATOM_SHELL_INTERNAL_RUN_AS_NODE;
 

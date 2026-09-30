@@ -1,11 +1,12 @@
 import { useEffect, useRef } from "react";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 import { useNotificationStore, type NotificationAction } from "@/store/notificationStore";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useDistributionStore } from "@/store/distributionStore";
 
-const AVAILABLE_HINT = 'Use "Check for Updates..." to check again.';
+const AVAILABLE_HINT = 'Use "Check for Updates…" to check again.';
 const UPDATE_CORRELATION_ID = "app-update";
 const CHANGELOG_URL = "https://daintree.org/changelog";
 
@@ -19,19 +20,7 @@ function DownloadProgress({ percent }: { percent: number }) {
   return (
     <div className="space-y-1">
       <span>{pct}% complete</span>
-      <div
-        role="progressbar"
-        aria-label="Update download"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={pct}
-        className="h-1 w-full rounded-full bg-tint/10 overflow-hidden"
-      >
-        <div
-          className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
+      <ProgressBar label="Update download" value={pct} />
     </div>
   );
 }
@@ -85,7 +74,7 @@ function surfaceAvailable(version: string): void {
   notify({
     type: "info",
     title: "Update available",
-    message: `Version ${version} is downloading...`,
+    message: `Version ${version} is downloading…`,
     inboxMessage: `Version ${version} is downloading. ${AVAILABLE_HINT}`,
     priority: "high",
     duration: 0,

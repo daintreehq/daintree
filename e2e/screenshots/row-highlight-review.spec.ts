@@ -16,8 +16,8 @@
  *   forced         the pointer state under `forced-colors: active` (first theme only)
  *
  * Every surface is the real component in its existing `*-preview.html` entry,
- * except the project switcher and the plain dropdown menu, which live in
- * `row-highlight-preview.html`.
+ * except the project switcher, the worktree palette, quick create and the plain
+ * dropdown menu, which live in `row-highlight-preview.html`.
  *
  *   DAINTREE_SHOT_ROWHIGHLIGHT=1 DAINTREE_SHOT_DIR=/abs/out \
  *     ./node_modules/.bin/playwright test --project=screenshots row-highlight-review
@@ -142,6 +142,28 @@ const SURFACES: Surface[] = [
     },
     row: '[role="option"]',
     pointerRow: 3,
+    arrows: true,
+  },
+  {
+    slug: "worktree-palette",
+    url: (t) => `/row-highlight-preview.html?surface=worktree-palette&theme=${t}`,
+    open: async (page) => {
+      await expect(listbox(page).getByRole("option").first()).toBeVisible();
+      return page.getByRole("dialog").first();
+    },
+    row: '[role="option"]',
+    pointerRow: 3,
+    arrows: true,
+  },
+  {
+    slug: "quick-create",
+    url: (t) => `/row-highlight-preview.html?surface=quick-create&theme=${t}`,
+    open: async (page) => {
+      await expect(listbox(page).getByRole("option").first()).toBeVisible();
+      return page.getByRole("dialog").first();
+    },
+    row: '[role="option"]',
+    pointerRow: 2,
     arrows: true,
   },
   {

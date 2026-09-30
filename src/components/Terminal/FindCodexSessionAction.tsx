@@ -1,8 +1,10 @@
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useId, useState, type ReactNode } from "react";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { useShallow } from "zustand/react/shallow";
 import { Search, RefreshCw } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Spinner } from "@/components/ui/Spinner";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
@@ -11,7 +13,6 @@ import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { buildResumeCommand } from "@shared/types";
 import { reconcileResumeLaunchFlags } from "@/services/agentResume";
-import { formatTimeAgo } from "@/utils/timeAgo";
 import { logWarn, logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { codexClient } from "@/clients/codexClient";
@@ -21,7 +22,11 @@ import type {
   CodexFolderSessionsResult,
 } from "@shared/types/ipc/agentSubagents";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
-import { HEADER_CHIP_FOCUS_CLASS } from "./terminalHeaderChip";
+import {
+  POPOVER_HEADER_ACTION_CLASS,
+  POPOVER_HEADER_CLASS,
+  POPOVER_TITLE_CLASS,
+} from "@/components/ui/popoverHeader";
 import { resolveConversationSearchCwd } from "@/utils/restoreRecovery";
 import { Button } from "@/components/ui/button";
 import {
@@ -42,6 +47,8 @@ function findSessionsErrorMessage(reason: AgentSubagentUnavailableReason): strin
       return "Couldn't check for Codex sessions";
   }
 }
+
+const SKELETON_PREVIEW_WIDTHS = ["w-4/5", "w-3/5", "w-2/3"] as const;
 
 function firstLine(value: string): string {
   return value.trim().split("\n")[0]?.trim() ?? "";
@@ -77,6 +84,7 @@ export function FindCodexSessionAction({
   variant = "banner",
 }: FindCodexSessionActionProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const headingId = useId();
   // Keyed by the folder it was listed for: a held pane moved onto another
   // worktree keeps its conversation folder, but one whose folder did change
   // must not keep offering the old folder's list.
@@ -269,46 +277,53 @@ export function FindCodexSessionAction({
       }}
     >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent align="end" className="w-80 p-0">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-divider">
-          <span className="text-xs font-medium text-text-primary">
+      <PopoverContent align="end" className="w-80 p-0" aria-labelledby={headingId}>
+        <div className={POPOVER_HEADER_CLASS}>
+          <span id={headingId} className={POPOVER_TITLE_CLASS}>
             Codex sessions in this folder
           </span>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon-xs"
             onClick={() => {
               if (!isLoading) load();
             }}
             // Not `disabled`: pressing it would drop keyboard focus to the page.
             // The spin is the busy state.
             aria-disabled={isLoading}
-            className={cn(
-              "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors",
-              HEADER_CHIP_FOCUS_CLASS
-            )}
+            className={POPOVER_HEADER_ACTION_CLASS}
             aria-label="Refresh sessions"
           >
             <SpinningIcon
               icon={RefreshCw}
               active={isLoading}
-              className={cn("w-3.5 h-3.5", isLoading && skipMotion && "text-text-muted")}
+              className={cn(isLoading && skipMotion && "text-text-muted")}
               aria-hidden
             />
-          </button>
+          </Button>
         </div>
         {result === null ? (
           showSpinner ? (
-            <div className="flex items-center gap-2 px-3 py-3 text-xs text-text-secondary">
-              <Spinner size="sm" />
-              Looking for sessions
-            </div>
+            // The rows' own shape — a preview line over its age — so the list
+            // lands where the wait was instead of replacing a sentence.
+            <Skeleton label="Looking for sessions" className="flex flex-col">
+              {SKELETON_PREVIEW_WIDTHS.map((width) => (
+                <div
+                  key={width}
+                  className="flex flex-col gap-1.5 px-3 py-2 border-b border-divider last:border-b-0"
+                >
+                  <SkeletonBone immediate className={cn("h-3", width)} />
+                  <SkeletonBone immediate className="h-2.5 w-12" />
+                </div>
+              ))}
+            </Skeleton>
           ) : null
         ) : result.status === "unavailable" ? (
           <p className="px-3 py-3 text-xs text-text-secondary">
             {findSessionsErrorMessage(result.reason)}
           </p>
         ) : sessions.length === 0 ? (
-          <p className="px-3 py-3 text-xs text-text-secondary">No other sessions found here</p>
+          <EmptyState variant="zero-data" scale="popover" title="No other sessions found here" />
         ) : (
           <ul className="max-h-80 overflow-y-auto">
             {sessions.map((session) => (
@@ -325,9 +340,10 @@ export function FindCodexSessionAction({
                     {firstLine(session.preview).slice(0, 80) || session.id.slice(0, 8)}
                   </span>
                   {session.updatedAt > 0 && (
-                    <span className="text-3xs text-text-placeholder tabular-nums">
-                      {formatTimeAgo(session.updatedAt)}
-                    </span>
+                    <TimeAgo
+                      timestamp={session.updatedAt}
+                      className="text-3xs text-text-placeholder"
+                    />
                   )}
                 </button>
               </li>

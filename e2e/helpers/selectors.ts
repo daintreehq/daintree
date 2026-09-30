@@ -11,12 +11,12 @@ export const SEL = {
   },
   portal: {
     region: 'aside[aria-label="Portal"]',
-    resizeHandle: '[aria-label="Resize portal panel"]',
+    resizeHandle: '[aria-label^="Resize portal panel"]',
     launchpadHeading: 'h2:has-text("New Chat")',
     container: '[aria-label="Portal"]',
     tab: '[role="tab"]',
     tabList: '[role="tablist"]',
-    newTab: '[aria-label="New Tab"]',
+    newTab: '[aria-label="New tab"]',
     goBack: '[aria-label="Go back"]',
     goForward: '[aria-label="Go forward"]',
     reload: '[aria-label="Reload"]',
@@ -24,7 +24,7 @@ export const SEL = {
     closeTab: (title: string) => `[aria-label="Close ${title}"]`,
   },
   sidebar: {
-    resizeHandle: '[aria-label="Resize sidebar"]',
+    resizeHandle: '[aria-label^="Resize sidebar"]',
     aside: 'aside[aria-label="Sidebar"]',
   },
   settings: {
@@ -79,7 +79,6 @@ export const SEL = {
     restoreFromDock: 'button[aria-label*="move to grid"]',
     duplicate: '[aria-label="Duplicate panel as new tab"]',
     restart: '[data-testid="panel-restart"]',
-    restartConfirm: '[data-testid="panel-restart-confirm"]',
     tabList: '[role="tablist"][aria-label="Panel tabs"]',
     tab: '[role="tab"]',
     dockPopoverResizeHandle: '[data-testid="dock-popover-resize-handle"]',
@@ -572,7 +571,6 @@ export const SEL = {
     overriddenBadge: 'text="Overridden by team recipe"',
     moreButton: (name: string) => `[aria-label="More actions for recipe ${name}"]`,
     copyJsonItem: '[role="menuitem"]:has-text("Copy as JSON")',
-    exportedButton: (name: string) => `[aria-label="Recipe ${name} exported to clipboard"]`,
   },
   recipeConflict: {
     dialog: '[role="dialog"]:has-text("changed on disk")',

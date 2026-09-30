@@ -1688,6 +1688,7 @@ async function runDeleteAsync(
         title: "Dev server stopped",
         message: `${worktreeName} stopped before removing the worktree.`,
         transient: true,
+        context: { worktreeId },
       });
     }
     // Success: the worktree is gone, so the closed terminals stay closed —
@@ -1733,14 +1734,6 @@ async function runDeleteAsync(
       // rather than relaunch them against a deleted worktree.
       pendingTerminalRestores.delete(mutationId);
       pruneOutboxEntry(get, set, mutationId);
-      // Deliberately NO `worktreeId` in the context here, unlike every other
-      // notify in this store. `notify`'s origin-surface gate reads it as "the
-      // card is on screen, so the signal is already visible inline" and routes
-      // the toast to the inbox — but this branch exists precisely because the
-      // card is gone, and a surviving ghost row (terminals outlived the
-      // worktree) still answers to the id. Attaching it would suppress the one
-      // surface that reports the outcome. The message names the branch, so
-      // nothing is lost by dropping it.
       if (isBranchKeptError(message)) {
         // Not a malfunction: the safe `branch -d` refused rather than discard
         // work Git does not consider merged. A warning keeps that legible as a
@@ -1751,7 +1744,7 @@ async function runDeleteAsync(
           title: "Branch kept",
           message,
           priority: "high",
-          context: { eventKind: "git" },
+          context: { worktreeId, eventKind: "git" },
         });
       } else {
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
@@ -1760,7 +1753,7 @@ async function runDeleteAsync(
           title: "Couldn't delete branch",
           message,
           priority: "high",
-          context: { eventKind: "git" },
+          context: { worktreeId, eventKind: "git" },
         });
       }
       return;
@@ -2348,6 +2341,25 @@ function lifecyclePhaseResultsEqual(
   return true;
 }
 
+// Counts are rendered on the card, so a re-run that moves them under the same
+// state is a real change. The host no longer re-stamps unchanged PRs, so a
+// bumped timestamp can't be relied on to carry it through.
+function ciStatusEqual(
+  a: import("../../shared/types/forge.js").CIStatus | undefined,
+  b: import("../../shared/types/forge.js").CIStatus | undefined
+): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  return (
+    a.state === b.state &&
+    a.total === b.total &&
+    a.passed === b.passed &&
+    a.failed === b.failed &&
+    a.pending === b.pending &&
+    a.requiredChecksPassing === b.requiredChecksPassing
+  );
+}
+
 function linkedEqual(
   a: import("../../shared/types/plugin.js").PluginWorktreeLinked | null,
   b: import("../../shared/types/plugin.js").PluginWorktreeLinked | null
@@ -2360,7 +2372,8 @@ function linkedEqual(
     a.pr?.state === b.pr?.state &&
     a.pr?.url === b.pr?.url &&
     a.pr?.title === b.pr?.title &&
-    a.pr?.ciStatus?.state === b.pr?.ciStatus?.state &&
+    a.pr?.baseRef === b.pr?.baseRef &&
+    ciStatusEqual(a.pr?.ciStatus, b.pr?.ciStatus) &&
     a.issue?.ref.number === b.issue?.ref.number &&
     a.issue?.title === b.issue?.title
   );

@@ -268,7 +268,7 @@ function jetbrainsToolboxScriptDirs(): string[] {
   return dirs;
 }
 
-function findBinaryInPath(binary: string, extraDirs: string[] = []): string | null {
+function binaryCandidates(binary: string, extraDirs: string[]): string[] {
   const p = process.platform === "win32" ? path.win32 : path.posix;
   const pathDirs = (process.env.PATH ?? "").split(p.delimiter).filter(Boolean);
   const searchDirs = [...extraDirs, ...pathDirs];
@@ -278,50 +278,79 @@ function findBinaryInPath(binary: string, extraDirs: string[] = []): string | nu
       ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";").map((e) => e.toLowerCase())
       : [""];
 
+  const candidates: string[] = [];
   for (const dir of searchDirs) {
     for (const ext of extensions) {
-      const fullPath = p.join(dir, binary + ext);
-      try {
-        const stat = fs.statSync(fullPath);
-        if (!stat.isFile()) continue;
-        if (process.platform === "win32") return fullPath;
-        try {
-          fs.accessSync(fullPath, fs.constants.X_OK);
-          return fullPath;
-        } catch {
-          // not executable for this user, continue
-        }
-      } catch {
-        // not found, continue
-      }
+      candidates.push(p.join(dir, binary + ext));
     }
   }
-  return null;
+  return candidates;
+}
+
+async function isExecutableFile(fullPath: string): Promise<boolean> {
+  try {
+    const stat = await fs.promises.stat(fullPath);
+    if (!stat.isFile()) return false;
+    if (process.platform === "win32") return true;
+    await fs.promises.access(fullPath, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function resolveEditorDef(id: KnownEditorId): EditorDefinition | undefined {
   return KNOWN_EDITORS.find((e) => e.id === id);
 }
 
-function findExecutable(def: EditorDefinition): string | null {
+// Probes share libuv's four-thread fs pool with the rest of the main process,
+// so a PATH entry on a hung mount must not be able to occupy all of it.
+const MAX_CONCURRENT_PROBES = 2;
+let activeProbes = 0;
+const probeQueue: Array<() => void> = [];
+
+function withProbeSlot<T>(task: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const run = () => {
+      activeProbes++;
+      new Promise<T>((settle) => settle(task())).then(resolve, reject).finally(() => {
+        activeProbes--;
+        probeQueue.shift()?.();
+      });
+    };
+    if (activeProbes < MAX_CONCURRENT_PROBES) run();
+    else probeQueue.push(run);
+  });
+}
+
+/**
+ * The same walk as a synchronous PATH lookup — binaries first, then extra
+ * dirs, then PATH, one candidate at a time — so it touches exactly the paths
+ * and picks exactly the file a sequential search would. Only the waiting moves
+ * off the main thread; separate editors walk concurrently under the slot cap.
+ */
+async function findExecutable(def: EditorDefinition): Promise<string | null> {
   const extraDirs = def.extraDirs ? def.extraDirs() : [];
   for (const binary of def.binaries) {
-    const resolved = findBinaryInPath(binary, extraDirs);
-    if (resolved) return resolved;
+    for (const candidate of binaryCandidates(binary, extraDirs)) {
+      if (await withProbeSlot(() => isExecutableFile(candidate))) return candidate;
+    }
   }
   return null;
 }
 
-export function discover(): DiscoveredEditor[] {
-  return KNOWN_EDITORS.map((def) => {
-    const executablePath = findExecutable(def) ?? undefined;
-    return {
-      id: def.id,
-      name: def.name,
-      available: executablePath !== undefined,
-      executablePath,
-    };
-  });
+export async function discover(): Promise<DiscoveredEditor[]> {
+  return Promise.all(
+    KNOWN_EDITORS.map(async (def) => {
+      const executablePath = (await findExecutable(def)) ?? undefined;
+      return {
+        id: def.id,
+        name: def.name,
+        available: executablePath !== undefined,
+        executablePath,
+      };
+    })
+  );
 }
 
 /**
@@ -475,7 +504,7 @@ export async function openFile(
     } else {
       const def = resolveEditorDef(config.id);
       if (def) {
-        const executable = findExecutable(def);
+        const executable = await findExecutable(def);
         if (executable) {
           const args = def.buildArgs(filePath, targetLine, targetCol, isDirectory);
           const launched = await launchEditor(executable, args);
@@ -495,7 +524,7 @@ export async function openFile(
 
   // 3. Try discovered editors in priority order
   for (const def of KNOWN_EDITORS) {
-    const executable = findExecutable(def);
+    const executable = await findExecutable(def);
     if (executable) {
       const args = def.buildArgs(filePath, targetLine, targetCol, isDirectory);
       const launched = await launchEditor(executable, args);

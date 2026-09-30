@@ -47,6 +47,7 @@ vi.stubGlobal(
   }
 );
 
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { NonGitFolderDialog } from "../NonGitFolderDialog";
 
 function renderDialog() {
@@ -58,7 +59,7 @@ function renderDialog() {
     onInitSuccess: vi.fn(),
     onCancel: vi.fn(),
   };
-  render(<NonGitFolderDialog {...props} />);
+  render(<NonGitFolderDialog {...props} />, { wrapper: TooltipProvider });
   return props;
 }
 

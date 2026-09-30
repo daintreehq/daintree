@@ -21,6 +21,7 @@ import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { formatTokenCount } from "@/utils/formatTokenCount";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { describeExitStatus } from "./exitStatus";
+import { pluralize } from "@/lib/pluralize";
 
 const TRIGGER_LABELS: Record<AgentStateChangeTrigger, string> = {
   input: "Input",
@@ -164,7 +165,7 @@ export function TerminalAgentIndicator({
           {errorCount > 0 && (
             <span
               className="status-mark absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-error"
-              aria-label={`${errorCount} error${errorCount > 1 ? "s" : ""}`}
+              aria-label={pluralize(errorCount, "error")}
             />
           )}
         </div>
@@ -209,9 +210,7 @@ export function TerminalAgentIndicator({
             </span>
           )}
           {errorCount > 0 && (
-            <span className="text-status-error">
-              {errorCount} error{errorCount > 1 ? "s" : ""}
-            </span>
+            <span className="text-status-error">{pluralize(errorCount, "error")}</span>
           )}
         </div>
       </TooltipContent>

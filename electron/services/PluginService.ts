@@ -40,6 +40,7 @@ import {
 import { PluginPtyTransport } from "./plugin/PluginPtyTransport.js";
 import { PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
+import { whenPluginDirResolverLive } from "../setup/pluginProtocolReadiness.js";
 import type { HostGitFactory } from "./plugin/pluginHostGit.js";
 import type { PluginDataBackupSource } from "./plugin/pluginDataBackup.js";
 import {
@@ -157,6 +158,7 @@ import {
   PluginBlocklistService,
   findPluginBlocklistMatch,
   type ParsedPluginBlocklist,
+  type PluginBlocklistMatch,
 } from "./plugin/PluginBlocklistService.js";
 import { PluginInstaller } from "./plugin/PluginInstaller.js";
 import { checkPluginEngineRange, type PluginEngineMismatch } from "./plugin/pluginEngineCompat.js";
@@ -996,6 +998,7 @@ export class PluginService {
    * constant-folded to `""` via `scripts/build-main.mjs` defines.
    */
   private sideloadPluginsRoot: string | undefined;
+  private readonly whenProtocolReady: (() => Promise<void>) | undefined;
   private appVersion: string;
   /**
    * Owns the coalesced per-tick contribution broadcasts (actions, panel kinds,
@@ -1069,6 +1072,13 @@ export class PluginService {
       blocklistService?: PluginBlocklistService;
       /** Overridable so tests can point the recipe metadata sidecar at a tmpdir. */
       globalConfigDir?: string | null;
+      /**
+       * Settles once `plugin://` requests reach this service's authorities.
+       * Every load awaits it before minting anything addressable (#12996).
+       * Absent means requests are always served, which only a test harness
+       * without a protocol handler can claim.
+       */
+      whenProtocolReady?: () => Promise<void>;
     }
   ) {
     this.pluginsRoot = pluginsRoot ?? path.join(os.homedir(), ".daintree", "plugins");
@@ -1078,6 +1088,7 @@ export class PluginService {
     this.appVersion = appVersion ?? app.getVersion();
     this.builtinPluginsRoot = options?.builtinPluginsRoot;
     this.sideloadPluginsRoot = options?.sideloadPluginsRoot;
+    this.whenProtocolReady = options?.whenProtocolReady;
     this.blocklistService = options?.blocklistService ?? new PluginBlocklistService();
 
     this.initPromise = new Promise<void>((resolve) => {
@@ -1377,16 +1388,30 @@ export class PluginService {
       console.error("[PluginService] Failed to read plugin recipe metadata:", err);
     }
 
-    // Resolve the kill-switch blocklist once, before any scan, so the
-    // per-plugin load gate below reads a single immutable snapshot and the
-    // Promise.allSettled fan-out never awaits a network call (#9428). Fails
-    // open: getBlocklist() returns null on any fetch/parse failure with no
-    // cached list, and plugins then load normally.
-    this.startupBlocklist = await this.blocklistService.getBlocklist();
+    // Resolve the kill-switch blocklist before any scan, so the per-plugin load
+    // gate reads one snapshot and the Promise.allSettled fan-out never awaits a
+    // network call (#9428). A cached list is enforced as-is even when stale, so
+    // startup never waits on the network while one exists; the revalidated list
+    // is adopted the moment it arrives, unloading anything it newly blocks. With
+    // no cache at all this still waits for the fetch. Fails open: null on any
+    // fetch/parse failure with no cached list.
+    const { blocklist, refreshed } = await this.blocklistService.getStartupBlocklist();
+    this.startupBlocklist = blocklist;
+    if (refreshed) {
+      void refreshed
+        .then((fresh) => this.applyRefreshedBlocklist(fresh))
+        .catch((err) =>
+          console.error("[PluginService] Failed to apply the refreshed blocklist:", err)
+        );
+    }
 
     // Built-ins load first so user plugins with a colliding manifest.name are
     // rejected by the duplicate guard in loadPlugin() — built-in wins.
     const builtinDir = this.builtinPluginsRoot ?? this.getBuiltinDir();
+    // One snapshot per contribution channel for the whole scan rather than one
+    // per plugin: the parallel loads each settle on their own fs callback, so
+    // per-tick coalescing alone could not merge them.
+    const releaseBroadcasts = this.broadcaster.holdBroadcasts();
     try {
       const builtinLoaded = builtinDir
         ? await this.loadFromDir(builtinDir, { isBuiltin: true })
@@ -1400,6 +1425,7 @@ export class PluginService {
       const sideloadLoaded = this.sideloadPluginsRoot
         ? await this.loadFromDir(this.sideloadPluginsRoot, { isBuiltin: true })
         : 0;
+      releaseBroadcasts();
       console.log(
         `[PluginService] Loaded ${builtinLoaded} built-in plugin(s) from ${builtinDir ?? "<unresolved>"}, ${userLoaded} user plugin(s) from ${this.pluginsRoot}, and ${sideloadLoaded} sideloaded plugin(s) from ${this.sideloadPluginsRoot ?? "<none>"}`
       );
@@ -1412,8 +1438,88 @@ export class PluginService {
       // user dir): a retry would re-run the built-in scan and trigger
       // "already registered, overwriting" warnings from the contribution
       // registries.
+      releaseBroadcasts();
       this.initialized = true;
+      // A refresh that landed mid-scan swept only what had committed by then;
+      // sweep again for loads that were in flight across it.
+      if (this.startupBlocklist !== blocklist) {
+        this.applyRefreshedBlocklist(this.startupBlocklist);
+      }
     }
+  }
+
+  /**
+   * Adopt a revalidated blocklist mid-session. Plugins that loaded against the
+   * stale cached list and are now blocked get the full `unloadPlugin()`
+   * teardown and move into `blockedPlugins`, exactly as if the load gate had
+   * refused them. A null result is the fail-open signal and never drops the
+   * list already enforced.
+   */
+  private applyRefreshedBlocklist(fresh: ParsedPluginBlocklist | null): void {
+    if (!fresh || this.disposed) return;
+    this.startupBlocklist = fresh;
+    let changed = false;
+    for (const [pluginId, plugin] of [...this.plugins]) {
+      if (this.blockLoadedPluginIfListed(pluginId, plugin)) changed = true;
+    }
+    for (const [pluginId, entry] of [...this.disabledPlugins]) {
+      const match = findPluginBlocklistMatch(fresh, {
+        name: entry.manifest.name,
+        version: entry.manifest.version,
+      });
+      if (!match) continue;
+      this.disabledPlugins.delete(pluginId);
+      this.recordBlockedPlugin(entry, match.message);
+      changed = true;
+    }
+    if (changed) this.broadcaster.broadcastProvenanceChanged();
+  }
+
+  /**
+   * Unload a registered plugin the current blocklist covers. Returns whether it
+   * did. Also the activation gate: a load that passed the check against an
+   * older list can commit after {@link applyRefreshedBlocklist} swept, and must
+   * still never run code.
+   */
+  private blockLoadedPluginIfListed(pluginId: string, plugin: LoadedPlugin): boolean {
+    const match = this.blocklistMatchFor(plugin);
+    if (!match) return false;
+    console.warn(
+      `[PluginService] Plugin "${plugin.manifest.name}" v${plugin.manifest.version} is blocklisted (${match.reason}) — unloading`
+    );
+    this.unloadPlugin(pluginId);
+    // Project instances never claim the global namespace; see loadPlugin().
+    if (plugin.origin !== "project") this.recordBlockedPlugin(plugin, match.message);
+    return true;
+  }
+
+  private blocklistMatchFor(plugin: LoadedPlugin): PluginBlocklistMatch | null {
+    return findPluginBlocklistMatch(this.startupBlocklist, {
+      name: plugin.manifest.name,
+      version: plugin.manifest.version,
+    });
+  }
+
+  private recordBlockedPlugin(
+    entry: { manifest: Readonly<PluginManifest>; dir: string; isBuiltin: boolean },
+    reason: string
+  ): void {
+    const { manifest } = entry;
+    this.reservedNames.add(manifest.name);
+    if (this.blockedPlugins.has(manifest.name)) return;
+    this.blockedPlugins.set(manifest.name, {
+      manifest: manifest as PluginManifest,
+      dir: entry.dir,
+      isBuiltin: entry.isBuiltin,
+      reason,
+    });
+    broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      type: "warning",
+      priority: "low",
+      title: "Plugin blocked",
+      message: `"${manifest.displayName ?? manifest.name}" was blocked: ${reason}`,
+      rateLimitKey: `plugin-blocklist:${manifest.name}`,
+    });
   }
 
   /**
@@ -1682,6 +1788,17 @@ export class PluginService {
       binding?: PluginHostBinding;
     }
   ): Promise<LoadedPlugin | null> {
+    // Every load path funnels through here — startup scans, a background-
+    // restored project's `onProjectOpened` (which never waits on the deferred
+    // `plugin-service` task), reloads, installs — and each one ends by
+    // publishing `plugin://` URLs. Served by the placeholder resolver, those
+    // 404, and a failed import is permanent for its specifier (#12996). Waiting
+    // here, before a view generation or authority is minted, means no URL
+    // exists until the handler can serve it.
+    if (this.whenProtocolReady) {
+      await this.whenProtocolReady();
+      if (this.disposed) return null;
+    }
     const origin: PluginOrigin = opts.origin ?? (opts.isBuiltin ? "builtin" : "user");
     const isProject = origin === "project";
     const isUserInstalled = origin === "user";
@@ -2452,7 +2569,7 @@ export class PluginService {
       // `Command "{id}" has no handler` toast.
     }
     if (registered) {
-      this.broadcaster.broadcastPluginActions();
+      this.broadcaster.schedulePluginActionsBroadcast();
     }
   }
 
@@ -2516,6 +2633,10 @@ export class PluginService {
       return this.buildWorkerCommandHandler(pluginId, channel, resolvedPath);
     }
     const mod = (await this.runImport(pluginId, resolvedPath)) as { default?: unknown };
+    const owner = this.plugins.get(pluginId);
+    if (!owner || this.blocklistMatchFor(owner)) {
+      throw new Error(`Plugin "${pluginId}" is no longer loaded; cannot run command "${channel}"`);
+    }
     if (typeof mod.default !== "function") {
       throw new Error(
         `Command "${channel}" handler module "${resolvedPath}" has no callable default export`
@@ -2643,6 +2764,9 @@ export class PluginService {
       const mod = (await this.runImport(pluginId, plugin.resolvedMain)) as {
         activate?: unknown;
       };
+      // The import is a suspension point: an unload, or a refreshed blocklist
+      // naming this plugin, may have landed while it resolved.
+      if (this.plugins.get(pluginId) !== plugin || this.blocklistMatchFor(plugin)) return;
       if (typeof mod.activate === "function") {
         const activate = mod.activate as PluginActivate;
         // A built-in gets the built-in host: the same object plus the
@@ -3061,6 +3185,13 @@ export class PluginService {
     if (existing) return existing;
     const plugin = this.plugins.get(pluginId);
     if (!plugin) return;
+    if (this.blockLoadedPluginIfListed(pluginId, plugin)) {
+      this.broadcaster.broadcastProvenanceChanged();
+      return;
+    }
+    // A project plugin can activate while the startup scan still holds
+    // contribution broadcasts; what it dispatches must find them published.
+    this.broadcaster.interruptHolds();
 
     const promise = this._doActivate(pluginId).then(
       () => {
@@ -5480,7 +5611,16 @@ export class PluginService {
     dir: string;
     dirName: string;
     manifest: Readonly<PluginManifest>;
+    isCurrent?: () => boolean;
   }): Promise<boolean> {
+    // `loadPlugin` waits on the same gate, but a project load can sit there for
+    // seconds on a relaunch (#12996) — long enough for its project to close or
+    // lose trust. Waiting here first lets it stop before it publishes or
+    // activates, which the controller's after-the-fact unload cannot undo.
+    if (this.whenProtocolReady) {
+      await this.whenProtocolReady();
+      if (this.disposed || args.isCurrent?.() === false) return false;
+    }
     const instanceKey = makeProjectPluginInstanceKey(args.projectId, args.manifest.name);
     // Re-derive the parent from the realpath-resolved directory discovery
     // returned, so the load reads through the same resolved path the symlink
@@ -6718,7 +6858,7 @@ export class PluginService {
     }
     owners.add(descriptor.id);
 
-    this.broadcaster.broadcastPluginActions();
+    this.broadcaster.schedulePluginActionsBroadcast();
   }
 
   /** Remove a single plugin-registered action. Silent no-op if unknown. */
@@ -6737,7 +6877,7 @@ export class PluginService {
       if (owners.size === 0) this.pluginActionOwners.delete(pluginId);
     }
 
-    this.broadcaster.broadcastPluginActions();
+    this.broadcaster.schedulePluginActionsBroadcast();
   }
 
   /** Bulk cleanup when a plugin is unloaded. Emits a single broadcast. */
@@ -6754,7 +6894,7 @@ export class PluginService {
     }
     this.pluginActionOwners.delete(pluginId);
 
-    this.broadcaster.broadcastPluginActions();
+    this.broadcaster.schedulePluginActionsBroadcast();
   }
 
   /**
@@ -6780,7 +6920,7 @@ export class PluginService {
       changed = true;
     }
     if (owners.size === 0) this.pluginActionOwners.delete(pluginId);
-    if (changed) this.broadcaster.broadcastPluginActions();
+    if (changed) this.broadcaster.schedulePluginActionsBroadcast();
   }
 
   /** Flattened snapshot of all plugin-registered actions (for renderer pull-on-mount). */
@@ -6917,6 +7057,7 @@ export class PluginService {
 // `""` in production builds, so no shipped binary ever sideloads anything.
 export const pluginService = new PluginService(undefined, undefined, {
   sideloadPluginsRoot: e2eSideloadPluginDir,
+  whenProtocolReady: whenPluginDirResolverLive,
 });
 
 // E2E backdoor: activate a loaded plugin by id without adding a production IPC

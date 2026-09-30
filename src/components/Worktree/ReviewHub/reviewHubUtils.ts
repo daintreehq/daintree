@@ -1,10 +1,11 @@
-import type { GitStatus, StagingFileEntry } from "@shared/types";
+import type { StagingFileEntry } from "@shared/types";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { getGitRecoveryHint } from "@shared/utils/gitOperationErrors";
 import { isClientGitError } from "@/utils/clientGitError";
 import { isGeneratedFile } from "../generatedFileClassifier";
 import { cn } from "@/lib/utils";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 export type DiffMode = "working-tree" | "base-branch";
 
@@ -220,7 +221,7 @@ export function getPushBannerConfig(
   if (state.reason === "push-rejected-outdated") {
     const remoteCount = behindCount && behindCount > 0 ? behindCount : null;
     const message = remoteCount
-      ? `The remote has ${remoteCount} new commit${remoteCount === 1 ? "" : "s"}. Pull and rebase before pushing.`
+      ? `The remote has ${pluralize(remoteCount, "new commit")}. Pull and rebase before pushing.`
       : "The remote has new commits. Pull and rebase before pushing.";
     return {
       ...base,
@@ -277,12 +278,17 @@ export const DEFAULT_SECTION_STATE: SectionViewState = {
   showGenerated: true,
 };
 
-export function matchesFilter(path: string, query: string): boolean {
-  const trimmed = query.trim().replace(/\\/g, "/");
-  if (!trimmed) return true;
+const GLOB_CHARS = /[*?[\]{}()]/;
 
-  const globChars = /[*?[\]{}()]/;
-  if (globChars.test(trimmed)) {
+export type FilterMatcher = (path: string) => boolean;
+
+const MATCH_ALL: FilterMatcher = () => true;
+
+export function compileFilter(query: string): FilterMatcher {
+  const trimmed = query.trim().replace(/\\/g, "/");
+  if (!trimmed) return MATCH_ALL;
+
+  if (GLOB_CHARS.test(trimmed)) {
     try {
       let regexStr = "";
       for (let i = 0; i < trimmed.length; i++) {
@@ -300,13 +306,40 @@ export function matchesFilter(path: string, query: string): boolean {
           regexStr += ch;
         }
       }
-      return new RegExp(`^${regexStr}$`, "i").test(path.replace(/\\/g, "/"));
+      const re = new RegExp(`^${regexStr}$`, "i");
+      return (path) => re.test(path.includes("\\") ? path.replace(/\\/g, "/") : path);
     } catch {
       // fall through to substring match
     }
   }
 
-  return path.toLowerCase().includes(trimmed.toLowerCase());
+  const needle = trimmed.toLowerCase();
+  return (path) => path.toLowerCase().includes(needle);
+}
+
+let lastFilterQuery: string | null = null;
+let lastFilterMatcher: FilterMatcher = MATCH_ALL;
+
+export function matchesFilter(path: string, query: string): boolean {
+  if (query !== lastFilterQuery) {
+    lastFilterMatcher = compileFilter(query);
+    lastFilterQuery = query;
+  }
+  return lastFilterMatcher(path);
+}
+
+const pathCollator = new Intl.Collator();
+
+const STATUS_RANK = new Map<string, number>(
+  ["modified", "added", "deleted", "renamed", "copied", "untracked", "conflicted", "ignored"].map(
+    (status, i) => [status, i]
+  )
+);
+
+interface SortRow {
+  file: StagingFileEntry;
+  generated: boolean;
+  primary: number;
 }
 
 export function sortFiles(
@@ -314,47 +347,30 @@ export function sortFiles(
   key: SortKey,
   dir: SortDirection
 ): StagingFileEntry[] {
-  const sorted = [...files];
-  const statusOrder: GitStatus[] = [
-    "modified",
-    "added",
-    "deleted",
-    "renamed",
-    "copied",
-    "untracked",
-    "conflicted",
-    "ignored",
-  ];
+  const rows: SortRow[] = files.map((file) => ({
+    file,
+    generated: isGeneratedFile(file.path),
+    primary:
+      key === "churn"
+        ? (file.insertions ?? 0) + (file.deletions ?? 0)
+        : key === "status"
+          ? (STATUS_RANK.get(file.status) ?? 99)
+          : 0,
+  }));
+  const sign = dir === "desc" ? -1 : 1;
 
-  sorted.sort((a, b) => {
+  rows.sort((a, b) => {
     // Generated files sort last across every sort mode and direction — this
     // tier is intentionally outside the dir flip below so descending sorts
     // don't surface generated files first.
-    const genTier = Number(isGeneratedFile(a.path)) - Number(isGeneratedFile(b.path));
-    if (genTier !== 0) return genTier;
+    if (a.generated !== b.generated) return a.generated ? 1 : -1;
 
-    let cmp: number;
-    if (key === "path") {
-      cmp = a.path.localeCompare(b.path);
-    } else if (key === "churn") {
-      const aChurn = (a.insertions ?? 0) + (a.deletions ?? 0);
-      const bChurn = (b.insertions ?? 0) + (b.deletions ?? 0);
-      cmp = aChurn - bChurn;
-      if (cmp === 0) {
-        cmp = a.path.localeCompare(b.path);
-      }
-    } else {
-      const ai = statusOrder.indexOf(a.status);
-      const bi = statusOrder.indexOf(b.status);
-      cmp = (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-      if (cmp === 0) {
-        cmp = a.path.localeCompare(b.path);
-      }
-    }
-    return dir === "desc" ? -cmp : cmp;
+    let cmp = a.primary - b.primary;
+    if (cmp === 0) cmp = pathCollator.compare(a.file.path, b.file.path);
+    return sign * cmp;
   });
 
-  return sorted;
+  return rows.map((r) => r.file);
 }
 
 /**
@@ -371,6 +387,16 @@ export function sortFiles(
  * looks exactly like an unpinned one.
  */
 export const REVIEW_HUB_STICKY_BAND = "sticky top-0 z-10 bg-surface-canvas";
+
+/**
+ * The band itself: every section heading in the hub ("Staged", "Changed vs
+ * main", "Conflicted", the loading skeleton's stand-ins). On the hub's 12px
+ * inset — the compact `SurfaceHeader`'s — so a band label sits directly under
+ * the header's first item rather than a few pixels in from it. Dividers are the
+ * caller's: some bands close a list and some open one.
+ */
+export const REVIEW_HUB_SECTION_BAND =
+  "flex items-center justify-between gap-2 px-3 py-2 bg-overlay-subtle";
 
 /**
  * The count beside a section title ("Conflicted 4", "Staged 3 files"). One

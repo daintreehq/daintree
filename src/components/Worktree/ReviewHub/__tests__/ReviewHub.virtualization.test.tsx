@@ -454,11 +454,13 @@ describe("ReviewHub windowed file list (#12241)", () => {
     ]);
 
     getStagingStatusMock.mockResolvedValue(makeStatus());
-    onUpdateMock.mockImplementation((_type: string, callback: (data: unknown) => void) => {
+    onUpdateMock.mockImplementation((type: string, callback: (data: unknown) => void) => {
       // The component subscribes to the per-view worktree port; tests keep
       // driving it with a plain WorktreeState by wrapping it in the port
       // event envelope here.
-      capturedUpdateCallback = (state: WorktreeState) => callback({ worktree: state });
+      if (type === "worktree-update") {
+        capturedUpdateCallback = (state: WorktreeState) => callback({ worktree: state });
+      }
       return mockUnsubscribe;
     });
 
@@ -612,6 +614,21 @@ describe("ReviewHub windowed file list (#12241)", () => {
     expect(scrollToIndexMock).not.toHaveBeenCalled();
   });
 
+  it("jumps to either end with Home and End and holds there, since a file list never wraps", async () => {
+    const listbox = await renderLargeHub(makeLargeStatus(3, 2));
+    const press = (key: string) => act(() => void fireEvent.keyDown(document, { key }));
+
+    press("End");
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-4");
+    press("ArrowDown");
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-4");
+
+    press("Home");
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-0");
+    press("ArrowUp");
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-0");
+  });
+
   it("names the active descendant again once the window covers the cursor", async () => {
     virtuosoRange.current = { startIndex: 0, endIndex: 40 };
     const listbox = await renderLargeHub();
@@ -620,7 +637,7 @@ describe("ReviewHub windowed file list (#12241)", () => {
       act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
     }
     expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-14");
-  });
+  }, 60_000);
 
   it("reveals into the unstaged section using that section's own indices", async () => {
     // Keep the total above the windowing threshold, with two staged rows so

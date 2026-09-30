@@ -36,9 +36,14 @@ const portal = vi.hoisted(() => ({
   links: [] as PortalLink[],
   defaultNewTabUrl: null as string | null,
 }));
+const restoreLink = vi.fn();
 vi.mock("@/store/portalStore", () => ({
-  usePortalStore: (selector: (s: typeof portal) => unknown) => selector(portal),
+  usePortalStore: Object.assign((selector: (s: typeof portal) => unknown) => selector(portal), {
+    getState: () => ({ ...portal, restoreLink }),
+  }),
 }));
+const mockNotify = vi.fn();
+vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...args) }));
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PortalSettingsTab } from "../PortalSettingsTab";
@@ -72,6 +77,8 @@ function describedText(el: Element): string {
 
 beforeEach(() => {
   dispatch.mockReset();
+  mockNotify.mockReset();
+  restoreLink.mockReset();
   dispatch.mockResolvedValue({ ok: true, result: undefined });
   portal.links = [DOCS];
   portal.defaultNewTabUrl = null;
@@ -284,5 +291,60 @@ describe("PortalSettingsTab custom new-tab URL failure", () => {
 
     const url = screen.getByRole("textbox", { name: "Custom URL" }) as HTMLInputElement;
     expect(url.value).toBe("https://intranet.example.com");
+  });
+});
+
+describe("PortalSettingsTab removing a link", () => {
+  const HANDBOOK: PortalLink = { ...DOCS, id: "handbook", title: "Handbook", order: 1 };
+
+  it("removes at once and offers Undo rather than asking first", async () => {
+    portal.links = [...DEFAULT_SYSTEM_LINKS, DOCS, HANDBOOK];
+    renderTab();
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" }).at(-2)!);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Remove link" }));
+    });
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(dispatch).toHaveBeenCalledWith(
+      "portal.links.remove",
+      { id: "docs" },
+      { source: "user" }
+    );
+    expect(mockNotify).toHaveBeenCalledTimes(1);
+    const payload = mockNotify.mock.calls[0]![0] as {
+      action: { label: string; onClick: () => void };
+    };
+    expect(payload.action.label).toBe("Undo");
+    payload.action.onClick();
+    expect(restoreLink).toHaveBeenCalledWith(DOCS, {
+      order: [...DEFAULT_SYSTEM_LINKS, DOCS, HANDBOOK].map((l) => l.id),
+    });
+  });
+
+  it("moves focus to the next custom link's Edit button", async () => {
+    portal.links = [DOCS, HANDBOOK];
+    const { rerender } = renderTab();
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]!);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Remove link" }));
+    });
+    portal.links = [HANDBOOK];
+    rerender(
+      <TooltipProvider>
+        <PortalSettingsTab />
+      </TooltipProvider>
+    );
+    expect(document.activeElement?.getAttribute("data-portal-edit")).toBe("handbook");
+  });
+
+  it("offers no Undo when the removal failed", async () => {
+    dispatch.mockResolvedValue({ ok: false, error: { message: "store unavailable" } });
+    renderTab();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Remove link" }));
+    });
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 });

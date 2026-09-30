@@ -71,6 +71,11 @@ vi.mock("@/lib/sidebarToggle", () => ({
 }));
 
 import { registerHelpActions } from "../helpActions";
+import {
+  markHelpPanelRuntimeMounted,
+  onHelpPanelRuntimeRequested,
+  resetHelpPanelRuntimeGateForTests,
+} from "@/lib/helpPanelRuntimeGate";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
@@ -142,7 +147,49 @@ describe("help.launchAgent", () => {
       isBootstrapped: true,
     });
     mockGetScratchState.mockReturnValue({ currentScratch: null });
+    resetHelpPanelRuntimeGateForTests();
+    markHelpPanelRuntimeMounted();
     action = extractHelpLaunchAgent();
+  });
+
+  it("asks for the assistant panel and binds nothing until it has mounted", async () => {
+    // HelpPanel mounts lazily; its lane runtimes hold the session listeners,
+    // which don't replay — so the session must not be provisioned before them.
+    resetHelpPanelRuntimeGateForTests();
+    const requested = vi.fn();
+    onHelpPanelRuntimeRequested(requested);
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+
+    const run = action.run(undefined, stubCtx);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(requested).toHaveBeenCalledTimes(1);
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    expect(mockDispatch).not.toHaveBeenCalled();
+
+    markHelpPanelRuntimeMounted();
+    await run;
+
+    expect(window.electron.help.provisionSession).toHaveBeenCalledTimes(1);
+    expect(mockDispatch).toHaveBeenCalledWith("agent.launch", expect.anything(), expect.anything());
+  });
+
+  it("still launches if the assistant panel never mounts", async () => {
+    vi.useFakeTimers();
+    try {
+      resetHelpPanelRuntimeGateForTests();
+      (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+        "/mock/help"
+      );
+      const run = action.run(undefined, stubCtx);
+      await vi.advanceTimersByTimeAsync(5000);
+      await run;
+      expect(window.electron.help.provisionSession).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("dispatches agent.launch with first available agent when no default set", async () => {
@@ -393,7 +440,7 @@ describe("help.launchAgent", () => {
     expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "error",
-        title: "Help Agent",
+        title: "Help agent",
       })
     );
     expect(mockDispatch).not.toHaveBeenCalled();

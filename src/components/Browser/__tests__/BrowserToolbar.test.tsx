@@ -3,6 +3,7 @@ import { useState } from "react";
 import { act, render, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { BrowserToolbar } from "../BrowserToolbar";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { normalizeBrowserUrl } from "../browserUtils";
 import { getFrecencySuggestions } from "@/store/urlHistoryStore";
 import type { ViewportPresetId } from "@shared/types/panel";
@@ -20,6 +21,8 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 const mockRemoveUrl = vi.fn();
+const notifyMock = vi.hoisted(() => vi.fn(() => "toast-1"));
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
 const STABLE_ENTRIES = [
   {
@@ -312,6 +315,29 @@ describe("BrowserToolbar ARIA semantics", () => {
     expect(options[1]!.getAttribute("aria-selected")).toBe("false");
   });
 
+  it("wraps the arrows through the typed address and jumps with Home and End", () => {
+    const { container, getByTestId } = renderToolbar();
+    const input = openDropdown(getByTestId);
+    const listboxId = input.getAttribute("aria-controls")!;
+    const count = container.querySelectorAll('[role="option"]').length;
+    expect(count).toBeGreaterThan(1);
+    const active = () => input.getAttribute("aria-activedescendant");
+
+    act(() => void fireEvent.keyDown(input, { key: "ArrowUp" }));
+    expect(active()).toBe(`${listboxId}-option-${count - 1}`);
+    act(() => void fireEvent.keyDown(input, { key: "ArrowDown" }));
+    expect(active()).toBeNull();
+    act(() => void fireEvent.keyDown(input, { key: "ArrowDown" }));
+    expect(active()).toBe(`${listboxId}-option-0`);
+
+    act(() => void fireEvent.keyDown(input, { key: "End" }));
+    expect(active()).toBe(`${listboxId}-option-${count - 1}`);
+    act(() => void fireEvent.keyDown(input, { key: "Home" }));
+    expect(active()).toBe(`${listboxId}-option-0`);
+    expect(fireEvent.keyDown(input, { key: "End", shiftKey: true })).toBe(true);
+    expect(active()).toBe(`${listboxId}-option-0`);
+  });
+
   it("aria-activedescendant clears when the dropdown closes", async () => {
     const { getByTestId } = renderToolbar();
     const input = openDropdown(getByTestId);
@@ -339,9 +365,9 @@ describe("BrowserToolbar ARIA semantics", () => {
     expect(button).toBeTruthy();
   });
 
-  it("Open in browser button is exposed by accessible name", () => {
+  it("Open in external browser button is exposed by accessible name", () => {
     const { getByRole } = renderToolbar();
-    const button = getByRole("button", { name: "Open in browser" });
+    const button = getByRole("button", { name: "Open in external browser" });
     expect(button).toBeTruthy();
     fireEvent.click(button);
     expect(defaultProps.onOpenExternal).toHaveBeenCalledOnce();
@@ -375,18 +401,19 @@ describe("BrowserToolbar ARIA semantics", () => {
     expect(onCaptureScreenshot).not.toHaveBeenCalled();
   });
 
-  it("copy success announces in a polite live region", async () => {
-    const { container, getByRole } = renderToolbar();
+  it("copy success announces through the shared live region and swaps its glyph", async () => {
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+    const { getByRole } = renderToolbar();
+    const button = getByRole("button", { name: "Copy URL" });
+    const glyphBefore = button.innerHTML;
 
     await act(async () => {
-      fireEvent.click(getByRole("button", { name: "Copy URL" }));
+      fireEvent.click(button);
     });
 
-    await waitFor(() => {
-      const liveRegions = container.querySelectorAll('[role="status"]');
-      const texts = Array.from(liveRegions).map((node) => node.textContent);
-      expect(texts).toContain("Copied to clipboard");
-    });
+    await waitFor(() => expect(useAnnouncerStore.getState().polite?.msg).toBe("Copied"));
+    expect(button.innerHTML).not.toBe(glyphBefore);
+    expect(button.getAttribute("aria-label")).toBe("Copy URL");
   });
 
   it("screenshot capture announces success in a polite live region and flips to a check", async () => {
@@ -590,10 +617,10 @@ describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
     vi.clearAllMocks();
   });
 
-  it("disables Open in browser when there is no URL to open", () => {
+  it("disables Open in external browser when there is no URL to open", () => {
     const onOpenExternal = vi.fn();
     const { getByRole } = renderToolbar({ url: "", onOpenExternal, canOpenExternal: false });
-    const button = getByRole("button", { name: "Open in browser" });
+    const button = getByRole("button", { name: "Open in external browser" });
     expect(button).toHaveProperty("disabled", true);
     fireEvent.click(button);
     expect(onOpenExternal).not.toHaveBeenCalled();
@@ -609,10 +636,13 @@ describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
     fireEvent.change(getByTestId("browser-address-bar"), {
       target: { value: "http://localhost:5173/" },
     });
-    expect(getByRole("button", { name: "Open in browser" })).toHaveProperty("disabled", true);
+    expect(getByRole("button", { name: "Open in external browser" })).toHaveProperty(
+      "disabled",
+      true
+    );
   });
 
-  it("does not tie Open in browser to webview readiness or loading", () => {
+  it("does not tie Open in external browser to webview readiness or loading", () => {
     const onOpenExternal = vi.fn();
     const { getByRole } = renderToolbar({
       onOpenExternal,
@@ -620,13 +650,13 @@ describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
       isWebviewReady: false,
       isLoading: true,
     });
-    const button = getByRole("button", { name: "Open in browser" });
+    const button = getByRole("button", { name: "Open in external browser" });
     expect(button).toHaveProperty("disabled", false);
     fireEvent.click(button);
     expect(onOpenExternal).toHaveBeenCalledOnce();
   });
 
-  it("enables Open in browser once a URL arrives", () => {
+  it("enables Open in external browser once a URL arrives", () => {
     const onOpenExternal = vi.fn();
     const { getByRole, rerender } = render(
       <BrowserToolbar
@@ -636,7 +666,10 @@ describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
         canOpenExternal={false}
       />
     );
-    expect(getByRole("button", { name: "Open in browser" })).toHaveProperty("disabled", true);
+    expect(getByRole("button", { name: "Open in external browser" })).toHaveProperty(
+      "disabled",
+      true
+    );
 
     rerender(
       <BrowserToolbar
@@ -646,7 +679,7 @@ describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
         canOpenExternal={true}
       />
     );
-    const button = getByRole("button", { name: "Open in browser" });
+    const button = getByRole("button", { name: "Open in external browser" });
     expect(button).toHaveProperty("disabled", false);
     fireEvent.click(button);
     expect(onOpenExternal).toHaveBeenCalledOnce();
@@ -686,7 +719,9 @@ describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
         canToggleConsole={false}
       />
     );
-    expect(getByRole("button", { name: "Open in browser" }).parentElement?.tagName).toBe("SPAN");
+    expect(getByRole("button", { name: "Open in external browser" }).parentElement?.tagName).toBe(
+      "SPAN"
+    );
     expect(getByLabelText("Toggle console").parentElement?.tagName).toBe("SPAN");
 
     rerender(
@@ -697,9 +732,9 @@ describe("BrowserToolbar actions with nothing to act on (#12395)", () => {
         canToggleConsole={true}
       />
     );
-    expect(getByRole("button", { name: "Open in browser" }).parentElement?.tagName).not.toBe(
-      "SPAN"
-    );
+    expect(
+      getByRole("button", { name: "Open in external browser" }).parentElement?.tagName
+    ).not.toBe("SPAN");
     expect(getByLabelText("Toggle console").parentElement?.tagName).not.toBe("SPAN");
   });
 
@@ -1155,8 +1190,9 @@ describe("BrowserToolbar at compact widths", () => {
     rowWidth.current = 1000;
   });
 
-  it("confirms a copy from More on the More trigger, then settles back", async () => {
-    const { getByLabelText, getByText } = renderToolbar();
+  it("confirms a copy from More with a toast, like every menu copy", async () => {
+    notifyMock.mockClear();
+    const { getByLabelText } = renderToolbar();
     const glyphBefore = getByLabelText("More page actions").innerHTML;
     fireEvent.pointerDown(getByLabelText("More page actions"), { button: 0, ctrlKey: false });
     await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeTruthy());
@@ -1165,12 +1201,12 @@ describe("BrowserToolbar at compact widths", () => {
     )!;
     fireEvent.click(copyItem);
     await waitFor(() =>
-      expect(getByLabelText("More page actions").innerHTML).not.toBe(glyphBefore)
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "info", title: "URL copied" })
+      )
     );
-    expect(getByText("Copied to clipboard")).toBeTruthy();
-    await waitFor(() => expect(getByLabelText("More page actions").innerHTML).toBe(glyphBefore), {
-      timeout: 3000,
-    });
+    // The trigger is not a second confirmation channel.
+    expect(getByLabelText("More page actions").innerHTML).toBe(glyphBefore);
   });
 
   it("moves controls in and out of More as a mounted toolbar is resized", () => {

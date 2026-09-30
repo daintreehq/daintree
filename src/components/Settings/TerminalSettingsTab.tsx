@@ -1,6 +1,8 @@
 import { Fragment, useState, useMemo, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
+import { notify } from "@/lib/notify";
+import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
@@ -13,7 +15,6 @@ import {
   SettingsRow,
 } from "@/components/Settings/SettingsGroup";
 import { Button } from "@/components/ui/button";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
@@ -150,10 +151,29 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const setTwoPaneSplitEnabled = useTwoPaneSplitStore((state) => state.setEnabled);
   const setPreferPreview = useTwoPaneSplitStore((state) => state.setPreferPreview);
   const setDefaultRatio = useTwoPaneSplitStore((state) => state.setDefaultRatio);
-  const resetAllWorktreeRatios = useTwoPaneSplitStore((state) => state.resetAllWorktreeRatios);
-  // Confirmed like the other settings resets: every ratio was set by hand, one
-  // worktree at a time, and nothing restores them.
-  const [isResetRatiosConfirmOpen, setIsResetRatiosConfirmOpen] = useState(false);
+  // Undone rather than confirmed, like the app's other reversible resets: the
+  // ratios are a small local map, and Undo puts every one of them back.
+  const handleResetWorktreeRatios = () => {
+    const { ratioByWorktreeId: cleared, resetAllWorktreeRatios } = useTwoPaneSplitStore.getState();
+    resetAllWorktreeRatios();
+    notify({
+      type: "success",
+      title: "Split ratios reset",
+      message: "Every worktree now uses the default ratio.",
+      priority: "high",
+      transient: true,
+      duration: UNDO_TOAST_DURATION_MS,
+      action: {
+        label: "Undo",
+        // A ratio dragged since the reset is newer than the one it replaced.
+        onClick: latestUndoOnly("split-ratio-reset", () => {
+          useTwoPaneSplitStore.setState((state) => ({
+            ratioByWorktreeId: { ...cleared, ...state.ratioByWorktreeId },
+          }));
+        }),
+      },
+    });
+  };
 
   const panelLimits = usePanelLimitStore(
     useShallow((state) => ({
@@ -683,26 +703,13 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => setIsResetRatiosConfirmOpen(true)}
+                        onClick={handleResetWorktreeRatios}
                         disabled={disabled}
                         aria-label="Reset all worktree split ratios"
                       >
                         Reset all
                       </Button>
                     )}
-                  />
-                  <ConfirmDialog
-                    isOpen={isResetRatiosConfirmOpen}
-                    variant="destructive"
-                    onConfirm={() => {
-                      resetAllWorktreeRatios();
-                      setIsResetRatiosConfirmOpen(false);
-                    }}
-                    onClose={() => setIsResetRatiosConfirmOpen(false)}
-                    title="Reset worktree split ratios?"
-                    description="Every worktree's two-pane split goes back to the default ratio."
-                    confirmLabel="Reset split ratios"
-                    zIndex="nested"
                   />
                 </SettingsDependents>
               </SettingsGroup>

@@ -22,6 +22,7 @@ import { FileStageRow, type FileStageRowSection } from "./FileStageRow";
 import { type MountedRange } from "@/lib/fileListWindowing";
 import { isGeneratedFile } from "../generatedFileClassifier";
 import {
+  REVIEW_HUB_SECTION_BAND,
   REVIEW_HUB_STICKY_BAND,
   type SectionViewState,
   applySortChange,
@@ -34,6 +35,7 @@ import {
   truncateFilterQuery,
 } from "./reviewHubUtils";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { pluralize } from "@/lib/pluralize";
 
 interface FileSectionProps {
   /** Drives every staged/unstaged copy, testid, and toggle-verb choice below. */
@@ -350,16 +352,14 @@ export function FileSection({
       {/* Sticky so identity, count and the scoped bulk action stay reachable
           while a long changeset scrolls. */}
       <div className={cn("@container/file-section", REVIEW_HUB_STICKY_BAND)}>
-        <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle gap-2">
+        <div className={REVIEW_HUB_SECTION_BAND}>
           <span className={cn(SECTION_LABEL_CLASS, "shrink-0 flex items-center")}>
             {title}
             <span
               data-testid={countTestId}
               className={cn(REVIEW_HUB_COUNT_CHIP, "inline-flex items-center gap-1")}
             >
-              <span>
-                {totalCount} file{totalCount !== 1 ? "s" : ""}
-              </span>
+              <span>{pluralize(totalCount, "file")}</span>
               {(churn.ins > 0 || churn.del > 0) && (
                 <span className={cn("inline-flex items-center gap-1", churnDropClass)}>
                   <span aria-hidden="true" className="text-daintree-text/30">
@@ -576,9 +576,7 @@ export function FileSection({
         <EmptyState
           variant="filtered-empty"
           scale="sidebar"
-          title={`${hiddenGeneratedMatches} matching generated file${
-            hiddenGeneratedMatches !== 1 ? "s" : ""
-          } hidden`}
+          title={`${pluralize(hiddenGeneratedMatches, "matching generated file")} hidden`}
           action={
             <Button
               variant="subtle"

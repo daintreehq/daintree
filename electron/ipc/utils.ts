@@ -5,6 +5,7 @@ import {
   getAppWebContents,
   getAllAppWebContents,
   getProjectForWebContents,
+  getRegisteredProjectViews,
   getWebContentsForProject,
   hasRegisteredProjectViews,
   isCachedViewWebContents,
@@ -456,6 +457,49 @@ export function broadcastToProjectRenderersExcept(
     return;
   }
   broadcastToRenderer(channel, ...args);
+}
+
+/**
+ * Project-scoped broadcast for a keyed batch that spans many projects (e.g.
+ * per-terminal resource samples). Each project view — cached ones included, as
+ * in {@link broadcastToProjectRenderers} — gets `wrap()` of its own project's
+ * entries plus every entry whose project is unknown or has no resident view,
+ * since those used to reach every renderer and still must reach some. Every
+ * view gets a payload each call, even an empty one, so per-batch consumers keep
+ * their cadence. With no live project views, every renderer gets the whole batch.
+ */
+export function broadcastSlicedToProjectRenderers<T>(
+  channel: string,
+  entries: Record<string, T>,
+  ownerOf: (key: string) => string | null,
+  wrap: (slice: Record<string, T>) => unknown
+): void {
+  const views = hasRegisteredProjectViews() ? getRegisteredProjectViews() : [];
+  if (views.length === 0) {
+    broadcastToRenderer(channel, wrap(entries));
+    return;
+  }
+  const byProject = new Map<string, Record<string, T>>();
+  for (const { projectId } of views) byProject.set(projectId, {});
+  const shared: Record<string, T> = {};
+  for (const [key, value] of Object.entries(entries)) {
+    const owner = ownerOf(key);
+    const slice = owner === null ? undefined : byProject.get(owner);
+    (slice ?? shared)[key] = value;
+  }
+  const payloads = new Map<string, unknown>();
+  for (const { webContents, projectId } of views) {
+    let payload = payloads.get(projectId);
+    if (payload === undefined) {
+      payload = wrap({ ...byProject.get(projectId), ...shared });
+      payloads.set(projectId, payload);
+    }
+    try {
+      webContents.send(channel, payload);
+    } catch {
+      // Silently ignore send failures during window initialization/disposal.
+    }
+  }
 }
 
 /**

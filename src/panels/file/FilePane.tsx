@@ -45,11 +45,7 @@ import {
   FILE_METADATA_RUN_CLASS,
   FILE_METADATA_STRIP_CLASS,
 } from "@/components/FileViewer/fileMetadataStrip";
-import {
-  FileViewerToolbar,
-  TOOLBAR_ICON_CLASS,
-  useMenuCopy,
-} from "@/components/FileViewer/FileViewerToolbar";
+import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy, type RevealCopy } from "@/components/FileViewer/revealCopy";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
@@ -82,17 +78,20 @@ import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useFileChangeCount } from "@/hooks/useFileChangeCount";
 import { NO_WATCHED_PATHS, useExternalChangeTick } from "@/hooks/useExternalChangeTick";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { copyWithToast } from "@/lib/copyWithToast";
 import { isClientAppError } from "@/utils/clientAppError";
 import { logError } from "@/utils/logger";
+import { lookupLocalChangeStatus } from "./localChangeStatus";
 import { useHeightHold } from "./useHeightHold";
 import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 import { useFileEditor } from "@/registry/fileEditorRegistry";
 import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
 import { useFileDocumentDraftText, useFileDocumentFlags } from "@/store/fileDocumentStore";
 import { cn } from "@/lib/utils";
+import { pluralize } from "@/lib/pluralize";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 
 export interface FilePaneProps extends BasePanelProps {
@@ -241,7 +240,6 @@ function externalTargetCopy(
 }
 
 const SEARCH_DEBOUNCE_MS = 150;
-const COPY_FEEDBACK_MS = 2000;
 
 interface PickerResult {
   relativePath: string;
@@ -414,6 +412,26 @@ export function FilePane({
     )
   );
 
+  // What moved behind that tick, read off the same containing worktree, so a
+  // write elsewhere in it can skip the re-read (#12244's directories, applied
+  // to one file instead of a tree).
+  const gitChangeTick = useWorktreeStore(
+    useCallback(
+      (state): number | undefined =>
+        revealWorktreeId
+          ? state.worktrees.get(revealWorktreeId)?.worktreeChanges?.lastUpdated
+          : undefined,
+      [revealWorktreeId]
+    )
+  );
+  const changedDirs = useWorktreeStore(
+    useCallback(
+      (state) =>
+        revealWorktreeId ? state.workingTreeChangedDirsById.get(revealWorktreeId) : undefined,
+      [revealWorktreeId]
+    )
+  );
+
   // Scalar status, never the change entry: `changes` is rebuilt wholesale every
   // poll tick, so returning the object would re-render the pane on each tick —
   // the same Object.is bail-out `selectDiffFreshnessKey` relies on (#8635).
@@ -423,13 +441,11 @@ export function FilePane({
         if (!diffWorktreePath || !relativeFilePath) return undefined;
         for (const worktree of state.worktrees.values()) {
           if (normalize(worktree.path) !== normalize(diffWorktreePath)) continue;
-          // Stored change paths are absolute today (electron/utils/git.ts keys
-          // changesMap by absolutePath) though the type says relative — fold
-          // both shapes to the same relative form before comparing.
-          return worktree.worktreeChanges?.changes?.find(
-            (change) =>
-              normalize(toWorktreeRelative(change.path, worktree.path)) === relativeFilePath
-          )?.status;
+          return lookupLocalChangeStatus(
+            worktree.worktreeChanges?.changes,
+            worktree.path,
+            relativeFilePath
+          );
         }
         return undefined;
       },
@@ -598,7 +614,6 @@ export function FilePane({
   // describes (a readable file whose SVG content the sanitizer rejects).
   // Mirrors FileViewerModal's `displayErrorMessage`.
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [pathCopied, setPathCopied] = useState(false);
   // Sandboxed-iframe preview URL for HTML files (#11191), minted by files:read.
   const [htmlPreviewUrl, setHtmlPreviewUrl] = useState<string | null>(null);
   // Reload generation for every surface whose content lives behind a URL rather
@@ -626,11 +641,10 @@ export function FilePane({
     if (loadState !== "loaded" || content === null) return null;
     return {
       lineCount: content.split("\n").length,
-      sizeLabel: formatBytes(new TextEncoder().encode(content).byteLength),
+      sizeLabel: formatBytes(contentBytes),
     };
-  }, [loadState, content]);
+  }, [loadState, content, contentBytes]);
   const requestRef = useRef(0);
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const markdownViewerRef = useRef<MarkdownViewerHandle>(null);
   const codeViewerRef = useRef<CodeViewerHandle>(null);
   // The state the last good view of the *current* file settled into, or null if
@@ -645,16 +659,13 @@ export function FilePane({
   // can tell an actual rewrite from a tick that changed nothing. Reset per
   // identity alongside the state above.
   const lastContentRef = useRef<string | null>(null);
+  // The file whose last read came back through its own realpath — the only
+  // spelling the watcher's directories can be matched against.
+  const [canonicalFilePath, setCanonicalFilePath] = useState<string | null>(null);
   useEffect(() => {
     lastGoodStateRef.current = null;
     lastContentRef.current = null;
   }, [filePath, effectiveRootPath]);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-    };
-  }, []);
 
   const loadFile = useCallback(
     (intent: FileLoadIntent) => {
@@ -765,14 +776,18 @@ export function FilePane({
         return;
       }
 
+      // Nothing may skip a tick on the strength of a read that is still being
+      // repeated: the answer this one brings back is the one that counts.
+      setCanonicalFilePath(null);
       filesClient
         .read({
           path: filePath,
           rootPath: effectiveRootPath,
           htmlPreview: isHtmlFilePath(filePath),
         })
-        .then(({ content: fileContent, htmlPreviewUrl: previewUrl }) => {
+        .then(({ content: fileContent, htmlPreviewUrl: previewUrl, pathIsCanonical }) => {
           if (requestRef.current !== requestId) return;
+          setCanonicalFilePath(pathIsCanonical === true ? filePath : null);
           // SVG is text on disk but a picture on screen: sanitize before it can
           // be inlined, and surface a sanitizer rejection as a load error
           // rather than silently rendering nothing.
@@ -786,6 +801,9 @@ export function FilePane({
               setErrorMessage(null);
               lastGoodStateRef.current = "svg";
             } else if (silent && lastGoodStateRef.current !== null) {
+              // Still a failed read, however the pane looks: keep taking every
+              // tick until one lands.
+              setCanonicalFilePath(null);
               // A background pass catching a half-written file mid-save reads
               // as a sanitizer rejection, so keep the last good drawing rather
               // than replacing it — the same bargain the text path's transient
@@ -845,6 +863,9 @@ export function FilePane({
           // in which case nothing else would ever settle it.
           const permanent =
             code === "NOT_FOUND" || code === "PERMISSION" || code === "OUTSIDE_ROOT";
+          // A swallowed failure still leaves the reset canonical flag above
+          // cleared, so every tick keeps retrying while the last good content
+          // stays on screen.
           if (silent && !permanent && lastGoodStateRef.current !== null) {
             setLoadState(lastGoodStateRef.current);
             return;
@@ -902,11 +923,31 @@ export function FilePane({
   // Identity travels with the tick so only a genuine disk write triggers this: a
   // path or root switch changes the tick too, but already has its own explicit
   // load, and firing here as well would read the same file twice.
+  //
+  // And only a tick that could have touched this file: every write anywhere in
+  // the worktree moves the tick, so without the changed-directory check each
+  // open pane re-reads on all of them. A failed read keeps taking every tick —
+  // that is how one that raced a half-written file recovers.
+  const fileChangeCount = useFileChangeCount(
+    changeTick,
+    useMemo(
+      () => ({ tick: worktreeChangeTick, gitTick: gitChangeTick, changedDirs }),
+      [worktreeChangeTick, gitChangeTick, changedDirs]
+    ),
+    relativeFilePath || null,
+    // Markdown opts out for the same reason it opts out of the bytes-changed
+    // gate: an embedded image elsewhere in the worktree is the change, and only
+    // a read bumps the cache token that refetches it.
+    !isMarkdown &&
+      canonicalFilePath !== null &&
+      canonicalFilePath === filePath &&
+      loadState !== "error"
+  );
   const lastChangeSignalRef = useRef({
     filePath,
     readRoot: effectiveRootPath,
     watchRoot: diffWorktreePath,
-    tick: changeTick,
+    tick: fileChangeCount,
     viewMode,
   });
   useEffect(() => {
@@ -915,7 +956,7 @@ export function FilePane({
       filePath,
       readRoot: effectiveRootPath,
       watchRoot: diffWorktreePath,
-      tick: changeTick,
+      tick: fileChangeCount,
       viewMode,
     };
     // Diff owns its own freshness — useDiffContent subscribes to the same store
@@ -934,9 +975,17 @@ export function FilePane({
     // A newly resolved worktree counts as a signal in its own right: whatever
     // happened to the file before anything was watching it is exactly what the
     // pane cannot otherwise know about.
-    if (previous.watchRoot === diffWorktreePath && previous.tick === changeTick) return;
+    if (previous.watchRoot === diffWorktreePath && previous.tick === fileChangeCount) return;
     loadFile("ambient");
-  }, [filePath, effectiveRootPath, diffWorktreePath, changeTick, viewMode, loadFile]);
+  }, [
+    filePath,
+    effectiveRootPath,
+    diffWorktreePath,
+    changeTick,
+    fileChangeCount,
+    viewMode,
+    loadFile,
+  ]);
 
   // Which surfaces a background re-read may replace. Images and inlined SVG join
   // "loaded" because both are cheap to re-request and show nothing but the file.
@@ -1010,19 +1059,6 @@ export function FilePane({
     window.addEventListener("daintree:find-in-panel", handleFindInPanel);
     return () => window.removeEventListener("daintree:find-in-panel", handleFindInPanel);
   }, [isFocused]);
-
-  const handleCopyPath = useCallback(() => {
-    if (!filePath) return;
-    navigator.clipboard
-      .writeText(filePath)
-      .then(() => {
-        useAnnouncerStore.getState().announce("Path copied");
-        setPathCopied(true);
-        if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-        copyTimeoutRef.current = setTimeout(() => setPathCopied(false), COPY_FEEDBACK_MS);
-      })
-      .catch((err) => logError("[FilePane] copy path failed", err));
-  }, [filePath]);
 
   // Rendered HTML opens in the browser; every other view opens in the editor.
   // Reveal is a third, always-present target that sits alongside this one.
@@ -1176,7 +1212,6 @@ export function FilePane({
 
   const showMarkdownWrap = (isMarkdown && viewMode === "source") || viewMode === "edit";
   const copyableContents = loadState === "loaded" ? content : null;
-  const menuCopy = useMenuCopy();
   const toolbar = filePath ? (
     <>
       <FileViewerToolbar.Root
@@ -1200,8 +1235,7 @@ export function FilePane({
         <FileViewerToolbar.Path
           path={displayPath}
           icon={getFileTypeIcon(fileName ?? filePath).Icon}
-          copied={pathCopied}
-          onCopy={handleCopyPath}
+          copyText={filePath || null}
         />
         <FileViewerToolbar.Actions>
           <FileViewerToolbar.Responsive
@@ -1296,10 +1330,7 @@ export function FilePane({
                     className={TOOLBAR_ICON_CLASS}
                   />
                 </FileViewerToolbar.IconButton>
-                <FileViewerToolbar.MoreActions
-                  data-testid="file-pane-more-actions"
-                  confirmed={menuCopy.copied}
-                >
+                <FileViewerToolbar.MoreActions data-testid="file-pane-more-actions">
                   {isMarkdown && viewMode === "rendered" && (
                     <>
                       <MarkdownTextSizeMenuItems
@@ -1325,7 +1356,13 @@ export function FilePane({
                     </>
                   )}
                   {copyableContents !== null && (
-                    <DropdownMenuItem onSelect={() => menuCopy.copy(copyableContents)}>
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        copyWithToast("File contents", copyableContents, {
+                          message: fileName ?? filePath,
+                        })
+                      }
+                    >
                       <Copy className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
                       Copy file contents
                     </DropdownMenuItem>
@@ -1661,7 +1698,7 @@ export function FilePane({
                       different item spacing the byte count still slides
                       sideways when the mode toggles. */}
                   <span className={FILE_METADATA_RUN_CLASS}>
-                    <span className="tabular-nums">{metadata.lineCount} lines</span>
+                    <span className="tabular-nums">{pluralize(metadata.lineCount, "line")}</span>
                     <span aria-hidden="true" className="text-text-muted">
                       ·
                     </span>

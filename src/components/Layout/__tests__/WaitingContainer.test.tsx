@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
+import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import type { TabGroup, AgentState } from "@/types";
 
 const activateTerminalMock = vi.fn();
@@ -19,12 +20,11 @@ vi.mock("@/hooks/useTerminalSelectors", () => ({
 }));
 
 vi.mock("@/hooks/useWorktrees", () => ({
-  useWorktrees: () => ({
-    worktreeMap: new Map([
-      ["wt-1", { id: "wt-1", name: "feature-auth" }],
-      ["wt-2", { id: "wt-2", name: "feature-ui" }],
+  useWorktreeNames: () =>
+    new Map([
+      ["wt-1", "feature-auth"],
+      ["wt-2", "feature-ui"],
     ]),
-  }),
 }));
 
 vi.mock("@/store", () => ({
@@ -128,6 +128,13 @@ vi.mock("@/components/ui/popover", () => ({
   },
 }));
 
+const markEscapeYieldedMock = vi.fn();
+
+vi.mock("@/lib/dialogEscapeBackstop", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/dialogEscapeBackstop")>()),
+  markEscapeYieldedToDialog: (event: unknown) => markEscapeYieldedMock(event),
+}));
+
 vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: ({
     isOpen,
@@ -155,6 +162,17 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
       </div>
     );
   },
+}));
+
+// Right-click on a row must be that row's panel, so the menu records whose it is.
+vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
+  TerminalContextMenu: ({
+    terminalId,
+    children,
+  }: {
+    terminalId: string;
+    children: React.ReactNode;
+  }) => <div data-menu-for={terminalId}>{children}</div>,
 }));
 
 import { WaitingContainer } from "../WaitingContainer";
@@ -187,6 +205,7 @@ function makeGroup(overrides: Partial<TabGroup> = {}): TabGroup {
 }
 
 beforeEach(() => {
+  markEscapeYieldedMock.mockReset();
   activateTerminalMock.mockReset();
   pingTerminalMock.mockReset();
   removePanelMock.mockReset();
@@ -199,6 +218,13 @@ beforeEach(() => {
   mockTerminals = [];
   mockTabGroups = new Map();
 });
+
+/** Where the real kill confirm holds focus: inside a backstop-managed dialog. */
+function focusInsideBackstopDialog() {
+  const dialog = screen.getByTestId("kill-confirm-dialog");
+  dialog.setAttribute(ESCAPE_BACKSTOP_DIALOG_ATTR, "");
+  within(dialog).getByRole("button", { name: "Cancel" }).focus();
+}
 
 describe("WaitingContainer", () => {
   it("stays mounted but hidden when there are no waiting terminals", () => {
@@ -671,6 +697,25 @@ describe("WaitingContainer", () => {
     });
   });
 
+  describe("row context menu", () => {
+    it("scopes each row's right-click to that row's own panel, group members included", () => {
+      mockTerminals = [
+        makeTerminal({ id: "t1", title: "solo" }),
+        makeTerminal({ id: "t2", title: "member-a" }),
+        makeTerminal({ id: "t3", title: "member-b" }),
+      ];
+      mockTabGroups = new Map([
+        ["g1", makeGroup({ id: "g1", activeTabId: "t2", panelIds: ["t2", "t3"] })],
+      ]);
+      render(<WaitingContainer />);
+      const rows = screen.getAllByTestId("waiting-single-item");
+      const owners = rows.map((row) =>
+        row.closest("[data-menu-for]")?.getAttribute("data-menu-for")
+      );
+      expect(owners.sort()).toEqual(["t1", "t2", "t3"]);
+    });
+  });
+
   describe("popover dismiss guard during kill confirm", () => {
     it("does not prevent dismiss when no kill confirm is open", () => {
       mockTerminals = [makeTerminal({ id: "t1" })];
@@ -680,6 +725,7 @@ describe("WaitingContainer", () => {
       popoverHandlers.onInteractOutside?.({ preventDefault });
       popoverHandlers.onEscapeKeyDown?.({ preventDefault });
       expect(preventDefault).not.toHaveBeenCalled();
+      expect(markEscapeYieldedMock).not.toHaveBeenCalled();
     });
 
     it("prevents dismiss when the kill confirm dialog is open", () => {
@@ -687,6 +733,8 @@ describe("WaitingContainer", () => {
       render(<WaitingContainer />);
       fireEvent.click(screen.getByTestId("waiting-kill-button"));
       expect(screen.getByTestId("kill-confirm-dialog")).toBeTruthy();
+
+      focusInsideBackstopDialog();
 
       const pointer = { preventDefault: vi.fn() };
       const interact = { preventDefault: vi.fn() };
@@ -697,7 +745,27 @@ describe("WaitingContainer", () => {
 
       expect(pointer.preventDefault).toHaveBeenCalledTimes(1);
       expect(interact.preventDefault).toHaveBeenCalledTimes(1);
-      expect(escape.preventDefault).toHaveBeenCalledTimes(1);
+      expect(escape.preventDefault).toHaveBeenCalled();
+      // Handed on to the confirm's backstop, or Escape closes nothing (#13081).
+      expect(markEscapeYieldedMock).toHaveBeenCalledWith(escape);
+    });
+
+    it("keeps Escape from a surface it cannot hand the keypress to", () => {
+      // Something above the confirm that the backstop does not manage: the
+      // yield would close the confirm underneath it instead.
+      mockTerminals = [makeTerminal({ id: "t1" })];
+      render(<WaitingContainer />);
+      fireEvent.click(screen.getByTestId("waiting-kill-button"));
+      const outside = document.createElement("button");
+      document.body.appendChild(outside);
+      outside.focus();
+
+      const escape = { preventDefault: vi.fn() };
+      popoverHandlers.onEscapeKeyDown?.(escape);
+
+      expect(escape.preventDefault).toHaveBeenCalled();
+      expect(markEscapeYieldedMock).not.toHaveBeenCalled();
+      outside.remove();
     });
   });
 });

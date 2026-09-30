@@ -1276,3 +1276,35 @@ describe("command HUD direct completion", () => {
     );
   });
 });
+
+describe("useGlobalKeybindings — per-keystroke document scans", () => {
+  it("only scans the document for modal dialogs when the key is Escape", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+    render(<Host />);
+    const querySelector = vi.spyOn(document, "querySelector");
+    try {
+      const xterm = document.createElement("div");
+      xterm.className = "xterm";
+      document.body.appendChild(xterm);
+      act(() => {
+        for (const init of [{ key: "a" }, { key: "Enter" }, { key: "k", metaKey: true }]) {
+          xterm.dispatchEvent(new KeyboardEvent("keydown", { ...init, bubbles: true }));
+        }
+      });
+      expect(querySelector).not.toHaveBeenCalled();
+
+      act(() => {
+        xterm.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+      expect(querySelector).toHaveBeenCalledWith('[role="dialog"][aria-modal="true"]');
+      expect(querySelector).toHaveBeenCalledWith(`[${ESCAPE_BACKSTOP_DIALOG_ATTR}]`);
+      xterm.remove();
+    } finally {
+      querySelector.mockRestore();
+    }
+  });
+});

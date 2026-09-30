@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { PathTail } from "@/components/ui/PathTail";
 import { UI_EXIT_DURATION } from "@/lib/animationUtils";
 import {
-  CircleAlert,
+  XCircle,
   Check,
   ChevronRight,
   CircleDashed,
@@ -30,6 +30,7 @@ import {
 import {
   REVIEW_HUB_COUNT_CHIP,
   REVIEW_HUB_DISABLED_CTA,
+  REVIEW_HUB_SECTION_BAND,
   REVIEW_HUB_STICKY_BAND,
 } from "./reviewHubUtils";
 import {
@@ -39,6 +40,7 @@ import {
   type RepoOperationState,
 } from "@/components/Git/repoOperationCopy";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { pluralize } from "@/lib/pluralize";
 
 const REBASE_ACTION_LABEL: Record<RebaseAction, string> = {
   pick: "pick",
@@ -112,7 +114,7 @@ function RebaseSequenceRail({ entries }: { entries: RebaseEntry[] }) {
   return (
     <div className="border-b border-divider" data-testid="conflict-rebase-sequence">
       <div className={REVIEW_HUB_STICKY_BAND}>
-        <div className="px-4 py-2 bg-overlay-subtle flex items-center">
+        <div className={REVIEW_HUB_SECTION_BAND}>
           <span className={SECTION_LABEL_CLASS}>
             Rebase sequence
             <span className={REVIEW_HUB_COUNT_CHIP}>{display.length}</span>
@@ -513,7 +515,7 @@ export function ConflictPanel({
     status.rebaseStep < status.rebaseTotalSteps;
   const summary =
     conflictCount > 0
-      ? `${conflictCount} conflicted file${conflictCount !== 1 ? "s" : ""} — resolve each, then continue`
+      ? `${pluralize(conflictCount, "conflicted file")} — resolve each, then continue`
       : isRebaseMidSequence
         ? "Continue to replay the remaining commits"
         : `Continue to finish the ${operationNoun}`;
@@ -524,7 +526,7 @@ export function ConflictPanel({
           needs the user; once nothing does, it steps down to a neutral band. */}
       <div
         className={cn(
-          "px-4 py-3 border-b border-divider",
+          "px-3 py-3 border-b border-divider",
           conflictCount > 0 ? "bg-status-warning/10" : "bg-overlay-subtle"
         )}
       >
@@ -588,7 +590,7 @@ export function ConflictPanel({
       {/* Region 2: Conflict worklist */}
       <div className="border-b border-divider">
         <div className={REVIEW_HUB_STICKY_BAND}>
-          <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle">
+          <div className={REVIEW_HUB_SECTION_BAND}>
             <span className={SECTION_LABEL_CLASS}>
               Conflicted
               <span className={REVIEW_HUB_COUNT_CHIP}>{conflictCount}</span>
@@ -609,9 +611,9 @@ export function ConflictPanel({
                     if (el) rowRefs.current.set(file.path, el);
                     else rowRefs.current.delete(file.path);
                   }}
-                  className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-sm text-xs hover:bg-tint/5 transition-colors"
+                  className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-sm text-xs hover:bg-overlay-subtle transition-colors"
                 >
-                  <CircleAlert className="w-3 h-3 shrink-0 text-status-error" aria-hidden />
+                  <XCircle className="w-3 h-3 shrink-0 text-status-error" aria-hidden />
                   <TruncatedTooltip
                     content={`${file.path} (${conflictKindLabel(file.label, isRebase)})`}
                   >
@@ -635,7 +637,7 @@ export function ConflictPanel({
                           className="shrink-0 whitespace-nowrap text-3xs tabular-nums text-text-secondary"
                           data-testid={`conflict-hunk-count-${file.path}`}
                         >
-                          {hunkCount} {hunkCount === 1 ? "region" : "regions"}
+                          {pluralize(hunkCount, "region")}
                         </span>
                       )}
                     </div>
@@ -705,7 +707,7 @@ export function ConflictPanel({
               onClick={() => setShowResolved((v) => !v)}
               className={cn(
                 SECTION_LABEL_CLASS,
-                "w-full flex items-center gap-1.5 px-4 py-1.5 hover:text-text-primary hover:bg-overlay-subtle transition-colors"
+                "w-full flex items-center gap-1.5 px-3 py-1.5 hover:text-text-primary hover:bg-overlay-subtle transition-colors"
               )}
               aria-expanded={showResolved}
               aria-controls={resolvedListId}

@@ -158,6 +158,13 @@ const MAX_FILE_DECORATION_PATHS = 1000;
  */
 const MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS = 50;
 /**
+ * Bound on how long a debounced `onDidChangeWorktrees` burst may defer its
+ * callback, as a multiple of the plugin's `debounceMs`. Multi-agent churn can
+ * stream worktree updates with no quiet gap for as long as agents are working,
+ * and a pure trailing debounce would withhold the snapshot for that whole time.
+ */
+const PLUGIN_SUBSCRIPTION_MAX_WAIT_FACTOR = 4;
+/**
  * Ceiling for a `host.fs.watch` `debounceMs`. Node clamps any timer delay past
  * 2^31-1 ms to 1 ms, so an unbounded value would turn "almost never" into
  * "immediately"; a minute is already far past any useful coalescing window.
@@ -966,7 +973,7 @@ export function createHost(
       }
       owners.add(namespacedId);
 
-      deps.broadcaster.broadcastPluginActions();
+      deps.broadcaster.schedulePluginActionsBroadcast();
       // All registry mutation above is synchronous (sync throws still surface
       // at the call site during activate()); only the return value is async.
       return Promise.resolve();
@@ -1266,18 +1273,29 @@ export function createHost(
         }
       };
       let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+      let burstDeadline = 0;
       // A foreign project's churn is dropped before the debounce timer is even
       // armed, so a bound host's trailing callback can't be pushed out
-      // indefinitely by worktree traffic in a project it cannot see.
+      // indefinitely by worktree traffic in a project it cannot see. Churn in
+      // its own project can't either: each burst fires by its deadline.
       const emit =
         debounceMs > 0
           ? (event?: PluginWorktreeEventPayload): void => {
               if (!isEventForBoundProject(event)) return;
-              if (debounceTimer) clearTimeout(debounceTimer);
-              debounceTimer = setTimeout(() => {
-                debounceTimer = null;
-                void runEmit();
-              }, debounceMs);
+              // Monotonic: a wall-clock rollback must not push the deadline out.
+              const now = performance.now();
+              if (debounceTimer) {
+                clearTimeout(debounceTimer);
+              } else {
+                burstDeadline = now + debounceMs * PLUGIN_SUBSCRIPTION_MAX_WAIT_FACTOR;
+              }
+              debounceTimer = setTimeout(
+                () => {
+                  debounceTimer = null;
+                  void runEmit();
+                },
+                Math.max(0, Math.min(debounceMs, burstDeadline - now))
+              );
             }
           : (event?: PluginWorktreeEventPayload): void => {
               if (!isEventForBoundProject(event)) return;
@@ -2670,6 +2688,15 @@ async function appendToContainedFile(
  */
 /** How often an `allowMissing` watch checks whether its paths exist. */
 const PLUGIN_FS_WATCH_PRESENCE_POLL_MS = 1000;
+/**
+ * An attached, quiet target is re-checked only every this many ticks. Its own
+ * watcher reports a deletion or replacement, which puts it back on the fast
+ * cadence (see `PLUGIN_FS_WATCH_PRESENCE_HOT_MS`); this backstop is for the
+ * notification a platform drops.
+ */
+const PLUGIN_FS_WATCH_PRESENCE_BACKSTOP_TICKS = 10;
+/** How long after attaching, or after its watcher last fired, a target is re-checked every tick. */
+const PLUGIN_FS_WATCH_PRESENCE_HOT_MS = 3000;
 
 function buildFsApi(
   deps: PluginHostFactoryDeps,
@@ -3341,11 +3368,18 @@ function buildFsApi(
             resolved: resolvedTargets[index]!,
             release: null as (() => void) | null,
             identity: null as string | null,
+            hotUntil: 0,
           }))
         : [];
+      let presenceTick = 0;
       const refreshPresence = async (announce: boolean): Promise<void> => {
+        const backstop = presenceTick++ % PLUGIN_FS_WATCH_PRESENCE_BACKSTOP_TICKS === 0;
+        const now = Date.now();
         for (const target of presence) {
           if (disposed || !deps.plugins.has(pluginId)) return;
+          // Only a missing target, or one whose watcher just fired, needs a stat
+          // every tick: an attached directory that goes quiet was not replaced.
+          if (target.identity !== null && !backstop && now >= target.hotUntil) continue;
           const stat = await fs.stat(target.resolved).catch(() => null);
           const identity = stat ? `${stat.dev}:${stat.ino}` : null;
           if (identity === target.identity) continue;
@@ -3369,11 +3403,19 @@ function buildFsApi(
               // The identity makes a replaced directory get its own watcher: a
               // shared one kept alive by another subscriber is still bound to
               // the old inode, and rejoining it would silently watch nothing.
-              target.release = watchShared(target.resolved, withinRootOf(target.resolved), {
-                recursive,
-                identity,
-              });
+              const forward = withinRootOf(target.resolved);
+              target.release = watchShared(
+                target.resolved,
+                (changed) => {
+                  target.hotUntil = Date.now() + PLUGIN_FS_WATCH_PRESENCE_HOT_MS;
+                  forward(changed);
+                },
+                { recursive, identity }
+              );
               target.identity = identity;
+              // A native watch can miss events for a moment after it opens
+              // (macOS FSEvents stream start), so a fresh attach stays hot.
+              target.hotUntil = Date.now() + PLUGIN_FS_WATCH_PRESENCE_HOT_MS;
             } catch {
               // Gone again between the stat and the watch; the next tick retries.
               continue;

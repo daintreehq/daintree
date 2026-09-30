@@ -3,6 +3,9 @@ import { PanelRightClose } from "lucide-react";
 import { BookDashed, NotebookPen } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
+import { ResizeHandle } from "@/components/ui/ResizeHandle";
+import { resolveSplitterKey } from "@/hooks/useSplitterKeys";
+import { PANE_STATUS_FOOTER_CLASS } from "@/components/ui/paneToolbarStyles";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
@@ -160,29 +163,24 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
     dragCleanupRef.current = () => finish(false);
   };
 
+  const resetWidth = () => setScratchpadWidth(terminalId, SCRATCHPAD_DEFAULT_WIDTH);
+
+  // The column sits on the right, so ArrowLeft widens it.
   const handleResizeKeyDown = (e: React.KeyboardEvent) => {
-    const step = e.shiftKey ? SCRATCHPAD_RESIZE_STEP_COARSE : SCRATCHPAD_RESIZE_STEP;
     const { rendered, max } = measure();
-    let next: number;
-    switch (e.key) {
-      case "ArrowLeft":
-        next = rendered + step;
-        break;
-      case "ArrowRight":
-        next = rendered - step;
-        break;
-      case "Home":
-        next = SCRATCHPAD_MIN_WIDTH;
-        break;
-      case "End":
-        next = SCRATCHPAD_MAX_WIDTH;
-        break;
-      default:
-        return;
-    }
+    const result = resolveSplitterKey(e, {
+      growKey: "ArrowLeft",
+      value: rendered,
+      min: Math.min(SCRATCHPAD_MIN_WIDTH, max),
+      max: Math.min(SCRATCHPAD_MAX_WIDTH, max),
+      step: SCRATCHPAD_RESIZE_STEP,
+      largeStep: SCRATCHPAD_RESIZE_STEP_COARSE,
+    });
+    if (!result) return;
     e.preventDefault();
     e.stopPropagation();
-    setScratchpadWidth(terminalId, clampToPane(next, max));
+    if (result.kind === "reset") resetWidth();
+    else setScratchpadWidth(terminalId, clampToPane(result.value, max));
   };
 
   if (!scratchpad || scratchpad.collapsed) return null;
@@ -204,36 +202,22 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
       // Capped at half the pane so the terminal always keeps the larger share.
       style={{ width, maxWidth: "50%" }}
     >
-      <div
-        role="separator"
-        aria-label="Resize scratchpad"
-        aria-orientation="vertical"
+      <ResizeHandle
+        growKey="ArrowLeft"
+        edge="left"
+        label="Resize scratchpad"
+        value={shownWidth}
+        min={reachableMin}
+        max={reachableMax}
+        isResizing={isDragging}
         aria-controls={columnId}
-        aria-valuenow={shownWidth}
-        aria-valuemin={reachableMin}
-        aria-valuemax={reachableMax}
         aria-valuetext={`${shownWidth} pixels wide`}
-        tabIndex={0}
         data-testid="terminal-scratchpad-resize"
-        className={cn(
-          "group absolute -left-1.5 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center",
-          "transition-colors outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-          // Hover styling is off while resizing, or it outranks the drag state.
-          isDragging ? "bg-overlay-medium" : "hover:bg-overlay-soft"
-        )}
+        className="z-10"
         onMouseDown={handleResizeStart}
-        onDoubleClick={() => setScratchpadWidth(terminalId, SCRATCHPAD_DEFAULT_WIDTH)}
         onKeyDown={handleResizeKeyDown}
-      >
-        <div
-          className={cn(
-            "h-8 rounded-full transition-[width] delay-100 duration-150",
-            isDragging
-              ? "w-0.5 bg-text-primary/50"
-              : "w-px bg-text-primary/20 group-hover:w-0.5 group-hover:bg-text-primary/35 group-focus-visible:w-0.5 group-focus-visible:bg-text-primary/50"
-          )}
-        />
-      </div>
+        onReset={resetWidth}
+      />
 
       {/* The title bar lifts while the notes are being written — the caret
           plus this lift is the editor's focus cue, in place of a ring. */}
@@ -295,7 +279,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
       />
 
       <div
-        className="flex h-6 shrink-0 items-center justify-between gap-2 border-t border-divider px-3 text-2xs text-text-secondary"
+        className={cn(PANE_STATUS_FOOTER_CLASS, "justify-between")}
         data-testid="terminal-scratchpad-status"
       >
         {/* One calm word on screen; the full lifecycle is the tooltip and the

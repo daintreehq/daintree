@@ -1,13 +1,14 @@
-import { useState, type ReactElement } from "react";
+import { useLayoutEffect, useRef, type ReactElement } from "react";
 import { Trash2 } from "lucide-react";
 import type { FleetSavedScope } from "@shared/types";
 import { AppDialog, type RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { actionService } from "@/services/ActionService";
 import { cn } from "@/lib/utils";
 import { useSavedFleets } from "./useSavedFleets";
+import { deleteSavedFleetWithUndo } from "./deleteSavedFleet";
 import { describeRule, formatSavedFleetCount, savedFleetAccessibleName } from "./savedFleetMeta";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 interface SavedFleetsDialogProps {
   isOpen: boolean;
@@ -28,10 +29,44 @@ export function SavedFleetsDialog({
   restoreFocusTo,
 }: SavedFleetsDialogProps): ReactElement {
   const { snapshotUsable, snapshotStale, rules, countById } = useSavedFleets();
-  const [pendingDelete, setPendingDelete] = useState<FleetSavedScope | null>(null);
-
   const snapshots = [...snapshotUsable, ...snapshotStale];
   const isEmpty = snapshots.length + rules.length === 0;
+
+  // The Delete button goes with its row, so focus moves to the next row's
+  // Delete, or the one before it, or the close button once the list is empty.
+  // Repaired when the row actually leaves (the delete is optimistic, the save
+  // is not) and only if focus went down with it.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const pendingFocusRef = useRef<{ deletedId: string; neighbourId: string | null } | null>(null);
+  const listedIds = [...snapshots, ...rules].map((s) => s.id);
+  const listedKey = listedIds.join("\n");
+  useLayoutEffect(() => {
+    const pending = pendingFocusRef.current;
+    if (!pending || listedKey.split("\n").includes(pending.deletedId)) return;
+    pendingFocusRef.current = null;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    const dialog = bodyRef.current?.closest('[role="dialog"]');
+    const target =
+      (pending.neighbourId !== null &&
+        dialog?.querySelector<HTMLElement>(
+          `[data-fleet-delete="${CSS.escape(pending.neighbourId)}"]`
+        )) ||
+      dialog?.querySelector<HTMLElement>('button[aria-label="Close dialog"]');
+    target?.focus();
+  }, [listedKey]);
+
+  const handleDelete = (scope: FleetSavedScope) => {
+    const at = listedIds.indexOf(scope.id);
+    pendingFocusRef.current = {
+      deletedId: scope.id,
+      neighbourId: listedIds[at + 1] ?? listedIds[at - 1] ?? null,
+    };
+    void deleteSavedFleetWithUndo(scope).finally(() => {
+      // A delete that never landed leaves the row, and its focus, where they were.
+      if (pendingFocusRef.current?.deletedId === scope.id) pendingFocusRef.current = null;
+    });
+  };
 
   const renderRow = (scope: FleetSavedScope) => {
     const count = countById[scope.id] ?? 0;
@@ -42,15 +77,16 @@ export function SavedFleetsDialog({
         className="flex h-9 items-center gap-3 border-t border-border-subtle first:border-t-0"
         data-testid="fleet-saved-manage-row"
       >
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate text-sm",
-            unavailable ? "text-text-secondary" : "text-text-primary"
-          )}
-          title={scope.name}
-        >
-          {scope.name}
-        </span>
+        <TruncatedTooltip content={scope.name}>
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate text-sm",
+              unavailable ? "text-text-secondary" : "text-text-primary"
+            )}
+          >
+            {scope.name}
+          </span>
+        </TruncatedTooltip>
         <span className="flex shrink-0 items-center gap-3 text-xs text-text-secondary">
           {scope.kind === "predicate" && <span>{describeRule(scope)}</span>}
           <span className="tabular-nums">{formatSavedFleetCount(scope, count)}</span>
@@ -76,8 +112,9 @@ export function SavedFleetsDialog({
           variant="ghost"
           size="icon-sm"
           aria-label={`Delete fleet "${scope.name}"`}
-          onClick={() => setPendingDelete(scope)}
+          onClick={() => handleDelete(scope)}
           data-testid="fleet-saved-manage-delete"
+          data-fleet-delete={scope.id}
         >
           <Trash2 aria-hidden="true" />
         </Button>
@@ -86,19 +123,19 @@ export function SavedFleetsDialog({
   };
 
   return (
-    <>
-      <AppDialog
-        isOpen={isOpen}
-        onClose={onClose}
-        size="md"
-        restoreFocusTo={restoreFocusTo}
-        data-testid="fleet-saved-manage-dialog"
-      >
-        <AppDialog.Header>
-          <AppDialog.Title>Saved fleets</AppDialog.Title>
-          <AppDialog.CloseButton />
-        </AppDialog.Header>
-        <AppDialog.Body>
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="md"
+      restoreFocusTo={restoreFocusTo}
+      data-testid="fleet-saved-manage-dialog"
+    >
+      <AppDialog.Header>
+        <AppDialog.Title>Saved fleets</AppDialog.Title>
+        <AppDialog.CloseButton />
+      </AppDialog.Header>
+      <AppDialog.Body>
+        <div ref={bodyRef}>
           {isEmpty ? (
             <p className="text-sm text-text-secondary">
               Arm two or more panes, then choose Save as fleet… from the fleet menu.
@@ -129,27 +166,8 @@ export function SavedFleetsDialog({
               )}
             </div>
           )}
-        </AppDialog.Body>
-      </AppDialog>
-      <ConfirmDialog
-        isOpen={pendingDelete !== null}
-        variant="destructive"
-        zIndex="nested"
-        title={`Delete '${pendingDelete?.name ?? "fleet"}'?`}
-        description="This removes the saved fleet. The terminals it points to are not affected."
-        confirmLabel="Delete fleet"
-        onConfirm={() => {
-          if (pendingDelete) {
-            void actionService.dispatch(
-              "fleet.deleteNamedFleet",
-              { id: pendingDelete.id },
-              { source: "user" }
-            );
-          }
-          setPendingDelete(null);
-        }}
-        onClose={() => setPendingDelete(null)}
-      />
-    </>
+        </div>
+      </AppDialog.Body>
+    </AppDialog>
   );
 }

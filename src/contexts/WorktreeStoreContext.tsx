@@ -1,3 +1,4 @@
+import { useDiffViewedStore } from "@/store/diffViewedStore";
 import { createContext, useEffect, useState, startTransition, type ReactNode } from "react";
 import {
   createWorktreeStore,
@@ -5,7 +6,8 @@ import {
   compareVersion,
   type WorktreeViewStoreApi,
 } from "@/store/createWorktreeStore";
-import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
+import type { WorktreeSnapshot, WorktreeTick, WorktreeEventVersion } from "@shared/types";
+import { applyWorktreeTick, worktreeTickMatches } from "@shared/utils/worktreeSnapshotTick";
 import type { CIStatusState } from "@shared/types/forge";
 import type { PluginWorktreeLinked } from "@shared/types/plugin";
 import {
@@ -64,6 +66,13 @@ export const WorktreeStoreContext = createContext<WorktreeViewStoreApi | null>(n
 interface WorktreeUpdateEvent {
   type: "worktree-update";
   worktree: WorktreeSnapshot;
+  epoch: string;
+  seq: number;
+}
+
+interface WorktreeTickEvent {
+  type: "worktree-tick";
+  tick: WorktreeTick;
   epoch: string;
   seq: number;
 }
@@ -204,6 +213,27 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       }, TOPOLOGY_DARK_ESCALATION_MS);
     }
 
+    // The last host snapshot each `worktree-tick` amends. Not the store row:
+    // that carries renderer-side overlays (manual issue associations, a detach
+    // in flight) which a full update would have been re-merged against.
+    const hostSnapshots = new Map<string, WorktreeSnapshot>();
+    let hostSnapshotsEpoch = "";
+    function hostSnapshotsFor(epoch: string): Map<string, WorktreeSnapshot> {
+      if (epoch !== hostSnapshotsEpoch) {
+        hostSnapshots.clear();
+        hostSnapshotsEpoch = epoch;
+      }
+      return hostSnapshots;
+    }
+    const applyHostSnapshot = (
+      snapshot: WorktreeSnapshot,
+      version: WorktreeEventVersion
+    ): boolean => {
+      const applied = store.getState().applyUpdate(snapshot, version);
+      if (applied) hostSnapshotsFor(version.epoch).set(snapshot.id, snapshot);
+      return applied;
+    };
+
     function fetchInitialState() {
       generation += 1;
       const thisGen = generation;
@@ -325,6 +355,9 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             startTransition(() => {
               store.getState().applySnapshot(states, snapshotVersion, associations);
             });
+            const snapshots = hostSnapshotsFor(snapshotVersion.epoch);
+            snapshots.clear();
+            for (const snap of states) snapshots.set(snap.id, snap);
 
             // Mutation-outbox reconcile + replay (#8405). Order matters: prune
             // FIRST so an ack the renderer missed (host crashed between
@@ -366,38 +399,62 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         });
     }
 
+    const handleWorktreeEvent = (
+      worktreeId: string,
+      version: { epoch: string; seq: number },
+      apply: () => boolean
+    ): void => {
+      const prevEpoch = store.getState().version.epoch;
+      // A differing epoch means the workspace host restarted. The event
+      // carries valid state and is applied (a new epoch always wins the
+      // compare), then we re-hydrate from a fresh snapshot to recover
+      // anything the restart's seq reset would otherwise have hidden.
+      // prevEpoch === "" is the pre-hydration baseline, not a restart.
+      const epochChanged = version.epoch !== prevEpoch && prevEpoch !== "";
+      const applied = apply();
+      if (epochChanged) fetchInitialState();
+
+      // A rejected event describes a worktree that is NOT in the map — a
+      // stale stamp, a superseded monitor incarnation, or an active removal
+      // tombstone. Resolving the placeholder and running the pending
+      // selection policy anyway is what made the swallowed create silent:
+      // the "Creating…" row vanished with no worktree and no error (#11994).
+      if (!applied) return;
+
+      // Side effect: sync pending worktree selection
+      const selectionStore = useWorktreeSelectionStore.getState();
+      if (selectionStore.pendingWorktreeId === worktreeId) {
+        selectionStore.applyPendingWorktreeSelection(worktreeId);
+      }
+
+      // Side effect: clear sidebar placeholder once the real worktree arrives.
+      // Idempotent — the action is a no-op when no entry matches the id, so
+      // unrelated worktree-update events cost nothing.
+      selectionStore.resolvePendingCreation(worktreeId);
+    };
+
     cleanups.push(
       worktreePort.onEvent("worktree-update", (data) => {
         const event = data as WorktreeUpdateEvent;
-        const prevEpoch = store.getState().version.epoch;
-        // A differing epoch means the workspace host restarted. The event
-        // carries valid state and is applied (a new epoch always wins the
-        // compare), then we re-hydrate from a fresh snapshot to recover
-        // anything the restart's seq reset would otherwise have hidden.
-        // prevEpoch === "" is the pre-hydration baseline, not a restart.
-        const epochChanged = event.epoch !== prevEpoch && prevEpoch !== "";
-        const applied = store
-          .getState()
-          .applyUpdate(event.worktree, { epoch: event.epoch, seq: event.seq });
-        if (epochChanged) fetchInitialState();
+        handleWorktreeEvent(event.worktree.id, event, () =>
+          applyHostSnapshot(event.worktree, { epoch: event.epoch, seq: event.seq })
+        );
+      })
+    );
 
-        // A rejected event describes a worktree that is NOT in the map — a
-        // stale stamp, a superseded monitor incarnation, or an active removal
-        // tombstone. Resolving the placeholder and running the pending
-        // selection policy anyway is what made the swallowed create silent:
-        // the "Creating…" row vanished with no worktree and no error (#11994).
-        if (!applied) return;
-
-        // Side effect: sync pending worktree selection
-        const selectionStore = useWorktreeSelectionStore.getState();
-        if (selectionStore.pendingWorktreeId === event.worktree.id) {
-          selectionStore.applyPendingWorktreeSelection(event.worktree.id);
-        }
-
-        // Side effect: clear sidebar placeholder once the real worktree arrives.
-        // Idempotent — the action is a no-op when no entry matches the id, so
-        // unrelated worktree-update events cost nothing.
-        selectionStore.resolvePendingCreation(event.worktree.id);
+    cleanups.push(
+      worktreePort.onEvent("worktree-tick", (data) => {
+        const event = data as WorktreeTickEvent;
+        handleWorktreeEvent(event.tick.worktreeId, event, () => {
+          const base = hostSnapshotsFor(event.epoch).get(event.tick.worktreeId);
+          // No base means this view never saw the monitor's last full snapshot;
+          // the host sends one to every port whenever a port attaches.
+          if (!base || !worktreeTickMatches(base, event.tick)) return false;
+          return applyHostSnapshot(applyWorktreeTick(base, event.tick), {
+            epoch: event.epoch,
+            seq: event.seq,
+          });
+        });
       })
     );
 
@@ -423,6 +480,9 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         store
           .getState()
           .applyRemove(event.worktreeId, { epoch: event.epoch, seq: event.seq }, event.generation);
+        if (!store.getState().worktrees.has(event.worktreeId)) {
+          hostSnapshots.delete(event.worktreeId);
+        }
         if (epochChanged) fetchInitialState();
 
         // applyRemove version-gates internally but returns void: a stale
@@ -438,6 +498,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
 
         // Side effect: invalidate pulse cache
         usePulseStore.getState().invalidate(event.worktreeId);
+        if (worktree?.path) useDiffViewedStore.getState().clearWorktree(worktree.path);
 
         // Side effect: selection handling for the removed worktree. When
         // terminals survive, the id lives on as a ghost row and the user may
@@ -605,6 +666,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           const removed = baseline.get(id);
           if (removed?.isMainWorktree) continue;
           if (removed?.gitDir && incomingGitDirs.has(removed.gitDir)) continue;
+          if (removed?.path) useDiffViewedStore.getState().clearWorktree(removed.path);
           const selectionStore = useWorktreeSelectionStore.getState();
           if (selectionStore.deletedWorktrees.has(id)) continue;
           if (getDeletedWorktreeTerminalIds(id).length === 0) continue;

@@ -23,6 +23,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { FLOATING_CARD_SURFACE_CLASS } from "@/components/ui/floatingSurface";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -43,6 +44,7 @@ import {
   setSessionQuietUntil,
   type NotificationEventKind,
 } from "@/lib/notify";
+import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { useUIStore } from "@/store/uiStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -70,6 +72,9 @@ import {
   UNKNOWN_PROJECT_LABEL,
   worktreeNameFromId,
 } from "@/lib/notificationSourceLabel";
+import { isMac } from "@/lib/platform";
+import { useIsWorktreeUnavailable } from "./notificationSource";
+import { goToNotificationSource } from "./notificationNavigation";
 import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
   PANE_TOOLBAR_ICON_CLASS,
@@ -78,6 +83,7 @@ import {
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { CountBadge } from "@/components/ui/badge";
 import { FilterChip } from "@/components/ui/FilterChip";
+import { pluralize } from "@/lib/pluralize";
 
 // Three, not five. Even as compact previews, five pinned rows took three
 // quarters of a laptop-height list, so the first screen held one row of what
@@ -152,6 +158,8 @@ interface FlatRow {
   correlationId: string | undefined;
   entryId: string;
   primaryAction: NotificationAction | undefined;
+  /** The displayed entry's address — what Enter goes to, like a click. */
+  context: NotificationHistoryEntry["context"];
 }
 
 function buildFlatRow(group: ThreadGroup): FlatRow {
@@ -163,6 +171,7 @@ function buildFlatRow(group: ThreadGroup): FlatRow {
     correlationId: group.correlationId,
     entryId: latest.id,
     primaryAction: latest.actions?.[0],
+    context: latest.context,
   };
 }
 
@@ -579,7 +588,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       // elsewhere without a time limit" exception — the notification history
       // inbox is always accessible as the recovery surface, and Undo provides
       // a reversal mechanism within the time limit.
-      duration: 5000,
+      duration: UNDO_TOAST_DURATION_MS,
       priority: "high",
       // Time-bound undo — surface even during quiet hours so the user has a
       // recovery path.
@@ -814,9 +823,20 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
         }
         case "Enter": {
           const row = flatRows[activeIndex];
-          if (!row || !row.primaryAction) return;
+          if (!row || e.repeat || e.shiftKey || e.altKey) return;
+          // Enter goes where a click goes. The primary action can be a side
+          // effect (Retry, Restore), so it moves to Mod+Enter rather than
+          // firing on the key everyone presses to open a list item.
+          const mod = isMac() ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+          if (mod) {
+            if (!row.primaryAction) return;
+            e.preventDefault();
+            dispatchPrimaryAction(row);
+            return;
+          }
+          if (e.metaKey || e.ctrlKey) return;
           e.preventDefault();
-          dispatchPrimaryAction(row);
+          void goToNotificationSource(row.context);
           return;
         }
         default:
@@ -1518,8 +1538,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               // Opaque, like ScrollPill: it floats over notification rows, and
               // `overlay-raised` is ~4% alpha on dark themes, so the rows read
               // through it. The hover tint layers as an image over the fill.
-              "bg-surface-panel-elevated border border-border-default",
-              "shadow-[var(--theme-shadow-floating)]",
+              FLOATING_CARD_SURFACE_CLASS,
               "text-2xs font-medium text-text-secondary",
               "hover:text-text-primary hover:border-border-strong",
               "hover:bg-[linear-gradient(var(--color-overlay-hover),var(--color-overlay-hover))]",
@@ -1973,12 +1992,18 @@ function ContextSectionHeader({
   // 64-character hash as the heading of any section from a project this view
   // hasn't loaded.
   const project = projectName ?? (projectId ? UNKNOWN_PROJECT_LABEL : undefined);
+  // A worktree this project view no longer has keeps its name, since the
+  // records under it stay readable, but is not passed off as a live one.
+  const worktreeUnavailable = useIsWorktreeUnavailable(worktreeId, projectId);
   const resolvedWorktree = worktreeId
     ? worktreeName?.trim() || worktreeNameFromId(worktreeId)
     : undefined;
   // A main worktree is named after its folder, usually the project's own name.
   const worktree = resolvedWorktree && resolvedWorktree !== project ? resolvedWorktree : undefined;
-  const label = [project, worktree].filter(Boolean).join(" · ") || APP_SOURCE_LABEL;
+  const label =
+    [project, worktree, worktreeUnavailable ? "unavailable" : undefined]
+      .filter(Boolean)
+      .join(" · ") || APP_SOURCE_LABEL;
   const hasUnread = unreadIds.length > 0;
   return (
     // Sticky, so the place a row belongs to stays on screen while you read
@@ -2015,13 +2040,19 @@ function ContextSectionHeader({
               </span>
             ) : null}
             {worktree ? <span className="max-w-[65%] shrink-0 truncate">{worktree}</span> : null}
+            {worktreeUnavailable ? (
+              <span
+                data-testid="context-section-unavailable"
+                className="shrink-0 pl-1 text-text-secondary"
+              >
+                · unavailable
+              </span>
+            ) : null}
             {!project && !worktree ? <span className="truncate">{APP_SOURCE_LABEL}</span> : null}
           </span>
           {/* Beside the name it counts, not beside the button — at the far end
             it read as part of "Mark read". */}
-          <CountBadge label={`${count} ${count === 1 ? "notification" : "notifications"}`}>
-            {count}
-          </CountBadge>
+          <CountBadge label={`${pluralize(count, "notification")}`}>{count}</CountBadge>
           {newCount > 0 && (
             <span data-testid="context-section-new" className="shrink-0 tabular-nums">
               · {newCount} new

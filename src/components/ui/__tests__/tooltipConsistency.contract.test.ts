@@ -13,9 +13,10 @@ import ts from "typescript";
 //
 // KNOWN LIMITS (a regression guard, not a sound checker):
 //   - Only class strings written as literals inside `className` are read.
-//   - Native `title` is only policed on the files listed in
-//     `TOOLTIP_ONLY_FILES`. Menu-row affordances (AgentButton, PluginTrayButton,
-//     DockLaunchButton) and the fleet chip's rows keep theirs on purpose.
+//   - Native `title` on buttons is only policed on the files listed in
+//     `TOOLTIP_ONLY_FILES`. Row controls inside options and menu items, and
+//     `title` on truncating text, are policed by
+//     `rowControlsTooltips.contract.test.ts`.
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../../..");

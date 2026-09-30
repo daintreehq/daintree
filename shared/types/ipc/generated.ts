@@ -376,7 +376,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "diff-media:read-file-versions": {
     args: [payload: import("./diffMedia.js").DiffMediaReadFileVersionsPayload];
-    result: import("./diffMedia.js").DiffMediaFileVersions;
+    result: import("./diffMedia.js").DiffMediaFileVersionsResponse;
   };
   "editor:discover": {
     args: [];
@@ -919,7 +919,7 @@ export interface GeneratedIpcInvokeMap {
     result: { enabled: boolean; maxRecords: number };
   };
   "mcp-server:get-audit-records": {
-    args: [];
+    args: [query?: import("./mcpServer.js").McpAuditRecordQuery | undefined];
     result: import("./mcpServer.js").McpAuditRecord[];
   };
   "mcp-server:get-audit-stats": {
@@ -1909,7 +1909,7 @@ export interface GeneratedIpcInvokeMap {
     result: Record<string, import("../terminalStatus.js").TerminalOutputActivityLookup>;
   };
   "terminal:get-serialized-state": {
-    args: [terminalId: string];
+    args: [terminalId: string, options?: import("../terminal.js").SerializeReadOptions | undefined];
     result: import("../terminal.js").SerializedTerminalSnapshot | null;
   };
   "terminal:get-serialized-states": {

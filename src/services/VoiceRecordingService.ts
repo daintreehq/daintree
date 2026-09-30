@@ -41,6 +41,11 @@ class VoiceRecordingService {
   private generation = 0;
   private startRequestId = 0;
   private audioContext: AudioContext | null = null;
+  // Built by start() before the microphone opens and not yet handed over to
+  // `audioContext`. Held here so a cancel or supersede can close it while
+  // getUserMedia is still pending (an unanswered permission prompt can leave
+  // it pending indefinitely).
+  private pendingAudioContext: AudioContext | null = null;
   private workletNode: AudioWorkletNode | null = null;
   private keepAliveOscillator: OscillatorNode | null = null;
   private keepAliveGain: GainNode | null = null;
@@ -490,8 +495,25 @@ class VoiceRecordingService {
     // A push-to-talk press that aborted arming must not have its keyup send a
     // stop for a session that never began.
     this.pttActiveKeyCode = null;
-    this.startRequestId++;
+    this.invalidatePendingStart();
     useVoiceRecordingStore.getState().finishSession({ nextStatus: "idle" });
+  }
+
+  /**
+   * Make any in-flight start() stale and close the AudioContext it built ahead
+   * of getUserMedia, so a start stuck on a pending permission prompt doesn't
+   * hold an output stream open after the user has moved on.
+   */
+  private invalidatePendingStart(): void {
+    this.startRequestId++;
+    this.releasePendingAudioContext();
+  }
+
+  private releasePendingAudioContext(): void {
+    const pending = this.pendingAudioContext;
+    if (!pending) return;
+    this.pendingAudioContext = null;
+    void pending.close().catch(() => {});
   }
 
   /**
@@ -507,6 +529,7 @@ class VoiceRecordingService {
 
   async start(target: VoiceRecordingTarget): Promise<void> {
     this.initialize();
+    this.releasePendingAudioContext();
     const startRequestId = ++this.startRequestId;
     logDebug(`${LOG_PREFIX} start() called`, {
       panelId: target.panelId,
@@ -604,6 +627,21 @@ class VoiceRecordingService {
       }
     }
 
+    // Build the AudioContext BEFORE opening the microphone. Its constructor
+    // resolves the output device with a synchronous IPC, and Chromium only
+    // caches that answer for a few seconds. Constructed after getUserMedia, a
+    // cache miss queues behind the audio service bringing up the just-opened
+    // input stream and freezes the renderer for ~650ms on macOS — with the
+    // recording indicator already committed but unpainted. Done first, the
+    // lookup lands on an idle audio service and costs a few milliseconds.
+    logDebug(`${LOG_PREFIX} Creating AudioContext (24kHz) — eager capture`);
+    const audioContext = new AudioContext({ sampleRate: 24000 });
+    this.pendingAudioContext = audioContext;
+    // A context no longer pending was already closed by a cancel or supersede.
+    const discardAudioContext = () => {
+      if (this.pendingAudioContext === audioContext) this.releasePendingAudioContext();
+    };
+
     // Acquire microphone stream. On macOS the preflight above already settled
     // permission; on Windows/Linux this call IS the permission gate, so a denial
     // arrives here as NotAllowedError rather than from the preflight.
@@ -615,6 +653,7 @@ class VoiceRecordingService {
         : { audio: true, video: false };
       stream = await navigator.mediaDevices.getUserMedia(constraints);
     } catch (error) {
+      discardAudioContext();
       const message =
         error instanceof DOMException && error.name === "NotAllowedError"
           ? "Microphone permission denied. Enable it in System Settings and try again."
@@ -680,6 +719,7 @@ class VoiceRecordingService {
       for (const track of stream.getTracks()) {
         track.stop();
       }
+      discardAudioContext();
       return;
     }
 
@@ -701,6 +741,7 @@ class VoiceRecordingService {
         for (const track of stream.getTracks()) {
           track.stop();
         }
+        discardAudioContext();
         return;
       }
     }
@@ -716,9 +757,8 @@ class VoiceRecordingService {
 
     // Start audio capture IMMEDIATELY — don't wait for WebSocket.
     // Chunks are buffered in the main process until the connection is ready.
-    logDebug(`${LOG_PREFIX} Creating AudioContext (24kHz) — eager capture`);
-    const audioContext = new AudioContext({ sampleRate: 24000 });
     this.audioContext = audioContext;
+    if (this.pendingAudioContext === audioContext) this.pendingAudioContext = null;
     logInfo(`${LOG_PREFIX} AudioContext created`, {
       requestedSampleRate: 24000,
       actualSampleRate: audioContext.sampleRate,
@@ -905,7 +945,7 @@ class VoiceRecordingService {
       // explicit stop has to cancel that pending start too, or the recording
       // resumes on the new target once the drain finishes.
       if (!options.preservePendingStart) {
-        this.startRequestId++;
+        this.invalidatePendingStart();
         this.pttActiveKeyCode = null;
       }
       await this.stopPromise;
@@ -922,7 +962,7 @@ class VoiceRecordingService {
       this.pttActiveKeyCode = null;
 
       if (!options.preservePendingStart) {
-        this.startRequestId++;
+        this.invalidatePendingStart();
       }
 
       const storeState = useVoiceRecordingStore.getState();
@@ -1483,7 +1523,7 @@ class VoiceRecordingService {
   }
 
   destroy(): void {
-    this.startRequestId++;
+    this.invalidatePendingStart();
     // Vite HMR disposes and re-evaluates this module; the old singleton's
     // timers must be cleared or they fire against the new singleton's state.
     this.clearPauseTimeout();

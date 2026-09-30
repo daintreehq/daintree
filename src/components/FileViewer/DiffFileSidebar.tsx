@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 import { GroupedVirtuoso, type GroupedVirtuosoHandle } from "react-virtuoso";
 import { Folder } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -17,8 +19,11 @@ import {
   useFileRowMenuItems,
 } from "@/hooks/useFileRowMenuItems";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
+import { useRovingRows, type UseRovingRowsResult } from "@/hooks/useRovingRows";
+import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { DIFF_STATUS_CONFIG, formatDiffDir, summarizeChangeSet } from "./diffChangeSet";
 import type { DiffChangeSetEntry } from "./diffChangeSet";
+import { pluralize } from "@/lib/pluralize";
 
 export interface DiffFileSidebarProps {
   files: DiffChangeSetEntry[];
@@ -51,6 +56,10 @@ interface ShelfRowContext {
   onSelect: (index: number) => void;
   toggleViewed: (worktreePath: string, viewedKey: string) => void;
   renderFileRowMenuItems: ReturnType<typeof useFileRowMenuItems>["renderItems"];
+  tabStopKey: string | null;
+  onRowFocus: UseRovingRowsResult["onRowFocus"];
+  rowRef: UseRovingRowsResult["rowRef"];
+  reportTabStopMounted: UseRovingRowsResult["reportTabStopMounted"];
 }
 
 /**
@@ -65,9 +74,25 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
   const config = DIFF_STATUS_CONFIG[file.status] ?? DIFF_STATUS_CONFIG.untracked;
   const viewed = ctx.viewedSet.has(file.viewedKey);
   const isCurrent = file.index === ctx.currentIndex;
+  const rowKey = String(file.index);
+  const isTabStop = ctx.tabStopKey === rowKey;
+  const { reportTabStopMounted } = ctx;
+  // The shelf windows its rows; the list has to know when the one row that
+  // holds the tab stop has been scrolled out of the DOM.
+  useEffect(() => {
+    if (!isTabStop) return;
+    reportTabStopMounted(true);
+    return () => reportTabStopMounted(false);
+  }, [isTabStop, reportTabStopMounted]);
   const row = (
     <div
       data-file-index={file.index}
+      data-roving-row=""
+      // The shared selected-row fill; `aria-current` on the button is what AT hears.
+      data-selected={isCurrent ? "true" : undefined}
+      // On the row, not the button: a click on the viewed box moves the cursor
+      // too, so the next arrow press starts from the row the user touched.
+      onFocus={() => ctx.onRowFocus(rowKey)}
       // Stands the global Shift+F10 / Menu-key handler down so
       // the row's own menu opens instead of the focused panel's
       // (`useGlobalKeybindings` matches on the attribute's
@@ -75,17 +100,32 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
       // falls through to that handler as it did before.
       data-row-menu={ctx.hasRowMenu ? "" : undefined}
       className={cn(
-        "group/diffrow flex items-center rounded-[var(--radius-lg)] px-1.5 py-1 text-xs font-mono transition-colors",
-        isCurrent ? "bg-overlay-subtle" : "hover:bg-tint/5",
-        // The row whose menu is open lifts a tier above the open
-        // file's own subtle fill, so the two never read as one.
-        "data-[state=open]:bg-overlay-raised"
+        LIST_DETAIL_ROW_CLASS,
+        "group/diffrow flex items-center rounded-[var(--radius-md)] px-1.5 py-1 text-xs font-mono"
       )}
     >
       <button
         type="button"
         onClick={() => ctx.onSelect(file.index)}
+        ref={ctx.rowRef(rowKey)}
+        // One tab stop for the whole shelf; the arrow keys move it.
+        tabIndex={isTabStop ? 0 : -1}
+        aria-keyshortcuts="V"
+        // The viewed box is out of the tab order, so its state rides here.
+        aria-description={viewed ? "Viewed" : undefined}
         onKeyDown={(event) => {
+          // The viewed box is out of the tab order with every other control in
+          // the row, so its key lives on the row's own button.
+          if (
+            event.key.toLowerCase() === "v" &&
+            !event.metaKey &&
+            !event.ctrlKey &&
+            !event.altKey
+          ) {
+            event.preventDefault();
+            ctx.toggleViewed(ctx.worktreePath, file.viewedKey);
+            return;
+          }
           if (!ctx.hasRowMenu || !isFileRowMenuKey(event)) return;
           // Anchored to the whole row, not this button: the menu
           // targets the file, and the row is what lifts to show
@@ -96,7 +136,7 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
         }}
         aria-current={isCurrent || undefined}
         aria-label={`Open ${file.path}`}
-        className="-my-1 -ml-1.5 flex min-w-0 flex-1 items-center rounded-[var(--radius-lg)] py-1 pr-1 pl-1.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+        className="-my-1 -ml-1.5 flex min-w-0 flex-1 items-center rounded-[var(--radius-md)] py-1 pr-1 pl-1.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         data-testid="diff-sidebar-file"
       >
         <span className={cn("w-4 shrink-0 font-bold", config.color)}>{config.label}</span>
@@ -108,14 +148,11 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
         >
           {basename(file.path)}
         </span>
-        <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-2xs">
-          {(file.insertions ?? 0) > 0 && (
-            <span className="text-status-success">+{file.insertions}</span>
-          )}
-          {(file.deletions ?? 0) > 0 && (
-            <span className="text-status-error">-{file.deletions}</span>
-          )}
-        </span>
+        <DiffStat
+          insertions={file.insertions}
+          deletions={file.deletions}
+          className="ml-auto shrink-0 pl-2 text-2xs"
+        />
       </button>
       <Tooltip>
         <TooltipTrigger asChild>
@@ -124,6 +161,7 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
             checked={viewed}
             onCheckedChange={() => ctx.toggleViewed(ctx.worktreePath, file.viewedKey)}
             aria-label={`Mark ${file.path} as viewed`}
+            tabIndex={-1}
             className={cn(
               // A 14px box with a 24px hit area (WCAG 2.5.8); the pseudo-element
               // stays inside the row's own padding.
@@ -289,6 +327,25 @@ export function DiffFileSidebar({
   // of after a full static render.
   const windowed = shouldVirtualizeFileList(visibleCount);
 
+  const rovingKeys = useMemo(() => flat.entries.map((file) => String(file.index)), [flat]);
+  const revealRovingRow = useCallback(
+    (position: number) => {
+      const file = flat.entries[position];
+      const slotIndex = file ? flat.slotIndexByFileIndex.get(file.index) : undefined;
+      if (slotIndex === undefined) return;
+      virtuosoRef.current?.scrollIntoView({ index: slotIndex, behavior: "auto" });
+    },
+    [flat]
+  );
+  const roving = useRovingRows({
+    keys: rovingKeys,
+    preferredKey: currentIndex >= 0 ? String(currentIndex) : null,
+    reveal: revealRovingRow,
+    windowed,
+    containerRef: listRef,
+  });
+  const { tabStopKey, onRowFocus, rowRef, reportTabStopMounted } = roving;
+
   const rowContext: ShelfRowContext = useMemo(
     () => ({
       currentIndex,
@@ -298,6 +355,10 @@ export function DiffFileSidebar({
       onSelect,
       toggleViewed,
       renderFileRowMenuItems,
+      tabStopKey,
+      onRowFocus,
+      rowRef,
+      reportTabStopMounted,
     }),
     [
       currentIndex,
@@ -307,6 +368,10 @@ export function DiffFileSidebar({
       onSelect,
       toggleViewed,
       renderFileRowMenuItems,
+      tabStopKey,
+      onRowFocus,
+      rowRef,
+      reportTabStopMounted,
     ]
   );
 
@@ -350,17 +415,12 @@ export function DiffFileSidebar({
     >
       <div className="shrink-0 border-b border-border-default px-3.5 py-2">
         <div className="flex items-baseline justify-between gap-2 text-xs">
-          <span className="font-medium text-text-primary">
-            {files.length} {files.length === 1 ? "file" : "files"}
-          </span>
-          <span className="flex items-center gap-1.5 font-mono text-2xs">
-            {summary.insertions > 0 && (
-              <span className="text-status-success">+{summary.insertions}</span>
-            )}
-            {summary.deletions > 0 && (
-              <span className="text-status-error">-{summary.deletions}</span>
-            )}
-          </span>
+          <span className="font-medium text-text-primary">{pluralize(files.length, "file")}</span>
+          <DiffStat
+            insertions={summary.insertions}
+            deletions={summary.deletions}
+            className="text-2xs"
+          />
         </div>
         <div className="mt-1" data-testid="diff-sidebar-progress">
           <span className="text-2xs text-text-muted">
@@ -369,19 +429,13 @@ export function DiffFileSidebar({
           {/* The track only appears once review has started — an empty
               full-width strip at zero progress reads as stray chrome. */}
           {viewedCount > 0 && (
-            <div
-              role="progressbar"
-              aria-label="Files viewed"
-              aria-valuemin={0}
-              aria-valuemax={files.length}
-              aria-valuenow={viewedCount}
-              className="mt-1 h-0.5 overflow-hidden rounded-full bg-tint/10"
-            >
-              <div
-                className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
-                style={{ width: `${files.length ? (viewedCount / files.length) * 100 : 0}%` }}
-              />
-            </div>
+            <ProgressBar
+              label="Files viewed"
+              value={viewedCount}
+              max={files.length}
+              size="thin"
+              className="mt-1"
+            />
           )}
         </div>
       </div>
@@ -400,6 +454,8 @@ export function DiffFileSidebar({
       </div>
 
       <div
+        onKeyDown={roving.onKeyDown}
+        {...roving.containerProps}
         ref={listRef}
         className={cn(
           "min-h-0 flex-1 overscroll-contain px-2 pb-2",

@@ -182,8 +182,6 @@ function DevPreviewRefusedScene() {
             code: "connection_refused",
             message: "Nothing is listening on localhost:5173. The dev server may have stopped.",
           }}
-          certCopied={false}
-          onCopyMkcert={noop}
           isRestarting={false}
           onRestartDevServer={noop}
           onHardReload={noop}

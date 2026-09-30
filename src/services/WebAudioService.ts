@@ -20,18 +20,52 @@ interface ActiveVoice {
 const MAX_VOICES = 4;
 const FADE_TIME_CONSTANT = 0.015;
 const FADE_TAIL_SECONDS = 0.1;
+// A running AudioContext keeps Chromium's audio render path ticking (and the
+// audio service's output stream open) through silence, for the rest of the
+// session. Suspend once playback has been quiet this long; the next play
+// resumes before it schedules, so nothing is dropped.
+export const IDLE_SUSPEND_MS = 30_000;
 
 let audioContext: AudioContext | null = null;
 let soundsDir: string | null = null;
 const bufferCache = new Map<string, AudioBuffer>();
 const activeVoices: ActiveVoice[] = [];
 let cancelGeneration = 0;
+let pendingPlays = 0;
+let idleSuspendTimer: ReturnType<typeof setTimeout> | null = null;
+// Set when we issue suspend(), before its promise settles: `state` still reads
+// "running" while the suspend is in flight, so it cannot be what decides
+// whether the next play has to resume.
+let suspendedForIdle = false;
+
+function clearIdleSuspend(): void {
+  if (idleSuspendTimer !== null) {
+    clearTimeout(idleSuspendTimer);
+    idleSuspendTimer = null;
+  }
+}
+
+function scheduleIdleSuspend(): void {
+  clearIdleSuspend();
+  if (!audioContext || suspendedForIdle || activeVoices.length > 0 || pendingPlays > 0) return;
+  idleSuspendTimer = setTimeout(() => {
+    idleSuspendTimer = null;
+    const ctx = audioContext;
+    if (!ctx || activeVoices.length > 0 || pendingPlays > 0) return;
+    suspendedForIdle = true;
+    ctx.suspend().catch(() => {});
+  }, IDLE_SUSPEND_MS);
+}
 
 async function ensureContext(): Promise<AudioContext> {
+  clearIdleSuspend();
   if (!audioContext) {
     audioContext = new AudioContext();
   }
-  if (audioContext.state === "suspended") {
+  if (suspendedForIdle || audioContext.state === "suspended") {
+    suspendedForIdle = false;
+    // Control messages are processed in order, so this also wins over a
+    // suspend() that has not settled yet.
     await audioContext.resume();
   }
   return audioContext;
@@ -76,6 +110,7 @@ export async function playSound(soundFile: string, detune?: number): Promise<voi
   // Captured before any await — if cancelSound() fires during fetch/decode,
   // the generation advances and we abort before scheduling playback.
   const startGeneration = cancelGeneration;
+  pendingPlays++;
   try {
     const ctx = await ensureContext();
     const buffer = await getBuffer(ctx, soundFile);
@@ -94,6 +129,7 @@ export async function playSound(soundFile: string, detune?: number): Promise<voi
     source.onended = () => {
       const idx = activeVoices.indexOf(voice);
       if (idx !== -1) activeVoices.splice(idx, 1);
+      scheduleIdleSuspend();
     };
 
     activeVoices.push(voice);
@@ -110,6 +146,9 @@ export async function playSound(soundFile: string, detune?: number): Promise<voi
     }
   } catch {
     // Non-critical — fail silently
+  } finally {
+    pendingPlays--;
+    scheduleIdleSuspend();
   }
 }
 
@@ -126,6 +165,8 @@ export function cancelSound(): void {
 
 export function dispose(): void {
   cancelSound();
+  clearIdleSuspend();
+  suspendedForIdle = false;
   bufferCache.clear();
   if (audioContext) {
     audioContext.close().catch(() => {});

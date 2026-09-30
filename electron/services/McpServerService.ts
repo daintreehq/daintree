@@ -12,6 +12,7 @@ import type {
   DisconnectBearerResult,
   HelpSessionBearerRecord,
   McpAuditRecord,
+  McpAuditRecordQuery,
   McpAuditStats,
   McpGrantLifecyclePayload,
   McpIssueGrantResult,
@@ -27,7 +28,7 @@ import type {
   TurnOutcomeClass,
 } from "../../shared/types/ipc/mcpServer.js";
 import { SessionStore } from "./mcp-server/sessionStore.js";
-import { principalOwnerKey } from "./mcp-server/resourceOwnership.js";
+import { helpOwnershipPrincipal, principalOwnerKey } from "./mcp-server/resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./mcp-server/terminalAdoption.js";
 import { isTierPermitted } from "./mcp-server/tierAuth.js";
 import type { OrchestratorPaneIdentity } from "./McpPaneConfigService.js";
@@ -485,10 +486,10 @@ export class McpServerService {
   }
 
   /**
-   * Drop every ownership record a revoked pane bearer held (#12487), the
-   * hand-overs it held (#12490), and the notices it has pending.
-   * Called by `McpPaneConfigService` in the same step as the revocation
-   * itself.
+   * Drop every ownership record a revoked pane or help bearer held (#12487,
+   * #12993), the hand-overs it held (#12490), and the notices it has pending.
+   * Called by `McpPaneConfigService` and `disconnectHelpBearer` in the same
+   * step as the revocation itself.
    */
   revokeOwnershipPrincipal(principal: string): void {
     this.sessionStore.resourceOwnership.revokePrincipal(principal);
@@ -847,8 +848,8 @@ export class McpServerService {
     return this.httpLifecycle.getConfigSnippet();
   }
 
-  getAuditRecords(): McpAuditRecord[] {
-    return this.auditService.getRecords();
+  getAuditRecords(query?: McpAuditRecordQuery): McpAuditRecord[] {
+    return this.auditService.getRecords(query);
   }
 
   /**
@@ -1048,14 +1049,21 @@ export class McpServerService {
    * when the help session is revoked (#9151). Resolves the raw help token to
    * its register key, then reuses {@link disconnectBearer} so tier, grants,
    * and pin drop immediately instead of lingering until the 30-minute idle
-   * reaper. A no-op when the agent never connected (or already disconnected)
-   * — the token won't be tracked. Wired in via
-   * `HelpSessionService.setOnMcpSessionRevoked`.
+   * reaper. Wired in via `HelpSessionService.setOnMcpSessionRevoked`.
+   *
+   * The help session's ownership principal (#12993) is revoked first and
+   * unconditionally: its records outlive every transport, so a help session
+   * whose last connection already dropped still holds authority that has to
+   * go with the bearer. Only the transport teardown is a no-op when the agent
+   * never connected (or already disconnected).
    */
-  disconnectHelpBearer(rawToken: string): void {
-    const tokenHash = this.httpLifecycle.findHelpBearerHash(rawToken);
-    if (tokenHash === null) return;
-    this.disconnectBearer(tokenHash);
+  disconnectHelpBearer(rawToken: string, helpSessionId: string): void {
+    try {
+      this.revokeOwnershipPrincipal(helpOwnershipPrincipal(helpSessionId));
+    } finally {
+      const tokenHash = this.httpLifecycle.findHelpBearerHash(rawToken);
+      if (tokenHash !== null) this.disconnectBearer(tokenHash);
+    }
   }
 
   /**

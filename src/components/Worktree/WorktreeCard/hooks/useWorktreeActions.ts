@@ -91,6 +91,7 @@ export function useWorktreeActions({
           notifyRecipeSpawnFailures(results, {
             recipeName: recipeState.getRecipeById(recipeId)?.name,
             projectId: recipeState.currentProjectId ?? undefined,
+            worktreeId: worktree.id,
           });
         })
         .catch((error) => {

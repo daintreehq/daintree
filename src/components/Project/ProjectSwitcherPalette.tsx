@@ -3,9 +3,11 @@ import { Callout } from "@/components/ui/Callout";
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import type { JSX } from "react";
 import {
+  AppWindow,
   BellOff,
   ChevronRight,
-  Download,
+  CircleStop,
+  Copy,
   FileText,
   FolderInput,
   FolderOpen,
@@ -15,17 +17,16 @@ import {
   Pin,
   PinOff,
   Plus,
-  Settings2,
+  Settings,
   Trash2,
   X,
-  AppWindow,
-  CircleStop,
-  Copy,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { Moon } from "@/components/icons";
+import { FolderDown, Moon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
+import { isMac } from "@/lib/platform";
+import { formatChordText } from "@/lib/kbdShortcut";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
 import {
   PALETTE_ROW_CLASS,
@@ -33,6 +34,8 @@ import {
   PALETTE_SECTION_LABEL_CLASS,
 } from "@/components/ui/paletteRowStyles";
 import { KbdChord } from "@/components/ui/Kbd";
+import { Input } from "@/components/ui/input";
+import { inlineRenameFieldInputProps } from "@/components/Panel/inlineRenameField";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import {
   ContextMenu,
@@ -106,6 +109,8 @@ import {
   SCRATCH_CLEANUP_COUNTDOWN_VISIBLE_DAYS,
 } from "@shared/config/scratchCleanup";
 import { PathSegments } from "@/components/ui/PathSegments";
+import { pluralize } from "@/lib/pluralize";
+import { keyBelongsToField } from "@/hooks/useListboxCursor";
 
 export interface ProjectSwitcherPaletteProps {
   isOpen: boolean;
@@ -491,7 +496,7 @@ function RowStatusLine({ status }: { status: ProjectRowStatus }) {
            * The visible dot is hidden from assistive tech and a comma stands in
            * for it, because the tokens are adjacent inline elements with no
            * whitespace between them: without this the row's accessible name
-           * runs together as "2 agents running1 needs inputwaiting 10m".
+           * runs together as "2 agents running1 waitingfor 10m".
            */}
           {index > 0 && (
             <>
@@ -555,11 +560,7 @@ function showResumableAgentMark(
  * sentence the project rows do, so the phrasing cannot drift between them.
  */
 function ResumableAgentsLabel({ count }: { count: number }) {
-  return (
-    <span className="sr-only">
-      , {count} {count === 1 ? "agent" : "agents"} will resume
-    </span>
-  );
+  return <span className="sr-only">, {pluralize(count, "agent")} will resume</span>;
 }
 
 /**
@@ -669,14 +670,19 @@ function modEnterOpensWindow(
 export function getProjectSwitcherEnterHint(
   row: ProjectSwitcherRow | undefined,
   modifierHeld: boolean,
-  canOpenWindow: boolean
+  canOpenWindow: boolean,
+  mac: boolean = isMac()
 ): { keys: string; label: string } | null {
   if (!row) return null;
   const opensWindow = modifierHeld && modEnterOpensWindow(row, canOpenWindow);
+  // The keydown takes Meta or Control, so the modifier is whichever this
+  // platform calls primary — a literal ⌘ tells Windows and Linux to press a key
+  // they don't have. The Enter glyph stays the footer family's ↵.
+  const modEnter = `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`;
   if (row.kind === "project" && isOpenElsewhere(row)) {
-    return { keys: opensWindow ? "⌘↵" : "↵", label: "Go to window" };
+    return { keys: opensWindow ? modEnter : "↵", label: "Go to window" };
   }
-  if (opensWindow && !row.isOpenInThisWindow) return { keys: "⌘↵", label: "New window" };
+  if (opensWindow && !row.isOpenInThisWindow) return { keys: modEnter, label: "New window" };
   return { keys: "↵", label: "Switch" };
 }
 
@@ -725,7 +731,7 @@ function ProjectListItem({
       aria-current={project.isActive ? "true" : undefined}
       className={cn(
         PALETTE_ROW_CLASS,
-        "group w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-md)] text-left cursor-pointer",
+        "group w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] text-left cursor-pointer",
         project.isActive
           ? "text-text-primary"
           : project.isMissing
@@ -973,7 +979,7 @@ function ScratchListItem({
       aria-current={scratch.isActive ? "true" : undefined}
       className={cn(
         PALETTE_ROW_CLASS,
-        "group w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-md)] text-left cursor-pointer",
+        "group w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] text-left cursor-pointer",
         scratch.isActive ? "text-text-primary" : "text-text-secondary"
       )}
       onPointerMove={onHoverRow && !isSelected ? () => onHoverRow(scratch.id) : undefined}
@@ -1615,6 +1621,14 @@ interface ScratchNameEditorProps {
   ariaLabel: string;
   onCommit: (name: string) => void;
   onCancel: () => void;
+  /**
+   * Blur commits a rename, like any inline rename. It never creates: making a
+   * workspace switches to it, which is too much to do because focus moved, so
+   * a create draft stays open for Enter or Escape instead.
+   */
+  commitOnBlur: boolean;
+  /** Enter and Escape unmount the field; focus goes back to the palette's input. */
+  onReturnFocus?: () => void;
   testId: string;
   /**
    * Spacing the editor inherits from whatever it stands in for. A rename editor
@@ -1637,17 +1651,21 @@ function ScratchNameEditor({
   ariaLabel,
   onCommit,
   onCancel,
+  commitOnBlur,
+  onReturnFocus,
   testId,
   className,
 }: ScratchNameEditorProps) {
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLInputElement>(null);
-  // Committing on blur would fire on Escape's focus restore too, resurrecting the
-  // cancelled edit; explicit Enter is the only commit path.
-  const committedRef = useRef(false);
+  // Set before Enter or Escape settles the edit, so the blur that follows —
+  // unmount, or the focus handed back to the palette — can't commit a cancelled
+  // edit or commit a second time.
+  const settledRef = useRef(false);
 
   useEscapeStack(true, () => {
-    if (committedRef.current) return;
+    if (settledRef.current) return;
+    settledRef.current = true;
     onCancel();
   });
 
@@ -1658,10 +1676,14 @@ function ScratchNameEditor({
     input.select();
   }, []);
 
-  const commit = useCallback(() => {
-    committedRef.current = true;
-    onCommit(value);
-  }, [onCommit, value]);
+  const settle = useCallback(
+    (outcome: () => void) => {
+      settledRef.current = true;
+      outcome();
+      if (onReturnFocus) requestAnimationFrame(onReturnFocus);
+    },
+    [onReturnFocus]
+  );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -1669,38 +1691,45 @@ function ScratchNameEditor({
       if (e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
-        commit();
+        settle(() => onCommit(value));
         return;
       }
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        onCancel();
+        settle(onCancel);
       }
     },
-    [commit, onCancel]
+    [settle, onCommit, onCancel, value]
   );
+
+  const handleBlur = useCallback(() => {
+    if (settledRef.current || !commitOnBlur) return;
+    settledRef.current = true;
+    onCommit(value);
+  }, [commitOnBlur, onCommit, value]);
 
   return (
     <div
       className={cn(
-        "w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-md)] border border-transparent",
+        "w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-sm)] border border-transparent",
         className
       )}
     >
       <StatusSlotSpacer />
       <CommandTile icon={FileText} tone="manage" />
-      <input
+      <Input
         ref={inputRef}
+        {...inlineRenameFieldInputProps}
         data-scratch-name-input=""
         data-testid={testId}
-        type="text"
         value={value}
         aria-label={ariaLabel}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
-        onBlur={onCancel}
-        className="flex-1 min-w-0 bg-overlay-soft border border-[var(--border-overlay)] rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+        onBlur={handleBlur}
+        // The row's own 30px, so opening the editor doesn't shift the list.
+        className="min-w-0 flex-1 px-2 py-1"
       />
     </div>
   );
@@ -1724,6 +1753,7 @@ interface ScratchSectionProps {
   onDeleteAll?: () => void;
   onRename?: (scratchId: string, name: string) => void;
   onSaveAsProject?: (scratchId: string) => void;
+  onReturnFocus?: () => void;
 }
 
 /**
@@ -1751,6 +1781,7 @@ function ScratchSection({
   onDeleteAll,
   onRename,
   onSaveAsProject,
+  onReturnFocus,
 }: ScratchSectionProps) {
   const storedCollapsed = usePreferencesStore(
     (state) => state.projectSwitcherCollapsedBands[PROJECT_SWITCHER_SCRATCH_BAND_KEY]
@@ -1876,6 +1907,8 @@ function ScratchSection({
                       testId="scratch-rename-input"
                       onCommit={(name) => handleRenameCommit(scratch.id, originalName, name)}
                       onCancel={closeEditor}
+                      commitOnBlur
+                      onReturnFocus={onReturnFocus}
                     />
                   );
                 }
@@ -1891,7 +1924,7 @@ function ScratchSection({
                         type="button"
                         onClick={() => onSelect?.(scratch)}
                         className={cn(
-                          "w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-md)] text-left transition-colors",
+                          "w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-sm)] text-left transition-colors",
                           scratch.isActive
                             ? "text-text-primary"
                             : "text-text-secondary hover:text-text-primary",
@@ -2017,13 +2050,15 @@ function ScratchSection({
                 className="mt-1"
                 onCommit={handleCreateCommit}
                 onCancel={closeEditor}
+                commitOnBlur={false}
+                onReturnFocus={onReturnFocus}
               />
             ) : (
               <button
                 type="button"
                 onClick={() => setEditor({ kind: "create" })}
                 className={cn(
-                  "w-full flex items-center gap-2 px-2 py-1 mt-1 rounded-[var(--radius-md)] text-left transition-colors",
+                  "w-full flex items-center gap-2 px-2 py-1 mt-1 rounded-[var(--radius-sm)] text-left transition-colors",
                   "border border-transparent text-text-secondary hover:bg-overlay-subtle hover:text-text-primary",
                   PALETTE_ROW_FOCUS_CLASS
                 )}
@@ -2051,7 +2086,7 @@ function ScratchSection({
                 // out to their text column. The middle track stands in for the
                 // tile and centres the smaller glyph inside it.
                 "w-full grid grid-cols-[0.5rem_2rem_minmax(0,1fr)] items-center gap-x-2",
-                "px-2 py-1.5 mt-1 rounded-[var(--radius-md)] border border-transparent text-left",
+                "px-2 py-1.5 mt-1 rounded-[var(--radius-sm)] border border-transparent text-left",
                 "text-xs font-medium text-status-error transition-colors hover:bg-status-error/10",
                 PALETTE_ROW_FOCUS_CLASS
               )}
@@ -2364,6 +2399,15 @@ function ProjectPaletteInner({
           e.stopPropagation();
           onSelectNext();
           break;
+        // First and last, as in every other palette. Shift+Home selects the
+        // query instead, and an empty list leaves the keys to the caret.
+        case "Home":
+        case "End":
+          if (keyBelongsToField(e) || results.length === 0 || !onHoverRow) break;
+          e.preventDefault();
+          e.stopPropagation();
+          onHoverRow(results[e.key === "Home" ? 0 : results.length - 1]!.id);
+          break;
         case "Enter":
           e.preventDefault();
           e.stopPropagation();
@@ -2413,6 +2457,7 @@ function ProjectPaletteInner({
     [
       results,
       selectedIndex,
+      onHoverRow,
       mode,
       query,
       onQueryChange,
@@ -2541,6 +2586,7 @@ function ProjectPaletteInner({
               onDeleteAll={onRequestDeleteAllScratches}
               onRename={onRenameScratch}
               onSaveAsProject={onSaveAsProject}
+              onReturnFocus={() => inputRef.current?.focus()}
             />
           </>
         )}
@@ -2552,7 +2598,7 @@ function ProjectPaletteInner({
           <div>
             {onOpenProjectSettings && (
               <ProjectCommandRow
-                icon={Settings2}
+                icon={Settings}
                 tone="manage"
                 label="Project settings…"
                 onClick={onOpenProjectSettings}
@@ -2560,7 +2606,7 @@ function ProjectPaletteInner({
             )}
             {onAddProject && (
               <ProjectCommandRow
-                icon={Plus}
+                icon={FolderOpen}
                 tone="create"
                 label="Open project…"
                 onClick={onAddProject}
@@ -2569,7 +2615,7 @@ function ProjectPaletteInner({
             )}
             {onCloneRepo && (
               <ProjectCommandRow
-                icon={Download}
+                icon={FolderDown}
                 tone="create"
                 label="Clone repository…"
                 onClick={onCloneRepo}

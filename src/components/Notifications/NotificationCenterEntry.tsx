@@ -1,12 +1,7 @@
-import { Fragment, useEffect, useRef, useState, type Ref } from "react";
+import { Fragment, useEffect, useRef, useState, type MouseEvent, type Ref } from "react";
 import {
-  CheckCircle2,
-  XCircle,
-  Info,
-  AlertTriangle,
   Clock,
   MoreHorizontal,
-  X,
   Copy,
   Bug,
   ArrowRight,
@@ -17,8 +12,10 @@ import {
   BellOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
@@ -51,10 +48,17 @@ import {
   resolveSnoozeDuration,
   type SnoozeDurationOption,
 } from "@shared/utils/snoozeTimestamps";
-import { useNotificationSource } from "./notificationSource";
+import { useNotificationDestination, useNotificationSource } from "./notificationSource";
+import { goToNotificationSource } from "./notificationNavigation";
+import {
+  NOTIFICATION_UNAVAILABLE_LABEL,
+  hasNotificationAddress,
+  type NotificationDestination,
+} from "@/lib/notificationDestination";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUIStore } from "@/store/uiStore";
 import { CountBadge } from "@/components/ui/badge";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 const snoozedUntilFormatter = new Intl.DateTimeFormat(undefined, {
   weekday: "short",
@@ -86,25 +90,23 @@ function rowLabel(entry: NotificationHistoryEntry): string {
   return message.length > 60 ? `${message.slice(0, 57)}…` : message || "notification";
 }
 
+// What a click inside the row can land on that is not the row: its recovery
+// actions, its menu and dismiss controls, and the menu's own items.
+const ROW_NESTED_CONTROL_SELECTOR =
+  'button, a, input, select, textarea, [contenteditable="true"], [role="menuitem"]';
+
 /**
- * The row's two management controls. 24x24 rather than the previous 16x16:
- * WCAG 2.2 SC 2.5.8 wants 24 CSS px, and the old pair sat 22px apart, so it
- * cleared neither the size rule nor the spacing exemption. It is also the size
- * the toast uses for this same notification content, and the dominant size for
- * row controls across the app. They had no focus ring at all before.
+ * The options trigger beside the row's dismiss: the same ghost `icon-xs` box
+ * and 14px glyph as `DismissButton`, ringed inside the row because the
+ * popover's scroller clips anything drawn outside it.
  */
-const ROW_CONTROL_CLASS = cn(
-  "h-6 w-6 shrink-0 flex items-center justify-center rounded-[var(--radius-sm)]",
-  "text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary",
-  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2",
-  "focus-visible:outline-accent-primary focus-visible:text-text-primary"
-);
+const ROW_CONTROL_CLASS = "shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2";
 
 const TYPE_CONFIG = {
-  success: { icon: CheckCircle2, className: "text-status-success" },
-  error: { icon: XCircle, className: "text-status-error" },
-  info: { icon: Info, className: "text-status-info" },
-  warning: { icon: AlertTriangle, className: "text-status-warning" },
+  success: { icon: SEVERITY_GLYPH.success, className: "text-status-success" },
+  error: { icon: SEVERITY_GLYPH.error, className: "text-status-error" },
+  info: { icon: SEVERITY_GLYPH.info, className: "text-status-info" },
+  warning: { icon: SEVERITY_GLYPH.warning, className: "text-status-warning" },
 };
 
 const yesterdayTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -224,6 +226,36 @@ export function NotificationCenterEntry({
   const showSnoozeLine = isSnoozed && snoozedUntil !== undefined;
   const metaSource = showSource ? source : null;
   const showMessage = !compact || !entry.title;
+  const destination = useNotificationDestination(entry.context);
+  const navigable = destination.kind !== "none";
+  // Another project's rows already name that project, so saying it again in
+  // the status would be noise; the menu still gives it as the reason.
+  const unavailableLabel =
+    destination.kind === "none" && destination.reason && destination.reason !== "other-project"
+      ? NOTIFICATION_UNAVAILABLE_LABEL[destination.reason]
+      : null;
+
+  // The body is the link; the controls inside it are their own targets. React
+  // bubbles a portalled menu's clicks through this row too, so a click that
+  // did not land inside the row's own DOM is not the row's.
+  const handleRowClick = (e: MouseEvent<HTMLDivElement>) => {
+    if (e.defaultPrevented) return;
+    const target = e.target;
+    if (!(target instanceof Element) || !e.currentTarget.contains(target)) return;
+    if (target.closest(ROW_NESTED_CONTROL_SELECTOR)) return;
+    // Selecting the row's text to copy it ends in a click; the record stays
+    // readable. A selection elsewhere in the app is not this gesture.
+    const selection = typeof window !== "undefined" ? window.getSelection() : null;
+    if (
+      selection &&
+      !selection.isCollapsed &&
+      selection.anchorNode &&
+      e.currentTarget.contains(selection.anchorNode)
+    ) {
+      return;
+    }
+    void goToNotificationSource(entry.context);
+  };
 
   const showChip =
     typeof threadCount === "number" && Number.isFinite(threadCount) && threadCount > 1;
@@ -253,8 +285,13 @@ export function NotificationCenterEntry({
       tabIndex={tabIndex}
       role={role}
       onFocus={onFocus}
+      onClick={navigable ? handleRowClick : undefined}
+      data-navigable={navigable ? "true" : undefined}
       className={cn(
-        "group flex items-start gap-2 pl-4 pr-3 hover:bg-overlay-subtle transition-colors",
+        "group flex items-start gap-2 pl-4 pr-3 transition-colors",
+        // A row with nowhere to go does not dress as a link. `group` stays, so
+        // hovering still reveals the row's own controls.
+        navigable ? "cursor-pointer hover:bg-overlay-subtle" : "cursor-default",
         // The rail is a preview, so it is packed tighter than the list: at the
         // list's rhythm three pinned rows took nearly half the panel before
         // anything that had just arrived.
@@ -398,16 +435,28 @@ export function NotificationCenterEntry({
             Snoozed until {formatSnoozeWake(snoozedUntil)}
           </p>
         )}
-        {metaSource && (
+        {(metaSource || unavailableLabel) && (
           <p
             data-testid="notification-source"
-            title={metaSource}
             className={cn(
-              "col-span-2 mt-0.5 min-w-0 truncate text-2xs text-text-secondary",
+              "col-span-2 mt-0.5 flex min-w-0 text-2xs text-text-secondary",
               showSnoozeLine ? "row-start-4" : "row-start-3"
             )}
           >
-            {metaSource}
+            {metaSource && (
+              <TruncatedTooltip content={metaSource} focusable={false}>
+                <span className="min-w-0 truncate">{metaSource}</span>
+              </TruncatedTooltip>
+            )}
+            {/* Kept when the name truncates, and on a grouped row that
+                carries no name: the record stays readable, and this says
+                that it no longer leads anywhere. */}
+            {unavailableLabel && (
+              <span data-testid="notification-destination-unavailable" className="shrink-0">
+                {metaSource && <span aria-hidden="true"> · </span>}
+                {unavailableLabel}
+              </span>
+            )}
           </p>
         )}
         {entry.actions && entry.actions.length > 0 && (
@@ -538,19 +587,17 @@ export function NotificationCenterEntry({
             onArchive={onArchive}
             onToggleRead={onToggleRead}
             source={entry.context?.projectId || entry.context?.worktreeId ? source : undefined}
+            destination={destination}
           />
           {onDismiss && (
-            <button
-              type="button"
+            <DismissButton
               aria-label={`Dismiss ${label}`}
               onClick={(e) => {
                 e.stopPropagation();
                 onDismiss();
               }}
-              className={ROW_CONTROL_CLASS}
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
+              className="focus-visible:-outline-offset-2"
+            />
           )}
         </div>
       </div>
@@ -567,6 +614,14 @@ async function reportNotificationOnGitHub(
 ): Promise<void> {
   const correlationId = entry.correlationId;
   if (!correlationId) return;
+  // Only the reported entry's address carries over — its eventKind and
+  // correlation identity describe that entry, not this feedback.
+  const { projectId, worktreeId, panelId } = entry.context ?? {};
+  const feedbackAddress = {
+    ...(projectId ? { projectId } : {}),
+    ...(worktreeId ? { worktreeId } : {}),
+    ...(panelId ? { panelId } : {}),
+  };
   try {
     // Lazy-load the report-flow dependencies so they stay off the boot
     // path — appClient + buildNotificationReportUrl + logger together push
@@ -622,7 +677,7 @@ async function reportNotificationOnGitHub(
             "The full notification report was copied to your clipboard — paste it into the issue body.",
           transient: true,
           priority: "high",
-          context: { eventKind: "uiFeedback" },
+          context: { eventKind: "uiFeedback", ...feedbackAddress },
         });
       } else {
         notify({
@@ -631,7 +686,7 @@ async function reportNotificationOnGitHub(
           message: "Couldn't copy the full report. Quote the correlation ID when filing the issue.",
           inboxMessage: "Couldn't copy notification report to clipboard.",
           priority: "high",
-          context: { eventKind: "uiFeedback" },
+          context: { eventKind: "uiFeedback", ...feedbackAddress },
         });
       }
     }
@@ -684,6 +739,7 @@ interface RowOptionsMenuProps {
   onToggleRead?: () => void;
   /** Where the row came from, in full — the row's own line truncates it. */
   source?: string;
+  destination: NotificationDestination;
 }
 
 function RowOptionsMenu({
@@ -700,6 +756,7 @@ function RowOptionsMenu({
   onArchive,
   onToggleRead,
   source,
+  destination,
 }: RowOptionsMenuProps) {
   const eventKind = entry.context?.eventKind;
   const hasContextActions = isNotificationEventKind(eventKind) || !!entry.context?.projectId;
@@ -711,7 +768,14 @@ function RowOptionsMenu({
   const supportsCopyCorrelationId = !!entry.correlationId;
   const supportsReportOnGitHub =
     !!entry.correlationId && (entry.type === "error" || entry.type === "warning");
-  const supportsGoToSource = !!entry.context?.panelId;
+  // Offered whenever the record names a panel or worktree, and disabled with
+  // the reason when neither is still there — a row click's twin, never a
+  // silent no-op.
+  const supportsGoToSource = hasNotificationAddress(entry.context);
+  const goToSourceUnavailable =
+    destination.kind === "none" && destination.reason
+      ? NOTIFICATION_UNAVAILABLE_LABEL[destination.reason]
+      : null;
   const hasDiagnosticsActions =
     supportsCopyCorrelationId || supportsReportOnGitHub || supportsGoToSource;
   const hasTriageActions = !!onToggleRead || !!onArchive;
@@ -728,6 +792,8 @@ function RowOptionsMenu({
   // keys only move between rows, so an Escape that handed focus to this
   // trigger (the default) left the user outside j/k.
   const openedFromRowRef = useRef(false);
+  // Set by "Go to source"; consumed by the menu's close-autofocus handler.
+  const goToSourcePendingRef = useRef(false);
   // Opened from the keyboard with nothing under the pointer, so focus goes on
   // the first duration explicitly. Radix's own open focus left it on <body>
   // for a programmatic open. One frame later so it lands after Radix's.
@@ -772,16 +838,14 @@ function RowOptionsMenu({
     void copyCorrelationId(entry.correlationId);
   };
 
+  // The one row-menu item that takes you somewhere else. It only marks the
+  // request: Radix restores focus to the trigger after the menu's exit
+  // animation, which would land after navigation had already moved focus to
+  // the destination and pull it back into the closing inbox. The menu's close
+  // handler starts the navigation instead, once there is nothing left to
+  // restore.
   const handleGoToSource = () => {
-    const panelId = entry.context?.panelId;
-    if (!panelId) return;
-    // panel.focus throws "Terminal panel no longer exists" for evicted panels.
-    // Swallow silently — the inbox keeps stale rows after the source goes
-    // away and forcing a toast on every dead-link click would be noise.
-    void actionService.dispatch("panel.focus", { panelId }).catch(() => undefined);
-    // The one row-menu item that takes you somewhere else. The inbox used to
-    // close under it only because any menu pick counted as a click outside.
-    useUIStore.getState().closeNotificationCenter();
+    goToSourcePendingRef.current = true;
   };
 
   const handleReportOnGitHub = () => {
@@ -816,9 +880,10 @@ function RowOptionsMenu({
   return (
     <DropdownMenu open={open} onOpenChange={handleOpenChange}>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
+        <Button
           ref={triggerRef}
+          variant="ghost"
+          size="icon-xs"
           aria-label={`Options for ${rowLabel}`}
           onClick={(e) => e.stopPropagation()}
           // `data-[state=open]` so the trigger reads as pressed while its menu
@@ -826,8 +891,8 @@ function RowOptionsMenu({
           // which of the two controls opened the menu.
           className={cn(ROW_CONTROL_CLASS, "data-[state=open]:bg-overlay-raised")}
         >
-          <MoreHorizontal className="h-3.5 w-3.5" />
-        </button>
+          <MoreHorizontal />
+        </Button>
       </DropdownMenuTrigger>
       {/* Bounded on both sides, matching the panel-header and docked-tab menus:
           a floor so short items do not collapse it, and a ceiling so it cannot
@@ -839,6 +904,20 @@ function RowOptionsMenu({
         className="min-w-[200px] max-w-[280px]"
         ref={menuContentRef}
         onCloseAutoFocus={(event) => {
+          if (goToSourcePendingRef.current) {
+            goToSourcePendingRef.current = false;
+            openedFromRowRef.current = false;
+            event.preventDefault();
+            const row = triggerRef.current?.closest('[role="listitem"]');
+            void goToNotificationSource(entry.context).then((arrived) => {
+              // A source gone since the menu opened leaves the inbox open, and
+              // the row, which now says why, takes focus back.
+              if (!arrived && row instanceof HTMLElement && row.isConnected) {
+                row.focus({ preventScroll: true });
+              }
+            });
+            return;
+          }
           if (!openedFromRowRef.current) return;
           openedFromRowRef.current = false;
           const row = triggerRef.current?.closest('[role="listitem"]');
@@ -919,9 +998,20 @@ function RowOptionsMenu({
               </DropdownMenuItem>
             )}
             {supportsGoToSource && (
-              <DropdownMenuItem onSelect={handleGoToSource}>
+              <DropdownMenuItem
+                onSelect={handleGoToSource}
+                disabled={!!goToSourceUnavailable}
+                aria-label={
+                  goToSourceUnavailable
+                    ? `Go to source, ${goToSourceUnavailable.toLowerCase()}`
+                    : undefined
+                }
+              >
                 <ArrowRight data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Go to source
+                {goToSourceUnavailable && (
+                  <DropdownMenuMeta>{goToSourceUnavailable}</DropdownMenuMeta>
+                )}
               </DropdownMenuItem>
             )}
             {supportsReportOnGitHub && (

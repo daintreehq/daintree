@@ -35,10 +35,13 @@ describe("AgentSelectorDropdown", () => {
     const input = screen.getByRole("combobox");
     const cursor = () => document.getElementById(input.getAttribute("aria-activedescendant")!);
 
+    fireEvent.keyDown(input, { key: "End" });
+    // End lands on the last row, and Down from there goes round to the first.
+    expect(cursor()?.id).toBe("agent-selector-item-codex");
     fireEvent.keyDown(input, { key: "ArrowDown" });
-    fireEvent.keyDown(input, { key: "ArrowDown" });
-    fireEvent.keyDown(input, { key: "ArrowDown" });
-    // Clamped at the end; exactly one option is the cursor.
+    expect(cursor()?.id).not.toBe("agent-selector-item-codex");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    // Exactly one option is the cursor.
     expect(cursor()?.id).toBe("agent-selector-item-codex");
     const options = screen.getAllByRole("option");
     expect(options.filter((o) => o.getAttribute("aria-selected") === "true")).toHaveLength(1);

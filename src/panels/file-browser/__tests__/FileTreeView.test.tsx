@@ -6,6 +6,7 @@ import type { ForwardedRef, ReactNode } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { ContextMenuItem } from "@/components/ui/context-menu";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { FILE_DRAG_MIME, decodeFileDragPaths } from "@/lib/fileDragPayload";
 import { FileTreeView } from "../FileTreeView";
 import type { FlatTreeRow } from "../fileBrowserTree";
@@ -120,7 +121,9 @@ function renderTree(overrides: Partial<Parameters<typeof FileTreeView>[0]> = {})
       basePath={BASE_PATH}
       label="Files"
       {...overrides}
-    />
+    />,
+    // The app root supplies the TooltipProvider; symlink rows carry a tooltip.
+    { wrapper: TooltipProvider }
   );
   return { onSelect, ...utils };
 }

@@ -35,7 +35,6 @@ import {
   diffChipField,
   terminalChipField,
   selectionChipField,
-  formatFileSize,
   chipPendingDeleteField,
   setChipPendingDelete,
   createChipBackspaceKeymap,
@@ -1584,25 +1583,6 @@ describe("selectionChipField", () => {
     });
     const chipState = state.field(selectionChipField);
     expect(chipState.tokens).toHaveLength(0);
-  });
-});
-
-describe("formatFileSize", () => {
-  it("formats bytes", () => {
-    expect(formatFileSize(0)).toBe("0 B");
-    expect(formatFileSize(512)).toBe("512 B");
-    expect(formatFileSize(1023)).toBe("1023 B");
-  });
-
-  it("formats kilobytes", () => {
-    expect(formatFileSize(1024)).toBe("1.0 KB");
-    expect(formatFileSize(2048)).toBe("2.0 KB");
-    expect(formatFileSize(1536)).toBe("1.5 KB");
-  });
-
-  it("formats megabytes", () => {
-    expect(formatFileSize(1024 * 1024)).toBe("1.0 MB");
-    expect(formatFileSize(5.5 * 1024 * 1024)).toBe("5.5 MB");
   });
 });
 

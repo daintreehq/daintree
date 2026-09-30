@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import {
-  AlertCircle,
+  XCircle,
   AlertTriangle,
   CheckSquare,
   Clock,
@@ -50,7 +50,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { actionService } from "@/services/ActionService";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { deleteSavedFleetWithUndo } from "./deleteSavedFleet";
 import { KbdChord } from "@/components/ui/Kbd";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import {
@@ -67,6 +67,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { pluralize } from "@/lib/pluralize";
 
 interface RunCountSegment {
   label: string;
@@ -139,7 +140,7 @@ function FleetRunStatusLine({
                 about; the words stay on a text token because the danger
                 colour sits under 4.5:1 on the amber fill. */}
             {segment.tone === "error" && (
-              <AlertCircle
+              <XCircle
                 className="mr-1 inline-block h-3 w-3 align-[-2px] text-status-error"
                 aria-hidden="true"
               />
@@ -162,6 +163,22 @@ function FleetRunStatusLine({
     </span>
   );
 }
+
+interface PresetCounts {
+  waitingCurrent: number;
+  waitingAll: number;
+  workingCurrent: number;
+  workingAll: number;
+  eligibleCurrent: number;
+}
+
+const EMPTY_PRESET_COUNTS: PresetCounts = {
+  waitingCurrent: 0,
+  waitingAll: 0,
+  workingCurrent: 0,
+  workingAll: 0,
+  eligibleCurrent: 0,
+};
 
 export function FleetArmingRibbon(): ReactElement | null {
   const armedCount = useFleetArmingStore((s) => s.armedIds.size);
@@ -187,11 +204,10 @@ export function FleetArmingRibbon(): ReactElement | null {
   const runStatus = deriveRunStatus(run, progressActive);
 
   const [popoverOpen, setPopoverOpen] = useState(false);
-  // The selection menu is controlled so a fleet-delete request can close it
-  // before the confirm dialog opens — keeping the modal dropdown layer from
-  // colliding with the dialog's focus trap (#8023, lesson #2828).
+  // The selection menu is controlled so a request for one of the fleet dialogs
+  // can close it before the dialog opens — keeping the modal dropdown layer
+  // from colliding with the dialog's focus trap (#8023, lesson #2828).
   const [selectionMenuOpen, setSelectionMenuOpen] = useState(false);
-  const [pendingDeleteFleetId, setPendingDeleteFleetId] = useState<string | null>(null);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [manageDialogOpen, setManageDialogOpen] = useState(false);
   // Set when the menu closes to hand off to one of the fleet dialogs. The
@@ -213,17 +229,6 @@ export function FleetArmingRibbon(): ReactElement | null {
       setPopoverOpen(false);
     }
   }, [armedCount, popoverOpen]);
-
-  // The fleet-delete confirm lives with the other fleet dialogs, outside the
-  // ribbon's armedCount>=2 branch, so a pane closing mid-confirm doesn't
-  // cancel the cleanup. Drop it only if the scope itself disappears (deleted
-  // from another window) so the title can't show a phantom name.
-  useEffect(() => {
-    if (pendingDeleteFleetId === null) return;
-    if (!savedScopes.some((s) => s.id === pendingDeleteFleetId)) {
-      setPendingDeleteFleetId(null);
-    }
-  }, [pendingDeleteFleetId, savedScopes]);
 
   // Escape stack: confirmation cancel is owned here so a pending confirm
   // absorbs bare Escape before it reaches the targets. The armed-list
@@ -266,7 +271,7 @@ export function FleetArmingRibbon(): ReactElement | null {
     if (armedCount === 0 && lastAnnouncedCount.current > 0) {
       announce("Fleet disarmed");
     } else if (armedCount > 0) {
-      announce(`${armedCount} ${armedCount === 1 ? "terminal" : "terminals"} in fleet`);
+      announce(`${pluralize(armedCount, "terminal")} in fleet`);
     }
     lastAnnouncedCount.current = armedCount;
   }, [armedCount]);
@@ -324,7 +329,7 @@ export function FleetArmingRibbon(): ReactElement | null {
     armedCount,
     exitFleet,
     pending,
-    popoverOpen || pendingDeleteFleetId !== null || saveDialogOpen || manageDialogOpen
+    popoverOpen || saveDialogOpen || manageDialogOpen
   );
 
   useFleetRibbonFlashes(ribbonRef);
@@ -346,16 +351,20 @@ export function FleetArmingRibbon(): ReactElement | null {
     };
   }, []);
 
-  const handleRequestDeleteFleet = useCallback((id: string) => {
-    // Close the selection menu first so its modal layer tears down before
-    // the confirm dialog mounts; React 19 batches both state updates.
-    dialogHandoffRef.current = true;
-    setSelectionMenuOpen(false);
-    setPendingDeleteFleetId(id);
-  }, []);
+  // No dialog to hand off to: the menu closes, returning focus to its trigger,
+  // and the deletion offers its own Undo.
+  const handleRequestDeleteFleet = useCallback(
+    (id: string) => {
+      const scope = savedScopes.find((s) => s.id === id);
+      setSelectionMenuOpen(false);
+      if (scope) void deleteSavedFleetWithUndo(scope);
+    },
+    [savedScopes]
+  );
 
   const handleRequestSaveFleet = useCallback(() => {
-    // Same hand-off as delete: the menu's modal layer goes before the dialog mounts.
+    // Close the selection menu first so its modal layer tears down before the
+    // dialog mounts; React 19 batches both state updates.
     dialogHandoffRef.current = true;
     setSelectionMenuOpen(false);
     setSaveDialogOpen(true);
@@ -366,11 +375,6 @@ export function FleetArmingRibbon(): ReactElement | null {
     setSelectionMenuOpen(false);
     setManageDialogOpen(true);
   }, []);
-
-  const pendingDeleteScope =
-    pendingDeleteFleetId !== null
-      ? (savedScopes.find((s) => s.id === pendingDeleteFleetId) ?? null)
-      : null;
 
   const setPreviewArmedIds = useFleetArmingStore((s) => s.setPreviewArmedIds);
   const clearPreviewArmedIds = useFleetArmingStore((s) => s.clearPreviewArmedIds);
@@ -410,13 +414,24 @@ export function FleetArmingRibbon(): ReactElement | null {
   );
 
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId) ?? null;
-  // Panel-store re-render triggers keep the selection-menu preset counts
-  // fresh, but only while the ribbon is actually visible — when it isn't,
-  // return a constant so agent ticks don't re-render the hidden ribbon.
-  // Hook order stays stable; only the subscription payload is gated.
+  // Selection-menu preset counts, derived inside the selector so the ribbon
+  // re-renders only when a count changes rather than on every panel-map
+  // write (status flushes land up to once per frame). Gated on visibility so
+  // the five O(panels) scans don't run for a hidden ribbon.
   const ribbonActive = armedCount >= 2;
-  usePanelStore((s) => (ribbonActive ? s.panelIds : null));
-  usePanelStore((s) => (ribbonActive ? s.panelsById : null));
+  const presetCounts = usePanelStore(
+    useShallow((s): PresetCounts =>
+      ribbonActive
+        ? {
+            waitingCurrent: computeArmByStateIds("waiting", "current", activeWorktreeId, s).length,
+            waitingAll: computeArmByStateIds("waiting", "all", activeWorktreeId, s).length,
+            workingCurrent: computeArmByStateIds("working", "current", activeWorktreeId, s).length,
+            workingAll: computeArmByStateIds("working", "all", activeWorktreeId, s).length,
+            eligibleCurrent: collectEligibleIds("current", activeWorktreeId, s).length,
+          }
+        : EMPTY_PRESET_COUNTS
+    )
+  );
 
   // Bare Esc on the ribbon → exit the fleet. Scoped to ribbon-owned
   // controls (the bar's own keydown handler) so terminals' Esc handling
@@ -426,20 +441,14 @@ export function FleetArmingRibbon(): ReactElement | null {
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       if (e.key !== "Escape") return;
       if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-      if (
-        popoverOpen ||
-        pending !== null ||
-        pendingDeleteFleetId !== null ||
-        saveDialogOpen ||
-        manageDialogOpen
-      ) {
+      if (popoverOpen || pending !== null || saveDialogOpen || manageDialogOpen) {
         return;
       }
       e.preventDefault();
       e.stopPropagation();
       exitFleet();
     },
-    [exitFleet, popoverOpen, pending, pendingDeleteFleetId, saveDialogOpen, manageDialogOpen]
+    [exitFleet, popoverOpen, pending, saveDialogOpen, manageDialogOpen]
   );
 
   // Render confirmation before the armedCount<2 null guard so single-agent
@@ -448,7 +457,7 @@ export function FleetArmingRibbon(): ReactElement | null {
   // doesn't strand a live Enter listener with no visible UI. The failure
   // banner is rendered alongside so a prior partial-failure surface stays
   // visible while the user is in the confirm flow.
-  // The fleet dialogs (save, manage, delete confirm), rendered first in a
+  // The fleet dialogs (save, manage), rendered first in a
   // fragment from every branch below — the same tree position, so they keep
   // their state — including the one where the ribbon
   // itself is gone: a pane closing while someone names a fleet must not take
@@ -465,25 +474,6 @@ export function FleetArmingRibbon(): ReactElement | null {
       <SavedFleetsDialog
         isOpen={manageDialogOpen}
         onClose={() => setManageDialogOpen(false)}
-        restoreFocusTo={selectionTriggerRef}
-      />
-      <ConfirmDialog
-        isOpen={pendingDeleteFleetId !== null}
-        variant="destructive"
-        title={`Delete '${pendingDeleteScope?.name ?? "fleet"}'?`}
-        description="This removes the saved fleet. The terminals it points to are not affected."
-        confirmLabel="Delete fleet"
-        onConfirm={() => {
-          if (pendingDeleteFleetId !== null) {
-            void actionService.dispatch(
-              "fleet.deleteNamedFleet",
-              { id: pendingDeleteFleetId },
-              { source: "user" }
-            );
-          }
-          setPendingDeleteFleetId(null);
-        }}
-        onClose={() => setPendingDeleteFleetId(null)}
         restoreFocusTo={selectionTriggerRef}
       />
     </>
@@ -534,16 +524,6 @@ export function FleetArmingRibbon(): ReactElement | null {
   if (armedCount < 2) {
     return <>{fleetDialogs}</>;
   }
-
-  // Below the early returns so the five O(panels) scans and the menu JSX
-  // only run while the ribbon is actually visible.
-  const presetCounts = {
-    waitingCurrent: computeArmByStateIds("waiting", "current", activeWorktreeId).length,
-    waitingAll: computeArmByStateIds("waiting", "all", activeWorktreeId).length,
-    workingCurrent: computeArmByStateIds("working", "current", activeWorktreeId).length,
-    workingAll: computeArmByStateIds("working", "all", activeWorktreeId).length,
-    eligibleCurrent: collectEligibleIds("current", activeWorktreeId).length,
-  };
 
   const selectionMenuItems = (
     <>
@@ -713,7 +693,7 @@ export function FleetArmingRibbon(): ReactElement | null {
                   {progressFailed > 0 && (
                     <span className="font-medium text-text-primary">
                       {" · "}
-                      <AlertCircle
+                      <XCircle
                         className="mr-1 inline-block h-3 w-3 align-[-2px] text-status-error"
                         aria-hidden="true"
                       />

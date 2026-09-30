@@ -1,4 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo, type ReactNode } from "react";
+import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ChevronRight, Coffee, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { projectClient, systemClient } from "@/clients";
@@ -26,6 +29,7 @@ import {
   formatMemory,
   formatProcessLabel,
 } from "./ProjectResourceBadge.utils";
+import { pluralize, pluralNoun } from "@/lib/pluralize";
 
 const MAX_SAMPLES = 12;
 const BADGE_POLL_MS = 10_000;
@@ -37,13 +41,6 @@ const FRESHNESS_TICK_MS = 1_000;
 const STALE_AFTER_SEC = 10;
 /** Three badge polls: past this, the fallback app-memory reading has stalled. */
 const APP_MEMORY_FRESH_MS = BADGE_POLL_MS * 3;
-
-function formatUptime(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
 
 /**
  * The footer mark, in the app's existing activity vocabulary: filled means work
@@ -87,13 +84,23 @@ function settled<T>(result: PromiseSettledResult<T>, what: string): T | null {
   return null;
 }
 
-/** One label/value line. Values are tabular so a column of them lines up. */
-function MemoryRow({ label, value, title }: { label: string; value: string; title?: string }) {
+/**
+ * One label/value line. Values are tabular so a column of them lines up. A
+ * `hint` explains what the label counts; without one, a clipped label reveals
+ * itself.
+ */
+function MemoryRow({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  const text = <span className="truncate text-text-secondary">{label}</span>;
   return (
     <div className="flex items-baseline justify-between gap-3 text-xs">
-      <span className="truncate text-text-secondary" title={title}>
-        {label}
-      </span>
+      {hint ? (
+        <Tooltip>
+          <TooltipTrigger asChild>{text}</TooltipTrigger>
+          <TooltipContent side="left">{hint}</TooltipContent>
+        </Tooltip>
+      ) : (
+        <TruncatedTooltip content={label}>{text}</TruncatedTooltip>
+      )}
       <span className="shrink-0 tabular-nums text-text-primary">{value}</span>
     </div>
   );
@@ -157,7 +164,7 @@ function MemorySummary({
           the start reads "Unavailable" here rather than dropping the line. */}
       <MemoryRow
         label="Terminal programs"
-        title="Dev servers, agents and tools your terminals started"
+        hint="Dev servers, agents and tools your terminals started"
         value={workloads !== null ? formatMemory(workloads.totalMemoryMb) : "Unavailable"}
       />
       {workloadNote !== null && (
@@ -230,12 +237,7 @@ function ProjectBreakdown({
       <SectionLabel>Terminal memory by project</SectionLabel>
       <div id="resource-project-rows" className="space-y-1">
         {visible.map((row) => (
-          <MemoryRow
-            key={row.key}
-            label={row.name}
-            title={row.name}
-            value={formatMemory(row.memoryMb)}
-          />
+          <MemoryRow key={row.key} label={row.name} value={formatMemory(row.memoryMb)} />
         ))}
       </div>
       {folded && (
@@ -283,12 +285,14 @@ function ProcessTable({ metrics }: { metrics: ProcessMetricEntry[] }) {
               key={proc.pid}
               className="flex items-baseline justify-between gap-2 text-2xs tabular-nums"
             >
-              <span
-                className="min-w-0 truncate text-text-secondary"
-                title={`${label} (${proc.pid})`}
-              >
-                {label}
-              </span>
+              {/* Always on offer, not only when clipped: the PID is what
+                  matches the row to the OS's own process list. */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="min-w-0 truncate text-text-secondary">{label}</span>
+                </TooltipTrigger>
+                <TooltipContent side="left">{`${label} (${proc.pid})`}</TooltipContent>
+              </Tooltip>
               <span className="flex shrink-0 gap-2 text-text-secondary">
                 <span>{formatMemory(proc.memoryMB)}</span>
                 <span className="w-10 text-right">{proc.cpuPercent}%</span>
@@ -369,7 +373,11 @@ function DiagnosticsSection({
             />
             <MemoryRow
               label="Uptime"
-              value={diagnosticsInfo ? formatUptime(diagnosticsInfo.uptimeSeconds) : "Unavailable"}
+              value={
+                diagnosticsInfo
+                  ? formatElapsedDuration(diagnosticsInfo.uptimeSeconds * 1000)
+                  : "Unavailable"
+              }
             />
             {diagnosticsInfo && diagnosticsInfo.eventLoopP99Ms > 50 && (
               <MemoryRow
@@ -751,7 +759,7 @@ export function ProjectResourceBadge({
   // the mark right beside it. Both now come from the same verdict.
   const readoutLabel =
     stats.runningProjects > 0
-      ? `${stats.runningProjects} project${stats.runningProjects !== 1 ? "s" : ""} active`
+      ? `${pluralize(stats.runningProjects, "project")} active`
       : isWorking
         ? "Working"
         : "Idle";
@@ -815,7 +823,7 @@ export function ProjectResourceBadge({
                   <>
                     {stats.runningProjects}
                     <span className="@max-[280px]/footer:hidden">
-                      {` project${stats.runningProjects !== 1 ? "s" : ""}`}
+                      {` ${pluralNoun(stats.runningProjects, "project")}`}
                     </span>
                     {" active"}
                   </>

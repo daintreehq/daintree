@@ -61,6 +61,66 @@ export type HostGitFactory = (cwd: string) => Promise<SimpleGit>;
 /** Changed-file provider for `status` — injectable so tests skip the real git shell-out. */
 export type HostGitChangesProvider = (worktreePath: string) => Promise<WorktreeChanges>;
 
+const defaultChangesProvider: HostGitChangesProvider = (worktreePath) =>
+  getWorktreeChangesWithStats(worktreePath, true);
+
+interface StatusReadLane {
+  running: Promise<WorktreeChanges> | null;
+  queued: Promise<WorktreeChanges> | null;
+}
+
+// Status reads per provider and worktree, shared across every plugin's
+// PluginHostGit. A caller never joins a read that is already running — that
+// read may have sampled the worktree before the caller's own earlier write —
+// only the one queued behind it, which starts after every caller sharing it
+// has arrived. A burst of concurrent calls therefore costs at most two reads,
+// and each caller sees the worktree as of some point after its call.
+const statusReadLanes = new WeakMap<HostGitChangesProvider, Map<string, StatusReadLane>>();
+
+function readChangesShared(
+  provider: HostGitChangesProvider,
+  worktreePath: string
+): Promise<WorktreeChanges> {
+  let byPath = statusReadLanes.get(provider);
+  if (!byPath) {
+    byPath = new Map();
+    statusReadLanes.set(provider, byPath);
+  }
+  let lane = byPath.get(worktreePath);
+  if (!lane) {
+    lane = { running: null, queued: null };
+    byPath.set(worktreePath, lane);
+  }
+  const current = lane;
+
+  const start = (): Promise<WorktreeChanges> => {
+    const promise = provider(worktreePath);
+    current.running = promise;
+    const release = () => {
+      if (current.running === promise) current.running = null;
+      if (!current.running && !current.queued && byPath.get(worktreePath) === current) {
+        byPath.delete(worktreePath);
+      }
+    };
+    promise.then(release, release);
+    return promise;
+  };
+
+  if (current.queued) return current.queued;
+  if (!current.running) return start();
+
+  const settled = current.running.then(
+    () => undefined,
+    () => undefined
+  );
+  const queued = settled.then(() => {
+    current.queued = null;
+    return start();
+  });
+  current.queued = queued;
+  return queued;
+}
+
 /**
  * Build the contained `host.git` operations for one worktree. `worktreePath`
  * has already been realpath-contained to the plugin's `scopes.fs.allowedPaths`
@@ -71,18 +131,19 @@ export class PluginHostGit {
   constructor(
     private readonly pluginId: string,
     private readonly gitFactory: HostGitFactory = createHardenedGit,
-    private readonly changesProvider: HostGitChangesProvider = (worktreePath) =>
-      getWorktreeChangesWithStats(worktreePath, true)
+    private readonly changesProvider: HostGitChangesProvider = defaultChangesProvider
   ) {}
 
   /**
    * Changed-file status, projected through the same {@link toPluginWorktreeStatus}
    * collapse the worktree snapshot uses so plugins see one status vocabulary.
-   * Reads via the shared `getWorktreeChangesWithStats` (cached, hardened).
+   * Reads via the shared `getWorktreeChangesWithStats` (hardened). Concurrent
+   * calls for the same worktree, from any plugin, share reads, but every read a
+   * caller receives started after that caller asked.
    */
   async status(worktreePath: string, signal?: AbortSignal): Promise<PluginGitStatus> {
     signal?.throwIfAborted();
-    const changes = await this.changesProvider(worktreePath);
+    const changes = await readChangesShared(this.changesProvider, worktreePath);
     signal?.throwIfAborted();
     const projected = toPluginWorktreeStatus(changes);
     return {

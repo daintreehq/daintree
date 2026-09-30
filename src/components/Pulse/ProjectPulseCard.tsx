@@ -5,11 +5,10 @@ import type { ForgeProjectHealthPayload } from "@shared/types/ipc/forge";
 import { usePulseStore, useProjectStore, PULSE_MAX_RETRIES } from "@/store";
 import { cn } from "@/lib/utils";
 import {
-  AlertCircle,
+  XCircle,
   RefreshCw,
   GitBranch,
   CheckCircle2,
-  XCircle,
   Clock,
   CircleMinus,
   Tag,
@@ -34,7 +33,9 @@ import { useProjectHealth } from "@/hooks/useProjectHealth";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { systemClient } from "@/clients/systemClient";
 import { formatTimeSince } from "@/components/Layout/FreshnessUtils";
+import { formatTimeAgo } from "@/utils/timeAgo";
 import { formatCompactCount, formatCountExact } from "@/lib/formatCount";
+import { pluralize } from "@/lib/pluralize";
 
 // Collapses paired window.focus + visibilitychange events that fire together
 // on restore-from-minimize. Short enough that legitimate user actions
@@ -85,17 +86,6 @@ function ciStatusLabel(status: ForgeProjectHealthPayload["ciStatus"]): string {
     default:
       return "no CI";
   }
-}
-
-function relativeTime(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-  if (days === 0) return "today";
-  if (days === 1) return "1d ago";
-  if (days < 30) return `${days}d ago`;
-  const months = Math.floor(days / 30);
-  if (months === 1) return "1mo ago";
-  return `${months}mo ago`;
 }
 
 interface HealthChipProps {
@@ -207,7 +197,7 @@ function HealthSignals({
       {health.latestRelease && (
         <HealthChip
           icon={<Tag className="w-3.5 h-3.5 text-current" />}
-          label={`${health.latestRelease.tagName}${health.latestRelease.publishedAt ? ` (${relativeTime(health.latestRelease.publishedAt)})` : ""}`}
+          label={`${health.latestRelease.tagName}${health.latestRelease.publishedAt ? ` (${formatTimeAgo(health.latestRelease.publishedAt)})` : ""}`}
           onClick={() => openUrl(health.latestRelease!.url)}
           tone="accent"
         />
@@ -215,7 +205,7 @@ function HealthSignals({
       {health.securityAlerts.visible && health.securityAlerts.count > 0 && (
         <HealthChip
           icon={<ShieldAlert className="w-3.5 h-3.5 text-current" />}
-          label={`${health.securityAlerts.count} alert${health.securityAlerts.count !== 1 ? "s" : ""}`}
+          label={`${pluralize(health.securityAlerts.count, "alert")}`}
           onClick={() => openUrl("/security/dependabot")}
           tone="warning"
         />
@@ -544,7 +534,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       >
         <div className="flex flex-col gap-2 w-full">
           <div className="flex items-center gap-2 text-text-primary" role="alert">
-            <AlertCircle className="w-4 h-4 text-status-error" aria-hidden="true" />
+            <XCircle className="w-4 h-4 text-status-error" aria-hidden="true" />
             <span className="text-xs">{error}</span>
             <Button
               variant="ghost"
@@ -564,7 +554,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             >
               <Spinner size="xs" />
               <span className="text-xs">
-                Retrying ({retryCount}/{PULSE_MAX_RETRIES})...
+                Retrying ({retryCount}/{PULSE_MAX_RETRIES})…
               </span>
             </div>
           )}

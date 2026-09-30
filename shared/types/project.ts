@@ -281,6 +281,12 @@ export interface PanelSnapshot {
   /** Process-level flags captured at launch time, persisted for session resume */
   agentLaunchFlags?: string[];
   /**
+   * The flags the `agent.launch` caller passed verbatim (#13046) — the tail of
+   * `agentLaunchFlags`, recorded so restart/restore/recovery can rebuild or
+   * reconcile the settings-derived part and re-append these untouched.
+   */
+  callerLaunchFlags?: string[];
+  /**
    * Caller-resolved launch env (preset/recipe/caller layers) captured at launch,
    * persisted so a restored session replays the same provider environment it
    * launched with rather than re-deriving it from a preset that may no longer
@@ -575,7 +581,7 @@ export function getAutoAssign(recipe: TerminalRecipe): RecipeAutoAssign {
 export interface RunCommand {
   /** Unique identifier for this command */
   id: string;
-  /** Display name (e.g. "Dev Server" or "Run Tests") */
+  /** Display name (e.g. "Dev server" or "Run Tests") */
   name: string;
   /** Command to execute (e.g. "npm run dev" or "php artisan test") */
   command: string;

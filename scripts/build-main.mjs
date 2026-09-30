@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { pluginSdkRuntimeBuildConfig } from "./lib/plugin-sdk-runtime.mjs";
+import { MAIN_BUNDLE_EXTERNAL, mainBundleStubsPlugin } from "./lib/main-bundle.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
@@ -13,17 +14,7 @@ const isProd = process.env.NODE_ENV === "production";
 const buildReadyFile = path.join(root, "dist-electron/.build-ready.js");
 let buildReadyTimer = null;
 
-const external = [
-  "electron",
-  "@parcel/watcher", // Native N-API module (FSEvents)
-  "node-pty", // Native module
-  "better-sqlite3", // Native module
-  "win-job-object", // Native module — Windows-only help-session Job Object (#7526)
-  "posix-pty-reaper", // Native module — macOS/Linux help-session PTY supervisor (#8769)
-  "copytree", // Externalize to preserve file structure (config files)
-  "onnxruntime-node", // Native module — ONNX runtime for Silero VAD (#9177)
-  "avr-vad", // Silero VAD wrapper; loads its bundled .onnx via fs from its own dir (#9177)
-];
+const external = MAIN_BUNDLE_EXTERNAL;
 
 const common = {
   bundle: true,
@@ -725,7 +716,7 @@ async function run() {
     format: "esm",
     splitting: true, // Share chunks between main/hosts/plugins
     chunkNames: "electron/chunks/[name]-[hash]",
-    plugins: isWatch ? [createReadyMarkerPlugin()] : [],
+    plugins: [mainBundleStubsPlugin(), ...(isWatch ? [createReadyMarkerPlugin()] : [])],
     banner: {
       js: `import { createRequire } from 'module'; const require = createRequire(import.meta.url);`,
     },

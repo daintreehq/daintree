@@ -25,7 +25,7 @@ function formatApiErrorText(rawText: string): string {
   }
 
   if (message.length > MAX_CHARS) {
-    return message.slice(0, MAX_CHARS) + "...";
+    return message.slice(0, MAX_CHARS) + "…";
   }
   return message;
 }

@@ -6,7 +6,7 @@ import type { WorktreeState } from "@shared/types";
 import { useActiveWorktreeSync } from "../useActiveWorktreeSync";
 
 const mocks = vi.hoisted(() => ({
-  useWorktrees: vi.fn(),
+  useWorktrees: vi.fn<() => { worktrees: Array<{ id: string }>; isInitialized: boolean }>(),
   selectionState: {
     activeWorktreeId: null as string | null,
     selectWorktree: vi.fn(),
@@ -21,8 +21,16 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@/hooks", () => ({
-  useWorktrees: () => mocks.useWorktrees(),
+// The hook reads the per-view worktree store through selectors; `useWorktrees`
+// stays the fixture's shape and is folded into the store state here.
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (
+    selector: (state: { worktrees: Map<string, unknown>; isInitialized: boolean }) => unknown
+  ): unknown => {
+    const { worktrees, isInitialized } = mocks.useWorktrees();
+    return selector({ worktrees: new Map(worktrees.map((w) => [w.id, w])), isInitialized });
+  },
+  useWorktreeStoreApi: () => ({ subscribe: () => () => {} }),
 }));
 
 vi.mock("@/store/worktreeStore", () => ({
@@ -168,8 +176,12 @@ describe("useActiveWorktreeSync on a worktree-less workspace", () => {
     mocks.useWorktrees.mockReturnValue({ worktrees: [], isInitialized: true });
 
     const { rerender } = renderHook(() => useActiveWorktreeSync());
-    // A distinct array, so the dep list changes and the effect genuinely reruns
-    // rather than being skipped.
+    // A worktree appearing and going again changes the effect's inputs, so it
+    // genuinely re-runs against the empty list rather than being skipped.
+    // (`selectWorktree` is a mock, so the selection stays null throughout.)
+    mocks.useWorktrees.mockReturnValue({ worktrees: [mainWorktree], isInitialized: true });
+    rerender();
+    expect(mocks.selectionState.selectWorktree).toHaveBeenCalledWith(mainWorktree.id);
     mocks.useWorktrees.mockReturnValue({ worktrees: [], isInitialized: true });
     rerender();
 

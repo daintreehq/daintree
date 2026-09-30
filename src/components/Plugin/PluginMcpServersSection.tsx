@@ -4,7 +4,7 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { InlineError } from "@/components/ui/field";
 import { Callout } from "@/components/ui/Callout";
-import { ChevronRight, RefreshCw } from "lucide-react";
+import { ChevronRight, RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
@@ -318,7 +318,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
                   disabled={isRestarting || isSpawning}
                   className="shrink-0"
                 >
-                  <SpinningIcon icon={RefreshCw} active={isRestarting} className="w-3.5 h-3.5" />
+                  <SpinningIcon icon={RotateCw} active={isRestarting} className="w-3.5 h-3.5" />
                   {status === "not-started" ? "Start server" : "Restart server"}
                 </Button>
               </div>
@@ -378,14 +378,14 @@ function StderrView({ state }: { state: StderrState | undefined }) {
   }
   const result = state.result;
   if (!result || result.lines.length === 0) {
-    return <p className="text-2xs text-text-secondary">No output captured.</p>;
+    return <p className="text-2xs text-text-secondary">No output captured</p>;
   }
   const hidden = result.totalLines - result.lines.length;
   return (
     <div className="space-y-1.5">
       {hidden > 0 && (
         <p className="text-3xs text-text-secondary">
-          Showing the most recent {result.lines.length} of {result.totalLines} lines.
+          Showing the most recent {result.lines.length} of {result.totalLines} lines
         </p>
       )}
       <pre className="max-h-48 overflow-auto rounded-[var(--radius-md)] bg-surface-canvas border border-border-default p-2 font-mono text-2xs leading-relaxed text-text-primary whitespace-pre-wrap break-words select-text">

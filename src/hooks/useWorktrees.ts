@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { WorktreeSnapshot, WorktreeState } from "@shared/types";
 import { compareWorktreeNames } from "@/lib/worktreeFilters";
 import { isValidPastTimestamp } from "@/utils/timestamps";
@@ -17,12 +18,23 @@ export interface UseWorktreesReturn {
   setActive: (id: string) => void;
 }
 
+// Store snapshots are immutable and replaced per worktree on change, so caching
+// by snapshot identity keeps every untouched worktree's normalized object
+// stable across Map updates — sidebar cards and other per-worktree consumers
+// then see unchanged props and skip re-rendering.
+const normalizedBySnapshot = new WeakMap<WorktreeSnapshot, WorktreeState>();
+
 function normalizeSnapshot(s: WorktreeSnapshot): WorktreeState {
-  return {
-    ...s,
-    worktreeChanges: s.worktreeChanges ?? null,
-    lastActivityTimestamp: s.lastActivityTimestamp ?? null,
-  } as WorktreeState;
+  let normalized = normalizedBySnapshot.get(s);
+  if (!normalized) {
+    normalized = {
+      ...s,
+      worktreeChanges: s.worktreeChanges ?? null,
+      lastActivityTimestamp: s.lastActivityTimestamp ?? null,
+    } as WorktreeState;
+    normalizedBySnapshot.set(s, normalized);
+  }
+  return normalized;
 }
 
 // Keyed by store Map identity so the normalize-clone + sort happens once per
@@ -63,6 +75,20 @@ function getNormalized(worktreeMap: Map<string, WorktreeSnapshot>): {
     normalizedCache.set(worktreeMap, cached);
   }
   return cached;
+}
+
+/** The normalized view of a store worktree Map, shared with `useWorktrees`. */
+export function getNormalizedWorktreeMap(
+  worktreeMap: Map<string, WorktreeSnapshot>
+): Map<string, WorktreeState> {
+  return getNormalized(worktreeMap).normalizedMap;
+}
+
+/** The normalized, sorted list of a store worktree Map — `useWorktrees().worktrees`. */
+export function getNormalizedWorktreeList(
+  worktreeMap: Map<string, WorktreeSnapshot>
+): WorktreeState[] {
+  return getNormalized(worktreeMap).worktrees;
 }
 
 // Stable sentinel for gated consumers — getNormalized caches per Map identity,
@@ -108,4 +134,19 @@ export function useWorktrees(options?: { enabled?: boolean }): UseWorktreesRetur
 export function useWorktree(worktreeId: string): WorktreeState | null {
   const snap = useWorktreeStore((state) => state.worktrees.get(worktreeId));
   return snap ? normalizeSnapshot(snap) : null;
+}
+
+function selectWorktreeNames(state: { worktrees: Map<string, WorktreeSnapshot> }) {
+  const names = new Map<string, string>();
+  for (const [id, snap] of state.worktrees) names.set(id, snap.name);
+  return names;
+}
+
+/**
+ * Worktree id → display name, for surfaces that only label rows with a
+ * worktree's name. Shallow-compared, so git-status and activity updates — which
+ * replace a snapshot without renaming it — do not re-render the consumer.
+ */
+export function useWorktreeNames(): ReadonlyMap<string, string> {
+  return useWorktreeStore(useShallow(selectWorktreeNames));
 }

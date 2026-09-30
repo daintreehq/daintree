@@ -2,7 +2,14 @@ import { useEffect, useId, useRef, useState, type ReactElement } from "react";
 import { TriangleAlert } from "lucide-react";
 import { AppDialog, type RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
-import { FIELD_INPUT, FormGrid, FormRow } from "@/components/Worktree/views";
+import { FIELD_CONTROL_SIZE, FIELD_INPUT, FormGrid, FormRow } from "@/components/Worktree/views";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { actionService } from "@/services/ActionService";
 import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleetActions";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
@@ -10,6 +17,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { PredicateFleetSavedScope } from "@shared/types";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
+import { pluralize } from "@/lib/pluralize";
 
 type SaveFleetKind = "snapshot" | "predicate";
 type RuleState = PredicateFleetSavedScope["stateFilter"];
@@ -20,10 +28,6 @@ interface SaveFleetDialogProps {
   onClose: () => void;
   armedCount: number;
   restoreFocusTo?: RestoreFocusTarget;
-}
-
-function panes(n: number): string {
-  return `${n} pane${n === 1 ? "" : "s"}`;
 }
 
 function savedIds(): Set<string> {
@@ -159,8 +163,8 @@ export function SaveFleetDialog({
             hint={
               <p id={kindHintId} className="text-xs text-text-secondary">
                 {kind === "snapshot"
-                  ? `The ${panes(armedCount)} armed now. Panes you close drop out of it.`
-                  : `Whichever panes match when you recall it. ${panes(ruleMatchCount)} ${ruleMatchCount === 1 ? "matches" : "match"} now.`}
+                  ? `The ${pluralize(armedCount, "pane")} armed now. Panes you close drop out of it.`
+                  : `Whichever panes match when you recall it. ${pluralize(ruleMatchCount, "pane matches", "panes match")} now.`}
               </p>
             }
           >
@@ -180,38 +184,48 @@ export function SaveFleetDialog({
           {kind === "predicate" && (
             <>
               <FormRow label="Panes" htmlFor={stateId}>
-                <select
-                  id={stateId}
+                <Select
                   value={ruleState}
-                  onChange={(e) => {
-                    const v = e.target.value;
+                  onValueChange={(v) => {
                     if (v === "all" || v === "waiting" || v === "working" || v === "finished") {
                       setRuleState(v);
                     }
                   }}
-                  className={FIELD_INPUT}
-                  data-testid="fleet-save-rule-state"
                 >
-                  <option value="waiting">Waiting</option>
-                  <option value="working">Working</option>
-                  <option value="finished">Finished</option>
-                  <option value="all">All panes</option>
-                </select>
+                  <SelectTrigger
+                    id={stateId}
+                    className={FIELD_CONTROL_SIZE}
+                    data-testid="fleet-save-rule-state"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="waiting">Waiting</SelectItem>
+                    <SelectItem value="working">Working</SelectItem>
+                    <SelectItem value="finished">Finished</SelectItem>
+                    <SelectItem value="all">All panes</SelectItem>
+                  </SelectContent>
+                </Select>
               </FormRow>
               <FormRow label="In" htmlFor={scopeId}>
-                <select
-                  id={scopeId}
+                <Select
                   value={ruleScope}
-                  onChange={(e) => {
-                    const v = e.target.value;
+                  onValueChange={(v) => {
                     if (v === "current" || v === "all") setRuleScope(v);
                   }}
-                  className={FIELD_INPUT}
-                  data-testid="fleet-save-rule-scope"
                 >
-                  <option value="current">This worktree (whichever is active)</option>
-                  <option value="all">All worktrees</option>
-                </select>
+                  <SelectTrigger
+                    id={scopeId}
+                    className={FIELD_CONTROL_SIZE}
+                    data-testid="fleet-save-rule-scope"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="current">This worktree (whichever is active)</SelectItem>
+                    <SelectItem value="all">All worktrees</SelectItem>
+                  </SelectContent>
+                </Select>
               </FormRow>
             </>
           )}

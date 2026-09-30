@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 // `FolderTree` is the file browser's own icon, imported from lucide directly
 // the same way `FileBrowserPane` does — it has no alias in the icons index.
 import { SquareTerminal, Search, FolderTree } from "lucide-react";
+import { ChoiceCard } from "@/components/ui/card";
 import { KbdChord } from "@/components/ui/Kbd";
 import { useEffectiveCombo, useAriaKeyshortcuts } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
@@ -46,15 +47,15 @@ function QuickAction({
   const combo = useEffectiveCombo(actionId);
   const ariaKeyshortcuts = useAriaKeyshortcuts(actionId);
   return (
-    <button
-      type="button"
+    <ChoiceCard
       ref={buttonRef}
+      padding="sm"
       onClick={onClick}
       onFocus={onFocus}
       onKeyDown={onKeyDown}
       tabIndex={tabIndex}
       aria-keyshortcuts={ariaKeyshortcuts}
-      className="launcher-press group inline-flex items-center gap-2 rounded-[var(--radius-md)] border border-border-subtle px-2.5 py-1.5 text-sm text-text-secondary transition-colors active:scale-[0.98] active:duration-[1ms] hover:bg-overlay-soft hover:border-border-default hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+      className="group inline-flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary"
     >
       <span className="shrink-0">{icon}</span>
       <span className="truncate">{label}</span>
@@ -73,7 +74,7 @@ function QuickAction({
           <KbdChord shortcut={combo} density="bare" className="ml-0.5" />
         </span>
       )}
-    </button>
+    </ChoiceCard>
   );
 }
 
@@ -111,7 +112,7 @@ function PaletteSearchButton() {
       // identify it; the old `border-strong` edge was weight the quiet rest of
       // the family does not carry.
       data-size="palette"
-      className="search-field launcher-press w-full py-3 [--search-field-bg:var(--theme-overlay-medium)] active:scale-[0.98] active:duration-[1ms]"
+      className="search-field press-scale w-full py-3 [--search-field-bg:var(--theme-overlay-medium)] active:scale-[0.98] active:duration-[1ms]"
     >
       <Search className="search-field-icon" aria-hidden="true" />
       <span className="min-w-0 flex-1 truncate text-left">Search agents &amp; panels…</span>

@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useReducer, useRef } from "react";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -6,6 +7,7 @@ import { Eye, EyeOff, ChevronRight } from "lucide-react";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
@@ -21,7 +23,6 @@ import { useSettingsTabValidation } from "@/components/Settings/SettingsValidati
 import { McpAuditLogViewer } from "@/components/Settings/McpAuditLogViewer";
 import { ErrorRetryRow, InlineErrorRow } from "@/components/Settings/auditLogParts";
 import { TurnOutcomeDiagnostics } from "@/components/Settings/TurnOutcomeDiagnostics";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import {
@@ -42,6 +43,7 @@ import {
   type McpClientConfigId,
 } from "@shared/config/mcpClientConfigs";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { pluralize } from "@/lib/pluralize";
 
 interface McpServerStatus {
   enabled: boolean;
@@ -50,7 +52,10 @@ interface McpServerStatus {
   apiKey: string;
 }
 
-const COPY_FEEDBACK_MS = 2000;
+const EXPORT_FEEDBACK_MS = 2000;
+
+/** A config copy abandoned because its payload changed while the status was re-read. */
+class StaleCopyError extends Error {}
 const STATUS_LOAD_TIMEOUT_MS = 10_000;
 
 const MASKED_KEY = "•".repeat(24);
@@ -78,23 +83,18 @@ export function McpServerSettingsTab() {
   // Past the Doherty threshold only, so a fast read never flashes bones — the
   // bones' own delayed pulse is switched off in performance mode.
   const showLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
-  // One state, not two booleans: the plain and scoped copies share a single
-  // reset timer, so independent flags let the second copy cancel the first's
-  // reset and strand its "Copied!" indefinitely.
-  const [copiedTarget, setCopiedTarget] = useState<"plain" | "scoped" | null>(null);
+  // Keys the config copy buttons: bumping it remounts them, so a confirmation
+  // never outlives the payload it described (a new port, a rotated key,
+  // another client).
+  const [configCopyEpoch, bumpConfigCopyEpoch] = useReducer((n: number) => n + 1, 0);
   const [clientConfigId, setClientConfigId] = useState<McpClientConfigId>("claude-code");
   const [error, setError] = useState<string | null>(null);
   const [portInput, setPortInput] = useState("");
   const portDirtyRef = useRef(false);
   const [showApiKey, setShowApiKey] = useState(false);
-  const [copiedKey, setCopiedKey] = useState(false);
-  const [copiedAudit, setCopiedAudit] = useState(false);
   const [exportedAudit, setExportedAudit] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
-  const configCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyGenerationRef = useRef(0);
-  const apiKeyCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const auditCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditExportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [auditRecords, setAuditRecords] = useState<McpLogRecord[]>([]);
@@ -170,15 +170,11 @@ export function McpServerSettingsTab() {
     apiKey: status.apiKey,
   });
 
-  // Bumping the generation abandons any copy still in flight, so a write that
-  // resolves after the payload changed can't resurrect "Copied!" for it.
+  // Bumping the generation abandons any copy still reading the status, so a
+  // payload that changed underneath it is never written.
   const clearConfigCopyFeedback = () => {
     copyGenerationRef.current += 1;
-    setCopiedTarget(null);
-    if (configCopyTimeoutRef.current) {
-      clearTimeout(configCopyTimeoutRef.current);
-      configCopyTimeoutRef.current = null;
-    }
+    bumpConfigCopyEpoch();
   };
 
   // Bearer list + assistant-control flag are non-critical: a failure must not
@@ -326,11 +322,7 @@ export function McpServerSettingsTab() {
     return () => {
       clearTimeout(timer);
       unsub();
-      // Abandon an in-flight copy so it can't schedule a timer past cleanup.
       copyGenerationRef.current += 1;
-      if (configCopyTimeoutRef.current) clearTimeout(configCopyTimeoutRef.current);
-      if (apiKeyCopyTimeoutRef.current) clearTimeout(apiKeyCopyTimeoutRef.current);
-      if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
       if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
     };
   }, []);
@@ -395,38 +387,28 @@ export function McpServerSettingsTab() {
    * the same bytes it always did, and the session it configures follows focus,
    * which is the documented behaviour for clients that don't ask for a binding.
    */
-  const copyClientConfig = async (workspaceId: string | null) => {
+  const readClientConfig = async (workspaceId: string | null): Promise<string> => {
     const generation = ++copyGenerationRef.current;
-    try {
-      setConfigCopyError(null);
-      // Rotating the key elsewhere (the assistant tab has its own control)
-      // doesn't broadcast, so the cached status can be stale by the time the
-      // user copies. Re-read it rather than hand out a dead key.
-      const fresh = await window.electron.mcpServer.getStatus();
-      if (generation !== copyGenerationRef.current) return;
-      setStatus(fresh);
-      const { snippet } = buildMcpClientConfig(clientConfigId, {
-        port: runtimeSnapshot.port ?? fresh.port,
-        apiKey: fresh.apiKey,
-        workspaceId,
-      });
-      await navigator.clipboard.writeText(snippet);
-      if (generation !== copyGenerationRef.current) return;
-      setCopiedTarget(workspaceId === null ? "plain" : "scoped");
-      if (configCopyTimeoutRef.current) clearTimeout(configCopyTimeoutRef.current);
-      configCopyTimeoutRef.current = setTimeout(() => setCopiedTarget(null), COPY_FEEDBACK_MS);
-    } catch (err) {
-      if (generation !== copyGenerationRef.current) return;
-      clearConfigCopyFeedback();
-      setConfigCopyError(formatErrorMessage(err, "Failed to copy config"));
-      logError("Failed to copy MCP config", err);
-    }
+    // Rotating the key elsewhere (the assistant tab has its own control)
+    // doesn't broadcast, so the cached status can be stale by the time the
+    // user copies. Re-read it rather than hand out a dead key.
+    const fresh = await window.electron.mcpServer.getStatus();
+    if (generation !== copyGenerationRef.current) throw new StaleCopyError();
+    setStatus(fresh);
+    return buildMcpClientConfig(clientConfigId, {
+      port: runtimeSnapshot.port ?? fresh.port,
+      apiKey: fresh.apiKey,
+      workspaceId,
+    }).snippet;
   };
 
-  const handleCopyConfig = () => copyClientConfig(null);
-  const handleCopyScopedConfig = () => copyClientConfig(viewWorkspaceId);
+  const handleConfigCopyError = (err: unknown) => {
+    if (err instanceof StaleCopyError) return;
+    setConfigCopyError(formatErrorMessage(err, "Failed to copy config"));
+    logError("Failed to copy MCP config", err);
+  };
 
-  // Stale "Copied!" would otherwise describe a payload the user no longer has.
+  // A stale "Copied" would otherwise describe a payload the user no longer has.
   const handleSelectClientConfig = (id: McpClientConfigId) => {
     setClientConfigId(id);
     clearConfigCopyFeedback();
@@ -462,7 +444,6 @@ export function McpServerSettingsTab() {
       setStatus((prev) => ({ ...prev, apiKey: key }));
       // The rotated key invalidates whatever config was last copied.
       clearConfigCopyFeedback();
-      setCopiedKey(false);
       setShowApiKey(false);
       setShowRotateConfirm(false);
     } catch (err) {
@@ -478,24 +459,6 @@ export function McpServerSettingsTab() {
     setShowRotateConfirm(false);
     setShowApiKey(false);
     setRotateError(null);
-  };
-
-  const handleCopyApiKey = async () => {
-    setKeyCopyError(null);
-    try {
-      await navigator.clipboard.writeText(status.apiKey);
-      setCopiedKey(true);
-      if (apiKeyCopyTimeoutRef.current) clearTimeout(apiKeyCopyTimeoutRef.current);
-      apiKeyCopyTimeoutRef.current = setTimeout(() => setCopiedKey(false), COPY_FEEDBACK_MS);
-    } catch (err) {
-      setCopiedKey(false);
-      if (apiKeyCopyTimeoutRef.current) {
-        clearTimeout(apiKeyCopyTimeoutRef.current);
-        apiKeyCopyTimeoutRef.current = null;
-      }
-      setKeyCopyError(formatErrorMessage(err, "Failed to copy API key"));
-      logError("Failed to copy MCP API key", err);
-    }
   };
 
   const handleAuditEnabledToggle = async () => {
@@ -562,24 +525,6 @@ export function McpServerSettingsTab() {
     setClearError(null);
   };
 
-  const handleCopyAuditAsJson = async (records: McpLogRecord[]) => {
-    try {
-      setAuditActionError(null);
-      await navigator.clipboard.writeText(JSON.stringify(records, null, 2));
-      setCopiedAudit(true);
-      if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
-      auditCopyTimeoutRef.current = setTimeout(() => setCopiedAudit(false), COPY_FEEDBACK_MS);
-    } catch (err) {
-      setCopiedAudit(false);
-      if (auditCopyTimeoutRef.current) {
-        clearTimeout(auditCopyTimeoutRef.current);
-        auditCopyTimeoutRef.current = null;
-      }
-      setAuditActionError(formatErrorMessage(err, "Failed to copy audit log"));
-      logError("Failed to copy MCP audit log", err);
-    }
-  };
-
   const handleExportAuditLog = async (records: McpLogRecord[]) => {
     if (isExporting) return;
     setIsExporting(true);
@@ -589,7 +534,10 @@ export function McpServerSettingsTab() {
       if (written) {
         setExportedAudit(true);
         if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
-        auditExportTimeoutRef.current = setTimeout(() => setExportedAudit(false), COPY_FEEDBACK_MS);
+        auditExportTimeoutRef.current = setTimeout(
+          () => setExportedAudit(false),
+          EXPORT_FEEDBACK_MS
+        );
       }
     } catch (err) {
       setExportedAudit(false);
@@ -723,10 +671,9 @@ export function McpServerSettingsTab() {
                       <div className="text-2xs text-text-secondary">
                         <span className="font-mono">…{bearer.token4LastChars}</span>
                         {" · "}
-                        {bearer.requestsSinceLaunch}{" "}
-                        {bearer.requestsSinceLaunch === 1 ? "request" : "requests"}
-                        {" · active "}
-                        {formatRelativeTime(bearer.lastActiveAt)}
+                        {pluralize(bearer.requestsSinceLaunch, "request")}
+                        {" · "}
+                        <TimeAgo timestamp={bearer.lastActiveAt} verbose prefix="active " />
                       </div>
                     </div>
                     <Button
@@ -774,12 +721,11 @@ export function McpServerSettingsTab() {
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-xs text-text-primary">{bearer.userAgent}</div>
                       <div className="text-2xs text-text-secondary">
-                        {bearer.sessionCount} {bearer.sessionCount === 1 ? "session" : "sessions"}
+                        {pluralize(bearer.sessionCount, "session")}
                         {" · "}
-                        {bearer.requestsSinceLaunch}{" "}
-                        {bearer.requestsSinceLaunch === 1 ? "request" : "requests"}
-                        {" · active "}
-                        {formatRelativeTime(bearer.lastActiveAt)}
+                        {pluralize(bearer.requestsSinceLaunch, "request")}
+                        {" · "}
+                        <TimeAgo timestamp={bearer.lastActiveAt} verbose prefix="active " />
                       </div>
                     </div>
                   </li>
@@ -791,9 +737,7 @@ export function McpServerSettingsTab() {
       </SettingsGroup>
 
       <p className="sr-only" role="status">
-        {configCopyError ??
-          keyCopyError ??
-          (copiedTarget ? "Config copied" : copiedKey ? "API key copied" : "")}
+        {configCopyError ?? keyCopyError ?? ""}
       </p>
 
       {error && (
@@ -864,13 +808,27 @@ export function McpServerSettingsTab() {
                     layout="stacked"
                     control={
                       <SettingsRowActions>
-                        <Button variant="outline" size="sm" onClick={handleCopyConfig}>
-                          {copiedTarget === "plain" ? "Copied!" : "Copy MCP config"}
-                        </Button>
+                        <CopyButton
+                          key={`plain:${configCopyEpoch}`}
+                          label="Copy MCP config"
+                          variant="outline"
+                          size="sm"
+                          text={() => readClientConfig(null)}
+                          announcement="Config copied"
+                          onClick={() => setConfigCopyError(null)}
+                          onCopyError={handleConfigCopyError}
+                        />
                         {viewWorkspaceId ? (
-                          <Button variant="outline" size="sm" onClick={handleCopyScopedConfig}>
-                            {copiedTarget === "scoped" ? "Copied!" : "Copy config for this project"}
-                          </Button>
+                          <CopyButton
+                            key={`scoped:${configCopyEpoch}`}
+                            label="Copy config for this project"
+                            variant="outline"
+                            size="sm"
+                            text={() => readClientConfig(viewWorkspaceId)}
+                            announcement="Config copied"
+                            onClick={() => setConfigCopyError(null)}
+                            onCopyError={handleConfigCopyError}
+                          />
                         ) : null}
                       </SettingsRowActions>
                     }
@@ -968,14 +926,19 @@ export function McpServerSettingsTab() {
                           {showApiKey ? <EyeOff /> : <Eye />}
                         </Button>
                       </div>
-                      <Button
+                      <CopyButton
+                        label="Copy"
+                        aria-label="Copy API key"
                         variant="outline"
                         size="sm"
-                        onClick={handleCopyApiKey}
-                        aria-label="Copy API key"
-                      >
-                        {copiedKey ? "Copied!" : "Copy"}
-                      </Button>
+                        text={status.apiKey}
+                        announcement="API key copied"
+                        onClick={() => setKeyCopyError(null)}
+                        onCopyError={(err) => {
+                          setKeyCopyError(formatErrorMessage(err, "Failed to copy API key"));
+                          logError("Failed to copy MCP API key", err);
+                        }}
+                      />
                     </div>
                   ) : undefined
                 }
@@ -1072,9 +1035,7 @@ export function McpServerSettingsTab() {
             turnRecords={turnRecords}
             loading={auditLoading}
             onRefresh={refreshAuditRecords}
-            onCopy={handleCopyAuditAsJson}
             onClear={() => setShowClearConfirm(true)}
-            copyFlashActive={copiedAudit}
             maxRecords={auditMaxRecords}
             onExport={handleExportAuditLog}
             exportFlashActive={exportedAudit}
@@ -1140,7 +1101,7 @@ export function McpServerSettingsTab() {
                 {client.userAgent ?? "Unknown client"}
               </span>
               <span className="text-2xs text-text-secondary shrink-0">
-                connected {formatRelativeTime(client.connectedAtMs)}
+                <TimeAgo timestamp={client.connectedAtMs} verbose prefix="connected " />
               </span>
             </li>
           ))}
@@ -1165,7 +1126,7 @@ export function McpServerSettingsTab() {
         isOpen={showClearConfirm}
         onClose={handleCancelClear}
         title="Clear audit log?"
-        description={`This permanently deletes ${auditRecords.length === 1 ? "1 audit record" : `${auditRecords.length} audit records`} on this machine. Turn outcomes aren't affected.${auditEnabled ? " New tool calls will still be recorded." : ""}`}
+        description={`This permanently deletes ${pluralize(auditRecords.length, "audit record")} on this machine. Turn outcomes aren't affected.${auditEnabled ? " New tool calls will still be recorded." : ""}`}
         confirmLabel="Clear audit log"
         cancelLabel="Cancel"
         onConfirm={confirmClearAuditLog}

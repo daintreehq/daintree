@@ -36,9 +36,10 @@ const PANE_TOOLBAR_FILES = [
  * `--radius-md`, each for a reason the pane toolbar button does not share.
  */
 const RADIUS_EXCEPTIONS: Record<string, number> = {
-  // The zoom chip and copy-URL sit inside the 28px address field, so they take
-  // a smaller concentric corner than the field's own radius-md.
-  "src/components/Browser/BrowserToolbar.tsx": 2,
+  // The zoom chip sits inside the 28px address field, so it takes a smaller
+  // concentric corner than the field's own radius-md. Copy URL, beside it, is
+  // a `CopyButton` given the same corner.
+  "src/components/Browser/BrowserToolbar.tsx": 1,
 };
 
 function classStrings(file: string): string[] {

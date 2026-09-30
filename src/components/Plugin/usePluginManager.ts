@@ -12,6 +12,7 @@ import type {
   PluginInstallExpectation,
   PluginInstallProgressEvent,
 } from "@shared/types/plugin";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * Alphabetical by display name, regardless of enabled state. Disabled plugins
@@ -89,6 +90,8 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const showInlineLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // A notice is neutral unless it reports something that went partly wrong.
+  const [noticeTone, setNoticeTone] = useState<"neutral" | "warning">("neutral");
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [refreshKey, setRefreshKey] = useState(0);
   // Mirror of `refreshKey` for async staleness checks. A list refresh (reopen,
@@ -386,6 +389,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   useEffect(() => {
     if (!focusPluginId || loading) return;
     if (!plugins.some((p) => p.manifest.name === focusPluginId)) {
+      setNoticeTone("neutral");
       setNotice(`Plugin "${focusPluginId}" isn't installed.`);
       setFocusPluginId(null);
     }
@@ -490,6 +494,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       case "cancelled":
         return;
       case "not-implemented":
+        setNoticeTone("neutral");
         setNotice("Installing plugins isn't available yet — it lands with an upcoming release.");
         return;
       case "invalid-url":
@@ -628,6 +633,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     const dntrFiles = files.filter((f) => f.name.toLowerCase().endsWith(".dntr"));
     if (dntrFiles.length === 0) {
       setError(null);
+      setNoticeTone("warning");
       setNotice("Only .dntr files can be installed.");
       return;
     }
@@ -849,10 +855,10 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
               : `Couldn't check any of the ${failed} plugins for updates. Check your connection and try again.`
           );
         } else if (failed > 0) {
-          setNotice(
-            `No updates found. ${failed} ${failed === 1 ? "plugin" : "plugins"} couldn't be checked.`
-          );
+          setNoticeTone("warning");
+          setNotice(`No updates found. ${pluralize(failed, "plugin")} couldn't be checked.`);
         } else {
+          setNoticeTone("neutral");
           setNotice("All plugins are up to date.");
         }
         return;
@@ -862,9 +868,8 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       // the next bulk check, so it is waiting in the column when the last
       // confirmation closes.
       if (failed > 0) {
-        setNotice(
-          `${failed} ${failed === 1 ? "plugin" : "plugins"} couldn't be checked for updates.`
-        );
+        setNoticeTone("warning");
+        setNotice(`${pluralize(failed, "plugin")} couldn't be checked for updates.`);
       }
       pendingQueueRef.current = rest;
       isBatchActiveRef.current = true;
@@ -959,6 +964,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     showInlineLoading,
     error,
     notice,
+    noticeTone,
     pending,
     pendingUninstall,
     deleteSettings,

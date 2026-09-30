@@ -4,6 +4,7 @@ import { isElectronAvailable } from "./useElectron";
 import { errorsClient } from "@/clients";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { notify, shouldEscalateTransientError, consumeEscalation } from "@/lib/notify";
+import { panelNotificationAddress } from "@/lib/notificationAddress";
 import type { NotificationAction, NotificationPriority } from "@/store/notificationStore";
 import { humanizeAppError } from "@shared/utils/errorMessage";
 
@@ -48,6 +49,18 @@ function buildCopyDetailsAction(error: ErrorRecord): NotificationAction {
       }
     },
   };
+}
+
+function errorNotificationAddress(
+  error: ErrorRecord
+): { panelId?: string; worktreeId?: string } | undefined {
+  const terminalId = error.context?.terminalId;
+  const worktreeId = error.context?.worktreeId;
+  if (terminalId) {
+    const address = panelNotificationAddress(terminalId);
+    return worktreeId ? { ...address, worktreeId } : address;
+  }
+  return worktreeId ? { worktreeId } : undefined;
 }
 
 function routeError(error: ErrorRecord): void {
@@ -128,6 +141,7 @@ function routeError(error: ErrorRecord): void {
     priority,
     action,
     actions,
+    context: errorNotificationAddress(error),
   });
 
   if (escalated && toastId) {

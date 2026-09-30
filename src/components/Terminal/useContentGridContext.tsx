@@ -29,7 +29,17 @@ import { useProjectStore } from "@/store/projectStore";
 import { useOpenDockPopoverId } from "@/components/Layout/useOpenDockPopoverId";
 import { computeGridSelectedAgentIds } from "./contentGridAgentFilter";
 import { buildFleetPanels } from "./contentGridFleetPanels";
-import { useDndPlaceholder, useIsDragging, GRID_PLACEHOLDER_ID } from "@/components/DragDrop";
+import {
+  useDndPlaceholder,
+  useIsDragging,
+  useIsWorktreeSortDragging,
+  GRID_PLACEHOLDER_ID,
+} from "@/components/DragDrop";
+import {
+  isOverContainer,
+  panelDragOrigin,
+  useArmedDropTarget,
+} from "@/components/DragDrop/useArmedDropTarget";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import {
   subscribeOptimisticClose,
@@ -49,7 +59,7 @@ import {
   subscribeSidebarHydrationUnlock,
 } from "@/lib/layoutTransitionLock";
 import { subscribeDiagnosticsDockLayoutChange } from "@/lib/diagnosticsDockLayout";
-import { useWorktrees } from "@/hooks/useWorktrees";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useProjectBranding } from "@/hooks";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { CliAvailability } from "@shared/types";
@@ -205,7 +215,8 @@ export interface ContentGridContext {
   isFleetScopeRender: boolean;
   fleetPanels: PanelInstance[];
   fleetNeedsWorktreePrefix: boolean;
-  isOver: boolean;
+  /** A panel from outside the grid would land in it: draws DROP_TARGET_FRAME. */
+  isDropTarget: boolean;
   isDragging: boolean;
   showPlaceholder: boolean;
   placeholderInGrid: boolean;
@@ -242,7 +253,7 @@ export interface ContentGridContext {
   projectEmoji: string | null;
   showProjectPulse: boolean;
   projectIconSvg: string | undefined;
-  worktreeMap: ReturnType<typeof useWorktrees>["worktreeMap"];
+  hasWorktrees: boolean;
   isInTrash: (id: string) => boolean;
   isWorktreeInitialized: boolean;
   getTabGroupPanels: (groupId: string, location?: TabGroupLocation) => PanelInstance[];
@@ -353,8 +364,27 @@ export function useContentGridContext({
   }, [isAvailabilityInitialized, agentAvailability, pluginAgentRegistry]);
   const isProjectSwitching = false;
   const { projectIconSvg } = useProjectBranding(currentProject?.id);
-  const { worktreeMap, isInitialized: isWorktreeInitialized } = useWorktrees();
-  const activeWorktree = activeWorktreeId ? worktreeMap.get(activeWorktreeId) : null;
+  // Narrow reads, never the whole Map: the Map changes identity on every
+  // worktree's git-status tick, which would re-run this hook and commit the
+  // grid for status changes it never displays.
+  const isWorktreeInitialized = useWorktreeStore((state) => state.isInitialized);
+  const hasWorktrees = useWorktreeStore((state) => state.worktrees.size > 0);
+  const activeWorktree = useWorktreeStore(
+    useShallow((state) => {
+      const wt = activeWorktreeId ? state.worktrees.get(activeWorktreeId) : undefined;
+      if (!wt) return null;
+      return {
+        isMainWorktree: wt.isMainWorktree,
+        name: wt.name,
+        branch: wt.branch,
+        isDetached: wt.isDetached,
+        head: wt.head,
+        path: wt.path,
+        issueNumber: wt.issueNumber,
+        prNumber: wt.linked?.pr?.ref.number,
+      };
+    })
+  );
   const hasActiveWorktree = activeWorktreeId != null && activeWorktree != null;
   const activeWorktreeName = activeWorktree
     ? activeWorktree.isMainWorktree
@@ -367,7 +397,7 @@ export function useContentGridContext({
   const gridRecipeContext = activeWorktree
     ? {
         issueNumber: activeWorktree.issueNumber,
-        prNumber: activeWorktree.linked?.pr?.ref.number,
+        prNumber: activeWorktree.prNumber,
         branchName: activeWorktree.branch,
         worktreePath: activeWorktree.path,
       }
@@ -478,9 +508,15 @@ export function useContentGridContext({
   // the closing-panel fast path.
   void EMPTY_TAB_GROUPS;
 
-  const { setNodeRef, isOver } = useDroppable({
+  const { setNodeRef } = useDroppable({
     id: "grid-container",
     data: { container: "grid" },
+  });
+  const isWorktreeSortDragging = useIsWorktreeSortDragging();
+  const isDropTarget = useArmedDropTarget({
+    accepts: (over) => isOverContainer(over, "grid-container"),
+    isOrigin: (active) => panelDragOrigin(active) === "grid",
+    disabled: isWorktreeSortDragging,
   });
 
   const gridContainerRef = useRef<HTMLDivElement>(null);
@@ -1246,7 +1282,7 @@ export function useContentGridContext({
     isFleetScopeRender,
     fleetPanels,
     fleetNeedsWorktreePrefix,
-    isOver,
+    isDropTarget,
     isDragging,
     showPlaceholder,
     placeholderInGrid,
@@ -1277,7 +1313,7 @@ export function useContentGridContext({
     projectEmoji: currentProject?.emoji ?? null,
     showProjectPulse,
     projectIconSvg,
-    worktreeMap,
+    hasWorktrees,
     isInTrash,
     isWorktreeInitialized,
     getTabGroupPanels: getTabGroupPanelsMapped,

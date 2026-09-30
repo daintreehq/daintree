@@ -1,5 +1,5 @@
-import { existsSync, watch as fsWatch, type FSWatcher } from "fs";
-import { basename, dirname, resolve as pathResolve } from "path";
+import { existsSync, realpathSync, watch as fsWatch, type FSWatcher } from "fs";
+import { basename, dirname, isAbsolute, relative, resolve as pathResolve, sep } from "path";
 import PQueue from "p-queue";
 import { MutableDisposable } from "../utils/lifecycle.js";
 import { withTimeout } from "../utils/withTimeout.js";
@@ -31,6 +31,42 @@ const TOPOLOGY_EVENT_DEBOUNCE_MS = 25;
 // cooldown bounds reconcile frequency, it must never strand an external
 // change (PERF-139's in-cooldown removal guards exactly this).
 const TOPOLOGY_RECONCILE_COOLDOWN_MS = 500;
+
+// Inside `.git/worktrees/<id>/`, what `git worktree list --porcelain` reads:
+// `gitdir` (the worktree path), `HEAD` (branch / detached), `locked`, plus the
+// ref-store inputs `commondir` and `config.worktree`. A reftable repository
+// keeps the real per-worktree HEAD under `reftable/`, so that subtree counts
+// too. Everything else — index, logs/, ORIG_HEAD, COMMIT_EDITMSG, *.lock —
+// churns on every commit/add/status in that worktree and changes no topology;
+// reconciling on it re-listed every worktree up to twice a second under agent
+// activity.
+const TOPOLOGY_METADATA_FILES = new Set([
+  "gitdir",
+  "HEAD",
+  "locked",
+  "commondir",
+  "config.worktree",
+]);
+
+/**
+ * Whether a watcher event under the metadata dir can change the worktree
+ * list: the dir itself, a `<id>` subdir appearing/vanishing, or one of the
+ * inputs above. A path outside every root spelling can't be classified and
+ * counts as relevant, so a mismatch only costs an idempotent reconcile.
+ */
+export function isTopologyEventPath(roots: readonly string[], path: string): boolean {
+  for (const root of roots) {
+    const rel = relative(root, path);
+    if (rel === "") return true;
+    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) continue;
+    const segments = rel.split(sep);
+    if (segments.length === 1) return true;
+    const entry = segments[1] ?? "";
+    if (entry === "reftable") return true;
+    return segments.length === 2 && TOPOLOGY_METADATA_FILES.has(entry);
+  }
+  return true;
+}
 
 export interface TopologyWatcherHost {
   readonly pollingEnabled: boolean;
@@ -182,6 +218,15 @@ export class TopologyWatcher {
 
     const generation = ++this.generation;
     const drain = () => this.drainEventBuffer();
+    // FSEvents reports canonical paths (`/private/var/...` for `/var/...`), so
+    // classify against both spellings of the root.
+    const roots = [pathResolve(metadataDir)];
+    try {
+      const real = realpathSync(metadataDir);
+      if (real !== roots[0]) roots.push(real);
+    } catch {
+      // Unresolvable now — events outside the lexical root stay relevant.
+    }
 
     subscribeParcelWatcher(
       metadataDir,
@@ -195,15 +240,26 @@ export class TopologyWatcher {
           }
         }
         if (Array.isArray(events)) {
+          let ignored = 0;
           for (const ev of events) {
             const e = ev as { path?: unknown; type?: unknown } | null;
             if (typeof e?.path === "string") {
+              // An errored batch keeps every event: dropping churn there could
+              // leave only a pending app-owned entry, which drains silently.
+              if (!err && !isTopologyEventPath(roots, e.path)) {
+                ignored++;
+                continue;
+              }
               this.eventBuffer.push({
                 path: e.path,
                 type: typeof e.type === "string" ? e.type : undefined,
               });
             }
           }
+          // A batch made only of in-worktree churn neither schedules nor
+          // delays a drain. Empty or unclassifiable batches still fall
+          // through to the reconcile-on-empty drain below.
+          if (ignored > 0 && ignored === events.length) return;
         }
         if (this.debounceTimer) {
           clearTimeout(this.debounceTimer);

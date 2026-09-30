@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { formatTimeAgo } from "@/utils/timeAgo";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { actionService } from "@/services/ActionService";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CloudOff, KeyRound } from "@/components/icons";
 import type { LucideIcon } from "lucide-react";
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
+import { pluralize } from "@/lib/pluralize";
 
 interface UpstreamSyncBadgeProps {
   aheadCount: number | undefined;
@@ -232,9 +233,7 @@ export function UpstreamSyncBadge({
         ? `Base (${compareLabel}): in sync`
         : null;
   const lastFetched =
-    lastFetchedAt != null
-      ? formatRelativeTime(lastFetchedAt, Math.max(nowMs, lastFetchedAt))
-      : null;
+    lastFetchedAt != null ? formatTimeAgo(lastFetchedAt, Math.max(nowMs, lastFetchedAt)) : null;
   // The actionable variant carries its own title, so only the passive auth
   // failure needs the sentence here.
   const statusSentence =
@@ -440,7 +439,7 @@ const STATUS_TONES: Record<SyncStatus, string> = {
 };
 
 function describeDrift(ahead: number, behind: number): string {
-  const commits = (n: number) => `${n} commit${n === 1 ? "" : "s"}`;
+  const commits = (n: number) => pluralize(n, "commit");
   if (ahead > 0 && behind > 0) return `${commits(ahead)} ahead, ${behind} behind`;
   if (ahead > 0) return `${commits(ahead)} ahead`;
   return `${commits(behind)} behind`;

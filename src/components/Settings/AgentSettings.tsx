@@ -504,7 +504,7 @@ export function AgentSettings({
             <SettingsSwitchCard
               id="agents-skip-permissions"
               title="Skip permission prompts"
-              subtitle="Agents run commands and edit files without asking — faster, but you won't get a chance to review first. Applies to every agent that supports it. The assistant follows it for Daintree's own confirmations unless it's set to always ask."
+              subtitle="Agents run commands and edit files without asking — faster, but you won't get a chance to review first. Applies to every agent that supports it. The assistant follows it for Daintree's own confirmations unless they're set to always ask or never ask."
               isEnabled={settings?.globalSkipPermissions ?? false}
               onChange={() => {
                 void (async () => {

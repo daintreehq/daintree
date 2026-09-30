@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
@@ -8,18 +9,8 @@ import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { SAFE_MODE_BANNER_COPY } from "./recoveryCopy";
 import type { QuarantinedPanelSummary } from "@shared/types/ipc/crashRecovery";
-
-function formatRelativeTime(timestamp: number): string {
-  const diff = Date.now() - timestamp;
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 1) return "moments ago";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(timestamp).toLocaleDateString();
-}
+import { pluralize } from "@/lib/pluralize";
+import { formatTimeAgo } from "@/utils/timeAgo";
 
 interface QuarantinedPanelRowProps {
   panel: QuarantinedPanelSummary;
@@ -54,13 +45,13 @@ function QuarantinedPanelRow({ panel }: QuarantinedPanelRowProps) {
   return (
     <li className="flex items-start justify-between gap-3 py-1.5">
       <div className="min-w-0 flex-1">
-        <p className="truncate text-text-primary" title={displayTitle}>
-          {displayTitle}
-        </p>
+        <TruncatedTooltip content={displayTitle}>
+          <p className="truncate text-text-primary">{displayTitle}</p>
+        </TruncatedTooltip>
         {subtitle && (
-          <p className="truncate text-3xs text-text-secondary" title={subtitle}>
-            {subtitle}
-          </p>
+          <TruncatedTooltip content={subtitle}>
+            <p className="truncate text-3xs text-text-secondary">{subtitle}</p>
+          </TruncatedTooltip>
         )}
       </div>
       {state === "idle" && (
@@ -125,11 +116,11 @@ export function SafeModeBanner() {
 
   let crashMetaText: string | null = null;
   if (crashes > 0 && crashTimestamp !== null) {
-    crashMetaText = `${crashes} ${crashes === 1 ? "crash" : "crashes"} detected, last ${formatRelativeTime(crashTimestamp)}`;
+    crashMetaText = `${pluralize(crashes, "crash", "crashes")} detected, last ${formatTimeAgo(crashTimestamp)}`;
   } else if (crashes > 0) {
-    crashMetaText = `${crashes} ${crashes === 1 ? "crash" : "crashes"} detected`;
+    crashMetaText = `${pluralize(crashes, "crash", "crashes")} detected`;
   } else if (crashTimestamp !== null) {
-    crashMetaText = `Last crash ${formatRelativeTime(crashTimestamp)}`;
+    crashMetaText = `Last crash ${formatTimeAgo(crashTimestamp)}`;
   }
 
   const detailsPopover = hasDetails ? (
@@ -140,13 +131,22 @@ export function SafeModeBanner() {
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="p-3 text-xs max-w-sm space-y-2 text-text-primary">
-        {crashMetaText && <p className="font-medium">{crashMetaText}</p>}
+        {crashMetaText && (
+          <p
+            className="font-medium"
+            title={crashTimestamp !== null ? new Date(crashTimestamp).toLocaleString() : undefined}
+          >
+            {crashMetaText}
+          </p>
+        )}
         {hasQuarantineList ? (
           <>
             <p className="text-text-secondary">
-              {quarantined.length === 1
-                ? "1 panel was quarantined because it appeared to trigger repeated crashes."
-                : `${quarantined.length} panels were quarantined because they appeared to trigger repeated crashes.`}
+              {pluralize(
+                quarantined.length,
+                "panel was quarantined because it appeared to trigger repeated crashes.",
+                "panels were quarantined because they appeared to trigger repeated crashes."
+              )}
             </p>
             <ul
               role="list"
@@ -160,8 +160,8 @@ export function SafeModeBanner() {
         ) : (
           skipped > 0 && (
             <p className="text-text-secondary">
-              {skipped} {skipped === 1 ? "panel was" : "panels were"} skipped so you can recover the
-              app. Restart normally to reload them.
+              {pluralize(skipped, "panel was", "panels were")} skipped so you can recover the app.
+              Restart normally to reload them.
             </p>
           )
         )}

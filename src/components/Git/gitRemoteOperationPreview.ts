@@ -17,6 +17,7 @@ import {
   toRepoOperationState,
   type RepoOperationState,
 } from "@/components/Git/repoOperationCopy";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * Max commits fetched per range: everything the handler will serve. It used to
@@ -333,13 +334,11 @@ export function formatGitRemoteOperationPreviewLines(
   const contextLines = [
     ...(pushBehind > 0
       ? [
-          `${MCP_PREVIEW_CAUTION_PREFIX}The destination has ${pushBehind} commit${pushBehind === 1 ? "" : "s"} this branch lacks — git will refuse this push as non-fast-forward.`,
+          `${MCP_PREVIEW_CAUTION_PREFIX}The destination has ${pluralize(pushBehind, "commit")} this branch lacks — git will refuse this push as non-fast-forward.`,
         ]
       : []),
     ...(isPullRebase && incoming > 0 && preview.commits.length > 0
-      ? [
-          `Brings in ${incoming} commit${incoming === 1 ? "" : "s"} from the upstream (as of the last fetch).`,
-        ]
+      ? [`Brings in ${pluralize(incoming, "commit")} from the upstream (as of the last fetch).`]
       : []),
   ];
   if (preview.commits.length === 0) {

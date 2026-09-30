@@ -40,6 +40,8 @@ export interface LinkedPRInfo {
   ciStatus?: GitHubPRCIStatus;
   /** Required-check summary, when selected by a hydrated linked-PR query */
   ciSummary?: GitHubPRCISummary;
+  /** Verbatim `mergeStateStatus`, when selected by the linked-PR query */
+  mergeStateStatus?: string;
 }
 
 /** GitHub issue representation */

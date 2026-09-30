@@ -235,4 +235,84 @@ describe("PluginBlocklistService", () => {
     await svc.getBlocklist();
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  describe("getStartupBlocklist", () => {
+    const STALE_NOW = 1000 + PLUGIN_BLOCKLIST_TTL_MS + 1;
+    const FRESH: ParsedPluginBlocklist = {
+      entries: [{ name: "acme.new", ranges: ["*"], reason: "revoked" }],
+    };
+
+    it("returns a stale disk list without waiting, and revalidates in the background", async () => {
+      await fs.writeFile(cachePath, JSON.stringify({ fetchedAt: 1000, raw: BLOCKLIST }), "utf-8");
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const fetchImpl = vi.fn(async () => {
+        await gate;
+        return jsonResponse(FRESH);
+      });
+      const svc = new PluginBlocklistService({ cachePath, fetchImpl, now: () => STALE_NOW });
+
+      const { blocklist, refreshed } = await svc.getStartupBlocklist();
+      expect(blocklist?.entries.map((e) => e.name)).toEqual(["acme.bad", "acme.multi"]);
+      expect(refreshed).not.toBeNull();
+
+      release();
+      expect((await refreshed)?.entries.map((e) => e.name)).toEqual(["acme.new"]);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps enforcing the stale list when the background refresh fails", async () => {
+      await fs.writeFile(cachePath, JSON.stringify({ fetchedAt: 1000, raw: BLOCKLIST }), "utf-8");
+      const fetchImpl = vi.fn(async () => {
+        throw new Error("offline");
+      });
+      const svc = new PluginBlocklistService({ cachePath, fetchImpl, now: () => STALE_NOW });
+
+      const { refreshed } = await svc.getStartupBlocklist();
+      expect((await refreshed)?.entries).toHaveLength(2);
+    });
+
+    it("waits for the fetch when there is no disk cache", async () => {
+      const fetchImpl = stubFetch(FRESH);
+      const svc = new PluginBlocklistService({ cachePath, fetchImpl });
+
+      const { blocklist, refreshed } = await svc.getStartupBlocklist();
+      expect(blocklist?.entries.map((e) => e.name)).toEqual(["acme.new"]);
+      expect(refreshed).toBeNull();
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it("never falls back to an older disk list than one fetched this session", async () => {
+      await fs.writeFile(cachePath, JSON.stringify({ fetchedAt: 1000, raw: BLOCKLIST }), "utf-8");
+      // Readable but not writable, so the fetched list is never persisted.
+      await fs.chmod(cachePath, 0o444);
+      let online = true;
+      const fetchImpl = vi.fn(async () => {
+        if (!online) throw new Error("offline");
+        return jsonResponse(FRESH);
+      });
+      let clock = STALE_NOW;
+      const svc = new PluginBlocklistService({ cachePath, fetchImpl, now: () => clock });
+      expect((await svc.getBlocklist())?.entries.map((e) => e.name)).toEqual(["acme.new"]);
+
+      online = false;
+      clock += PLUGIN_BLOCKLIST_TTL_MS + 1;
+      const { blocklist, refreshed } = await svc.getStartupBlocklist();
+      expect(blocklist?.entries.map((e) => e.name)).toEqual(["acme.new"]);
+      expect((await refreshed)?.entries.map((e) => e.name)).toEqual(["acme.new"]);
+    });
+
+    it("serves a fresh disk list with no refresh", async () => {
+      await fs.writeFile(cachePath, JSON.stringify({ fetchedAt: 1000, raw: BLOCKLIST }), "utf-8");
+      const fetchImpl = stubFetch(FRESH);
+      const svc = new PluginBlocklistService({ cachePath, fetchImpl, now: () => 2000 });
+
+      const { blocklist, refreshed } = await svc.getStartupBlocklist();
+      expect(blocklist?.entries).toHaveLength(2);
+      expect(refreshed).toBeNull();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+  });
 });

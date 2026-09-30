@@ -1,6 +1,7 @@
 import { create, type StateCreator } from "zustand";
 import { persist } from "zustand/middleware";
 import type { PortalTab, PortalLink } from "@shared/types";
+import { reinsert, type RemovedPosition } from "@/lib/undoToast";
 import { getPortalPlaceholderBounds } from "@/lib/portalBounds";
 import {
   DEFAULT_PORTAL_TABS,
@@ -52,6 +53,8 @@ interface PortalActions {
   reset: () => void;
   addLink: (link: Omit<PortalLink, "id" | "order">) => void;
   removeLink: (id: string) => void;
+  /** Puts a removed link back where it was, id and all — the Undo for `removeLink`. */
+  restoreLink: (link: PortalLink, position: RemovedPosition) => void;
   updateLink: (id: string, updates: Partial<PortalLink>) => void;
   toggleLink: (id: string) => void;
   reorderLinks: (fromIndex: number, toIndex: number) => void;
@@ -160,7 +163,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       }
 
       const newTabId = `tab-${crypto.randomUUID()}`;
-      const newTab: PortalTab = { id: newTabId, url: null, title: "New Tab" };
+      const newTab: PortalTab = { id: newTabId, url: null, title: "New tab" };
       set((s) => ({
         tabs: [...s.tabs, newTab],
         activeTabId: newTabId,
@@ -355,6 +358,12 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
         return {
           links: filtered.map((l, i) => ({ ...l, order: i })),
         };
+      }),
+
+    restoreLink: (link, position) =>
+      set((s) => {
+        if (s.links.some((l) => l.id === link.id)) return s;
+        return { links: reinsert(s.links, link, position).map((l, i) => ({ ...l, order: i })) };
       }),
 
     updateLink: (id, updates) =>

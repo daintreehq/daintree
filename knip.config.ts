@@ -32,9 +32,6 @@ const baseConfig: KnipConfig = {
     // that aren't wired through package.json.
     "electron-builder.config.cjs",
     "scripts/generate-sounds.mjs",
-    "playwright.mechanism.config.ts",
-    "playwright.plugins.config.ts",
-    "vitest.integration.config.ts",
 
     // The perf dispatcher launches these entry points by string path in
     // isolated subprocesses, so static analysis cannot follow those edges.
@@ -49,6 +46,14 @@ const baseConfig: KnipConfig = {
     "scripts/perf/verify-baselines.ts",
     "scripts/perf/diagnose.ts",
     "scripts/perf/journeys/report.ts",
+    // Invoked directly for focused local measurements.
+    "scripts/perf/audio-idle-probe.cjs",
+    "scripts/perf/bench-tail-serialize.ts",
+    "scripts/perf/snapshot-io-bench.ts",
+    // These focused benches load their Vitest configs by CLI path.
+    "src/components/Layout/__bench__/vitest.config.ts",
+    "src/components/Worktree/__bench__/vitest.config.ts",
+    "src/hooks/__bench__/vitest.config.ts",
 
     // The liveness and module-hook guards launch these drivers by string path
     // in isolated Node processes, so Knip cannot follow the spawn edge.
@@ -162,6 +167,11 @@ const baseConfig: KnipConfig = {
     "src/components/Settings/__preview__/subjectPicker.tsx",
     "src/components/TerminalRecipe/__preview__/recipes.tsx",
     "src/components/Tour/__preview__/preview.tsx",
+    "src/components/ui/__preview__/resizeHandlesPreview.tsx",
+    "src/components/ui/__preview__/surfaceHeadersPreview.tsx",
+    "src/components/ui/__preview__/choiceCardsPreview.tsx",
+    "src/components/ui/__preview__/formStragglersPreview.tsx",
+    "src/components/Worktree/__preview__/fileListRows.tsx",
     "src/components/Panel/__preview__/preview.tsx",
     "src/components/DragDrop/__preview__/preview.tsx",
     "src/components/Recovery/__preview__/preview.tsx",
@@ -204,7 +214,6 @@ const baseConfig: KnipConfig = {
     // src/App.tsx. Knip cannot trace import() calls, so these index.ts
     // re-exports appear unused despite being public API surfaces.
     "src/components/ActionPalette/index.ts",
-    "src/components/LogLevelPalette/index.ts",
     "src/components/QuickSwitcher/index.ts",
     "src/components/TerminalPalette/index.ts",
     "src/components/ThemePalette/index.ts",
@@ -250,12 +259,11 @@ const baseConfig: KnipConfig = {
 
   ignoreBinaries: [
     // The release workflow invokes CLI binaries from local npm workspaces.
-    // Screenshot and tour tooling require ffmpeg, ffprobe, and wrangler from
+    // Screenshot and tour tooling require ffmpeg and wrangler from
     // the host OS rather than npm dependencies in this package.
     "create-daintree-plugin",
     "daintree-plugin",
     "ffmpeg",
-    "ffprobe",
     "sqlite3",
     "wrangler",
     // why: Host OS commands invoked directly by platform-specific runtime,
@@ -329,7 +337,6 @@ const baseConfig: KnipConfig = {
     // unused from that workspace.
     "archiver",
     "yauzl",
-    "zod",
     // Native addon support, consumed only from electron/native/win-job-object/
     // binding.gyp (#7526). Knip walks JS/TS imports, not gyp files.
     "node-addon-api",

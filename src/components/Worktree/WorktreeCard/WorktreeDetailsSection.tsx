@@ -1,10 +1,10 @@
 import type React from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
 import { prefetchStagingStatus } from "@/components/Worktree/ReviewHub/stagingStatusCache";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import type { WorktreeState } from "@/types";
 import type { RetryAction } from "@/store";
 import type { ErrorRecord } from "@/store/errorStore";
-import { useAnimate } from "framer-motion";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { DURATION_200 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
@@ -21,9 +21,9 @@ import {
   ChevronRight,
   GitCommitHorizontal,
   Pause,
-  Plug,
   Play,
-  RotateCcw,
+  Plug,
+  RefreshCw,
   ShieldAlert,
   Trash2,
 } from "lucide-react";
@@ -41,6 +41,9 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
 } from "@/components/ui/context-menu";
+import { pluralize } from "@/lib/pluralize";
+
+const COUNT_BUMP_EASING = "cubic-bezier(0.4, 0, 0.2, 1)";
 
 const LazyLifecycleCommandApprovalDialog = lazy(() =>
   import("../LifecycleCommandApprovalDialog").then((m) => ({
@@ -143,7 +146,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   });
 
   const changedFileCount = worktree.worktreeChanges?.changedFileCount ?? 0;
-  const [countScope, animate] = useAnimate<HTMLSpanElement>();
+  const countRef = useRef<HTMLSpanElement>(null);
   const prefersReducedMotion = useShouldSkipMotion();
   const didMountRef = useRef(false);
   const prevCountRef = useRef(changedFileCount);
@@ -158,7 +161,8 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     prevCountRef.current = changedFileCount;
 
     if (prefersReducedMotion) return;
-    if (countScope.current == null) return;
+    const countEl = countRef.current;
+    if (countEl == null) return;
     if (
       document.body.dataset.performanceMode === "true" ||
       Date.now() - lastBumpTimeRef.current < DURATION_200
@@ -166,12 +170,19 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
       return;
 
     lastBumpTimeRef.current = Date.now();
-    animate(
-      countScope.current,
-      { scale: [1, 1.06, 1] },
-      { duration: DURATION_200 / 1000, ease: [0.4, 0, 0.2, 1] }
+    // Native WAAPI rather than framer-motion's useAnimate, which dragged its
+    // imperative animate/sequence runtime into the eager motion chunk. The
+    // easing sits on each keyframe so it applies per segment, as framer's
+    // single `ease` did across keyframes.
+    countEl.animate(
+      [
+        { transform: "scale(1)", easing: COUNT_BUMP_EASING },
+        { transform: "scale(1.06)", easing: COUNT_BUMP_EASING },
+        { transform: "scale(1)" },
+      ],
+      { duration: DURATION_200 }
     );
-  }, [changedFileCount, prefersReducedMotion, animate, countScope]);
+  }, [changedFileCount, prefersReducedMotion]);
 
   const isConflicted = reviewState === "conflicted";
   // A clean tree with unpushed commits still has a Review Hub next step —
@@ -419,29 +430,13 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     </span>
                   ) : hasChanges && worktree.worktreeChanges ? (
                     <span className="flex items-center gap-1.5 text-text-secondary">
-                      <span ref={countScope} className="inline-block">
-                        {worktree.worktreeChanges.changedFileCount} file
-                        {worktree.worktreeChanges.changedFileCount !== 1 ? "s" : ""}
+                      <span ref={countRef} className="inline-block">
+                        {pluralize(worktree.worktreeChanges.changedFileCount, "file")}
                       </span>
-                      {((worktree.worktreeChanges.insertions ?? 0) > 0 ||
-                        (worktree.worktreeChanges.deletions ?? 0) > 0) && (
-                        <span className="flex items-center gap-0.5">
-                          {(worktree.worktreeChanges.insertions ?? 0) > 0 && (
-                            <span className="text-status-success">
-                              +{worktree.worktreeChanges.insertions}
-                            </span>
-                          )}
-                          {(worktree.worktreeChanges.insertions ?? 0) > 0 &&
-                            (worktree.worktreeChanges.deletions ?? 0) > 0 && (
-                              <span className="text-text-muted">/</span>
-                            )}
-                          {(worktree.worktreeChanges.deletions ?? 0) > 0 && (
-                            <span className="text-status-error">
-                              -{worktree.worktreeChanges.deletions}
-                            </span>
-                          )}
-                        </span>
-                      )}
+                      <DiffStat
+                        insertions={worktree.worktreeChanges.insertions}
+                        deletions={worktree.worktreeChanges.deletions}
+                      />
                     </span>
                   ) : (
                     <span
@@ -628,7 +623,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     loading={isRetryingSetup}
                     className="shrink-0 shadow-none inset-shadow-none"
                   >
-                    <RotateCcw aria-hidden="true" />
+                    <RefreshCw aria-hidden="true" />
                     Retry setup
                   </Button>
                 </div>
@@ -683,7 +678,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                 // The row's own signal: an approval is waiting on the user.
                 <ShieldAlert className="text-status-warning" aria-hidden="true" />
               ) : (
-                <RotateCcw aria-hidden="true" />
+                <RefreshCw aria-hidden="true" />
               )}
               {commandsNeedApproval ? "Review commands" : "Run setup"}
             </Button>

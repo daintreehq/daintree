@@ -252,7 +252,7 @@ describe("ProjectSwitcher loading affordance", () => {
     expect(getByRole("button").querySelector(".animate-spin")).not.toBeNull();
   });
 
-  it("'Open Project…' (no projects at all) keeps Plus icon and does not get a spinner", () => {
+  it("'Open Project…' (no projects at all) keeps its FolderOpen icon and does not get a spinner", () => {
     setStore({
       projects: [],
       currentProject: null,
@@ -262,7 +262,7 @@ describe("ProjectSwitcher loading affordance", () => {
     advanceDeferGate();
     const trigger = getByRole("button", { name: /Open project/ });
     expect(within(trigger).getByText("Open project…")).toBeTruthy();
-    expect(trigger.querySelector(".lucide-plus")).not.toBeNull();
+    expect(trigger.querySelector(".lucide-folder-open")).not.toBeNull();
     expect(trigger.querySelector(".animate-spin")).toBeNull();
   });
 

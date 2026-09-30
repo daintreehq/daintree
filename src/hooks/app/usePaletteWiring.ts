@@ -1,3 +1,4 @@
+import { useCallback, useState } from "react";
 import {
   useWorktrees,
   useNewTerminalPalette,
@@ -13,16 +14,38 @@ import { useDoubleShift } from "@/hooks/useDoubleShift";
 import { useProjectMruSwitcher } from "@/hooks/useProjectMruSwitcher";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { usePaletteStore } from "@/store";
+import { useWorktreeStoreApi } from "@/hooks/useWorktreeStore";
+import { getNormalizedWorktreeMap } from "@/hooks/useWorktrees";
 
 /**
  * Composes the app's ~10 palette hooks (new-terminal, panel, project-switcher,
  * action, quick-switcher, send-to-agent, worktree, quick-create) plus the
  * theme/log-level/resume-sessions palette-store flags and every palette's
  * `useKeepMounted` exit-animation latch (#9917) into one typed bag.
+ *
+ * This runs in the app root, so the worktree list is only subscribed to while
+ * a surface that shows it — the worktree palette or the overview — is open;
+ * a whole-list subscription would re-render the root on every status tick.
  */
-export function usePaletteWiring() {
-  const { worktrees, worktreeMap, isLoading } = useWorktrees();
-  const newTerminalPalette = useNewTerminalPalette({ worktreeMap });
+export function usePaletteWiring({ isWorktreeOverviewOpen }: { isWorktreeOverviewOpen: boolean }) {
+  const isWorktreePaletteOpen = usePaletteStore((state) => state.activePaletteId === "worktree");
+  const isWorktreeListShown = isWorktreePaletteOpen || isWorktreeOverviewOpen;
+  const { worktrees: liveWorktrees, isLoading } = useWorktrees({ enabled: isWorktreeListShown });
+  // The palette stays mounted through its exit animation, so hold the list it
+  // closed with rather than letting the rows vanish mid-fade.
+  const [lastShownWorktrees, setLastShownWorktrees] = useState(liveWorktrees);
+  if (isWorktreeListShown && lastShownWorktrees !== liveWorktrees) {
+    setLastShownWorktrees(liveWorktrees);
+  }
+  const worktrees = isWorktreeListShown ? liveWorktrees : lastShownWorktrees;
+
+  const worktreeStore = useWorktreeStoreApi();
+  const getWorktree = useCallback(
+    (worktreeId: string) =>
+      getNormalizedWorktreeMap(worktreeStore.getState().worktrees).get(worktreeId),
+    [worktreeStore]
+  );
+  const newTerminalPalette = useNewTerminalPalette({ getWorktree });
   const panelPalette = usePanelPalette();
   const projectSwitcherPalette = useProjectSwitcherPalette();
   const actionPalette = useActionPalette();

@@ -28,7 +28,6 @@ import {
   FileViewerToolbar,
   TOOLBAR_ICON_CLASS,
   useFileViewerToolbarCompact,
-  useMenuCopy,
 } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -57,14 +56,14 @@ import {
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { toFileReadErrorCode } from "@/components/FileViewer/fileReadErrors";
+import { useFileChangeCount, type FileChangeSignal } from "@/hooks/useFileChangeCount";
 import {
   FileUnavailableState as UnavailableState,
   unavailableCopy,
   type UnavailableReason,
 } from "@/components/FileViewer/FileUnavailableState";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { copyWithToast } from "@/lib/copyWithToast";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -111,6 +110,12 @@ export interface FileBrowserViewerProps {
    * reflected instead of leaving stale bytes on screen.
    */
   revision: string;
+  /**
+   * What moved behind `revision`'s change-tick half, so a tick whose changed
+   * directories cannot contain the open file skips the re-read. Absent (a
+   * workspace root, a test) means every revision re-reads.
+   */
+  changeSignal?: FileChangeSignal;
   /**
    * Changes on a foreground refresh — pressing Refresh, or returning to this
    * project after it sat cached — never on an ambient worktree tick. The half
@@ -264,6 +269,7 @@ export function FileBrowserViewer({
   fileName,
   relativePath,
   revision,
+  changeSignal,
   surfaceRefreshNonce,
   mediaReloadNonce,
   onMediaPlayingChange,
@@ -404,12 +410,33 @@ export function FileBrowserViewer({
   // size the reader last chose in whichever surface they opened it (#12134).
   const markdownFontSize = usePreferencesStore((state) => state.markdownFontSize);
   const setMarkdownFontSize = usePreferencesStore((state) => state.setMarkdownFontSize);
-  // Bumped on every load so `HtmlViewer` re-navigates its sandboxed frame when
-  // an agent rewrites the file underneath it.
+  // Bumped so `HtmlViewer` re-navigates its sandboxed frame when an agent
+  // rewrites the file underneath it — but only then, or on a foreground
+  // refresh. The nonce is the frame's only src input, and most ticks are writes
+  // to other files: bumping on every read would throw away the page's scroll
+  // and in-page JS state for nothing. Same bargain as `FilePane`'s ambient
+  // reads, including its cost: an unchanged entry file whose relative asset
+  // was rewritten waits for Refresh.
   const [reloadNonce, setReloadNonce] = useState(0);
   // Which file the state on screen belongs to. A re-read triggered by a listing
   // change is for the same file, so it must not clear what is already rendered.
   const shownPathRef = useRef<string | null>(null);
+  const lastContentRef = useRef<string | null>(null);
+  const lastSurfaceRefreshNonceRef = useRef(surfaceRefreshNonce);
+  // Survives a read the next one cancelled, so a Refresh pressed mid-read
+  // still re-navigates once the read that replaced it lands.
+  const forceSurfaceReloadRef = useRef(false);
+  // The file whose last read came back through its own realpath. Only such a
+  // path can be matched against the directories the watcher names, so only it
+  // may skip a tick. A failed read re-reads on every tick, which is what lets a
+  // read that raced a half-written file recover without a Refresh.
+  const [canonicalFilePath, setCanonicalFilePath] = useState<string | null>(null);
+  const fileChangeCount = useFileChangeCount(
+    revision,
+    changeSignal,
+    relativePath,
+    canonicalFilePath !== null && canonicalFilePath === filePath && state.status !== "error"
+  );
 
   useEffect(() => {
     if (!filePath || !rootPath) {
@@ -423,6 +450,11 @@ export function FileBrowserViewer({
     const isSvg = isSvgFilePath(filePath);
     const isSameFile = shownPathRef.current === filePath;
     shownPathRef.current = filePath;
+    if (!isSameFile) lastContentRef.current = null;
+    if (lastSurfaceRefreshNonceRef.current !== surfaceRefreshNonce) {
+      forceSurfaceReloadRef.current = true;
+      lastSurfaceRefreshNonceRef.current = surfaceRefreshNonce;
+    }
 
     // Raster images never round-trip their bytes through IPC — the
     // `daintree-file://` protocol serves them straight to the <img>.
@@ -479,11 +511,17 @@ export function FileBrowserViewer({
     if (!isSameFile) setState({ status: "loading" });
     const wantsHtmlPreview = isHtmlFilePath(filePath);
 
+    // A read being repeated can't vouch for the path it is about to re-answer.
+    setCanonicalFilePath(null);
     void filesClient
       .read({ path: filePath, rootPath, ...(wantsHtmlPreview && { htmlPreview: true }) })
       .then((result) => {
         if (cancelled) return;
-        setReloadNonce((nonce) => nonce + 1);
+        const bytesChanged = lastContentRef.current !== result.content;
+        lastContentRef.current = result.content;
+        if (bytesChanged || forceSurfaceReloadRef.current) setReloadNonce((nonce) => nonce + 1);
+        forceSurfaceReloadRef.current = false;
+        setCanonicalFilePath(result.pathIsCanonical === true ? filePath : null);
         if (isSvg) {
           // Sanitized here, never handed to the viewer raw: `FileImagePreview`
           // documents that its input must already be safe. A rejected SVG shows
@@ -519,16 +557,13 @@ export function FileBrowserViewer({
     return () => {
       cancelled = true;
     };
-    // `revision` is a dependency, not a value this effect reads: a committed
-    // listing change means the open file may have been rewritten under the same
-    // path, which no other dependency would notice.
-  }, [filePath, rootPath, revision]);
+    // `fileChangeCount` is a dependency, not a value this effect reads: a
+    // change tick that could have touched this file means it may have been
+    // rewritten under the same path, which no other dependency would notice.
+  }, [filePath, rootPath, fileChangeCount, surfaceRefreshNonce]);
 
-  // Toolbar state — the path pill's copied flash and the external actions'
-  // pending/error tracking. Reset when the file changes: a failure banner for
+  // Toolbar state — the external actions' pending/error tracking. Reset when the file changes: a failure banner for
   // a file no longer on screen would aim its Retry at the wrong path.
-  const [pathCopied, setPathCopied] = useState(false);
-  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [externalError, setExternalError] = useState<{
     message: string;
     target: ExternalTarget;
@@ -545,14 +580,7 @@ export function FileBrowserViewer({
     externalInFlightRef.current.clear();
     setExternalError(null);
     setPendingTargets([]);
-    setPathCopied(false);
   }, [filePath, folderPath]);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
-    };
-  }, []);
 
   // What the path pill names, absolute: the open file, else the listed folder,
   // else the file that vanished — the three things the pill can identify.
@@ -568,21 +596,6 @@ export function FileBrowserViewer({
       : missingFilePath !== null
         ? join(basePath, missingFilePath)
         : null);
-
-  const handleCopyPath = useCallback(() => {
-    if (!identityAbsolutePath || !navigator.clipboard) return;
-    void navigator.clipboard
-      .writeText(identityAbsolutePath)
-      .then(() => {
-        useAnnouncerStore.getState().announce("Path copied");
-        setPathCopied(true);
-        if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
-        copyTimerRef.current = setTimeout(() => setPathCopied(false), UI_ACTION_SUCCESS_DWELL_MS);
-      })
-      .catch(() => {
-        /* clipboard unavailable — the tooltip simply never flips to Copied */
-      });
-  }, [identityAbsolutePath]);
 
   const handleExternalAction = useCallback(
     async (target: ExternalTarget) => {
@@ -729,8 +742,7 @@ export function FileBrowserViewer({
             path={identityLabel}
             icon={identityIcon}
             copyLabel={filePath || missingFilePath !== null ? "Copy file path" : "Copy folder path"}
-            copied={pathCopied}
-            onCopy={handleCopyPath}
+            copyText={identityAbsolutePath}
           />
         )}
         {/* The right-aligned group, following whatever the viewer is showing:
@@ -1300,14 +1312,10 @@ function FileActions({
   onOpen: () => void;
 }) {
   const compact = useFileViewerToolbarCompact();
-  const menuCopy = useMenuCopy();
 
   if (compact) {
     return (
-      <FileViewerToolbar.MoreActions
-        data-testid="file-browser-more-actions"
-        confirmed={menuCopy.copied}
-      >
+      <FileViewerToolbar.MoreActions data-testid="file-browser-more-actions">
         {textSize && (
           <>
             <MarkdownTextSizeMenuItems
@@ -1329,7 +1337,13 @@ function FileActions({
           </>
         )}
         {contents !== null && (
-          <DropdownMenuItem onSelect={() => menuCopy.copy(contents)}>
+          <DropdownMenuItem
+            onSelect={() =>
+              copyWithToast("File contents", contents, {
+                message: filePath.split(/[/\\]/).pop() ?? filePath,
+              })
+            }
+          >
             <Copy className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
             Copy file contents
           </DropdownMenuItem>

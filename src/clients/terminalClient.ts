@@ -42,6 +42,23 @@ const dataCallbacks = new Map<string, Set<TerminalDataCallback>>();
 const earlyDataBuffer = new Map<string, Array<{ data: string | Uint8Array; streamEnd?: number }>>();
 const earlyDataBufferBytes = new Map<string, number>();
 const pendingPortAckBytes = new Map<string, number[]>();
+// Ids the renderer just killed/trashed. The host can still have data chunks in
+// flight on the MessagePort when kill() lands; without this they would find no
+// dataCallbacks and re-create an early buffer (up to MAX_EARLY_BUFFER_BYTES)
+// for an id nobody will ever attach to. Bounded, oldest-first: the in-flight
+// window is milliseconds. Cleared when the id is revived (spawn, reconnect,
+// restore, onData).
+const closedIds = new Set<string>();
+const MAX_CLOSED_IDS = 4096;
+
+function markClosed(id: string): void {
+  closedIds.delete(id);
+  closedIds.add(id);
+  if (closedIds.size > MAX_CLOSED_IDS) {
+    const oldest = closedIds.values().next().value;
+    if (oldest !== undefined) closedIds.delete(oldest);
+  }
+}
 // The early buffer only needs to cover the spawn→attach race window — late
 // attachers recover full history through the serialized-state restore path.
 // Cap both chunk count and retained bytes, evicting the OLDEST chunks: the
@@ -210,6 +227,7 @@ function installPortDataHandler(port: MessagePort): void {
           // Port closed — ack lost, safety timeout will resume PTY
         }
 
+        if (closedIds.has(msg.id)) return;
         let buf = earlyDataBuffer.get(msg.id);
         if (!buf) {
           buf = [];
@@ -348,6 +366,7 @@ if (typeof window !== "undefined") {
 
 export const terminalClient = {
   spawn: (options: TerminalSpawnOptions): Promise<string> => {
+    if (options.id) closedIds.delete(options.id);
     return window.electron.terminal.spawn(options);
   },
 
@@ -469,13 +488,14 @@ export const terminalClient = {
    * message, the host writes to each PTY in a tight loop. Keeps renderer
    * latency bounded regardless of fleet size.
    */
-  broadcast: (ids: string[], data: string): void => {
+  broadcast: (ids: string[], data: string, reportSuccess = false): void => {
     if (ids.length === 0 || data.length === 0) return;
-    window.electron.terminal.broadcastWrite(ids, data);
+    window.electron.terminal.broadcastWrite(ids, data, reportSuccess);
   },
 
   /**
-   * Listen for per-target results emitted after every fleet broadcast write.
+   * Listen for per-target results emitted after a fleet broadcast write that
+   * failed somewhere, or that was asked to report successes.
    * Used by `fleetRawInputBroadcast` to surface the failure chip and to
    * auto-disarm targets whose pty is permanently gone (EPIPE/EIO/EBADF/
    * ECONNRESET).
@@ -518,6 +538,7 @@ export const terminalClient = {
   },
 
   kill: (id: string): Promise<void> => {
+    markClosed(id);
     earlyDataBuffer.delete(id);
     earlyDataBufferBytes.delete(id);
     pendingPortAckBytes.delete(id);
@@ -527,6 +548,7 @@ export const terminalClient = {
   },
 
   gracefulKill: (id: string): Promise<string | null> => {
+    markClosed(id);
     earlyDataBuffer.delete(id);
     earlyDataBufferBytes.delete(id);
     pendingPortAckBytes.delete(id);
@@ -536,6 +558,7 @@ export const terminalClient = {
   },
 
   trash: (id: string): Promise<void> => {
+    markClosed(id);
     earlyDataBuffer.delete(id);
     earlyDataBufferBytes.delete(id);
     pendingPortAckBytes.delete(id);
@@ -545,10 +568,12 @@ export const terminalClient = {
   },
 
   restore: (id: string): Promise<boolean> => {
+    closedIds.delete(id);
     return window.electron.terminal.restore(id);
   },
 
   onData: (id: string, callback: TerminalDataCallback): (() => void) => {
+    closedIds.delete(id);
     // Register in per-terminal callback set for MessagePort data dispatch
     let cbs = dataCallbacks.get(id);
     if (!cbs) {
@@ -838,6 +863,7 @@ export const terminalClient = {
    * Returns the terminal info if it exists, error otherwise.
    */
   reconnect: (terminalId: string): Promise<TerminalReconnectResult> => {
+    closedIds.delete(terminalId);
     return window.electron.terminal.reconnect(terminalId);
   },
 
@@ -847,6 +873,7 @@ export const terminalClient = {
    * `{ exists: false }`. Used by the cold-boot panel-restore prefetch.
    */
   reconnectBulk: (terminalIds: string[]): Promise<Record<string, TerminalReconnectResult>> => {
+    for (const id of terminalIds) closedIds.delete(id);
     return window.electron.terminal.reconnectBulk(terminalIds);
   },
 

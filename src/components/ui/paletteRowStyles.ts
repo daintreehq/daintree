@@ -52,6 +52,53 @@ export const PALETTE_ROW_CLASS = cn(
 );
 
 /**
+ * Hover for a row in a list-detail list, where the selection and the row under
+ * the pointer really are two states: the same neutral direction as the
+ * highlight, one step lighter, and never painted on the selected row itself.
+ *
+ * Keyed on the same two attributes the highlight reads rather than on a JS
+ * ternary at each site. That is the whole point of a shared constant here: the
+ * file lists had each grown `isSelected ? subtle : hover:tint/5`, which is the
+ * hover brighter than the selection it is meant to sit under.
+ */
+export const LIST_ROW_HOVER_CLASS =
+  "not-aria-selected:not-data-[selected=true]:hover:bg-overlay-subtle";
+
+/**
+ * The row a context menu is open on.
+ *
+ * An outline, not a fill. The row under a right-click is usually also the row
+ * under the pointer and often the selection, so a fill tier would have to sit
+ * somewhere on a ladder that already holds hover and selection — and on light
+ * themes there is no rung left: `overlay-raised` and `overlay-highlight` are
+ * the same colour, so a raised menu target was indistinguishable from the
+ * selection. A ring composes with either fill instead of competing with it,
+ * which is also how Finder marks a context-menu target. Neutral, because the
+ * accent in a list belongs to keyboard focus.
+ *
+ * Radix writes `data-state="open"` onto the row through the `asChild` trigger.
+ */
+export const ROW_MENU_TARGET_CLASS = cn(
+  "data-[state=open]:outline data-[state=open]:outline-1 data-[state=open]:-outline-offset-1",
+  "data-[state=open]:outline-border-strong data-[state=open]:text-text-primary"
+);
+
+/**
+ * A row in a list-detail list: the selected record takes the highlight, the
+ * pointer a lighter step, and an open row menu its own ring. Import this rather
+ * than composing the three by hand.
+ *
+ * Selection is `aria-selected` where the row is a real option or tree item, and
+ * `data-selected` where the row is a plain list item that carries its own
+ * controls (see `PALETTE_ROW_CLASS`).
+ */
+export const LIST_DETAIL_ROW_CLASS = cn(
+  PALETTE_ROW_CLASS,
+  LIST_ROW_HOVER_CLASS,
+  ROW_MENU_TARGET_CLASS
+);
+
+/**
  * The label that names a band of rows ("Pinned", "Scratch", "Recent").
  *
  * Same drift as the row treatment: most palettes drew it as a 10px tracked

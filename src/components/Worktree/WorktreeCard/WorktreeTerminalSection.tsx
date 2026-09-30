@@ -4,6 +4,7 @@ import type React from "react";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import type { PtyPanelData } from "@shared/types/panel";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { cn } from "@/lib/utils";
 import type { WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";
 import { getAgentConfig } from "@/config/agents";
@@ -27,6 +28,7 @@ import {
   Plus,
   SquareTerminal,
 } from "lucide-react";
+import { DRAG_GRIP_CLASS, DRAG_GRIP_ICON_CLASS } from "@/components/ui/dragGripStyles";
 import {
   SortableWorktreeTerminal,
   getAccordionDragId,
@@ -36,6 +38,7 @@ import { DismissButton } from "@/components/ui/DismissButton";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
 import { SECTION_LABEL, CARD_DENSITY } from "./sectionChrome";
+import { pluralize } from "@/lib/pluralize";
 
 interface MarqueeBox {
   x: number;
@@ -88,23 +91,25 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
     onPointerLeave: () => setIsOverMeta(false),
   };
 
+  // The session's own menu, not the worktree card's it sits inside.
   return (
-    <div
-      data-terminal-id={term.id}
-      data-terminal-runtime-kind={chrome.runtimeKind}
-      data-terminal-agent-id={chrome.agentId || undefined}
-      data-terminal-agent-state={agentState || undefined}
-      data-session-row=""
-      className={cn(
-        "rounded-[var(--radius-lg)]",
-        // 4px in, not 2: at 2 the stroke sat 1px inside the well's border and
-        // met the next armed row's stroke edge to edge.
-        isArmed && "outline outline-2 outline-offset-[-4px]",
-        isArmed && isPrimary && "outline-solid outline-accent-primary",
-        isArmed && !isPrimary && "outline-dashed outline-border-strong"
-      )}
-    >
-      {/* One row, the same height as the disclosure row that owns it. It used
+    <TerminalContextMenu terminalId={term.id} proxy>
+      <div
+        data-terminal-id={term.id}
+        data-terminal-runtime-kind={chrome.runtimeKind}
+        data-terminal-agent-id={chrome.agentId || undefined}
+        data-terminal-agent-state={agentState || undefined}
+        data-session-row=""
+        className={cn(
+          "rounded-[var(--radius-lg)]",
+          // 4px in, not 2: at 2 the stroke sat 1px inside the well's border and
+          // met the next armed row's stroke edge to edge.
+          isArmed && "outline outline-2 outline-offset-[-4px]",
+          isArmed && isPrimary && "outline-solid outline-accent-primary",
+          isArmed && !isPrimary && "outline-dashed outline-border-strong"
+        )}
+      >
+        {/* One row, the same height as the disclosure row that owns it. It used
           to be 40px against that row's 26 — 8px of padding around a 24px grip
           box — so two sessions spent more height than the rest of the card's
           body, and children read heavier than their parent.
@@ -114,110 +119,111 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
           glyph still lands under the trigger's label. Trailing, it was a
           fourth mark in a cluster of three, 34px of permanent chrome taken
           from the title. */}
-      <div className="worktree-section-button group/termrow flex items-center rounded-[var(--radius-lg)] border border-transparent">
-        <button
-          ref={dragHandle?.setActivatorNodeRef}
-          type="button"
-          data-drag-handle
-          data-session-grip=""
-          className="flex h-6 w-6 shrink-0 items-center justify-center cursor-grab rounded-[var(--radius-md)] text-text-secondary hover:text-text-primary focus-visible:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px] active:cursor-grabbing"
-          aria-label="Drag to move terminal"
-          {...(dragHandle?.listeners as React.HTMLAttributes<HTMLElement> | undefined)}
-        >
-          <GripVertical className="w-3 h-3" aria-hidden="true" />
-        </button>
+        <div className="worktree-section-button group/termrow flex items-center rounded-[var(--radius-lg)] border border-transparent">
+          <button
+            ref={dragHandle?.setActivatorNodeRef}
+            type="button"
+            data-drag-handle
+            data-session-grip=""
+            className={DRAG_GRIP_CLASS}
+            aria-label="Drag to move terminal"
+            {...(dragHandle?.listeners as React.HTMLAttributes<HTMLElement> | undefined)}
+          >
+            <GripVertical className={DRAG_GRIP_ICON_CLASS} aria-hidden="true" />
+          </button>
 
-        <TruncatedTooltip content={term.title} isTruncated={isTruncated} disabled={isOverMeta}>
-          {/* The whole rest of the row is the button, trailing marks
+          <TruncatedTooltip content={term.title} isTruncated={isTruncated} disabled={isOverMeta}>
+            {/* The whole rest of the row is the button, trailing marks
               included: the hover fill paints the full row, so the full row is
               what a click has to answer to. */}
-          <button
-            type="button"
-            onMouseDown={suppressShiftClickTextSelection}
-            onClick={(e) => {
-              e.stopPropagation();
-              onClick(term);
-            }}
-            aria-pressed={isArmable ? isArmed : undefined}
-            // Named by the title alone: the placement and command below are
-            // descriptions, and as descendant text they would otherwise be
-            // read twice and change the toggle's name whenever they change.
-            aria-labelledby={titleId}
-            aria-describedby={showCommand ? `${commandId} ${placementId}` : placementId}
-            className={cn(
-              // The ring is drawn by a pseudo-element reaching back over the
-              // grip's gutter, so it outlines the row rather than clipping the
-              // agent glyph that starts this button.
-              "relative flex min-w-0 flex-1 items-center gap-2 self-stretch pr-2.5 text-left cursor-pointer focus-visible:outline-hidden before:pointer-events-none before:absolute before:inset-y-0 before:-left-6 before:right-0 before:rounded-[var(--radius-lg)] focus-visible:before:outline focus-visible:before:outline-2 focus-visible:before:outline-accent-primary focus-visible:before:outline-offset-[-2px]",
-              padY
-            )}
-          >
-            <TerminalIcon kind={term.kind} chrome={chrome} className="w-3 h-3 shrink-0" />
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span
-                ref={ref}
-                id={titleId}
-                className="truncate text-xs font-medium text-text-secondary transition-colors group-hover/termrow:text-text-primary group-has-[:focus-visible]/termrow:text-text-primary"
-              >
-                {term.title}
+            <button
+              type="button"
+              onMouseDown={suppressShiftClickTextSelection}
+              onClick={(e) => {
+                e.stopPropagation();
+                onClick(term);
+              }}
+              aria-pressed={isArmable ? isArmed : undefined}
+              // Named by the title alone: the placement and command below are
+              // descriptions, and as descendant text they would otherwise be
+              // read twice and change the toggle's name whenever they change.
+              aria-labelledby={titleId}
+              aria-describedby={showCommand ? `${commandId} ${placementId}` : placementId}
+              className={cn(
+                // The ring is drawn by a pseudo-element reaching back over the
+                // grip's gutter, so it outlines the row rather than clipping the
+                // agent glyph that starts this button.
+                "relative flex min-w-0 flex-1 items-center gap-2 self-stretch pr-2.5 text-left cursor-pointer focus-visible:outline-hidden before:pointer-events-none before:absolute before:inset-y-0 before:-left-6 before:right-0 before:rounded-[var(--radius-lg)] focus-visible:before:outline focus-visible:before:outline-2 focus-visible:before:outline-accent-primary focus-visible:before:outline-offset-[-2px]",
+                padY
+              )}
+            >
+              <TerminalIcon kind={term.kind} chrome={chrome} className="w-3 h-3 shrink-0" />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span
+                  ref={ref}
+                  id={titleId}
+                  className="truncate text-xs font-medium text-text-secondary transition-colors group-hover/termrow:text-text-primary group-has-[:focus-visible]/termrow:text-text-primary"
+                >
+                  {term.title}
+                </span>
+                {showCommand && (
+                  <Tooltip autoDismiss={false}>
+                    <TooltipTrigger asChild>
+                      <span
+                        id={commandId}
+                        className="truncate text-2xs font-mono text-text-secondary"
+                        {...metaPointer}
+                      >
+                        {term.lastCommand}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{term.lastCommand}</TooltipContent>
+                  </Tooltip>
+                )}
               </span>
-              {showCommand && (
-                <Tooltip autoDismiss={false}>
+
+              <span className="flex shrink-0 items-center gap-1.5">
+                {isArmed && armBadge !== undefined && (
+                  <span
+                    className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-accent-primary px-1 text-4xs font-mono font-semibold text-accent-primary-foreground tabular-nums"
+                    aria-label={`Armed position ${armBadge}`}
+                  >
+                    {armBadge}
+                  </span>
+                )}
+
+                {StateIcon && agentState && (
+                  <StateIcon
+                    className={cn(
+                      "w-3 h-3",
+                      getEffectiveStateColor(agentState),
+                      agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
+                    )}
+                    aria-label={STATE_LABELS[agentState]}
+                  />
+                )}
+
+                <Tooltip>
                   <TooltipTrigger asChild>
-                    <span
-                      id={commandId}
-                      className="truncate text-2xs font-mono text-text-secondary"
-                      {...metaPointer}
-                    >
-                      {term.lastCommand}
+                    <span className="text-text-secondary" {...metaPointer}>
+                      <span id={placementId} className="sr-only">
+                        {placementLabel}
+                      </span>
+                      {term.location === "dock" ? (
+                        <PanelBottom className="w-3 h-3" aria-hidden="true" />
+                      ) : (
+                        <PanelTopClose className="w-3 h-3" aria-hidden="true" />
+                      )}
                     </span>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">{term.lastCommand}</TooltipContent>
+                  <TooltipContent side="bottom">{placementLabel}</TooltipContent>
                 </Tooltip>
-              )}
-            </span>
-
-            <span className="flex shrink-0 items-center gap-1.5">
-              {isArmed && armBadge !== undefined && (
-                <span
-                  className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-accent-primary px-1 text-4xs font-mono font-semibold text-accent-primary-foreground tabular-nums"
-                  aria-label={`Armed position ${armBadge}`}
-                >
-                  {armBadge}
-                </span>
-              )}
-
-              {StateIcon && agentState && (
-                <StateIcon
-                  className={cn(
-                    "w-3 h-3",
-                    getEffectiveStateColor(agentState),
-                    agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
-                  )}
-                  aria-label={STATE_LABELS[agentState]}
-                />
-              )}
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="text-text-secondary" {...metaPointer}>
-                    <span id={placementId} className="sr-only">
-                      {placementLabel}
-                    </span>
-                    {term.location === "dock" ? (
-                      <PanelBottom className="w-3 h-3" aria-hidden="true" />
-                    ) : (
-                      <PanelTopClose className="w-3 h-3" aria-hidden="true" />
-                    )}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{placementLabel}</TooltipContent>
-              </Tooltip>
-            </span>
-          </button>
-        </TruncatedTooltip>
+              </span>
+            </button>
+          </TruncatedTooltip>
+        </div>
       </div>
-    </div>
+    </TerminalContextMenu>
   );
 }
 
@@ -280,12 +286,11 @@ export function WorktreeTerminalSection({
       counts.byState,
       counts.total
     );
-    const plural = counts.total !== 1 ? "s" : "";
     // The collapsed trigger names itself once. Left to name-from-content it
     // read "3 active 3 sessions: 2 working, …" — the visible summary, then
     // the cluster's own name repeating the total. Starts with the visible
     // "N active" so speech input can still target it by what is on screen.
-    const triggerLabel = `${counts.total} active session${plural}${breakdown ? `: ${breakdown}` : ""}`;
+    const triggerLabel = `${pluralize(counts.total, "active session")}${breakdown ? `: ${breakdown}` : ""}`;
     return {
       visibleTerminalStates: visibleStates,
       terminalSessionAriaLabel: label,

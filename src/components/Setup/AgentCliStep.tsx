@@ -6,7 +6,7 @@ import {
   ExternalLink,
   ChevronRight,
   Download,
-  AlertCircle,
+  CircleX,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AGENT_REGISTRY, getAgentConfig } from "@/config/agents";
@@ -23,6 +23,7 @@ import { DEFAULT_DANGEROUS_ARGS, resolveDangerousMode } from "@shared/types/agen
 import { CopyableCommand } from "./CopyableCommand";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { AGENT_DESCRIPTIONS } from "@/config/agents";
 import type { CliAvailability } from "@shared/types";
@@ -322,7 +323,7 @@ export function AgentCliStep({
                     </span>
                   ) : isError ? (
                     <span className="inline-flex items-center gap-1 text-2xs text-status-error font-medium">
-                      <AlertCircle className="w-3 h-3" />
+                      <CircleX className="w-3 h-3" />
                       Failed
                     </span>
                   ) : isManual ? (
@@ -350,20 +351,22 @@ export function AgentCliStep({
               </div>
 
               {hasMultipleMethods && !isInstalled && (
-                <div className="flex items-center gap-1 pl-14 pt-1 pb-0.5">
-                  <span className="text-3xs text-text-placeholder mr-1">via</span>
-                  {blocks.map((block, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      disabled={isInstalling || isBatchRunning}
-                      onClick={() => handleMethodChange(agentId, idx)}
-                      data-selected={idx === currentMethodIdx || undefined}
-                      className="px-1.5 py-0.5 rounded-[var(--radius-xs)] text-3xs text-text-secondary transition-colors hover:text-text-primary data-[selected]:bg-overlay-medium data-[selected]:text-text-primary disabled:opacity-50 disabled:pointer-events-none cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-                    >
-                      {block.label ?? `Method ${idx + 1}`}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-2 pl-14 pt-1 pb-0.5">
+                  <span className="text-2xs text-text-secondary" aria-hidden="true">
+                    via
+                  </span>
+                  <SegmentedRadioGroup
+                    density="compact"
+                    aria-label={`Install method for ${config.name}`}
+                    options={blocks.map((block, idx) => ({
+                      value: String(idx),
+                      label: block.label ?? `Method ${idx + 1}`,
+                    }))}
+                    value={String(currentMethodIdx)}
+                    onChange={(value) => handleMethodChange(agentId, Number(value))}
+                    disabled={isInstalling || isBatchRunning}
+                    testId={`install-method-${agentId}`}
+                  />
                 </div>
               )}
 

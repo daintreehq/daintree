@@ -2623,6 +2623,29 @@ describe("useMcpBridge", () => {
       const options = mocks.dispatch.mock.calls[0]?.[2] as Record<string, unknown>;
       expect(options.hostApprovedTargets).toBeUndefined();
     });
+
+    it("attests every named target itself under the skip preference, with no modal (#12989)", async () => {
+      mocks.get.mockReturnValue(killBatchManifestEntry());
+      mocks.dispatch.mockResolvedValue({ ok: true, data: {} });
+      mocks.panelsById = { p1: { id: "p1", title: "zsh" } };
+      renderHook(() => useMcpBridge());
+
+      await dispatchHandler?.({
+        requestId: "req-batch",
+        actionId: "terminal.killBatch",
+        args: { terminalIds: ["p1", "gone"] },
+        confirmed: true,
+        authorization: "skip-preference",
+      });
+
+      expect(useMcpConfirmStore.getState().current).toBeNull();
+      const options = mocks.dispatch.mock.calls[0]?.[2] as Record<string, unknown>;
+      expect(options).toMatchObject({ confirmed: true });
+      expect(options.hostApprovedTargets).toEqual([
+        { id: "p1", observedAgentRunning: false },
+        { id: "gone", observedAgentRunning: false },
+      ]);
+    });
   });
 });
 

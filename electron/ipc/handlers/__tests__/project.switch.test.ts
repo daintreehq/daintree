@@ -638,7 +638,8 @@ describe("project:switch multi-window PVM routing", () => {
     expect(pvm2.switchTo).toHaveBeenCalledWith(
       "proj-new",
       "/projects/new",
-      expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" })
+      expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" }),
+      { requesterWebContentsId: 20 }
     );
     // Window 1's PVM should NOT have been called
     expect(pvm1.switchTo).not.toHaveBeenCalled();
@@ -684,7 +685,8 @@ describe("project:switch multi-window PVM routing", () => {
     expect(pvmFallback.switchTo).toHaveBeenCalledWith(
       "proj-new",
       "/projects/new",
-      expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" })
+      expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" }),
+      { requesterWebContentsId: 99 }
     );
   });
 
@@ -782,7 +784,8 @@ describe("project:switch multi-window PVM routing", () => {
     expect(pvm2.switchTo).toHaveBeenCalledWith(
       "proj-reopen",
       "/projects/reopen",
-      expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" })
+      expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" }),
+      { requesterWebContentsId: 20 }
     );
     expect(pvm1.switchTo).not.toHaveBeenCalled();
   });
@@ -2778,7 +2781,8 @@ describe("project switch/reopen redirects to the window that owns the project (#
       expect(senderPvm.switchTo).toHaveBeenCalledWith(
         TARGET.id,
         TARGET.path,
-        expect.objectContaining({ switchId: expect.any(String) })
+        expect.objectContaining({ switchId: expect.any(String) }),
+        { requesterWebContentsId: SENDER_EVENT.sender.id }
       );
     });
 

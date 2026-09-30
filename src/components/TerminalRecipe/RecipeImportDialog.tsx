@@ -2,11 +2,17 @@ import { useEffect, useId, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Field, FieldError } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
-import { FIELD_INPUT, FormGrid, FormRow } from "@/components/Worktree/views";
+import { FIELD_CONTROL_SIZE, FormGrid, FormRow } from "@/components/Worktree/views";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import { cn } from "@/lib/utils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface RecipeImportDialogProps {
@@ -80,20 +86,23 @@ export function RecipeImportDialog({ isOpen, onClose, projectId }: RecipeImportD
       <AppDialog.Body>
         <FormGrid>
           <FormRow label="Import as" htmlFor={scopeId}>
-            <select
-              id={scopeId}
+            <Select
               value={scope}
-              onChange={(e) => {
-                setScope(e.target.value === "global" ? "global" : "project");
+              onValueChange={(value) => {
+                setScope(value === "global" ? "global" : "project");
                 setImportError(null);
               }}
-              className={cn(FIELD_INPUT, "pr-8")}
             >
-              <option value="project" disabled={!projectId}>
-                Project (current project only)
-              </option>
-              <option value="global">Global (all projects)</option>
-            </select>
+              <SelectTrigger id={scopeId} className={FIELD_CONTROL_SIZE}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="project" disabled={!projectId}>
+                  Project (current project only)
+                </SelectItem>
+                <SelectItem value="global">Global (all projects)</SelectItem>
+              </SelectContent>
+            </Select>
           </FormRow>
         </FormGrid>
 

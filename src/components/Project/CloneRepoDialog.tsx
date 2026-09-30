@@ -1,13 +1,16 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
+import { ProgressBar } from "@/components/ui/ProgressBar";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { InlineError } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
+import { KbdChord } from "@/components/ui/Kbd";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { cn } from "@/lib/utils";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Check, CircleSlash, FolderOpen, LogIn } from "lucide-react";
+import { Check, CircleSlash, FolderOpen, LogIn, CheckCircle2 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
-import { FolderGit2 } from "@/components/icons";
+import { FolderDown } from "@/components/icons";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { projectClient, systemClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
@@ -560,9 +563,9 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       <div className="space-y-2.5 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-3 py-3">
         <div className="space-y-1">
           <span className="text-xs font-medium text-text-secondary">Source</span>
-          <p className="truncate text-xs font-mono text-text-primary" title={normalizedUrl}>
-            {normalizedUrl}
-          </p>
+          <TruncatedTooltip content={normalizedUrl}>
+            <p className="truncate text-xs font-mono text-text-primary">{normalizedUrl}</p>
+          </TruncatedTooltip>
         </div>
         <div className="space-y-1">
           <span className="text-xs font-medium text-text-secondary">Destination</span>
@@ -612,7 +615,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       <AppDialog.Header>
         {/* Neutral, not accent: the header glyph is decoration, and this focus
             region's one load-bearing accent is the keyboard focus ring. */}
-        <AppDialog.Title icon={<FolderGit2 className="h-4 w-4 text-text-secondary" />}>
+        <AppDialog.Title icon={<FolderDown className="h-4 w-4 text-text-secondary" />}>
           Clone repository
         </AppDialog.Title>
         <AppDialog.CloseButton />
@@ -627,7 +630,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             aria-atomic="true"
           >
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-status-success/15">
-              <Check className="h-6 w-6 text-status-success" />
+              <CheckCircle2 className="h-6 w-6 text-status-success" />
             </div>
             <div className="space-y-1">
               <h3 className="text-base font-semibold text-text-primary">Repository cloned</h3>
@@ -678,23 +681,10 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                   with no measurable progress and gains it the moment git speaks,
                   and swapping the indicator in would shift everything under it.
                   Indeterminate omits `aria-valuenow` and pulses the empty track. */}
-              <div
-                role="progressbar"
-                aria-label={currentStage ? stageLabel(currentStage) : "Connecting"}
-                {...(currentStage ? { "aria-valuenow": stagePercent(currentStage) } : {})}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                className={`h-1 w-full overflow-hidden rounded-full bg-daintree-border/50 ${
-                  currentStage ? "" : "animate-pulse-immediate"
-                }`}
-              >
-                {currentStage && (
-                  <div
-                    className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
-                    style={{ width: `${stagePercent(currentStage)}%` }}
-                  />
-                )}
-              </div>
+              <ProgressBar
+                label={currentStage ? stageLabel(currentStage) : "Connecting"}
+                value={currentStage ? stagePercent(currentStage) : null}
+              />
               {/* Only while the phase is indeterminate — once a percentage is
                   moving, "Still working…" would be telling the user something
                   the number already says. Five seconds, per the house rule for
@@ -883,7 +873,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       <AppDialog.Footer hint={mode === "configure" || mode === "failed" ? outcomeHint : undefined}>
         {mode === "complete" ? (
           <Button ref={footerActionRef} variant="contrast" onClick={handleClose} className="gap-2">
-            <Check className="h-4 w-4" />
+            <FolderOpen className="h-4 w-4" />
             {launchedDestination === "new" ? "Open in new window" : "Open project"}
           </Button>
         ) : mode === "running" ? (
@@ -925,11 +915,9 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               aria-keyshortcuts="Enter"
             >
               Clone
-              <span
-                className="ml-1 rounded-xs bg-text-inverse/15 px-1 py-0.5 font-mono text-3xs leading-none text-text-inverse"
-                aria-hidden="true"
-              >
-                {"\u21A9"}
+              {/* Hidden from the name: `aria-keyshortcuts` already says it. */}
+              <span className="inline-flex" aria-hidden="true">
+                <KbdChord shortcut="Enter" density="compact" foreground="inverse" />
               </span>
             </Button>
           </div>

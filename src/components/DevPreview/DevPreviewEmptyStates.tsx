@@ -1,9 +1,9 @@
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import {
-  AlertTriangle,
   ChevronDown,
   ExternalLink,
   Play,
+  RefreshCw,
   RotateCw,
   Settings,
   SquareTerminal,
@@ -198,13 +198,13 @@ export function DevPreviewEmptyStates({
     return (
       <PaneState
         live="alert"
-        icon={<AlertTriangle className="text-status-warning" />}
+        icon={<XCircle className="text-status-error" />}
         title={ERROR_TITLES[error.type]}
         description={error.message}
       >
         <PaneStateActions>
           <Button onClick={handleRetry} variant="subtle" size="sm">
-            <RotateCw />
+            <RefreshCw />
             {error.type === "missing-dependencies" ? "Retry install" : "Retry"}
           </Button>
           {viewTerminal ? (
@@ -254,7 +254,7 @@ export function DevPreviewEmptyStates({
                   action={{
                     id: "dev-preview-auto-detect-retry",
                     label: "Retry",
-                    icon: RotateCw,
+                    icon: RefreshCw,
                     variant: "dangerFilled",
                     onClick: () => void handleAutoDetect(offeredCommand),
                   }}
@@ -336,7 +336,7 @@ export function DevPreviewEmptyStates({
                   action={{
                     id: "dev-preview-save-command-retry",
                     label: "Retry",
-                    icon: RotateCw,
+                    icon: RefreshCw,
                     variant: "dangerFilled",
                     onClick: () => void handleSaveCommand(),
                   }}

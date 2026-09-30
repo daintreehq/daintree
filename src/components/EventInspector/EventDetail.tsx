@@ -1,12 +1,10 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { useEventStore, type EventRecord, type EventFilterOptions } from "@/store/eventStore";
-import { Copy, Check, ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { FilterChip } from "@/components/ui/FilterChip";
-import { logError } from "@/utils/logger";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { sanitizeErrorText } from "@/utils/errorText";
 
 interface EventDetailProps {
@@ -55,9 +53,7 @@ function ContextPill({ label, value, filterKey, currentFilters, onToggle }: Cont
 export function EventDetail({ event, hasEvents = true, className }: EventDetailProps) {
   const filters = useEventStore((state) => state.filters);
   const setFilters = useEventStore((state) => state.setFilters);
-  const [copied, setCopied] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["payload"]));
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleContextToggle = (key: keyof EventFilterOptions, value: string | number) => {
     const newValue = filters[key] === value ? undefined : value;
@@ -68,23 +64,6 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
     () => (event ? JSON.stringify(event.payload, null, 2) : ""),
     [event]
   );
-
-  useEffect(() => {
-    setCopied(false);
-    if (copyTimeoutRef.current) {
-      clearTimeout(copyTimeoutRef.current);
-      copyTimeoutRef.current = null;
-    }
-  }, [event]);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimeoutRef.current) {
-        clearTimeout(copyTimeoutRef.current);
-        copyTimeoutRef.current = null;
-      }
-    };
-  }, []);
 
   if (!event) {
     return (
@@ -109,25 +88,6 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
       }
       return next;
     });
-  };
-
-  const copyPayload = async () => {
-    try {
-      await navigator.clipboard.writeText(sanitizeErrorText(formattedPayload));
-      setCopied(true);
-      useAnnouncerStore.getState().announce("Payload copied");
-
-      if (copyTimeoutRef.current) {
-        clearTimeout(copyTimeoutRef.current);
-      }
-
-      copyTimeoutRef.current = setTimeout(() => {
-        setCopied(false);
-        copyTimeoutRef.current = null;
-      }, 2000);
-    } catch (err) {
-      logError("Failed to copy payload", err);
-    }
   };
 
   // Local time, matching the timeline row; the ISO string stays in the tooltip.
@@ -166,15 +126,15 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
               <span className="capitalize">{event.source}</span>
             </div>
           </div>
-          <Button
-            variant="subtle"
-            size="xs"
-            onClick={copyPayload}
-            aria-label={copied ? "Copied payload" : "Copy payload JSON"}
-          >
-            {copied ? <Check /> : <Copy />}
-            {copied ? "Copied" : "Copy JSON"}
-          </Button>
+          {/* Keyed by event: identical payloads on two events should not carry
+              one's confirmation onto the other. */}
+          <CopyButton
+            key={event.id}
+            label="Copy JSON"
+            aria-label="Copy payload JSON"
+            text={sanitizeErrorText(formattedPayload)}
+            announcement="Payload copied"
+          />
         </div>
       </div>
 

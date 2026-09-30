@@ -19,6 +19,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useRowFocus } from "./useRowFocus";
 import { ENV_KEY_DUPLICATE_MESSAGE, ENV_KEY_INVALID_MESSAGE, isValidEnvKey } from "./EnvVarRow";
 import { SettingsInlineError } from "@/components/Settings/SettingsGroup";
+import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 
 /**
  * Inline env var CRUD editor with validation and optional inheritance.
@@ -300,21 +301,19 @@ function EnvVarKeyCell({
               onBlur={() => onBlur(rowId)}
               onFocus={(e) => e.target.select()}
               onKeyDown={(e) => {
-                if (e.key === "ArrowDown") {
+                // Down opens a shut list at its first row; the rest move an open one.
+                const next =
+                  open && !keyBelongsToField(e)
+                    ? stepListboxCursor(e.key, activeIndex, availableSuggestions.length)
+                    : null;
+                if (next !== null) {
+                  e.preventDefault();
+                  setActiveIndex(next);
+                } else if (e.key === "ArrowDown" && !keyBelongsToField(e)) {
                   if (availableSuggestions.length === 0) return;
                   e.preventDefault();
-                  if (!open) {
-                    setOpen(true);
-                    setActiveIndex(0);
-                  } else {
-                    setActiveIndex((i) =>
-                      i + 1 >= availableSuggestions.length ? availableSuggestions.length - 1 : i + 1
-                    );
-                  }
-                } else if (e.key === "ArrowUp") {
-                  if (!open) return;
-                  e.preventDefault();
-                  setActiveIndex((i) => (i <= 0 ? 0 : i - 1));
+                  setOpen(true);
+                  setActiveIndex(0);
                 } else if (e.key === "Enter" && open && activeIndex >= 0) {
                   e.preventDefault();
                   const sel = availableSuggestions[activeIndex];

@@ -1,15 +1,16 @@
 import { Fragment, useState, useEffect, useMemo, useRef } from "react";
 import {
+  ChevronDown,
   CornerDownLeft,
+  GitBranch,
   LayoutGrid,
   PanelBottom,
-  ChevronDown,
-  GitBranch,
   Pin,
   PinOff,
-  RefreshCw,
+  RotateCw,
 } from "lucide-react";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
+import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
@@ -20,9 +21,11 @@ import { logError } from "@/utils/logger";
 import { RunningTaskList } from "./RunningTaskList";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { HighlightedText } from "@/components/ui/HighlightedText";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
 import { KbdChord } from "@/components/ui/Kbd";
 import { isMac } from "@/lib/platform";
-import { describeChord, labelWithShortcut } from "@/lib/kbdShortcut";
+import { describeChord } from "@/lib/kbdShortcut";
 
 interface QuickRunProps {
   projectId: string;
@@ -609,16 +612,22 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     highlighted != null && normalizeCommand(highlighted.value) !== normalizedInput;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Down opens a shut list; the other navigation keys only move a list that is
+    // showing, so Home and End keep the caret while it is shut. -1 is the field.
+    const navigable = !keyBelongsToField(e) && (listOpen || e.key === "ArrowDown");
+    const next = navigable
+      ? stepListboxCursor(e.key, activeIndex, suggestions.length, { allowNone: true })
+      : null;
     if (e.key === "Enter") {
       e.preventDefault();
       if (runTarget) void handleRunItem(runTarget);
-    } else if (e.key === "ArrowDown") {
+    } else if (navigable && e.key === "ArrowDown") {
       e.preventDefault();
       setShowSuggestions(true);
-      setFocusedSuggestionIndex(Math.min(activeIndex + 1, suggestions.length - 1));
-    } else if (e.key === "ArrowUp") {
+      if (next !== null) setFocusedSuggestionIndex(next);
+    } else if (next !== null) {
       e.preventDefault();
-      setFocusedSuggestionIndex(Math.max(activeIndex - 1, -1));
+      setFocusedSuggestionIndex(next);
     } else if (e.key === "Escape") {
       // Dismiss the menu, keep the field. Blurring threw the keyboard user out
       // of the one control they came here for.
@@ -659,7 +668,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
         role="option"
         aria-selected={selected}
         aria-describedby={selected ? SUMMARY_ID : undefined}
-        title={item.value}
+        data-command={item.value}
         // Hover moves the highlight rather than painting a second, lookalike
         // state beside it — so there is only ever one lit row, and it is the
         // one Enter runs.
@@ -678,29 +687,37 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
         {item.type === "typed" ? (
           <>
             <span className="shrink-0">Run</span>
-            <span className={cn("min-w-0 truncate text-text-primary", COMMAND_TEXT_CLASS)}>
-              {item.value}
-            </span>
+            <TruncatedTooltip content={item.value} focusable={false}>
+              <span className={cn("min-w-0 truncate text-text-primary", COMMAND_TEXT_CLASS)}>
+                {item.value}
+              </span>
+            </TruncatedTooltip>
           </>
         ) : (
           <>
-            <span
-              className={cn(
-                "min-w-0 truncate text-text-primary",
-                item.type === "saved" ? "font-medium" : COMMAND_TEXT_CLASS
-              )}
-            >
-              <HighlightedText text={primary} indices={matchRanges(primary, search)} />
-            </span>
-            {secondary && (
+            {/* Pointer-only: the option is driven by aria-activedescendant from
+                the input, so a tab stop on its text would be a second focus. */}
+            <TruncatedTooltip content={primary} focusable={false}>
               <span
                 className={cn(
-                  "min-w-0 flex-1 truncate text-2xs",
-                  secondary === item.value && COMMAND_TEXT_CLASS
+                  "min-w-0 truncate text-text-primary",
+                  item.type === "saved" ? "font-medium" : COMMAND_TEXT_CLASS
                 )}
               >
-                <HighlightedText text={secondary} indices={matchRanges(secondary, search)} />
+                <HighlightedText text={primary} indices={matchRanges(primary, search)} />
               </span>
+            </TruncatedTooltip>
+            {secondary && (
+              <TruncatedTooltip content={secondary} focusable={false}>
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-2xs",
+                    secondary === item.value && COMMAND_TEXT_CLASS
+                  )}
+                >
+                  <HighlightedText text={secondary} indices={matchRanges(secondary, search)} />
+                </span>
+              </TruncatedTooltip>
             )}
           </>
         )}
@@ -708,17 +725,19 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
           // A pointer affordance only — never a tab stop and never inside the
           // option's accessible name, since an option's children are
           // presentational. The keyboard route is Alt+P, named in the footer.
-          <span
-            aria-hidden="true"
-            title={labelWithShortcut(item.type === "saved" ? "Unpin" : "Pin", PIN_COMBO, isMac())}
-            onClick={(e) => {
-              e.stopPropagation();
-              togglePin(item);
-            }}
-            className="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-colors hover:bg-overlay-medium hover:text-text-primary"
-          >
-            {item.type === "saved" ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
-          </span>
+          <RowControlTooltip label={item.type === "saved" ? "Unpin" : "Pin"} shortcut={PIN_COMBO}>
+            <span
+              aria-hidden="true"
+              data-testid="quick-run-pin"
+              onClick={(e) => {
+                e.stopPropagation();
+                togglePin(item);
+              }}
+              className={cn(ROW_CONTROL_CLASS, "ml-auto")}
+            >
+              {item.type === "saved" ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+            </span>
+          </RowControlTooltip>
         )}
       </div>
     );
@@ -739,9 +758,9 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
       {isWorktreeValid && (
         <div className="mb-1.5 flex min-w-0 items-center gap-1 text-2xs text-text-secondary">
           <GitBranch className="h-3 w-3 shrink-0" aria-hidden="true" />
-          <span className="truncate" title={destinationLabel}>
-            {destinationLabel}
-          </span>
+          <TruncatedTooltip content={destinationLabel}>
+            <span className="truncate font-mono">{destinationLabel}</span>
+          </TruncatedTooltip>
         </div>
       )}
       <div>
@@ -867,7 +886,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                       aria-label="Auto-restart"
                       aria-pressed={effective.restart}
                     >
-                      <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                      <RotateCw className="h-3.5 w-3.5" aria-hidden="true" />
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
@@ -1032,7 +1051,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                       <span className="flex min-w-0 items-center gap-1 @max-[280px]/footer:basis-full">
                         <GitBranch className="h-3 w-3 shrink-0" aria-hidden="true" />
                         <span className="sr-only">Runs on </span>
-                        <span className="min-w-0 truncate">{destinationLabel}</span>
+                        <span className="min-w-0 truncate font-mono">{destinationLabel}</span>
                       </span>
                       <span className="flex shrink-0 items-center gap-1 @max-[280px]/footer:h-4 @max-[280px]/footer:min-w-0 @max-[280px]/footer:flex-1">
                         <span className="min-w-0 truncate">
@@ -1059,13 +1078,11 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
               )}
             </div>
             {launchError && (
-              <div
-                role="alert"
-                className="mt-1 truncate text-2xs text-text-primary"
-                title={launchError}
-              >
-                Couldn't start {launchError}
-              </div>
+              <TruncatedTooltip content={`Couldn't start ${launchError}`}>
+                <div role="alert" className="mt-1 truncate text-2xs text-text-primary">
+                  Couldn't start {launchError}
+                </div>
+              </TruncatedTooltip>
             )}
           </>
         )}

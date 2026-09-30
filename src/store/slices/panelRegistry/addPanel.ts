@@ -345,6 +345,7 @@ export const createAddPanelActions = (
           title: "Panel limit reached",
           message: `Maximum of ${hardLimit} panels reached. Close some panels before adding new ones.`,
           duration: 5000,
+          context: { worktreeId: options.worktreeId ?? undefined },
         });
         return null;
       }
@@ -729,6 +730,7 @@ export const createAddPanelActions = (
       exitBehavior: options.exitBehavior,
       agentSessionId: options.agentSessionId,
       agentLaunchFlags: options.agentLaunchFlags,
+      callerLaunchFlags: options.callerLaunchFlags,
       agentModelId: options.agentModelId,
       everDetectedAgent: options.everDetectedAgent,
       agentIncarnation: options.agentIncarnation,
@@ -1328,6 +1330,10 @@ export const createAddPanelActions = (
             // sendPtyResize would defer 500ms for a settled-strategy agent —
             // exactly the window in which the CLI paints its banner at the
             // stale spawn width. The backend dedupes when nothing drifted.
+            // Whatever a fit recorded as sent during the spawn never reached a
+            // PTY; forget it so a pane that detached before this point still
+            // re-asserts on its next fit.
+            terminalInstanceService.invalidatePtyGrid(id);
             const settledDims = getAttachedGridDims(id);
             if (settledDims && (settledDims.cols !== spawnCols || settledDims.rows !== spawnRows)) {
               terminalClient.resize(id, settledDims.cols, settledDims.rows);

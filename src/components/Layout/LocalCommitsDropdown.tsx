@@ -10,7 +10,7 @@ import {
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import {
   RefreshCw,
-  AlertCircle,
+  XCircle,
   ArrowUp,
   GitCommitHorizontal,
   Check,
@@ -37,6 +37,7 @@ import { classifyGitError, getGitRecoveryHint } from "@shared/utils/gitOperation
 import { logError } from "@/utils/logger";
 import type { GitCommit, GitPushCommitPreview } from "@shared/types/git";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 import { FORGE_DROPDOWN_PANEL_SIZE } from "./forgeStatsDropdownContract";
 
 // The commits pill's list (issue #10414). Commit history is local git data, not
@@ -832,17 +833,17 @@ export function LocalCommitsDropdown({
       // candidate must not also expand or copy a row. The keyCode check covers
       // WebKit's first keydown, before `isComposing` is set.
       if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+      // The Load more row is the list's last row; -1 is the search field itself.
+      const next = keyBelongsToField(e)
+        ? null
+        : stepListboxCursor(e.key, cursorIndex, maxCursor + 1, { allowNone: true });
+      if (next !== null) {
+        e.preventDefault();
+        e.stopPropagation();
+        setCursorIndex(next);
+        return;
+      }
       switch (e.key) {
-        case "ArrowDown":
-          e.preventDefault();
-          e.stopPropagation();
-          setCursorIndex((prev) => Math.min(prev + 1, maxCursor));
-          break;
-        case "ArrowUp":
-          e.preventDefault();
-          e.stopPropagation();
-          setCursorIndex((prev) => Math.max(prev - 1, -1));
-          break;
         case "Enter": {
           e.preventDefault();
           e.stopPropagation();
@@ -909,6 +910,7 @@ export function LocalCommitsDropdown({
       handleRetryPush,
       expandedHashes,
       handleRetry,
+      cursorIndex,
       maxCursor,
       isLoadMoreActive,
       activeCommit,
@@ -957,7 +959,7 @@ export function LocalCommitsDropdown({
 
   return (
     <div className={cn("relative flex flex-col", FORGE_DROPDOWN_PANEL_SIZE)}>
-      <div className="p-3 border-b border-[var(--border-divider)] shrink-0">
+      <div className="p-3 border-b border-divider shrink-0">
         <SearchField
           size="compact"
           // The dropdown header's 32px, text-sm field, the same as the issue
@@ -986,7 +988,7 @@ export function LocalCommitsDropdown({
           aria-controls={LIST_ID}
           aria-activedescendant={activeDescendantId}
           aria-label="Search commits"
-          aria-keyshortcuts="ArrowDown ArrowUp Enter Shift+Enter PageDown PageUp Escape"
+          aria-keyshortcuts="ArrowDown ArrowUp Home End Enter Shift+Enter PageDown PageUp Escape"
           onClear={handleClearSearch}
           trailing={
             isSlowRefresh && (
@@ -1055,9 +1057,9 @@ export function LocalCommitsDropdown({
             {error && (
               <div
                 role="alert"
-                className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-text-secondary bg-overlay-soft shrink-0"
+                className="px-3 py-2 border-b border-divider flex items-center gap-2 text-text-secondary bg-overlay-soft shrink-0"
               >
-                <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <XCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 {/* Wraps rather than clipping the cause, like the forge lists'
                     saved-results banners. */}
                 <p className="min-w-0 flex-1 text-xs">
@@ -1117,7 +1119,7 @@ export function LocalCommitsDropdown({
                         {loadMoreError ? (
                           // One way out, not two: Retry takes Load more's place.
                           <div className="flex items-center gap-2 px-1">
-                            <AlertCircle
+                            <XCircle
                               className="h-3.5 w-3.5 shrink-0 text-text-secondary"
                               aria-hidden="true"
                             />
@@ -1180,7 +1182,7 @@ export function LocalCommitsDropdown({
             <EmptyState
               variant="zero-data"
               scale="canvas"
-              icon={<AlertCircle />}
+              icon={<XCircle />}
               title="Couldn't load commits"
               description={error}
               action={
@@ -1203,7 +1205,7 @@ export function LocalCommitsDropdown({
         copyFailed ||
         activeCommit ||
         footerAction) && (
-        <div className="px-3 h-10 border-t border-[var(--border-divider)] flex items-center gap-3 shrink-0 text-xs text-text-secondary">
+        <div className="px-3 h-10 border-t border-divider flex items-center gap-3 shrink-0 text-xs text-text-secondary">
           <div className="flex-1 min-w-0 flex items-center gap-2">
             {pushLine ? (
               <PushSummary line={pushLine} />

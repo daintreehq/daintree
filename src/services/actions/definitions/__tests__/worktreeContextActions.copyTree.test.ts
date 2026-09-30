@@ -141,7 +141,7 @@ describe("worktree.copyTree completion announcement", () => {
       expect.objectContaining({
         type: "success",
         message: "Copied 3 files (4 KB) as XML to clipboard",
-        context: { eventKind: "agent" },
+        context: { eventKind: "agent", worktreeId: "wt-1" },
       })
     );
   });
@@ -209,13 +209,11 @@ describe("worktree.copyTree completion announcement", () => {
     expect(payload.message).not.toContain("folder");
   });
 
-  it("keeps the worktree out of the toast context so notify() cannot suppress it", async () => {
-    // notify() diverts a high-priority toast to the inbox when context names
-    // the worktree already on screen — always the case for the toolbar button.
+  it("addresses the toast to the copied worktree, not the active one", async () => {
     const { run } = setupActions();
-    await run("worktree.copyTree", { worktreeId: "wt-active" }, { activeWorktreeId: "wt-active" });
+    await run("worktree.copyTree", { worktreeId: "wt-1" }, { activeWorktreeId: "wt-active" });
     expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ context: { eventKind: "agent" } })
+      expect.objectContaining({ context: { eventKind: "agent", worktreeId: "wt-1" } })
     );
   });
 

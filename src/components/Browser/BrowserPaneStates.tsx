@@ -1,6 +1,9 @@
-import { useEffect, useState } from "react";
-import { AlertTriangle, Check, Copy, ExternalLink, Globe, RotateCw } from "lucide-react";
+import { useState } from "react";
+import { Check, Copy, ExternalLink, Globe, Info, RefreshCw, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { COPIED_LABEL, COPY_FAILED_LABEL } from "@/components/ui/CopyButton";
+import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { PanePlaceholder, PaneState, PaneStateActions } from "@/components/ui/PaneState";
 import { PaneLoadingState } from "@/components/ui/PaneLoadingState";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
@@ -92,15 +95,22 @@ export function BrowserLoadErrorOverlay({
 }) {
   return (
     <PaneState
-      live="alert"
+      live={loadError.kind === "cancelled" ? "status" : "alert"}
       className="z-30"
-      icon={<AlertTriangle className="text-status-warning" />}
+      icon={
+        // A load the user stopped is not a failure: it keeps the neutral mark.
+        loadError.kind === "cancelled" ? (
+          <Info className="text-text-secondary" />
+        ) : (
+          <XCircle className="text-status-error" />
+        )
+      }
       title={loadErrorTitle(loadError.kind)}
       description={loadError.message}
     >
       <PaneStateActions>
         <Button onClick={onRetry} variant="subtle" size="sm">
-          <RotateCw />
+          <RefreshCw />
           Retry
         </Button>
         <Button onClick={onOpenExternal} variant="ghost" size="sm">
@@ -112,9 +122,7 @@ export function BrowserLoadErrorOverlay({
   );
 }
 
-// How long "Copied" lingers — the dev preview's notice uses the same beat. A
-// failed copy stays until the notice goes: it may be the only way forward.
-const COPY_FEEDBACK_MS = 2000;
+const writeMainClipboard = (text: string) => window.electron.clipboard.writeText(text);
 
 /**
  * Same notice as the dev preview's blocked-navigation banner: the host in the
@@ -137,32 +145,26 @@ export function BrowserBlockedNavNotice({
   onOpenExternal: () => void;
   onDismiss: () => void;
 }) {
-  const [copyFeedback, setCopyFeedback] = useState<"copied" | "copy-failed" | null>(null);
-
-  useEffect(() => {
-    if (copyFeedback !== "copied") return;
-    const timer = setTimeout(() => setCopyFeedback(null), COPY_FEEDBACK_MS);
-    return () => clearTimeout(timer);
-  }, [copyFeedback]);
+  // The shared dwell and announcement; the main-process clipboard, since the
+  // guest page may hold focus. A failed copy stays until the notice goes: it
+  // may be the only way forward.
+  const { copiedText, copy } = useCopyWithFeedback({ write: writeMainClipboard });
+  const [copyFailed, setCopyFailed] = useState(false);
+  const copied = copiedText === url;
 
   const handleCopy = async () => {
-    try {
-      await window.electron.clipboard.writeText(url);
-      setCopyFeedback("copied");
-    } catch {
-      setCopyFeedback("copy-failed");
-    }
+    const ok = await copy(url);
+    setCopyFailed(!ok);
+    if (!ok) useAnnouncerStore.getState().announce(COPY_FAILED_LABEL, "assertive");
   };
 
   const copyAction: BannerAction = {
     id: "copy-url",
-    label:
-      copyFeedback === "copied"
-        ? "Copied"
-        : copyFeedback === "copy-failed"
-          ? "Couldn't copy"
-          : "Copy URL",
-    icon: copyFeedback === "copied" ? Check : Copy,
+    label: copied ? COPIED_LABEL : copyFailed ? COPY_FAILED_LABEL : "Copy URL",
+    // Constant: the hook announces the copy, and a name that flips under focus
+    // is announced a second time.
+    ariaLabel: "Copy URL",
+    icon: copied ? Check : Copy,
     onClick: () => void handleCopy(),
     variant: canOpenExternal ? "dismiss" : "primary",
   };

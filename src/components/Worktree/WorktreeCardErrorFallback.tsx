@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { TriangleAlert } from "lucide-react";
+import { XCircle } from "lucide-react";
 import type { ErrorFallbackProps } from "@/components/ErrorBoundary/ErrorFallback";
 import { Button } from "@/components/ui/button";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -38,7 +38,7 @@ export function WorktreeCardErrorFallback({
 
   return (
     <div className="flex items-center gap-2 border-b border-divider px-4 py-3">
-      <TriangleAlert className="size-3.5 shrink-0 text-status-error" aria-hidden="true" />
+      <XCircle className="size-3.5 shrink-0 text-status-error" aria-hidden="true" />
       <TruncatedTooltip content={message}>
         <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">{message}</span>
       </TruncatedTooltip>

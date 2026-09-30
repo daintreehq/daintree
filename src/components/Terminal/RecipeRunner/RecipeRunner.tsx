@@ -1,4 +1,4 @@
-import { Info, RotateCcw, XCircle } from "lucide-react";
+import { RefreshCw, XCircle } from "lucide-react";
 import { useRecipeRunner, type SpawnFailureSummary } from "./useRecipeRunner";
 import { RecipeRunnerGrid } from "./RecipeRunnerGrid";
 import { RecipeRunnerList } from "./RecipeRunnerList";
@@ -81,7 +81,7 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
             action={{
               id: "retry-failed",
               label: "Retry failed",
-              icon: RotateCcw,
+              icon: RefreshCw,
               variant: "primary",
               onClick: runner.handleRetryFailed,
               title: "Retry the terminals that failed to start",
@@ -95,7 +95,6 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
       {runner.unresolvedVars.length > 0 && (
         <div className="mb-3" data-testid="recipe-unresolved-vars-banner">
           <InlineStatusBanner
-            icon={Info}
             title={formatUnresolvedVarsTitle(runner.unresolvedVars)}
             description="These variables stayed empty in the launched commands."
             severity="warning"

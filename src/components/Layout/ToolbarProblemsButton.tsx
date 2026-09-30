@@ -8,6 +8,7 @@ import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { DIAGNOSTICS_DOCK_REGION_ID } from "@/components/Diagnostics/regionIds";
+import { pluralize } from "@/lib/pluralize";
 
 const toolbarIconButtonClass = "toolbar-icon-button text-text-primary";
 
@@ -45,7 +46,7 @@ export function ToolbarProblemsButton({
     : topologyWatcherDark
       ? "Worktree list may be stale"
       : null;
-  const errorSummary = `${errorCount} error${errorCount !== 1 ? "s" : ""}`;
+  const errorSummary = `${pluralize(errorCount, "error")}`;
   const diagnosticsShortcut = useEffectiveCombo("panel.toggleDiagnostics");
   const diagnosticsAriaShortcut = useAriaKeyshortcuts("panel.toggleDiagnostics");
   const diagnosticsHover = useShortcutHintHover("panel.toggleDiagnostics");

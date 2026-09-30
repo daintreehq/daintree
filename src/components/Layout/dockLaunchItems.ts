@@ -24,7 +24,6 @@ import { logError } from "@/utils/logger";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { TOOLBAR_CUSTOMIZE_LABEL } from "./toolbarMenuStrings";
 import type { ActionSource, AgentAvailabilityState, TerminalRecipe } from "@shared/types";
-import type { AttentionAgentState } from "@/components/Worktree/terminalStateConfig";
 import type { RecipeContext } from "@/utils/recipeVariables";
 
 export const AGENT_MRU_PREFIX = "agent.";
@@ -73,8 +72,6 @@ export interface DockLaunchAgent {
    * launch alongside the named ones.
    */
   presetChoices?: readonly DockLaunchPresetChoice[];
-  /** Drives the pip. Null when no session of this agent is waiting or directing. */
-  attentionState?: AttentionAgentState | null;
   /** Newly detected on this machine and not yet acted on — drives the "New" cue. */
   isNew?: boolean;
 }
@@ -185,8 +182,8 @@ export type DockLaunchCueId =
 /** Heading for each named provenance group, matching the old preset submenu. */
 export const DOCK_LAUNCH_PRESET_GROUP_LABELS: Record<DockLaunchPresetGroup, string> = {
   default: "",
-  ccr: "CCR Routes",
-  project: "Project Shared",
+  ccr: "CCR routes",
+  project: "Project shared",
   custom: "Custom",
 };
 
@@ -249,7 +246,7 @@ export function getDockLaunchRowItem(row: DockLaunchRow): DockLaunchItem | undef
  * with the synthetic Default first.
  *
  * Project membership beats the `ccr-` prefix so a project preset with a `ccr-*`
- * id still reads as Project Shared; everything neither project nor `ccr-` falls
+ * id still reads as Project shared; everything neither project nor `ccr-` falls
  * through to Custom, preserving display for presets whose origin can't be told
  * from the id alone.
  */
@@ -929,14 +926,12 @@ export function activateDockLaunchItem(
   // Fire-and-forget, but surface spawn failures — the menu closes on select, so
   // a toast/inbox entry is the only signal the user gets when terminals are
   // dropped (e.g. panel limit).
+  const worktreeId = ctx.activeWorktreeId ?? undefined;
   void useRecipeStore
     .getState()
-    .runRecipeWithResults(
-      item.recipe.id,
-      ctx.cwd,
-      ctx.activeWorktreeId ?? undefined,
-      ctx.recipeContext
+    .runRecipeWithResults(item.recipe.id, ctx.cwd, worktreeId, ctx.recipeContext)
+    .then((results) =>
+      notifyRecipeSpawnFailures(results, { recipeName: item.recipe.name, worktreeId })
     )
-    .then((results) => notifyRecipeSpawnFailures(results, { recipeName: item.recipe.name }))
     .catch((error) => logError("Recipe launch from dock failed", error));
 }

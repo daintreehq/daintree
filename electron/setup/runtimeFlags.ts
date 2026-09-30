@@ -14,6 +14,7 @@ export const E2E_MODE_ARG = "--daintree-e2e-mode";
 export const E2E_SKIP_FIRST_RUN_DIALOGS_ARG = "--daintree-e2e-skip-first-run-dialogs";
 export const E2E_FAULT_MODE_ARG = "--daintree-e2e-fault-mode";
 export const E2E_DEFER_RENDERER_LOAD_ARG = "--daintree-e2e-defer-renderer-load";
+export const E2E_BACKGROUND_WINDOWS_ARG = "--daintree-e2e-background-windows";
 export const E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE_ARG =
   "--daintree-e2e-disable-cached-view-cpu-throttle";
 export const E2E_CRASH_DUMPS_DIR_ARG = "--daintree-e2e-crash-dumps-dir=";
@@ -51,6 +52,17 @@ export function getIsE2EDeferRendererLoad(): boolean {
   return (
     !isPackaged &&
     (process.env.DAINTREE_E2E_DEFER_RENDERER_LOAD === "1" || hasArg(E2E_DEFER_RENDERER_LOAD_ARG))
+  );
+}
+
+/**
+ * Local e2e runs keep every window invisible and never take OS focus, so a
+ * suite can run while the developer keeps working. See e2eBackgroundWindows.ts.
+ */
+export function getIsE2EBackgroundWindows(): boolean {
+  return (
+    !isPackaged &&
+    (process.env.DAINTREE_E2E_BACKGROUND_WINDOWS === "1" || hasArg(E2E_BACKGROUND_WINDOWS_ARG))
   );
 }
 
@@ -108,6 +120,7 @@ export const isE2EMode = getIsE2EMode();
 export const isE2ESkipFirstRunDialogs = getIsE2ESkipFirstRunDialogs();
 export const isE2EFaultMode = getIsE2EFaultMode();
 export const isE2EDeferRendererLoad = getIsE2EDeferRendererLoad();
+export const isE2EBackgroundWindows = getIsE2EBackgroundWindows();
 export const isE2EDisableCachedViewCpuThrottle = getIsE2EDisableCachedViewCpuThrottle();
 export const e2eCrashDumpsDir = getE2ECrashDumpsDir();
 export const e2eSideloadPluginDir = getE2ESideloadPluginDir();

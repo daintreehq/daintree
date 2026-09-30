@@ -70,6 +70,7 @@ export async function copyContextWithFeedback(
           : "Copying context…",
     priority: "high",
     duration: 0,
+    context: { worktreeId },
   });
 
   try {

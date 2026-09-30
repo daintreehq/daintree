@@ -310,6 +310,18 @@ describe("registerReviewDecorationProvider", () => {
     mockGetPRReviewThreads.mockReset();
   });
 
+  it("subscribes with a debounce so worktree churn doesn't re-read every update", async () => {
+    const { host } = makeRegisterHost();
+    await registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+
+    expect(host.onDidChangeWorktrees).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ debounceMs: expect.any(Number) })
+    );
+    const options = vi.mocked(host.onDidChangeWorktrees).mock.calls[0]![1]!;
+    expect(options.debounceMs).toBeGreaterThan(0);
+  });
+
   it("invalidates only PR-linked scopes on the first event", async () => {
     const { host, emit } = makeRegisterHost();
     await registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));

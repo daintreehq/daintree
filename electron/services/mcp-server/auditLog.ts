@@ -4,6 +4,7 @@ import type {
   McpAnomalySeverity,
   McpAnomalySignal,
   McpAuditRecord,
+  McpAuditRecordQuery,
   McpAuditResult,
   McpAuditStats,
   McpConfirmationDecision,
@@ -847,13 +848,18 @@ export class AuditService {
    * shows `result`-keyed columns. {@link getLogRecords} returns the full
    * union for callers that understand the new discriminator.
    */
-  getRecords(): McpAuditRecord[] {
+  getRecords(query?: McpAuditRecordQuery): McpAuditRecord[] {
     this.hydrate();
+    const limit = query?.limit ?? Infinity;
+    const helpSessionId = query?.helpSessionId;
     const out: McpAuditRecord[] = [];
-    for (const record of this.records) {
-      if (!isGrantRecord(record)) out.push(record);
+    for (let i = this.records.length - 1; i >= 0 && out.length < limit; i--) {
+      const record = this.records[i]!;
+      if (isGrantRecord(record)) continue;
+      if (helpSessionId !== undefined && record.helpSessionId !== helpSessionId) continue;
+      out.push(record);
     }
-    return out.reverse();
+    return out;
   }
 
   /**

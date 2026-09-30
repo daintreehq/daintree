@@ -5,6 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GIT_REMOTE_COMMIT_PREVIEW_MAX, type GitRemoteCommitPreview } from "@shared/types/git";
 import { GitForcePushConfirmDialog } from "../GitForcePushConfirmDialog";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 vi.mock("zustand/react/shallow", () => ({ useShallow: (fn: unknown) => fn }));
 vi.mock("@/store", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));

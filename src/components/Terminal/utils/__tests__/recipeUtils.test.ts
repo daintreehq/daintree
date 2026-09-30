@@ -41,7 +41,7 @@ describe("recipeUtils", () => {
         { type: "dev-preview", title: "" },
       ];
       const summary = getRecipeTerminalSummary(terminals);
-      expect(summary).toBe("Terminal • Claude • Dev Server");
+      expect(summary).toBe("Terminal • Claude • Dev server");
     });
 
     it("formats agent names with proper capitalization", () => {
@@ -63,7 +63,7 @@ describe("recipeUtils", () => {
     it("handles dev-preview terminals", () => {
       const terminals: RecipeTerminal[] = [{ type: "dev-preview" }];
       const summary = getRecipeTerminalSummary(terminals);
-      expect(summary).toBe("Dev Server");
+      expect(summary).toBe("Dev server");
     });
 
     it("joins multiple terminals with bullet separator", () => {
@@ -73,7 +73,7 @@ describe("recipeUtils", () => {
         { type: "dev-preview" },
       ];
       const summary = getRecipeTerminalSummary(terminals);
-      expect(summary).toBe("Claude • Server • Dev Server");
+      expect(summary).toBe("Claude • Server • Dev server");
     });
 
     it("shows exactly 5 terminals with overflow indicator", () => {
@@ -98,7 +98,7 @@ describe("recipeUtils", () => {
         { type: "terminal", title: "Extra 2" },
       ];
       const summary = getRecipeTerminalSummary(terminals);
-      expect(summary).toBe("Claude • Server • Dev Server • Gemini +2");
+      expect(summary).toBe("Claude • Server • Dev server • Gemini +2");
     });
 
     it("shows exactly 4 terminals without overflow", () => {

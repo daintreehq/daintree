@@ -4,7 +4,7 @@ import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { makePluginViewContent } from "@/components/Plugin/PluginViewContent";
 import { PluginSetupStrip } from "@/components/Plugin/PluginSetupStrip";
-import { AlertTriangle } from "lucide-react";
+import { XCircle } from "lucide-react";
 import { PaneState } from "@/components/ui/PaneState";
 import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
@@ -221,7 +221,7 @@ export function PluginViewLoadError({ pluginId, displayName, message }: PluginVi
         inFlow
         className="flex-1"
         live="alert"
-        icon={<AlertTriangle className="text-status-warning" />}
+        icon={<XCircle className="text-status-error" />}
         title={`${displayName} unavailable`}
         description={message}
       >

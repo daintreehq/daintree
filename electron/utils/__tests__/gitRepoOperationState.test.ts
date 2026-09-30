@@ -1,14 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readdirSync } from "fs";
+import { readdir } from "fs/promises";
 import { join as pathJoin } from "path";
 import {
   OPERATION_SENTINEL_NAMES,
   isRepoOperationInProgress,
   getRepoOperationStateSync,
+  getRepoOperationState,
 } from "../gitRepoOperationState.js";
 
 vi.mock("fs", () => ({
   readdirSync: vi.fn(),
+}));
+
+vi.mock("fs/promises", () => ({
+  readdir: vi.fn(),
 }));
 
 describe("gitRepoOperationState", () => {
@@ -87,6 +93,43 @@ describe("gitRepoOperationState", () => {
       // classification order matches the async detectRepoOperationState.
       vi.mocked(readdirSync).mockReturnValue(["MERGE_HEAD", "rebase-merge"] as never);
       expect(getRepoOperationStateSync(gitDir)).toBe("REBASING");
+    });
+  });
+
+  describe("getRepoOperationState", () => {
+    it("classifies from an async listing without touching readdirSync", async () => {
+      vi.mocked(readdir).mockResolvedValue(["HEAD", "MERGE_HEAD", "rebase-apply"] as never);
+      await expect(getRepoOperationState(gitDir)).resolves.toBe("REBASING");
+      expect(vi.mocked(readdir)).toHaveBeenCalledWith(gitDir);
+      expect(vi.mocked(readdirSync)).not.toHaveBeenCalled();
+    });
+
+    it("returns undefined when no sentinel files exist", async () => {
+      vi.mocked(readdir).mockResolvedValue(["HEAD", "config"] as never);
+      await expect(getRepoOperationState(gitDir)).resolves.toBeUndefined();
+    });
+
+    it("joins an outstanding read instead of starting another", async () => {
+      let resolveListing!: (names: string[]) => void;
+      vi.mocked(readdir).mockReturnValue(
+        new Promise((resolve) => (resolveListing = resolve)) as never
+      );
+      const first = getRepoOperationState(gitDir);
+      const second = getRepoOperationState(gitDir);
+      resolveListing(["HEAD", "REVERT_HEAD"]);
+
+      await expect(first).resolves.toBe("REVERTING");
+      await expect(second).resolves.toBe("REVERTING");
+      expect(vi.mocked(readdir)).toHaveBeenCalledTimes(1);
+
+      vi.mocked(readdir).mockResolvedValue(["HEAD"] as never);
+      await expect(getRepoOperationState(gitDir)).resolves.toBeUndefined();
+      expect(vi.mocked(readdir)).toHaveBeenCalledTimes(2);
+    });
+
+    it("fails open when the listing rejects", async () => {
+      vi.mocked(readdir).mockRejectedValue(Object.assign(new Error("EPERM"), { code: "EPERM" }));
+      await expect(getRepoOperationState(gitDir)).resolves.toBeUndefined();
     });
   });
 });

@@ -1,4 +1,6 @@
 import { cn } from "@/lib/utils";
+import { DiffStat } from "@/components/ui/DiffStat";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PathTail } from "@/components/ui/PathTail";
 import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
 import { getWorkingTreeChangeKey, type WorkingTreeFileChange } from "@/lib/workingTreeDiff";
@@ -52,61 +54,70 @@ export function FileBrowserChangeSummary({ changes, onSelect }: FileBrowserChang
 
           return (
             <li key={getWorkingTreeChangeKey(change)}>
-              <button
-                type="button"
-                // aria-disabled rather than `disabled`: the row keeps its place
-                // in the tab order so a keyboard user can reach the explanation
-                // instead of the row silently not existing for them.
-                aria-disabled={!isReadable}
-                aria-label={
-                  isReadable
-                    ? `Read ${change.relativePath}, ${presentation.name}`
-                    : `${change.relativePath}, deleted file isn't available to read`
-                }
-                title={isReadable ? change.relativePath : "Deleted file isn't available to read"}
-                onClick={
-                  isReadable
-                    ? () => {
-                        onSelect(change.relativePath);
-                      }
-                    : undefined
-                }
-                className={cn(
-                  "flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-xs",
-                  "transition-colors duration-150 ease-out",
-                  // Unconditional: a deleted file's row stays in the tab order
-                  // (aria-disabled, so the explanation can be read), and a
-                  // focusable row without a ring takes the browser's default.
-                  PALETTE_ROW_FOCUS_CLASS,
-                  isReadable
-                    ? "cursor-pointer text-text-secondary hover:bg-tint/5 hover:text-text-primary"
-                    : // Struck through rather than faded: the row stays readable
-                      // at full strength while still saying there is nothing
-                      // left to open — the convention source-control lists use
-                      // for a deleted path.
-                      "cursor-default text-text-secondary line-through decoration-text-secondary"
-                )}
-              >
-                <span
-                  className={cn("w-3 shrink-0 text-center font-bold", presentation.colorClass)}
-                  aria-hidden="true"
-                >
-                  {presentation.marker}
-                </span>
-                <span className="flex min-w-0 flex-1 items-center">
-                  {dir !== "" && <PathTail className="text-text-secondary">{`${dir}/`}</PathTail>}
-                  <span className={cn("truncate font-medium", isReadable && "text-text-primary")}>
-                    {base}
-                  </span>
-                </span>
-                <span
-                  className="flex shrink-0 items-center gap-1.5 text-2xs tabular-nums"
-                  aria-hidden="true"
-                >
-                  {insertions > 0 && <span className="text-status-success">+{insertions}</span>}
-                  {deletions > 0 && <span className="text-status-error">-{deletions}</span>}
-                </span>
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    // aria-disabled rather than `disabled`: the row keeps its place
+                    // in the tab order so a keyboard user can reach the explanation
+                    // instead of the row silently not existing for them.
+                    aria-disabled={!isReadable}
+                    aria-label={
+                      isReadable
+                        ? `Read ${change.relativePath}, ${presentation.name}`
+                        : `${change.relativePath}, deleted file isn't available to read`
+                    }
+                    onClick={
+                      isReadable
+                        ? () => {
+                            onSelect(change.relativePath);
+                          }
+                        : undefined
+                    }
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-[var(--radius-md)] px-2 py-1 text-left text-xs",
+                      "transition-colors duration-150 ease-out",
+                      // Unconditional: a deleted file's row stays in the tab order
+                      // (aria-disabled, so the explanation can be read), and a
+                      // focusable row without a ring takes the browser's default.
+                      PALETTE_ROW_FOCUS_CLASS,
+                      isReadable
+                        ? "cursor-pointer text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
+                        : // Struck through rather than faded: the row stays readable
+                          // at full strength while still saying there is nothing
+                          // left to open — the convention source-control lists use
+                          // for a deleted path.
+                          "cursor-default text-text-secondary line-through decoration-text-secondary"
+                    )}
+                  >
+                    <span
+                      className={cn("w-3 shrink-0 text-center font-bold", presentation.colorClass)}
+                      aria-hidden="true"
+                    >
+                      {presentation.marker}
+                    </span>
+                    <span className="flex min-w-0 flex-1 items-center">
+                      {dir !== "" && (
+                        <PathTail className="text-text-secondary">{`${dir}/`}</PathTail>
+                      )}
+                      <span
+                        className={cn("truncate font-medium", isReadable && "text-text-primary")}
+                      >
+                        {base}
+                      </span>
+                    </span>
+                    <DiffStat
+                      insertions={insertions}
+                      deletions={deletions}
+                      className="shrink-0 text-2xs"
+                      aria-hidden="true"
+                    />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {isReadable ? change.relativePath : "Deleted file isn't available to read"}
+                </TooltipContent>
+              </Tooltip>
             </li>
           );
         })}

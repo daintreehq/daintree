@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { ChevronRight, CircleDashed, ExternalLink, Info, RotateCw, Send } from "lucide-react";
+import { ChevronRight, CircleDashed, ExternalLink, Info, RefreshCw, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -16,6 +16,7 @@ import {
   summarizePrChecks,
   type PrCheckRow,
 } from "./prChecks";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * Set on the trigger — which is always in the hub's own DOM — while the
@@ -232,7 +233,7 @@ export function PrChecksPopover({
               className="flex flex-col"
             >
               {/* `immediate`: the Doherty gate already absorbed the anti-flicker delay. */}
-              <div className="flex flex-col gap-1.5 px-3 pt-2.5 pb-2 border-b border-divider">
+              <div className="flex flex-col gap-1.5 px-3 py-2 border-b border-divider">
                 <SkeletonBone immediate className="h-3.5 w-24 rounded-sm" />
                 <SkeletonBone immediate className="h-3 w-48 rounded-sm" />
               </div>
@@ -311,7 +312,7 @@ export function PrChecksPopover({
               onClick={runFetch}
               className={FOOTER_BUTTON_MOTION}
             >
-              <RotateCw aria-hidden="true" />
+              <RefreshCw aria-hidden="true" />
               {reloadLabel}
             </Button>
             {failingCount > 0 && (
@@ -324,7 +325,7 @@ export function PrChecksPopover({
                 className={FOOTER_BUTTON_MOTION}
               >
                 <Send aria-hidden="true" />
-                Send {failingCount === 1 ? "1 check" : `${failingCount} checks`} to agent
+                Send {pluralize(failingCount, "check")} to agent
               </Button>
             )}
             {cannotRead && (
@@ -378,7 +379,7 @@ function ChecksList({
 
   return (
     <>
-      <div data-testid="pr-checks-summary" className="px-3 pt-2.5 pb-2 border-b border-divider">
+      <div data-testid="pr-checks-summary" className="px-3 py-2 border-b border-divider">
         <p className="font-medium text-text-primary">{summary.headline}</p>
         {summary.detail && <p className="mt-0.5 text-2xs text-text-secondary">{summary.detail}</p>}
       </div>
@@ -484,7 +485,7 @@ function CheckRows({
                 size="icon-xs"
                 onClick={() => onOpenExternal(detailsUrl)}
                 aria-label={labels.get(row.key)}
-                className="-my-1 transition-colors"
+                className="-my-1 [&_svg]:size-3.5"
               >
                 <ExternalLink aria-hidden="true" />
               </Button>
@@ -521,7 +522,7 @@ function describeState(
     case "loaded": {
       const failing = state.rows.filter((row) => row.isFailure).length;
       const total = state.rows.length;
-      return `${total} CI check${total === 1 ? "" : "s"}, ${failing} failing`;
+      return `${pluralize(total, "CI check")}, ${failing} failing`;
     }
     default:
       return "";

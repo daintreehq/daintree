@@ -341,7 +341,7 @@ describe("FileChangeList — folder grouping is an invariant (#12102)", () => {
       <FileChangeList changes={changes} rootPath={ROOT} maxVisible={1} />
     );
     expect(headers(container)).toEqual(["src"]);
-    expect(container.textContent).toContain("...and 1 more");
+    expect(container.textContent).toContain("…and 1 more");
     expect(container.textContent).toContain("b.ts");
   });
 });
@@ -632,5 +632,68 @@ describe("FileChangeList — scroll containment (#12828)", () => {
     const stale = container.querySelector<HTMLElement>(".surface-stale");
     expect(stale?.classList.contains("contain-paint")).toBe(true);
     expect(stale?.classList.contains("overflow-y-auto")).toBe(true);
+  });
+});
+
+describe("FileChangeList — one tab stop, arrows move it", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  const rowsOf = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll<HTMLElement>("[data-roving-row]"));
+  const tabStops = (container: HTMLElement) =>
+    rowsOf(container).filter((row) => row.tabIndex === 0);
+
+  it("puts exactly one row in the tab order, however many files there are", () => {
+    const { container } = render(
+      <FileChangeList
+        changes={[file("src/a.ts"), file("src/b.ts"), file("lib/c.ts"), file("d.ts")]}
+        rootPath={ROOT}
+      />
+    );
+    expect(rowsOf(container).length).toBe(4);
+    expect(tabStops(container).length).toBe(1);
+  });
+
+  it("walks the rows in display order, across folder groups, and stops at the ends", () => {
+    const { container } = render(
+      <FileChangeList
+        changes={[file("src/a.ts"), file("lib/b.ts"), file("c.ts")]}
+        rootPath={ROOT}
+      />
+    );
+    const rows = rowsOf(container);
+    const first = tabStops(container)[0]!;
+    expect(first).toBe(rows[0]);
+    first.focus();
+
+    for (let i = 1; i < rows.length; i++) {
+      fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+      expect(document.activeElement).toBe(rows[i]);
+    }
+    // No wrap: one press too many stays on the last row.
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(rows[rows.length - 1]);
+
+    fireEvent.keyDown(document.activeElement!, { key: "Home" });
+    expect(document.activeElement).toBe(rows[0]);
+    fireEvent.keyDown(document.activeElement!, { key: "End" });
+    expect(document.activeElement).toBe(rows[rows.length - 1]);
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(rows[rows.length - 2]);
+
+    // The tab stop follows, so Tab out and back returns to the same row.
+    expect(tabStops(container)).toEqual([document.activeElement]);
+  });
+
+  it("leaves modified arrows alone for the app's own shortcuts", () => {
+    const { container } = render(
+      <FileChangeList changes={[file("a.ts"), file("b.ts")]} rootPath={ROOT} />
+    );
+    const [first] = rowsOf(container);
+    first!.focus();
+    fireEvent.keyDown(first!, { key: "ArrowDown", metaKey: true });
+    expect(document.activeElement).toBe(first);
   });
 });

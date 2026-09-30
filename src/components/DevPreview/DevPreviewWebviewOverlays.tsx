@@ -1,16 +1,15 @@
 import {
   AlertTriangle,
-  Check,
   ChevronDown,
-  Copy,
   Download,
   Eraser,
   ExternalLink,
-  RotateCcw,
+  RefreshCw,
   RotateCw,
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -31,11 +30,12 @@ import type { FindInPageState } from "@/hooks/useFindInPage";
 import { WebviewDialog, type WebviewDialogRequest } from "../Browser/WebviewDialog";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 
+// The main-process clipboard: the guest page may hold focus.
+const writeMainClipboard = (text: string) => window.electron.clipboard.writeText(text);
+
 interface DevPreviewWebviewOverlaysProps {
   reconnectAttempt: number;
   webviewLoadError: WebviewLoadError | null;
-  certCopied: boolean;
-  onCopyMkcert: () => void;
   isRestarting: boolean;
   onRestartDevServer: () => void;
   onHardReload: () => void;
@@ -77,8 +77,6 @@ interface DevPreviewWebviewOverlaysProps {
 export function DevPreviewWebviewOverlays({
   reconnectAttempt,
   webviewLoadError,
-  certCopied,
-  onCopyMkcert,
   isRestarting,
   onRestartDevServer,
   onHardReload,
@@ -120,16 +118,19 @@ export function DevPreviewWebviewOverlays({
         <PaneState
           live="alert"
           className="z-20"
-          icon={<AlertTriangle className="text-status-warning" />}
+          icon={<XCircle className="text-status-error" />}
           title={webviewLoadErrorHeading(webviewLoadError.code)}
           description={webviewLoadError.message}
         >
           <PaneStateActions>
             {webviewLoadError.code === "cert" && (
-              <Button onClick={onCopyMkcert} variant="ghost" size="sm">
-                {certCopied ? <Check /> : <Copy />}
-                {certCopied ? "Copied" : "Copy `mkcert -install`"}
-              </Button>
+              <CopyButton
+                label="Copy `mkcert -install`"
+                variant="ghost"
+                size="sm"
+                text="mkcert -install"
+                write={writeMainClipboard}
+              />
             )}
             {webviewLoadError.code === "connection_refused" ||
             webviewLoadError.code === "proxy_error" ? (
@@ -176,7 +177,7 @@ export function DevPreviewWebviewOverlays({
                       Reload preview
                     </DropdownMenuItem>
                     <DropdownMenuItem onSelect={onRestartDevServer}>
-                      <RotateCcw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                      <RotateCw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Restart dev server
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
@@ -193,7 +194,7 @@ export function DevPreviewWebviewOverlays({
               </div>
             ) : (
               <Button onClick={onRetryWebviewLoad} variant="subtle" size="sm">
-                <RotateCw />
+                <RefreshCw />
                 Retry
               </Button>
             )}

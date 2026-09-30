@@ -1,5 +1,5 @@
 import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   addRecipeMock,
@@ -4089,6 +4089,112 @@ describe("recipeStore", () => {
       useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
       const json = useRecipeStore.getState().exportRecipe("acme.tools.deploy")!;
       expect(JSON.parse(json)).not.toHaveProperty("origin");
+    });
+  });
+
+  describe("background (focus) reloads", () => {
+    const recipe = (id: string, name = `Recipe ${id}`) => ({
+      id,
+      name,
+      projectId: "project-1",
+      terminals: [{ type: "terminal" as const, command: "npm run dev" }],
+      createdAt: 1,
+    });
+    const collision = { droppedName: "dup", filename: "dup.json" };
+
+    beforeEach(() => {
+      globalGetRecipesMock.mockImplementation(async () => [recipe("recipe-g1")]);
+      getRecipesMock.mockImplementation(async () => ({
+        recipes: [recipe("recipe-p1")],
+        collisions: [collision],
+      }));
+      getInRepoRecipesMock.mockImplementation(async () => []);
+    });
+
+    afterEach(() => {
+      globalGetRecipesMock.mockReset().mockResolvedValue([]);
+      getRecipesMock.mockReset().mockResolvedValue({ recipes: [], collisions: [] });
+      getInRepoRecipesMock.mockReset().mockResolvedValue([]);
+    });
+
+    it("keeps array identities and skips the store update when content is unchanged", async () => {
+      await useRecipeStore.getState().loadRecipes("project-1");
+      const before = useRecipeStore.getState();
+      const listener = vi.fn();
+      const unsubscribe = useRecipeStore.subscribe(listener);
+
+      await useRecipeStore.getState().loadRecipes("project-1", { background: true });
+      unsubscribe();
+
+      expect(listener).not.toHaveBeenCalled();
+      const after = useRecipeStore.getState();
+      expect(after.recipes).toBe(before.recipes);
+      expect(after.globalRecipes).toBe(before.globalRecipes);
+      expect(after.projectRecipes).toBe(before.projectRecipes);
+    });
+
+    it("publishes new content and reuses only the unchanged tiers", async () => {
+      await useRecipeStore.getState().loadRecipes("project-1");
+      const before = useRecipeStore.getState();
+      getRecipesMock.mockImplementation(async () => ({
+        recipes: [recipe("recipe-p1", "Renamed")],
+        collisions: [collision],
+      }));
+
+      await useRecipeStore.getState().loadRecipes("project-1", { background: true });
+
+      const after = useRecipeStore.getState();
+      expect(after.globalRecipes).toBe(before.globalRecipes);
+      expect(after.projectRecipes).not.toBe(before.projectRecipes);
+      expect(after.recipes.map((r) => r.name)).toEqual(["Recipe recipe-g1", "Renamed"]);
+    });
+
+    it("does not flip isLoading on a background refresh", async () => {
+      await useRecipeStore.getState().loadRecipes("project-1");
+      const flips: boolean[] = [];
+      const unsubscribe = useRecipeStore.subscribe((state, prev) => {
+        if (state.isLoading !== prev.isLoading) flips.push(state.isLoading);
+      });
+
+      await useRecipeStore.getState().loadRecipes("project-1", { background: true });
+      unsubscribe();
+
+      expect(flips).toEqual([]);
+    });
+
+    it("settles isLoading when a background refresh supersedes a foreground load", async () => {
+      await useRecipeStore.getState().loadRecipes("project-1");
+      const foreground = useRecipeStore.getState().loadRecipes("project-1");
+      expect(useRecipeStore.getState().isLoading).toBe(true);
+      await useRecipeStore.getState().loadRecipes("project-1", { background: true });
+      await foreground;
+      expect(useRecipeStore.getState().isLoading).toBe(false);
+    });
+
+    it("re-raises the collision notice only when the collisions change", async () => {
+      await useRecipeStore.getState().loadRecipes("project-1");
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+
+      await useRecipeStore.getState().loadRecipes("project-1", { background: true });
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+
+      getRecipesMock.mockImplementation(async () => ({
+        recipes: [recipe("recipe-p1")],
+        collisions: [collision, { droppedName: "other", filename: "other.json" }],
+      }));
+      await useRecipeStore.getState().loadRecipes("project-1", { background: true });
+      expect(notifyMock).toHaveBeenCalledTimes(2);
+
+      await useRecipeStore.getState().loadRecipes("project-1");
+      expect(notifyMock).toHaveBeenCalledTimes(3);
+    });
+
+    it("treats a background request for a different project as a foreground load", async () => {
+      await useRecipeStore.getState().loadRecipes("project-1");
+      const pending = useRecipeStore.getState().loadRecipes("project-2", { background: true });
+      expect(useRecipeStore.getState().isLoading).toBe(true);
+      expect(useRecipeStore.getState().currentProjectId).toBe("project-2");
+      await pending;
     });
   });
 });

@@ -1,9 +1,12 @@
 import { memo, useCallback, useRef } from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
 import type React from "react";
 import type { RefObject } from "react";
 import type { StagingFileEntry } from "@shared/types";
 import type { GitStatus } from "@shared/types";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { PathTail } from "@/components/ui/PathTail";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Plus, Minus } from "lucide-react";
@@ -179,13 +182,14 @@ function FileStageRowComponent({
       data-focused={isFocused || undefined}
       aria-selected={isSelected}
       className={cn(
-        "relative group/stagerow flex items-center text-xs rounded px-1.5 transition-colors",
-        density === "compact" ? "py-0.5" : "py-1.5",
-        isStaged ? "bg-overlay-subtle hover:bg-overlay-medium" : "hover:bg-tint/5",
-        // The row whose menu is open lifts to a neutral raised tier — a
-        // distinct level from the selection's subtle fill, so it reads as
-        // "the menu targets this row" rather than as a second selection.
-        "data-[state=open]:bg-overlay-raised"
+        // The list-detail language, keyed on this row's own `aria-selected`:
+        // a selected row takes the highlight, the pointer a lighter step, an
+        // open row menu a ring. Staged rows carry no resting fill of their own —
+        // the section header already says which list they are in, and a fill
+        // at the hover step left the pointer with nothing lighter to show.
+        LIST_DETAIL_ROW_CLASS,
+        "group/stagerow flex items-center text-xs rounded-[var(--radius-md)] px-1.5",
+        density === "compact" ? "py-0.5" : "py-1.5"
       )}
       // Below the windowing threshold the staging lists still render every
       // changed file, and a big changeset (lockfiles, codegen) mounts thousands
@@ -203,16 +207,10 @@ function FileStageRowComponent({
             }
       }
     >
-      {isSelected && (
-        <div
-          aria-hidden="true"
-          className="absolute inset-0 rounded bg-overlay-subtle pointer-events-none"
-        />
-      )}
       {isFocused && (
         <div
           aria-hidden="true"
-          className="absolute inset-0 rounded ring-1 ring-inset ring-tint/30 pointer-events-none"
+          className="absolute inset-0 rounded-[var(--radius-sm)] ring-1 ring-inset ring-tint/30 pointer-events-none"
         />
       )}
       <TruncatedTooltip content={file.path}>
@@ -221,7 +219,7 @@ function FileStageRowComponent({
           onClick={handleClick}
           aria-label={`View diff: ${file.path}`}
           className={cn(
-            "relative -mx-1 flex min-w-0 flex-1 items-baseline rounded px-1 text-left",
+            "relative -mx-1 flex min-w-0 flex-1 items-baseline rounded-[var(--radius-sm)] px-1 text-left",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
           )}
         >
@@ -272,8 +270,7 @@ function FileStageRowComponent({
             (generated || viewed) && "opacity-60"
           )}
         >
-          {insertions > 0 && <span className="text-status-success">+{insertions}</span>}
-          {deletions > 0 && <span className="text-status-error">-{deletions}</span>}
+          <DiffStat insertions={insertions} deletions={deletions} />
         </div>
       )}
 
@@ -283,7 +280,7 @@ function FileStageRowComponent({
             <label
               onClick={handleViewedClick}
               className={cn(
-                "flex items-center gap-1 ml-2 shrink-0 cursor-pointer select-none rounded px-1.5 py-0.5",
+                "flex items-center gap-1 ml-2 shrink-0 cursor-pointer select-none rounded-[var(--radius-sm)] px-1.5 py-0.5",
                 "text-3xs font-medium uppercase tracking-wider transition-colors",
                 viewed ? "text-text-secondary" : "text-text-placeholder hover:text-text-secondary"
               )}
@@ -307,18 +304,17 @@ function FileStageRowComponent({
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon-xs"
             onClick={handleToggle}
-            className={cn(
-              "w-5 h-5 flex items-center justify-center rounded shrink-0 ml-2 transition-colors",
-              "text-text-secondary hover:text-text-primary focus-visible:text-text-primary",
-              "hover:bg-tint/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-            )}
+            // The 24px hit area without the 24px of row height: the negative
+            // margin gives back what the button adds over the row's 16px line.
+            className="-my-1 ml-2 shrink-0"
             aria-label={isStaged ? `Unstage ${file.path}` : `Stage ${file.path}`}
           >
-            {isStaged ? <Minus className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
-          </button>
+            {isStaged ? <Minus /> : <Plus />}
+          </Button>
         </TooltipTrigger>
         <TooltipContent side="left">{isStaged ? "Unstage" : "Stage"}</TooltipContent>
       </Tooltip>

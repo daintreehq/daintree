@@ -1,13 +1,5 @@
 import { Suspense, useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
-import {
-  ChevronUp,
-  MoreHorizontal,
-  RotateCw,
-  CircleStop,
-  Download,
-  Eraser,
-  RotateCcw,
-} from "lucide-react";
+import { ChevronUp, CircleStop, Download, Eraser, MoreHorizontal, RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -318,7 +310,7 @@ export function ConsoleDrawer({
                       Reload preview
                     </DropdownMenuItem>
                     <DropdownMenuItem onSelect={onRestartDevServer}>
-                      <RotateCcw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                      <RotateCw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Restart dev server
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />

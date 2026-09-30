@@ -60,7 +60,11 @@ export interface Utf8Window {
  * so an oversized leading character is emitted whole rather than never at all.
  */
 export function sliceUtf8Window(text: string, offset: number, maxBytes: number): Utf8Window {
-  const bytes = encoder.encode(text);
+  return sliceUtf8Bytes(encoder.encode(text), offset, maxBytes);
+}
+
+/** `sliceUtf8Window` over already-encoded text, for callers that page one encoding. */
+export function sliceUtf8Bytes(bytes: Uint8Array, offset: number, maxBytes: number): Utf8Window {
   const totalBytes = bytes.length;
   const size = Math.max(Math.trunc(maxBytes) || 1, 1);
   // 0 is never a continuation byte, so an out-of-range index reads as a boundary.

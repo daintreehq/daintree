@@ -18,16 +18,105 @@ function isChecklistComplete(checklist: ChecklistState): boolean {
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
+function isLaunchedAgentPanel(p: CarrierPanel | undefined): boolean {
+  if (!p || !isPtyPanel(p)) return false;
+  return Boolean(p.launchAgentId) || Boolean(p.detectedAgentId) || p.everDetectedAgent === true;
+}
+
+function isActiveAgentPanel(p: CarrierPanel | undefined): boolean {
+  if (!p || !isPtyPanel(p)) return false;
+  if (!p.detectedAgentId && !p.launchAgentId) return false;
+  const state = p.agentState;
+  return Boolean(state && ACTIVE_AGENT_STATES.has(state));
+}
+
 function countActiveAgentPanels(panelsById: Record<string, CarrierPanel>): number {
   let count = 0;
   for (const raw of Object.values(panelsById)) {
-    if (!raw || !isPtyPanel(raw)) continue;
-    if (!raw.detectedAgentId && !raw.launchAgentId) continue;
-    const state = raw.agentState;
-    if (state && ACTIVE_AGENT_STATES.has(state)) count += 1;
+    if (isActiveAgentPanel(raw)) count += 1;
     if (count >= 2) return count;
   }
   return count;
+}
+
+type PanelState = ReturnType<typeof usePanelStore.getState>;
+
+// What the last full or incremental pass over the panel store established.
+// `launchMiss` records that no panel in `panelIds` qualified for
+// `launchedAgent`; `activeCount` is the exact active-agent count across
+// `panelsById` (null once it reached 2, where the scan stops counting).
+interface AgentScan {
+  panelsById: PanelState["panelsById"];
+  panelIds: PanelState["panelIds"];
+  keyCount: number;
+  launchMiss: boolean;
+  activeCount: number | null;
+}
+
+function fullAgentScan(state: PanelState, checkLaunch: boolean): AgentScan {
+  const launchMiss =
+    checkLaunch && !state.panelIds.some((id) => isLaunchedAgentPanel(state.panelsById[id]));
+  let keyCount = 0;
+  let activeCount = 0;
+  for (const id in state.panelsById) {
+    keyCount += 1;
+    if (isActiveAgentPanel(state.panelsById[id])) activeCount += 1;
+  }
+  return {
+    panelsById: state.panelsById,
+    panelIds: state.panelIds,
+    keyCount,
+    launchMiss,
+    activeCount: activeCount >= 2 ? null : activeCount,
+  };
+}
+
+// Re-examines only the panel records replaced since `prev`: a record that is
+// still the same object cannot have changed either answer. Falls back to a
+// full scan when membership moved or the previous pass left no usable answer.
+function nextAgentScan(prev: AgentScan | null, state: PanelState, checkLaunch: boolean): AgentScan {
+  if (
+    !prev ||
+    prev.panelIds !== state.panelIds ||
+    prev.activeCount === null ||
+    (checkLaunch && !prev.launchMiss)
+  ) {
+    return fullAgentScan(state, checkLaunch);
+  }
+  if (prev.panelsById === state.panelsById) return prev;
+
+  let launchHit = false;
+  if (checkLaunch) {
+    for (const id of state.panelIds) {
+      const panel = state.panelsById[id];
+      if (panel !== prev.panelsById[id] && isLaunchedAgentPanel(panel)) {
+        launchHit = true;
+        break;
+      }
+    }
+  }
+
+  let keyCount = 0;
+  let retained = 0;
+  let activeCount = prev.activeCount;
+  for (const id in state.panelsById) {
+    keyCount += 1;
+    const panel = state.panelsById[id];
+    const prevPanel = prev.panelsById[id];
+    if (prevPanel !== undefined) retained += 1;
+    if (panel === prevPanel) continue;
+    activeCount += Number(isActiveAgentPanel(panel)) - Number(isActiveAgentPanel(prevPanel));
+  }
+  // A key that disappeared took its contribution with it; recount.
+  if (retained !== prev.keyCount) return fullAgentScan(state, checkLaunch);
+
+  return {
+    panelsById: state.panelsById,
+    panelIds: state.panelIds,
+    keyCount,
+    launchMiss: checkLaunch && !launchHit,
+    activeCount: activeCount >= 2 ? null : activeCount,
+  };
 }
 
 export interface GettingStartedChecklistState {
@@ -52,11 +141,9 @@ function reconcileCurrentState(
   }
   if (
     !cl.items.launchedAgent &&
-    usePanelStore.getState().panelIds.some((id) => {
-      const p = usePanelStore.getState().panelsById[id];
-      if (!p || !isPtyPanel(p)) return false;
-      return Boolean(p.launchAgentId) || Boolean(p.detectedAgentId) || p.everDetectedAgent === true;
-    })
+    usePanelStore
+      .getState()
+      .panelIds.some((id) => isLaunchedAgentPanel(usePanelStore.getState().panelsById[id]))
   ) {
     markItem("launchedAgent");
   }
@@ -210,6 +297,7 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
 
     const getChecklist = () => checklistRef.current;
     const viewStore = getCurrentViewStore();
+    let agentScan: AgentScan | null = null;
 
     const unsubs = [
       useProjectStore.subscribe((state) => {
@@ -222,20 +310,16 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
       usePanelStore.subscribe((state) => {
         const cl = getChecklist();
         if (!cl || cl.dismissed) return;
-        if (
-          !cl.items.launchedAgent &&
-          state.panelIds.some((id) => {
-            const p = state.panelsById[id];
-            if (!p || !isPtyPanel(p)) return false;
-            return (
-              Boolean(p.launchAgentId) || Boolean(p.detectedAgentId) || p.everDetectedAgent === true
-            );
-          })
-        ) {
-          markItem("launchedAgent");
-        }
-        if (!cl.items.ranSecondParallelAgent && countActiveAgentPanels(state.panelsById) >= 2) {
-          markItem("ranSecondParallelAgent");
+        const checkLaunch = !cl.items.launchedAgent;
+        if (checkLaunch || !cl.items.ranSecondParallelAgent) {
+          const scan = nextAgentScan(agentScan, state, checkLaunch);
+          agentScan = scan;
+          if (checkLaunch && !scan.launchMiss) {
+            markItem("launchedAgent");
+          }
+          if (!cl.items.ranSecondParallelAgent && scan.activeCount === null) {
+            markItem("ranSecondParallelAgent");
+          }
         }
         maybeAutoCollapse();
       }),

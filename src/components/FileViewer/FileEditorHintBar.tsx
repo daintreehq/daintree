@@ -1,4 +1,5 @@
 import { Pencil, XCircle } from "lucide-react";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -89,10 +90,10 @@ export function FileEditorHintBar({
     >
       <Pencil aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
       {/* The message yields first under width pressure: the action has to stay
-          whole to be clickable, and the full text is on the title attribute. */}
-      <span className="min-w-0 flex-1 truncate" title={message}>
-        {message}
-      </span>
+          whole to be clickable, and the clipped text opens in a tooltip. */}
+      <TruncatedTooltip content={message}>
+        <span className="min-w-0 flex-1 truncate">{message}</span>
+      </TruncatedTooltip>
       <Button
         variant="subtle"
         size="xs"

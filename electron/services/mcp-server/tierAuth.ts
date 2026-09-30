@@ -641,10 +641,9 @@ export function buildTargetPolicy(
   // An agent's `terminal.closeAll` is confirm-gated whatever it declares
   // (#12881), and every caller here is an agent.
   const effectiveDanger = id === CLOSE_ALL_TOOL_ID ? "confirm" : danger;
-  // Mirrors the dispatch gate's skip preference (#12874), which covers the
-  // same tools a native grant can.
-  const skipConfirmWaived =
-    snapshot.confirmationsSkipped === true && isGenericNativeGrantEligible(id);
+  // Mirrors the dispatch gate's skip preference (#12874), which covers every
+  // confirm-gated tool, target-picking ones included (#12989).
+  const skipConfirmWaived = snapshot.confirmationsSkipped === true;
   const requiresConfirmation =
     authorizedBy === "approval" ||
     (effectiveDanger === "confirm" && !nativeGranted && !paneConfirmWaived && !skipConfirmWaived);
@@ -724,7 +723,9 @@ export function buildTargetPolicy(
     // per-tool grant only widens the floor and never bypasses confirmation —
     // except a pane's, which the user minted from the dialog itself (#12692).
     requiresConfirmation,
-    confirmationMayEscalate,
+    // The hash keeps the target's own answer; this is the live one, and under
+    // the skip preference no argument can raise a dialog (#12989).
+    confirmationMayEscalate: confirmationMayEscalate && !skipConfirmWaived,
     // Exactly the two checks `issueGrant` enforces, minus the runtime
     // caller-pin: the origin must be able to hold a grant, and the tool must be
     // one some non-external tier already permits. A pane's grant comes from its

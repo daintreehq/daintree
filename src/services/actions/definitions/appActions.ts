@@ -13,6 +13,7 @@ import { actionService } from "@/services/ActionService";
 import { getBuiltInAppSchemeForType, resolveAppTheme } from "@shared/theme";
 import { logError } from "@/utils/logger";
 import { IMPORT_CONFIG_EVENT } from "@/components/Config/importConfigEvent";
+import { pluralize } from "@/lib/pluralize";
 
 async function refreshRendererConfig(): Promise<void> {
   await Promise.all([
@@ -147,7 +148,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
           context: { eventKind: "settings" },
           message:
             omitted > 0
-              ? `Configuration exported — ${omitted} ${omitted === 1 ? "value that looked like a secret was" : "values that looked like secrets were"} left out`
+              ? `Configuration exported — ${pluralize(omitted, "value that looked like a secret was", "values that looked like secrets were")} left out`
               : "Configuration exported",
           duration: 4000,
         });

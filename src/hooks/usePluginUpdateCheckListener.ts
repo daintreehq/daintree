@@ -4,6 +4,7 @@ import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { PluginBackgroundUpdateCheckResult } from "@shared/types/plugin";
+import { pluralize } from "@/lib/pluralize";
 
 const SUPERSEDE_KEY = "plugin-updates-available";
 
@@ -21,10 +22,11 @@ function showPluginUpdatesNotification(result: PluginBackgroundUpdateCheckResult
     // into a single inbox row rather than stacking duplicates.
     supersedeKey: SUPERSEDE_KEY,
     title: "Plugin updates available",
-    message:
-      count === 1
-        ? "1 plugin update is available. Open the plugin manager to review it."
-        : `${count} plugin updates are available. Open the plugin manager to review them.`,
+    message: pluralize(
+      count,
+      "plugin update is available. Open the plugin manager to review it.",
+      "plugin updates are available. Open the plugin manager to review them."
+    ),
     duration: 0,
     // actionId drives the button on the inbox-history path (a bare onClick is
     // dropped there — see useStoreUpdateListener); onClick is the toast-path

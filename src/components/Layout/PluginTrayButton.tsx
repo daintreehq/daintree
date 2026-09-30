@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { Pin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import {
   DropdownMenu,
@@ -176,38 +178,42 @@ function PluginTrayRow({
     >
       <Icon data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
 
-      <span className="min-w-0 flex-1 truncate" title={config.label}>
-        {config.label}
-      </span>
+      <TruncatedTooltip content={config.label} focusable={false}>
+        <span className="min-w-0 flex-1 truncate">{config.label}</span>
+      </TruncatedTooltip>
 
       <span className="sr-only">Press P to {promoted ? "unpin from" : "pin to"} toolbar</span>
 
-      <span
-        role="presentation"
-        aria-hidden="true"
-        data-testid={`plugin-tray-pin-${config.id}`}
-        data-pinned={promoted ? "true" : "false"}
-        title={promoted ? `${TOOLBAR_UNPIN_LABEL} (P)` : `${TOOLBAR_PIN_LABEL} (P)`}
-        onPointerDown={(e) => e.stopPropagation()}
-        onPointerUp={(e) => e.stopPropagation()}
-        onClick={(e) => {
-          e.stopPropagation();
-          onTogglePin(config);
-        }}
-        className={cn(
-          "-my-0.5 ml-1 inline-flex h-5 w-5 items-center justify-center rounded-sm text-text-secondary transition-opacity hover:bg-overlay-hover hover:text-text-primary",
-          promoted ? "opacity-100" : "opacity-0 group-data-[highlighted]:opacity-100"
-        )}
-      >
-        <Pin
+      <RowControlTooltip label={promoted ? TOOLBAR_UNPIN_LABEL : TOOLBAR_PIN_LABEL} shortcut="P">
+        <span
+          role="presentation"
+          aria-hidden="true"
+          data-testid={`plugin-tray-pin-${config.id}`}
+          data-pinned={promoted ? "true" : "false"}
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onTogglePin(config);
+          }}
           className={cn(
-            "h-3 w-3",
-            promoted &&
-              "fill-current text-text-secondary group-data-[highlighted]:text-text-primary"
+            ROW_CONTROL_CLASS,
+            // 24px inside a 28px menu row: the negative margin keeps the row's
+            // height where every other menu item has it.
+            "-my-1 ml-1",
+            !promoted && "opacity-0 group-data-[highlighted]:opacity-100"
           )}
-          strokeWidth={promoted ? 2 : 1.75}
-        />
-      </span>
+        >
+          <Pin
+            className={cn(
+              "h-3 w-3",
+              promoted &&
+                "fill-current text-text-secondary group-data-[highlighted]:text-text-primary"
+            )}
+            strokeWidth={promoted ? 2 : 1.75}
+          />
+        </span>
+      </RowControlTooltip>
     </DropdownMenuItem>
   );
 }

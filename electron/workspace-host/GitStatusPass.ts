@@ -4,7 +4,7 @@ import { createHardenedGit, createWslHardenedGit } from "../utils/hardenedGit.js
 import type { WslGitInvocation } from "../utils/hardenedGit.js";
 import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
 import { getGitDir } from "../utils/gitUtils.js";
-import { getRepoOperationStateSync } from "../utils/gitRepoOperationState.js";
+import { getRepoOperationState } from "../utils/gitRepoOperationState.js";
 import { WorktreeRemovedError } from "../utils/errorTypes.js";
 import { categorizeWorktree } from "../services/worktree/mood.js";
 import type { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
@@ -196,6 +196,9 @@ export class GitStatusPass {
     // completed normally, so every read is dominated by the assignment.
     let gitDir!: string | null;
     let reachedStatusPass = false;
+    // Pinned before the first await so a stop (or stop-then-start) during the
+    // sentinel read below is seen, instead of the old lifecycle publishing.
+    const lifecycleSignal = this.host.abortSignal;
     try {
       // Skip the git status invocation while a rebase/merge/cherry-pick/revert
       // is in progress — running it would compete with the user's git client
@@ -209,7 +212,16 @@ export class GitStatusPass {
       // can surface it even when git status is skipped.
       let opState: RepoState | undefined;
       if (gitDir) {
-        opState = getRepoOperationStateSync(gitDir);
+        // Async and bounded: a sync readdir here blocked the whole host on a
+        // stalled mount. A timeout fails open, like any other read error.
+        opState = await withTimeout(
+          getRepoOperationState(gitDir),
+          FS_OP_TIMEOUT_MS,
+          `repo operation state: ${gitDir}`
+        ).catch(() => undefined);
+        if (lifecycleSignal.aborted) {
+          return;
+        }
         if (opState !== this.host.repoState) {
           this.host.repoState = opState;
           if (this.host.hasInitialStatus) {

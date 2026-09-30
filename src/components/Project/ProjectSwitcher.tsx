@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { ChevronsUpDown, FileText, Plus } from "lucide-react";
+import { ChevronsUpDown, FileText, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { useProjectStore } from "@/store/projectStore";
@@ -15,6 +15,7 @@ import { useProjectSwitcherPalette, useDohertyGate } from "@/hooks";
 import { actionService } from "@/services/ActionService";
 import { ProjectSwitcherPalette } from "./ProjectSwitcherPalette";
 import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
+import { pluralize } from "@/lib/pluralize";
 
 const renderIcon = (emoji: string, color?: string, sizeClass = "h-9 w-9 text-lg") => (
   <div
@@ -40,7 +41,8 @@ export function ProjectSwitcher() {
   const workspaceIdentity = activeWorkspaceIdentity(currentProject, currentScratch);
   const isLoading = useProjectStore((state) => state.isLoading);
   const showLoadingSpinner = useDohertyGate(isLoading);
-  const projectSwitcher = useProjectSwitcherPalette();
+  // Its trigger badge counts agents with the switcher closed.
+  const projectSwitcher = useProjectSwitcherPalette({ liveStatsWhileClosed: true });
   const projectSwitcherShortcut = useEffectiveCombo("project.switcherPalette");
   const projectSwitcherAriaShortcut = useAriaKeyshortcuts("project.switcherPalette");
   const isDropdownOpen = projectSwitcher.isOpen && projectSwitcher.mode === "dropdown";
@@ -164,15 +166,11 @@ export function ProjectSwitcher() {
     // need me?", which stays legible when eight agents pile up in one repo. An
     // agent tally there would read as eight separate obligations.
     if (waitingAgentCount > 0) {
-      parts.push(
-        `${waitingProjectCount} project${waitingProjectCount === 1 ? "" : "s"} waiting for input`
-      );
+      parts.push(`${pluralize(waitingProjectCount, "project")} waiting for input`);
     }
     // Work in progress isn't an obligation, so it stays an agent count.
     if (activeAgentCount > 0) {
-      parts.push(
-        `${activeAgentCount} background agent${activeAgentCount === 1 ? "" : "s"} working`
-      );
+      parts.push(`${pluralize(activeAgentCount, "background agent")} working`);
     }
 
     return {
@@ -290,7 +288,7 @@ export function ProjectSwitcher() {
           onClick={() => void projectSwitcher.addProject()}
           disabled={isLoading}
         >
-          <Plus />
+          <FolderOpen />
           Open project…
         </Button>
       </>

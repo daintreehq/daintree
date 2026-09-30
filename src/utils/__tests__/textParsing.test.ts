@@ -91,6 +91,13 @@ describe("middleTruncatePath", () => {
     expect(short).toContain("…");
   });
 
+  it("keeps the drive prefix of a Windows path, cutting on its own separator", () => {
+    const path = "C:\\Users\\dev\\Projects\\clients\\acme\\storefront\\apps\\web";
+    const short = middleTruncatePath(path, 30);
+    expect(short.startsWith("C:\\")).toBe(true);
+    expect(short.endsWith("…\\web")).toBe(true);
+  });
+
   it("leaves a path that already fits completely alone", () => {
     const path = "src/routes/+page.svelte:6";
     expect(middleTruncatePath(path, 40)).toBe(path);

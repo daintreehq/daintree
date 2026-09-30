@@ -8,7 +8,6 @@ import {
   Pencil,
   FileDown,
   FileUp,
-  Check,
   Copy,
   CopyPlus,
   Lock,
@@ -21,6 +20,7 @@ import {
 import { Plug, Workflow } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { copyWithToast } from "@/lib/copyWithToast";
 import { SearchField } from "@/components/ui/SearchField";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -48,6 +48,8 @@ import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { isPluginRecipe } from "@shared/types/project";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
+import { pluralize } from "@/lib/pluralize";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 const EMPTY_WORKTREES = new Map<string, WorktreeSnapshot>();
 
@@ -116,9 +118,7 @@ export function RecipeManager({
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [recipeToDeleteAfterSave, setRecipeToDeleteAfterSave] = useState<string | null>(null);
-  const [exportFeedback, setExportFeedback] = useState<string | null>(null);
   const [showImportDialog, setShowImportDialog] = useState(false);
-  const exportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Kept mounted between opens; a filter left from last time would reopen the
   // manager showing a fraction of the inventory with no obvious reason why.
@@ -128,14 +128,6 @@ export function RecipeManager({
       setFilterMinHeight(null);
     }
   }, [isOpen]);
-
-  useEffect(() => {
-    return () => {
-      if (exportTimeoutRef.current) {
-        clearTimeout(exportTimeoutRef.current);
-      }
-    };
-  }, []);
 
   const handleDeleteRecipe = async (recipeId: string) => {
     setDeleteError(null);
@@ -152,22 +144,12 @@ export function RecipeManager({
     }
   };
 
+  // The menu has closed by the time the copy settles, so it confirms like
+  // every menu copy: a toast naming the recipe, and a Retry when refused.
   const handleExportRecipe = useCallback(
-    async (recipeId: string) => {
-      const json = exportRecipe(recipeId);
-      if (json) {
-        try {
-          await navigator.clipboard.writeText(json);
-          setExportFeedback(recipeId);
-          if (exportTimeoutRef.current) clearTimeout(exportTimeoutRef.current);
-          exportTimeoutRef.current = setTimeout(() => {
-            setExportFeedback(null);
-            exportTimeoutRef.current = null;
-          }, 2000);
-        } catch (err) {
-          logError("Failed to copy to clipboard", err);
-        }
-      }
+    (recipe: TerminalRecipe) => {
+      const json = exportRecipe(recipe.id);
+      if (json !== null) copyWithToast("Recipe", json, { message: recipe.name });
     },
     [exportRecipe]
   );
@@ -243,7 +225,6 @@ export function RecipeManager({
     // that tier alone, and a global recipe of the same name still launches as
     // itself.
     const isShadowed = projectRecipeIds.has(recipe.id) && inRepoNames.has(recipe.name);
-    const exported = exportFeedback === recipe.id;
     const isPinned = recipe.showInEmptyState === true;
     const summary = getRecipeTerminalSummary(recipe.terminals);
     const worktreeLabel = recipe.worktreeId
@@ -257,9 +238,9 @@ export function RecipeManager({
       >
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-sm font-medium text-text-primary" title={recipe.name}>
-              {recipe.name}
-            </span>
+            <TruncatedTooltip content={recipe.name}>
+              <span className="truncate text-sm font-medium text-text-primary">{recipe.name}</span>
+            </TruncatedTooltip>
             {isPinned && (
               <Badge size="xs">
                 <Pin aria-hidden />
@@ -277,9 +258,9 @@ export function RecipeManager({
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary">
             {fromPlugin && (
               <>
-                <span className="max-w-[40%] truncate" title={recipe.origin.pluginId}>
-                  From {recipe.origin.pluginId}
-                </span>
+                <TruncatedTooltip content={recipe.origin.pluginId}>
+                  <span className="max-w-[40%] truncate">From {recipe.origin.pluginId}</span>
+                </TruncatedTooltip>
                 <span aria-hidden>·</span>
               </>
             )}
@@ -290,7 +271,7 @@ export function RecipeManager({
               </>
             )}
             <span className="min-w-0 truncate">
-              {recipe.terminals.length} terminal{recipe.terminals.length !== 1 ? "s" : ""}
+              {pluralize(recipe.terminals.length, "terminal")}
               {summary && summary !== recipe.name ? `: ${summary}` : ""}
             </span>
             <span aria-hidden>·</span>
@@ -330,17 +311,13 @@ export function RecipeManager({
                     variant="ghost"
                     size="icon-sm"
                     className="text-text-secondary hover:text-text-primary data-[state=open]:bg-overlay-raised"
-                    aria-label={
-                      exported
-                        ? `Recipe ${recipe.name} exported to clipboard`
-                        : `More actions for recipe ${recipe.name}`
-                    }
+                    aria-label={`More actions for recipe ${recipe.name}`}
                   >
-                    {exported ? <Check /> : <MoreHorizontal />}
+                    <MoreHorizontal />
                   </Button>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
-              <TooltipContent side="bottom">{exported ? "Copied" : "More actions"}</TooltipContent>
+              <TooltipContent side="bottom">More actions</TooltipContent>
             </Tooltip>
             <DropdownMenuContent align="end" sideOffset={4} className="min-w-[200px]">
               <DropdownMenuItem
@@ -368,7 +345,7 @@ export function RecipeManager({
                 </DropdownMenuItem>
               )}
               <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => void handleExportRecipe(recipe.id)}>
+              <DropdownMenuItem onSelect={() => handleExportRecipe(recipe)}>
                 <Copy data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Copy as JSON
               </DropdownMenuItem>

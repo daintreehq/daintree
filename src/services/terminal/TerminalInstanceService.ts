@@ -44,6 +44,7 @@ import {
   TerminalReflowController,
   attemptRendererUnpause,
   forceXtermReflow,
+  forceXtermReflowBatch,
   forceXtermRendererUnpause,
   resetRendererUnpauseBreaker,
 } from "./TerminalReflowController";
@@ -55,6 +56,7 @@ import { TerminalWriteController } from "./TerminalWriteController";
 import { TerminalSettleWaiterRegistry } from "./TerminalSettleWaiterRegistry";
 import { TerminalBurstController } from "./TerminalBurstController";
 import { TerminalResizePassScheduler } from "./TerminalResizePassScheduler";
+import { yieldToScheduler } from "@/lib/schedulerYield";
 import { reportFileLinkFailure } from "./FileLinksAddon";
 import {
   installTerminalBoundListeners,
@@ -137,6 +139,21 @@ function writeLocal(managed: ManagedTerminal, data: string): void {
   managed.terminal.write(data);
 }
 
+// Frame two of an attach reveal: every pane's layout reads run before any fit.
+interface AttachSettleJob {
+  id: string;
+  measure: () => void;
+  settle: () => void;
+}
+
+// Frame one of an attach reveal. `prepare` returns the xterm element owed the
+// shared reflow flush, or null when the reveal ended early.
+interface AttachRevealJob {
+  id: string;
+  prepare: () => HTMLElement | null;
+  reveal: () => AttachSettleJob;
+}
+
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
 
@@ -201,6 +218,8 @@ class TerminalInstanceService {
   private revealController: TerminalRevealController;
   private unsubTierChanged: (() => void) | null = null;
   private unsubResizeResult: (() => void) | null = null;
+  private unsubExit: (() => void) | null = null;
+  private exitHandlers = new Map<string, (exitCode: number) => void>();
   private offViewLifecycle: () => void;
   private offViewObservability: () => void;
   private suppressedWebGLReleaseTimer: ReturnType<typeof setTimeout> | null = null;
@@ -911,57 +930,117 @@ class TerminalInstanceService {
     }, durationMs);
   }
 
+  private projectSwitchArmSeq = 0;
+  private readonly projectSwitchTimers = new Set<number>();
+  private readonly projectSwitchRedrawQueue = new Map<string, ManagedTerminal>();
+  private projectSwitchRedrawDraining = false;
+  private projectSwitchRedrawEpoch = 0;
+
   suppressResizesDuringProjectSwitch(panelIds: string[], durationMs: number): void {
-    panelIds.forEach((id) => {
+    // One timer per arm, not per terminal: every id in the arm shares the same
+    // deadline, and a per-terminal timer set fired them all in one task — a
+    // resetRenderer per pane back to back, a long task right after the switch.
+    const token = ++this.projectSwitchArmSeq;
+    const armed: string[] = [];
+    for (const id of panelIds) {
       const instance = this.instances.get(id);
-      if (!instance) return;
-
-      if (instance.resizeSuppressionTimer) {
-        clearTimeout(instance.resizeSuppressionTimer);
-      }
-
+      if (!instance) continue;
       instance.isResizeSuppressed = true;
       instance.resizeSuppressionEndTime = Date.now() + durationMs;
+      instance.resizeSuppressionToken = token;
       this.resizeController.lockResize(id, true, durationMs);
+      armed.push(id);
+    }
+    if (armed.length === 0) return;
 
-      instance.resizeSuppressionTimer = window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
+      this.projectSwitchTimers.delete(timer);
+      const due: Array<[string, ManagedTerminal]> = [];
+      for (const id of armed) {
         // Re-fetch: the instance can be disposed/replaced between arming and
-        // firing. Working off the live map (not the closed-over ref) also lets
-        // the closure drop its `instance` capture for GC.
+        // firing, and a later arm or clearResizeSuppression takes ownership.
         const current = this.instances.get(id);
-        if (!current) return;
+        if (!current || current.resizeSuppressionToken !== token) continue;
         current.isResizeSuppressed = false;
         current.resizeSuppressionEndTime = undefined;
-        current.resizeSuppressionTimer = undefined;
-        this.resizeController.lockResize(id, false);
-        // Guaranteed post-switch redraw. The reveal repaint and its rAF
-        // backstops all fire INSIDE this suppression window, where the renderer
-        // can still be mid-settle and a stale `isVisible` can no-op the
-        // visibility-guarded reveal path. Now that suppression and the resize
-        // lock are gone and the reconciliation watchdog (which skips suppressed
-        // terminals) re-engages, run the exact recovery a user gets by clicking
-        // "Redraw": resetRenderer has no isVisible guard and its fit() is no
-        // longer lock-gated, so it corrects both a stale grid (garbled wrapping)
-        // and a paused/garbled renderer.
-        //
-        // Rule #1 (#10632): the obligation must be PRESERVED whenever the redraw
-        // did NOT actually run — not just when the host is detached. On a dwell
-        // longer than the suppression window this timer fires while the outgoing
-        // view is still non-renderable (detached, occluded zero box,
-        // content-visibility:hidden, or a transitional sub-50px box), where
-        // resetRenderer self-skips and the one-shot recovery would be SILENTLY
-        // SPENT. resetRenderer now reports whether it ran; if it didn't (host
-        // not foreground-renderable, OR renderable but below its >=50px floor),
-        // hand the obligation to the reconciliation watchdog, which runs the
-        // closed-loop repair once DOM geometry proves the pane on-screen. Owned
-        // by the current attachGeneration so a later re-attach can supersede it.
-        const ran = this.hostHasRenderableDims(current) ? this.resetRenderer(id) : false;
-        if (!ran) {
-          current.revealPendingRepair = true;
-          current.revealPendingGeneration = current.attachGeneration;
+        current.resizeSuppressionToken = undefined;
+        // Unlocking can replay a stashed background resize; a throw there must
+        // not strand the rest of the arm, which no longer has timers of its own.
+        try {
+          this.resizeController.lockResize(id, false);
+        } catch (error) {
+          logError("project-switch resize unlock failed", error, { id });
         }
-      }, durationMs);
-    });
+        due.push([id, current]);
+      }
+      this.queueProjectSwitchRedraws(due);
+    }, durationMs);
+    this.projectSwitchTimers.add(timer);
+  }
+
+  private queueProjectSwitchRedraws(due: Array<[string, ManagedTerminal]>): void {
+    for (const [id, managed] of due) this.projectSwitchRedrawQueue.set(id, managed);
+    if (this.projectSwitchRedrawDraining || this.projectSwitchRedrawQueue.size === 0) return;
+    this.projectSwitchRedrawDraining = true;
+    void this.drainProjectSwitchRedraws()
+      .catch((error) => logError("project-switch redraw pass failed", error))
+      .finally(() => {
+        this.projectSwitchRedrawDraining = false;
+        // Ids queued while a superseded drain was winding down.
+        if (this.projectSwitchRedrawQueue.size > 0) this.queueProjectSwitchRedraws([]);
+      });
+  }
+
+  /**
+   * One redraw per task, focused pane first, yielding between panes — the
+   * same shape as runResizePass. The first redraw runs synchronously in the
+   * suppression timer's task, so a single-pane switch is unchanged.
+   */
+  private async drainProjectSwitchRedraws(): Promise<void> {
+    const queue = this.projectSwitchRedrawQueue;
+    const epoch = this.projectSwitchRedrawEpoch;
+    while (queue.size > 0) {
+      if (epoch !== this.projectSwitchRedrawEpoch) return;
+      const focusedId = usePanelStore.getState().focusedId;
+      const id =
+        focusedId && queue.has(focusedId) ? focusedId : (queue.keys().next().value as string);
+      const managed = queue.get(id)!;
+      queue.delete(id);
+      this.redrawAfterProjectSwitch(id, managed);
+      if (queue.size > 0) await yieldToScheduler();
+    }
+  }
+
+  private redrawAfterProjectSwitch(id: string, managed: ManagedTerminal): void {
+    if (this.instances.get(id) !== managed) return;
+    // Re-armed by a later switch while queued: that arm's clear owns the redraw.
+    if (managed.isResizeSuppressed) return;
+    // Guaranteed post-switch redraw. The reveal repaint and its rAF
+    // backstops all fire INSIDE this suppression window, where the renderer
+    // can still be mid-settle and a stale `isVisible` can no-op the
+    // visibility-guarded reveal path. Now that suppression and the resize
+    // lock are gone and the reconciliation watchdog (which skips suppressed
+    // terminals) re-engages, run the exact recovery a user gets by clicking
+    // "Redraw": resetRenderer has no isVisible guard and its fit() is no
+    // longer lock-gated, so it corrects both a stale grid (garbled wrapping)
+    // and a paused/garbled renderer.
+    //
+    // Rule #1 (#10632): the obligation must be PRESERVED whenever the redraw
+    // did NOT actually run — not just when the host is detached. On a dwell
+    // longer than the suppression window this timer fires while the outgoing
+    // view is still non-renderable (detached, occluded zero box,
+    // content-visibility:hidden, or a transitional sub-50px box), where
+    // resetRenderer self-skips and the one-shot recovery would be SILENTLY
+    // SPENT. resetRenderer now reports whether it ran; if it didn't (host
+    // not foreground-renderable, OR renderable but below its >=50px floor),
+    // hand the obligation to the reconciliation watchdog, which runs the
+    // closed-loop repair once DOM geometry proves the pane on-screen. Owned
+    // by the current attachGeneration so a later re-attach can supersede it.
+    const ran = this.hostHasRenderableDims(managed) ? this.resetRenderer(id) : false;
+    if (!ran) {
+      managed.revealPendingRepair = true;
+      managed.revealPendingGeneration = managed.attachGeneration;
+    }
   }
 
   /**
@@ -974,6 +1053,18 @@ class TerminalInstanceService {
     if (this.unsubResizeResult) return;
     this.unsubResizeResult = terminalClient.onResizeResult((id, result) => {
       this.recordPtyResizeResult(id, result);
+    });
+  }
+
+  /**
+   * One process-wide PTY exit listener routed by id. The preload event bus calls
+   * every subscriber across the contextBridge per event, so a listener per
+   * terminal made each exit O(N) and closing a project's N terminals O(N²).
+   */
+  private ensureExitSubscription(): void {
+    if (this.unsubExit) return;
+    this.unsubExit = terminalClient.onExit((id, exitCode) => {
+      this.exitHandlers.get(id)?.(exitCode);
     });
   }
 
@@ -1039,11 +1130,7 @@ class TerminalInstanceService {
     const instance = this.instances.get(id);
     if (!instance) return;
 
-    if (instance.resizeSuppressionTimer) {
-      clearTimeout(instance.resizeSuppressionTimer);
-      instance.resizeSuppressionTimer = undefined;
-    }
-
+    instance.resizeSuppressionToken = undefined;
     instance.isResizeSuppressed = false;
     instance.resizeSuppressionEndTime = undefined;
     this.resizeController.lockResize(id, false);
@@ -1232,6 +1319,7 @@ class TerminalInstanceService {
     // caller's rejection is handled by prewarmTerminal/XtermAdapter (both
     // catch+log; there is nothing to attach to a removed panel).
     if (this.cancelledCreations.delete(id)) {
+      this.cwdProviders.delete(id);
       terminal.dispose();
       throw new Error(`Terminal ${id} creation cancelled: destroyed before build completed`);
     }
@@ -1277,8 +1365,7 @@ class TerminalInstanceService {
     });
     listeners.push(unsubData);
 
-    const unsubExit = terminalClient.onExit((termId, exitCode) => {
-      if (termId !== id) return;
+    const handleExit = (exitCode: number) => {
       const current = this.instances.get(id);
       // Ahead of the suppression gate: the PTY is gone either way, and a
       // suppressed exit (trash/restore churn) is exactly the case where the pane
@@ -1293,8 +1380,12 @@ class TerminalInstanceService {
         writeLocal(current, `\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
       }
       exitSubscribers.forEach((cb) => cb(exitCode));
+    };
+    this.ensureExitSubscription();
+    this.exitHandlers.set(id, handleExit);
+    listeners.push(() => {
+      if (this.exitHandlers.get(id) === handleExit) this.exitHandlers.delete(id);
     });
-    listeners.push(unsubExit);
 
     const kind = "terminal" as const;
 
@@ -2321,6 +2412,75 @@ class TerminalInstanceService {
     return el.clientWidth > 0 && el.clientHeight > 0;
   }
 
+  private attachRevealBatch: AttachRevealJob[] = [];
+
+  /**
+   * Attach reveals share one frame callback instead of a rAF per pane. A
+   * project switch attaches every pane in one commit; per-pane callbacks each
+   * wrote then read layout (the reflow jitter, then the settle measure after
+   * the previous pane's fit and xterm's paint), so N panes cost ~2N forced
+   * layouts over two frames. Batched, each phase runs for every pane before
+   * the next: one reflow flush for frame one, and every settle read ahead of
+   * every fit in frame two. Frame timing and per-pane order are unchanged.
+   *
+   * Every job still requests its own frame, bound to the batch it joined;
+   * whichever of that batch's callbacks runs first drains it and the rest find
+   * it empty. No shared "scheduled" flag, so a frame that never fires can't
+   * strand later reveals, and a pane attached mid-flush lands in a fresh batch
+   * that a leftover callback from the drained one can't pull a frame early.
+   */
+  private queueAttachReveal(job: AttachRevealJob): void {
+    const batch = this.attachRevealBatch;
+    batch.push(job);
+    requestAnimationFrame(() => this.flushAttachReveals(batch));
+  }
+
+  private flushAttachReveals(batch: AttachRevealJob[]): void {
+    if (batch.length === 0) return;
+    if (batch === this.attachRevealBatch) this.attachRevealBatch = [];
+    const jobs = batch.splice(0);
+
+    const prepared: Array<{ job: AttachRevealJob; element: HTMLElement }> = [];
+    for (const job of jobs) {
+      try {
+        const element = job.prepare();
+        if (element) prepared.push({ job, element });
+      } catch (error) {
+        logError("attach reveal failed", error, { id: job.id });
+      }
+    }
+
+    try {
+      forceXtermReflowBatch(prepared.map(({ element }) => element));
+    } catch (error) {
+      logWarn("forceXtermReflowBatch failed", { error });
+    }
+
+    const settles: AttachSettleJob[] = [];
+    for (const { job } of prepared) {
+      try {
+        settles.push(job.reveal());
+      } catch (error) {
+        logError("attach reveal failed", error, { id: job.id });
+      }
+    }
+    if (settles.length === 0) return;
+
+    // Registered after every pane's refresh(), so xterm's own paint frames run
+    // ahead of this one — the settle reads see layout those paints dirtied once.
+    requestAnimationFrame(() => {
+      for (const step of ["measure", "settle"] as const) {
+        for (const settle of settles) {
+          try {
+            settle[step]();
+          } catch (error) {
+            logError("attach settle failed", error, { id: settle.id });
+          }
+        }
+      }
+    });
+  }
+
   attach(id: string, container: HTMLElement): ManagedTerminal | null {
     const managed = this.instances.get(id);
     if (!managed) {
@@ -2336,7 +2496,6 @@ class TerminalInstanceService {
       wasDetached,
       isOpened: managed.isOpened,
       bufferRows: managed.terminal.buffer?.active?.length ?? 0,
-      containerRect: container.getBoundingClientRect(),
     });
 
     if (wasReparented) {
@@ -2383,125 +2542,141 @@ class TerminalInstanceService {
 
     if (wasReparented && managed.isOpened) {
       const revealToken = managed.attachRevealToken;
-      requestAnimationFrame(() => {
-        if (this.instances.get(id) !== managed) return;
-        if (managed.attachRevealToken !== revealToken) return;
-        managed.isAttaching = false;
+      this.queueAttachReveal({
+        id,
+        prepare: () => {
+          if (this.instances.get(id) !== managed) return null;
+          if (managed.attachRevealToken !== revealToken) return null;
+          managed.isAttaching = false;
 
-        // Post-attach renderer recovery: reconcile the renderer policy now that
-        // isAttaching is cleared. During attach, setVisible(id, true) sets
-        // isVisible but early-returns before applying the renderer policy or
-        // scheduling a refresh (guarded by isAttaching). Without this
-        // reconciliation, terminals prewarmed at BACKGROUND tier never get
-        // upgraded to VISIBLE/FOCUSED, causing frozen display in switched-to
-        // projects where applyWorktreeTerminalPolicy already ran before the
-        // terminal was created.
-        if (managed.isVisible && managed.getRefreshTier) {
-          const currentTier = managed.getRefreshTier();
-          if (managed.lastAppliedTier === undefined || currentTier !== managed.lastAppliedTier) {
-            this.rendererPolicy.applyRendererPolicy(id, currentTier);
+          // Post-attach renderer recovery: reconcile the renderer policy now that
+          // isAttaching is cleared. During attach, setVisible(id, true) sets
+          // isVisible but early-returns before applying the renderer policy or
+          // scheduling a refresh (guarded by isAttaching). Without this
+          // reconciliation, terminals prewarmed at BACKGROUND tier never get
+          // upgraded to VISIBLE/FOCUSED, causing frozen display in switched-to
+          // projects where applyWorktreeTerminalPolicy already ran before the
+          // terminal was created.
+          if (managed.isVisible && managed.getRefreshTier) {
+            const currentTier = managed.getRefreshTier();
+            if (managed.lastAppliedTier === undefined || currentTier !== managed.lastAppliedTier) {
+              this.rendererPolicy.applyRendererPolicy(id, currentTier);
+            }
           }
-        }
 
-        // Restore WebGL after a same-tier reparent: setVisible(true) above
-        // returned early because isAttaching was set, so no debounce timer
-        // was armed. If tier didn't change either, applyRendererPolicy
-        // above is a no-op. Re-acquire the context here so an agent
-        // terminal that released WebGL on hide doesn't stay on the DOM
-        // renderer permanently after a project switch or grid reflow.
-        if (
-          managed.isVisible &&
-          !this.webGLManager.isActive(id) &&
-          this.webGLPolicy.shouldRestoreWebGL(managed)
-        ) {
-          this.webGLManager.ensureContext(id, managed);
-        }
-
-        if (!managed.terminal.element) {
-          managed.hostElement.style.opacity = "";
-          this.settleWaiters.notifyAttachSettledWaiters(id);
-          return;
-        }
-
-        const termEl = managed.terminal.element;
-        if (termEl) {
-          forceXtermReflow(termEl);
-        }
-
-        const reveal = () => {
-          if (managed.attachRevealToken !== revealToken) return;
-          managed.hostElement.style.opacity = "";
-          if (managed.attachRevealTimer !== undefined) {
-            clearTimeout(managed.attachRevealTimer);
-            managed.attachRevealTimer = undefined;
+          // Restore WebGL after a same-tier reparent: setVisible(true) above
+          // returned early because isAttaching was set, so no debounce timer
+          // was armed. If tier didn't change either, applyRendererPolicy
+          // above is a no-op. Re-acquire the context here so an agent
+          // terminal that released WebGL on hide doesn't stay on the DOM
+          // renderer permanently after a project switch or grid reflow.
+          if (
+            managed.isVisible &&
+            !this.webGLManager.isActive(id) &&
+            this.webGLPolicy.shouldRestoreWebGL(managed)
+          ) {
+            this.webGLManager.ensureContext(id, managed);
           }
-          if (managed.attachRevealDisposable) {
-            managed.attachRevealDisposable.dispose();
-            managed.attachRevealDisposable = undefined;
-          }
-        };
 
-        managed.attachRevealDisposable = managed.terminal.onRender(() => {
-          reveal();
-        });
-
-        managed.attachRevealTimer = setTimeout(reveal, 150);
-
-        managed.terminal.refresh(0, managed.terminal.rows - 1);
-
-        requestAnimationFrame(() => {
-          if (this.instances.get(id) !== managed) return;
-
-          if (earlyResizeApplied) {
+          if (!managed.terminal.element) {
+            managed.hostElement.style.opacity = "";
             this.settleWaiters.notifyAttachSettledWaiters(id);
-            return;
+            return null;
           }
+          return managed.terminal.element;
+        },
+        reveal: () => {
+          const reveal = () => {
+            if (managed.attachRevealToken !== revealToken) return;
+            managed.hostElement.style.opacity = "";
+            if (managed.attachRevealTimer !== undefined) {
+              clearTimeout(managed.attachRevealTimer);
+              managed.attachRevealTimer = undefined;
+            }
+            if (managed.attachRevealDisposable) {
+              managed.attachRevealDisposable.dispose();
+              managed.attachRevealDisposable = undefined;
+            }
+          };
 
-          if (wasDetached) {
-            const rect = container.getBoundingClientRect();
-            const widthMatch =
-              managed.lastWidth > 0 && Math.abs(managed.lastWidth - rect.width) < 2;
-            const heightMatch =
-              managed.lastHeight > 0 && Math.abs(managed.lastHeight - rect.height) < 2;
-            if (widthMatch && heightMatch) {
-              logDebug(`[TIS.attach] Skipping resize for ${id} — dimensions match after detach`);
-              managed.targetCols = undefined;
-              managed.targetRows = undefined;
+          managed.attachRevealDisposable = managed.terminal.onRender(() => {
+            reveal();
+          });
+
+          managed.attachRevealTimer = setTimeout(reveal, 150);
+
+          managed.terminal.refresh(0, managed.terminal.rows - 1);
+
+          let settled = false;
+          return {
+            id,
+            measure: () => {
+              if (this.instances.get(id) !== managed) {
+                settled = true;
+                return;
+              }
+
+              if (earlyResizeApplied) {
+                this.settleWaiters.notifyAttachSettledWaiters(id);
+                settled = true;
+                return;
+              }
+
+              if (wasDetached) {
+                const rect = container.getBoundingClientRect();
+                const widthMatch =
+                  managed.lastWidth > 0 && Math.abs(managed.lastWidth - rect.width) < 2;
+                const heightMatch =
+                  managed.lastHeight > 0 && Math.abs(managed.lastHeight - rect.height) < 2;
+                if (widthMatch && heightMatch) {
+                  logDebug(
+                    `[TIS.attach] Skipping resize for ${id} — dimensions match after detach`
+                  );
+                  managed.targetCols = undefined;
+                  managed.targetRows = undefined;
+                  this.settleWaiters.notifyAttachSettledWaiters(id);
+                  settled = true;
+                }
+              }
+            },
+            settle: () => {
+              if (settled || this.instances.get(id) !== managed) return;
+
+              // Temporarily bypass resize lock for the initial attach fit, then re-lock.
+              // Don't call clearResizeSuppression() — the suppression window must remain
+              // active to block ResizeObserver and batch-fit events while layout settles.
+              const needsLockBypass = managed.isResizeSuppressed;
+              let remainingSuppressionMs = 0;
+
+              if (needsLockBypass) {
+                // Calculate remaining suppression time to use for re-lock
+                if (managed.resizeSuppressionEndTime) {
+                  remainingSuppressionMs = Math.max(
+                    0,
+                    managed.resizeSuppressionEndTime - Date.now()
+                  );
+                }
+                this.resizeController.lockResize(id, false);
+              }
+
+              try {
+                if (managed.targetCols && managed.targetRows) {
+                  this.resizeController.applyResize(id, managed.targetCols, managed.targetRows);
+                  managed.targetCols = undefined;
+                  managed.targetRows = undefined;
+                } else {
+                  this.resizeController.fit(id);
+                }
+              } finally {
+                if (needsLockBypass) {
+                  // Re-lock with remaining suppression time to maintain full protection window
+                  this.resizeController.lockResize(id, true, remainingSuppressionMs);
+                }
+              }
               this.settleWaiters.notifyAttachSettledWaiters(id);
-              return;
-            }
-          }
-
-          // Temporarily bypass resize lock for the initial attach fit, then re-lock.
-          // Don't call clearResizeSuppression() — the suppression window must remain
-          // active to block ResizeObserver and batch-fit events while layout settles.
-          const needsLockBypass = managed.isResizeSuppressed;
-          let remainingSuppressionMs = 0;
-
-          if (needsLockBypass) {
-            // Calculate remaining suppression time to use for re-lock
-            if (managed.resizeSuppressionEndTime) {
-              remainingSuppressionMs = Math.max(0, managed.resizeSuppressionEndTime - Date.now());
-            }
-            this.resizeController.lockResize(id, false);
-          }
-
-          try {
-            if (managed.targetCols && managed.targetRows) {
-              this.resizeController.applyResize(id, managed.targetCols, managed.targetRows);
-              managed.targetCols = undefined;
-              managed.targetRows = undefined;
-            } else {
-              this.resizeController.fit(id);
-            }
-          } finally {
-            if (needsLockBypass) {
-              // Re-lock with remaining suppression time to maintain full protection window
-              this.resizeController.lockResize(id, true, remainingSuppressionMs);
-            }
-          }
-          this.settleWaiters.notifyAttachSettledWaiters(id);
-        });
+            },
+          };
+        },
       });
     } else {
       managed.isAttaching = false;
@@ -2592,6 +2767,10 @@ class TerminalInstanceService {
 
   fit(id: string): { cols: number; rows: number } | null {
     return this.resizeController.fit(id);
+  }
+
+  invalidatePtyGrid(id: string): void {
+    this.resizeController.invalidatePtyGrid(id);
   }
 
   flushResize(id: string): void {
@@ -2874,6 +3053,7 @@ class TerminalInstanceService {
     // Defer to the reconciliation watchdog via the reveal-pending obligation;
     // a no-drift fit falls through (its resize is a no-op and the PTY
     // re-assert is dedupe-safe). Alt-buffer panes never reach here.
+    this.resizeController.invalidatePtyGrid(id);
     if (this.deferGridChangeForStream(managed, this.proposalDivergesFromGrid(managed))) {
       // Deferred to the watchdog — skip the fit.
     } else {
@@ -3321,6 +3501,7 @@ class TerminalInstanceService {
       try {
         writeLocal(managed, "\x1b[!p");
 
+        this.resizeController.invalidatePtyGrid(id);
         this.resetRenderer(id);
 
         const timestamp = new Date().toLocaleTimeString();
@@ -3360,24 +3541,32 @@ class TerminalInstanceService {
 
   applyGlobalOptions(options: Partial<Terminal["options"]>): void {
     const textMetricKeys = ["fontSize", "fontFamily", "lineHeight", "letterSpacing", "fontWeight"];
-    const textMetricsChanged = textMetricKeys.some((key) => key in options);
+    const entries = Object.entries(options);
 
     this.instances.forEach((managed, id) => {
-      Object.entries(options).forEach(([key, value]) => {
+      // The global sync always carries theme + font keys, and mounted terminals
+      // have usually received the same values from XtermAdapter already. Diff
+      // per instance against what xterm holds so an unchanged font does not
+      // refit (forced layout + PTY resize RPC) every terminal on a theme change,
+      // and an unchanged theme does not force an extra full repaint.
+      const changedKeys = entries.filter(
+        ([key, value]) => Reflect.get(managed.terminal.options, key) !== value
+      );
+      for (const [key, value] of changedKeys) {
         // @ts-expect-error xterm options are indexable
         managed.terminal.options[key] = value;
-      });
+      }
       // Same rationale as updateOptions: re-clamp cursorBlink so a global
       // theme/font change doesn't silently re-enable the blink timer on
       // backgrounded plain terminals.
       this.applyCursorBlinkPolicy(managed);
 
-      if (textMetricsChanged) {
+      if (changedKeys.some(([key]) => textMetricKeys.includes(key))) {
         managed.lastWidth = 0;
         managed.lastHeight = 0;
         this.resizeController.fit(id);
       }
-      if ("theme" in options) {
+      if (changedKeys.some(([key]) => key === "theme")) {
         managed.terminal.refresh(0, managed.terminal.rows - 1);
       }
     });
@@ -3624,10 +3813,7 @@ class TerminalInstanceService {
       managed.observedTitleTimer = undefined;
       managed.pendingObservedTitle = undefined;
     }
-    if (managed.resizeSuppressionTimer !== undefined) {
-      clearTimeout(managed.resizeSuppressionTimer);
-      managed.resizeSuppressionTimer = undefined;
-    }
+    managed.resizeSuppressionToken = undefined;
     if (managed.webGLRestoreTimer !== undefined) {
       clearTimeout(managed.webGLRestoreTimer);
       managed.webGLRestoreTimer = undefined;
@@ -3686,6 +3872,10 @@ class TerminalInstanceService {
   }
 
   dispose(): void {
+    this.projectSwitchRedrawEpoch++;
+    for (const timer of this.projectSwitchTimers) clearTimeout(timer);
+    this.projectSwitchTimers.clear();
+    this.projectSwitchRedrawQueue.clear();
     this.offViewLifecycle();
     this.offViewObservability();
     this.clearSuppressedWebGLReleaseTimer();
@@ -3694,6 +3884,8 @@ class TerminalInstanceService {
     this.unsubTierChanged = null;
     this.unsubResizeResult?.();
     this.unsubResizeResult = null;
+    this.unsubExit?.();
+    this.unsubExit = null;
     this.workerIngestController.dispose();
     this.resizePassScheduler.dispose();
     this.reflowController.dispose();

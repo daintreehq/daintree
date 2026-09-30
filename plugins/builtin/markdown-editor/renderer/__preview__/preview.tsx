@@ -56,11 +56,7 @@ function Preview() {
         style={{ width: `${width}px`, height: "100vh" }}
       >
         <FileViewerToolbar.Root label="File viewer controls">
-          <FileViewerToolbar.Path
-            path="docs/releases/release-plan.md"
-            copied={false}
-            onCopy={() => {}}
-          />
+          <FileViewerToolbar.Path path="docs/releases/release-plan.md" />
         </FileViewerToolbar.Root>
         <MarkdownEditorStatusBar {...fixture.props} onSave={() => {}} />
         {/* An empty file has an empty buffer: a capture showing 0 lines over a

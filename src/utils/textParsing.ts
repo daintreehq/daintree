@@ -58,7 +58,8 @@ export function middleTruncatePath(path: string, maxLength: number = 44): string
   const chars = Array.from(path);
   if (chars.length <= maxLength) return path;
 
-  const slash = path.lastIndexOf("/");
+  // Either separator: a Windows path cut on "/" alone loses its whole prefix.
+  const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   const tail = slash === -1 ? path : path.slice(slash + 1);
   const tailChars = Array.from(tail);
 
@@ -69,7 +70,7 @@ export function middleTruncatePath(path: string, maxLength: number = 44): string
   }
 
   const headBudget = Math.max(0, maxLength - tailChars.length - 2);
-  return `${chars.slice(0, headBudget).join("")}…/${tail}`;
+  return `${chars.slice(0, headBudget).join("")}…${path[slash]}${tail}`;
 }
 
 export function middleTruncate(text: string, maxLength: number = 40): string {
@@ -123,34 +124,6 @@ export function shortSha(sha: string | null | undefined): string | undefined {
   return sha ? sha.slice(0, 7) : undefined;
 }
 
-export function formatTimestamp(timestamp: number | null | undefined): string {
-  if (!timestamp) {
-    return "Never active";
-  }
-
-  const now = Date.now();
-  const diff = now - timestamp;
-
-  if (diff < 1000) {
-    return "Just now";
-  }
-
-  const seconds = Math.floor(diff / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-
-  if (seconds < 60) {
-    return `${seconds}s ago`;
-  } else if (minutes < 60) {
-    return `${minutes}m ago`;
-  } else if (hours < 24) {
-    return `${hours}h ago`;
-  } else {
-    return `${days}d ago`;
-  }
-}
-
 /**
  * Generates a branch-safe slug from an issue title.
  * Filters stop words and limits to a character count to keep branch names concise.
@@ -185,38 +158,4 @@ export function generateBranchSlug(title: string, maxChars: number = 30): string
 
   // Ensure no trailing dash (shouldn't happen with this logic, but safety check)
   return slug.replace(/-+$/, "");
-}
-
-export function formatTimestampExact(timestamp: number | null | undefined): string {
-  if (!timestamp) {
-    return "No recent activity";
-  }
-
-  const date = new Date(timestamp);
-  const now = new Date();
-
-  const isToday = date.toDateString() === now.toDateString();
-  const timeStr = date.toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-
-  if (isToday) {
-    return `Last active: today at ${timeStr}`;
-  }
-
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const isYesterday = date.toDateString() === yesterday.toDateString();
-
-  if (isYesterday) {
-    return `Last active: yesterday at ${timeStr}`;
-  }
-
-  const dateStr = date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-
-  return `Last active: ${dateStr} at ${timeStr}`;
 }

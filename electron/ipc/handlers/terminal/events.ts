@@ -7,6 +7,7 @@ import {
   broadcastToProjectRenderers,
   broadcastToProjectRenderersExcept,
   broadcastToRenderer,
+  broadcastSlicedToProjectRenderers,
 } from "../../utils.js";
 import { resolveLiveWebContents } from "../../../window/webContentsRegistry.js";
 import { logInfo, logWarn } from "../../../utils/logger.js";
@@ -23,6 +24,8 @@ import type {
   BroadcastWriteResultPayload,
   FdGrowthPayload,
   TerminalSubmitStatusPayload,
+  TerminalReliabilityMetricPayload,
+  TerminalResourceBatchPayload,
 } from "../../../../shared/types/pty-host.js";
 import type { PtyDataRouting } from "../../../services/pty/types.js";
 import {
@@ -201,9 +204,23 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   handlers.push(() => ptyClient.off("terminal-status", handleTerminalStatus));
 
   // Per-target results from a fleet broadcast write. Drives the failure chip
-  // and auto-disarm of dead-pipe targets in the renderer.
+  // and auto-disarm of dead-pipe targets in the renderer. A fleet is armed
+  // from one project view, so only that project's views can act on a result.
+  // Entries Main can no longer attribute (killed mid-write) go to every view
+  // on their own, so no foreign view records a live target's failure that its
+  // later, project-scoped recovery would never reach.
   const handleBroadcastWriteResult = (payload: BroadcastWriteResultPayload) => {
-    broadcastToRenderer(CHANNELS.TERMINAL_BROADCAST_WRITE_RESULT, payload);
+    const byProject = new Map<string | null, BroadcastWriteResultPayload["results"]>();
+    for (const result of payload.results) {
+      const projectId = ptyClient.getTerminalProjectId(result.id);
+      const group = byProject.get(projectId);
+      if (group) group.push(result);
+      else byProject.set(projectId, [result]);
+    }
+    // A null project falls back to every view inside broadcastToProjectRenderers.
+    for (const [projectId, results] of byProject) {
+      broadcastToProjectRenderers(projectId, CHANNELS.TERMINAL_BROADCAST_WRITE_RESULT, { results });
+    }
   };
   ptyClient.on("broadcast-write-result", handleBroadcastWriteResult);
   handlers.push(() => ptyClient.off("broadcast-write-result", handleBroadcastWriteResult));
@@ -219,9 +236,17 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   });
   handlers.push(unsubArtifactDetected);
 
-  // Resource metrics (batched from pty-host)
-  const handleResourceMetrics = (metrics: unknown, timestamp: unknown) => {
-    broadcastToRenderer(CHANNELS.TERMINAL_RESOURCE_METRICS, { metrics, timestamp });
+  // Resource metrics (batched from pty-host). The batch covers every terminal
+  // in every project; each project view gets only its own terminals. Cached
+  // views still get their slice: their memory-leak detector watches their
+  // terminals in the background.
+  const handleResourceMetrics = (metrics: TerminalResourceBatchPayload, timestamp: number) => {
+    broadcastSlicedToProjectRenderers(
+      CHANNELS.TERMINAL_RESOURCE_METRICS,
+      metrics,
+      (id) => ptyClient.getTerminalProjectId(id),
+      (slice) => ({ metrics: slice, timestamp })
+    );
   };
   ptyClient.on("resource-metrics", handleResourceMetrics);
   handlers.push(() => ptyClient.off("resource-metrics", handleResourceMetrics));
@@ -240,6 +265,20 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   };
   ptyClient.on("fd-growth", handleFdGrowth);
   handlers.push(() => ptyClient.off("fd-growth", handleFdGrowth));
+
+  // Backpressure/suspend transitions. The only consumer is the owning pane's
+  // stall watchdog, so it goes to that project's views like terminal:status.
+  const unsubReliabilityMetric = events.on(
+    "terminal:reliability-metric",
+    (payload: TerminalReliabilityMetricPayload) => {
+      broadcastToProjectRenderers(
+        ptyClient.getTerminalProjectId(payload.terminalId),
+        CHANNELS.EVENTS_PUSH,
+        { name: "terminal:reliability-metric", payload }
+      );
+    }
+  );
+  handlers.push(unsubReliabilityMetric);
 
   // Terminal activity — per-terminal headline updates, project-scoped like
   // the status pulses above.

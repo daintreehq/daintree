@@ -89,6 +89,7 @@ export function buildRestoreRecoveryLaunchOptions(
     conversationCwd: resuming ? panel.conversationCwd : undefined,
     isInputLocked: panel.isInputLocked,
     agentLaunchFlags: panel.agentLaunchFlags,
+    callerLaunchFlags: panel.callerLaunchFlags,
     agentModelId: panel.agentModelId,
     agentPresetId: panel.agentPresetId,
     agentPresetColor: panel.agentPresetColor,
@@ -159,7 +160,11 @@ export async function launchFromRestoreRecovery(
       return "held-elsewhere";
     }
     const options = buildRestoreRecoveryLaunchOptions(current, choice, {
-      flags: reconcileResumeLaunchFlags({ agentId, agentLaunchFlags: current.agentLaunchFlags }),
+      flags: reconcileResumeLaunchFlags({
+        agentId,
+        agentLaunchFlags: current.agentLaunchFlags,
+        callerLaunchFlags: current.callerLaunchFlags,
+      }),
       baseCommand,
     });
     if (!options) return "unavailable";

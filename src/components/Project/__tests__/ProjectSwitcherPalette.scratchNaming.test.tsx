@@ -228,6 +228,13 @@ function renderPalette(overrides: Record<string, unknown> = {}) {
  * The section auto-collapses when there are no scratches yet, hiding its contents.
  * Matched by aria-controls: the header's accessible name absorbs the count badge.
  */
+/** The palette's own query field — every input that is not a scratch editor. */
+function paletteInput(): HTMLInputElement {
+  const input = document.querySelector<HTMLInputElement>("input:not([data-scratch-name-input])");
+  if (!input) throw new Error("palette input not rendered");
+  return input;
+}
+
 function expandScratchSection() {
   const header = document.querySelector('[aria-controls="scratch-section-list"]');
   if (header instanceof HTMLElement && header.getAttribute("aria-expanded") === "false") {
@@ -320,16 +327,25 @@ describe("scratch create naming", () => {
     expect(props.onClose).not.toHaveBeenCalled();
   });
 
-  it("cancels on blur rather than creating something the user clicked away from", () => {
+  it("keeps the draft on blur: neither creates something clicked away from nor drops it", () => {
     const props = renderPalette();
     fireEvent.click(screen.getByTestId("scratch-create-button"));
 
-    const input = screen.getByTestId("scratch-create-input");
+    const input = screen.getByTestId<HTMLInputElement>("scratch-create-input");
     fireEvent.change(input, { target: { value: "Half typed" } });
     fireEvent.blur(input);
 
     expect(props.onCreateScratch).not.toHaveBeenCalled();
-    expect(screen.getByTestId("scratch-create-button")).toBeTruthy();
+    expect(screen.getByTestId<HTMLInputElement>("scratch-create-input").value).toBe("Half typed");
+  });
+
+  it("hands focus back to the palette's input after Enter", async () => {
+    renderPalette();
+    fireEvent.click(screen.getByTestId("scratch-create-button"));
+    fireEvent.keyDown(screen.getByTestId("scratch-create-input"), { key: "Enter" });
+
+    await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+    expect(document.activeElement).toBe(paletteInput());
   });
 
   it("ignores Enter while an IME composition is active", () => {
@@ -415,6 +431,45 @@ describe("scratch rename", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(props.onRenameScratch).not.toHaveBeenCalled();
+  });
+
+  it("commits the typed name on blur, like every inline rename", () => {
+    const props = renderPalette({ scratchResults: [makeScratch({ id: "a", name: "Alpha" })] });
+    act(() => {
+      fireEvent.click(screen.getByText("Rename scratch"));
+    });
+
+    const input = screen.getByTestId("scratch-rename-input");
+    fireEvent.change(input, { target: { value: "Kept on blur" } });
+    fireEvent.blur(input);
+
+    expect(props.onRenameScratch).toHaveBeenCalledWith("a", "Kept on blur");
+    expect(screen.queryByTestId("scratch-rename-input")).toBeNull();
+  });
+
+  it("ignores Enter while an IME composition is active", () => {
+    const props = renderPalette({ scratchResults: [makeScratch({ id: "a", name: "Alpha" })] });
+    act(() => {
+      fireEvent.click(screen.getByText("Rename scratch"));
+    });
+
+    const input = screen.getByTestId("scratch-rename-input");
+    fireEvent.change(input, { target: { value: "にほんご" } });
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+
+    expect(props.onRenameScratch).not.toHaveBeenCalled();
+    expect(screen.getByTestId("scratch-rename-input")).toBeTruthy();
+  });
+
+  it("hands focus back to the palette's input after Escape", async () => {
+    renderPalette({ scratchResults: [makeScratch({ id: "a", name: "Alpha" })] });
+    act(() => {
+      fireEvent.click(screen.getByText("Rename scratch"));
+    });
+    fireEvent.keyDown(screen.getByTestId("scratch-rename-input"), { key: "Escape" });
+
+    await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+    expect(document.activeElement).toBe(paletteInput());
   });
 
   it("reverts on Escape and restores the row", () => {

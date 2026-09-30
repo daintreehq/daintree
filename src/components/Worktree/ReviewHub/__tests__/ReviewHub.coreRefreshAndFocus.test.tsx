@@ -315,10 +315,12 @@ const makeWorktreeState = (path = WORKTREE_PATH): WorktreeState =>
 
 describe("ReviewHub", () => {
   let capturedUpdateCallback: ((state: WorktreeState) => void) | null = null;
+  let capturedTickCallback: ((path: string) => void) | null = null;
   const mockUnsubscribe = vi.fn();
 
   beforeEach(() => {
     capturedUpdateCallback = null;
+    capturedTickCallback = null;
     debounceCancelSpy.mockReset();
 
     // Clear the file-list disclosure map rather than force-expanding it: the
@@ -349,11 +351,15 @@ describe("ReviewHub", () => {
     ]);
 
     getStagingStatusMock.mockResolvedValue(makeStatus());
-    onUpdateMock.mockImplementation((_type: string, callback: (data: unknown) => void) => {
+    onUpdateMock.mockImplementation((type: string, callback: (data: unknown) => void) => {
       // The component subscribes to the per-view worktree port; tests keep
       // driving it with a plain WorktreeState by wrapping it in the port
       // event envelope here.
-      capturedUpdateCallback = (state: WorktreeState) => callback({ worktree: state });
+      if (type === "worktree-update") {
+        capturedUpdateCallback = (state: WorktreeState) => callback({ worktree: state });
+      } else if (type === "worktree-tick") {
+        capturedTickCallback = (path: string) => callback({ tick: { worktreeId: path, path } });
+      }
       return mockUnsubscribe;
     });
 
@@ -452,8 +458,30 @@ describe("ReviewHub", () => {
   it("subscribes to worktree updates on open", async () => {
     render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
-    await waitFor(() => expect(onUpdateMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onUpdateMock).toHaveBeenCalledTimes(2));
     expect(capturedUpdateCallback).not.toBeNull();
+    expect(capturedTickCallback).not.toBeNull();
+  });
+
+  it("triggers background refresh on a stamp-only tick for the matching worktree only", async () => {
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      capturedTickCallback!("/home/user/other-project");
+      await Promise.resolve();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    expect(getStagingStatusMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      capturedTickCallback!(WORKTREE_PATH);
+      await Promise.resolve();
+    });
+    // The refresh is debounced 800 ms, close to waitFor's default window.
+    await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(2), {
+      timeout: 3000,
+    });
   });
 
   it("triggers background refresh when matching worktree emits update", async () => {
@@ -868,6 +896,28 @@ describe("ReviewHub", () => {
       await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalled());
 
       expect(screen.queryByLabelText("Commit message")).toBeNull();
+    });
+
+    it("leaves the file-list keys alone while the base-branch comparison is showing", async () => {
+      HTMLElement.prototype.scrollIntoView = vi.fn();
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      act(() => {
+        fireEvent.click(screen.getByRole("radio", { name: /vs main/i }));
+      });
+      await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalled());
+
+      for (const key of ["End", "ArrowDown", " "]) {
+        let notConsumed = false;
+        act(() => {
+          notConsumed = fireEvent.keyDown(document, { key });
+        });
+        expect(notConsumed).toBe(true);
+      }
+      await act(async () => {});
+      expect(stageFileMock).not.toHaveBeenCalled();
+      expect(unstageFileMock).not.toHaveBeenCalled();
     });
 
     it("resets to working-tree mode when closed and reopened", async () => {

@@ -121,7 +121,7 @@ export async function resolveGitPushDestination(
     return { status: "unresolved", reason: "not-configured" };
   }
 
-  const remotes = (await git.getRemotes()).map((r) => r.name).filter((n) => n.length > 0);
+  const remotes = await listRemoteNames(git);
 
   const raw = await git.raw([
     "for-each-ref",
@@ -132,26 +132,94 @@ export async function resolveGitPushDestination(
     `refs/heads/${branchName}`,
   ]);
 
-  // `refs/heads/topic` as a pattern also matches `refs/heads/topic/sub`, so the
-  // record for the branch we asked about has to be picked out by exact refname
-  // rather than assumed to be the only one.
-  const wanted = `${REF_HEADS_PREFIX}${branchName}`;
-  const record = raw
-    .split("\n")
-    .map((line) => line.split(FIELD_SEPARATOR))
-    .find((fields) => fields[0] === wanted);
-
+  const record = findBranchRecord(raw, branchName);
   if (!record) {
     return { status: "unresolved", reason: "not-configured" };
   }
+  return resolvePushFromFields(git, branchName, remotes, record[1], record[2], record[3]);
+}
 
+const COMBINED_FIELD_COUNT = 5;
+
+/**
+ * Resolve both the push destination and the upstream of `branchName` from one
+ * `for-each-ref`, against a remote list the caller already holds. Same answers
+ * as {@link resolveGitPushDestination} and {@link resolveGitUpstream} run
+ * separately, for read paths that want both and have listed the remotes
+ * themselves. Rejects only when the `for-each-ref` itself fails.
+ */
+export async function resolveGitPushAndUpstream(
+  git: Pick<SimpleGit, "raw" | "getRemotes">,
+  branchName: string,
+  remoteNames: readonly string[]
+): Promise<{ push: GitPushDestinationResolution; upstream: GitPushDestinationResolution }> {
+  const notConfigured: GitPushDestinationResolution = {
+    status: "unresolved",
+    reason: "not-configured",
+  };
+  if (!branchName || branchName === "HEAD") {
+    return { push: notConfigured, upstream: notConfigured };
+  }
+
+  const remotes = remoteNames.filter((n) => n.length > 0);
+  const raw = await git.raw([
+    "for-each-ref",
+    "--format=%(refname)%00%(push:remotename)%00%(push)%00%(upstream)%00%(upstream:remotename)",
+    `${REF_HEADS_PREFIX}${branchName}`,
+  ]);
+
+  const record = findBranchRecord(raw, branchName);
+  if (!record) return { push: notConfigured, upstream: notConfigured };
+
+  // A config value carrying a newline (only reachable by hand-editing) splits
+  // the record and takes the upstream fields with it. The separate resolvers
+  // read each side on its own, so one bad value can't sink the other.
+  if (record.length !== COMBINED_FIELD_COUNT) {
+    const [push, upstream] = await Promise.all([
+      resolveGitPushDestination(git, branchName),
+      resolveGitUpstream(git, branchName),
+    ]);
+    return { push, upstream };
+  }
+
+  return {
+    push: await resolvePushFromFields(git, branchName, remotes, record[1], record[2], record[3]),
+    upstream: resolveUpstreamFromFields(remotes, record[4], record[3]),
+  };
+}
+
+async function listRemoteNames(git: Pick<SimpleGit, "getRemotes">): Promise<string[]> {
+  return (await git.getRemotes()).map((r) => r.name).filter((n) => n.length > 0);
+}
+
+/**
+ * `refs/heads/topic` as a pattern also matches `refs/heads/topic/sub`, so the
+ * record for the branch we asked about has to be picked out by exact refname
+ * rather than assumed to be the only one.
+ */
+function findBranchRecord(raw: string, branchName: string): string[] | undefined {
+  const wanted = `${REF_HEADS_PREFIX}${branchName}`;
+  return raw
+    .split("\n")
+    .map((line) => line.split(FIELD_SEPARATOR))
+    .find((fields) => fields[0] === wanted);
+}
+
+async function resolvePushFromFields(
+  git: Pick<SimpleGit, "raw">,
+  branchName: string,
+  remotes: readonly string[],
+  remoteField: string | undefined,
+  pushRefField: string | undefined,
+  upstreamRefField: string | undefined
+): Promise<GitPushDestinationResolution> {
   // Deliberately NOT trimmed: a remote named " origin" is a different remote
   // from "origin", and normalizing the whitespace away would silently redirect
   // the write to the wrong repository — the exact bug class #11746 is about.
   // The guard below rejects such names outright instead.
-  const remote = record[1] ?? "";
-  const pushRef = record[2] ?? "";
-  const upstreamRef = record[3] ?? "";
+  const remote = remoteField ?? "";
+  const pushRef = pushRefField ?? "";
+  const upstreamRef = upstreamRefField ?? "";
 
   if (!remote) {
     return resolveUnconfigured(remotes, branchName);
@@ -357,7 +425,7 @@ export async function resolveGitUpstream(
     return { status: "unresolved", reason: "not-configured" };
   }
 
-  const remotes = (await git.getRemotes()).map((r) => r.name).filter((n) => n.length > 0);
+  const remotes = await listRemoteNames(git);
 
   const raw = await git.raw([
     "for-each-ref",
@@ -365,16 +433,18 @@ export async function resolveGitUpstream(
     `${REF_HEADS_PREFIX}${branchName}`,
   ]);
 
-  const wanted = `${REF_HEADS_PREFIX}${branchName}`;
-  const record = raw
-    .split("\n")
-    .map((line) => line.split(FIELD_SEPARATOR))
-    .find((fields) => fields[0] === wanted);
-
+  const record = findBranchRecord(raw, branchName);
   if (!record) return { status: "unresolved", reason: "not-configured" };
+  return resolveUpstreamFromFields(remotes, record[1], record[2]);
+}
 
-  const remote = record[1] ?? "";
-  const upstreamRef = record[2] ?? "";
+function resolveUpstreamFromFields(
+  remotes: readonly string[],
+  remoteField: string | undefined,
+  upstreamRefField: string | undefined
+): GitPushDestinationResolution {
+  const remote = remoteField ?? "";
+  const upstreamRef = upstreamRefField ?? "";
 
   if (!remote || !upstreamRef) {
     return { status: "unresolved", reason: "not-configured" };

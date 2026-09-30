@@ -10,6 +10,7 @@ import type { Issue, PR } from "@shared/types/forge";
 import type { FleetScopeToken } from "@shared/types/worktree";
 import { useFocusStore } from "@/store/focusStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useDiffViewedStore } from "@/store/diffViewedStore";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { logDebug } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
@@ -994,6 +995,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       next.set(worktree.id, worktree);
       return { deletedWorktrees: next };
     });
+    useDiffViewedStore.getState().clearWorktree(worktree.path);
   },
 
   dismissDeletedWorktree: (worktreeId) => {
@@ -1277,12 +1279,12 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   closeCrossWorktreeDiff: () =>
     set({ crossDiffDialog: { isOpen: false, initialWorktreeId: null } }),
 
-  trackTerminalFocus: (worktreeId, terminalId) =>
-    set((state) => {
-      const next = new Map(state.lastFocusedTerminalByWorktree);
-      next.set(worktreeId, terminalId);
-      return { lastFocusedTerminalByWorktree: next };
-    }),
+  // Mutated in place without set(): this map is only ever read imperatively
+  // via getState(), so notifying would just re-run every selector on this
+  // store on each focus move.
+  trackTerminalFocus: (worktreeId, terminalId) => {
+    get().lastFocusedTerminalByWorktree.set(worktreeId, terminalId);
+  },
 
   clearWorktreeFocusTracking: (worktreeId) =>
     set((state) => {

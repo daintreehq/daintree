@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { RotateCw } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { SidebarFooterGlyph } from "@/components/Layout/SidebarFooterGlyph";
@@ -7,6 +7,7 @@ import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import type { ProjectPluginInfo } from "@shared/types/plugin";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { pluralize } from "@/lib/pluralize";
 
 function stateLabel(state: ProjectPluginInfo["state"]): string {
   switch (state) {
@@ -99,14 +100,12 @@ export function ProjectPluginIndicator() {
   const summary = unsaved
     ? "Project plugins on, but not saved"
     : failed.length > 0
-      ? failed.length === 1
-        ? "1 project plugin has an error"
-        : `${failed.length} project plugins have errors`
+      ? pluralize(failed.length, "project plugin has an error", "project plugins have errors")
       : invalid.length > 0
-        ? `${invalid.length} project plugin${invalid.length === 1 ? "" : "s"} unreadable`
+        ? `${pluralize(invalid.length, "project plugin")} unreadable`
         : blocked.length > 0
-          ? `${blocked.length} project plugin${blocked.length === 1 ? "" : "s"} off`
-          : `${staged.length} project plugin${staged.length === 1 ? "" : "s"} staged`;
+          ? `${pluralize(blocked.length, "project plugin")} off`
+          : `${pluralize(staged.length, "project plugin")} staged`;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -203,7 +202,7 @@ export function ProjectPluginIndicator() {
               onClick={() => void reload()}
               loading={reloading}
             >
-              <RefreshCw />
+              <RotateCw />
               Reload from folder
             </Button>
 

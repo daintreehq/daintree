@@ -10,6 +10,11 @@ export function useWindowNotifications(): void {
   const windowFocusedRef = useRef(true);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const blurDimTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // Last badge state handed to Main and drawn in the favicon. Focus used to
+  // re-send both unconditionally; with no waiting agents that is an IPC and a
+  // favicon href rewrite per focus for no change.
+  const sentBadgeCountRef = useRef<number | null>(null);
+  const faviconBadgedRef = useRef(false);
   const [blurTime, setBlurTime] = useState<number | null>(null);
 
   const { waitingCount } = useTerminalNotificationCounts(blurTime);
@@ -32,9 +37,13 @@ export function useWindowNotifications(): void {
 
       prevWaitingRef.current = 0;
 
-      clearFaviconBadge();
+      if (faviconBadgedRef.current) {
+        faviconBadgedRef.current = false;
+        clearFaviconBadge();
+      }
 
-      if (window.electron?.notification?.updateBadge) {
+      if (sentBadgeCountRef.current !== 0 && window.electron?.notification?.updateBadge) {
+        sentBadgeCountRef.current = 0;
         window.electron.notification.updateBadge({ waitingCount: 0 });
       }
     };
@@ -79,13 +88,16 @@ export function useWindowNotifications(): void {
         debounceTimerRef.current = null;
 
         if (window.electron?.notification?.updateBadge) {
+          sentBadgeCountRef.current = waitingCount;
           window.electron.notification.updateBadge({ waitingCount });
         }
 
         if (!windowFocusedRef.current) {
           if (waitingCount > 0) {
+            faviconBadgedRef.current = true;
             updateFaviconBadge(waitingCount);
           } else {
+            faviconBadgedRef.current = false;
             clearFaviconBadge();
           }
         }

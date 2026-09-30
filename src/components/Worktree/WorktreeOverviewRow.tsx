@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
 import {
   AlertTriangle,
   ChevronRight,
@@ -16,7 +17,11 @@ import type { AgentState, WorktreeState } from "@/types";
 import type { PtyPanelData } from "@shared/types/panel";
 import { cn } from "@/lib/utils";
 import { CheckboxGlyph } from "@/components/ui/checkbox";
-import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
+import {
+  LIST_ROW_HOVER_CLASS,
+  PALETTE_SECTION_LABEL_CLASS,
+  ROW_MENU_TARGET_CLASS,
+} from "@/components/ui/paletteRowStyles";
 import { getWorktreeBranchLabel, getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
@@ -55,6 +60,7 @@ import {
 import { ActivityLight } from "./ActivityLight";
 import { CollapsedSessionIndicators } from "./WorktreeCard/CollapsedSessionIndicators";
 import { Badge } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * Column tracks shared by the header and every row, so each section sits on
@@ -337,7 +343,7 @@ export function WorktreeOverviewRow({
   const setupFailed = lifecycleState === "failed" || lifecycleState === "timed-out";
   const exception =
     conflictCount > 0
-      ? `${conflictCount} conflict${conflictCount === 1 ? "" : "s"}`
+      ? `${pluralize(conflictCount, "conflict")}`
       : setupFailed
         ? worktree.lifecycleStatus?.phase === "setup"
           ? "Setup failed"
@@ -387,7 +393,12 @@ export function WorktreeOverviewRow({
               OVERVIEW_ROW_INSET,
               !isLast && "border-b border-divider",
               "transition-colors duration-150 ease-out",
-              isSelected ? "bg-overlay-medium" : "hover:bg-overlay-soft",
+              // The highlight step and the lighter list hover, keyed on the
+              // cell's own `aria-selected`. Not `PALETTE_ROW_CLASS` itself: its
+              // transparent border would fight the row divider above.
+              "aria-selected:bg-overlay-highlight",
+              LIST_ROW_HOVER_CLASS,
+              ROW_MENU_TARGET_CLASS,
               // Cursor only while the grid holds focus — see the modal for why.
               isCursor &&
                 "group-focus/overview-grid:outline group-focus/overview-grid:outline-2 group-focus/overview-grid:-outline-offset-2 group-focus/overview-grid:outline-accent-primary"
@@ -585,20 +596,16 @@ export function WorktreeOverviewRow({
               )}
             </div>
 
-            {/* Changes, in the sidebar's own words and colours: +added/-removed
+            {/* Changes, in the sidebar's own words and colours: "+added -removed"
                 in the success and error inks, then the file count and drift. */}
             <div className="min-w-0 text-right tabular-nums">
               <div className="text-xs leading-5 text-text-secondary">
                 {changes === null ? (
                   "—"
                 ) : fileCount > 0 && (insertions > 0 || deletions > 0) ? (
-                  <span className="inline-flex items-center gap-0.5">
-                    {insertions > 0 && <span className="text-status-success">+{insertions}</span>}
-                    {insertions > 0 && deletions > 0 && <span className="text-text-muted">/</span>}
-                    {deletions > 0 && <span className="text-status-error">-{deletions}</span>}
-                  </span>
+                  <DiffStat insertions={insertions} deletions={deletions} />
                 ) : fileCount > 0 ? (
-                  `${fileCount} file${fileCount === 1 ? "" : "s"}`
+                  `${pluralize(fileCount, "file")}`
                 ) : (
                   "Clean"
                 )}
@@ -608,9 +615,7 @@ export function WorktreeOverviewRow({
                 behind > 0) && (
                 <div className="mt-1 flex items-center justify-end gap-1.5 text-2xs text-text-secondary">
                   {fileCount > 0 && (insertions > 0 || deletions > 0) && (
-                    <span>
-                      {fileCount} file{fileCount === 1 ? "" : "s"}
-                    </span>
+                    <span>{pluralize(fileCount, "file")}</span>
                   )}
                   {(ahead > 0 || behind > 0) && (
                     <span className="font-mono">

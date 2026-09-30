@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo, useReducer } from "react";
-import { OctagonAlert, RotateCw } from "lucide-react";
+import { RefreshCw, RotateCw } from "lucide-react";
 import { DevPreviewDestructiveConfirmDialog } from "./DevPreviewDestructiveConfirmDialog";
 import { usePanelStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
@@ -230,24 +230,6 @@ export function DevPreviewPane({
   const [blockedNav, dispatchBlockedNav] = useReducer(blockedNavReducer, null);
   const crashReloadRef = useRef<() => void>(() => {});
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const CLIPBOARD_FEEDBACK_MS = 2000;
-  const [certCopied, setCertCopied] = useState(false);
-  const certCopyTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const handleCopyMkcert = useCallback(async () => {
-    try {
-      await window.electron.clipboard.writeText("mkcert -install");
-      setCertCopied(true);
-      if (certCopyTimerRef.current) clearTimeout(certCopyTimerRef.current);
-      certCopyTimerRef.current = setTimeout(() => setCertCopied(false), CLIPBOARD_FEEDBACK_MS);
-    } catch {
-      // clipboard unavailable — silently ignore
-    }
-  }, []);
-  useEffect(() => {
-    return () => {
-      if (certCopyTimerRef.current) clearTimeout(certCopyTimerRef.current);
-    };
-  }, []);
   // Seed `lastSetUrlRef` to the mount URL so the isWebviewReady navigation
   // effect does not fire a redundant loadURL on first ready (#9940). The
   // hard-restart path resets this to "" explicitly when unconfigured.
@@ -995,14 +977,13 @@ export function DevPreviewPane({
 
         {promoteToPortalError && (
           <InlineStatusBanner
-            icon={OctagonAlert}
             title="Couldn't open in Portal"
             description={promoteToPortalError}
             severity="error"
             action={{
               id: "retry-promote-to-portal",
               label: "Retry",
-              icon: RotateCw,
+              icon: RefreshCw,
               variant: "dangerFilled",
               loading: isPromotingToPortal,
               onClick: () => void handlePromoteToPortal(),
@@ -1119,8 +1100,6 @@ export function DevPreviewPane({
                   <DevPreviewWebviewOverlays
                     reconnectAttempt={reconnectAttempt}
                     webviewLoadError={webviewLoadError}
-                    certCopied={certCopied}
-                    onCopyMkcert={handleCopyMkcert}
                     isRestarting={isRestarting}
                     onRestartDevServer={handleRestartDevServer}
                     onHardReload={handleHardReload}
@@ -1195,7 +1174,6 @@ export function DevPreviewPane({
 
         {forceKilled && status === "stopped" && !forceKillBannerDismissed && (
           <InlineStatusBanner
-            icon={OctagonAlert}
             title="Dev server was force-quit"
             description="The server did not exit within 5 seconds and was terminated."
             severity="warning"
@@ -1205,21 +1183,18 @@ export function DevPreviewPane({
         )}
         {crashLoopStopped && status === "stopped" && !crashLoopBannerDismissed && (
           <InlineStatusBanner
-            icon={OctagonAlert}
             title="Dev server stopped"
             description="The server crashed and restarted several times in a row. Check your dev server config, then restart once it's fixed."
-            severity="warning"
+            severity="error"
             onClose={() => setCrashLoopBannerDismissed(true)}
-            actions={[
-              {
-                id: "crash-loop-restart",
-                label: "Restart dev server",
-                icon: RotateCw,
-                variant: "danger",
-                onClick: handleRestartDevServer,
-                ariaLabel: "Restart dev server",
-              },
-            ]}
+            action={{
+              id: "crash-loop-restart",
+              label: "Restart dev server",
+              icon: RotateCw,
+              variant: "danger",
+              onClick: handleRestartDevServer,
+              ariaLabel: "Restart dev server",
+            }}
           />
         )}
         {consoleTerminalId && (

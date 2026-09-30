@@ -453,6 +453,22 @@ export function resolveEffectiveBypass(
   return !!globalSkipPermissions && isAgentBypassSupported(agentId);
 }
 
+/** Splits args into options, each paired with the non-option value after it. */
+function optionGroups(tokens: readonly string[]): string[][] {
+  const groups: string[][] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] as string;
+    const next = tokens[index + 1];
+    if (token.startsWith("-") && next !== undefined && !next.startsWith("-")) {
+      groups.push([token, next]);
+      index += 1;
+    } else {
+      groups.push([token]);
+    }
+  }
+  return groups;
+}
+
 /**
  * Reconciles a persisted `agentLaunchFlags` snapshot against the current
  * effective bypass setting (#10432, the "resume trap").
@@ -473,9 +489,12 @@ export function resolveEffectiveBypass(
  * canonical token (no `DEFAULT_DANGEROUS_ARGS` entry and no `dangerousArgs`)
  * fall through the empty-strip-set guard below and are left untouched.
  *
- * All known bypass flags in {@link DEFAULT_DANGEROUS_ARGS} are single tokens;
- * the strip matches whole tokens so flag *values* are never collaterally
- * removed.
+ * Bypass args are matched one option group at a time — an option together with
+ * the value that follows it — never token by token: a custom Codex bypass like
+ * `-c approval_policy=never` shares its `-c` with every other config override
+ * in the list, and stripping that `-c` alone would orphan the value that
+ * followed it (#13046). Groups rather than the whole sequence, so a bypass
+ * whose other half another reconciler already rewrote is still recognised.
  *
  * @param bypassArgs - The agent's currently-resolved dangerous args (e.g.
  *   `entry.dangerousArgs`); falls back to `DEFAULT_DANGEROUS_ARGS[agentId]`.
@@ -489,46 +508,55 @@ export function reconcileBypassFlags(
   const resolved = (bypassArgs?.trim() || DEFAULT_DANGEROUS_ARGS[agentId] || "").trim();
   // Strip both the resolved args and the registry default: a snapshot may have
   // been captured before the user customized `dangerousArgs`, so cleaning only
-  // the current value could leave a stale default token behind.
-  const stripTokens = new Set<string>();
+  // the current value could leave a stale default flag behind.
+  const groups: string[][] = [];
   for (const source of [resolved, DEFAULT_DANGEROUS_ARGS[agentId]]) {
-    if (!source) continue;
-    for (const token of source.trim().split(/\s+/)) {
-      if (token) stripTokens.add(token);
+    for (const group of optionGroups(source?.trim().split(/\s+/).filter(Boolean) ?? [])) {
+      if (!groups.some((known) => known.join(" ") === group.join(" "))) groups.push(group);
     }
   }
-  if (stripTokens.size === 0) return [...flags];
+  if (groups.length === 0) return [...flags];
+  // Longest first, so an option/value pair wins over a lone token of its own.
+  groups.sort((a, b) => b.length - a.length);
   // A standing instruction is free text that can equal a bypass token, and
   // Codex's shares a `-c` with config-override bypass args (#12431). Stripping
   // either half would orphan the other — a lone value becomes the first-turn
   // prompt — so both are left alone.
   const instruction = systemPromptArgPositions(flags, agentId);
-  const isStripped = (flag: string, index: number) =>
-    !instruction.has(index) && stripTokens.has(flag);
-
-  if (!effectiveBypass || !resolved) {
-    // Bypass not wanted: drop every occurrence of the canonical token(s).
-    return flags.filter((flag, index) => !isStripped(flag, index));
-  }
+  const matchLengthAt = (index: number): number => {
+    for (const group of groups) {
+      if (
+        group.every(
+          (token, offset) => flags[index + offset] === token && !instruction.has(index + offset)
+        )
+      ) {
+        return group.length;
+      }
+    }
+    return 0;
+  };
 
   // Bypass wanted: replace the first canonical occurrence in place with the
   // currently-resolved args (preserving flag order so a snapshot that already
   // carries the right flag is left untouched), drop any duplicates, and append
-  // if the flag was absent.
-  const resolvedTokens = resolved.split(/\s+/).filter(Boolean);
+  // if the flag was absent. Bypass not wanted: drop every occurrence.
+  const wanted = effectiveBypass && resolved ? resolved.split(/\s+/).filter(Boolean) : undefined;
   const reconciled: string[] = [];
   let inserted = false;
-  for (const [index, flag] of flags.entries()) {
-    if (isStripped(flag, index)) {
-      if (!inserted) {
-        reconciled.push(...resolvedTokens);
+  for (let index = 0; index < flags.length;) {
+    const matched = matchLengthAt(index);
+    if (matched > 0) {
+      if (wanted && !inserted) {
+        reconciled.push(...wanted);
         inserted = true;
       }
+      index += matched;
     } else {
-      reconciled.push(flag);
+      reconciled.push(flags[index] as string);
+      index += 1;
     }
   }
-  if (!inserted) reconciled.push(...resolvedTokens);
+  if (wanted && !inserted) reconciled.push(...wanted);
   return reconciled;
 }
 

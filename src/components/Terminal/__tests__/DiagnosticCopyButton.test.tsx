@@ -1,8 +1,21 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  type RenderOptions,
+} from "@testing-library/react";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 import { DiagnosticCopyButton } from "../DiagnosticCopyButton";
+
+// The app root supplies the TooltipProvider.
+function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
+  return rtlRender(ui, { wrapper: TooltipProvider, ...options });
+}
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -31,6 +44,8 @@ function stubClipboard(writeText: ReturnType<typeof vi.fn>) {
     value: { writeText },
   });
 }
+
+const visibleLabel = (button: HTMLElement) => button.textContent;
 
 describe("DiagnosticCopyButton", () => {
   it("renders nothing when all diagnostic fields are absent", () => {
@@ -81,13 +96,15 @@ describe("DiagnosticCopyButton", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByRole("button", { name: /diagnostics copied/i })).toBeTruthy();
+    // The label confirms; the name stays put so it is announced once, by the hook.
+    expect(visibleLabel(button)).toBe("Copied");
+    expect(button.getAttribute("aria-label")).toBe("Copy diagnostics");
 
     await act(async () => {
       vi.advanceTimersByTime(2000);
     });
 
-    expect(screen.getByRole("button", { name: /copy diagnostics/i })).toBeTruthy();
+    expect(visibleLabel(button)).toBe("Copy");
   });
 
   it("does not throw when clipboard.writeText is unavailable", () => {
@@ -126,6 +143,7 @@ describe("DiagnosticCopyButton", () => {
       await Promise.resolve();
     });
 
-    expect(screen.queryByRole("button", { name: /diagnostics copied/i })).toBeNull();
+    const button = screen.getByRole("button", { name: /copy diagnostics/i });
+    expect(visibleLabel(button)).toBe("Copy");
   });
 });

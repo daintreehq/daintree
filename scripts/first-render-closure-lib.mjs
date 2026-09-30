@@ -21,9 +21,9 @@
 //     reachable bundle. Report-only.
 //
 // Seeds are always enqueued explicitly (if present) regardless of
-// `followDynamic` — they're first-paint paths by definition (a persisted
-// browser/dev-preview/review panel restores synchronously), not edges
-// discovered by walking `dynamicImports[]`.
+// `followDynamic` — they're first-paint paths by definition (the entry shell
+// imports the app root unconditionally), not edges discovered by walking
+// `dynamicImports[]`.
 //
 // Identity is the node KEY, so a chunk shared via multiple edges (vendor-react
 // imported by both the entry and vendor-motion) is visited exactly once. A seed
@@ -67,8 +67,7 @@ export function collectClosure(
 //     facadeModuleId, imports[], dynamicImports[] }). Non-"chunk" outputs
 //     (CSS/assets) are ignored, so no asset is ever preloaded as a module.
 //   • `seedSourcePaths` — Set of repo-relative POSIX source paths from the panel
-//     registry (getFirstRenderPreloadSeeds — the app root plus the first-render
-//     panel chunks). A chunk is a seed when its facadeModuleId, normalized via
+//     registry (getFirstRenderPreloadSeeds — the app root). A chunk is a seed when its facadeModuleId, normalized via
 //     `toRelativePosix`, is in this set.
 //   • `toRelativePosix` — maps an absolute facadeModuleId to the repo-relative
 //     POSIX form for comparison against the seeds (kept as a callback so this

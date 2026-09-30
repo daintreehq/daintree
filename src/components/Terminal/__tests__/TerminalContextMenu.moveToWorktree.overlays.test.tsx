@@ -9,8 +9,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { WorktreeState } from "@/types";
 import { _resetTooltipFocusSuppressionForTests } from "@/lib/tooltipFocusSuppression";
 
-const { dispatchMock, worktrees, panelsById } = vi.hoisted(() => ({
+const { dispatchMock, worktrees, panelsById, orderEnabled } = vi.hoisted(() => ({
   dispatchMock: vi.fn(),
+  orderEnabled: { current: [] as boolean[] },
   // Main plus eleven others, one past what the submenu shows.
   worktrees: [
     { id: "w-main", name: "daintree", branch: "main", isMainWorktree: true },
@@ -84,7 +85,11 @@ vi.mock("@/store/fleetArmingStore", () => ({
 }));
 
 vi.mock("@/hooks/useSidebarWorktreeOrder", () => ({
-  useSidebarWorktreeOrder: () => worktrees,
+  useSidebarWorktreeOrder: (options?: { enabled?: boolean }) => {
+    const enabled = options?.enabled ?? true;
+    orderEnabled.current.push(enabled);
+    return enabled ? worktrees : [];
+  },
 }));
 
 vi.mock("@/hooks/useWorktreeColorMap", () => ({
@@ -160,6 +165,38 @@ beforeEach(() => {
 afterEach(async () => {
   cleanup();
   await settle();
+  orderEnabled.current = [];
+});
+
+describe("TerminalContextMenu worktree list, through the real menu", () => {
+  it("reads the list only while the menu content is mounted", async () => {
+    const pane = renderPane();
+    expect(orderEnabled.current.every((enabled) => !enabled)).toBe(true);
+
+    fireEvent.contextMenu(pane, { clientX: 24, clientY: 24 });
+    await screen.findByRole("menuitem", { name: "Move to worktree" });
+    expect(orderEnabled.current.at(-1)).toBe(true);
+
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await settle();
+    expect(orderEnabled.current.at(-1)).toBe(false);
+  });
+
+  it("keeps the list when the menu reopens before the last close's focus return", async () => {
+    const pane = renderPane();
+    fireEvent.contextMenu(pane, { clientX: 24, clientY: 24 });
+    await screen.findByRole("menuitem", { name: "Move to worktree" });
+
+    // Radix returns focus on a zero-delay timer after the content unmounts;
+    // reopening inside that window must not let the stale close clear the list.
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    fireEvent.contextMenu(pane, { clientX: 24, clientY: 24 });
+    await settle();
+
+    expect(screen.getByRole("menuitem", { name: "Move to worktree" })).toBeTruthy();
+  });
 });
 
 describe("TerminalContextMenu More worktrees…, through the real overlays", () => {

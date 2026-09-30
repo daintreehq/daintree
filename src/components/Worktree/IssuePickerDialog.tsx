@@ -18,6 +18,8 @@ import type { WorktreeState } from "@/types";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { pluralize } from "@/lib/pluralize";
+import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 
 interface IssuePickerDialogProps {
   isOpen: boolean;
@@ -51,8 +53,7 @@ function scopeNoun(state: StateFilter): string {
 }
 
 function countLabel(count: number, state: StateFilter): string {
-  const noun = state === "all" ? "issue" : `${state} issue`;
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+  return pluralize(count, state === "all" ? "issue" : `${state} issue`);
 }
 
 interface IssueOptionRowProps {
@@ -221,13 +222,15 @@ export function IssuePickerDialog({
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.nativeEvent.isComposing) return;
-    if (e.key === "ArrowDown") {
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+    // Rows held behind the loading skeleton are not a list to step through yet.
+    const next =
+      keyBelongsToField(e) || !hasResults
+        ? null
+        : stepListboxCursor(e.key, selectedIndex, issues.length);
+    if (next !== null) {
       e.preventDefault();
-      setSelectedIndex((prev) => Math.min(prev + 1, Math.max(issues.length - 1, 0)));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setSelectedIndex((prev) => Math.max(prev - 1, 0));
+      setSelectedIndex(next);
     } else if (e.key === "Enter") {
       e.preventDefault();
       if (activeIssue) {
@@ -429,7 +432,7 @@ export function IssuePickerDialog({
           // "Clear search", and two buttons with one name are indistinguishable.
           clearLabel="Clear"
           onKeyDown={handleKeyDown}
-          placeholder="Search issues by title or number..."
+          placeholder="Search issues by title or number…"
           aria-label="Search issues"
           role="combobox"
           aria-autocomplete="list"

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo } from "react";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
@@ -18,7 +19,6 @@ import {
 } from "@/hooks/usePromptHistoryPalette";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { excerptPreview, findPreviewMatches } from "@/utils/promptHistoryPreview";
-import { formatTimeAgo } from "@/utils/timeAgo";
 import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/store/projectStore";
 import { isMac } from "@/lib/platform";
@@ -88,7 +88,7 @@ export function PromptHistoryRow({
       aria-selected={isSelected}
       className={cn(
         PALETTE_ROW_CLASS,
-        "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
+        "w-full flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] text-left",
         "text-text-secondary"
       )}
       onClick={() => onSelect(item)}
@@ -112,9 +112,10 @@ export function PromptHistoryRow({
           {counts.length > 0 && <span>{counts.join(" · ")}</span>}
         </span>
       )}
-      <span className="shrink-0 min-w-14 text-right text-xs text-text-secondary tabular-nums">
-        {formatTimeAgo(item.addedAt)}
-      </span>
+      <TimeAgo
+        timestamp={item.addedAt}
+        className="shrink-0 min-w-14 text-right text-xs text-text-secondary"
+      />
     </button>
   );
 }

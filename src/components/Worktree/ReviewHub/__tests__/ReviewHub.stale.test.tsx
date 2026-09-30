@@ -99,6 +99,7 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 import { ReviewHubContent } from "../ReviewHubContent";
+import { SURFACE_HEADER_FOCUS_LIFT_CLASS } from "@/components/ui/SurfaceHeader";
 import { useUIStore } from "@/store/uiStore";
 import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
@@ -168,11 +169,13 @@ describe("ReviewHub stale visual", () => {
     ]);
 
     getStagingStatusMock.mockResolvedValue(makeStatus());
-    onUpdateMock.mockImplementation((_type: string, callback: (data: unknown) => void) => {
+    onUpdateMock.mockImplementation((type: string, callback: (data: unknown) => void) => {
       // The component subscribes to the per-view worktree port; tests keep
       // driving it with a plain WorktreeState by wrapping it in the port
       // event envelope here.
-      capturedUpdateCallback = (state: WorktreeState) => callback({ worktree: state });
+      if (type === "worktree-update") {
+        capturedUpdateCallback = (state: WorktreeState) => callback({ worktree: state });
+      }
       return mockUnsubscribe;
     });
 
@@ -341,6 +344,33 @@ describe("ReviewHub stale visual", () => {
 
     const reservation = screen.getByTestId("review-hub-body-reservation");
     expect([...reservation.classList].some((c) => /^min-h-/.test(c))).toBe(false);
+  });
+
+  describe("focused title bar", () => {
+    const lifted = (el: HTMLElement) =>
+      SURFACE_HEADER_FOCUS_LIFT_CLASS.split(" ").every((c) => el.classList.contains(c));
+
+    it.each([
+      { location: "grid" as const, isFocused: true, expected: true },
+      { location: "grid" as const, isFocused: false, expected: false },
+      { location: "dock" as const, isFocused: true, expected: false },
+    ])(
+      "$location, focused=$isFocused: lifts like a PanelHeader would ($expected)",
+      async ({ location, isFocused, expected }) => {
+        render(
+          <ReviewHubContent
+            isOpen={true}
+            worktreePath={WORKTREE_PATH}
+            onClose={vi.fn()}
+            location={location}
+            isFocused={isFocused}
+          />
+        );
+        const header = await screen.findByTestId("review-hub-header");
+        expect(lifted(header)).toBe(expected);
+        expect(header.classList.contains("border-overlay")).toBe(expected);
+      }
+    );
   });
 });
 

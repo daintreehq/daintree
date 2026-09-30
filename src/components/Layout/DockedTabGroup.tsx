@@ -6,7 +6,6 @@ import {
   useSensor,
   useSensors,
   KeyboardSensor,
-  PointerSensor,
   TouchSensor,
   type DragEndEvent,
   type DraggableSyntheticListeners,
@@ -19,6 +18,11 @@ import {
   sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
+import {
+  MOUSE_SENSOR_OPTIONS,
+  PrimaryMouseSensor,
+  TOUCH_SENSOR_OPTIONS,
+} from "@/components/DragDrop/dragActivation";
 import { LayoutGroup, AnimatePresence, m } from "framer-motion";
 import { Check, ChevronDown, CopyPlus } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -54,6 +58,13 @@ import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { DockActivityCue } from "./DockActivityCue";
 import { useDockPanelPortal } from "./dockPanelPortalContext";
+import {
+  DOCK_CHIP_CLASS,
+  DOCK_CHIP_OPEN_CLASS,
+  DOCK_CHIP_WAITING_CLASS,
+  DOCK_CHIP_RULE_CLASS,
+  DOCK_STATE_GLYPH_CLASS,
+} from "./dockChipStyles";
 import { useDockPopoverResize } from "./useDockPopoverResize";
 import { DockPopoverResizeHandle } from "./DockPopoverResizeHandle";
 import {
@@ -127,7 +138,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     stateTip.dismiss();
   };
 
-  const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
   const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
   const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
   const moveTerminalToGrid = usePanelStore((s) => s.moveTerminalToGrid);
@@ -161,12 +171,16 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   }, [panels, activeTabId]);
   const activePanelId = activePanel?.id;
 
-  // Derive isOpen from store state - open if ANY panel in this group is active
-  const isOpen = panels.some((p) => p.id === activeDockTerminalId);
   // The pane this group actually has open in the dock — the id every close must
   // name. Reading it from the store (rather than assuming the active tab) keeps
-  // a close honest even if a tab switch and the dock state ever disagree.
-  const openDockPanelId = isOpen ? activeDockTerminalId : null;
+  // a close honest even if a tab switch and the dock state ever disagree. Scoped
+  // to this group's own panels so another chip's popover opening or closing
+  // leaves the selection unchanged and this group un-rendered.
+  const openDockPanelId = usePanelStore((s) => {
+    const id = s.activeDockTerminalId;
+    return id !== null && panels.some((p) => p.id === id) ? id : null;
+  });
+  const isOpen = openDockPanelId !== null;
 
   const [tabListEl, setTabListEl] = useState<HTMLDivElement | null>(null);
 
@@ -364,14 +378,11 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     [activeTabId, panels, group.id, setActiveTab, setFocused, trashPanel]
   );
 
-  // Sensors for tab drag-and-drop (require small distance to differentiate from clicks)
+  // The app's one pickup threshold, so a tab and the panel it sits on start a
+  // drag at the same travel.
   const tabSensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 5 },
-    }),
-    useSensor(TouchSensor, {
-      activationConstraint: { delay: 150, tolerance: 5 },
-    }),
+    useSensor(PrimaryMouseSensor, MOUSE_SENSOR_OPTIONS),
+    useSensor(TouchSensor, TOUCH_SENSOR_OPTIONS),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
@@ -683,17 +694,12 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               {...dragPointerListeners}
               data-dock-item=""
               className={cn(
-                "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
-                "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-text-secondary",
-                "hover:text-text-primary hover:bg-[var(--dock-item-bg-hover)]",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
-                "cursor-grab active:cursor-grabbing",
-                isOpen &&
-                  "bg-[var(--dock-item-bg-active)] text-text-primary border-[var(--dock-item-border-active)] ring-1 ring-inset ring-daintree-accent/30",
+                DOCK_CHIP_CLASS,
+                isOpen && DOCK_CHIP_OPEN_CLASS,
                 !isOpen &&
                   showDockAgentHighlights &&
                   blockedState === "waiting" &&
-                  "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
+                  DOCK_CHIP_WAITING_CLASS,
                 isDeprioritized && "border-transparent"
               )}
               onClick={(e) => {
@@ -736,7 +742,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
               {(isActive || activePlainWorking) && commandText && (
                 <>
-                  <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
+                  <div className={DOCK_CHIP_RULE_CLASS} aria-hidden="true" />
                   <Tooltip open={commandTip.open} onOpenChange={commandTip.onOpenChange}>
                     <TooltipTrigger asChild onPointerEnter={commandTip.onPointerEnter}>
                       <span className="truncate flex-1 min-w-0 text-2xs text-text-secondary font-mono">
@@ -763,7 +769,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                     >
                       <StateIcon
                         className={cn(
-                          "w-3.5 h-3.5",
+                          DOCK_STATE_GLYPH_CLASS,
                           displayAgentState === "working" && "animate-spin-slow",
                           "motion-reduce:animate-none"
                         )}
@@ -843,6 +849,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                             presetColor={panelPresetColors.get(panel.id)}
                             isUsingFallback={panel.isUsingFallback}
                             tabPanelId={tabPanelId}
+                            menuLocation="dock"
                             onClick={() => handleTabClick(panel.id)}
                             onClose={() => handleTabClose(panel.id)}
                             onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
@@ -882,6 +889,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                                 presetColor={panelPresetColors.get(panel.id)}
                                 isUsingFallback={panel.isUsingFallback}
                                 tabPanelId={tabPanelId}
+                                menuLocation="dock"
                                 onClick={() => handleTabClick(panel.id)}
                                 onClose={() => handleTabClose(panel.id)}
                                 onRename={(newTitle) => handleTabRename(panel.id, newTitle)}

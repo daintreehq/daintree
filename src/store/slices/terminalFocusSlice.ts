@@ -213,6 +213,15 @@ export interface TerminalFocusSlice {
   ) => void;
 }
 
+function holdsNewestLastActive(panel: CarrierPanel, panels: CarrierPanel[]): boolean {
+  const own = panel.lastActiveAt;
+  if (own === undefined || !Number.isFinite(own) || own <= 0) return false;
+  for (const other of panels) {
+    if (other.id !== panel.id && (other.lastActiveAt ?? 0) >= own) return false;
+  }
+  return true;
+}
+
 export const createTerminalFocusSlice =
   (
     getTerminals: () => CarrierPanel[],
@@ -244,27 +253,28 @@ export const createTerminalFocusSlice =
         if (id) {
           const previousFocusedId = get().focusedId;
           const focusActuallyChanged = id !== previousFocusedId;
-          const terminal = getTerminals().find((t) => t.id === id);
+          const terminals = getTerminals();
+          const terminal = terminals.find((t) => t.id === id);
           // Snapshot BEFORE the set() below flips activeDockTerminalId to `id`: a
           // dock pane that was already the active dock terminal is live (popover
           // open), like a grid re-focus; a dock pane that was NOT active is a
           // first reveal from the parked/offscreen dock and needs a genuine wake.
           const wasActiveDockTerminal =
             terminal?.location === "dock" && get().activeDockTerminalId === id;
-          if (terminal?.location === "dock") {
+          const nextActiveDockTerminalId = terminal?.location === "dock" ? id : null;
+          // Re-clicking the focused pane must not notify every panel-store
+          // subscriber when nothing observable changed.
+          if (focusActuallyChanged || get().activeDockTerminalId !== nextActiveDockTerminalId) {
             set({
               focusedId: id,
-              activeDockTerminalId: id,
-              ...(focusActuallyChanged && { previousFocusedId }),
-            });
-          } else {
-            set({
-              focusedId: id,
-              activeDockTerminalId: null,
+              activeDockTerminalId: nextActiveDockTerminalId,
               ...(focusActuallyChanged && { previousFocusedId }),
             });
           }
-          if (terminal) {
+          // A restamp only matters when it changes the recency ordering that
+          // restore reads; when this panel already holds the newest stamp,
+          // skip the panelsById spread and the persistence save.
+          if (terminal && (focusActuallyChanged || !holdsNewestLastActive(terminal, terminals))) {
             stampLastActive(id);
           }
           // Wake-on-focus: recover this pane's renderer when focus MOVES to it.
@@ -291,6 +301,8 @@ export const createTerminalFocusSlice =
             get().pingTerminal(id);
           }
         } else {
+          const { focusedId, activeDockTerminalId } = get();
+          if (focusedId === null && activeDockTerminalId === null) return;
           set({ focusedId: null, activeDockTerminalId: null });
         }
       },

@@ -16,6 +16,7 @@ vi.mock("../../utils/gitUtils.js", () => ({
 
 vi.mock("../../utils/gitRepoOperationState.js", () => ({
   getRepoOperationStateSync: (...args: unknown[]) => mockGetRepoOperationStateSync(...args),
+  getRepoOperationState: async (...args: unknown[]) => mockGetRepoOperationStateSync(...args),
 }));
 
 vi.mock("fs/promises", () => ({
@@ -531,6 +532,23 @@ describe("GitStatusPass", () => {
     await pass.run(false);
 
     expect(host.emitUpdate).toHaveBeenCalled();
+    expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+    expect(host.isUpdating).toBe(false);
+  });
+
+  it("drops the sentinel result when the monitor stops while it is being read", async () => {
+    mockGetGitDir.mockResolvedValue("/test/worktree/.git");
+    const controller = new AbortController();
+    mockGetRepoOperationStateSync.mockImplementation(() => {
+      controller.abort();
+      return "REBASING";
+    });
+    const { pass, host } = makePass({ hasInitialStatus: true, abortSignal: controller.signal });
+
+    await pass.run(true);
+
+    expect(host.repoState).toBeUndefined();
+    expect(host.emitUpdate).not.toHaveBeenCalled();
     expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
     expect(host.isUpdating).toBe(false);
   });

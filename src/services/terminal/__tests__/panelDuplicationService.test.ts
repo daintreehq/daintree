@@ -270,6 +270,28 @@ describe("panelDuplicationService", () => {
     expect(result.command).toBe("generated-claude-command");
   });
 
+  // #13046: settings rebuild the duplicate's flags, but the caller's own flags
+  // have no setting behind them and ride last in both command and flags.
+  it("carries the source's caller flags onto the rebuilt command and flags", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockResolvedValue({ agents: { claude: {} } });
+
+    const panel = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "old-cmd",
+      agentLaunchFlags: ["--old", "--effort", "high"],
+      callerLaunchFlags: ["--effort", "high"],
+    });
+    const result = await buildPanelDuplicateOptions(panel, "grid");
+
+    expect(result.command).toBe("generated-claude-command --effort high");
+    expect(result).toMatchObject({
+      agentLaunchFlags: ["--effort", "high"],
+      callerLaunchFlags: ["--effort", "high"],
+    });
+  });
+
   it("falls back to existing command when agent settings fetch fails", async () => {
     const { agentSettingsClient } = await import("@/clients");
     (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockRejectedValue(

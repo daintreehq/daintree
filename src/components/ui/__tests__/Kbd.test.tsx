@@ -132,3 +132,20 @@ describe("formatChordText", () => {
     expect(formatChordText("Cmd+Shift+P", false)).toMatch(/^\w+\+\w+\+\w+$/);
   });
 });
+
+describe("KbdChord inverse", () => {
+  // Inside a filled contrast button the neutral chip and secondary ink vanish
+  // into the fill, so no part of the chord — key, "+" or step comma — keeps them.
+  it.each([true, false])("carries no neutral chip or secondary ink (mac: %s)", (mac) => {
+    const { container } = render(
+      <KbdChord shortcut="Cmd+K Cmd+Enter" isMac={mac} density="compact" foreground="inverse" />
+    );
+    const painted = [...container.querySelectorAll("kbd, [aria-hidden]")];
+    expect(painted.length).toBeGreaterThan(0);
+    for (const node of painted) {
+      expect(node.className).not.toMatch(
+        /text-text-secondary|bg-overlay-subtle|border-border-subtle/
+      );
+    }
+  });
+});

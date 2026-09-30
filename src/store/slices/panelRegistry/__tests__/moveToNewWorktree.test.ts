@@ -57,6 +57,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     get: vi.fn().mockReturnValue({ terminal: { cols: 80, rows: 24 } }),
     waitForInstance: vi.fn().mockResolvedValue(undefined),
     fit: vi.fn(),
+    invalidatePtyGrid: vi.fn(),
     captureBufferText: mockCaptureBufferText,
     addAgentStateListener: mockAddAgentStateListener,
     setInputLocked: vi.fn(),

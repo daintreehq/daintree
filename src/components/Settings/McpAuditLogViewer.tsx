@@ -1,9 +1,9 @@
-import { useMemo, useState } from "react";
-import { Check, Copy, Download, Layers, RefreshCw, ShieldOff } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { memo, useMemo, useState } from "react";
+import { Check, Download, Layers, RefreshCw, ShieldOff } from "lucide-react";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import {
@@ -14,6 +14,7 @@ import {
   AuditFilterSelect,
   AuditRecordTime,
   AuditTimeRangeSelect,
+  auditAgeLabel,
   type AuditTimeRange,
 } from "./auditLogParts";
 import {
@@ -29,6 +30,7 @@ import {
   type McpAnomalySeverity,
   type McpAnomalySignal,
 } from "@shared/types";
+import { pluralize } from "@/lib/pluralize";
 
 /** "problems" is every dispatch that didn't succeed. */
 type AuditResultFilter = "all" | "problems" | McpAuditResult;
@@ -108,14 +110,17 @@ const ANOMALY_SEVERITY_RANK: Record<McpAnomalySeverity, number> = {
 
 /**
  * The severity lives in the mark; the words stay in neutral text, since
- * severity-coloured text fails 4.5:1 on most themes.
+ * severity-coloured text fails 4.5:1 on most themes. The marks are the app's
+ * severity glyphs, so forced colours keep info, warning and a failure cluster
+ * apart by shape.
  */
-const ANOMALY_SEVERITY_VISUAL: Record<McpAnomalySeverity, { label: string; mark: string }> = {
-  // Info is drawn hollow: forced-colors paints every `.status-mark` fill the
-  // same CanvasText, but a border-only diamond stays distinct from a filled one.
-  info: { label: "Anomaly (info)", mark: "border border-text-secondary" },
-  warning: { label: "Anomaly (warning)", mark: "status-mark bg-status-warning" },
-  danger: { label: "Anomaly (error)", mark: "status-mark bg-status-danger" },
+const ANOMALY_SEVERITY_VISUAL: Record<
+  McpAnomalySeverity,
+  { label: string; level: StatusSeverity }
+> = {
+  info: { label: "Anomaly (info)", level: "info" },
+  warning: { label: "Anomaly (warning)", level: "warning" },
+  danger: { label: "Anomaly (error)", level: "error" },
 };
 
 function higherSeverity(a: McpAnomalySeverity, b: McpAnomalySeverity): McpAnomalySeverity {
@@ -130,15 +135,9 @@ function AnomalyMark({
   decorative?: boolean;
 }) {
   if (!severity) return null;
-  const { label, mark } = ANOMALY_SEVERITY_VISUAL[severity];
+  const { label, level } = ANOMALY_SEVERITY_VISUAL[severity];
   return (
-    <span
-      role={decorative ? undefined : "img"}
-      aria-hidden={decorative || undefined}
-      aria-label={decorative ? undefined : label}
-      title={label}
-      className={cn("h-2 w-2 rounded-sm rotate-45 shrink-0", mark)}
-    />
+    <SeverityMark severity={level} label={label} decorative={decorative} className="h-3 w-3" />
   );
 }
 
@@ -265,20 +264,14 @@ export function groupRecordsByTurn(
   return { groups, unassociated, lifecycle };
 }
 
-function plural(count: number, one: string, many: string = `${one}s`): string {
-  return `${count} ${count === 1 ? one : many}`;
-}
-
 interface McpAuditLogViewerProps {
   records: McpLogRecord[];
   turnRecords?: AssistantTurnRecord[];
   loading: boolean;
   onRefresh: () => Promise<void> | void;
-  onCopy: (records: McpLogRecord[]) => Promise<void> | void;
   onClear?: () => void;
   includeRecord?: (record: McpLogRecord) => boolean;
   maxRecords?: number;
-  copyFlashActive?: boolean;
   /** Triggers the NDJSON export via OS save dialog with the filtered records. */
   onExport?: (records: McpLogRecord[]) => Promise<void> | void;
   /** Set when an export succeeded so the UI can flash a confirmation. */
@@ -287,7 +280,7 @@ interface McpAuditLogViewerProps {
   anomalySuppressed?: boolean;
   /** Shown in place of the list when the records couldn't be read. */
   loadError?: React.ReactNode;
-  /** A copy or export that failed, shown beside the actions. */
+  /** An export that failed, shown beside the actions. */
   actionError?: string | null;
   /**
    * What an empty log says. The default is the first-use line; a parent that
@@ -344,7 +337,7 @@ function DispatchRow({
         {/* Never shown as "confirmed": nobody was asked (#12874). */}
         {record.authorization === "skip-preference" && (
           <div className="mt-0.5 text-text-secondary">
-            Confirmation skipped — Skip permission prompts
+            Confirmation skipped — Daintree confirmations setting
           </div>
         )}
       </div>
@@ -406,21 +399,31 @@ function GrantRow({ record, now }: { record: McpGrantRecord; now: number }) {
   );
 }
 
-function LogRow({
-  record,
-  now,
-  anomaly,
-}: {
+interface LogRowProps {
   record: McpLogRecord;
   now: number;
   anomaly?: McpAnomalySeverity;
-}) {
+}
+
+// `now` only reaches a row through its age label, so a minute tick re-renders
+// just the rows whose label actually changed rather than every row in the log.
+function sameRowOutput(prev: LogRowProps, next: LogRowProps): boolean {
+  return (
+    prev.record === next.record &&
+    prev.anomaly === next.anomaly &&
+    (prev.now === next.now ||
+      auditAgeLabel(prev.record.timestamp, prev.now) ===
+        auditAgeLabel(next.record.timestamp, next.now))
+  );
+}
+
+const LogRow = memo(function LogRow({ record, now, anomaly }: LogRowProps) {
   return isAuditRecord(record) ? (
     <DispatchRow record={record} now={now} anomaly={anomaly} />
   ) : (
     <GrantRow record={record} now={now} />
   );
-}
+}, sameRowOutput);
 
 /** A turn's (or the leftover) records, under a one-line summary. */
 function RecordBlock({
@@ -448,11 +451,9 @@ export function McpAuditLogViewer({
   turnRecords,
   loading,
   onRefresh,
-  onCopy,
   onClear,
   includeRecord,
   maxRecords,
-  copyFlashActive,
   onExport,
   exportFlashActive,
   anomalySignals = [],
@@ -488,6 +489,9 @@ export function McpAuditLogViewer({
     [visibleRecords]
   );
 
+  // Only a bounded range depends on the clock; under "All time" a tick must not
+  // re-filter (and re-serialize) the whole log.
+  const cutoffMs = timeRange !== "all" ? now - AUDIT_TIME_RANGE_MS[timeRange] : undefined;
   const filteredRecords = useMemo(() => {
     // Grants carry no result or arguments of their own. With no narrowing they
     // all show; once the view is narrowed, a grant stays only as context for a
@@ -495,7 +499,6 @@ export function McpAuditLogViewer({
     // so an unrelated session's grant never props up an otherwise empty result.
     const needle = toolFilter.trim().toLowerCase();
     const searchNeedle = searchQuery.trim().toLowerCase();
-    const cutoffMs = timeRange !== "all" ? now - AUDIT_TIME_RANGE_MS[timeRange] : undefined;
     const narrowed = needle.length > 0 || searchNeedle.length > 0 || resultFilter !== "all";
     const matchesDispatch = (record: McpAuditRecord) => {
       if (resultFilter === "problems" && record.result === "success") return false;
@@ -523,7 +526,7 @@ export function McpAuditLogViewer({
         ? matchesDispatch(record)
         : !narrowed || matchingSessions.has(record.sessionId)
     );
-  }, [visibleRecords, resultFilter, toolFilter, timeRange, searchQuery, now]);
+  }, [visibleRecords, resultFilter, toolFilter, searchQuery, cutoffMs]);
 
   const canGroup = !!turnRecords && turnRecords.length > 0;
   const turnGroups = useMemo(() => {
@@ -581,17 +584,19 @@ export function McpAuditLogViewer({
 
   const relatedEventCount = isFiltering ? filteredRecords.filter(isGrantRecord).length : 0;
 
-  const status = copyFlashActive
-    ? "Copied!"
-    : exportFlashActive
-      ? "Exported!"
-      : isFiltering
-        ? relatedEventCount > 0
-          ? `Showing ${filteredRecords.length - relatedEventCount} of ${visibleRecords.length} · ${plural(relatedEventCount, "related event")}`
-          : `Showing ${filteredRecords.length} of ${visibleRecords.length}`
-        : maxRecords !== undefined
-          ? `${visibleRecords.length} of ${maxRecords}`
-          : plural(visibleRecords.length, "record");
+  // A string, not a thunk: the check then belongs to the records it copied,
+  // and a filter change during the dwell retires it.
+  const recordsJson = useMemo(() => JSON.stringify(filteredRecords, null, 2), [filteredRecords]);
+
+  const status = exportFlashActive
+    ? "Exported!"
+    : isFiltering
+      ? relatedEventCount > 0
+        ? `Showing ${filteredRecords.length - relatedEventCount} of ${visibleRecords.length} · ${pluralize(relatedEventCount, "related event")}`
+        : `Showing ${filteredRecords.length} of ${visibleRecords.length}`
+      : maxRecords !== undefined
+        ? `${visibleRecords.length} of ${maxRecords}`
+        : pluralize(visibleRecords.length, "record");
 
   const hasQuickViews = (unauthorizedCount > 0 && resultFilter !== "unauthorized") || canGroup;
 
@@ -649,7 +654,7 @@ export function McpAuditLogViewer({
         >
           <AnomalyMark severity={bannerSeverity} decorative />
           <span>
-            {visibleSignals.length} anomaly signal{visibleSignals.length !== 1 ? "s" : ""}
+            {pluralize(visibleSignals.length, "anomaly signal")}
             {Object.entries(anomalyCountsByKind).length > 0 &&
               ` (${Object.entries(anomalyCountsByKind)
                 .map(([kind, count]) => `${count} ${kind}`)
@@ -691,9 +696,9 @@ export function McpAuditLogViewer({
               summary={
                 <>
                   <AuditRecordTime ts={group.turnRecord.timestamp} now={now} />
-                  {` · ${plural(group.callCount, "call")}`}
+                  {` · ${pluralize(group.callCount, "call")}`}
                   {group.unauthorizedCount > 0 && ` · ${group.unauthorizedCount} unauthorized`}
-                  {group.errorCount > 0 && ` · ${plural(group.errorCount, "error")}`}
+                  {group.errorCount > 0 && ` · ${pluralize(group.errorCount, "error")}`}
                   {` · ${group.totalDurationMs}ms`}
                 </>
               }
@@ -702,14 +707,14 @@ export function McpAuditLogViewer({
                 <LogRow key={record.id} record={record} now={now} />
               ))}
               {group.lifecycle.map((grant) => (
-                <GrantRow key={grant.id} record={grant} now={now} />
+                <LogRow key={grant.id} record={grant} now={now} />
               ))}
             </RecordBlock>
           ))}
           {turnGroups.unassociated.length > 0 && (
             <RecordBlock
               heading="Outside any turn"
-              summary={plural(turnGroups.unassociated.length, "record")}
+              summary={pluralize(turnGroups.unassociated.length, "record")}
             >
               {turnGroups.unassociated.map((record) => (
                 <LogRow key={record.id} record={record} now={now} />
@@ -719,10 +724,10 @@ export function McpAuditLogViewer({
           {turnGroups.lifecycle.length > 0 && (
             <RecordBlock
               heading="Lifecycle events"
-              summary={plural(turnGroups.lifecycle.length, "event")}
+              summary={pluralize(turnGroups.lifecycle.length, "event")}
             >
               {turnGroups.lifecycle.map((grant) => (
-                <GrantRow key={grant.id} record={grant} now={now} />
+                <LogRow key={grant.id} record={grant} now={now} />
               ))}
             </RecordBlock>
           )}
@@ -752,15 +757,13 @@ export function McpAuditLogViewer({
           <RefreshCw aria-hidden="true" />
           Refresh
         </Button>
-        <Button
+        <CopyButton
+          label={`Copy ${showCopyAll ? "all" : "shown"} as JSON`}
           variant="outline"
           size="sm"
-          onClick={() => void onCopy(filteredRecords)}
+          text={recordsJson}
           disabled={filteredRecords.length === 0}
-        >
-          {copyFlashActive ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-          {`Copy ${showCopyAll ? "all" : "shown"} as JSON`}
-        </Button>
+        />
         {onExport && (
           <Button
             variant="outline"

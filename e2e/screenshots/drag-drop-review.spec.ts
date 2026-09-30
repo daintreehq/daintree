@@ -23,6 +23,8 @@
  *   DAINTREE_SHOT_DIR           output directory (default artifacts/drag-drop-shots, gitignored)
  *   DAINTREE_SHOT_THEMES        themes for the full state matrix (default: daintree,bondi,namib)
  *   DAINTREE_SHOT_SWEEP_THEMES  themes for the one-page-per-theme sheet (default: all 15; "" skips)
+ *   DAINTREE_SHOT_SCENES        comma-separated scenes to capture (default: all) — ghosts, grid,
+ *                               dock, targets, drag-grid, drag-dock, drag-sidebar, sheet
  *
  * Hard rule, inherited from the siblings: never write a PNG that has not been
  * verified. `snap()` asserts a real box before it writes, the drag captures
@@ -102,6 +104,12 @@ const DOCK_KINDS = [
   "file",
   "plugin",
 ] as const;
+
+const SCENES = (process.env.DAINTREE_SHOT_SCENES ?? "")
+  .split(",")
+  .map((t) => t.trim())
+  .filter(Boolean);
+const wants = (scene: string) => SCENES.length === 0 || SCENES.includes(scene);
 
 let server: PreviewServer | undefined;
 const snap = makeSnap(OUT_DIR);
@@ -210,6 +218,47 @@ function alphaOf(value: string): number {
   return parts.length >= 4 ? Number(parts[3]) : 1;
 }
 
+const TARGET_SHOTS = [
+  "target-grid",
+  "target-dock",
+  "target-trash",
+  "target-worktree",
+  "target-toolbar",
+] as const;
+
+/** Every armed target draws an edge, and no rest target does. */
+async function expectTargetsPainted(shell: Locator): Promise<void> {
+  for (const shot of TARGET_SHOTS) {
+    for (const state of ["rest", "armed"] as const) {
+      const edges = await shell.locator(`[data-shot="${shot}-${state}"]`).evaluate((root) => {
+        const found: string[] = [];
+        for (const el of [root, ...Array.from(root.querySelectorAll("*"))]) {
+          const style = getComputedStyle(el);
+          if (style.outlineStyle !== "none" && parseFloat(style.outlineWidth) > 0) {
+            found.push(`outline ${style.outlineColor}`);
+          }
+          const after = getComputedStyle(el, "::after").boxShadow;
+          if (el.matches("[data-drop-target]") && after && after !== "none") {
+            found.push(`card-edge ${after}`);
+          }
+        }
+        return found;
+      });
+      const painted = edges.filter(
+        (edge) => alphaOf(edge.replace(/^\S+ /, "").split(" inset")[0]!) > 0
+      );
+      if (state === "armed" && painted.length === 0) {
+        throw new Error(`${shot} armed paints no frame — refusing to write`);
+      }
+      if (state === "rest" && painted.length > 0) {
+        throw new Error(
+          `${shot} at rest paints a frame (${painted.join("; ")}) — refusing to write`
+        );
+      }
+    }
+  }
+}
+
 async function expectActiveDrag(shell: Locator): Promise<void> {
   await expect(
     shell.locator("[data-sandbox-active]"),
@@ -231,7 +280,7 @@ test("drag ghosts and drop placeholders — states and themes", async ({ page })
 
   for (const theme of THEMES) {
     // Ghosts: the gallery, then each card alone at the size the eye judges it.
-    {
+    if (wants("ghosts")) {
       const shell = await open(page, { theme, scene: "ghosts" });
       written.push(await snap(shell, `ghosts-gallery-${theme}.png`));
       for (const shot of GHOST_SHOTS) {
@@ -242,25 +291,36 @@ test("drag ghosts and drop placeholders — states and themes", async ({ page })
     }
 
     // Grid placeholder, per kind, between real-recipe panels.
-    for (const kind of GRID_KINDS) {
-      const shell = await open(page, { theme, scene: "grid", kind });
-      const target = shell.locator('[data-shot="grid-placeholder"]');
-      await expect(target.locator(":scope > *"), `grid/${kind} rendered nothing`).toHaveCount(1);
-      await expectPainted(target.locator(":scope > *"), "border-top-color");
-      written.push(await snap(shell, `grid-${kind}-${theme}.png`));
-    }
+    if (wants("grid"))
+      for (const kind of GRID_KINDS) {
+        const shell = await open(page, { theme, scene: "grid", kind });
+        const target = shell.locator('[data-shot="grid-placeholder"]');
+        await expect(target.locator(":scope > *"), `grid/${kind} rendered nothing`).toHaveCount(1);
+        await expectPainted(target.locator(":scope > *"), "border-top-color");
+        written.push(await snap(shell, `grid-${kind}-${theme}.png`));
+      }
 
     // Dock placeholder, per kind, in the empty rail with the drag-over highlight.
-    for (const kind of DOCK_KINDS) {
-      const shell = await open(page, { theme, scene: "dock", kind, over: "1" });
-      const target = shell.locator('[data-shot="dock-placeholder"]');
-      await expect(target.locator(":scope > *"), `dock/${kind} rendered nothing`).toHaveCount(1);
-      await expectPainted(target.locator(":scope > *"), "border-top-color");
-      written.push(await snap(shell, `dock-${kind}-${theme}.png`));
+    if (wants("dock"))
+      for (const kind of DOCK_KINDS) {
+        const shell = await open(page, { theme, scene: "dock", kind, over: "1" });
+        const target = shell.locator('[data-shot="dock-placeholder"]');
+        await expect(target.locator(":scope > *"), `dock/${kind} rendered nothing`).toHaveCount(1);
+        await expectPainted(target.locator(":scope > *"), "border-top-color");
+        written.push(await snap(shell, `dock-${kind}-${theme}.png`));
+      }
+
+    // Armed drop targets: every container that takes a drop whole, at rest and
+    // armed. The frame is an outline (a card's is its ::after box-shadow), so
+    // each armed half is checked for a painted edge before the page is written.
+    if (wants("targets")) {
+      const shell = await open(page, { theme, scene: "targets" });
+      await expectTargetsPainted(shell);
+      written.push(await snap(shell, `targets-${theme}.png`));
     }
 
     // Source dim in the grid, mid-drag, with the real overlay ghost in frame.
-    {
+    if (wants("drag-grid")) {
       const shell = await open(page, { theme, scene: "drag-grid" });
       const handle = shell.locator("[data-fixture-handle]").first();
       const from = await pointerDown(page, handle);
@@ -271,7 +331,7 @@ test("drag ghosts and drop placeholders — states and themes", async ({ page })
     }
 
     // Dock reorder: source dim plus the insertion line, in both directions.
-    {
+    if (wants("drag-dock")) {
       const shell = await open(page, { theme, scene: "drag-dock" });
       const chips = shell.locator("[data-dock-item]");
       await expect(chips).toHaveCount(3);
@@ -308,7 +368,7 @@ test("drag ghosts and drop placeholders — states and themes", async ({ page })
     }
 
     // Sidebar reorder: row dim plus the above/below line.
-    {
+    if (wants("drag-sidebar")) {
       const shell = await open(page, { theme, scene: "drag-sidebar" });
       const rows = shell.locator("[data-worktree-row]");
       await expect(rows).toHaveCount(3);
@@ -346,7 +406,7 @@ test("drag ghosts and drop placeholders — states and themes", async ({ page })
   // Dock geometry questions are density questions, not palette ones: the two
   // other densities, the rail without its highlight, and the idle spacer, in
   // the first theme only.
-  {
+  if (wants("dock")) {
     const theme = THEMES[0]!;
     for (const density of ["compact", "comfortable"] as const) {
       const shell = await open(page, { theme, scene: "dock", kind: "browser", over: "1", density });
@@ -366,33 +426,46 @@ test("drag ghosts and drop placeholders — states and themes", async ({ page })
     }
   }
 
+  // Forced colours strip box-shadow and repaint every colour; the drop frames
+  // must survive as their dashed system-colour outlines. First theme only: the
+  // palette is gone in this mode.
+  if (wants("targets")) {
+    const theme = THEMES[0]!;
+    await page.emulateMedia({ forcedColors: "active" });
+    const shell = await open(page, { theme, scene: "targets" });
+    await expectTargetsPainted(shell);
+    written.push(await snap(shell, `targets-forced-colors-${theme}.png`));
+    await page.emulateMedia({ forcedColors: "none" });
+  }
+
   // The sweep: one composite page per theme, then the same page mid-drag for
   // the dock line and the row line. Theme-specific collapse only shows up here.
-  for (const theme of SWEEP_THEMES) {
-    const shell = await open(page, { theme, scene: "sheet", width: "1360" });
-    written.push(await snap(shell, `sheet-${theme}.png`));
+  if (wants("sheet"))
+    for (const theme of SWEEP_THEMES) {
+      const shell = await open(page, { theme, scene: "sheet", width: "1360" });
+      written.push(await snap(shell, `sheet-${theme}.png`));
 
-    const chips = shell.locator("[data-sheet-dock] [data-dock-item]");
-    await expect(chips).toHaveCount(3);
-    const chipBox = await chips.nth(2).boundingBox();
-    if (!chipBox) throw new Error("sheet dock chip has no box");
-    await pointerDown(page, chips.nth(0));
-    await glide(page, { x: chipBox.x + chipBox.width * 0.85, y: chipBox.y + chipBox.height / 2 });
-    await expect(shell.locator("[data-dock-drop-indicator]")).toHaveCount(1);
-    written.push(await snap(shell, `sheet-dockline-${theme}.png`));
-    await page.mouse.up();
-    await page.waitForTimeout(150);
+      const chips = shell.locator("[data-sheet-dock] [data-dock-item]");
+      await expect(chips).toHaveCount(3);
+      const chipBox = await chips.nth(2).boundingBox();
+      if (!chipBox) throw new Error("sheet dock chip has no box");
+      await pointerDown(page, chips.nth(0));
+      await glide(page, { x: chipBox.x + chipBox.width * 0.85, y: chipBox.y + chipBox.height / 2 });
+      await expect(shell.locator("[data-dock-drop-indicator]")).toHaveCount(1);
+      written.push(await snap(shell, `sheet-dockline-${theme}.png`));
+      await page.mouse.up();
+      await page.waitForTimeout(150);
 
-    const rows = shell.locator("[data-sheet-sidebar] [data-worktree-row]");
-    await expect(rows).toHaveCount(3);
-    const rowBox = await rows.nth(2).boundingBox();
-    if (!rowBox) throw new Error("sheet worktree row has no box");
-    await pointerDown(page, shell.getByRole("button", { name: "Reorder worktree" }).nth(0));
-    await glide(page, { x: rowBox.x + rowBox.width / 2, y: rowBox.y + rowBox.height * 0.8 });
-    await expect(shell.locator("[data-worktree-drop-indicator]")).toHaveCount(1);
-    written.push(await snap(shell, `sheet-rowline-${theme}.png`));
-    await page.mouse.up();
-  }
+      const rows = shell.locator("[data-sheet-sidebar] [data-worktree-row]");
+      await expect(rows).toHaveCount(3);
+      const rowBox = await rows.nth(2).boundingBox();
+      if (!rowBox) throw new Error("sheet worktree row has no box");
+      await pointerDown(page, shell.getByRole("button", { name: "Reorder worktree" }).nth(0));
+      await glide(page, { x: rowBox.x + rowBox.width / 2, y: rowBox.y + rowBox.height * 0.8 });
+      await expect(shell.locator("[data-worktree-drop-indicator]")).toHaveCount(1);
+      written.push(await snap(shell, `sheet-rowline-${theme}.png`));
+      await page.mouse.up();
+    }
 
   // Count the files ourselves. A harness that trusts its own exit code is how
   // a review ends up reasoning about screenshots that were never written.

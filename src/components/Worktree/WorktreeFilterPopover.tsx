@@ -71,7 +71,7 @@ function FilterSection({
   const showClear = onClear !== undefined && hasActive;
 
   return (
-    <div className="flex flex-col border-b border-border-default last:border-b-0">
+    <div className="flex flex-col border-b border-divider last:border-b-0">
       {/* The toggle spans the whole row, edge to edge, so its hover fill and
           focus ring match the dividers and there is no dead strip to miss.
           Clear can't nest inside it, so it floats over the toggle in a slot
@@ -569,7 +569,7 @@ export function WorktreeFilterPopover({
       >
         {/* Search */}
         {!hideSearchInput && (
-          <div className="shrink-0 border-b border-border-default p-3">
+          <div className="shrink-0 border-b border-divider p-3">
             <SearchField
               size="compact"
               inputRef={searchInputRef}
@@ -633,7 +633,7 @@ export function WorktreeFilterPopover({
                 </button>
               ))}
             </div>
-            <div className="mt-2 flex items-center gap-2 border-t border-border-default pt-2">
+            <div className="mt-2 flex items-center gap-2 border-t border-divider pt-2">
               <Checkbox
                 id={groupByTypeId}
                 size="sm"
@@ -740,7 +740,7 @@ export function WorktreeFilterPopover({
 
         {/* Clear All */}
         {hasAnyFilter && (
-          <div className="shrink-0 border-t border-border-default p-3">
+          <div className="shrink-0 border-t border-divider p-3">
             <Button variant="subtle" size="xs" onClick={handleClearAll} className="w-full">
               Clear all filters
             </Button>

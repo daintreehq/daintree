@@ -995,7 +995,9 @@ describe("FileBrowserPane resizable sidebar (#11331)", () => {
   it("names the separator and points aria-controls at the resolvable tree column", () => {
     renderPane();
     // Query by the accessible role + name so a broken aria-label actually fails.
-    const handle = screen.getByRole("separator", { name: "Resize file tree" });
+    const handle = screen.getByRole("separator", {
+      name: "Resize file tree (double-click to reset)",
+    });
 
     expect(handle.getAttribute("aria-orientation")).toBe("vertical");
     expect(handle.getAttribute("aria-valuemin")).toBe(String(MIN_W));
@@ -1254,7 +1256,7 @@ describe("tree-header root path copy (#11407)", () => {
     vi.useRealTimers();
   });
 
-  it("leaves the label inert at the worktree root", () => {
+  it("leaves the label inert at the worktree root", async () => {
     // No rootPath — the label is a bare basename, not a path worth copying.
     render(paneJsx());
 
@@ -1262,12 +1264,16 @@ describe("tree-header root path copy (#11407)", () => {
 
     const el = label();
     expect(el.tagName).toBe("SPAN");
-    // Not focusable, and the hover text still resolves the worktree.
+    // Not focusable, and the hover text still resolves the worktree — through
+    // the app's tooltip, never a native title.
     expect(el.hasAttribute("tabindex")).toBe(false);
-    expect(el.getAttribute("title")).toBe("/repo");
+    expect(el.hasAttribute("title")).toBe(false);
 
     fireEvent.click(el);
     expect(writeTextMock).not.toHaveBeenCalled();
+
+    fireEvent.focus(el);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("/repo");
   });
 
   it("stays inert when the root is set but the worktree cannot be resolved", () => {
@@ -1399,11 +1405,12 @@ describe("tree-header root path copy (#11407)", () => {
     // The inbox drops onClick actions, so a demoted toast would lose the Retry.
     expect(payload?.priority).toBe("high");
     expect(payload?.context?.eventKind).toBe("uiFeedback");
-    // Naming the origin surface marks the failure as already visible there and
-    // suppresses the toast — but this label shows nothing when a write fails,
-    // so the Retry would become unreachable.
-    expect(payload?.context?.panelId).toBeUndefined();
-    expect(payload?.context?.worktreeId).toBeUndefined();
+    // Addressed to the pane and the worktree it browses, so the inbox row
+    // groups under them — without opting into origin suppression, since this
+    // label shows nothing when a write fails.
+    expect(payload?.context?.panelId).toBe("fb-1");
+    expect(payload?.context?.worktreeId).toBe("wt-1");
+    expect(payload?.suppressWhenOriginVisible).toBeUndefined();
     // Nothing claims success: no announcement, no lit label.
     expect(lastAnnouncement()?.id).toBe(announcedBefore?.id);
     expect(copyButton().className).toBe(idle);
@@ -1423,6 +1430,27 @@ describe("tree-header root path copy (#11407)", () => {
     expect(copyButton().className).not.toBe(idle);
     // The successful retry raises no second toast.
     expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not address a workspace-rooted failure to its placement worktree", async () => {
+    // Promotion stamps wt-1 onto the panel for placement only (#11489); the
+    // failure belongs to the pane, not to a worktree it doesn't browse.
+    workspaceRootPathMock.mockReturnValue("/scratches/one");
+    mockPanel.browserWorkspaceRooted = true;
+    mockPanel.browserRootPath = ROOT;
+    writeTextMock.mockRejectedValueOnce(new Error("denied"));
+    render(paneJsx());
+
+    await act(async () => {
+      fireEvent.click(copyButton());
+    });
+
+    expect(writeTextMock).toHaveBeenCalledWith(`/scratches/one/${ROOT}`);
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const payload = notifyMock.mock.calls[0]?.[0];
+    expect(payload?.type).toBe("error");
+    expect(payload?.context?.panelId).toBe("fb-1");
+    expect(payload?.context?.worktreeId).toBeUndefined();
   });
 });
 

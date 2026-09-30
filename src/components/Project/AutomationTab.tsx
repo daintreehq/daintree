@@ -2,7 +2,7 @@ import { Plus, Trash2, ChevronUp, ChevronDown } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
+import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { actionService } from "@/services/ActionService";
@@ -315,8 +315,7 @@ export function AutomationTab({
                       />
                     </div>
                     <label className="flex items-center gap-2 text-xs text-text-secondary cursor-pointer">
-                      <Switch
-                        size="sm"
+                      <SettingsSwitch
                         checked={!!cmd.preferredAutoRestart}
                         onCheckedChange={(checked) =>
                           updateRunCommand(index, { preferredAutoRestart: checked })

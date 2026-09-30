@@ -7,6 +7,7 @@ import type { AgentAvailabilityState } from "@shared/types";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { getAgentHealth } from "./agentHealth";
+import { pluralize } from "@/lib/pluralize";
 
 export interface InventoryAgent {
   id: string;
@@ -75,7 +76,7 @@ export function AgentInventorySection({
       ? "No agent CLIs found on this machine"
       : attention.length === 0
         ? `${installed} installed and ready to use`
-        : `${ready.length} of ${installed} installed agents ready — ${attention.length} need${attention.length === 1 ? "s" : ""} attention`;
+        : `${ready.length} of ${installed} installed agents ready — ${pluralize(attention.length, "needs", "need")} attention`;
 
   const wizardButton = (
     <Button size="sm" variant="outline" onClick={onRunSetupWizard}>
@@ -212,7 +213,7 @@ export function AgentInventorySection({
               () => setShowMissing((v) => !v),
               showMissing
                 ? "Hide agents that aren't installed"
-                : `Show ${missing.length} ${missing.length === 1 ? "agent" : "agents"} that ${missing.length === 1 ? "isn't" : "aren't"} installed`,
+                : `Show ${pluralize(missing.length, "agent")} that ${missing.length === 1 ? "isn't" : "aren't"} installed`,
               missing
             )}
         </SettingsGroup>

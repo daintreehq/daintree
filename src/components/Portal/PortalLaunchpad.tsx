@@ -5,7 +5,9 @@ import { PortalIcon } from "./PortalIcon";
 import { isMac } from "@/lib/platform";
 import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
+import { ChoiceCard } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 interface PortalLaunchpadProps {
   links: PortalLink[];
@@ -68,8 +70,11 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
         <ul className="flex flex-col gap-0.5">
           {links.map((link) => (
             <li key={link.id}>
-              <button
-                type="button"
+              <ChoiceCard
+                tone="row"
+                padding="sm"
+                aria-labelledby={`portal-link-${link.id}-title`}
+                aria-describedby={`portal-link-${link.id}-host`}
                 onClick={(e) => {
                   const modifierBackground = mac ? e.metaKey : e.ctrlKey;
                   onOpenUrl(link.url, link.title, modifierBackground);
@@ -81,23 +86,28 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
                     onOpenUrl(link.url, link.title, true);
                   }
                 }}
-                className="group flex w-full items-center gap-3 h-10 px-3 rounded-[var(--radius-lg)] text-left transition-colors duration-150 hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
+                className="group w-full items-center gap-3"
               >
                 <span className="flex w-6 h-6 shrink-0 items-center justify-center text-text-secondary">
                   <PortalIcon icon={link.icon} size="launchpad" />
                 </span>
                 <span className="flex min-w-0 flex-1 items-baseline gap-2">
+                  <TruncatedTooltip content={link.title} focusable={false}>
+                    <span
+                      id={`portal-link-${link.id}-title`}
+                      className="min-w-0 max-w-[70%] shrink-0 truncate text-sm font-medium text-text-primary"
+                    >
+                      {link.title}
+                    </span>
+                  </TruncatedTooltip>
                   <span
-                    className="min-w-0 max-w-[70%] shrink-0 truncate text-sm font-medium text-text-primary"
-                    title={link.title}
+                    id={`portal-link-${link.id}-host`}
+                    className="min-w-0 truncate text-xs text-text-secondary group-hover:text-text-primary transition-colors duration-150"
                   >
-                    {link.title}
-                  </span>
-                  <span className="min-w-0 truncate text-xs text-text-secondary group-hover:text-text-primary transition-colors duration-150">
                     {linkHost(link.url)}
                   </span>
                 </span>
-              </button>
+              </ChoiceCard>
             </li>
           ))}
         </ul>

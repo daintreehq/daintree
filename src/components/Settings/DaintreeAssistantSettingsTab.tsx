@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { formatCountdown } from "@/utils/formatCountdown";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { Callout } from "@/components/ui/Callout";
 import type { ReactNode } from "react";
-import { AlertCircle, AlertTriangle, Check, ChevronRight, Copy, FolderOpen } from "lucide-react";
+import { XCircle, AlertTriangle, ChevronRight, FolderOpen } from "lucide-react";
 import * as semver from "semver";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -12,6 +13,8 @@ import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
 import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
+import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
 import {
@@ -47,9 +50,11 @@ import {
 } from "@shared/config/agentRegistry";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
-import { assistantSkipsDaintreeConfirmations } from "@shared/utils/assistantDaintreeConfirmations";
+import {
+  assistantSkipsDaintreeConfirmations,
+  isHelpAssistantDaintreeConfirmations,
+} from "@shared/utils/assistantDaintreeConfirmations";
 import type {
-  HelpAssistantDaintreeConfirmations,
   HelpAssistantIdleHibernateMinutes,
   HelpAssistantSettings,
   HelpAssistantTier,
@@ -64,8 +69,9 @@ import {
   HELP_TIER_INCREMENTAL,
   HIGH_BLAST_RADIUS_TOOLS,
 } from "@shared/config/helpAssistantTierAllowlists";
+import { pluralNoun } from "@/lib/pluralize";
 
-const COPY_RESET_DELAY_MS = 2000;
+const EXPORT_FEEDBACK_MS = 2000;
 const CUSTOM_ARGS_DEBOUNCE_MS = 500;
 
 type SaveGroup = "agent" | "launch" | "behavior" | "security" | "privacy" | "content";
@@ -231,18 +237,6 @@ const TIER_RANK: Record<HelpAssistantTier, number> = {
   full: 1,
 };
 
-// Format a whole-seconds grant countdown as "Xm Ys" / "Xm" / "Ys". Exported
-// for unit coverage of the boundary cases (sub-minute, exact minute, mixed).
-export function formatGrantRemaining(totalSeconds: number): string {
-  const safe = Math.max(0, Math.floor(totalSeconds));
-  if (safe >= 60) {
-    const minutes = Math.floor(safe / 60);
-    const seconds = safe % 60;
-    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
-  }
-  return `${safe}s`;
-}
-
 function groupToolsByNamespace(tools: readonly string[]): Array<[string, string[]]> {
   const groups = new Map<string, string[]>();
   for (const tool of tools) {
@@ -298,21 +292,21 @@ interface BypassCopy {
 // Scoped to new sessions because both the tier and the bypass preference are
 // provision-time snapshots — a session already running keeps the tier it was
 // minted with, which the live-status card reports.
-// While the assistant inherits "Skip permission prompts" (#12874) those
+// While Daintree confirmations skips them (#12874, #12989) those
 // confirmations are skipped too, so the second sentence says that instead.
 const tierBoundsNewSessions = (tier: HelpAssistantTier, confirmationsSkipped: boolean): string =>
   `New sessions are limited to the Daintree actions in the ${TIER_SHORT_LABEL[tier]} tool set. ${
     confirmationsSkipped
-      ? "Daintree's own confirmations are skipped as well, because Daintree confirmations follows Skip permission prompts."
+      ? "Daintree's own confirmations, closing panels included, are skipped as well, as set by Daintree confirmations below."
       : "Actions that need confirmation still open Daintree's own prompt unless an automation grant covers them."
   }`;
 
-const daintreeConfirmationOptions = (globalSkipPermissions: boolean) => [
-  {
-    value: "inherit",
-    label: `Use Skip permission prompts (currently: ${globalSkipPermissions ? "on" : "off"})`,
-  },
+// The live value lives in the row's description, where the select's narrow
+// rail cannot clip it.
+const DAINTREE_CONFIRMATION_OPTIONS = [
+  { value: "inherit", label: "Follow global setting" },
   { value: "always-ask", label: "Always ask" },
+  { value: "never-ask", label: "Never ask" },
 ];
 
 /**
@@ -410,7 +404,6 @@ export function DaintreeAssistantSettingsTab() {
   // Unread, the recording switch would show its optimistic default as if it were fact.
   const [auditConfigFailed, setAuditConfigFailed] = useState(false);
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
-  const [copied, setCopied] = useState(false);
   const [showRotateConfirm, setShowRotateConfirm] = useState(false);
   const [isRotating, setIsRotating] = useState(false);
   const [showBlastRadius, setShowBlastRadius] = useState(false);
@@ -418,7 +411,6 @@ export function DaintreeAssistantSettingsTab() {
   const [auditStats, setAuditStats] = useState<McpAuditStats | null>(null);
   const [turnRecords, setTurnRecords] = useState<AssistantTurnRecord[]>([]);
   const [auditLoading, setAuditLoading] = useState(true);
-  const [auditCopied, setAuditCopied] = useState(false);
   const [auditExported, setAuditExported] = useState(false);
   const [isExportingAudit, setIsExportingAudit] = useState(false);
   const [showClearAuditConfirm, setShowClearAuditConfirm] = useState(false);
@@ -431,8 +423,6 @@ export function DaintreeAssistantSettingsTab() {
   // so the Privacy section doesn't surface telemetry on load. Local-only state —
   // no persistence precedent for section collapse in Settings.
   const [advancedDiagnosticsOpen, setAdvancedDiagnosticsOpen] = useState(false);
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const auditCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditExportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // customArgs is a free-form text input; persisting on every keystroke would
@@ -616,7 +606,6 @@ export function DaintreeAssistantSettingsTab() {
     return () => {
       cancelled = true;
       unsubscribe();
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
       if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
     };
   }, []);
@@ -700,7 +689,6 @@ export function DaintreeAssistantSettingsTab() {
     );
     return () => {
       cancelled = true;
-      if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
     };
   }, []);
 
@@ -777,27 +765,6 @@ export function DaintreeAssistantSettingsTab() {
     }
   };
 
-  const handleCopyAuditAsJson = async (records: McpLogRecord[]) => {
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(records, null, 2));
-      setPrivacyError(null);
-      setAuditCopied(true);
-      if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
-      auditCopyTimeoutRef.current = setTimeout(() => setAuditCopied(false), COPY_RESET_DELAY_MS);
-    } catch (err) {
-      setAuditCopied(false);
-      if (auditCopyTimeoutRef.current) {
-        clearTimeout(auditCopyTimeoutRef.current);
-        auditCopyTimeoutRef.current = null;
-      }
-      setPrivacyError({
-        message: formatErrorMessage(err, "Couldn't copy audit log"),
-        retry: () => void handleCopyAuditAsJson(records),
-      });
-      logError("Failed to copy MCP audit log from assistant tab", err);
-    }
-  };
-
   const handleExportAuditAsNdjson = async (records: McpLogRecord[]) => {
     if (isExportingAudit) return;
     setIsExportingAudit(true);
@@ -809,7 +776,7 @@ export function DaintreeAssistantSettingsTab() {
         if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
         auditExportTimeoutRef.current = setTimeout(
           () => setAuditExported(false),
-          COPY_RESET_DELAY_MS
+          EXPORT_FEEDBACK_MS
         );
       }
     } catch (err) {
@@ -900,8 +867,8 @@ export function DaintreeAssistantSettingsTab() {
   };
 
   const setDaintreeConfirmations = (value: string) => {
-    if (value !== "inherit" && value !== "always-ask") return;
-    void persist({ daintreeConfirmations: value as HelpAssistantDaintreeConfirmations });
+    if (!isHelpAssistantDaintreeConfirmations(value)) return;
+    void persist({ daintreeConfirmations: value });
   };
 
   const toggleDebugLogging = () => {
@@ -1032,18 +999,26 @@ export function DaintreeAssistantSettingsTab() {
     void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
   };
 
+  const handleGoToSkipPermissions = () => {
+    void actionService.dispatch(
+      "app.settings.openTab",
+      { tab: "agents", subtab: "general", sectionId: "agents-skip-permissions" },
+      { source: "user" }
+    );
+  };
+
   const handleOpenCommandsFolder = () => {
     void actionService.dispatch("help.openCommandsFolder", undefined, { source: "user" });
   };
 
+  // The band's Retry for a failed config copy. The button beside it is the
+  // everyday path; this re-runs the same read and write from the error.
+  const { copy: copyConfig } = useCopyWithFeedback({ announcement: "Config copied" });
   const handleCopyConfig = async () => {
     try {
       const snippet = await window.electron.mcpServer.getConfigSnippet();
-      await navigator.clipboard.writeText(snippet);
-      setConnectionError(null);
-      setCopied(true);
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-      copyTimeoutRef.current = setTimeout(() => setCopied(false), COPY_RESET_DELAY_MS);
+      if (await copyConfig(snippet)) setConnectionError(null);
+      else setConnectionError("Couldn't copy config");
     } catch (err) {
       setConnectionError(formatErrorMessage(err, "Couldn't copy config"));
       logError("Failed to copy MCP config", err);
@@ -1297,10 +1272,19 @@ export function DaintreeAssistantSettingsTab() {
           <SettingsSelect
             id="assistant-daintree-confirmations"
             label="Daintree confirmations"
-            description="Whether Daintree asks before the assistant runs an action like deleting a worktree. Following Skip permission prompts, those actions run without asking while it's on and ask while it's off."
+            description={
+              <>
+                Whether Daintree asks before the assistant deletes a worktree, closes a panel it
+                didn't open, or runs another action that needs confirmation. By default it follows{" "}
+                <Button variant="link" onClick={handleGoToSkipPermissions}>
+                  Settings &gt; Agents &gt; Skip permission prompts
+                </Button>
+                , which is {globalSkipPermissions ? "on" : "off"}.
+              </>
+            }
             value={settings.daintreeConfirmations}
             onValueChange={setDaintreeConfirmations}
-            options={daintreeConfirmationOptions(globalSkipPermissions)}
+            options={DAINTREE_CONFIRMATION_OPTIONS}
             disabled={settingsUnavailable}
             isModified={settings.daintreeConfirmations !== DEFAULT_SETTINGS.daintreeConfirmations}
             onReset={() => setDaintreeConfirmations(DEFAULT_SETTINGS.daintreeConfirmations)}
@@ -1397,9 +1381,7 @@ export function DaintreeAssistantSettingsTab() {
               turnRecords={turnRecords}
               loading={auditLoading}
               onRefresh={refreshAuditRecords}
-              onCopy={handleCopyAuditAsJson}
               onClear={() => setShowClearAuditConfirm(true)}
-              copyFlashActive={auditCopied}
               // Privacy section hides external MCP traffic. Grant-lifecycle
               // events stay visible — they're tied to this Daintree's own
               // help-session bearers, not external API-key clients.
@@ -1419,7 +1401,7 @@ export function DaintreeAssistantSettingsTab() {
             {auditStats && auditStats.auth401Count > 0 && (
               <p className="text-xs text-text-secondary select-text">
                 <span className="font-mono text-text-primary">{auditStats.auth401Count}</span>{" "}
-                bearer rejection{auditStats.auth401Count === 1 ? "" : "s"} since last launch — an
+                bearer {pluralNoun(auditStats.auth401Count, "rejection")} since last launch — an
                 external client is connecting with a stale or missing API key.
               </p>
             )}
@@ -1559,10 +1541,18 @@ export function DaintreeAssistantSettingsTab() {
                 label="Client config"
                 description={`Paste into an external MCP client to connect it to port ${runtimeSnapshot.port ?? mcpStatus.port ?? "—"}`}
                 control={
-                  <Button variant="outline" size="sm" onClick={handleCopyConfig}>
-                    {copied ? <Check /> : <Copy />}
-                    {copied ? "Copied" : "Copy MCP config"}
-                  </Button>
+                  <CopyButton
+                    label="Copy MCP config"
+                    variant="outline"
+                    size="sm"
+                    text={() => window.electron.mcpServer.getConfigSnippet()}
+                    announcement="Config copied"
+                    onCopied={() => setConnectionError(null)}
+                    onCopyError={(err) => {
+                      setConnectionError(formatErrorMessage(err, "Couldn't copy config"));
+                      logError("Failed to copy MCP config", err);
+                    }}
+                  />
                 }
               />
             </SettingsGroup>
@@ -1639,7 +1629,7 @@ function StatusLine({
   return (
     <span role={live ? "status" : undefined} className="flex items-start gap-2">
       {tone === "error" ? (
-        <AlertCircle className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
+        <XCircle className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
       ) : (
         <span
           className={cn(
@@ -1798,7 +1788,7 @@ function GrantCountdown({ expiresAt }: { expiresAt: number }) {
   const remainingMs = expiresAt - now;
   return (
     <span role="timer" className="font-mono text-text-secondary tabular-nums shrink-0">
-      {remainingMs <= 0 ? "expiring" : `expires in ${formatGrantRemaining(remainingMs / 1000)}`}
+      {remainingMs <= 0 ? "expiring" : `${formatCountdown(remainingMs / 1000)} left`}
     </span>
   );
 }

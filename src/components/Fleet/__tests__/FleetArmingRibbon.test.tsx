@@ -91,6 +91,16 @@ import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { dispatchEscape, _resetForTests as resetEscapeStack } from "@/lib/escapeStack";
 import type { PtyPanelData } from "@shared/types/panel";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 function resetStores() {
   useFleetArmingStore.setState({
@@ -1219,7 +1229,7 @@ describe("FleetArmingRibbon", () => {
   });
 });
 
-describe("FleetArmingRibbon — saved fleet delete confirm (#8023)", () => {
+describe("FleetArmingRibbon — saved fleet delete", () => {
   beforeEach(() => {
     resetStores();
     useProjectSettingsStore.setState({
@@ -1232,39 +1242,20 @@ describe("FleetArmingRibbon — saved fleet delete confirm (#8023)", () => {
     });
   });
 
-  it("requesting delete opens a confirm dialog instead of deleting immediately", async () => {
+  it("deletes at once, with no confirm dialog in the way", async () => {
+    const { useProjectStore } = await import("@/store/projectStore");
+    useProjectStore.setState({ currentProject: { id: "p1" } } as never);
     const actionServiceModule = await import("@/services/ActionService");
-    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    const dispatchSpy = vi
+      .spyOn(actionServiceModule.actionService, "dispatch")
+      .mockResolvedValue({ ok: true, result: undefined });
 
     useFleetArmingStore.getState().armIds(["a", "b"]);
     render(<FleetArmingRibbon />);
 
-    // The fixture fleet is stale (no terminals), so selecting it asks to delete.
+    // The fixture fleet is stale (no terminals), so selecting it deletes it.
     await act(async () => {
       fireEvent.click(screen.getByText("My fleet"));
-    });
-
-    // No immediate dispatch — the confirm must gate the deletion.
-    expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.deleteNamedFleet")).toBe(false);
-    expect(screen.getByText("Delete 'My fleet'?")).toBeTruthy();
-
-    dispatchSpy.mockRestore();
-  });
-
-  it("confirming the dialog dispatches fleet.deleteNamedFleet with the scope id", async () => {
-    const actionServiceModule = await import("@/services/ActionService");
-    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
-
-    useFleetArmingStore.getState().armIds(["a", "b"]);
-    render(<FleetArmingRibbon />);
-
-    await act(async () => {
-      fireEvent.click(screen.getByText("My fleet"));
-    });
-
-    const confirmBtn = screen.getByRole("button", { name: "Delete fleet" });
-    await act(async () => {
-      fireEvent.click(confirmBtn);
     });
 
     expect(dispatchSpy).toHaveBeenCalledWith(
@@ -1272,61 +1263,10 @@ describe("FleetArmingRibbon — saved fleet delete confirm (#8023)", () => {
       { id: "fs-1" },
       { source: "user" }
     );
-
-    dispatchSpy.mockRestore();
-  });
-
-  it("cancelling the dialog does not dispatch and closes the dialog", async () => {
-    const actionServiceModule = await import("@/services/ActionService");
-    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
-
-    useFleetArmingStore.getState().armIds(["a", "b"]);
-    render(<FleetArmingRibbon />);
-
-    await act(async () => {
-      fireEvent.click(screen.getByText("My fleet"));
-    });
-    expect(screen.getByText("Delete 'My fleet'?")).toBeTruthy();
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    });
-
-    expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.deleteNamedFleet")).toBe(false);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(screen.queryByText("Delete 'My fleet'?")).toBeNull();
 
     dispatchSpy.mockRestore();
-  });
-
-  it("keeps the delete confirm open when the armed set drains below 2", async () => {
-    useFleetArmingStore.getState().armIds(["a", "b"]);
-    render(<FleetArmingRibbon />);
-
-    await act(async () => {
-      fireEvent.click(screen.getByText("My fleet"));
-    });
-    expect(screen.getByText("Delete 'My fleet'?")).toBeTruthy();
-
-    // The ribbon goes; the saved fleet is still there, so the cleanup stands.
-    await act(async () => {
-      useFleetArmingStore.getState().armIds(["a"]);
-    });
-    expect(screen.queryByTestId("fleet-selection-menu-trigger")).toBeNull();
-    expect(screen.getByText("Delete 'My fleet'?")).toBeTruthy();
-  });
-
-  it("drops the pending delete when the saved fleet itself disappears", async () => {
-    useFleetArmingStore.getState().armIds(["a", "b"]);
-    render(<FleetArmingRibbon />);
-    await act(async () => {
-      fireEvent.click(screen.getByText("My fleet"));
-    });
-    await act(async () => {
-      useProjectSettingsStore.setState({
-        settings: { runCommands: [], fleetSavedScopes: [] } as ProjectSettings,
-      });
-    });
-    expect(screen.queryByText("Delete 'My fleet'?")).toBeNull();
   });
 });
 
@@ -1346,7 +1286,6 @@ describe("FleetArmingRibbon — fleet dialogs absorb bare Escape", () => {
   // Esc closes the dialog; a second quick Esc from the control that regained
   // focus must not read as the double-tap that interrupts every armed agent.
   for (const [label, open] of [
-    ["delete confirm", () => fireEvent.click(screen.getByText("My fleet"))],
     ["save dialog", () => fireEvent.click(screen.getByText("Save as fleet…"))],
   ] as const) {
     it(`a double bare Escape while the ${label} is open does not interrupt`, async () => {
@@ -1507,5 +1446,60 @@ describe("supervised run status line (#10930)", () => {
     });
     render(<FleetArmingRibbon />);
     expect(screen.queryByTestId("fleet-run-status")).toBeNull();
+  });
+});
+
+describe("FleetArmingRibbon — panel-map write fanout", () => {
+  beforeEach(() => {
+    resetStores();
+    useFleetPickerSessionStore.setState({ activeOwner: null });
+  });
+
+  function renderCounted(): { commits: () => number } {
+    let commits = 0;
+    render(
+      <React.Profiler id="ribbon" onRender={() => commits++}>
+        <FleetArmingRibbon />
+      </React.Profiler>
+    );
+    return { commits: () => commits };
+  }
+
+  function patchPanel(id: string, patch: Partial<PtyPanelData>): void {
+    act(() => {
+      const { panelsById } = usePanelStore.getState();
+      usePanelStore.setState({
+        panelsById: { ...panelsById, [id]: { ...panelsById[id], ...patch } as PtyPanelData },
+      });
+    });
+  }
+
+  it("skips a write that changes no preset count or armed-pane field", () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working"), makeAgent("t3", "waiting")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const probe = renderCounted();
+    const before = probe.commits();
+
+    patchPanel("t3", { title: "renamed" });
+    patchPanel("t3", { title: "renamed again" });
+
+    expect(probe.commits()).toBe(before);
+  });
+
+  it("re-renders with the new counts when an agent state flips", () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working"), makeAgent("t3", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const probe = renderCounted();
+    const before = probe.commits();
+    const waitingItem = () =>
+      screen
+        .getAllByRole("menuitem")
+        .find((el) => /All waiting — this worktree/.test(el.textContent ?? ""))!;
+    expect(waitingItem().textContent).toContain("0");
+
+    patchPanel("t3", { agentState: "waiting" });
+
+    expect(probe.commits()).toBeGreaterThan(before);
+    expect(waitingItem().textContent).toContain("1");
   });
 });

@@ -1,9 +1,9 @@
 import { Button } from "@/components/ui/button";
+import { formatLastChecked } from "@/utils/timeAgo";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { useCodexQuota } from "@/hooks/useCodexQuota";
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
-import { formatTimeAgo } from "@/utils/timeAgo";
 import {
   CODEX_QUOTA_STALE_AFTER_MS,
   type CodexQuotaUnavailableReason,
@@ -123,7 +123,7 @@ function CodexQuota() {
 
   const stale = now - result.fetchedAt > CODEX_QUOTA_STALE_AFTER_MS;
   const anyStale = stale || result.windows.some((window) => hasResetPassed(window, now));
-  const checked = `Last checked ${formatTimeAgo(result.fetchedAt, now)}`;
+  const checked = formatLastChecked(result.fetchedAt, now);
   return (
     <SettingsGroup>
       {result.windows.map((window, index) => (

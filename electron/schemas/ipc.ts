@@ -183,6 +183,7 @@ export const TerminalSnapshotSchema = z
     devPreviewConsoleOpen: z.boolean().optional(),
     agentSessionId: z.string().optional(),
     agentLaunchFlags: z.array(z.string()).optional(),
+    callerLaunchFlags: z.array(z.string()).optional(),
     agentModelId: z.string().optional(),
     spawnedBy: SpawnSourceSchema,
     agentPresetId: z.string().optional(),
@@ -745,6 +746,12 @@ export const DiffMediaReadFileVersionsPayloadSchema = z.object({
     .max(4096)
     // eslint-disable-next-line no-control-regex
     .regex(/^[^\x00]*$/, "Null bytes not allowed"),
+  known: z
+    .object({
+      head: z.string().max(256).optional(),
+      working: z.string().max(256).optional(),
+    })
+    .optional(),
 });
 
 export const VoiceInputCorrectPayloadSchema = z.object({

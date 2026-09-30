@@ -65,6 +65,8 @@ let mockToolbarState: ToolbarState = makeToolbarState();
 let mockAgentSettings: AgentSettings | null = null;
 
 function clearStoreMocks() {
+  setStateMock.mockClear();
+  mockNotify.mockClear();
   setLeftButtonsMock.mockClear();
   setRightButtonsMock.mockClear();
   moveButtonMock.mockClear();
@@ -83,9 +85,13 @@ function clearStoreMocks() {
 vi.mock("@/store", () => ({
   useToolbarPreferencesStore: Object.assign(
     (selector: (s: ToolbarState) => unknown) => selector(mockToolbarState),
-    { getState: () => mockToolbarState }
+    { getState: () => mockToolbarState, setState: (patch: unknown) => setStateMock(patch) }
   ),
 }));
+
+const setStateMock = vi.fn();
+const mockNotify = vi.fn();
+vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...args) }));
 
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: (
@@ -113,34 +119,6 @@ vi.mock("@/store/cliAvailabilityStore", () => ({
   useCliAvailabilityStore: (
     selector: (s: { availability: Record<string, string> | undefined }) => unknown
   ) => selector({ availability: mockAvailability.value }),
-}));
-
-// The real dialog frame pulls in the app's hook barrel, which this suite's module
-// mocks can't satisfy; a stand-in keeps the reset flow observable.
-vi.mock("@/components/ui/ConfirmDialog", () => ({
-  ConfirmDialog: ({
-    isOpen,
-    title,
-    confirmLabel,
-    onConfirm,
-    onClose,
-  }: {
-    isOpen: boolean;
-    title: string;
-    confirmLabel: string;
-    onConfirm: () => void;
-    onClose: () => void;
-  }) =>
-    isOpen ? (
-      <div role="alertdialog" aria-label={title}>
-        <button type="button" onClick={onClose}>
-          Cancel
-        </button>
-        <button type="button" onClick={onConfirm}>
-          {confirmLabel}
-        </button>
-      </div>
-    ) : null,
 }));
 
 vi.mock("@shared/config/agentIds", () => {
@@ -193,6 +171,7 @@ vi.mock("@dnd-kit/core", () => ({
   KeyboardSensor: vi.fn(),
   PointerSensor: vi.fn(),
   useDroppable: () => ({ setNodeRef: vi.fn(), isOver: false }),
+  useDndMonitor: () => {},
   useSensor: vi.fn(),
   useSensors: () => [],
 }));
@@ -1476,20 +1455,50 @@ describe("ToolbarSettingsTab — reset", () => {
     mockAgentSettings = null;
   });
 
-  it("asks before resetting, and resets only on confirm", () => {
-    const { getByRole, queryByRole } = render(<ToolbarSettingsTab />);
+  const openUndo = () => {
+    const { getByRole } = render(<ToolbarSettingsTab />);
     fireEvent.click(getByRole("button", { name: /reset toolbar/i }));
-    expect(resetMock).not.toHaveBeenCalled();
+    return mockNotify.mock.calls[0]![0] as {
+      action: { label: string; onClick: () => void };
+    };
+  };
+  const restored = () =>
+    setStateMock.mock.calls.at(-1)![0] as Pick<ToolbarState, "layout" | "launcher">;
 
-    const confirm = getByRole("alertdialog", { name: "Reset toolbar?" });
-    fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
-    expect(resetMock).not.toHaveBeenCalled();
-    expect(queryByRole("alertdialog")).toBeNull();
+  it("resets at once and offers an Undo that puts the old layout back", () => {
+    const { layout, launcher } = mockToolbarState;
+    const payload = openUndo();
 
-    fireEvent.click(getByRole("button", { name: /reset toolbar/i }));
-    fireEvent.click(
-      within(getByRole("alertdialog")).getByRole("button", { name: "Reset toolbar" })
-    );
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
     expect(resetMock).toHaveBeenCalledTimes(1);
+    expect(payload.action.label).toBe("Undo");
+    payload.action.onClick();
+    expect(restored()).toEqual({ layout, launcher });
+  });
+
+  it("keeps a change made since the reset and restores everything else", () => {
+    const { layout, launcher } = mockToolbarState;
+    const payload = openUndo();
+
+    // Since the reset, one launcher option changed; the button layout didn't.
+    mockToolbarState = {
+      ...mockToolbarState,
+      launcher: {
+        ...mockToolbarState.launcher,
+        alwaysShowDevServer: !launcher.alwaysShowDevServer,
+      },
+    };
+    payload.action.onClick();
+    expect(restored().layout).toEqual(layout);
+    expect(restored().launcher.alwaysShowDevServer).toBe(!launcher.alwaysShowDevServer);
+  });
+
+  it("leaves both sides alone once either side changed again", () => {
+    const payload = openUndo();
+    const changed = { ...mockToolbarState.layout, leftButtons: [] };
+    mockToolbarState = { ...mockToolbarState, layout: changed };
+    payload.action.onClick();
+    expect(restored().layout.leftButtons).toBe(changed.leftButtons);
+    expect(restored().layout.rightButtons).toBe(changed.rightButtons);
   });
 });

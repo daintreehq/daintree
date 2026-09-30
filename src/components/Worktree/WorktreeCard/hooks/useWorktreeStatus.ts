@@ -246,7 +246,7 @@ export function useWorktreeStatus({
       if (lifecycle.currentCommand) {
         return `${phase}: ${lifecycle.currentCommand}`;
       }
-      return `${phase}...`;
+      return `${phase}…`;
     }
     if (lifecycle.state === "failed") {
       const phase = LIFECYCLE_PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;

@@ -1,4 +1,4 @@
-import { AlertCircle, Package, RefreshCw } from "lucide-react";
+import { AlertTriangle, Package, RotateCw, XCircle } from "lucide-react";
 import { InlineError } from "@/components/ui/field";
 import { Callout } from "@/components/ui/Callout";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import {
 } from "@shared/types/plugin";
 import { LIST_LABEL_CLASS, SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge, CountBadge } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 const SECTION_HEADER_CLASS = cn(LIST_LABEL_CLASS, "px-3");
 
@@ -101,7 +102,11 @@ function ProjectPluginRow({
                     failed ? "text-status-danger" : "text-status-warning"
                   )}
                 >
-                  <AlertCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                  {failed ? (
+                    <XCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                  ) : (
+                    <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                  )}
                   <span className="truncate">{failed ? "Error" : "Id clash"}</span>
                 </span>
               ) : (
@@ -158,10 +163,7 @@ export function ProjectPluginSection({
           drops under Chromium 146 + VoiceOver (LESSON #9006). */}
       <h3 id="plugin-category-this-project" className={SECTION_HEADER_CLASS}>
         This project{" "}
-        <CountBadge
-          className="ml-1.5"
-          label={`${plugins.length} ${plugins.length === 1 ? "plugin" : "plugins"}`}
-        >
+        <CountBadge className="ml-1.5" label={`${pluralize(plugins.length, "plugin")}`}>
           {plugins.length}
         </CountBadge>
       </h3>
@@ -228,7 +230,7 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
             {plugin.state !== "active" && <Badge size="xs">{STATE_BADGE[plugin.state]}</Badge>}
             {plugin.loadError && (
               <Badge size="xs" tone="error">
-                <AlertCircle aria-hidden="true" />
+                <XCircle aria-hidden="true" />
                 Error
               </Badge>
             )}
@@ -312,7 +314,7 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
             is useful whatever the folder's state — including "unreadable",
             where fixing the manifest and reloading is the whole loop. */}
         <Button variant="outline" size="sm" onClick={() => void reload()} loading={reloading}>
-          <RefreshCw />
+          <RotateCw />
           Reload from folder
         </Button>
 

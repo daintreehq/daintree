@@ -103,6 +103,10 @@ describe("actions.search ranking over the real registry", () => {
       "launch codex",
       "run codex on a task",
       "run codex on task",
+      // #13045: model and effort are launch arguments, not preset-only.
+      "codex model",
+      "reasoning effort",
+      "launch codex with high effort",
     ])("puts agent.launch first for %j", async (query) => {
       expect(await firstCallable(query, tier)).toBe("agent.launch");
     });

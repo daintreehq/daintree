@@ -168,6 +168,15 @@ function execGit(args: string[], cwd: string, timeout: number): Promise<string> 
 }
 
 /**
+ * `GIT_DIR` / `GIT_COMMON_DIR` inherited by the app relocate the repository for
+ * every git it spawns, which reading the `.git` entry or refs directly cannot
+ * see. Filesystem fast paths stand down while either is set.
+ */
+export function hasGitLocationEnvOverride(): boolean {
+  return Boolean(process.env.GIT_DIR || process.env.GIT_COMMON_DIR);
+}
+
+/**
  * Resolve the git dir for `worktreePath` from the `.git` entry alone — a
  * directory (regular repo) or a `gitdir: <path>` pointer file (linked
  * worktree / submodule) — without a subprocess. Both shapes are sanity-checked
@@ -177,7 +186,8 @@ function execGit(args: string[], cwd: string, timeout: number): Promise<string> 
  * can't prove (no `.git` entry, subdirectory of a repo, bare repo) — the
  * caller MUST fall back to `git rev-parse`, never treat null as "not a repo".
  */
-async function resolveGitDirFromFs(worktreePath: string): Promise<string | null> {
+export async function resolveGitDirFromFs(worktreePath: string): Promise<string | null> {
+  if (hasGitLocationEnvOverride()) return null;
   const dotGit = pathJoin(worktreePath, ".git");
   try {
     const stat = await fsPromises.stat(dotGit);
@@ -190,6 +200,12 @@ async function resolveGitDirFromFs(worktreePath: string): Promise<string | null>
     if (!content.startsWith("gitdir:")) return null;
     const target = content.slice("gitdir:".length).trim();
     if (!target) return null;
+    // git resolves a relative pointer from the real location of the `.git`
+    // file. Under a symlinked path the literal join can land somewhere else
+    // entirely, so that shape is left to the subprocess.
+    if (!isAbsolute(target) && (await fsPromises.realpath(worktreePath)) !== worktreePath) {
+      return null;
+    }
     const resolved = isAbsolute(target) ? target : pathJoin(worktreePath, target);
     await fsPromises.access(pathJoin(resolved, "HEAD"));
     return resolved;

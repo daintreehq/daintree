@@ -327,6 +327,113 @@ describe("mutation broadcasts with nothing project-scoped", () => {
   });
 });
 
+describe("holdBroadcasts", () => {
+  const names = () =>
+    ipcUtilsMock.broadcastToRenderer.mock.calls.map((call) => (call[1] as { name: string }).name);
+
+  it("parks every scheduled channel until release, then sends each once with the live snapshot", async () => {
+    const b = makeBroadcaster();
+    const release = b.holdBroadcasts();
+    for (let i = 0; i < 3; i++) {
+      b.schedulePluginActionsBroadcast();
+      b.schedulePanelKindsBroadcast();
+      b.scheduleToolbarButtonsBroadcast(false);
+      b.scheduleKeybindingsBroadcast(false);
+      b.scheduleContextMenuItemsBroadcast(false);
+      b.scheduleAgentsBroadcast(false);
+      b.scheduleRecipesBroadcast(false);
+      b.scheduleToursBroadcast();
+    }
+    b.scheduleToolbarButtonsBroadcast(true);
+    b.scheduleRecipesBroadcast(true);
+    await flush();
+    expect(ipcUtilsMock.broadcastToRenderer).not.toHaveBeenCalled();
+
+    actions = [...actions, action(GLOBAL_PLUGIN, "acme.global.late")];
+    release();
+    await flush();
+
+    expect(names()).toEqual([
+      "plugin:actions-changed",
+      "plugin:panel-kinds-changed",
+      "plugin:toolbar-buttons-changed",
+      "plugin:keybindings-changed",
+      "plugin:context-menu-items-changed",
+      "plugin:agents-changed",
+      "plugin:recipes-changed",
+      "plugin:tours-changed",
+    ]);
+    const payloads = new Map(
+      ipcUtilsMock.broadcastToRenderer.mock.calls.map((call) => [
+        (call[1] as { name: string }).name,
+        (call[1] as { payload: Record<string, unknown> }).payload,
+      ])
+    );
+    expect(payloads.get("plugin:actions-changed")).toEqual({ actions });
+    // A `complete` requested during the hold is still owed at release, and a
+    // channel that only ever saw loads stays incomplete.
+    expect(payloads.get("plugin:toolbar-buttons-changed")?.complete).toBe(true);
+    expect(payloads.get("plugin:recipes-changed")?.complete).toBe(true);
+    expect(payloads.get("plugin:keybindings-changed")?.complete).toBe(false);
+    expect(payloads.get("plugin:context-menu-items-changed")?.complete).toBe(false);
+    expect(payloads.get("plugin:agents-changed")?.complete).toBe(false);
+  });
+
+  it("interruptHolds publishes parked snapshots now and stops holding later ones", async () => {
+    const b = makeBroadcaster();
+    const release = b.holdBroadcasts();
+    b.schedulePanelKindsBroadcast();
+    b.interruptHolds();
+    await flush();
+    expect(names()).toEqual(["plugin:panel-kinds-changed"]);
+
+    b.schedulePluginActionsBroadcast();
+    await flush();
+    expect(names()).toEqual(["plugin:panel-kinds-changed", "plugin:actions-changed"]);
+
+    release();
+    await flush();
+    expect(ipcUtilsMock.broadcastToRenderer).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops parked snapshots when the service is disposed before release", async () => {
+    let disposed = false;
+    const b = new PluginContributionBroadcaster({
+      isDisposed: () => disposed,
+      listPluginActions: () => actions,
+      initPromise: Promise.resolve(),
+      listPluginRuntimeStatuses: () => runtimeStatuses,
+      isReplacingPlugin: () => false,
+    });
+    const release = b.holdBroadcasts();
+    b.schedulePluginActionsBroadcast();
+    b.schedulePanelKindsBroadcast();
+    disposed = true;
+    release();
+    await flush();
+    expect(ipcUtilsMock.broadcastToRenderer).not.toHaveBeenCalled();
+  });
+
+  it("releases only when the outermost hold ends, and a second release is a no-op", async () => {
+    const b = makeBroadcaster();
+    const outer = b.holdBroadcasts();
+    const inner = b.holdBroadcasts();
+    b.schedulePluginActionsBroadcast();
+    inner();
+    inner();
+    await flush();
+    expect(ipcUtilsMock.broadcastToRenderer).not.toHaveBeenCalled();
+
+    outer();
+    await flush();
+    expect(names()).toEqual(["plugin:actions-changed"]);
+
+    b.schedulePluginActionsBroadcast();
+    await flush();
+    expect(names()).toEqual(["plugin:actions-changed", "plugin:actions-changed"]);
+  });
+});
+
 describe("project-scoped mutation broadcasts", () => {
   beforeEach(() => {
     setPluginContributionScope(PROJECT_PLUGIN_A, PROJECT_A);

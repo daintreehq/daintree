@@ -57,7 +57,7 @@ afterEach(() => {
 });
 
 const worktree = { path: "/repo" } as WorktreeState;
-const PLACEHOLDER = "Search issues by title or number...";
+const PLACEHOLDER = "Search issues by title or number…";
 
 function renderDialog(
   props: Partial<React.ComponentProps<typeof IssuePickerDialog>> = {}
@@ -224,6 +224,53 @@ describe("IssuePickerDialog keyboard contract", () => {
     expect(selected).toHaveLength(1);
     for (const option of screen.getAllByRole("option")) {
       expect(option.tabIndex).toBe(-1);
+    }
+  });
+
+  it("wraps the arrows at the ends and jumps with Home and End, leaving modified keys to the field", async () => {
+    listIssuesMock.mockResolvedValue({
+      items: [makeIssue(1, "One"), makeIssue(2, "Two"), makeIssue(3, "Three")],
+    });
+    renderDialog();
+    await waitFor(() => screen.getByText("Three", VISIBLE));
+
+    const combobox = screen.getByRole("combobox");
+    const active = () =>
+      document.getElementById(combobox.getAttribute("aria-activedescendant") ?? "")?.textContent;
+
+    expect(active()).toContain("One");
+    fireEvent.keyDown(combobox, { key: "ArrowUp" });
+    expect(active()).toContain("Three");
+    fireEvent.keyDown(combobox, { key: "ArrowDown" });
+    expect(active()).toContain("One");
+    fireEvent.keyDown(combobox, { key: "End" });
+    expect(active()).toContain("Three");
+    fireEvent.keyDown(combobox, { key: "Home" });
+    expect(active()).toContain("One");
+
+    // Shift+End selects the query text; the cursor stays put.
+    expect(fireEvent.keyDown(combobox, { key: "End", shiftKey: true })).toBe(true);
+    expect(active()).toContain("One");
+  });
+
+  it("leaves the navigation keys to the field while the loading skeleton shows", async () => {
+    vi.useFakeTimers();
+    try {
+      listIssuesMock.mockResolvedValue({ items: [makeIssue(1, "One"), makeIssue(2, "Two")] });
+      renderDialog();
+      // Loaded, but still inside the skeleton's minimum dwell: no list on screen.
+      await flush();
+      expect(listIssuesMock).toHaveBeenCalled();
+      expect(screen.queryByRole("listbox")).toBeNull();
+
+      expect(fireEvent.keyDown(input(), { key: "End" })).toBe(true);
+      expect(fireEvent.keyDown(input(), { key: "ArrowDown" })).toBe(true);
+
+      await flush(FIRST_PAINT_MS);
+      expect(screen.getByRole("listbox")).toBeTruthy();
+      expect(fireEvent.keyDown(input(), { key: "End" })).toBe(false);
+    } finally {
+      vi.useRealTimers();
     }
   });
 

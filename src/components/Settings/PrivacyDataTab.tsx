@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
+import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -18,9 +19,7 @@ import { ANALYTICS_EVENTS } from "@shared/config/telemetry";
 import { actionService } from "@/services/ActionService";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { logError } from "@/utils/logger";
-
-/** How long a reset of hidden commands can be undone — the app's standard window. */
-const HIDDEN_COMMANDS_UNDO_MS = 5_000;
+import { pluralize } from "@/lib/pluralize";
 
 type TelemetryLevel = "off" | "errors" | "full";
 type LogRetention = 7 | 30 | 90 | 0;
@@ -342,7 +341,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
       message: "All previously hidden commands will appear in Recently used again.",
       transient: true,
       priority: "high",
-      duration: HIDDEN_COMMANDS_UNDO_MS,
+      duration: UNDO_TOAST_DURATION_MS,
       context: { eventKind: "uiFeedback" },
       action: {
         label: "Undo",
@@ -555,7 +554,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   description={
                     hiddenActionCount === 0
                       ? "No commands are hidden from 'Recently used' in the action palette"
-                      : `${hiddenActionCount} ${hiddenActionCount === 1 ? "command is" : "commands are"} hidden from 'Recently used' in the action palette. Resetting restores all of them.`
+                      : `${pluralize(hiddenActionCount, "command is", "commands are")} hidden from 'Recently used' in the action palette. Resetting restores all of them.`
                   }
                   control={
                     <Button

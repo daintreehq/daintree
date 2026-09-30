@@ -43,6 +43,16 @@ import type { PtyPanelData } from "@shared/types/panel";
 import type { WorktreeSnapshot } from "@shared/types";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
+import type { ReactNode } from "react";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 function makeTerminal(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -122,6 +132,34 @@ describe("FleetPickerPalette", () => {
   afterEach(() => {
     resetStores();
     resetEscapeStack();
+  });
+
+  it("ignores panel-map writes while closed and shows the latest panels on reopen", async () => {
+    seedTerminals([makeTerminal("t1")]);
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeWorktreeSnap("wt-1", "main")], { epoch: "test", seq: 1 });
+    let commits = 0;
+    const tree = (isOpen: boolean) => (
+      <WorktreeStoreContext.Provider value={store}>
+        <React.Profiler id="palette" onRender={() => commits++}>
+          <FleetPickerPalette isOpen={isOpen} onClose={() => {}} />
+        </React.Profiler>
+      </WorktreeStoreContext.Provider>
+    );
+    const { rerender } = render(tree(false));
+    await act(async () => {});
+    const before = commits;
+
+    act(() => {
+      seedTerminals([makeTerminal("t1", { title: "renamed" }), makeTerminal("t2")]);
+    });
+    expect(commits).toBe(before);
+
+    rerender(tree(true));
+    await act(async () => {});
+    expect(
+      (screen.getByTestId("fleet-picker-cold-start-confirm") as HTMLButtonElement).textContent
+    ).toContain("Arm 2 selected");
   });
 
   it("renders the palette title and content when open", async () => {

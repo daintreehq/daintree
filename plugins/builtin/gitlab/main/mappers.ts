@@ -9,6 +9,7 @@ import type {
   NormalizedIssueState,
   NormalizedPRState,
   PR,
+  PRMergeState,
   PRTooltipData,
   Release,
 } from "../../../../shared/types/forge.js";
@@ -187,11 +188,29 @@ function mergeableFromMR(mr: GitLabMergeRequest): boolean | null {
   return null;
 }
 
+/**
+ * Conflict observation from GitLab's merge status — REST `detailed_merge_status`
+ * (lower-case) or GraphQL `detailedMergeStatus` (upper-case), or REST
+ * `has_conflicts`. Either positive report counts on its own: the detailed
+ * status stops at the first blocker it meets, so a conflicted draft reports
+ * `draft_status` while `has_conflicts` still says `true`.
+ */
+function mergeStateFromGitLab(
+  detailedMergeStatus: unknown,
+  hasConflicts?: unknown
+): PRMergeState | undefined {
+  if (typeof detailedMergeStatus === "string" && detailedMergeStatus.toLowerCase() === "conflict") {
+    return "conflicts";
+  }
+  return hasConflicts === true ? "conflicts" : undefined;
+}
+
 /** Map a REST merge-request payload onto the contract PR (numbering by `iid`). */
 export function mergeRequestToForgePR(mr: GitLabMergeRequest, host: string): PR {
   const rawState = typeof mr.state === "string" ? mr.state : "opened";
   const merged = rawState.toLowerCase() === "merged" || typeof mr.merged_at === "string";
   const ciStatus = pipelineStatusToCIState(mr.head_pipeline?.status);
+  const mergeState = mergeStateFromGitLab(mr.detailed_merge_status, mr.has_conflicts);
   const author = gitlabUserToForgeUser(mr.author, host);
   return {
     number: mr.iid ?? 0,
@@ -208,6 +227,7 @@ export function mergeRequestToForgePR(mr: GitLabMergeRequest, host: string): PR 
     mergeable: mergeableFromMR(mr),
     ...(typeof mr.user_notes_count === "number" ? { commentCount: mr.user_notes_count } : {}),
     ...(ciStatus && ciStatus !== "unknown" ? { ciStatus } : {}),
+    ...(mergeState ? { mergeState } : {}),
     createdAt: isoToMs(mr.created_at ?? mr.updated_at),
     updatedAt: isoToMs(mr.updated_at),
     closedAt: isoToMsOrNull(mr.closed_at),
@@ -377,6 +397,7 @@ export function graphqlMergeRequestToForgePR(
     typeof headPipeline?.status === "string" ? headPipeline.status.toLowerCase() : undefined
   );
   const title = typeof node.title === "string" ? node.title : "";
+  const mergeState = mergeStateFromGitLab(node.detailedMergeStatus);
   return {
     number: iid,
     title,
@@ -391,6 +412,7 @@ export function graphqlMergeRequestToForgePR(
     headRef: typeof node.sourceBranch === "string" ? node.sourceBranch : "",
     mergeable: null,
     ...(ciStatus && ciStatus !== "unknown" ? { ciStatus } : {}),
+    ...(mergeState ? { mergeState } : {}),
     createdAt: isoToMs(node.createdAt ?? node.updatedAt),
     updatedAt: isoToMs(node.updatedAt),
     closedAt: isoToMsOrNull(node.closedAt),

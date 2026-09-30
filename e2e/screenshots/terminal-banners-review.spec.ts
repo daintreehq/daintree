@@ -229,7 +229,7 @@ test("terminal banner family — every state, three pane widths, every theme", a
         await openSheet(page, `theme=${theme}&fixture=spawn-enoent`, width, 1);
         await page.setViewportSize({ width: width + 32, height: 420 });
         await page.getByRole("button", { name: "More recovery options" }).click();
-        await expect(page.getByRole("button", { name: "Remove terminal" })).toBeVisible();
+        await expect(page.getByRole("button", { name: "Trash terminal" })).toBeVisible();
         await page.waitForTimeout(250);
         return snap(page.locator("body"), `overflow-${width}-${theme}.png`);
       })

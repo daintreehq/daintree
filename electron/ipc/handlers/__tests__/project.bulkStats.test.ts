@@ -792,7 +792,7 @@ describe("registerProjectStatsHandlers — deferred initial compute", () => {
     const ptyClient = makePtyClient();
     const cleanup = registerProjectCrudHandlers(makeDeps(ptyClient));
 
-    expect(ptyClient.getAllTerminalsAsync).not.toHaveBeenCalled();
+    expect(ptyClient.getAllTerminalsWithCompletenessAsync).not.toHaveBeenCalled();
     expect(ptyClient.getProjectStats).not.toHaveBeenCalled();
 
     const mock = registerDeferredTask as unknown as ReturnType<typeof vi.fn>;
@@ -806,7 +806,7 @@ describe("registerProjectStatsHandlers — deferred initial compute", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(ptyClient.getAllTerminalsAsync).toHaveBeenCalledTimes(1);
+    expect(ptyClient.getAllTerminalsWithCompletenessAsync).toHaveBeenCalledTimes(1);
 
     cleanup();
   });
@@ -828,7 +828,7 @@ describe("registerProjectStatsHandlers — deferred initial compute", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(ptyClient.getAllTerminalsAsync).not.toHaveBeenCalled();
+    expect(ptyClient.getAllTerminalsWithCompletenessAsync).not.toHaveBeenCalled();
   });
 });
 

@@ -7,6 +7,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import type { Project } from "@shared/types";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 interface ProjectIdentityEditorProps {
   project: Project;
@@ -230,7 +231,7 @@ export function ProjectIdentityEditor({
         }}
       >
         <div className="flex flex-col">
-          <div className="flex flex-col gap-1.5 border-b border-border-default p-3">
+          <div className="flex flex-col gap-1.5 border-b border-divider p-3">
             <div className="flex items-baseline justify-between gap-3">
               <label
                 htmlFor="project-identity-name"
@@ -244,7 +245,7 @@ export function ProjectIdentityEditor({
                 Enter saves · Esc cancels
               </span>
             </div>
-            <input
+            <Input
               id="project-identity-name"
               type="text"
               // The popover exists to edit this field, so it takes focus on
@@ -272,10 +273,10 @@ export function ProjectIdentityEditor({
                   onOpenChange(false);
                 }
               }}
-              // Neutral rather than the accent ring: the field is autofocused on
-              // every opening, so an accent there is chrome that is always lit —
-              // the same call as the picker's search strip below it.
-              className="w-full rounded-[var(--radius-md)] border border-border-input bg-surface-input px-3 py-1.5 text-sm text-text-primary transition-colors duration-150 ease-out focus:outline-hidden focus:border-selection-outline"
+              // The field's ring in the neutral tone rather than accent: it is
+              // autofocused on every opening, so an accent there is chrome that
+              // is always lit — the same call as the picker's search strip below.
+              className="focus-visible:outline-selection-outline"
             />
             {isNameBlank && (
               <p

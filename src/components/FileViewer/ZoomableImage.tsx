@@ -3,6 +3,7 @@ import { buildDaintreeFileUrl } from "./filePreviewKinds";
 import { transparencyCheckerboardUnderScale } from "./transparencyCheckerboard";
 import { cn } from "@/lib/utils";
 import {
+  PANE_STATUS_FOOTER_CLASS,
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
   PANE_TOOLBAR_ICON_CLASS,
   PANE_TOOLBAR_TEXT_BUTTON_CLASS,
@@ -233,8 +234,11 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
           wheel or a drag. */}
       {/* Wraps rather than truncates: at a narrow width the facts drop to
           their own line instead of losing the scale off the end. */}
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 border-t border-border-default px-3 py-1 text-2xs text-text-secondary">
-        <span className="tabular-nums" data-testid="zoomable-image-status">
+      <div // No vertical padding: the zoom buttons are 26px on their own, so
+        // `py-1` would make this the one 34px strip among 24px siblings.
+        className={cn(PANE_STATUS_FOOTER_CLASS, "flex-wrap justify-between gap-x-2 gap-y-0.5 py-0")}
+      >
+        <span role="status" className="tabular-nums" data-testid="zoomable-image-status">
           {natural && (
             <span className="whitespace-nowrap">
               {natural.width} × {natural.height}

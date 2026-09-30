@@ -487,6 +487,110 @@ describe("persistence boundary hardening", () => {
     expect(diskSessions()).toEqual({});
   });
 
+  it("createSafeJSONStorage mergeOnWrite skips a repeated write only while the disk still holds its own bytes (#11351)", async () => {
+    const backing = new Map<string, string>();
+    let primaryWrites = 0;
+    installLocalStorage({
+      getItem: (key) => backing.get(key) ?? null,
+      setItem: (key, value) => {
+        if (!key.endsWith(".__bak")) primaryWrites += 1;
+        backing.set(key, value);
+      },
+      removeItem: (key) => {
+        backing.delete(key);
+      },
+    });
+
+    const { createSafeJSONStorage } = await import("../persistence/safeStorage");
+    const { mergeRecordByWriterDelta } = await import("../persistence/persistWriteMerge");
+
+    type Sessions = { sessions: Record<string, { v: string }> };
+    const mergeSessions: PersistWriteMerge<Sessions> = ({ baseline, onDisk, incoming }) => {
+      if (!onDisk) return incoming;
+      return {
+        version: incoming.version,
+        state: {
+          sessions: mergeRecordByWriterDelta(
+            baseline?.state.sessions ?? {},
+            incoming.state.sessions,
+            onDisk.state.sessions ?? {}
+          ),
+        },
+      };
+    };
+    const KEY = "merge-skip";
+    const val = (sessions: Sessions["sessions"]) => ({ state: { sessions }, version: 1 });
+    const diskSessions = () =>
+      (JSON.parse(backing.get(KEY) ?? "null") as { state: Sessions } | null)?.state.sessions;
+
+    const viewA = createSafeJSONStorage<Sessions>({ mergeOnWrite: mergeSessions });
+    viewA.getItem(KEY);
+    viewA.setItem(KEY, val({ a: { v: "a" } }));
+    // Repeats keep merging until one reproduces the disk bytes exactly (here
+    // the second, since the merger reorders `version` ahead of `state`); only
+    // repeats after that fixed point are skipped.
+    for (let i = 0; i < 5; i += 1) viewA.setItem(KEY, val({ a: { v: "a" } }));
+    expect(primaryWrites).toBe(3);
+
+    // A sibling rewrites the key: the next unchanged write must merge again.
+    backing.set(KEY, JSON.stringify(val({ a: { v: "sibling" }, b: { v: "b" } })));
+    viewA.setItem(KEY, val({ a: { v: "a" } }));
+    expect(primaryWrites).toBe(4);
+    expect(diskSessions()).toEqual({ a: { v: "sibling" }, b: { v: "b" } });
+
+    // The key is cleared out from under the writer: the unchanged write lands
+    // again, exactly as it did before the skip existed.
+    backing.delete(KEY);
+    viewA.setItem(KEY, val({ a: { v: "a" } }));
+    expect(primaryWrites).toBe(5);
+    expect(diskSessions()).toEqual({ a: { v: "a" } });
+
+    // Once settled again, a lost backup still defeats the skip and is repaired.
+    for (let i = 0; i < 5; i += 1) viewA.setItem(KEY, val({ a: { v: "a" } }));
+    const settledWrites = primaryWrites;
+    viewA.setItem(KEY, val({ a: { v: "a" } }));
+    expect(primaryWrites).toBe(settledWrites);
+    backing.delete(`${KEY}.__bak`);
+    viewA.setItem(KEY, val({ a: { v: "a" } }));
+    expect(primaryWrites).toBe(settledWrites + 1);
+    expect(backing.get(`${KEY}.__bak`)).toBe(backing.get(KEY));
+  });
+
+  it("createSafeJSONStorage mergeOnWrite keeps writing until a repeated snapshot reaches a fixed point (#11351)", async () => {
+    const backing = new Map<string, string>();
+    installLocalStorage({
+      getItem: (key) => backing.get(key) ?? null,
+      setItem: (key, value) => {
+        backing.set(key, value);
+      },
+      removeItem: (key) => {
+        backing.delete(key);
+      },
+    });
+
+    const { createSafeJSONStorage } = await import("../persistence/safeStorage");
+
+    // Mirrors toolbarPreferencesStore: a baseline from an older schema version
+    // defers wholly to disk, and only the next write applies the writer's value.
+    type Order = { order: string };
+    const mergeOrder: PersistWriteMerge<Order> = ({ baseline, onDisk, incoming }) => {
+      if (!onDisk) return incoming;
+      if (baseline && baseline.version !== incoming.version) {
+        return { version: incoming.version, state: onDisk.state };
+      }
+      return incoming;
+    };
+    const KEY = "merge-fixed-point";
+    backing.set(KEY, JSON.stringify({ state: { order: "old" }, version: 1 }));
+
+    const view = createSafeJSONStorage<Order>({ mergeOnWrite: mergeOrder });
+    view.getItem(KEY); // baseline at version 1
+    view.setItem(KEY, { state: { order: "mine" }, version: 2 });
+    expect(JSON.parse(backing.get(KEY)!).state.order).toBe("old");
+    view.setItem(KEY, { state: { order: "mine" }, version: 2 });
+    expect(JSON.parse(backing.get(KEY)!).state.order).toBe("mine");
+  });
+
   it("agentPreferencesStore boots cleanly when the legacy toolbar blob is corrupt JSON", async () => {
     // Realistic first-run upgrade scenario: primary key absent, legacy toolbar
     // key holds corrupt JSON. Zustand's persist skips merge() when the primary

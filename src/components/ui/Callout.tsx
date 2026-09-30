@@ -1,38 +1,53 @@
 import * as React from "react";
 import { cva } from "class-variance-authority";
-import { AlertTriangle, XCircle } from "lucide-react";
+import { OctagonAlert, type LucideIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 
 /**
- * A static error or warning box inside a dialog, settings page or card: the
- * in-flow sibling of `InlineStatusBanner`, for messages that sit among the
- * content rather than across the top of a pane.
+ * A static message box inside a dialog, settings page or card: the in-flow
+ * sibling of `InlineStatusBanner`, for messages that sit among the content
+ * rather than across the top of a pane.
  *
- * - `error` — something failed. `XCircle`, the glyph `InlineStatusBanner` and
- *   the notification inbox use for the same severity.
+ * - `error` — something failed. `XCircle`.
  * - `warning` — something needs attention before it goes wrong. `AlertTriangle`.
  * - `danger` — a caution about a destructive or irreversible consequence. It
- *   warns rather than reports a failure, so it keeps the triangle, in danger ink.
+ *   warns rather than reports a failure, so it is not the error's `XCircle`;
+ *   it is `OctagonAlert`, the one caution glyph that does not share the
+ *   warning's triangle, so the two stay apart under forced colours.
+ * - `success` — something finished and the user can carry on. `CheckCircle2`.
+ * - `info` — something worth knowing that asks nothing. `Info`.
+ * - `neutral` — a state to note, with no severity at all: the neutral ramp, no
+ *   status tint. Its glyph defaults to `Info`, and it is the one tone that may
+ *   take a domain glyph through `icon` (a key for a sign-in state).
  *
- * The glyph and the tint carry the severity; the words stay on the neutral ramp,
- * because status-coloured text has no contrast floor across the themes.
+ * error, warning, success and info are `SEVERITY_GLYPH`'s shapes, so a callout
+ * and the toast or banner for the same event wear the same mark. The glyph and
+ * the tint carry the severity; the words stay on the neutral ramp, because
+ * status-coloured text has no contrast floor across the themes.
  */
 
-export type CalloutSeverity = "error" | "warning" | "danger";
+export type CalloutSeverity = "error" | "warning" | "danger" | "success" | "info" | "neutral";
 
-export const CALLOUT_ICON: Record<CalloutSeverity, typeof XCircle> = {
-  error: XCircle,
-  warning: AlertTriangle,
-  danger: AlertTriangle,
+export const CALLOUT_ICON: Record<CalloutSeverity, LucideIcon> = {
+  error: SEVERITY_GLYPH.error,
+  warning: SEVERITY_GLYPH.warning,
+  danger: OctagonAlert,
+  success: SEVERITY_GLYPH.success,
+  info: SEVERITY_GLYPH.info,
+  neutral: SEVERITY_GLYPH.info,
 };
 
-const calloutVariants = cva("flex items-start rounded-[var(--radius-md)] border", {
+export const calloutVariants = cva("flex items-start rounded-[var(--radius-md)] border", {
   variants: {
     severity: {
       error: "border-status-error/20 bg-status-error/10",
       warning: "border-status-warning/20 bg-status-warning/10",
       danger: "border-status-danger/20 bg-status-danger/10",
+      success: "border-status-success/20 bg-status-success/10",
+      info: "border-status-info/20 bg-status-info/10",
+      neutral: "border-border-default bg-overlay-subtle",
     },
     size: {
       default: "gap-2 px-3 py-2 text-xs",
@@ -43,10 +58,13 @@ const calloutVariants = cva("flex items-start rounded-[var(--radius-md)] border"
   defaultVariants: { severity: "error", size: "default" },
 });
 
-const ICON_TONE: Record<CalloutSeverity, string> = {
+export const CALLOUT_ICON_TONE: Record<CalloutSeverity, string> = {
   error: "text-status-error",
   warning: "text-status-warning",
   danger: "text-status-danger",
+  success: "text-status-success",
+  info: "text-status-info",
+  neutral: "text-text-secondary",
 };
 
 // Centred on the first line: 16px on a `text-xs` body line or, nudged down, on a
@@ -71,6 +89,8 @@ export interface CalloutProps extends Omit<React.HTMLAttributes<HTMLDivElement>,
   title?: React.ReactNode;
   /** One trailing control beside the message — a Retry. Anything more goes in the body. */
   action?: React.ReactNode;
+  /** A domain glyph in place of `Info`, for `neutral` only: every other tone's glyph is its severity. */
+  icon?: LucideIcon;
 }
 
 export function Callout({
@@ -78,11 +98,12 @@ export function Callout({
   size = "default",
   title,
   action,
+  icon,
   className,
   children,
   ...props
 }: CalloutProps) {
-  const Icon = CALLOUT_ICON[severity];
+  const Icon = (severity === "neutral" && icon) || CALLOUT_ICON[severity];
   return (
     <div
       {...props}
@@ -94,9 +115,10 @@ export function Callout({
           ICON_SIZE[size],
           title && size === "default" && "mt-0.5",
           "shrink-0",
-          ICON_TONE[severity]
+          CALLOUT_ICON_TONE[severity]
         )}
         aria-hidden="true"
+        data-severity-glyph=""
       />
       <div
         className={cn(

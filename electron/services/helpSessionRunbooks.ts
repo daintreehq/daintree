@@ -81,7 +81,7 @@ export function buildConfirmationsAddendum(): string {
   return [
     "## Daintree Confirmations",
     "",
-    "The user has told Daintree not to ask before your actions. Confirm-gated Daintree actions, deleting a worktree included, run as soon as you call them: no dialog, no typed-name check, so don't tell the user to watch for one. This overrides anything above about those actions waiting for the user. Refusals still apply. The user can turn asking back on at any time, so if a call does wait for a dialog, tell them it is waiting for them.",
+    "The user has told Daintree not to ask before your actions. Confirm-gated Daintree actions run as soon as you call them: deleting a worktree, closing a panel you didn't open or whose agent is mid-task, and closing panels in bulk included. No dialog, no typed-name check, so don't tell the user to watch for one. This overrides anything above about those actions waiting for the user. It doesn't change what you should do: close and remove only what the user asked for. Refusals still apply, and so does asking for a tool outside your tool set. The user can turn asking back on at any time, so if a call does wait for a dialog, tell them it is waiting for them.",
     "",
   ].join("\n");
 }

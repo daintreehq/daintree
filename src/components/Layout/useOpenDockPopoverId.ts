@@ -1,7 +1,7 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store/panelStore";
-import { setDockPopoverOpen } from "@/lib/dockPopoverLayer";
+import { useDockPopoverLayer } from "@/lib/dockPopoverLayer";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useHelpPanelStore, selectSlotTerminalIds } from "@/store/helpPanelStore";
 import { selectOpenDockPopoverId } from "./dockPanelVisibility";
@@ -39,15 +39,12 @@ export function useOpenDockPopoverId(): string | null {
 }
 
 /**
- * Publishes the signal every `AppDialog` layers itself against. Call once, high
+ * Publishes the docked panel's share of the signal every `AppDialog` layers
+ * itself against (status-pill popovers publish their own). Call once, high
  * enough to outlive any dialog — the dock chip that owns the popover unmounts
  * on a worktree switch, and a dialog left open must not be stranded above a
  * popover that has gone.
  */
 export function useDockPopoverLayerSync(): void {
-  const openDockPopoverId = useOpenDockPopoverId();
-  useEffect(() => {
-    setDockPopoverOpen(openDockPopoverId !== null);
-  }, [openDockPopoverId]);
-  useEffect(() => () => setDockPopoverOpen(false), []);
+  useDockPopoverLayer(useOpenDockPopoverId() !== null);
 }

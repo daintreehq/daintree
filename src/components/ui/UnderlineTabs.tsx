@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { pluralize } from "@/lib/pluralize";
 
 export interface UnderlineTabItem<T extends string = string> {
   id: T;
@@ -139,9 +140,7 @@ export function TabErrorCount({ count }: { count: number }) {
   return (
     <Badge size="xs" tone="error" shape="pill" className="leading-none tabular-nums">
       <span aria-hidden="true">{count > ERROR_COUNT_CAP ? `${ERROR_COUNT_CAP}+` : count}</span>
-      <span className="sr-only">
-        {count} {count === 1 ? "error" : "errors"}
-      </span>
+      <span className="sr-only">{pluralize(count, "error")}</span>
     </Badge>
   );
 }

@@ -25,7 +25,7 @@ vi.mock("@/hooks/useTerminalSelectors", () => ({
 }));
 
 vi.mock("@/hooks/useWorktrees", () => ({
-  useWorktrees: () => ({ worktreeMap: new Map() }),
+  useWorktreeNames: () => new Map(),
 }));
 
 vi.mock("@/store/panelStore", async () => {

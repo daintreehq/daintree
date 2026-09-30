@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { formatBytes } from "@/lib/formatBytes";
 import { InlineError } from "@/components/ui/field";
-import { Image, Upload, Check, FolderInput, Copy, Palette } from "lucide-react";
+import { Image, Upload, FolderInput, Palette } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { Input } from "@/components/ui/input";
 import { RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -147,8 +149,6 @@ export function GeneralTab({
   const [inRepoExpanded, setInRepoExpanded] = useState(false);
   const [inRepoEnabling, setInRepoEnabling] = useState(false);
   const [inRepoError, setInRepoError] = useState<string | null>(null);
-  const [gitignoreCopied, setGitignoreCopied] = useState(false);
-  const gitignoreCopyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const loadTimeoutDraft = useNumberDraft(
     devServerLoadTimeout === undefined ? "" : String(devServerLoadTimeout),
@@ -227,11 +227,6 @@ export function GeneralTab({
       setInRepoExpanded(false);
       setInRepoEnabling(false);
       setInRepoError(null);
-      setGitignoreCopied(false);
-      if (gitignoreCopyTimeoutRef.current) {
-        clearTimeout(gitignoreCopyTimeoutRef.current);
-        gitignoreCopyTimeoutRef.current = null;
-      }
     }
   }, [isOpen]);
 
@@ -286,20 +281,6 @@ export function GeneralTab({
   const handleRemoveIcon = () => {
     onProjectIconSvgChange(undefined);
     setIconError(null);
-  };
-
-  const handleCopyGitignore = async () => {
-    try {
-      await navigator.clipboard.writeText(GITIGNORE_SNIPPET);
-      setGitignoreCopied(true);
-      if (gitignoreCopyTimeoutRef.current) clearTimeout(gitignoreCopyTimeoutRef.current);
-      gitignoreCopyTimeoutRef.current = setTimeout(() => {
-        setGitignoreCopied(false);
-        gitignoreCopyTimeoutRef.current = null;
-      }, 2000);
-    } catch {
-      // clipboard access denied — fail silently
-    }
   };
 
   const handleEnableInRepoSettings = async () => {
@@ -446,7 +427,7 @@ export function GeneralTab({
                           <button
                             type="button"
                             aria-label="Change project emoji"
-                            className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-lg)] shadow-inner shrink-0 border border-border-strong cursor-pointer group"
+                            className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-lg)] shadow-[var(--shadow-inset)] shrink-0 border border-border-strong cursor-pointer group"
                             style={{
                               background: getProjectGradient(color),
                             }}
@@ -504,7 +485,7 @@ export function GeneralTab({
                             className={cn(
                               "h-7 w-7 rounded-full transition-[border-color,scale,box-shadow] border-2 shrink-0",
                               color === hex
-                                ? "border-text-primary scale-110 shadow-sm"
+                                ? "border-text-primary scale-110 shadow-[var(--theme-shadow-ambient)]"
                                 : "border-transparent hover:border-border-default hover:scale-105"
                             )}
                             style={{ backgroundColor: hex }}
@@ -589,7 +570,7 @@ export function GeneralTab({
                         {iconPreview}
                       </div>
                       <p className="flex-1 min-w-0 text-xs text-text-secondary">
-                        Custom icon · {Math.round(new Blob([projectIconSvg]).size / 1024)}KB
+                        Custom icon · {formatBytes(new Blob([projectIconSvg]).size)}
                       </p>
                       <Button
                         variant="outline"
@@ -813,15 +794,11 @@ export function GeneralTab({
                   <p className="text-xs font-medium text-text-primary">
                     Recommended <code className="font-mono">.gitignore</code> entries
                   </p>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => void handleCopyGitignore()}
+                  <CopyButton
+                    label="Copy"
                     aria-label="Copy .gitignore snippet"
-                  >
-                    {gitignoreCopied ? <Check /> : <Copy />}
-                    {gitignoreCopied ? "Copied" : "Copy"}
-                  </Button>
+                    text={GITIGNORE_SNIPPET}
+                  />
                 </div>
                 <pre className="rounded-[var(--radius-md)] border border-border-default bg-surface-sidebar p-3 text-xs font-mono text-text-secondary overflow-x-auto whitespace-pre select-text">
                   {GITIGNORE_SNIPPET}

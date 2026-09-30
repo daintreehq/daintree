@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { basename, join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
+import { PANE_STATUS_FOOTER_CLASS } from "@/components/ui/paneToolbarStyles";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -21,6 +22,7 @@ import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { COPIED_LABEL } from "@/components/ui/CopyButton";
 import { useFileRowMenuItems } from "@/hooks/useFileRowMenuItems";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
@@ -35,6 +37,8 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useExternalChangeTick } from "@/hooks/useExternalChangeTick";
 import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
+import { useSplitterKeys } from "@/hooks/useSplitterKeys";
+import { ResizeHandle } from "@/components/ui/ResizeHandle";
 import { FileTreeView } from "./FileTreeView";
 import { FileBrowserViewer } from "./FileBrowserViewer";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
@@ -720,6 +724,12 @@ export function FileBrowserPane({
   // what re-runs the viewer's classification effect, so a media file stuck in
   // `status: "error"` remounts its preview on Refresh instead of staying dead.
   const viewerRevision = `${changeTick ?? 0}:${surfaceRefreshNonce}`;
+  // What moved behind that revision, so the viewer can tell a write to its own
+  // file's directory from one anywhere else in the worktree.
+  const viewerChangeSignal = useMemo(
+    () => ({ tick: changeTick, gitTick: gitChangeTick, changedDirs }),
+    [changeTick, gitChangeTick, changedDirs]
+  );
 
   // Takes the state it is moving TO rather than flipping what it finds: the
   // view-options menu renders a checkbox whose `onCheckedChange` already knows
@@ -828,44 +838,28 @@ export function FileBrowserPane({
     [id, sidebarWidth, setFileBrowserView]
   );
 
-  const handleResizeDoubleClick = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      setFileBrowserView(id, { browserSidebarWidth: FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH });
+  const handleResizeReset = useCallback(() => {
+    setFileBrowserView(id, { browserSidebarWidth: FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH });
+  }, [id, setFileBrowserView]);
+
+  const setSidebarWidth = useCallback(
+    (next: number) => {
+      setFileBrowserView(id, { browserSidebarWidth: clampFileBrowserSidebarWidth(next) });
     },
     [id, setFileBrowserView]
   );
 
-  // Left-anchored splitter: ArrowRight widens, ArrowLeft narrows; Home/End jump
-  // to the bounds per the WAI-ARIA window-splitter pattern, Shift for a coarse
-  // step (matching PortalDock's keyboard convention).
-  const handleResizeKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      const step = e.shiftKey
-        ? FILE_BROWSER_SIDEBAR_RESIZE_STEP_COARSE
-        : FILE_BROWSER_SIDEBAR_RESIZE_STEP;
-      let next: number;
-      switch (e.key) {
-        case "ArrowRight":
-          next = sidebarWidth + step;
-          break;
-        case "ArrowLeft":
-          next = sidebarWidth - step;
-          break;
-        case "Home":
-          next = FILE_BROWSER_SIDEBAR_MIN_WIDTH;
-          break;
-        case "End":
-          next = FILE_BROWSER_SIDEBAR_MAX_WIDTH;
-          break;
-        default:
-          return;
-      }
-      e.preventDefault();
-      setFileBrowserView(id, { browserSidebarWidth: clampFileBrowserSidebarWidth(next) });
-    },
-    [id, sidebarWidth, setFileBrowserView]
-  );
+  // Left-anchored splitter, so ArrowRight widens the tree.
+  const handleResizeKeyDown = useSplitterKeys({
+    growKey: "ArrowRight",
+    value: sidebarWidth,
+    min: FILE_BROWSER_SIDEBAR_MIN_WIDTH,
+    max: FILE_BROWSER_SIDEBAR_MAX_WIDTH,
+    step: FILE_BROWSER_SIDEBAR_RESIZE_STEP,
+    largeStep: FILE_BROWSER_SIDEBAR_RESIZE_STEP_COARSE,
+    onChange: setSidebarWidth,
+    onReset: handleResizeReset,
+  });
 
   // The document listeners outlive the grip on two lifecycles the mouseup can't
   // cover: the pane unmounting mid-drag (project switch), and the grip
@@ -956,6 +950,10 @@ export function FileBrowserPane({
 
   const handleCopyRootPath = useCallback(() => {
     if (rootAbsolutePath === "") return;
+    // Only the worktree the tree browses addresses the failure — a
+    // workspace-rooted panel's placement worktree is incidental.
+    const worktreeAddress =
+      isWorktreeSource && sourceWorktreeId ? { worktreeId: sourceWorktreeId } : {};
     // Retry re-enters the whole gesture, so a write that only succeeds on the
     // second attempt still flashes and announces.
     const attempt = () => {
@@ -967,17 +965,14 @@ export function FileBrowserPane({
           message: "The clipboard rejected the write.",
           // uiFeedback is passive, and the inbox keeps only actionId actions —
           // resolving to "low" would strip the Retry this toast exists for.
-          // No panelId/worktreeId: those mark the origin surface as already
-          // showing the failure, which suppresses the toast outright — and this
-          // label renders nothing when a write fails.
           priority: "high",
-          context: { eventKind: "uiFeedback" },
+          context: { eventKind: "uiFeedback", panelId: id, ...worktreeAddress },
           action: { label: "Retry", onClick: attempt },
         });
       });
     };
     attempt();
-  }, [rootAbsolutePath, copyRootPath]);
+  }, [rootAbsolutePath, copyRootPath, id, isWorktreeSource, sourceWorktreeId]);
 
   // The one file-row menu, shared with the worktree card's changed files, the
   // Review Hub and the diff sidebar (#11757). It owns everything that acts on
@@ -1244,7 +1239,7 @@ export function FileBrowserPane({
                       onClick={handleCopyRootPath}
                       aria-label={`Copy folder path: ${rootAbsolutePath}`}
                       className={cn(
-                        "min-w-0 flex-1 cursor-pointer truncate text-left text-2xs transition-colors duration-150 ease-out",
+                        "min-w-0 flex-1 cursor-pointer truncate text-left font-mono text-2xs transition-colors duration-150 ease-out",
                         showRootPathCopied
                           ? "text-text-primary"
                           : "text-text-secondary hover:text-text-primary"
@@ -1266,18 +1261,22 @@ export function FileBrowserPane({
                     {rootHoverPath}
                     {showRootPathCopied && (
                       <span aria-hidden="true" className="block">
-                        Copied!
+                        {COPIED_LABEL}
                       </span>
                     )}
                   </TooltipContent>
                 </Tooltip>
               ) : (
-                <span
-                  className="min-w-0 flex-1 truncate text-2xs text-text-secondary"
-                  title={rootHoverPath}
-                >
-                  {rootPath || (basePath ? basename(basePath) : "")}
-                </span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary">
+                      {rootPath || (basePath ? basename(basePath) : "")}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="break-words">
+                    {rootHoverPath}
+                  </TooltipContent>
+                </Tooltip>
               )}
               {rootPath !== "" && (
                 <FileViewerToolbar.IconButton label="Up one level" onClick={handleUpOneLevel}>
@@ -1334,40 +1333,23 @@ export function FileBrowserPane({
                 inside the collapsible column, so it unmounts with the tree —
                 no grip while collapsed, per #11331 — and is gated on the viewer
                 too, since a sole column has nothing to resize against (#11496).
-                Styling mirrors the worktree Sidebar / PortalDock handle: a thin
-                pill that thickens on hover, an accent focus anchor for keyboard
-                resize. */}
+                The shared ResizeHandle, like every other resizable edge. */}
             {!viewerCollapsed && (
-              <div
-                role="separator"
-                aria-label="Resize file tree"
-                aria-orientation="vertical"
+              <ResizeHandle
+                growKey="ArrowRight"
+                edge="right"
+                label="Resize file tree"
+                value={sidebarWidth}
+                min={FILE_BROWSER_SIDEBAR_MIN_WIDTH}
+                max={FILE_BROWSER_SIDEBAR_MAX_WIDTH}
+                isResizing={isResizing}
                 aria-controls={treeSidebarId}
-                aria-valuenow={Math.round(sidebarWidth)}
-                aria-valuemin={FILE_BROWSER_SIDEBAR_MIN_WIDTH}
-                aria-valuemax={FILE_BROWSER_SIDEBAR_MAX_WIDTH}
-                tabIndex={0}
                 data-testid="file-browser-sidebar-resize"
-                className={cn(
-                  "group absolute -right-1.5 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-center",
-                  "transition-colors outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-                  // Hover styling is off while resizing, or it outranks the drag state.
-                  isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft"
-                )}
+                className="z-10"
                 onMouseDown={handleResizeStart}
-                onDoubleClick={handleResizeDoubleClick}
                 onKeyDown={handleResizeKeyDown}
-              >
-                <div
-                  className={cn(
-                    "h-8 rounded-full transition-[width] delay-100 duration-150",
-                    // The focus outline is the accent; the grip stays neutral.
-                    isResizing
-                      ? "w-0.5 bg-text-primary/50"
-                      : "w-px bg-text-primary/20 group-hover:w-0.5 group-hover:bg-text-primary/35 group-focus-visible:w-0.5 group-focus-visible:bg-text-primary/50"
-                  )}
-                />
-              </div>
+                onReset={handleResizeReset}
+              />
             )}
           </div>
         )}
@@ -1396,6 +1378,7 @@ export function FileBrowserPane({
               fileName={selectedFileName}
               relativePath={isSelectedReadableFile ? (selectedPath ?? null) : null}
               revision={viewerRevision}
+              changeSignal={viewerChangeSignal}
               // Handed over separately from `revision` rather than pulled back
               // out of it: the PDF frame may only re-navigate on the explicit
               // half of that pair, and a merged string can't say which half
@@ -1451,7 +1434,7 @@ export function FileBrowserPane({
           // through this element; `fixed` keeps it out of the flex layout.
           <div
             data-testid="file-browser-resize-shield"
-            className="fixed inset-0 z-50 cursor-col-resize"
+            className="fixed inset-0 z-[var(--z-drag-shield)] cursor-col-resize"
           />
         )}
       </div>
@@ -1575,7 +1558,7 @@ export function FileBrowserPane({
             above the rows its arrival would shift them under a click in
             progress. */}
         {rootError !== null && (
-          <div className="shrink-0 border-t border-border-default p-2">
+          <div className="shrink-0 border-t border-divider p-2">
             <InlineStatusBanner
               severity="error"
               icon={FolderTree}
@@ -1606,7 +1589,12 @@ export function FileBrowserPane({
             <button
               type="button"
               onClick={revealSelection}
-              className="shrink-0 truncate border-t border-border-default px-3 py-1 text-left text-2xs text-text-secondary transition-colors duration-150 ease-out hover:bg-tint/5 hover:text-text-primary"
+              className={cn(
+                PANE_STATUS_FOOTER_CLASS,
+                // `block`, not the strip's flex: `truncate` only ellipsizes a
+                // block container's own text.
+                "block truncate text-left transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary"
+              )}
             >
               Reveal {selectedFileName}
             </button>

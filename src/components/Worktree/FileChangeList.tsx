@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
 import type { FileChangeDetail } from "../../types";
 import { cn } from "../../lib/utils";
 import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
@@ -31,6 +32,8 @@ import { usePanelDialogStore } from "@/store/panelDialogStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeIdForPath } from "@/panels/diff/useWorktreeIdForPath";
 import { FileDecorationBadge } from "@/components/Plugin/FileDecorationBadge";
+import { useRovingRows, type UseRovingRowsResult } from "@/hooks/useRovingRows";
+import { LIST_ROW_HOVER_CLASS, ROW_MENU_TARGET_CLASS } from "@/components/ui/paletteRowStyles";
 
 interface FileChangeListProps {
   changes: FileChangeDetail[];
@@ -74,6 +77,10 @@ interface FileChangeRowProps {
   openFileAt: (index: number, triggerEl: HTMLElement | null) => void;
   renderItems: ReturnType<typeof useFileRowMenuItems>["renderItems"];
   rememberMenuTrigger: (rowEl: HTMLElement) => void;
+  rowKey: string;
+  isTabStop: boolean;
+  onRowFocus: UseRovingRowsResult["onRowFocus"];
+  rowRef: UseRovingRowsResult["rowRef"];
 }
 
 // Extracted as a genuine component (rather than a plain helper invoked via
@@ -91,6 +98,10 @@ function FileChangeRow({
   openFileAt,
   renderItems,
   rememberMenuTrigger,
+  rowKey,
+  isTabStop,
+  onRowFocus,
+  rowRef,
 }: FileChangeRowProps) {
   const presentation = getGitStatusPresentation(change.status);
   const { base } = splitPath(change.relativePath);
@@ -139,17 +150,20 @@ function FileChangeRow({
               // row's own handler below can open this menu instead of the
               // focused panel's (`useGlobalKeybindings`).
               data-row-menu=""
+              data-roving-row=""
+              ref={rowRef(rowKey)}
               role="button"
-              tabIndex={0}
+              // One tab stop for the list; the arrow keys move it.
+              tabIndex={isTabStop ? 0 : -1}
+              onFocus={() => onRowFocus(rowKey)}
               aria-label={`Open ${change.relativePath}`}
               className={cn(
-                "group/filerow flex items-center text-xs font-mono hover:bg-tint/5 rounded-[var(--radius-md)] px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors",
+                "group/filerow flex items-center text-xs font-mono rounded-[var(--radius-md)] px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors duration-150 ease-out",
+                LIST_ROW_HOVER_CLASS,
                 "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-                // The row whose menu is open lifts to a neutral raised tier
-                // so it reads as "the menu targets this row" — these rows
-                // are ~20px and densely stacked, and the menu otherwise
-                // names no file at all.
-                "data-[state=open]:bg-overlay-raised",
+                // These rows are ~20px and densely stacked, and the menu names
+                // no file at all — the ring is what says which one it targets.
+                ROW_MENU_TARGET_CLASS,
                 isNew && "file-change-row-new"
               )}
               onClick={(e) => openFileAt(index, e.currentTarget)}
@@ -183,12 +197,7 @@ function FileChangeRow({
               </span>
 
               <div className="ml-2 flex items-center gap-2 shrink-0 text-2xs">
-                {(change.insertions ?? 0) > 0 && (
-                  <span className="text-status-success">+{change.insertions}</span>
-                )}
-                {(change.deletions ?? 0) > 0 && (
-                  <span className="text-status-error">-{change.deletions}</span>
-                )}
+                <DiffStat insertions={change.insertions} deletions={change.deletions} />
                 <FileDecorationBadge decoration={decoration} />
               </div>
             </div>
@@ -399,6 +408,12 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
       [openFileAt]
     );
 
+    const rovingKeys = useMemo(
+      () => groupedChanges.flatMap((group) => group.files.map(getWorkingTreeChangeKey)),
+      [groupedChanges]
+    );
+    const roving = useRovingRows({ keys: rovingKeys });
+
     if (changes.length === 0) {
       return null;
     }
@@ -419,6 +434,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
           isStale && "surface-stale"
         )}
         aria-busy={isStale || undefined}
+        onKeyDown={roving.onKeyDown}
       >
         {groupedChanges.map((group) => (
           // Prefixed, because the root's identity is the empty string and a
@@ -467,6 +483,10 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
                     openFileAt={openFileAt}
                     renderItems={renderItems}
                     rememberMenuTrigger={rememberMenuTrigger}
+                    rowKey={key}
+                    isTabStop={roving.tabStopKey === key}
+                    onRowFocus={roving.onRowFocus}
+                    rowRef={roving.rowRef}
                   />
                 );
               })}
@@ -475,11 +495,11 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
         ))}
         {remainingCount > 0 && (
           <div className="text-2xs text-text-secondary pl-4 pt-1">
-            ...and {remainingCount} more
+            …and {remainingCount} more
             {remainingFiles.length > 0 && (
               <span className="ml-1 opacity-75">
                 ({remainingFiles.map((f) => basename(f.relativePath)).join(", ")}
-                {sortedChanges.length > maxVisible + 2 && ", ..."})
+                {sortedChanges.length > maxVisible + 2 && ", …"})
               </span>
             )}
           </div>

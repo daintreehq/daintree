@@ -1,10 +1,20 @@
 import { useCallback, useId, useMemo, useRef } from "react";
 import { LayoutGroup } from "framer-motion";
-import { Plus } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { SpinnerCircle, HollowCircle, InteractingCircle } from "@/components/icons";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { cn } from "@/lib/utils";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+  stopContextMenuPropagation,
+} from "@/components/ui/context-menu";
 import {
   DocumentTabClose,
   DocumentTabIndicator,
@@ -131,6 +141,11 @@ interface SessionTabChipProps {
   onSelect: (slot: number) => void;
   onClose: (slot: number) => void;
   onFocusTab: (slot: number) => void;
+  /** Close from the lane's own menu, with focus handed on once the lane is gone. */
+  onMenuClose: (slot: number) => void;
+  isSoleLane: boolean;
+  canOpenSession: boolean;
+  onOpenSession?: () => void;
 }
 
 /**
@@ -147,7 +162,12 @@ function SessionTabChip({
   onSelect,
   onClose,
   onFocusTab,
+  onMenuClose,
+  isSoleLane,
+  canOpenSession,
+  onOpenSession,
 }: SessionTabChipProps) {
+  const closingFromMenuRef = useRef(false);
   const stateId = `${tabId}-state`;
   const title = tab.fullTitle ?? tab.label;
   const { ref: labelRef, isTruncated: isLabelTruncated } = useTruncationDetection();
@@ -222,13 +242,48 @@ function SessionTabChip({
   // swapping it in when a title arrives would remount the tab and drop keyboard focus.
   const hasTitleTip =
     tab.fullTitle !== undefined && (tab.fullTitle !== tab.label || isLabelTruncated);
+  // Each lane owns its menu, like every other tab in the app: a right-click on a
+  // background lane closes that lane, never the one in front.
   return (
-    <Tooltip autoDismiss={false} open={hasTitleTip ? undefined : false}>
-      <TooltipTrigger asChild>{chip}</TooltipTrigger>
-      {tab.fullTitle !== undefined && (
-        <TooltipContent side="bottom">{tab.fullTitle}</TooltipContent>
-      )}
-    </Tooltip>
+    <ContextMenu>
+      <Tooltip autoDismiss={false} open={hasTitleTip ? undefined : false}>
+        <ContextMenuTrigger asChild onContextMenu={stopContextMenuPropagation}>
+          <TooltipTrigger asChild>{chip}</TooltipTrigger>
+        </ContextMenuTrigger>
+        {tab.fullTitle !== undefined && (
+          <TooltipContent side="bottom">{tab.fullTitle}</TooltipContent>
+        )}
+      </Tooltip>
+      <ContextMenuContent
+        onCloseAutoFocus={(e) => {
+          // Back onto a lane that is closing would read as a cancelled close and
+          // stand the handoff down; the strip moves focus once the lane is gone.
+          // The sole lane survives its close (it resets in place), so it takes
+          // focus back as usual.
+          if (closingFromMenuRef.current && !isSoleLane) e.preventDefault();
+          closingFromMenuRef.current = false;
+        }}
+      >
+        {onOpenSession && (
+          <>
+            <ContextMenuItem disabled={!canOpenSession} onSelect={onOpenSession}>
+              <Plus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              New session
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
+        <ContextMenuItem
+          onSelect={() => {
+            closingFromMenuRef.current = true;
+            onMenuClose(tab.slot);
+          }}
+        >
+          <X data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          Close session
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -327,6 +382,14 @@ export function HelpSessionTabs({
     [disarmKeyboardClose, onClose]
   );
 
+  const handleMenuClose = useCallback(
+    (slot: number) => {
+      armKeyboardClose(slot);
+      onClose(slot);
+    },
+    [armKeyboardClose, onClose]
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       // The focused lane, whichever element the key reached the list through.
@@ -404,6 +467,10 @@ export function HelpSessionTabs({
               onSelect={onSelect}
               onClose={handlePointerClose}
               onFocusTab={handleTabFocus}
+              onMenuClose={handleMenuClose}
+              isSoleLane={tabs.length === 1}
+              canOpenSession={canOpenSession}
+              onOpenSession={onOpenSession}
             />
           ))}
         </LayoutGroup>
@@ -414,8 +481,9 @@ export function HelpSessionTabs({
       {onOpenSession && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={canOpenSession ? onOpenSession : undefined}
               // `aria-disabled`, not `disabled`. A truly disabled button is removed from
               // the tab order and stops firing pointer events, which takes its tooltip
@@ -423,18 +491,15 @@ export function HelpSessionTabs({
               // the one state that could not explain it.
               aria-disabled={!canOpenSession || undefined}
               className={cn(
-                "w-6 h-6 inline-flex items-center justify-center shrink-0",
-                "rounded-[var(--radius-sm)] text-text-secondary",
-                "transition-colors duration-150 ease-out",
-                canOpenSession
-                  ? "hover:text-text-primary hover:bg-overlay-subtle"
-                  : "opacity-40 cursor-default",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                "shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2",
+                ARIA_DISABLED_CLASSES,
+                // Hover stays live for the tooltip, but lifts nothing it can't do.
+                "aria-disabled:hover:bg-transparent aria-disabled:hover:text-text-secondary aria-disabled:active:scale-100"
               )}
               aria-label="New session"
             >
-              <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
+              <Plus aria-hidden="true" />
+            </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
             {canOpenSession

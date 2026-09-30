@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 /**
  * Whether a dock popover is currently on screen, as a layering signal for
@@ -18,16 +18,27 @@ import { useSyncExternalStore } from "react";
  * provider on. Mirrors `dialogEscapeBackstop`'s shape. Per-view module state is
  * per-view state — each project view is its own V8 context with its own dock.
  *
- * Publishing is `useDockPopoverLayerSync`'s job (one caller, in `AppLayout`);
- * everything else reads.
+ * Several popovers publish independently — the docked panel's and each status
+ * pill's (#13081) — so each holds its own registration and the signal is up
+ * while any of them is. A shared boolean would let one popover closing clear
+ * another that is still on screen.
  */
-let dockPopoverOpen = false;
+const registrations = new Set<symbol>();
 const listeners = new Set<() => void>();
 
-export function setDockPopoverOpen(next: boolean): void {
-  if (next === dockPopoverOpen) return;
-  dockPopoverOpen = next;
+function notify(): void {
   for (const listener of listeners) listener();
+}
+
+/** Marks a popover as on screen until the returned release is called. */
+export function registerDockPopoverLayer(): () => void {
+  const token = Symbol("dock-popover");
+  registrations.add(token);
+  if (registrations.size === 1) notify();
+  return () => {
+    if (!registrations.delete(token)) return;
+    if (registrations.size === 0) notify();
+  };
 }
 
 function subscribe(listener: () => void): () => void {
@@ -38,7 +49,7 @@ function subscribe(listener: () => void): () => void {
 }
 
 export function getDockPopoverOpen(): boolean {
-  return dockPopoverOpen;
+  return registrations.size > 0;
 }
 
 export function useDockPopoverOpen(): boolean {
@@ -47,7 +58,15 @@ export function useDockPopoverOpen(): boolean {
   return useSyncExternalStore(subscribe, getDockPopoverOpen, getDockPopoverOpen);
 }
 
+/**
+ * Holds a registration while `open`. Released on close and on unmount, so a
+ * popover whose host goes away without closing never strands the signal.
+ */
+export function useDockPopoverLayer(open: boolean): void {
+  useEffect(() => (open ? registerDockPopoverLayer() : undefined), [open]);
+}
+
 export function _resetForTests(): void {
-  dockPopoverOpen = false;
+  registrations.clear();
   listeners.clear();
 }

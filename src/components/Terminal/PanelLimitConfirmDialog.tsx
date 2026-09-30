@@ -4,10 +4,7 @@ import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { actionService } from "@/services/ActionService";
 import { usePanelLimitStore, type PanelLimitConfirmRequest } from "@/store/panelLimitStore";
-
-function panels(count: number): string {
-  return `${count} ${count === 1 ? "panel" : "panels"}`;
-}
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * The copy for one batch request. Every number comes from the request the
@@ -38,19 +35,19 @@ export function describePanelLimitRequest(request: PanelLimitConfirmRequest): {
       title: `Open ${allowedCount} of ${requestedCount} panels?`,
       // Both batch callers spawn in launch order, so the panels that fit are
       // always the first ones — saying so tells the user which half they get.
-      description: `${subject} asks for ${panels(requestedCount)}, but the hard limit of ${hardLimit} leaves room for ${allowedCount === 1 ? "the first one" : `the first ${allowedCount}`}. The other ${left} won't open. Opening ${allowedCount} brings you to ${total}, ${threshold}.`,
-      confirmLabel: `Open ${panels(allowedCount)}`,
+      description: `${subject} asks for ${pluralize(requestedCount, "panel")}, but the hard limit of ${hardLimit} leaves room for ${allowedCount === 1 ? "the first one" : `the first ${allowedCount}`}. The other ${left} won't open. Opening ${allowedCount} brings you to ${total}, ${threshold}.`,
+      confirmLabel: `Open ${pluralize(allowedCount, "panel")}`,
     };
   }
 
   const onto =
     currentCount > 0
-      ? `adds ${panels(allowedCount)} to the ${currentCount} already open, for ${total} in total`
-      : `opens ${panels(allowedCount)}`;
+      ? `adds ${pluralize(allowedCount, "panel")} to the ${currentCount} already open, for ${total} in total`
+      : `opens ${pluralize(allowedCount, "panel")}`;
   return {
-    title: `Open ${panels(allowedCount)}?`,
+    title: `Open ${pluralize(allowedCount, "panel")}?`,
     description: `${subject} ${onto}, ${threshold}.`,
-    confirmLabel: `Open ${panels(allowedCount)}`,
+    confirmLabel: `Open ${pluralize(allowedCount, "panel")}`,
   };
 }
 

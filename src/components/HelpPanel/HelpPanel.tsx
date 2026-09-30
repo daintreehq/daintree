@@ -10,9 +10,11 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 import { ExternalLink, MessageCircle, Settings2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ChoiceCard } from "@/components/ui/card";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { MissingCliGate } from "@/components/Terminal/MissingCliGate";
@@ -30,6 +32,10 @@ import { HelpIntroBanner } from "./HelpIntroBanner";
 import { HelpPanelHeader } from "./HelpPanelHeader";
 import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "./HelpSessionTabs";
 import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
+import {
+  markHelpPanelRuntimeMounted,
+  markHelpPanelRuntimeUnmounted,
+} from "@/lib/helpPanelRuntimeGate";
 import { trimSessionTabTitle } from "./sessionTabTitle";
 import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 import {
@@ -86,7 +92,7 @@ const LazyHybridInputBar = lazy(() =>
 );
 
 const RESIZE_STEP = 10;
-const RESIZE_PAGE_STEP = 50;
+const RESIZE_STEP_LARGE = 50;
 
 const ASSISTANT_DOCS_URL = "https://daintree.org/docs/daintree-assistant";
 const ASSISTANT_INSTALLER_URL = "https://daintree.org/download";
@@ -353,11 +359,12 @@ export function HelpPanel({
     pinnedContext?.worktreeId != null &&
     focusedWorktreeId !== null &&
     pinnedContext.worktreeId !== focusedWorktreeId;
+  const pinnedWorktreeId = pinnedContext?.worktreeId;
   const returnToPinnedWorktree = useCallback(() => {
-    if (pinnedContext?.worktreeId) {
-      selectWorktree(pinnedContext.worktreeId, { source: "user" });
+    if (pinnedWorktreeId) {
+      selectWorktree(pinnedWorktreeId, { source: "user" });
     }
-  }, [pinnedContext?.worktreeId, selectWorktree]);
+  }, [pinnedWorktreeId, selectWorktree]);
 
   const agentConfig = agentId ? getAgentConfig(agentId) : undefined;
   // The model the live session actually launched with, read from its persisted
@@ -997,6 +1004,13 @@ export function HelpPanel({
     [width, setWidth, onResizeStart, onResizeEnd]
   );
 
+  // Child effects run before the parent's, so every lane runtime's
+  // `controller.start()` has armed its listeners by the time this fires.
+  useEffect(() => {
+    markHelpPanelRuntimeMounted();
+    return markHelpPanelRuntimeUnmounted;
+  }, []);
+
   // Run any in-flight resize teardown if the panel unmounts mid-drag.
   useEffect(() => {
     return () => {
@@ -1008,34 +1022,16 @@ export function HelpPanel({
     setWidth(HELP_PANEL_DEFAULT_WIDTH);
   }, [setWidth]);
 
-  // Resize via keyboard.
-  const handleResizeKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        setWidth(Math.min(width + RESIZE_STEP, HELP_PANEL_MAX_WIDTH));
-      } else if (e.key === "ArrowRight") {
-        e.preventDefault();
-        setWidth(Math.max(width - RESIZE_STEP, HELP_PANEL_MIN_WIDTH));
-      } else if (e.key === "PageUp") {
-        e.preventDefault();
-        setWidth(Math.min(width + RESIZE_PAGE_STEP, HELP_PANEL_MAX_WIDTH));
-      } else if (e.key === "PageDown") {
-        e.preventDefault();
-        setWidth(Math.max(width - RESIZE_PAGE_STEP, HELP_PANEL_MIN_WIDTH));
-      } else if (e.key === "Home") {
-        e.preventDefault();
-        setWidth(HELP_PANEL_MIN_WIDTH);
-      } else if (e.key === "End") {
-        e.preventDefault();
-        setWidth(HELP_PANEL_MAX_WIDTH);
-      } else if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        handleResetWidth();
-      }
-    },
-    [width, setWidth, handleResetWidth]
-  );
+  const handleResizeKeyDown = useSplitterKeys({
+    growKey: "ArrowLeft",
+    value: width,
+    min: HELP_PANEL_MIN_WIDTH,
+    max: HELP_PANEL_MAX_WIDTH,
+    step: RESIZE_STEP,
+    largeStep: RESIZE_STEP_LARGE,
+    onChange: setWidth,
+    onReset: handleResetWidth,
+  });
 
   // Hide the panel without tearing down the agent or conversation.
   const handleClose = useCallback(() => {
@@ -1732,15 +1728,18 @@ export function HelpPanel({
                     <div className="flex flex-col gap-1.5 w-full">
                       <p className="text-2xs text-text-secondary">Or start with a question</p>
                       {STARTER_PROMPTS.map((prompt) => (
-                        <button
+                        <ChoiceCard
                           key={prompt}
-                          type="button"
+                          padding="sm"
                           onClick={() => handleStartAssistant(prompt)}
-                          className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs rounded-[var(--radius-md)] border border-border-default text-daintree-text/80 hover:text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                          className="items-center gap-2 w-full text-xs text-text-primary"
                         >
-                          <MessageCircle className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" />
+                          <MessageCircle
+                            className="w-3.5 h-3.5 shrink-0 text-text-secondary"
+                            aria-hidden="true"
+                          />
                           <span>{prompt}</span>
-                        </button>
+                        </ChoiceCard>
                       ))}
                     </div>
                   )}

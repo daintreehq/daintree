@@ -7,18 +7,10 @@ import {
   type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
-import {
-  AlertTriangle,
-  BellMinus,
-  BellOff,
-  Check,
-  CheckCircle2,
-  Info,
-  type LucideIcon,
-  MoreHorizontal,
-  XCircle,
-} from "lucide-react";
+import { BellMinus, BellOff, Check, type LucideIcon, MoreHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
+import { FLOATING_CARD_RADIUS_CLASS } from "@/components/ui/floatingSurface";
 import { logError } from "@/utils/logger";
 import {
   DURATION_150,
@@ -63,13 +55,16 @@ const ACCENT_CLASS: Record<string, string> = {
 
 type IconConfig = { Icon: LucideIcon; className: string };
 
-const DEFAULT_ICON_CONFIG: IconConfig = { Icon: Info, className: "text-status-info" };
+const DEFAULT_ICON_CONFIG: IconConfig = {
+  Icon: SEVERITY_GLYPH.info,
+  className: "text-status-info",
+};
 
 const TYPE_ICON_CONFIG: Record<string, IconConfig> = {
-  success: { Icon: CheckCircle2, className: "text-status-success" },
-  error: { Icon: XCircle, className: "text-status-error" },
+  success: { Icon: SEVERITY_GLYPH.success, className: "text-status-success" },
+  error: { Icon: SEVERITY_GLYPH.error, className: "text-status-error" },
   info: DEFAULT_ICON_CONFIG,
-  warning: { Icon: AlertTriangle, className: "text-status-warning" },
+  warning: { Icon: SEVERITY_GLYPH.warning, className: "text-status-warning" },
 };
 
 /**
@@ -466,7 +461,8 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
           "flex w-full items-start gap-3",
           // The severity edge must follow `border`: cn() resolves conflicts
           // last-wins, and a later `border` erases a left width set before it.
-          "rounded-[var(--radius-sm)] border border-tint/[0.08] border-l-[3px]",
+          FLOATING_CARD_RADIUS_CLASS,
+          "border border-tint/[0.08] border-l-[3px]",
           "bg-surface-panel/85 backdrop-blur-xl",
           "px-3 py-2.5 pr-2",
           "text-sm text-text-primary",

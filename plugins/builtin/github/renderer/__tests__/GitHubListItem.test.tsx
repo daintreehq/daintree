@@ -350,6 +350,32 @@ describe("GitHubListItem", () => {
     expect(screen.queryByLabelText("Checks pending")).toBeNull();
   });
 
+  // GitHub doesn't run `pull_request` CI while the head conflicts, so a
+  // conflicted PR has no roll-up and its slot used to fall blank (#13070).
+  it("shows the conflict glyph in the CI slot when the forge reports conflicts", () => {
+    const pr: PR = { ...basePR, mergeState: "conflicts" };
+    const { container } = render(<GitHubListItem item={pr} type="pr" />);
+    const indicator = screen.getByLabelText(/^Merge conflicts with the base branch/);
+    expect(indicator.getAttribute("data-rail-slot")).toBe("ci");
+    expect(indicator.textContent).toBe("");
+    expect(indicator.querySelector("svg.lucide-git-merge-conflict")).not.toBeNull();
+    expect(indicator.querySelector(".text-status-warning")).not.toBeNull();
+    expect(container.querySelectorAll('[data-rail-slot="ci"]')).toHaveLength(1);
+  });
+
+  it("lets a reported conflict take the slot over a stale roll-up", () => {
+    const pr: PR = { ...basePR, ciStatus: "failure", mergeState: "conflicts" };
+    render(<GitHubListItem item={pr} type="pr" />);
+    expect(screen.getByLabelText(/^Merge conflicts with the base branch/)).toBeTruthy();
+    expect(screen.queryByLabelText("Checks failing")).toBeNull();
+  });
+
+  it("drops the conflict glyph once the PR is no longer open", () => {
+    const pr: PR = { ...basePR, state: "closed", mergeState: "conflicts" };
+    const { container } = render(<GitHubListItem item={pr} type="pr" />);
+    expect(container.querySelector('[data-rail-slot="ci"]')).toBeNull();
+  });
+
   it("renders linked PR icon button for issues", () => {
     const issueWithPR: Issue = {
       ...baseIssue,
@@ -802,6 +828,50 @@ describe("GitHubListItem", () => {
     const link = screen.getByRole("button", { name: /Open linked pull request #55/ });
     expect(link.getAttribute("aria-label")).toContain("merged");
     expect(link.getAttribute("aria-label")).toContain("failing");
+  });
+
+  it("marks an open linked PR the forge reports as conflicted", () => {
+    render(
+      <GitHubListItem
+        item={{
+          ...baseIssue,
+          linkedPR: {
+            number: 55,
+            state: "open",
+            url: "https://github.com/test/repo/pull/55",
+            mergeState: "conflicts",
+          },
+        }}
+        type="issue"
+      />
+    );
+    const link = screen.getByRole("button", { name: /Open linked pull request #55/ });
+    expect(link.getAttribute("aria-label")).toBe(
+      "Open linked pull request #55 (open, Merge conflicts)"
+    );
+    expect(link.querySelector("svg.lucide-git-merge-conflict")).not.toBeNull();
+  });
+
+  it("keeps a merged linked PR's checks rather than a conflict it no longer has", () => {
+    render(
+      <GitHubListItem
+        item={{
+          ...baseIssue,
+          linkedPR: {
+            number: 55,
+            state: "merged",
+            url: "https://github.com/test/repo/pull/55",
+            ciStatus: "success",
+            mergeState: "conflicts",
+          },
+        }}
+        type="issue"
+      />
+    );
+    const link = screen.getByRole("button", { name: /Open linked pull request #55/ });
+    expect(link.getAttribute("aria-label")).toBe(
+      "Open linked pull request #55 (merged, CI passing)"
+    );
   });
 
   it("shows the timestamp the panel's sort order implies", () => {

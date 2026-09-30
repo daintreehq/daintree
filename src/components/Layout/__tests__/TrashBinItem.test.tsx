@@ -2,17 +2,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { TrashBinItem } from "../TrashBinItem";
+import { DockPopoverList } from "../dockStatusPill";
 import type { PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal } from "@/store/slices";
 
+const restoreTerminal = vi.hoisted(() => vi.fn());
+const selection = vi.hoisted(() => ({ activeWorktreeId: "wt-active" as string | null }));
+
 vi.mock("@/store", () => ({
   usePanelStore: (selector: (s: unknown) => unknown) =>
-    selector({ restoreTerminal: vi.fn(), removePanel: vi.fn() }),
+    selector({ restoreTerminal, removePanel: vi.fn() }),
 }));
 
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: (selector: (s: unknown) => unknown) =>
-    selector({ activeWorktreeId: "wt-active" }),
+    selector({ activeWorktreeId: selection.activeWorktreeId }),
 }));
 
 vi.mock("@/components/Terminal/TerminalIcon", () => ({
@@ -428,6 +432,35 @@ describe("TrashBinItem", () => {
       fireEvent.click(screen.getByRole("button", { name: /permanently/i }));
       expect(onRequestRemove).toHaveBeenCalledTimes(1);
       expect(onRequestRemove.mock.calls[0]![0]).toMatchObject({ ids: ["t1"] });
+    });
+  });
+
+  describe("a row that cannot be restored", () => {
+    it("keeps Restore as its keyboard target, never permanent removal", () => {
+      // An orphan (its worktree is gone) with no worktree to adopt it into.
+      selection.activeWorktreeId = null;
+      restoreTerminal.mockClear();
+      try {
+        render(
+          <DockPopoverList>
+            <TrashBinItem
+              onRequestRemove={onRequestRemove}
+              terminal={makeAgentTerminal({ worktreeId: "wt-deleted" })}
+              trashedInfo={{ id: "t1", expiresAt: Date.now() + 20000, originalLocation: "grid" }}
+            />
+          </DockPopoverList>
+        );
+        const stop = Array.from(document.querySelectorAll<HTMLElement>("button")).filter(
+          (button) => button.tabIndex === 0
+        );
+        expect(stop).toHaveLength(1);
+        expect(stop[0]!.getAttribute("aria-label")).not.toMatch(/permanently/i);
+        expect(stop[0]!.getAttribute("aria-disabled")).toBe("true");
+        fireEvent.click(stop[0]!);
+        expect(restoreTerminal).not.toHaveBeenCalled();
+      } finally {
+        selection.activeWorktreeId = "wt-active";
+      }
     });
   });
 

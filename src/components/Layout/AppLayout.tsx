@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef, Suspense, lazy, type ReactNod
 import { LazyPortalDock } from "@/lazyPanels";
 import { createPortal, flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
+import { OVERLAY_SHEET_SHADOW_CLASS } from "@/components/ui/floatingSurface";
 import { Toolbar } from "./Toolbar";
 import { Sidebar } from "./Sidebar";
 import { TerminalDockRegion } from "./TerminalDockRegion";
@@ -63,6 +64,7 @@ import { terminalInstanceService } from "@/services/terminal/TerminalInstanceSer
 import { unlockSidebarHydration } from "@/lib/layoutTransitionLock";
 import { logError } from "@/utils/logger";
 import { FileDocumentCloseGuardHost } from "@/panels/file/FileDocumentCloseGuardHost";
+import { onHelpPanelRuntimeRequested } from "@/lib/helpPanelRuntimeGate";
 
 function preloadGlobalBannerCoordinator() {
   return import("../Recovery/GlobalBannerCoordinator");
@@ -73,6 +75,8 @@ const LazyGlobalBannerCoordinator = lazy(() =>
 // Fetch eagerly: `safeMode` is set synchronously during hydration, so the
 // first post-hydration render can suspend before the idle preload fires.
 void preloadGlobalBannerCoordinator();
+
+const HELP_PANEL_IDLE_MOUNT_TIMEOUT_MS = 2000;
 
 function preloadHelpPanel() {
   // Gate the panel chunk on the HybridInputBar chunk: the assistant always
@@ -87,11 +91,12 @@ function preloadHelpPanel() {
   return Promise.all([import("../HelpPanel"), inputBar]).then(([m]) => m);
 }
 // Named `HelpPanel` (not Lazy*) because AppLayout.sidebar.test.ts asserts on
-// the `<HelpPanel ...>` JSX shape. The render below is unconditional (panel
-// visibility is CSS-width driven), so the chunk is always needed — fetch it
-// eagerly to run in parallel with hydration instead of after first mount.
+// the `<HelpPanel ...>` JSX shape. Not fetched at module eval: the assistant is
+// always closed on a cold boot (helpPanelStore never persists `isOpen`), so the
+// panel, its input bar and the CodeMirror vendor chunk would be paid for on the
+// first-render path by a surface nobody can see yet. The mount latch below
+// pulls it in on first open or at idle after hydration, whichever comes first.
 const HelpPanel = lazy(() => preloadHelpPanel().then((m) => ({ default: m.HelpPanel })));
-void preloadHelpPanel();
 
 // Demo-mode tooling is dev/recording-only and never reachable in production
 // (the `window.electron?.demo` gate is undefined unless launched with
@@ -146,7 +151,7 @@ export const DEFAULT_SIDEBAR_WIDTH = 350;
 const SIDEBAR_HYDRATION_UNLOCK_FALLBACK_MS = 5000;
 
 // #11893: top edge for the body-portaled full-height overlays (ThemeBrowser,
-// PortalDock). They are position:fixed and paint under the z-[60] toolbar, so a
+// PortalDock). They are position:fixed and paint under the --z-toolbar toolbar, so a
 // static top-12 clipped their top strip the moment a global banner pushed the
 // toolbar down. `3rem` is the toolbar's own h-12; the var carries the banner
 // height, which is content-driven (description length, action count) and so has
@@ -170,8 +175,8 @@ export function AppLayout({
   useCcrPresetsSubscription();
   useProjectPresetsSubscription();
   useDiagnosticsAutoOpen();
-  // Published once for the whole view: every AppDialog layers itself against
-  // this rather than each caller working it out (#11505).
+  // The docked panel's share of the signal every AppDialog layers itself
+  // against (#11505); status-pill popovers publish their own from their list.
   useDockPopoverLayerSync();
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   // Issue #7627: track active drag-resize per panel so AppLayout can suppress
@@ -246,6 +251,33 @@ export function AppLayout({
   // transitionend (#6182). pointer-events-none + the panel's own tabIndex gating
   // already cover the in-flight window.
   const [assistantInert, setAssistantInert] = useState(!showAssistant);
+  // One-way latch: once mounted, HelpPanel stays mounted (closing must not
+  // unmount it — that would destroy the assistant PTY, #6619). A closed panel
+  // still has work to do: the cold-resume peek waits on hydration anyway, and a
+  // direct launch (`help.launchAgent`) asks for the mount through
+  // helpPanelRuntimeGate before it binds a session. So an idle mount after
+  // hydration loses nothing while keeping the chunk off the first-paint path.
+  const [helpPanelLatched, setHelpPanelLatched] = useState(showAssistant);
+  const helpPanelMounted = helpPanelLatched || showAssistant;
+  useEffect(() => {
+    if (helpPanelLatched) return;
+    return onHelpPanelRuntimeRequested(() => setHelpPanelLatched(true));
+  }, [helpPanelLatched]);
+  useEffect(() => {
+    if (helpPanelLatched) return;
+    if (showAssistant) {
+      setHelpPanelLatched(true);
+      return;
+    }
+    if (!isHydrated) return;
+    const mount = () => setHelpPanelLatched(true);
+    if (typeof requestIdleCallback === "function") {
+      const id = requestIdleCallback(mount, { timeout: HELP_PANEL_IDLE_MOUNT_TIMEOUT_MS });
+      return () => cancelIdleCallback(id);
+    }
+    const timer = setTimeout(mount, 0);
+    return () => clearTimeout(timer);
+  }, [helpPanelLatched, showAssistant, isHydrated]);
 
   // #11070: the assistant's post-transition reveal repaint is a durable
   // obligation, not a one-shot. On a cold first open the slide settles while the
@@ -1052,15 +1084,17 @@ export function AppLayout({
                 className="absolute top-0 right-0 h-full"
                 style={{ width: layout.helpPanelWidth }}
               >
-                <Suspense fallback={null}>
-                  <HelpPanel
-                    width={layout.helpPanelWidth}
-                    isVisible={showAssistant}
-                    isReadyToLaunch={isHydrated}
-                    onResizeStart={handleAssistantResizeStart}
-                    onResizeEnd={handleAssistantResizeEnd}
-                  />
-                </Suspense>
+                {helpPanelMounted && (
+                  <Suspense fallback={null}>
+                    <HelpPanel
+                      width={layout.helpPanelWidth}
+                      isVisible={showAssistant}
+                      isReadyToLaunch={isHydrated}
+                      onResizeStart={handleAssistantResizeStart}
+                      onResizeEnd={handleAssistantResizeEnd}
+                    />
+                  </Suspense>
+                )}
               </div>
             </div>
           </ErrorBoundary>
@@ -1096,7 +1130,7 @@ export function AppLayout({
               aria-hidden="true"
               onClick={() => useThemeBrowserStore.getState().close()}
               data-visible={themeBrowserVisible}
-              className="fixed inset-0 z-30 bg-scrim-soft/30 hover:bg-scrim-soft/45 hover:backdrop-blur-[2px] starting:opacity-0 data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
+              className="fixed inset-0 z-[var(--z-panel-scrim)] bg-scrim-soft/30 hover:bg-scrim-soft/45 hover:backdrop-blur-[2px] starting:opacity-0 data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
               style={{
                 transitionProperty: "background-color, opacity",
                 transitionDuration: `var(--duration-150), ${themeBrowserMotion.duration}ms`,
@@ -1108,7 +1142,7 @@ export function AppLayout({
               componentName="ThemeBrowser"
               onError={() => useThemeBrowserStore.getState().close()}
             >
-              {/* Offset the panel below the top toolbar. The toolbar is z-[60]
+              {/* Offset the panel below the top toolbar. The toolbar is --z-toolbar
                   / h-12 (Toolbar.tsx) and paints over the viewport's top 48px, so
                   a top-0 panel had its top strip (hero ✕ close, any top bar) hidden
                   behind it. OVERLAY_TOP_OFFSET adds the measured global-banner
@@ -1119,7 +1153,7 @@ export function AppLayout({
               <div
                 inert={!themeBrowserOpen || undefined}
                 data-visible={themeBrowserVisible}
-                className="fixed bottom-0 z-40 pointer-events-auto transition-[translate,opacity] starting:translate-x-[100%] starting:opacity-0 data-[visible=false]:pointer-events-none data-[visible=false]:translate-x-[100%] data-[visible=false]:opacity-0 motion-reduce:transition-opacity motion-reduce:translate-none data-[visible=false]:motion-reduce:translate-none"
+                className="fixed bottom-0 z-[var(--z-panel)] pointer-events-auto transition-[translate,opacity] starting:translate-x-[100%] starting:opacity-0 data-[visible=false]:pointer-events-none data-[visible=false]:translate-x-[100%] data-[visible=false]:opacity-0 motion-reduce:transition-opacity motion-reduce:translate-none data-[visible=false]:motion-reduce:translate-none"
                 style={{
                   top: OVERLAY_TOP_OFFSET,
                   right: "var(--right-obstruction-offset, 0px)",
@@ -1144,7 +1178,10 @@ export function AppLayout({
                 WebContentsView is already hidden via PortalVisibilityController. */}
             <div
               {...(chromeInert ? { inert: true } : {})}
-              className="fixed right-0 bottom-0 z-50 shadow-2xl border-l border-border-default"
+              className={cn(
+                "fixed right-0 bottom-0 z-[var(--z-portal)] border-l border-border-default",
+                OVERLAY_SHEET_SHADOW_CLASS
+              )}
               style={{ top: OVERLAY_TOP_OFFSET }}
             >
               <Suspense fallback={null}>

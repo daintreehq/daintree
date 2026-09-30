@@ -16,6 +16,8 @@ const { initGitGuidedMock, onInitGitProgressMock } = vi.hoisted(() => ({
   onInitGitProgressMock: vi.fn(),
 }));
 
+vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
+
 vi.mock("@/clients", () => ({
   projectClient: {
     initGitGuided: initGitGuidedMock,
@@ -190,9 +192,13 @@ describe("GitInitDialog", () => {
   ])(
     "renders %s as the destination path with no dropped or duplicated characters",
     (directoryPath, expected) => {
-      renderDialog({ directoryPath });
+      const { container } = renderDialog({ directoryPath });
 
-      expect(screen.getByTitle(expected).textContent).toBe(expected);
+      // The caption's own spans, read together, are the visible path.
+      const captions = [...container.ownerDocument.querySelectorAll("p.font-mono")].map((p) =>
+        [...p.querySelectorAll(":scope > span.truncate")].map((s) => s.textContent).join("")
+      );
+      expect(captions).toContain(expected);
     }
   );
 
@@ -204,6 +210,19 @@ describe("GitInitDialog", () => {
       GITIGNORE_TEMPLATE_OPTIONS.map((option) => option.value)
     );
     expect(select.value).toBe(DEFAULT_GITIGNORE_TEMPLATE_ID);
+  });
+
+  // The closed select shows only the template's name; what it writes is said
+  // beside it, for whichever template is picked.
+  it("describes the picked template under the select", () => {
+    renderDialog();
+    const select = screen.getByLabelText(/^gitignore$/i);
+    const hint = () => document.getElementById(select.getAttribute("aria-describedby") ?? "");
+
+    for (const option of [GITIGNORE_TEMPLATE_OPTIONS[1]!, GITIGNORE_TEMPLATE_OPTIONS[0]!]) {
+      fireEvent.change(select, { target: { value: option.value } });
+      expect(hint()?.textContent).toBe(option.description);
+    }
   });
 
   it("pre-fills the commit message and submits the default without editing", async () => {
@@ -980,7 +999,7 @@ describe("GitInitDialog", () => {
         progressHandler?.({
           step: "add",
           status: "start",
-          message: "Staging files for initial commit...",
+          message: "Staging files for initial commit…",
           timestamp: Date.now(),
         });
       });

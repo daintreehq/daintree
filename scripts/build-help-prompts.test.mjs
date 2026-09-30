@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { config as codexConfig } from "../shared/config/agents/codex.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -412,6 +413,24 @@ describe("help prompt outputs", () => {
       for (const arg of ["agentId", "prompt", "worktreeId", "name"]) {
         expect(call).toContain(arg);
       }
+    });
+
+    // #13045: with only the preset list to go on, a session told the user
+    // Codex model and effort couldn't be set per launch. The launch entry is
+    // the one shape it trusts, so it carries both.
+    it("the launch entry shows per-launch Codex model and effort", () => {
+      const launch = tasks.split("\n").find((line) => line.startsWith("- Launch:")) ?? "";
+      const call = launch.match(/agent\.launch\(\{[^}]*\}\)/)?.[0] ?? "";
+      expect(call).toContain("model?");
+      expect(call).toContain("agentLaunchFlags?");
+      expect(launch).toContain('agentLaunchFlags: ["-c", "model_reasoning_effort=high"]');
+      expect(launch).toMatch(/no preset/);
+      expect(launch).toMatch(/no per-agent model or flags/);
+      const models = launch.match(/`model: "([^"]+)"` \(or ([^)]*)\)/);
+      const named = models
+        ? [models[1], ...[...models[2].matchAll(/`([^`]+)`/g)].map((m) => m[1])]
+        : [];
+      expect(named.sort()).toEqual(codexConfig.models.map((m) => m.id).sort());
     });
 
     // Codex reads project instructions up to `project_doc_max_bytes` (32 KiB by

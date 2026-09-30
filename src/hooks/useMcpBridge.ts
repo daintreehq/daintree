@@ -1419,6 +1419,26 @@ export function useMcpBridge(): void {
             }
           }
 
+          // The skip preference (#12989) is the user's standing answer for
+          // every target the call names, so the attestation `killBatch` runs
+          // on is built here rather than from a checklist. Each row carries the
+          // state it is read at now, and `run()` still skips a target whose
+          // agent has started working since.
+          if (
+            hostApprovedTargets === undefined &&
+            effectiveConfirmed === true &&
+            authorization === "skip-preference" &&
+            actionId === "terminal.killBatch"
+          ) {
+            const terminalIds = terminalIdsArg(args);
+            if (terminalIds !== undefined) {
+              hostApprovedTargets = buildTerminalKillBatchTargets(terminalIds).map((target) => ({
+                id: target.id,
+                observedAgentRunning: target.agentRunning,
+              }));
+            }
+          }
+
           const dispatchArgs = tagMcpSpawnSource(
             actionId,
             withPreviewedWorktreeCwd(args, previewTarget),

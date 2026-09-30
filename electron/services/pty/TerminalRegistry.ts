@@ -25,7 +25,10 @@ export class TerminalRegistry {
   private trashExpiryTimes: Map<string, number> = new Map();
   private projectIdCandidatesByTerminalId: Map<string, ProjectIdCandidates> = new Map();
 
-  constructor(private readonly trashTtlMs: number = TRASH_TTL_MS) {}
+  constructor(
+    private readonly trashTtlMs: number = TRASH_TTL_MS,
+    private readonly onDelete?: (id: string) => void
+  ) {}
 
   add(id: string, terminal: TerminalProcess): void {
     this.terminals.set(id, terminal);
@@ -39,6 +42,7 @@ export class TerminalRegistry {
     this.clearTrashTimeout(id);
     this.terminals.delete(id);
     this.projectIdCandidatesByTerminalId.delete(id);
+    this.onDelete?.(id);
   }
 
   has(id: string): boolean {

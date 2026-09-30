@@ -8,6 +8,7 @@ import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { getGitRecoveryHint } from "@shared/utils/gitOperationErrors";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { isGeneratedFile } from "../generatedFileClassifier";
+import { pluralize } from "@/lib/pluralize";
 
 export type ReviewReadinessLevel = "ready" | "needs-review" | "blocked" | "unknown";
 
@@ -109,10 +110,6 @@ const OPERATION_LABELS: Partial<Record<StagingStatus["repoState"], string>> = {
   REVERTING: "Revert in progress",
 };
 
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 export function deriveReviewReadiness(input: ReviewReadinessInput): ReviewReadinessSummary {
   const { status } = input;
   if (!status) {
@@ -147,7 +144,8 @@ export function deriveReviewReadiness(input: ReviewReadinessInput): ReviewReadin
       status.repoState === "REBASING" && status.rebaseStep !== null && status.rebaseTotalSteps
         ? `Step ${status.rebaseStep} of ${status.rebaseTotalSteps}`
         : undefined;
-    const conflictDetail = conflictCount > 0 ? plural(conflictCount, "conflicted file") : undefined;
+    const conflictDetail =
+      conflictCount > 0 ? pluralize(conflictCount, "conflicted file") : undefined;
     items.push({
       id: "operation-in-progress",
       severity: "blocker",
@@ -162,7 +160,7 @@ export function deriveReviewReadiness(input: ReviewReadinessInput): ReviewReadin
     items.push({
       id: "conflicts",
       severity: "blocker",
-      label: plural(conflictCount, "conflicted file"),
+      label: pluralize(conflictCount, "conflicted file"),
       detail: "Resolve conflicts before committing",
       action: { kind: "focus-conflicts" },
     });
@@ -211,10 +209,10 @@ export function deriveReviewReadiness(input: ReviewReadinessInput): ReviewReadin
     items.push({
       id: "behind-remote",
       severity: "warning",
-      label: `Behind remote by ${plural(behindCount, "commit")}`,
+      label: `Behind remote by ${pluralize(behindCount, "commit")}`,
       detail:
         aheadCount !== null && aheadCount > 0
-          ? `${plural(aheadCount, "local commit")} will be replayed on top`
+          ? `${pluralize(aheadCount, "local commit")} will be replayed on top`
           : undefined,
       action: status.hasRemote && !isOperationState ? { kind: "pull-rebase" } : undefined,
     });
@@ -278,7 +276,7 @@ export function deriveReviewReadiness(input: ReviewReadinessInput): ReviewReadin
       id: "nothing-staged",
       severity: "warning",
       label: "No files staged",
-      detail: plural(status.unstaged.length, "changed file"),
+      detail: pluralize(status.unstaged.length, "changed file"),
       action: { kind: "focus-staged" },
     });
   }
@@ -359,7 +357,7 @@ export function deriveReviewReadiness(input: ReviewReadinessInput): ReviewReadin
     items.push({
       id: "unpushed-commits",
       severity: "info",
-      label: `${plural(aheadCount, "commit")} not pushed`,
+      label: `${pluralize(aheadCount, "commit")} not pushed`,
     });
   }
 

@@ -1,6 +1,8 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { RotateCcw, Unlink, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { DOCK_POPOVER_ROW_HOVER_CLASS } from "./dockStatusPill";
 import { usePanelStore } from "@/store";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -53,12 +55,13 @@ export function TrashBinItem({
   const canRestore = !isOrphan || !!activeWorktreeId;
 
   const handleRestore = useCallback(() => {
+    if (!canRestore) return;
     if (isOrphan && activeWorktreeId) {
       restoreTerminal(terminal.id, activeWorktreeId);
     } else {
       restoreTerminal(terminal.id);
     }
-  }, [restoreTerminal, terminal.id, isOrphan, activeWorktreeId]);
+  }, [canRestore, restoreTerminal, terminal.id, isOrphan, activeWorktreeId]);
 
   const terminalName = (() => {
     if (isPtyPanel(terminal)) {
@@ -85,7 +88,11 @@ export function TrashBinItem({
     <div
       data-trash-row
       data-row-id={terminal.id}
-      className="relative flex shrink-0 items-start gap-2 overflow-hidden rounded-[var(--radius-sm)] bg-transparent px-2.5 py-1.5 transition-colors hover:bg-tint/5 group"
+      data-dock-row=""
+      className={cn(
+        "relative flex shrink-0 items-start gap-2 overflow-hidden rounded-[var(--radius-sm)] px-2.5 py-1.5 group",
+        DOCK_POPOVER_ROW_HOVER_CLASS
+      )}
     >
       <div className="shrink-0 mt-0.5 opacity-60 group-hover:opacity-100 transition-opacity">
         <TerminalIcon
@@ -137,7 +144,11 @@ export function TrashBinItem({
                 variant="ghost"
                 size="icon-sm"
                 onClick={handleRestore}
-                disabled={!canRestore}
+                // Unavailable but still focusable, so the row's keyboard target
+                // stays Restore (its tooltip says why) rather than falling
+                // through to permanent removal.
+                aria-disabled={!canRestore || undefined}
+                data-dock-row-target=""
                 aria-label={
                   isOrphan
                     ? canRestore

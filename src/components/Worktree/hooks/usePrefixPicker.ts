@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { suggestPrefixes } from "../branchPrefixUtils";
+import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 
 export interface UsePrefixPickerResult {
   prefixPickerOpen: boolean;
@@ -105,17 +106,16 @@ export function usePrefixPicker({
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
     const active = prefixSuggestions[prefixSelectedIndex];
 
+    const next = keyBelongsToField(e)
+      ? null
+      : stepListboxCursor(e.key, prefixSelectedIndex, prefixSuggestions.length);
+    if (next !== null) {
+      e.preventDefault();
+      setPrefixSelectedIndex(next);
+      return;
+    }
+
     switch (e.key) {
-      case "ArrowDown":
-        e.preventDefault();
-        setPrefixSelectedIndex((prev) => (prev + 1) % prefixSuggestions.length);
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        setPrefixSelectedIndex(
-          (prev) => (prev - 1 + prefixSuggestions.length) % prefixSuggestions.length
-        );
-        break;
       // Tab completes the prefix and keeps focus so the slug can be typed next,
       // like shell completion. Either key is only swallowed when it actually
       // picks a row; otherwise Tab must still leave the field. A modified key is

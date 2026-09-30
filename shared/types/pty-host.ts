@@ -230,7 +230,16 @@ export type PtyHostRequest =
   | { type: "spawn"; id: string; options: PtyHostSpawnOptions }
   | { type: "resize"; id: string; cols: number; rows: number }
   | { type: "write"; id: string; data: string; traceId?: string }
-  | { type: "broadcast-write"; ids: string[]; data: string }
+  | {
+      type: "broadcast-write";
+      ids: string[];
+      data: string;
+      /**
+       * The sender has a failed fleet chip showing, so successful targets must
+       * be reported for it to clear. Without it the host reports failures only.
+       */
+      reportSuccess?: boolean;
+    }
   | {
       type: "submit";
       id: string;
@@ -342,7 +351,7 @@ export type PtyHostRequest =
   | { type: "get-terminals-for-project"; projectId: string; requestId: string }
   | { type: "get-terminal"; id: string; requestId: string; submissionToken?: string }
   | { type: "replay-history"; id: string; maxLines: number; requestId: string }
-  | { type: "get-serialized-state"; id: string; requestId: string }
+  | { type: "get-serialized-state"; id: string; requestId: string; tailRows?: number }
   | {
       type: "init-buffers";
       visualBuffers: SharedArrayBuffer[];
@@ -1076,6 +1085,11 @@ export interface PtyHostTerminalInfo {
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
   hasPty?: boolean;
   /**
+   * The process has exited. Narrower than `!hasPty`, which also folds in a kill
+   * still waiting on its exit — the host's project stats count those.
+   */
+  isExited?: boolean;
+  /**
    * Grid the live PTY holds, read off the node-pty handle when the query was
    * served (#11718). Absent when the handle is gone or unreadable — restore
    * builds a reconnected pane's xterm on this, so an unknown must never be
@@ -1275,7 +1289,11 @@ export interface BroadcastWriteTargetResult {
   error?: { code?: string; message: string };
 }
 
-/** Payload delivered to the renderer after every fleet broadcast write. */
+/**
+ * Payload delivered to the renderer after a fleet broadcast write that had a
+ * failure, or whose successes the renderer needs to clear a failed chip. An
+ * all-ok write the renderer asked no successes for sends nothing.
+ */
 export interface BroadcastWriteResultPayload {
   results: BroadcastWriteTargetResult[];
 }

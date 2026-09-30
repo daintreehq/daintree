@@ -609,6 +609,17 @@ export type TerminalAdoptionResult =
   | { status: "handed-over"; adoption: TerminalAdoptionEntry }
   | { status: "refused"; reason: TerminalAdoptionRefusal; heldByPaneId?: string };
 
+/**
+ * Narrows `getAuditRecords` in main so a caller that wants a handful of one
+ * session's calls doesn't ship the whole ring across IPC.
+ */
+export interface McpAuditRecordQuery {
+  /** Keep only dispatches from this public help-session id. */
+  helpSessionId?: string;
+  /** Newest-first cap on the records returned. */
+  limit?: number;
+}
+
 /** Minimum and maximum values accepted for the configurable ring-buffer cap. */
 export const MCP_AUDIT_MIN_RECORDS = 50;
 export const MCP_AUDIT_MAX_RECORDS = 10000;

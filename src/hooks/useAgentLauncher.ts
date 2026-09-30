@@ -6,7 +6,8 @@ import { useScratchStore } from "@/store/scratchStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import { useWorktrees } from "./useWorktrees";
+import { getNormalizedWorktreeMap } from "./useWorktrees";
+import { useWorktreeStoreApi } from "./useWorktreeStore";
 import { isElectronAvailable } from "./useElectron";
 
 import { systemClient } from "@/clients";
@@ -34,7 +35,7 @@ import {
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { findEquivalentMissingCliGate } from "@/utils/missingCliGate";
 import { isAssistantFocused } from "@/store/macroFocusStore";
-import { escapeShellArgOptional } from "@shared/utils/shellEscape";
+import { appendCallerLaunchFlagsToCommand } from "@shared/utils/callerLaunchFlags";
 import {
   getAgentConfig,
   isRegisteredAgent,
@@ -291,7 +292,10 @@ export interface UseAgentLauncherReturn {
 
 export function useAgentLauncher(): UseAgentLauncherReturn {
   const addPanel = usePanelStore((state) => state.addPanel);
-  const { worktreeMap, isInitialized } = useWorktrees();
+  // Read at launch time rather than subscribed, so `launchAgent` keeps its
+  // identity across worktree status changes instead of re-minting App's
+  // launch callbacks (and the AppLayout props built from them) on every one.
+  const worktreeStore = useWorktreeStoreApi();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const deletedWorktrees = useWorktreeSelectionStore((state) => state.deletedWorktrees);
   const currentProject = useProjectStore((state) => state.currentProject);
@@ -379,10 +383,11 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         // Inside the try: a throw between the add above and the `finally` would
         // strand the entry and leave this agentId unlaunchable for the session.
         markRendererPerformance("agentlaunch.begin", { agentId });
+        const { worktrees: worktreeSnapshots, isInitialized } = worktreeStore.getState();
         const { worktreeId: effectiveWorktreeId, worktree: targetWorktree } = resolveLaunchTarget(
           launchOptions?.worktreeId,
           activeWorktreeId,
-          worktreeMap,
+          getNormalizedWorktreeMap(worktreeSnapshots),
           isInitialized,
           deletedWorktrees
         );
@@ -432,7 +437,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             const devCommand = await readViewDevServerCommand();
             const terminalId = await addPanel({
               kind: "dev-preview",
-              title: "Dev Server",
+              title: "Dev server",
               devCommand,
               cwd,
               worktreeId: effectiveWorktreeId || undefined,
@@ -459,6 +464,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
 
         let command: string | undefined;
         let launchFlags: string[] | undefined;
+        let callerLaunchFlags: string[] | undefined;
         // Session id chosen up front for CLIs that accept one (#11782). Minted
         // per launch and never reused: re-offering an id the CLI already knows
         // is rejected outright, so each fresh conversation needs its own.
@@ -608,18 +614,14 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           // occurrence, e.g. `--model sonnet` after a preset's `--model`).
           // Mirrored into both the spawn command string and the persisted
           // `launchFlags` array so resume reproduces the same configuration.
-          const extraFlags = launchOptions?.agentLaunchFlags;
+          // Recorded separately too (#13046): recovery paths that rebuild or
+          // reconcile the settings-derived flags re-append exactly these.
+          const extraFlags = launchOptions?.agentLaunchFlags?.filter(Boolean);
           if (extraFlags?.length) {
-            const appendedTokens: string[] = [];
-            for (const flag of extraFlags) {
-              if (!flag) continue;
-              appendedTokens.push(flag.startsWith("-") ? flag : escapeShellArgOptional(flag));
-            }
-            if (appendedTokens.length) {
-              command = `${command} ${appendedTokens.join(" ")}`;
-            }
+            command = appendCallerLaunchFlagsToCommand(command, extraFlags);
             if (isAgent) {
-              launchFlags = [...(launchFlags ?? []), ...extraFlags.filter(Boolean)];
+              launchFlags = [...(launchFlags ?? []), ...extraFlags];
+              callerLaunchFlags = extraFlags;
             }
           }
         }
@@ -677,6 +679,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               worktreeId: effectiveWorktreeId || undefined,
               location: launchOptions?.location,
               agentLaunchFlags: launchFlags,
+              callerLaunchFlags,
               agentModelId: launchOptions?.modelId,
               agentSessionId: assignedSessionId,
               handbackCode: launchOptions?.handbackCode,
@@ -731,6 +734,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               location: launchOptions?.location === "dock" ? "dock" : "grid",
               command: command as string | undefined,
               agentLaunchFlags: launchFlags,
+              callerLaunchFlags,
               agentModelId: launchOptions?.modelId,
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
@@ -833,8 +837,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
     [
       activeWorktreeId,
       deletedWorktrees,
-      worktreeMap,
-      isInitialized,
+      worktreeStore,
       addPanel,
       currentProject,
       currentScratch,

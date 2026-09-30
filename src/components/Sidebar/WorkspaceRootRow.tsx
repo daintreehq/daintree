@@ -18,6 +18,7 @@ import { actionService } from "@/services/ActionService";
 import { formatPath } from "@/utils/textParsing";
 import { fileManagerRevealLabel } from "@/lib/platform";
 import { SIDEBAR_HEADER_ACTION } from "./sidebarHeader";
+import { pluralize } from "@/lib/pluralize";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
@@ -66,7 +67,7 @@ export function WorkspaceRootRow({
 
   const KindIcon = workspace.kind === "scratch" ? FlaskConical : FolderOpen;
   const displayPath = formatPath(workspace.path, homeDir);
-  const terminalLabel = `${counts.total} terminal${counts.total !== 1 ? "s" : ""}`;
+  const terminalLabel = `${pluralize(counts.total, "terminal")}`;
 
   return (
     <div data-workspace-root-row={workspace.id}>

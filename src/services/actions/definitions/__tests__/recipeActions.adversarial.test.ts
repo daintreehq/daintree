@@ -351,6 +351,7 @@ describe("recipeActions adversarial", () => {
     expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, {
       recipeName: "My recipe",
       projectId: "proj-1",
+      worktreeId: "wt-1",
     });
   });
 

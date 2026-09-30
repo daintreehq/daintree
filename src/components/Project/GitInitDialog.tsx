@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 import { InlineError } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Check } from "lucide-react";
+import { Check, FolderOpen, CheckCircle2 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { FolderGit2 } from "@/components/icons";
@@ -16,9 +17,21 @@ import { basename } from "@shared/utils/path";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import { ProjectEmojiButton } from "./ProjectEmojiButton";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
-import { FormGrid, FormRow, FIELD_INPUT } from "@/components/Worktree/views/WorktreeFormLayout";
+import {
+  FormGrid,
+  FormRow,
+  FIELD_CONTROL_SIZE,
+  FIELD_INPUT,
+} from "@/components/Worktree/views/WorktreeFormLayout";
 import { EMOJI_SLOT_CLASS, SlottedInputField, PathCaption } from "./projectDialogFields";
 import {
   GITIGNORE_TEMPLATE_OPTIONS,
@@ -76,12 +89,12 @@ function planSteps(createGitignore: boolean, createInitialCommit: boolean): Work
 }
 
 /**
- * The main process narrates a start as `"Staging files for initial commit..."`.
- * The trailing dots are its own progress punctuation and this surface supplies
- * its own, so strip them rather than rendering an ellipsis followed by three more dots.
+ * The main process narrates a start as `"Staging files for initial commit…"`.
+ * The trailing ellipsis is its own progress punctuation and this surface supplies
+ * its own, so strip it rather than rendering two ellipses.
  */
 function liveLabel(message: string): string {
-  return message.replace(/\.{3}$/, "").trim();
+  return message.replace(/(?:\.{3}|…)$/, "").trim();
 }
 
 interface PhaseState {
@@ -193,6 +206,7 @@ export function GitInitDialog({
   const previousModeRef = useRef<"configure" | "running" | "failed" | "complete">("configure");
   const nameErrorId = useId();
   const commitMessageErrorId = useId();
+  const templateHintId = useId();
 
   const trimmedProjectName = projectName.trim();
   // The name is seeded from the folder, so this only ever fires after the user
@@ -475,7 +489,7 @@ export function GitInitDialog({
               aria-atomic="true"
             >
               <div className="flex h-12 w-12 items-center justify-center rounded-full bg-status-success/15">
-                <Check className="h-6 w-6 text-status-success" />
+                <CheckCircle2 className="h-6 w-6 text-status-success" />
               </div>
               <div className="space-y-1">
                 <h3 className="text-base font-semibold text-text-primary">
@@ -536,25 +550,11 @@ export function GitInitDialog({
                   the user submitted, so "2 of 4" is something this surface
                   actually knows. Before the first event there is no step to
                   count, so the track omits `aria-valuenow` and pulses instead. */}
-              <div
-                role="progressbar"
-                aria-label={currentPhase?.live ?? "Starting"}
-                {...(currentPhase ? { "aria-valuenow": completedCount } : {})}
-                aria-valuemin={0}
-                aria-valuemax={plannedSteps.length}
-                className={`h-1 w-full overflow-hidden rounded-full bg-daintree-border/50 ${
-                  currentPhase ? "" : "animate-pulse-immediate"
-                }`}
-              >
-                {currentPhase && (
-                  <div
-                    className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
-                    style={{
-                      width: `${(completedCount / Math.max(plannedSteps.length, 1)) * 100}%`,
-                    }}
-                  />
-                )}
-              </div>
+              <ProgressBar
+                label={currentPhase?.live ?? "Starting"}
+                value={currentPhase ? completedCount : null}
+                max={Math.max(plannedSteps.length, 1)}
+              />
               {/* Only while nothing has been reported yet — once steps are
                   ticking, "Still working…" would be telling the user something
                   the counter already says. */}
@@ -658,22 +658,40 @@ export function GitInitDialog({
                 />
               </FormRow>
 
-              <FormRow label="Gitignore" htmlFor="git-init-template">
-                <select
-                  id="git-init-template"
+              <FormRow
+                label="Gitignore"
+                htmlFor="git-init-template"
+                hint={
+                  <p id={templateHintId} className="text-xs text-text-secondary">
+                    {
+                      GITIGNORE_TEMPLATE_OPTIONS.find((opt) => opt.value === gitignoreTemplate)
+                        ?.description
+                    }
+                  </p>
+                }
+              >
+                <Select
                   value={gitignoreTemplate}
-                  onChange={(e) => {
-                    if (isGitignoreTemplateId(e.target.value)) setGitignoreTemplate(e.target.value);
+                  onValueChange={(value) => {
+                    if (isGitignoreTemplateId(value)) setGitignoreTemplate(value);
                   }}
                   disabled={configDisabled}
-                  className={FIELD_INPUT}
                 >
-                  {GITIGNORE_TEMPLATE_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label} — {opt.description}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger
+                    id="git-init-template"
+                    aria-describedby={templateHintId}
+                    className={FIELD_CONTROL_SIZE}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {GITIGNORE_TEMPLATE_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value} description={opt.description}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </FormRow>
 
               <FormRow label="Commit">
@@ -760,7 +778,7 @@ export function GitInitDialog({
             onClick={handleClose}
             className="gap-2"
           >
-            <Check className="h-4 w-4" />
+            <FolderOpen className="h-4 w-4" />
             Open project
           </Button>
         ) : mode === "running" ? (

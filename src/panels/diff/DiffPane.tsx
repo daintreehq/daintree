@@ -88,6 +88,7 @@ import type { MarkdownDiffFailure } from "@/components/Worktree/markdownBlockDif
 import type { DiffSubject } from "./diffContentCache";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import type { TabInfo } from "@/components/Panel/TabButton";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * The layout segments the toolbar offers. `rendered` is deliberately not a
@@ -166,7 +167,7 @@ const DIFF_SENTINEL_CONTENT: ReadonlySet<string> = new Set([
 ]);
 
 function describeNotesSent(result: Extract<DiffNoteDeliveryResult, { ok: true }>): string {
-  const sent = `Pasted ${result.sent} ${result.sent === 1 ? "note" : "notes"} into ${result.targetTitle}`;
+  const sent = `Pasted ${pluralize(result.sent, "note")} into ${result.targetTitle}`;
   return result.kept > 0 ? `${sent} · ${result.kept} still pending` : sent;
 }
 
@@ -437,15 +438,6 @@ export function DiffPane({
     // worktree move that filePath (relative) alone would miss.
     setPreviewError(null);
   }, [filePath, absolutePath, worktreePath, previewReloadNonce]);
-
-  const [pathCopied, setPathCopied] = useState(false);
-  const handleCopyPath = useCallback(() => {
-    if (!filePath) return;
-    void navigator.clipboard.writeText(filePath).then(() => {
-      setPathCopied(true);
-      window.setTimeout(() => setPathCopied(false), 1500);
-    });
-  }, [filePath]);
 
   // dispatch() resolves an ActionDispatchResult and never rejects, so a failed
   // open would otherwise vanish entirely (the #11114 bug FilePane already hit).
@@ -1023,8 +1015,7 @@ export function DiffPane({
         <FileViewerToolbar.Path
           path={filePath}
           icon={getFileTypeIcon(filePath).Icon}
-          copied={pathCopied}
-          onCopy={handleCopyPath}
+          copyText={filePath || null}
         />
         <FileViewerToolbar.Actions>
           <FileViewerToolbar.Responsive

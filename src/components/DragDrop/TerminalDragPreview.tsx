@@ -10,6 +10,10 @@ import {
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import {
+  SURFACE_HEADER_FOCUS_LIFT_CLASS,
+  surfaceHeaderVariants,
+} from "@/components/ui/SurfaceHeader";
 
 interface TerminalDragPreviewProps {
   terminal: PanelInstance;
@@ -49,10 +53,14 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
         </Badge>
       )}
       <div className="flex h-full flex-col overflow-hidden rounded-lg">
-        {/* Title bar — the panel header's own recipe, so the ghost reads as the lifted panel */}
+        {/* Title bar — the selected panel header's own recipe (the focus lift and
+            the stepped-up border-overlay divider .terminal-selected paints), so
+            the ghost reads as the panel in hand. */}
         <div
           className={cn(
-            "flex h-8 shrink-0 items-center gap-2 border-b border-border-strong/30 bg-overlay-medium px-3 text-xs",
+            surfaceHeaderVariants({ density: "compact" }),
+            SURFACE_HEADER_FOCUS_LIFT_CLASS,
+            "justify-start gap-2 border-overlay text-xs",
             // Clear the badge so it never covers the state glyph.
             isGroupDrag && "pr-7"
           )}

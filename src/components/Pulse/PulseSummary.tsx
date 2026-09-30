@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
 import type { ProjectPulse } from "@shared/types";
 import {
   GitCommit,
@@ -11,6 +12,7 @@ import {
 } from "lucide-react";
 import { StreakFlame } from "./StreakFlame";
 import { cn } from "@/lib/utils";
+import { pluralize, pluralNoun } from "@/lib/pluralize";
 
 interface PulseSummaryProps {
   pulse: ProjectPulse;
@@ -20,7 +22,7 @@ interface PulseSummaryProps {
 interface StatProps {
   icon: ReactNode;
   value: number | string;
-  label: string;
+  label: ReactNode;
   highlight?: boolean;
   className?: string;
   // StreakFlame carries its own tier color; defaulting to true keeps neutral
@@ -89,7 +91,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
         <Stat
           icon={<GitCommit className="w-3.5 h-3.5" />}
           value={pulse.commitsInRange}
-          label={`commit${pulse.commitsInRange !== 1 ? "s" : ""}`}
+          label={pluralNoun(pulse.commitsInRange, "commit")}
           highlight
         />
         <Stat
@@ -109,8 +111,13 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
         {hasUncommitted && (
           <Stat
             icon={<FilePenLine className="w-3.5 h-3.5 text-status-info" />}
-            value={`${pulse.uncommitted!.changedFiles} files`}
-            label={`+${pulse.uncommitted!.insertions ?? 0}/-${pulse.uncommitted!.deletions ?? 0}`}
+            value={pluralize(pulse.uncommitted!.changedFiles, "file")}
+            label={
+              <DiffStat
+                insertions={pulse.uncommitted!.insertions}
+                deletions={pulse.uncommitted!.deletions}
+              />
+            }
           />
         )}
       </div>
@@ -141,17 +148,17 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
           {pulse.deltaToMain!.filesChanged !== undefined && pulse.deltaToMain!.filesChanged > 0 && (
             <div className="flex items-center gap-0.5 text-text-secondary">
               <FileCode className="w-3 h-3" />
-              <span className="font-mono">{pulse.deltaToMain!.filesChanged}</span>
-              <span className="text-text-secondary">files</span>
+              <span className="font-mono">{pulse.deltaToMain!.filesChanged.toLocaleString()}</span>
+              <span className="text-text-secondary">
+                {pluralNoun(pulse.deltaToMain!.filesChanged, "file")}
+              </span>
             </div>
           )}
 
-          {(pulse.deltaToMain!.insertions ?? 0) > 0 && (
-            <span className="font-mono text-status-success">+{pulse.deltaToMain!.insertions}</span>
-          )}
-          {(pulse.deltaToMain!.deletions ?? 0) > 0 && (
-            <span className="font-mono text-status-error">-{pulse.deltaToMain!.deletions}</span>
-          )}
+          <DiffStat
+            insertions={pulse.deltaToMain!.insertions}
+            deletions={pulse.deltaToMain!.deletions}
+          />
         </div>
       )}
     </div>

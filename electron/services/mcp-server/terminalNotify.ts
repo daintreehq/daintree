@@ -25,7 +25,7 @@ import {
   type TerminalNotifyWhenIdleArgs,
   type TerminalNotifyWhenIdleResult,
 } from "../../../shared/types/terminalNotify.js";
-import { tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
+import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import { detectHandback } from "../pty/HandbackDetector.js";
 import { evaluateWakeGate, wakeGateOptionsFor } from "../../../shared/utils/terminalWakeGate.js";
 
@@ -77,7 +77,10 @@ export interface TerminalNotifyPtyClient {
   /** Take back a line that has not reached its Enter; see `WriteQueue.withdrawGuardedSubmission`. */
   withdrawGuardedSubmission(id: string, submissionToken: string): void;
   /** The terminal's screen and scrollback, read for the reply a notice quotes. */
-  getSerializedStateAsync?(id: string): Promise<{ data: string } | null>;
+  getSerializedStateAsync?(
+    id: string,
+    options?: { tailRows: number }
+  ): Promise<{ data: string; partial?: true } | null>;
   on(event: "exit", listener: (id: string, exitCode: number) => void): unknown;
   off(event: "exit", listener: (id: string, exitCode: number) => void): unknown;
 }
@@ -251,7 +254,7 @@ function describeNotice(notice: FiredNotice): string {
  * than any pane is tall. Grok pins its transcript to the top of a tall pane,
  * so on a 90-row screen the reply sits some 70 rows above the composer.
  */
-const REPLY_SEARCH_ROWS = 500;
+export const REPLY_SEARCH_ROWS = 500;
 
 const HANDBACK_END_MARKERS = /\bEND-([a-z0-9]{6})\b/g;
 
@@ -1677,7 +1680,11 @@ export class TerminalNotifyService {
     const client = this.deps.getPtyClient();
     if (client?.getSerializedStateAsync === undefined) return;
     try {
-      const snapshot = await client.getSerializedStateAsync(entry.notice.terminalId);
+      const getState = client.getSerializedStateAsync.bind(client);
+      const snapshot = await readTailSnapshot(
+        (options) => getState(entry.notice.terminalId, options),
+        REPLY_SEARCH_ROWS
+      );
       if (snapshot === null) return;
       const observed = entry.observed;
       const endAt: ObservedMarker | boolean = !endAtHandback

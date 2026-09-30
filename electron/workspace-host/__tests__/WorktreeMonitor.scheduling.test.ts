@@ -64,6 +64,7 @@ const mockGetRepoOperationStateSync = vi.fn().mockReturnValue(undefined);
 vi.mock("../../utils/gitRepoOperationState.js", () => ({
   isRepoOperationInProgress: vi.fn().mockReturnValue(false),
   getRepoOperationStateSync: (...args: unknown[]) => mockGetRepoOperationStateSync(...args),
+  getRepoOperationState: async (...args: unknown[]) => mockGetRepoOperationStateSync(...args),
   OPERATION_SENTINEL_NAMES: [
     "MERGE_HEAD",
     "rebase-merge",
@@ -233,6 +234,25 @@ describe("WorktreeMonitor", () => {
       await vi.advanceTimersByTimeAsync(6_000);
       expect(onScheduleFetch).toHaveBeenCalledTimes(1);
       expect(onScheduleFetch).toHaveBeenCalledWith(TEST_WORKTREE.id, false, false, undefined);
+
+      monitor.stop();
+    });
+
+    it("forwards the cadence run's freshness window to onScheduleFetch", async () => {
+      const onScheduleFetch = vi.fn().mockResolvedValue(undefined);
+      const callbacks = makeCallbacks({ onScheduleFetch });
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(6_000);
+      onScheduleFetch.mockClear();
+      // Past the longest background cadence delay.
+      await vi.advanceTimersByTimeAsync(6.5 * 60_000);
+
+      expect(onScheduleFetch).toHaveBeenCalledTimes(1);
+      const [id, isCurrent, force, prune, maxAgeMs] = onScheduleFetch.mock.calls[0]!;
+      expect([id, isCurrent, force, prune]).toEqual([TEST_WORKTREE.id, false, false, undefined]);
+      expect(typeof maxAgeMs).toBe("number");
 
       monitor.stop();
     });

@@ -44,7 +44,7 @@ const docs: PortalTab = {
   url: "https://developer.mozilla.org/en-US/docs/Web/API/ResizeObserver",
   title: "ResizeObserver - Web APIs | MDN",
 };
-const blank: PortalTab = { id: "t-blank", url: null, title: "New Tab" };
+const blank: PortalTab = { id: "t-blank", url: null, title: "New tab" };
 
 function session(
   panelId: string,

@@ -3,6 +3,7 @@ import { isValidPastTimestamp } from "@/utils/timestamps";
 import { parseCommitBody } from "@/utils/commitMessage";
 import { useWallClock } from "@/hooks/useWallClock";
 import { CommitAuthorAvatar, type CommitAuthor } from "./CommitAuthorAvatar";
+import { pluralize } from "@/lib/pluralize";
 
 export interface CommitInfoTooltipProps {
   /** Timestamp of the last commit. */
@@ -38,21 +39,22 @@ export function relativeTimePhrase(diffMs: number, timestampMs?: number): string
   const h = Math.floor(m / 60);
   const d = Math.floor(h / 24);
   if (s < 60) return "just now";
-  if (m < 60) return `${m} minute${m !== 1 ? "s" : ""} ago`;
-  if (h < 24) return `${h} hour${h !== 1 ? "s" : ""} ago`;
-  if (d < 7) return `${d} day${d !== 1 ? "s" : ""} ago`;
+  if (m < 60) return `${pluralize(m, "minute")} ago`;
+  if (h < 24) return `${pluralize(h, "hour")} ago`;
+  if (d < 7) return `${pluralize(d, "day")} ago`;
   if (diffMs < ABSOLUTE_AFTER_MS || timestampMs === undefined) {
     const w = Math.floor(d / 7);
-    return `${w} week${w !== 1 ? "s" : ""} ago`;
+    return `${pluralize(w, "week")} ago`;
   }
   absoluteDateFormatter ??= new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
   return `on ${absoluteDateFormatter.format(new Date(timestampMs))}`;
 }
 
+// Every name, not "and 2 others": this card is itself the disclosure, so there
+// is nowhere further to reveal the rest.
 function joinNames(names: string[]): string {
   if (names.length <= 1) return names.join("");
-  if (names.length === 2) return `${names[0]} and ${names[1]}`;
-  return `${names[0]} and ${names.length - 1} others`;
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 const MINUTE_MS = 60_000;
@@ -186,12 +188,7 @@ export function CommitInfoTooltip({
               {author ? author.name : "Last commit"}
             </span>
             {coAuthorLine && (
-              <span
-                className="truncate text-2xs text-text-secondary"
-                title={coAuthors.map((p) => p.name).join(", ")}
-              >
-                {coAuthorLine}
-              </span>
+              <span className="break-words text-2xs text-text-secondary">{coAuthorLine}</span>
             )}
             <span className="flex min-w-0 items-center gap-1.5 text-2xs text-text-secondary">
               <span className="shrink-0">Committed {committed}</span>

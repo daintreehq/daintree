@@ -41,7 +41,6 @@ import {
   GripVertical,
 } from "lucide-react";
 import { useToolbarPreferencesStore } from "@/store";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { AnyToolbarButtonId, LauncherItemToolbarButtonId } from "@/../../shared/types/toolbar";
@@ -79,6 +78,11 @@ import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 
 import { buildPluginToolbarMeta } from "@/components/Layout/pluginToolbarMeta";
 import { cn } from "@/lib/utils";
+import { DROP_TARGET_FRAME } from "@/components/DragDrop/dropIndicator";
+import { useArmedDropTarget } from "@/components/DragDrop/useArmedDropTarget";
+import { DRAG_GRIP_CLASS, DRAG_GRIP_ICON_CLASS } from "@/components/ui/dragGripStyles";
+import { notify } from "@/lib/notify";
+import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { DRAG_GHOST_OPACITY, EASE_OUT_EXPO, UI_ANIMATION_DURATION } from "@/lib/animationUtils";
 import {
   isToolbarButtonOnToolbar,
@@ -98,6 +102,7 @@ import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { pluralize } from "@/lib/pluralize";
 
 type ToolbarSide = "left" | "right";
 
@@ -213,21 +218,20 @@ function ToolbarButtonCard({
           {/* A row that can't move keeps the grip's slot but not the grip, so every
               icon and label in the column stays on one rail. When interactive,
               gripProps carries dnd-kit's role/tabIndex/describedby — the grip must
-              stay in the accessibility tree and needs an accessible name. */}
+              stay in the accessibility tree and needs an accessible name. The
+              grip's 24px box overhangs the 20px label line rather than growing
+              the row past every other settings row. */}
           {draggable ? (
             <span
               {...(gripProps ?? {})}
-              // The colour sits on the wrapper, not the SVG: forced colours keep an
-              // SVG's own colour (`preserve-parent-color`), so a class on the glyph
-              // would stay theme grey in high-contrast mode.
-              className="shrink-0 cursor-grab rounded-[var(--radius-sm)] text-text-secondary outline-offset-2 active:cursor-grabbing"
+              className={cn(DRAG_GRIP_CLASS, "-my-0.5")}
               aria-hidden={gripProps ? undefined : true}
               aria-label={gripProps ? `Reorder ${metadata.label}` : undefined}
             >
-              <GripVertical aria-hidden="true" className="h-4 w-4" />
+              <GripVertical aria-hidden="true" className={DRAG_GRIP_ICON_CLASS} />
             </span>
           ) : (
-            <span className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className="-my-0.5 h-6 w-6 shrink-0" aria-hidden="true" />
           )}
           <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="truncate">{metadata.label}</span>
@@ -382,7 +386,14 @@ function ToolbarSideColumn({
   // The column id doubles as a droppable target so an empty side still accepts
   // a cross-side drop (a `SortableContext` registers no droppable of its own
   // when it holds zero items).
-  const { setNodeRef, isOver } = useDroppable({ id: side });
+  const { setNodeRef } = useDroppable({ id: side });
+  // Armed while a button from the other column would land here, over this
+  // column's rows as well as its empty space; a reorder within the column has
+  // the sortable gap instead.
+  const isDropTarget = useArmedDropTarget({
+    accepts: (over) => over.id === side || buttonIds.some((id) => id === over.id),
+    isOrigin: (active) => buttonIds.some((id) => id === active.id),
+  });
   // Only what renders. An id with no live metadata — an uninstalled plugin's
   // button the user had dragged here, or a launcher item belonging to another
   // project (#12217) — draws nothing, and neither does a button that is off.
@@ -396,8 +407,8 @@ function ToolbarSideColumn({
     <div id={id} ref={setNodeRef} className="min-w-0 scroll-mt-6">
       <SortableContext items={buttonIds} strategy={rectSortingStrategy}>
         <SettingsGroup
-          label={`${label} · ${onCount} ${onCount === 1 ? "button" : "buttons"}`}
-          className={cn("min-h-12", isOver && "ring-1 ring-inset ring-border-strong")}
+          label={`${label} · ${pluralize(onCount, "button")}`}
+          className={cn("min-h-12", isDropTarget && DROP_TARGET_FRAME)}
         >
           {renderedIds.length === 0 ? (
             <SettingsEmptyRow>Drag a button here or use its menu</SettingsEmptyRow>
@@ -439,6 +450,21 @@ function withoutDuplicates(ids: readonly AnyToolbarButtonId[]): AnyToolbarButton
   return Array.from(new Set(ids));
 }
 
+/**
+ * Per key: the value from before a reset where the key still holds what the
+ * reset put there, else whatever it holds now.
+ */
+function restoreUntouched<T extends object>(before: T, afterReset: T, now: T): T {
+  const resetValues = new Map<string, unknown>(Object.entries(afterReset));
+  const keys = new Set([...Object.keys(before), ...resetValues.keys(), ...Object.keys(now)]);
+  const beforeValues = new Map<string, unknown>(Object.entries(before));
+  const nowValues = new Map<string, unknown>(Object.entries(now));
+  const restored = [...keys]
+    .filter((key) => nowValues.get(key) === resetValues.get(key))
+    .map((key) => [key, beforeValues.get(key)] as const);
+  return { ...now, ...Object.fromEntries(restored) };
+}
+
 export function ToolbarSettingsTab() {
   const layout = useToolbarPreferencesStore((s) => s.layout);
   const launcher = useToolbarPreferencesStore((s) => s.launcher);
@@ -452,10 +478,46 @@ export function ToolbarSettingsTab() {
   const positionAgentButton = useToolbarPreferencesStore((s) => s.positionAgentButton);
   const setAlwaysShowDevServer = useToolbarPreferencesStore((s) => s.setAlwaysShowDevServer);
   const setDefaultSelection = useToolbarPreferencesStore((s) => s.setDefaultSelection);
-  const reset = useToolbarPreferencesStore((s) => s.reset);
-  // Confirmed like every other settings reset (shortcuts, agent settings): the
-  // layout is hand-built and nothing restores it once it's gone.
-  const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
+  // Undone rather than confirmed, like the app's other reversible resets: the
+  // whole layout is a small local snapshot, and Undo puts it back exactly.
+  const handleResetToolbar = () => {
+    const { layout, launcher, reset } = useToolbarPreferencesStore.getState();
+    reset();
+    const { layout: resetLayout, launcher: resetLauncher } = useToolbarPreferencesStore.getState();
+    notify({
+      type: "success",
+      title: "Toolbar reset",
+      message: "Buttons, their order and the launcher options are back to the defaults.",
+      priority: "high",
+      transient: true,
+      duration: UNDO_TOAST_DURATION_MS,
+      action: {
+        label: "Undo",
+        // Anything changed again since the reset keeps that change. The two
+        // sides are one unit: a button moved across changes both lists.
+        onClick: latestUndoOnly("toolbar-reset", () => {
+          const now = useToolbarPreferencesStore.getState();
+          const sidesUntouched =
+            now.layout.leftButtons === resetLayout.leftButtons &&
+            now.layout.rightButtons === resetLayout.rightButtons;
+          useToolbarPreferencesStore.setState({
+            layout: {
+              ...now.layout,
+              ...(sidesUntouched
+                ? { leftButtons: layout.leftButtons, rightButtons: layout.rightButtons }
+                : {}),
+              pinnedButtons: restoreUntouched(
+                layout.pinnedButtons,
+                resetLayout.pinnedButtons,
+                now.layout.pinnedButtons
+              ),
+            },
+            launcher: restoreUntouched(launcher, resetLauncher, now.launcher),
+          });
+        }),
+      },
+    });
+  };
 
   const agentSettings = useAgentSettingsStore((s) => s.settings);
   const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
@@ -1027,7 +1089,7 @@ export function ToolbarSettingsTab() {
           </div>
           <DragOverlay dropAnimation={dropAnimation}>
             {activeId && activeMetadata ? (
-              <SettingsGroup className="shadow-md cursor-grabbing">
+              <SettingsGroup className="shadow-[var(--theme-shadow-floating)] cursor-grabbing">
                 <ToolbarButtonCard
                   buttonId={activeId}
                   metadata={activeMetadata}
@@ -1101,7 +1163,7 @@ export function ToolbarSettingsTab() {
                       />
                       {showUninstalledAgents
                         ? "Hide agents that aren't installed"
-                        : `Show ${uninstalledAgentCount} ${uninstalledAgentCount === 1 ? "agent" : "agents"} that aren't installed`}
+                        : `Show ${pluralize(uninstalledAgentCount, "agent")} that aren't installed`}
                     </button>
                   </div>
                 )}
@@ -1186,9 +1248,9 @@ export function ToolbarSettingsTab() {
           control={({ labelId, descriptionId, disabled }) => (
             <Button
               type="button"
-              variant="ghost-danger"
+              variant="outline"
               size="sm"
-              onClick={() => setIsResetConfirmOpen(true)}
+              onClick={handleResetToolbar}
               disabled={disabled}
               aria-labelledby={labelId}
               aria-describedby={descriptionId}
@@ -1198,19 +1260,6 @@ export function ToolbarSettingsTab() {
           )}
         />
       </SettingsGroup>
-      <ConfirmDialog
-        isOpen={isResetConfirmOpen}
-        variant="destructive"
-        onConfirm={() => {
-          reset();
-          setIsResetConfirmOpen(false);
-        }}
-        onClose={() => setIsResetConfirmOpen(false)}
-        title="Reset toolbar?"
-        description="Every button, its side and its order go back to the defaults, and so do the launcher palette options."
-        confirmLabel="Reset toolbar"
-        zIndex="nested"
-      />
     </div>
   );
 }

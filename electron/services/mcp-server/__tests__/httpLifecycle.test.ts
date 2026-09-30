@@ -36,9 +36,9 @@ import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { HttpLifecycle, sessionCredentialDigest } from "../httpLifecycle.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
-import { minimumPermittingTier } from "../shared.js";
+import { MCP_SSE_HEARTBEAT_INTERVAL_MS, minimumPermittingTier } from "../shared.js";
 import type { SessionServerDeps } from "../sessionServer.js";
-import { ResourceOwnershipLedger } from "../resourceOwnership.js";
+import { ResourceOwnershipLedger, helpOwnershipPrincipal } from "../resourceOwnership.js";
 import { WorkspaceBindingError } from "../rendererBridge.js";
 import { AuditService, type McpAuditLogStore } from "../auditLog.js";
 
@@ -2072,6 +2072,109 @@ describe("HttpLifecycle", () => {
       return handleRequest;
     }
 
+    describe("SSE heartbeat (#12994)", () => {
+      const KEEPALIVE = ": keepalive\n\n";
+
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      function keepalives(res: ReturnType<typeof recordingRes>): number {
+        return res.write.mock.calls.filter(([chunk]) => chunk === KEEPALIVE).length;
+      }
+
+      it("writes a comment line on the idle stream at every interval", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { streamRes } = await openSseSession(deps, handle, ELEVATED_AUTH);
+
+        expect(streamRes.write.mock.calls[0]?.[0]).toMatch(/^event: endpoint\n/);
+        expect(keepalives(streamRes)).toBe(0);
+
+        vi.advanceTimersByTime(MCP_SSE_HEARTBEAT_INTERVAL_MS);
+        expect(keepalives(streamRes)).toBe(1);
+
+        vi.advanceTimersByTime(MCP_SSE_HEARTBEAT_INTERVAL_MS * 20);
+        expect(keepalives(streamRes)).toBe(21);
+      });
+
+      it("keeps the session alive past undici's 300 s body timeout without touching its idle timer", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const resetIdleTimer = vi.spyOn(deps.sessionStore, "resetIdleTimer");
+        const UNDICI_BODY_TIMEOUT_MS = 300_000;
+        const { sessionId, streamRes } = await openSseSession(deps, handle, ELEVATED_AUTH);
+        const { idleTimer } = deps.sessionStore.sessions.get(sessionId)!;
+        const byteTimes = [Date.now()];
+        streamRes.write.mockImplementation(() => {
+          byteTimes.push(Date.now());
+          return true;
+        });
+
+        vi.advanceTimersByTime(3 * UNDICI_BODY_TIMEOUT_MS);
+
+        const gaps = byteTimes.slice(1).map((t, i) => t - byteTimes[i]!);
+        expect(gaps.length).toBeGreaterThan(0);
+        expect(Math.max(...gaps)).toBeLessThan(UNDICI_BODY_TIMEOUT_MS);
+        expect(Date.now() - byteTimes.at(-1)!).toBeLessThan(UNDICI_BODY_TIMEOUT_MS);
+        expect(resetIdleTimer).not.toHaveBeenCalled();
+        expect(deps.sessionStore.sessions.get(sessionId)?.idleTimer).toBe(idleTimer);
+      });
+
+      it("stops when the client drops the stream", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { sessionId, streamRes } = await openSseSession(deps, handle, ELEVATED_AUTH);
+
+        streamRes.emit("close");
+        expect(deps.sessionStore.sessions.has(sessionId)).toBe(false);
+
+        vi.advanceTimersByTime(MCP_SSE_HEARTBEAT_INTERVAL_MS * 4);
+        expect(keepalives(streamRes)).toBe(0);
+      });
+
+      it("stops when the server closes the transport", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { sessionId, streamRes } = await openSseSession(deps, handle, ELEVATED_AUTH);
+
+        await deps.sessionStore.sessions.get(sessionId)!.transport.close();
+
+        vi.advanceTimersByTime(MCP_SSE_HEARTBEAT_INTERVAL_MS * 4);
+        expect(keepalives(streamRes)).toBe(0);
+      });
+
+      it("stops quietly when a write throws", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { streamRes } = await openSseSession(deps, handle, ELEVATED_AUTH);
+        streamRes.write.mockImplementation(() => {
+          throw new Error("write after end");
+        });
+
+        expect(() => vi.advanceTimersByTime(MCP_SSE_HEARTBEAT_INTERVAL_MS)).not.toThrow();
+        const attempts = streamRes.write.mock.calls.length;
+
+        vi.advanceTimersByTime(MCP_SSE_HEARTBEAT_INTERVAL_MS * 4);
+        expect(streamRes.write.mock.calls.length).toBe(attempts);
+      });
+
+      it("never writes to a response that has already ended", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { streamRes } = await openSseSession(deps, handle, ELEVATED_AUTH);
+
+        (streamRes as unknown as { writableEnded: boolean }).writableEnded = true;
+
+        vi.advanceTimersByTime(MCP_SSE_HEARTBEAT_INTERVAL_MS * 4);
+        expect(keepalives(streamRes)).toBe(0);
+      });
+    });
+
     describe("SSE /messages", () => {
       it("binds the session to its creator at handshake", async () => {
         const deps = fakeDeps();
@@ -3380,6 +3483,139 @@ describe("HttpLifecycle", () => {
         const sessionId = await openSse(lc, deps, PANE_AUTH);
 
         expect(deps.sessionStore.resourceOwnership.ownerOf(sessionId)).toBe(sessionId);
+      });
+    });
+
+    describe("help-bearer ownership principal (#12993)", () => {
+      const HELP_TOKEN = "help-token-9a2f";
+      const HELP_AUTH = `Bearer ${HELP_TOKEN}`;
+      const OTHER_HELP_TOKEN = "help-token-7b31";
+
+      function helpLifecycle(deps: HttpLifecycleDeps) {
+        const lc = new HttpLifecycle(deps);
+        lc.setApiKey("test-api-key");
+        lc.setHelpTokenValidator((token) =>
+          token === HELP_TOKEN || token === OTHER_HELP_TOKEN ? "core" : false
+        );
+        const helpSessions = new Map<string, string>([
+          [HELP_TOKEN, "help-session-1"],
+          [OTHER_HELP_TOKEN, "help-session-2"],
+        ]);
+        lc.setHelpSessionIdResolver((token) => helpSessions.get(token) ?? null);
+        (lc as unknown as { port: number }).port = 45454;
+        return { lc, helpSessions };
+      }
+
+      async function openSse(lc: HttpLifecycle, deps: HttpLifecycleDeps, auth: string) {
+        const before = new Set(deps.sessionStore.sessions.keys());
+        const res = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        res.writeHead = vi.fn();
+        res.write = vi.fn(() => true);
+        res.end = vi.fn();
+        res.headersSent = false;
+        await (
+          lc as unknown as {
+            handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+          }
+        ).handleRequest(
+          {
+            method: "GET",
+            url: "/sse",
+            headers: { host: "127.0.0.1:45454", authorization: auth },
+          } as unknown as http.IncomingMessage,
+          res as unknown as http.ServerResponse
+        );
+        const sessionId = Array.from(deps.sessionStore.sessions.keys()).find(
+          (id) => !before.has(id)
+        );
+        if (sessionId === undefined) throw new Error("the /sse handshake opened no session");
+        return sessionId;
+      }
+
+      it("keeps a help session's records across a transport reconnect", async () => {
+        const deps = bindingDeps();
+        const { lc } = helpLifecycle(deps);
+        const ledger = deps.sessionStore.resourceOwnership;
+        const first = await openSse(lc, deps, HELP_AUTH);
+        expect(ledger.isPrincipalOwner(ledger.ownerOf(first))).toBe(true);
+        ledger.record(ledger.ownerOf(first), [{ kind: "worktree", id: "/repo/wt-1" }]);
+
+        deps.sessionStore.sessions.get(first)!.transport.onclose?.();
+        const second = await openSse(lc, deps, HELP_AUTH);
+
+        expect(second).not.toBe(first);
+        expect(ledger.owns(ledger.ownerOf(second), "worktree", "/repo/wt-1")).toBe(true);
+      });
+
+      it("keeps them across a server drain, and drops them when the principal is revoked", async () => {
+        const deps = bindingDeps();
+        const { lc } = helpLifecycle(deps);
+        const ledger = deps.sessionStore.resourceOwnership;
+        const first = await openSse(lc, deps, HELP_AUTH);
+        ledger.record(ledger.ownerOf(first), [{ kind: "worktree", id: "/repo/wt-1" }]);
+
+        ledger.clearAllSessions();
+        const second = await openSse(lc, deps, HELP_AUTH);
+        expect(ledger.owns(ledger.ownerOf(second), "worktree", "/repo/wt-1")).toBe(true);
+
+        ledger.revokePrincipal(helpOwnershipPrincipal("help-session-1"));
+        expect(ledger.owns(ledger.ownerOf(second), "worktree", "/repo/wt-1")).toBe(false);
+      });
+
+      it("gives a different help session none of another's records", async () => {
+        const deps = bindingDeps();
+        const { lc } = helpLifecycle(deps);
+        const ledger = deps.sessionStore.resourceOwnership;
+        const mine = await openSse(lc, deps, HELP_AUTH);
+        ledger.record(ledger.ownerOf(mine), [{ kind: "worktree", id: "/repo/wt-1" }]);
+
+        const theirs = await openSse(lc, deps, `Bearer ${OTHER_HELP_TOKEN}`);
+
+        expect(ledger.ownerOf(theirs)).not.toBe(ledger.ownerOf(mine));
+        expect(ledger.owns(ledger.ownerOf(theirs), "worktree", "/repo/wt-1")).toBe(false);
+      });
+
+      it("binds the /mcp handshake to the help principal the same way", async () => {
+        const deps = bindingDeps();
+        const { lc } = helpLifecycle(deps);
+        const bind = vi.spyOn(deps.sessionStore.resourceOwnership, "bindPrincipal");
+
+        await handshakeHandler(lc)(
+          fakeReq({ authorization: HELP_AUTH }),
+          fakeRes(),
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(bind).toHaveBeenCalledExactlyOnceWith(
+          expect.any(String),
+          helpOwnershipPrincipal("help-session-1")
+        );
+      });
+
+      it("prefers a pane principal when the bearer is a pane token", async () => {
+        const deps = bindingDeps();
+        const { lc } = helpLifecycle(deps);
+        lc.setPaneOwnershipPrincipalResolver((token) => (token === HELP_TOKEN ? "pane-p" : null));
+        const bind = vi.spyOn(deps.sessionStore.resourceOwnership, "bindPrincipal");
+
+        await openSse(lc, deps, HELP_AUTH);
+
+        expect(bind).toHaveBeenCalledExactlyOnceWith(expect.any(String), "pane-p");
+      });
+
+      it("keeps a revoked help bearer and an api-key session session-scoped", async () => {
+        const deps = bindingDeps();
+        const { lc, helpSessions } = helpLifecycle(deps);
+        const ledger = deps.sessionStore.resourceOwnership;
+
+        const apiKeySession = await openSse(lc, deps, "Bearer test-api-key");
+        expect(ledger.ownerOf(apiKeySession)).toBe(apiKeySession);
+
+        // Revoked between the auth gate and the handshake: the resolver no
+        // longer knows the token, so nothing binds.
+        helpSessions.delete(HELP_TOKEN);
+        const revoked = await openSse(lc, deps, HELP_AUTH);
+        expect(ledger.ownerOf(revoked)).toBe(revoked);
       });
     });
 

@@ -34,7 +34,7 @@ describe("mapCreationError", () => {
     expect(result.friendly).toBe("This branch is already open in another worktree.");
     expect(result.raw).toBe(raw);
     expect(result.recovery).toBeDefined();
-    expect(result.recovery!.label).toBe("Open Worktree");
+    expect(result.recovery!.label).toBe("Open worktree");
   });
 
   it("recovery action selects the matching worktree and calls onClose", () => {

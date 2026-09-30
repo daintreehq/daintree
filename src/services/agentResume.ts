@@ -14,6 +14,7 @@ import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
+import { splitCallerLaunchFlags } from "@shared/utils/callerLaunchFlags";
 
 /**
  * Reconciles a resumed session's persisted launch flags against the current
@@ -28,6 +29,8 @@ import { isPtyPanel } from "@shared/types/panel";
 export function reconcileResumeLaunchFlags(session: {
   agentId: string;
   agentLaunchFlags?: string[];
+  /** The caller's verbatim tail (#13046), re-appended untouched after reconcile. */
+  callerLaunchFlags?: string[];
 }): string[] | undefined {
   const settings = useAgentSettingsStore.getState().settings;
   const entry = settings?.agents?.[session.agentId] ?? {};
@@ -41,12 +44,16 @@ export function reconcileResumeLaunchFlags(session: {
     session.agentId,
     settings?.globalUseAltScreen
   );
+  const { base, caller } = splitCallerLaunchFlags(
+    session.agentLaunchFlags,
+    session.callerLaunchFlags
+  );
   // Pass [] when no flags were captured so a global-on still injects the token
   // for a supported agent (each reconcile no-ops for agents without one).
-  return reconcileDecorationFlags(
+  const reconciled = reconcileDecorationFlags(
     reconcileInlineModeFlag(
       reconcileBypassFlags(
-        session.agentLaunchFlags ?? [],
+        base,
         session.agentId,
         effectiveBypass,
         entry.dangerousArgs as string | undefined
@@ -57,6 +64,7 @@ export function reconcileResumeLaunchFlags(session: {
     session.agentId,
     resolveKeepDecorations(entry)
   );
+  return caller.length > 0 ? [...reconciled, ...caller] : reconciled;
 }
 
 /**

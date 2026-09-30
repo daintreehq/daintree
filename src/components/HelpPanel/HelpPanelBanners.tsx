@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { formatCountdown } from "@/utils/formatCountdown";
 import { Clock, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
@@ -24,12 +25,6 @@ const GRANT_ENDED_TITLE: Record<GrantEndReason, string> = {
 // drives a re-render, it isn't the source of truth, so a missed beat can't
 // drift the displayed value.
 const COUNTDOWN_TICK_MS = 1000;
-
-function formatRemaining(totalSeconds: number): string {
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
 
 function computeRemainingSeconds(expiresAt: number): number {
   return Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
@@ -88,7 +83,7 @@ function GrantActiveBanner({
         // polite live region (`aria-live="off"`) so screen readers announce
         // the "<tool> approved" message once instead of the ticking time.
         <span aria-live="off">
-          <span className="tabular-nums">{formatRemaining(remainingSeconds)}</span> left
+          <span className="tabular-nums">{formatCountdown(remainingSeconds)}</span> left
         </span>
       }
       action={{

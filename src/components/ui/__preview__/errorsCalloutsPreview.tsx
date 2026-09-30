@@ -40,6 +40,10 @@ import { NewWorktreeDialog } from "@/components/Worktree/NewWorktreeDialog";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore } from "@/store/createWorktreeStore";
 import { McpConfirmDialog } from "@/components/McpConfirmDialog";
+import { Callout, CALLOUT_ICON, type CalloutSeverity } from "@/components/ui/Callout";
+import { InlineError } from "@/components/ui/field";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useMcpConfirmStore } from "@/store/mcpConfirmStore";
 import "@/index.css";
 
@@ -75,6 +79,7 @@ const INLINE_SCENES = new Set([
   "settings-load-error",
   "plugin-errors",
   "system-requirements",
+  "severity-vocabulary",
 ]);
 if (INLINE_SCENES.has(state)) {
   for (const el of [document.documentElement, document.body]) {
@@ -209,6 +214,32 @@ function MissingCliScene() {
               resolvedPath: "/usr/local/bin/gemini",
               via: "which",
               message: "Execution of /usr/local/bin/gemini was denied (EPERM).",
+            }}
+            onRunAnyway={noop}
+            onAvailabilityReady={noop}
+            onOpenAgentSettings={noop}
+          />
+        </div>
+      </Specimen>
+      <Specimen label="MissingCliGate · ready" width={560}>
+        <div className="flex flex-col rounded-[var(--radius-md)] border border-border-default">
+          <MissingCliGate
+            agentId="claude"
+            detail={{ state: "ready", resolvedPath: "/Users/you/.local/bin/claude", via: "which" }}
+            onRunAnyway={noop}
+            onAvailabilityReady={noop}
+            onOpenAgentSettings={noop}
+          />
+        </div>
+      </Specimen>
+      <Specimen label="MissingCliGate · unauthenticated" width={560}>
+        <div className="flex flex-col rounded-[var(--radius-md)] border border-border-default">
+          <MissingCliGate
+            agentId="codex"
+            detail={{
+              state: "unauthenticated",
+              resolvedPath: "/opt/homebrew/bin/codex",
+              via: "which",
             }}
             onRunAnyway={noop}
             onAvailabilityReady={noop}
@@ -375,6 +406,94 @@ function PluginErrorsScene() {
       </Specimen>
       <Specimen label="ProjectPluginDetailPane · invalid + loadError + clash" width={480}>
         <ProjectPluginDetailPane plugin={INVALID_PLUGIN} />
+      </Specimen>
+    </Scene>
+  );
+}
+
+// ---- severity-vocabulary ---------------------------------------------------
+
+const CALLOUT_TONES: CalloutSeverity[] = [
+  "error",
+  "warning",
+  "danger",
+  "success",
+  "info",
+  "neutral",
+];
+const CALLOUT_COPY: Record<CalloutSeverity, [string, string]> = {
+  error: ["Couldn't save settings", "EACCES: permission denied, open settings.json"],
+  warning: [
+    "Default recipe unavailable",
+    "The pinned recipe was deleted or is no longer eligible.",
+  ],
+  danger: ["This deletes the worktree", "Uncommitted changes in feature-auth-refresh are lost."],
+  success: ["CLI is now available", "The agent binary was detected. Re-check to continue."],
+  info: [
+    "Plugins reload on restart",
+    "Changes to plugin files apply the next time Daintree starts.",
+  ],
+  neutral: ["Sign-in not detected", "The CLI prompts for sign-in on its first run."],
+};
+const BANNER_TITLE = { warning: "Warning banner", info: "Info banner", neutral: "Neutral banner" };
+const MARK_LEVELS: StatusSeverity[] = ["success", "error", "warning", "info"];
+
+function SeverityVocabularyScene() {
+  // A tone this build's Callout does not know is skipped, so the same scene
+  // captures a tree from before the tone existed.
+  const tones = CALLOUT_TONES.filter((tone) => tone in CALLOUT_ICON);
+  return (
+    <Scene>
+      <Specimen label="Callout · default" width={560}>
+        {tones.map((tone) => (
+          <Callout key={tone} severity={tone} title={CALLOUT_COPY[tone][0]}>
+            <p>{CALLOUT_COPY[tone][1]}</p>
+          </Callout>
+        ))}
+      </Specimen>
+      <Specimen label="Callout · compact, untitled" width={560}>
+        {tones.map((tone) => (
+          <Callout key={tone} severity={tone} size="compact">
+            <p>{CALLOUT_COPY[tone][1]}</p>
+          </Callout>
+        ))}
+      </Specimen>
+      <Specimen label="InlineStatusBanner" width={560}>
+        <InlineStatusBanner
+          severity="error"
+          title="Error banner"
+          description="The pane-level band for the same severity."
+          animated={false}
+        />
+        {(["warning", "info", "neutral"] as const).map((tone) => (
+          <InlineStatusBanner
+            key={tone}
+            severity={tone}
+            title={BANNER_TITLE[tone]}
+            description="The pane-level band for the same severity."
+            animated={false}
+            actions={[]}
+          />
+        ))}
+        <InlineStatusBanner
+          severity="success"
+          title="Success banner"
+          description="The pane-level band for the same severity."
+          animated={false}
+          onClose={noop}
+          autoDismissAfter={3_600_000}
+        />
+      </Specimen>
+      <Specimen label="InlineError · SeverityMark" width={560}>
+        <InlineError>Name is required</InlineError>
+        <div className="flex items-center gap-3 text-xs text-text-secondary">
+          {MARK_LEVELS.map((level) => (
+            <span key={level} className="inline-flex items-center gap-1">
+              <SeverityMark severity={level} label={level} className="h-3.5 w-3.5" />
+              {level}
+            </span>
+          ))}
+        </div>
       </Specimen>
     </Scene>
   );
@@ -626,6 +745,8 @@ function InlineScene() {
       return <PluginErrorsScene />;
     case "system-requirements":
       return <SystemRequirementsScene />;
+    case "severity-vocabulary":
+      return <SeverityVocabularyScene />;
     default:
       return null;
   }

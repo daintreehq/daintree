@@ -205,7 +205,7 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
         // Home and End route through the shell's hover callback.
         onHoverIndex={loggerPalette.setSelectedIndex}
         getActionLabel={getLoggerActionLabel}
-        label="Set Log Level"
+        label="Set log level"
         ariaLabel="Set log level — choose a module"
         searchPlaceholder="Search modules"
         searchAriaLabel="Search log modules"

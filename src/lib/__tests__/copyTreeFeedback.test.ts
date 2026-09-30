@@ -43,6 +43,15 @@ describe("announceCopyTreeCopy", () => {
     });
   });
 
+  it("addresses the fallback toast to the copied worktree", () => {
+    announceCopyTreeCopy(NOTICE, "worktree.copyTree", "/repo/wt-a");
+    expect(notifyMock.mock.calls[0]![0].context).toEqual({
+      eventKind: "agent",
+      worktreeId: "/repo/wt-a",
+    });
+    expect(notifyMock.mock.calls[0]![0].suppressWhenOriginVisible).toBeUndefined();
+  });
+
   it("falls back to a toast when no presenter is registered at all", () => {
     announceCopyTreeCopy(NOTICE, "worktree.copyTree");
     expect(notifyMock).toHaveBeenCalledTimes(1);

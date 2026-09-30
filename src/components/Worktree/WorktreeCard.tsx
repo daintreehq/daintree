@@ -60,7 +60,7 @@ import {
 import { useInputReceiptKey } from "./WorktreeCard/hooks/useInputReceiptKey";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
-import { copyWorktreeValue } from "./WorktreeCard/copyWorktreeValue";
+import { copyWithToast } from "@/lib/copyWithToast";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import {
   CONTEXT_COMPONENTS,
@@ -532,13 +532,13 @@ export function WorktreeCard({
   };
 
   const handleCopyPath = () => {
-    copyWorktreeValue("Path", worktree.path);
+    copyWithToast("Path", worktree.path);
   };
 
   const handleCopyBranchName = () => {
     const branch = copyableBranchName(worktree);
     if (!branch) return;
-    copyWorktreeValue("Branch name", branch);
+    copyWithToast("Branch name", branch);
   };
 
   const [showIssuePicker, setShowIssuePicker] = useState(false);
@@ -823,7 +823,7 @@ export function WorktreeCard({
       if (actionId === "git.push" && captured) {
         notify({
           type: "error",
-          context: { eventKind: "git" },
+          context: { worktreeId: worktree.id, eventKind: "git" },
           title: "Push failed",
           message: `${captured.branchName} has commits on the remote you don't have locally. Force pushing discards them; pulling keeps them.`,
           action: {
@@ -862,7 +862,7 @@ export function WorktreeCard({
             : { cwd: worktree.path });
         notify({
           type: "error",
-          context: { eventKind: "git" },
+          context: { worktreeId: worktree.id, eventKind: "git" },
           title: humanized.title,
           message: humanized.body,
           action: {
@@ -876,7 +876,7 @@ export function WorktreeCard({
       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok. `RECOVERY_ACTIONS` in gitOperationErrors.ts is the repo's map of which git failures have a route; the ones that reach here are the ones it deliberately leaves unrouted, and inventing an action for them would send the user somewhere unrelated to what failed.
       notify({
         type: "error",
-        context: { eventKind: "git" },
+        context: { worktreeId: worktree.id, eventKind: "git" },
         title: humanized.title,
         message: humanized.body,
       });
@@ -1220,7 +1220,7 @@ export function WorktreeCard({
                     <div
                       ref={dragHandleActivatorRef}
                       data-worktree-row-drag-handle=""
-                      className="shrink-0 w-4 flex items-center justify-center cursor-not-allowed opacity-30 touch-none select-none transition-colors motion-reduce:transition-none"
+                      className="shrink-0 w-4 flex items-center justify-center cursor-not-allowed opacity-50 touch-none select-none transition-colors motion-reduce:transition-none"
                       aria-hidden="true"
                     >
                       <GripVertical className="w-3 h-3" />

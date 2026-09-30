@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Check, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { OVERLAY_SHEET_SHADOW_CLASS } from "@/components/ui/floatingSurface";
+import { pluralize } from "@/lib/pluralize";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
@@ -15,6 +18,8 @@ import {
 } from "@shared/theme";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { SearchField } from "@/components/ui/SearchField";
+import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   SegmentedRadioGroup,
   type SegmentedRadioOption,
@@ -25,6 +30,7 @@ import { AccessibilityAnnouncer } from "@/components/Accessibility/Accessibility
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useOverlayClaim, useImageError } from "@/hooks";
+import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 
 const PANEL_WIDTH = 380;
 const LISTBOX_ID = "theme-browser-listbox";
@@ -101,7 +107,7 @@ function ThemeRow({
       onClick={() => onSelect(scheme.id)}
       className={cn(
         PALETTE_ROW_CLASS,
-        "w-full flex items-center gap-2.5 px-2.5 py-2 text-left cursor-pointer",
+        "w-full flex items-center gap-2.5 px-3 py-2 text-left cursor-pointer",
         "duration-150 ease-out"
       )}
     >
@@ -126,10 +132,11 @@ function ThemeRow({
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-medium text-text-primary truncate">{scheme.name}</span>
           {warnings.length > 0 && (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-3xs text-status-warning shrink-0">
-              <AlertTriangle className="h-2.5 w-2.5" />
-              {warnings.length}
-            </span>
+            <Badge size="xs" tone="warning" shape="pill">
+              <AlertTriangle aria-hidden="true" />
+              <span aria-hidden="true">{warnings.length}</span>
+              <span className="sr-only">{pluralize(warnings.length, "warning")}</span>
+            </Badge>
           )}
         </div>
         <div className="flex items-center gap-1.5 min-w-0">
@@ -424,18 +431,13 @@ export function ThemeBrowser() {
   const handleListKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       if (filteredThemes.length === 0) return;
-      if (e.key === "ArrowDown") {
+      // A persistent list: the arrows stop at its ends. The search field forwards
+      // only the arrows, so there Home and End stay with the caret.
+      const next = keyBelongsToField(e)
+        ? null
+        : stepListboxCursor(e.key, keyboardIndex, filteredThemes.length, { wrap: false });
+      if (next !== null) {
         e.preventDefault();
-        const next = Math.min(keyboardIndex + 1, filteredThemes.length - 1);
-        setKeyboardIndex(next);
-        const scheme = filteredThemes[next];
-        if (scheme && scheme.id !== activeSchemeId) {
-          handlePreview(scheme.id, true);
-          revealRow(scheme.id);
-        }
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        const next = Math.max(keyboardIndex - 1, 0);
         setKeyboardIndex(next);
         const scheme = filteredThemes[next];
         if (scheme && scheme.id !== activeSchemeId) {
@@ -518,7 +520,10 @@ export function ThemeBrowser() {
 
   return (
     <div
-      className="flex flex-col h-full bg-surface-canvas border-l border-border-default shadow-2xl"
+      className={cn(
+        "flex flex-col h-full bg-surface-canvas border-l border-border-default",
+        OVERLAY_SHEET_SHADOW_CLASS
+      )}
       style={{ width: PANEL_WIDTH }}
       role="dialog"
       aria-modal="true"
@@ -545,14 +550,19 @@ export function ThemeBrowser() {
             <PaletteStrip scheme={effectiveSchemes.get(activeScheme.id) ?? activeScheme} />
           </div>
         )}
-        <button
-          type="button"
-          onClick={handleCancel}
-          aria-label="Close theme browser"
-          className="absolute top-2 right-2 p-1 rounded-full bg-scrim-medium text-white hover:bg-scrim-strong transition-colors duration-150 ease-out"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={handleCancel}
+              aria-label="Close theme browser"
+              className="absolute top-2 right-2 p-1 rounded-full bg-scrim-medium text-white hover:bg-scrim-strong transition-colors duration-150 ease-out"
+            >
+              <X className="w-4 h-4" aria-hidden="true" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Close theme browser</TooltipContent>
+        </Tooltip>
         {/* Media-overlay caption: sits on a guaranteed-dark scrim over the hero
             image, so the white label text is intentional and stays readable on
             every theme. `text-inverse` flips dark on dark themes — not usable here. */}
@@ -568,10 +578,11 @@ export function ThemeBrowser() {
         </div>
       </div>
 
-      {/* Search + type filter */}
-      <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-border-default shrink-0">
+      {/* Search + type filter: the browser's own title strip under the hero, so
+          it takes the compact header frame and the filter-strip field size. */}
+      <SurfaceHeader density="compact" className="gap-1.5">
         <SearchField
-          size="compact"
+          size="dense"
           fieldClassName="flex-1"
           inputRef={searchInputRef}
           role="combobox"
@@ -602,7 +613,7 @@ export function ThemeBrowser() {
             setTypeFilter(next);
           }}
         />
-      </div>
+      </SurfaceHeader>
 
       {/* Scrollable theme list, sized to its content rather than to the panel.
           `shrink` (grow 0, shrink 1) keeps the list as tall as its rows when
@@ -621,7 +632,7 @@ export function ThemeBrowser() {
       >
         {isEmpty ? (
           <p className="text-xs text-text-secondary text-center py-4">
-            No themes match your search.
+            No themes match your search
           </p>
         ) : (
           filteredThemes.map((scheme) => (
@@ -647,7 +658,7 @@ export function ThemeBrowser() {
           (near-white fill + off-black text on dark themes, near-black fill +
           off-white text on light) so it's highly visible and never restyles to
           the previewed accent. */}
-      <div className="flex items-center gap-2 px-2.5 py-2 border-t border-border-default bg-surface-canvas shrink-0">
+      <div className="flex items-center gap-2 px-3 py-2 border-t border-divider bg-surface-canvas shrink-0">
         {/* The app behind this panel is showing a live preview and is not
             interactive. Saying so is what the scrim alone cannot do — and it
             says it without tinting or blurring the very thing being judged. */}

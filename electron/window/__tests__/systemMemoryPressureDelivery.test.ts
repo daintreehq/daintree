@@ -15,6 +15,7 @@ import { broadcastToRenderer } from "../../ipc/utils.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import {
   deliverOpenSystemMemoryPressure,
+  getOpenSystemMemoryPressure,
   publishSystemMemoryPressure,
   resetSystemMemoryPressureDeliveryForTesting,
 } from "../systemMemoryPressureDelivery.js";
@@ -186,5 +187,16 @@ describe("systemMemoryPressureDelivery", () => {
     deliverOpenSystemMemoryPressure(win, view.wc);
 
     expect(view.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("exposes the open episode until it closes", () => {
+    const win = makeWindow(1, makeWebContents());
+    expect(getOpenSystemMemoryPressure()).toBeNull();
+
+    publishSystemMemoryPressure(DEGRADED, [win]);
+    expect(getOpenSystemMemoryPressure()).toEqual(DEGRADED);
+
+    publishSystemMemoryPressure(NORMAL, [win]);
+    expect(getOpenSystemMemoryPressure()).toBeNull();
   });
 });

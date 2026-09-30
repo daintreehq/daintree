@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 type GainMock = {
   gain: { setTargetAtTime: ReturnType<typeof vi.fn>; value: number };
@@ -21,7 +21,16 @@ type SourceMock = {
 
 function createMockAudioContext() {
   const mockStart = vi.fn();
-  const mockResume = vi.fn().mockResolvedValue(undefined);
+  // suspend() and resume() settle asynchronously and in call order, as Web
+  // Audio control messages do: `state` still reads "running" while a suspend
+  // is in flight, and a resume issued behind it lands after it.
+  let controlQueue: Promise<void> = Promise.resolve();
+  const enqueue = (next: string) =>
+    (controlQueue = controlQueue.then(() => {
+      state = next;
+    }));
+  const mockResume = vi.fn(() => enqueue("running"));
+  const mockSuspend = vi.fn(() => enqueue("suspended"));
   const mockClose = vi.fn().mockResolvedValue(undefined);
   const mockDecodeAudioData = vi.fn();
   const sources: SourceMock[] = [];
@@ -72,13 +81,23 @@ function createMockAudioContext() {
     }),
     decodeAudioData: mockDecodeAudioData,
     resume: mockResume,
+    suspend: mockSuspend,
     close: mockClose,
   };
 
-  return { ctx, mockStart, mockResume, mockClose, mockDecodeAudioData, sources };
+  return { ctx, mockStart, mockResume, mockSuspend, mockClose, mockDecodeAudioData, sources };
 }
 
 describe("WebAudioService", () => {
+  let activeService: typeof import("@/services/WebAudioService") | undefined;
+
+  afterEach(() => {
+    // vi.resetModules() leaves the previous instance's idle timer armed.
+    activeService?.dispose();
+    activeService = undefined;
+    vi.useRealTimers();
+  });
+
   async function setupTest(opts: { ctxState?: string } = {}) {
     vi.resetModules();
     vi.restoreAllMocks();
@@ -99,6 +118,7 @@ describe("WebAudioService", () => {
     };
 
     const service = await import("@/services/WebAudioService");
+    activeService = service;
 
     const fakeBuffer = { duration: 1, length: 44100 } as AudioBuffer;
     function mockSuccessfulFetch() {
@@ -318,5 +338,160 @@ describe("WebAudioService", () => {
     service.dispose();
 
     expect(mockClose).toHaveBeenCalled();
+  });
+
+  describe("idle suspend", () => {
+    it("suspends the context once playback has been silent for the idle period", async () => {
+      vi.useFakeTimers();
+      const { service, mockSuccessfulFetch, mockSuspend, sources, ctx } = await setupTest();
+      mockSuccessfulFetch();
+
+      await service.playSound("chime.wav");
+      vi.advanceTimersByTime(service.IDLE_SUSPEND_MS * 2);
+      // Still playing: a live voice must never be cut off.
+      expect(mockSuspend).not.toHaveBeenCalled();
+
+      sources[0]!.onended?.();
+      vi.advanceTimersByTime(service.IDLE_SUSPEND_MS - 1);
+      expect(mockSuspend).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(mockSuspend).toHaveBeenCalledTimes(1);
+      await vi.runAllTimersAsync();
+      expect(ctx.state).toBe("suspended");
+
+      // Suspended once, not re-armed on a silent context.
+      vi.advanceTimersByTime(service.IDLE_SUSPEND_MS * 10);
+      expect(mockSuspend).toHaveBeenCalledTimes(1);
+    });
+
+    it("resumes before scheduling the next sound so it is not dropped", async () => {
+      vi.useFakeTimers();
+      const { service, mockSuccessfulFetch, mockResume, mockStart, sources, ctx } =
+        await setupTest();
+      mockSuccessfulFetch();
+      await service.playSound("chime.wav");
+      sources[0]!.onended?.();
+      vi.advanceTimersByTime(service.IDLE_SUSPEND_MS);
+      await vi.runAllTimersAsync();
+      expect(ctx.state).toBe("suspended");
+
+      await service.playSound("chime.wav");
+
+      expect(mockResume).toHaveBeenCalledTimes(1);
+      expect(mockResume.mock.invocationCallOrder[0]).toBeLessThan(
+        mockStart.mock.invocationCallOrder[1]!
+      );
+      expect(ctx.state).toBe("running");
+    });
+
+    it("resumes a play that lands while the suspend is still in flight", async () => {
+      vi.useFakeTimers();
+      const { service, mockSuccessfulFetch, mockResume, sources, ctx } = await setupTest();
+      mockSuccessfulFetch();
+      await service.playSound("chime.wav");
+      sources[0]!.onended?.();
+      vi.advanceTimersByTime(service.IDLE_SUSPEND_MS);
+      // suspend() issued but not settled: state still reads "running".
+      expect(ctx.state).toBe("running");
+
+      await service.playSound("chime.wav");
+
+      expect(mockResume).toHaveBeenCalledTimes(1);
+      expect(ctx.state).toBe("running");
+    });
+
+    it("restarts the idle period on every play", async () => {
+      vi.useFakeTimers();
+      const { service, mockSuccessfulFetch, mockSuspend, sources } = await setupTest();
+      mockSuccessfulFetch();
+      await service.playSound("chime.wav");
+      sources[0]!.onended?.();
+      vi.advanceTimersByTime(service.IDLE_SUSPEND_MS - 1000);
+
+      await service.playSound("chime.wav");
+      sources[1]!.onended?.();
+      vi.advanceTimersByTime(service.IDLE_SUSPEND_MS - 1000);
+      expect(mockSuspend).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1000);
+      expect(mockSuspend).toHaveBeenCalledTimes(1);
+    });
+
+    it("dispose cancels a pending idle suspend", async () => {
+      vi.useFakeTimers();
+      const { service, mockSuccessfulFetch, mockSuspend, sources } = await setupTest();
+      mockSuccessfulFetch();
+      await service.playSound("chime.wav");
+      sources[0]!.onended?.();
+
+      service.dispose();
+      vi.advanceTimersByTime(service.IDLE_SUSPEND_MS * 2);
+
+      expect(mockSuspend).not.toHaveBeenCalled();
+    });
+    it("waits for resume to settle before starting the next sound", async () => {
+      vi.useFakeTimers();
+      const { service, ctx, mockSuccessfulFetch, mockResume, mockStart, sources } =
+        await setupTest();
+      mockSuccessfulFetch();
+      await service.playSound("chime.wav");
+      sources[0]!.onended?.();
+      vi.advanceTimersByTime(service.IDLE_SUSPEND_MS);
+      await vi.runAllTimersAsync();
+      expect(ctx.state).toBe("suspended");
+
+      let settle!: () => void;
+      mockResume.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            settle = () => {
+              ctx.state = "running";
+              resolve();
+            };
+          })
+      );
+      const play = service.playSound("chime.wav");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockStart).toHaveBeenCalledTimes(1);
+
+      settle();
+      await play;
+      expect(mockStart).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not suspend while a fetch is in flight, and does once it fails", async () => {
+      vi.useFakeTimers();
+      const { service, mockFetch, mockSuspend } = await setupTest();
+      let fail!: () => void;
+      mockFetch.mockReturnValueOnce(
+        new Promise((_resolve, reject) => {
+          fail = () => reject(new Error("offline"));
+        })
+      );
+
+      const play = service.playSound("slow.wav");
+      await vi.advanceTimersByTimeAsync(service.IDLE_SUSPEND_MS * 2);
+      expect(mockSuspend).not.toHaveBeenCalled();
+
+      fail();
+      await play;
+      vi.advanceTimersByTime(service.IDLE_SUSPEND_MS);
+      expect(mockSuspend).toHaveBeenCalledTimes(1);
+    });
+
+    it("waits for a cancelled voice to finish its fade before arming", async () => {
+      vi.useFakeTimers();
+      const { service, mockSuccessfulFetch, mockSuspend, sources } = await setupTest();
+      mockSuccessfulFetch();
+      await service.playSound("chime.wav");
+
+      service.cancelSound();
+      // The fade's `ended` has not arrived yet.
+      vi.advanceTimersByTime(service.IDLE_SUSPEND_MS * 2);
+      expect(mockSuspend).not.toHaveBeenCalled();
+
+      sources[0]!.onended?.();
+      vi.advanceTimersByTime(service.IDLE_SUSPEND_MS);
+      expect(mockSuspend).toHaveBeenCalledTimes(1);
+    });
   });
 });

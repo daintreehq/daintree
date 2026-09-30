@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  promises as fsPromises,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import { join as pathJoin } from "path";
 
@@ -187,7 +194,9 @@ describe("filesystem fast path (no subprocess)", () => {
   let root: string;
 
   beforeEach(() => {
-    root = mkdtempSync(pathJoin(tmpdir(), "daintree-gitdir-fastpath-"));
+    // Real path: macOS's tmpdir is itself a symlink, and a relative gitdir
+    // pointer under a symlinked path is deliberately left to the subprocess.
+    root = realpathSync(mkdtempSync(pathJoin(tmpdir(), "daintree-gitdir-fastpath-")));
   });
 
   afterEach(() => {
@@ -223,6 +232,7 @@ describe("filesystem fast path (no subprocess)", () => {
   });
 
   it("resolves a relative gitdir pointer against the worktree path", async () => {
+    mockGitFailure("unexpected subprocess fallback");
     const target = pathJoin(root, "meta");
     mkdirSync(target, { recursive: true });
     writeFileSync(pathJoin(target, "HEAD"), "ref: refs/heads/main\n");
@@ -230,7 +240,10 @@ describe("filesystem fast path (no subprocess)", () => {
     mkdirSync(wtRoot, { recursive: true });
     writeFileSync(pathJoin(wtRoot, ".git"), "gitdir: ../meta\n");
 
-    await expect(getGitDir(wtRoot)).resolves.toBe(target);
+    // Use the same async realpath spelling as the fast path's symlink guard.
+    // On Windows a sync realpath may retain the temp directory's 8.3 alias.
+    const canonicalWtRoot = await fsPromises.realpath(wtRoot);
+    await expect(getGitDir(canonicalWtRoot)).resolves.toBe(pathJoin(canonicalWtRoot, "../meta"));
     expect(execFileMock).not.toHaveBeenCalled();
   });
 

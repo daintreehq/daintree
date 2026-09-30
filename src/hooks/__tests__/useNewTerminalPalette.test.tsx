@@ -149,7 +149,7 @@ describe("useNewTerminalPalette", () => {
   function render() {
     return renderHook(() =>
       useNewTerminalPalette({
-        worktreeMap: makeWorktreeMap(),
+        getWorktree: (id) => makeWorktreeMap().get(id),
       })
     );
   }

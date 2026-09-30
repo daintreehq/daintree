@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Callout } from "@/components/ui/Callout";
-import { AlertCircle, AlertTriangle, ArrowUpCircle, RefreshCw, Trash2 } from "lucide-react";
+import { XCircle, AlertTriangle, ArrowUpCircle, RefreshCw, Trash2 } from "lucide-react";
 import {
   getPluginCategoryMeta,
   resolvePluginCategory,
@@ -436,7 +436,7 @@ export function PluginDetailPane({
               <Badge size="xs">{sourceLabel}</Badge>
               {plugin.blocklisted === true && (
                 <Badge size="xs" tone="error">
-                  <AlertCircle aria-hidden="true" />
+                  <XCircle aria-hidden="true" />
                   Blocked
                 </Badge>
               )}
@@ -644,7 +644,7 @@ export function PluginDetailPane({
                 {plugin.manifest.description}
               </p>
             ) : (
-              <p className="text-xs text-text-secondary">No description provided.</p>
+              <p className="text-xs text-text-secondary">No description provided</p>
             )}
 
             {/* Where it actually came from. A "URL" badge names the KIND of

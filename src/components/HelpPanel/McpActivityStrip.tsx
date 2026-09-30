@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Spinner } from "@/components/ui/Spinner";
-import { Check, CircleSlash, TriangleAlert, X } from "lucide-react";
+import { CircleSlash, TriangleAlert, XCircle, CheckCircle2 } from "lucide-react";
 import { Activity } from "@/components/icons";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -54,6 +54,7 @@ interface McpActivityStripProps {
  */
 export function McpActivityStrip({ sessionId, activity, compact = false }: McpActivityStripProps) {
   const [open, setOpen] = useState(false);
+  const titleId = useId();
   const [records, setRecords] = useState<McpAuditRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -90,10 +91,15 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
 
     void (async () => {
       try {
-        const all = await window.electron.mcpServer.getAuditRecords();
-        if (fetchSeq.current !== seq) return;
         // Audit records carry the MCP transport id in `sessionId`; the help
         // session id the renderer holds only ever matches `helpSessionId`.
+        // Main narrows the ring so only these few records cross IPC; the
+        // local pass is a no-op on that answer.
+        const all = await window.electron.mcpServer.getAuditRecords({
+          helpSessionId: sessionId,
+          limit: MAX_RECENT_CALLS,
+        });
+        if (fetchSeq.current !== seq) return;
         const mine = all.filter((r) => r.helpSessionId === sessionId).slice(0, MAX_RECENT_CALLS);
         hasRecords.current = mine.length > 0;
         setRecords(mine);
@@ -204,10 +210,11 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
         side="top"
         align="start"
         onOpenAutoFocus={(event) => event.preventDefault()}
-        aria-label="Recent tool calls"
+        aria-labelledby={titleId}
         className="w-80 max-w-[var(--radix-popover-content-available-width)]"
       >
         <RecentCallsPopover
+          titleId={titleId}
           records={records}
           loading={loading}
           error={error}
@@ -266,7 +273,7 @@ function ActivityGlyph({
     return <Spinner size="xs" />;
   }
   if (activity.isError) {
-    return <X aria-hidden className="w-3 h-3 shrink-0" />;
+    return <XCircle aria-hidden className="w-3 h-3 shrink-0" />;
   }
   if (activity.result === "unauthorized" || activity.result === "rate_limited") {
     return <CircleSlash aria-hidden className="w-3 h-3 shrink-0" />;
@@ -274,7 +281,7 @@ function ActivityGlyph({
   if (activity.severity === "warning" || activity.severity === "notice") {
     return <TriangleAlert aria-hidden className="w-3 h-3 shrink-0" />;
   }
-  return <Check aria-hidden className="w-3 h-3 shrink-0" />;
+  return <CheckCircle2 aria-hidden className="w-3 h-3 shrink-0" />;
 }
 
 function buildTitle(activity: McpToolActivityState): string {

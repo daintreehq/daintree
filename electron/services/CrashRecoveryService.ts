@@ -144,10 +144,9 @@ export class CrashRecoveryService {
   private cachedConfig: CrashRecoveryConfig | null = null;
   // Serialized state-dependent snapshot fields (appState + windowStates,
   // excluding capturedAt which changes on every call) from the last successful
-  // write. Used to skip the rotate+write on periodic timer ticks when state
-  // hasn't changed. Explicit scheduleBackup() calls clear this field so
-  // change-driven writes always go through.
+  // write. Used to skip the rotate+write when state hasn't changed.
   private lastWrittenStateJson: string | null = null;
+  private lastWrittenFingerprint: string | null = null;
   // Workspaces whose persisted layouts describe the running session. Supplied
   // by main because the answer lives in the window registry and PtyClient,
   // neither of which this early-boot service may import.
@@ -458,9 +457,6 @@ export class CrashRecoveryService {
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
     }
-    // Clear the idempotency guard so the upcoming write goes through regardless
-    // of what was written last — a scheduleBackup() call means state changed.
-    this.lastWrittenStateJson = null;
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
       this.takeBackup();
@@ -475,17 +471,22 @@ export class CrashRecoveryService {
 
       const snapshot = this.captureSessionSnapshot();
 
-      // Skip the rotate+write on periodic timer ticks when the state-bearing
-      // fields are identical to the last write. capturedAt is excluded because
-      // it changes on every call regardless of app state. Explicit
-      // scheduleBackup() calls clear lastWrittenStateJson so change-driven
-      // writes always go through.
+      // Skip the rotate+write when the state-bearing fields are identical to
+      // the last write, whatever triggered it: a crash-critical APP_SET_STATE
+      // that re-sends an unchanged value would otherwise rotate an identical
+      // copy over the previous generation. capturedAt is excluded because it
+      // changes on every call regardless of app state. A backup file that has
+      // since changed on disk or gone missing is always rewritten.
       const stateJson = JSON.stringify({
         appState: snapshot.appState,
         windowStates: snapshot.windowStates,
         projectLayouts: snapshot.projectLayouts,
       });
-      if (stateJson === this.lastWrittenStateJson) {
+      if (
+        stateJson === this.lastWrittenStateJson &&
+        this.lastWrittenFingerprint !== null &&
+        this.backupFingerprint() === this.lastWrittenFingerprint
+      ) {
         return;
       }
 
@@ -500,8 +501,24 @@ export class CrashRecoveryService {
         mode: OWNER_RW_FILE_MODE,
       });
       this.lastWrittenStateJson = stateJson;
+      this.lastWrittenFingerprint = this.backupFingerprint();
     } catch (err) {
+      // Rotation may have run before the write failed; never trust the guard.
+      this.lastWrittenStateJson = null;
+      this.lastWrittenFingerprint = null;
       console.error("[CrashRecovery] Failed to take backup:", err);
+    }
+  }
+
+  // Identity of the current backup file as this service last wrote it, so a
+  // skipped write never leaves a file that was since replaced, truncated or
+  // deleted standing in for the current state.
+  private backupFingerprint(): string | null {
+    try {
+      const stat = fs.statSync(this.backupPath);
+      return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+    } catch {
+      return null;
     }
   }
 

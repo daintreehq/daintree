@@ -130,6 +130,24 @@ describe("reconcileResumeLaunchFlags", () => {
     expect(resolveEffectiveBypassMock).toHaveBeenCalledWith({}, "gemini", true);
     expect(reconcileBypassFlagsMock).toHaveBeenCalledWith([], "gemini", true, undefined);
   });
+
+  // #13046: the caller's verbatim tail never reaches the reconcile, and comes
+  // back unchanged after it.
+  it("reconciles only the settings-derived flags and re-appends the caller's", () => {
+    const result = reconcileResumeLaunchFlags({
+      agentId: "claude",
+      agentLaunchFlags: ["--dangerously-skip-permissions", "--effort", "high"],
+      callerLaunchFlags: ["--effort", "high"],
+    });
+
+    expect(reconcileBypassFlagsMock).toHaveBeenCalledWith(
+      ["--dangerously-skip-permissions"],
+      "claude",
+      true,
+      "--dangerously-skip-permissions"
+    );
+    expect(result).toEqual(["--dangerously-skip-permissions", "--effort", "high"]);
+  });
 });
 
 describe("buildResumePanelOptions", () => {

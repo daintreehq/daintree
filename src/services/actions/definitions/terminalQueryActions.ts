@@ -6,7 +6,7 @@ import {
   TerminalSendCommandResultSchema,
   TerminalLastMessageResultSchema,
 } from "./schemas";
-import { tailCapturedOutput } from "@shared/utils/artifactParser";
+import { readTailSnapshot, tailCapturedOutput } from "@shared/utils/artifactParser";
 import {
   boundTerminalStatusOutput,
   fitTerminalOutputResult,
@@ -273,7 +273,14 @@ export function registerTerminalQueryActions(
       const effectiveMaxLines = Math.min(Math.max(maxLines, 1), 1000);
 
       // Get serialized terminal state via existing IPC method
-      const serializedState = await window.electron.terminal.getSerializedState(terminalId);
+      // Raw output keeps the whole-buffer read: the serializer's erase escapes
+      // depend on the range it starts from, so a capped read is not byte-identical.
+      const serializedState = stripAnsi
+        ? await readTailSnapshot(
+            (options) => window.electron.terminal.getSerializedState(terminalId, options),
+            effectiveMaxLines
+          )
+        : await window.electron.terminal.getSerializedState(terminalId);
 
       if (serializedState === null) {
         return {
@@ -803,7 +810,7 @@ export function registerTerminalQueryActions(
     id: "terminal.readLastMessageOwned",
     title: "Read owned agent's last message",
     description:
-      "Read an agent's last transcript reply and unanswered tool calls, e.g. a question and its options. Agents this connection launched or was handed; Daintree's assistant: any in its project. Claude Code only. Not proof the agent is waiting; permission prompts are screen-only.",
+      "Read an agent's last transcript reply and unanswered tool calls, e.g. a question and its options. Agents this connection launched or was handed (right-click > Hand to orchestrator); Daintree's assistant: any in its project. Claude Code only. Not proof the agent is waiting; permission prompts are screen-only.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -991,7 +998,7 @@ export function registerTerminalQueryActions(
     id: "terminal.sendCommandOwned",
     title: "Submit text to owned terminal",
     description:
-      "Queue text as one submission to a terminal this connection created or was handed: a shell runs it, an agent pane takes it as its next prompt. Any other panel is refused. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check.",
+      "Queue text as one submission to a terminal this connection created or was handed (right-click > Hand to orchestrator): a shell runs it, an agent pane takes it as its next prompt. Any other panel is refused. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check.",
     category: "terminal",
     kind: "command",
     danger: "safe",

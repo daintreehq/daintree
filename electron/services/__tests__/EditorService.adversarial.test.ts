@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockExecaChildren } from "./helpers/editorChild.js";
 
 const fsMock = vi.hoisted(() => ({
-  statSync: vi.fn<(path: string) => { isFile: () => boolean }>(),
-  accessSync: vi.fn<(path: string, mode?: number) => void>(),
+  promises: {
+    stat: vi.fn<(path: string) => Promise<{ isFile: () => boolean }>>(),
+    access: vi.fn<(path: string, mode?: number) => Promise<void>>(),
+  },
   constants: { X_OK: 1 },
 }));
 
@@ -30,11 +32,11 @@ function setPlatform(platform: NodeJS.Platform) {
 function mockExistingFiles(paths: string[], options: { executable?: boolean } = {}) {
   const set = new Set(paths);
   const executable = options.executable ?? true;
-  fsMock.statSync.mockImplementation((p: string) => {
+  fsMock.promises.stat.mockImplementation(async (p: string) => {
     if (set.has(p)) return { isFile: () => true };
     throw new Error("ENOENT");
   });
-  fsMock.accessSync.mockImplementation((p: string) => {
+  fsMock.promises.access.mockImplementation(async (p: string) => {
     if (set.has(p) && executable) return;
     throw new Error("EACCES");
   });
@@ -85,7 +87,7 @@ describe("EditorService adversarial", () => {
     mockExistingFiles(["/usr/local/bin/code"]);
     const { discover, openFile } = await loadModule();
 
-    const first = discover();
+    const first = await discover();
     expect(first.find((e) => e.id === "vscode")?.available).toBe(true);
 
     mockExistingFiles([]);
@@ -365,10 +367,10 @@ describe("EditorService directory targets", () => {
     delete process.env.VISUAL;
     delete process.env.EDITOR;
     setPlatform("linux");
-    fsMock.statSync.mockImplementation(() => {
+    fsMock.promises.stat.mockImplementation(async () => {
       throw new Error("ENOENT");
     });
-    fsMock.accessSync.mockImplementation(() => {
+    fsMock.promises.access.mockImplementation(async () => {
       throw new Error("EACCES");
     });
     shellMock.openPath.mockResolvedValue("");

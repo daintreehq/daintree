@@ -9,30 +9,30 @@ import React, {
   type ReactNode,
 } from "react";
 import {
-  Check,
-  X,
-  Maximize2,
-  Minimize2,
-  RotateCcw,
-  Grid2X2,
-  Plus,
-  RadioTower,
   Bell,
   BellOff,
+  Check,
   ChevronDown,
   CirclePlay,
   CopyPlus,
   DatabaseBackup,
   Ellipsis,
+  Grid2X2,
   Lock,
+  Maximize2,
+  Minimize2,
   PanelBottomClose,
   PanelTopClose,
   Pencil,
+  Plus,
+  RadioTower,
   RefreshCw,
+  RotateCw,
   Settings,
   ShieldAlert,
   Trash2,
   Unlock,
+  X,
 } from "lucide-react";
 import {
   DndContext,
@@ -40,7 +40,6 @@ import {
   useSensor,
   useSensors,
   KeyboardSensor,
-  PointerSensor,
   TouchSensor,
   type DragEndEvent,
   type UniqueIdentifier,
@@ -52,6 +51,11 @@ import {
   sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
+import {
+  MOUSE_SENSOR_OPTIONS,
+  PrimaryMouseSensor,
+  TOUCH_SENSOR_OPTIONS,
+} from "@/components/DragDrop/dragActivation";
 import { PanelTabList } from "./PanelTabList";
 import { inlineRenameFieldClassName, inlineRenameFieldInputProps } from "./inlineRenameField";
 import { focusPaneWhenStripCloses, revealTabInStrip } from "@/components/ui/document-tab";
@@ -61,7 +65,7 @@ import { cn } from "@/lib/utils";
 import { formatShortcutForTooltip } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
+import { SurfaceHeader, SURFACE_HEADER_FOCUS_LIFT_CLASS } from "@/components/ui/SurfaceHeader";
 import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import { Button } from "@/components/ui/button";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
@@ -86,6 +90,7 @@ import {
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { usePanelStore } from "@/store/panelStore";
+import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -333,40 +338,8 @@ function PanelHeaderComponent({
   // Check if panel kind supports restart via registry
   const canRestart = panelKindCanRestart(kind);
 
-  // Armed restart confirmation state (2-click pattern with 3s timeout)
-  const [armedRestartId, setArmedRestartId] = useState<string | null>(null);
-  const [countdown, setCountdown] = useState<number | null>(null);
   const [overflowTooltipOpen, setOverflowTooltipOpen] = useState(false);
   const overflowButtonRef = useRef<HTMLButtonElement | null>(null);
-  const armedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const ARMED_TIMEOUT_MS = 3000;
-
-  useEffect(() => {
-    return () => {
-      if (armedTimerRef.current) {
-        clearTimeout(armedTimerRef.current);
-      }
-      if (countdownIntervalRef.current) {
-        clearInterval(countdownIntervalRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (armedRestartId !== null && (armedRestartId !== id || !canRestart || !onRestart)) {
-      setArmedRestartId(null);
-      setCountdown(null);
-      if (armedTimerRef.current) {
-        clearTimeout(armedTimerRef.current);
-        armedTimerRef.current = null;
-      }
-      if (countdownIntervalRef.current) {
-        clearInterval(countdownIntervalRef.current);
-        countdownIntervalRef.current = null;
-      }
-    }
-  }, [id, armedRestartId, canRestart, onRestart]);
 
   const dragListeners =
     (location === "grid" || location === "dock") && dragHandle?.listeners
@@ -654,56 +627,17 @@ function PanelHeaderComponent({
     );
   };
 
-  // Restart handler for Radix DropdownMenu onSelect
-  const handleRestartSelect = useCallback(
-    (e: Event) => {
-      if (armedRestartId === id) {
-        // Second select — confirm restart, let menu close
-        setArmedRestartId(null);
-        setCountdown(null);
-        if (armedTimerRef.current) {
-          clearTimeout(armedTimerRef.current);
-          armedTimerRef.current = null;
-        }
-        if (countdownIntervalRef.current) {
-          clearInterval(countdownIntervalRef.current);
-          countdownIntervalRef.current = null;
-        }
-        onRestart?.();
-      } else {
-        // First select — arm, keep menu open
-        e.preventDefault();
-        setArmedRestartId(id);
-        setCountdown(3);
-
-        if (armedTimerRef.current) {
-          clearTimeout(armedTimerRef.current);
-        }
-        if (countdownIntervalRef.current) {
-          clearInterval(countdownIntervalRef.current);
-        }
-
-        let currentCount = 3;
-        countdownIntervalRef.current = setInterval(() => {
-          currentCount -= 1;
-          if (currentCount > 0) {
-            setCountdown(currentCount);
-          }
-        }, 1000);
-
-        armedTimerRef.current = setTimeout(() => {
-          setArmedRestartId(null);
-          setCountdown(null);
-          if (countdownIntervalRef.current) {
-            clearInterval(countdownIntervalRef.current);
-            countdownIntervalRef.current = null;
-          }
-          armedTimerRef.current = null;
-        }, ARMED_TIMEOUT_MS);
-      }
-    },
-    [id, armedRestartId, onRestart]
-  );
+  // Restarting an idle shell costs nothing worth asking about, so it acts at
+  // once; a working agent gets the same confirm as the right-click menu. That
+  // confirm is staged by the action itself, after the menu has handed focus
+  // back, so the dialog's own close returns focus to this panel.
+  const handleRestartSelect = () => {
+    if (terminalHasRunningAgentSession(usePanelStore.getState().panelsById[id])) {
+      pendingMenuDispatchRef.current = { actionId: "terminal.restart", args: { terminalId: id } };
+      return;
+    }
+    onRestart?.();
+  };
 
   const handleWatchToggle = useCallback(() => {
     if (isWatched) {
@@ -855,14 +789,11 @@ function PanelHeaderComponent({
     revealTabInStrip(tabListEl, tabEl, prefersReducedMotion() ? "auto" : "smooth");
   }, [activeTabId, isDragging, tabListEl]);
 
-  // Sensors for tab drag-and-drop (require small distance to differentiate from clicks)
+  // The app's one pickup threshold, so a tab and the panel it sits on start a
+  // drag at the same travel.
   const tabSensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 5 },
-    }),
-    useSensor(TouchSensor, {
-      activationConstraint: { delay: 150, tolerance: 5 },
-    }),
+    useSensor(PrimaryMouseSensor, MOUSE_SENSOR_OPTIONS),
+    useSensor(TouchSensor, TOUCH_SENSOR_OPTIONS),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
@@ -1120,10 +1051,7 @@ function PanelHeaderComponent({
           : location === "dock"
             ? "bg-surface"
             : isFocused || isSelected
-              ? // The var hook lets a theme repaint the lifted bar; the fallback
-                // is the strongest neutral overlay step, so on a theme without
-                // the hook the pane you type into still reads as lifted.
-                "bg-[var(--panel-header-focus-bg,var(--color-overlay-medium))]"
+              ? SURFACE_HEADER_FOCUS_LIFT_CLASS
               : // Preview tint sits between transparent and the focus lift so a
                 // previewed-but-unselected pane reads distinctly from both.
                 // Neutral surface, no accent — accent restraint per CLAUDE.md.
@@ -1190,6 +1118,7 @@ function PanelHeaderComponent({
                       fallbackTooltip={tab.fallbackTooltip}
                       hasDangerousFlags={tab.hasDangerousFlags}
                       tabPanelId={tabPanelId}
+                      menuLocation={location}
                       onClick={() => onTabClick?.(tab.id)}
                       onClose={() => onTabClose?.(tab.id)}
                       onRename={
@@ -1228,6 +1157,7 @@ function PanelHeaderComponent({
                   fallbackTooltip={tab.fallbackTooltip}
                   hasDangerousFlags={tab.hasDangerousFlags}
                   tabPanelId={tabPanelId}
+                  menuLocation={location}
                   onClick={() => onTabClick?.(tab.id)}
                   onClose={() => onTabClose?.(tab.id)}
                   onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
@@ -1357,8 +1287,9 @@ function PanelHeaderComponent({
             {isFleetFailed && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
                     onClick={(e) => {
                       e.stopPropagation();
                       dismissFleetFailure(id);
@@ -1368,13 +1299,14 @@ function PanelHeaderComponent({
                     data-testid="panel-fleet-failure-dot"
                     // The mark stays an 8px dot; the button around it is the
                     // 24px target. -mx-1 keeps its footprint in the row at 16px.
-                    className="-mx-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                    // Ringed inside: the title group clips anything outside it.
+                    className="-mx-1 shrink-0 focus-visible:-outline-offset-2"
                   >
                     <span
                       className="status-mark h-2 w-2 rounded-full bg-status-error"
                       aria-hidden="true"
                     />
-                  </button>
+                  </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
                   Last fleet broadcast failed here — click to dismiss. Run "Fleet: Retry failed
@@ -1653,24 +1585,9 @@ function PanelHeaderComponent({
                   )}
 
                   {canRestart && onRestart && (
-                    <DropdownMenuItem
-                      onSelect={handleRestartSelect}
-                      className={cn(
-                        armedRestartId === id && "bg-status-warning/10 text-status-warning"
-                      )}
-                      data-testid={
-                        armedRestartId === id ? "panel-restart-confirm" : "panel-restart"
-                      }
-                      aria-label={
-                        armedRestartId === id
-                          ? `Armed — click again to confirm restart. ${countdown !== null ? `Confirmation expires in ${countdown} seconds` : ""}`
-                          : "Restart session"
-                      }
-                    >
-                      <RotateCcw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                      {armedRestartId === id
-                        ? `Confirm restart (${countdown ?? 0}s)`
-                        : "Restart session"}
+                    <DropdownMenuItem onSelect={handleRestartSelect} data-testid="panel-restart">
+                      <RotateCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Restart session
                     </DropdownMenuItem>
                   )}
 

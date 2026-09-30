@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { History, RotateCcw } from "lucide-react";
+import { History, RefreshCw } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, type PanelGridState } from "@/store/panelStore";
@@ -8,6 +8,7 @@ import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useScrollbackRestoreAggregate } from "@/hooks/useScrollbackRestoreAggregate";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { retryFailedScrollbackRestoreBatch } from "@/utils/stateHydration/scrollbackRestoreScheduler";
+import { pluralize } from "@/lib/pluralize";
 
 // Panels whose last scrollback restore failed. The per-panel banner inside each
 // TerminalPane handles individual dismissal/reset; this batch banner aggregates
@@ -47,7 +48,7 @@ export function BatchScrollbackRestoreBar({ className }: { className?: string })
     return (
       <InlineStatusBanner
         icon={History}
-        title={`Restore failed for ${count} panel${count !== 1 ? "s" : ""}`}
+        title={`Restore failed for ${pluralize(count, "panel")}`}
         description="Some panels couldn't replay their earlier output. The terminals still work."
         severity="error"
         role="alert"
@@ -59,7 +60,7 @@ export function BatchScrollbackRestoreBar({ className }: { className?: string })
         action={{
           id: "retry-batch",
           label: "Retry batch",
-          icon: RotateCcw,
+          icon: RefreshCw,
           variant: "primary",
           onClick: handleRetry,
           ariaLabel: "Retry batch",

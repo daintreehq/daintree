@@ -95,6 +95,14 @@ export const LazyProjectSwitcherPalette = lazyWithPreload(
 );
 export const preloadProjectSwitcherPalette = LazyProjectSwitcherPalette.preload;
 
+// Carries the emoji picker (and frimousse) — only mounted once the pill's
+// context menu asks for it, and preloaded on pill hover or that menu opening.
+export const LazyProjectIdentityEditor = lazyWithPreload(
+  () => import("./components/Project/ProjectIdentityEditor"),
+  (m) => m.ProjectIdentityEditor
+);
+export const preloadProjectIdentityEditor = LazyProjectIdentityEditor.preload;
+
 export const LazyGitInitDialog = lazyWithPreload(
   () => import("./components/Project/NonGitFolderDialog"),
   (m) => m.NonGitFolderDialog

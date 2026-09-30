@@ -1,10 +1,13 @@
 import React, { use, useState, useEffect, useRef, type CSSProperties } from "react";
 import { InsetSurfaceContext } from "@/components/ui/insetSurface";
-import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { Button, type ButtonProps } from "@/components/ui/button";
 import { ARIA_DISABLED_INERT_CLASSES } from "@/components/ui/ariaDisabled";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { useWindowControlsInset, useTitleBarSurface } from "@/components/ui/WindowControlsInset";
 import { getVisibleTabbableElements, restoreFocusTo } from "@/lib/accessibility";
 import { isLinux } from "@/lib/platform";
@@ -200,16 +203,13 @@ const SEVERITY_VAR: Record<Exclude<InlineStatusBannerSeverity, "neutral">, strin
 };
 
 /**
- * One glyph per severity, matching `NotificationCenterEntry` so a banner and
- * the inbox row it may also produce read as the same event. Shape, not hue,
- * is what tells a red banner from an amber one under forced colours.
+ * One glyph per severity, from the app-wide `SEVERITY_GLYPH`, so a banner and
+ * the toast or inbox row it may also produce read as the same event. Shape, not
+ * hue, is what tells a red banner from an amber one under forced colours.
  */
 export const SEVERITY_ICON: Record<InlineStatusBannerSeverity, BannerIcon> = {
-  error: XCircle,
-  warning: AlertTriangle,
-  info: Info,
-  success: CheckCircle2,
-  neutral: Info,
+  ...SEVERITY_GLYPH,
+  neutral: SEVERITY_GLYPH.info,
 };
 
 /**
@@ -234,19 +234,29 @@ const BUTTON_VARIANT: Record<ButtonVariant, NonNullable<ButtonProps["variant"]>>
  * so the head gives way first and the final segment stays readable.
  */
 function ContextLine({ text, truncate }: { text: string; truncate: "end" | "middle" }) {
+  // The middle form clips in either of two spans and never in the <p> that
+  // hosts the tooltip, so each span reports its own overflow.
+  const head = useTruncationDetection();
+  const tail = useTruncationDetection();
   const split = truncate === "middle" ? text.replace(/[\\/]+$/, "").search(/[\\/][^\\/]*$/) : -1;
   if (split <= 0) {
     return (
-      <p className="text-xs font-mono mt-1 truncate text-text-secondary" title={text}>
-        {text}
-      </p>
+      <TruncatedTooltip content={text}>
+        <p className="text-xs font-mono mt-1 truncate text-text-secondary">{text}</p>
+      </TruncatedTooltip>
     );
   }
   return (
-    <p className="text-xs font-mono mt-1 flex min-w-0 text-text-secondary" title={text}>
-      <span className="truncate">{text.slice(0, split)}</span>
-      <span className="shrink-0 max-w-[75%] truncate">{text.slice(split)}</span>
-    </p>
+    <TruncatedTooltip content={text} isTruncated={head.isTruncated || tail.isTruncated}>
+      <p className="text-xs font-mono mt-1 flex min-w-0 text-text-secondary">
+        <span ref={head.ref} className="truncate">
+          {text.slice(0, split)}
+        </span>
+        <span ref={tail.ref} className="shrink-0 max-w-[75%] truncate">
+          {text.slice(split)}
+        </span>
+      </p>
+    </TruncatedTooltip>
   );
 }
 

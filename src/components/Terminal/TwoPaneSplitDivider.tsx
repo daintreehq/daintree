@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useState, useRef } from "react";
 import { Columns2, PanelLeftOpen, PanelRightOpen, Ruler } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { ResizeHandle, RESIZE_HANDLE_INLINE_TRACK_PX } from "@/components/ui/ResizeHandle";
+import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
+  stopContextMenuPropagation,
 } from "@/components/ui/context-menu";
 
 interface TwoPaneSplitDividerProps {
@@ -22,7 +24,7 @@ interface TwoPaneSplitDividerProps {
   maxRatio?: number;
 }
 
-const DIVIDER_WIDTH_PX = 6;
+const DIVIDER_WIDTH_PX = RESIZE_HANDLE_INLINE_TRACK_PX;
 const KEYBOARD_STEP = 0.02;
 const KEYBOARD_COARSE_STEP = 0.1;
 
@@ -172,25 +174,16 @@ export function TwoPaneSplitDivider({
     [minRatio, maxRatio, onRatioChange, onRatioCommit]
   );
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      const step = e.shiftKey ? KEYBOARD_COARSE_STEP : KEYBOARD_STEP;
-      let next: number | null = null;
-      if (e.key === "ArrowLeft") next = ratio - step;
-      else if (e.key === "ArrowRight") next = ratio + step;
-      else if (e.key === "Home") next = minRatio;
-      else if (e.key === "End") next = maxRatio;
-      else if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        onDoubleClick();
-        return;
-      }
-      if (next === null) return;
-      e.preventDefault();
-      applyRatio(next);
-    },
-    [ratio, minRatio, maxRatio, applyRatio, onDoubleClick]
-  );
+  const handleKeyDown = useSplitterKeys({
+    growKey: "ArrowRight",
+    value: ratio,
+    min: minRatio,
+    max: maxRatio,
+    step: KEYBOARD_STEP,
+    largeStep: KEYBOARD_COARSE_STEP,
+    onChange: applyRatio,
+    onReset: onDoubleClick,
+  });
 
   // The primary pane is the left one: its size is the value. Its body is the
   // region this separator controls, found in the DOM because a tab group's
@@ -213,61 +206,24 @@ export function TwoPaneSplitDivider({
 
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild onContextMenu={(e) => e.stopPropagation()}>
-        <div
+      <ContextMenuTrigger asChild onContextMenu={stopContextMenuPropagation}>
+        <ResizeHandle
           ref={dividerRef}
-          role="separator"
-          aria-label="Resize left pane"
-          aria-orientation="vertical"
+          growKey="ArrowRight"
+          edge="inline"
+          label="Resize left pane"
+          value={percent(ratio)}
+          min={percent(minRatio)}
+          max={percent(maxRatio)}
+          isResizing={isDragging}
           aria-controls={controlsId}
-          aria-valuenow={percent(ratio)}
-          aria-valuemin={percent(minRatio)}
-          aria-valuemax={percent(maxRatio)}
           aria-valuetext={`Left pane ${percent(ratio)}%, right pane ${100 - percent(ratio)}%`}
-          aria-keyshortcuts="ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Home End Enter"
-          tabIndex={0}
-          className={cn(
-            "group cursor-col-resize flex items-center justify-center z-10 shrink-0 transition-colors",
-            // Hover styling is off while dragging: the pointer sits on the divider
-            // for the whole gesture, so a hover variant would outrank the drag state
-            // and the two would render identically.
-            //
-            // On dark, overlay-soft already clears the JND (~0.022-0.032 dL), so it
-            // stays. On light it composites sub-JND (~0.012-0.018 dL), so .light
-            // alone steps the resting hover scrim up to overlay-medium.
-            isDragging
-              ? "bg-overlay-medium"
-              : "hover:bg-overlay-soft [.light_&]:hover:bg-overlay-medium",
-            // Keyboard focus is one solid inset outline — the single accent anchor
-            // for this region. Outline rather than ring so it is the same mark the
-            // forced-colors override redraws, and inset so it stays inside the track
-            // instead of painting over both pane borders.
-            "outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-          )}
-          style={{ width: DIVIDER_WIDTH_PX }}
+          className="z-10"
           onMouseDown={handleMouseDown}
           onKeyDown={handleKeyDown}
-          onDoubleClick={handleDoubleClick}
+          onReset={handleDoubleClick}
           onFocus={resolveControlsId}
-        >
-          <div
-            className={cn(
-              "h-16 rounded-full transition-[width] duration-150 delay-100",
-              // The grip's ink ladder: /20 rest, /35 hover, /50 drag on dark. On
-              // light the low-alpha ink reads too faint over the near-white track, so
-              // .light raises every step. Focus keeps it neutral in every theme — the
-              // outline is the accent — and widens it so it reads inside the frame.
-              isDragging
-                ? "w-0.5 bg-text-primary/50 [.light_&]:bg-text-primary/55"
-                : cn(
-                    "w-px group-hover:w-0.5 group-focus-visible:w-0.5",
-                    "bg-text-primary/20 group-hover:bg-text-primary/35 group-focus-visible:bg-text-primary/50",
-                    "[.light_&]:bg-text-primary/25 [.light_&]:group-hover:bg-text-primary/45",
-                    "[.light_&]:group-focus-visible:bg-text-primary/55"
-                  )
-            )}
-          />
-        </div>
+        />
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem

@@ -5,10 +5,11 @@ import { usePortalStore } from "@/store/portalStore";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { DEFAULT_SYSTEM_LINKS } from "@shared/types";
+import { DEFAULT_SYSTEM_LINKS, type PortalLink } from "@shared/types";
+import { notify } from "@/lib/notify";
+import { latestUndoOnly, positionOf, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { SettingsActions, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
@@ -115,7 +116,6 @@ export function PortalSettingsTab() {
   // a fresh `role="alert"` node is announced even when the text repeats.
   const [errorSeq, setErrorSeq] = useState(0);
   const customUrlRef = useRef<HTMLInputElement>(null);
-  const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
   const customUrlErrorId = useId();
   const addLinkErrorId = useId();
   const editErrorId = useId();
@@ -188,6 +188,43 @@ export function PortalSettingsTab() {
     setEditName(title);
     setEditUrl(url);
     setEditError(null);
+  };
+
+  // Removed at once and offered back, not confirmed: a link is a name and a URL,
+  // and Undo puts it back exactly where it was.
+  const handleRemoveLink = async (link: PortalLink) => {
+    if (pendingRef.current) return;
+    const position = positionOf(links, link.id);
+    const userIndex = userLinks.findIndex((l) => l.id === link.id);
+    // The Remove button goes with the editor, so focus moves to the next custom
+    // link, or the one before it, or the add field once none are left.
+    const neighbour = userLinks[userIndex + 1] ?? userLinks[userIndex - 1];
+    setEditingLinkId(null);
+    setEditName("");
+    setEditUrl("");
+    setEditError(null);
+    if (neighbour) setReturnFocusTo(neighbour.id);
+    else addNameRef.current?.focus();
+    const result = await actionService.dispatch(
+      "portal.links.remove",
+      { id: link.id },
+      { source: "user" }
+    );
+    if (!result.ok) return;
+    notify({
+      type: "success",
+      title: "Link removed",
+      message: link.title || link.url,
+      priority: "high",
+      transient: true,
+      duration: UNDO_TOAST_DURATION_MS,
+      action: {
+        label: "Undo",
+        onClick: latestUndoOnly(`portal-link:${link.id}`, () =>
+          usePortalStore.getState().restoreLink(link, position)
+        ),
+      },
+    });
   };
 
   const closeEditor = () => {
@@ -369,7 +406,7 @@ export function PortalSettingsTab() {
                   type="button"
                   variant="ghost-danger"
                   size="sm"
-                  onClick={() => setPendingRemoveId(link.id)}
+                  onClick={() => void handleRemoveLink(link)}
                   disabled={link.alwaysEnabled || pending !== null}
                 >
                   Remove link
@@ -477,8 +514,6 @@ export function PortalSettingsTab() {
     );
   };
 
-  const pendingRemoveLink = links.find((l) => l.id === pendingRemoveId) ?? null;
-
   const defaultAgentValue = showCustomUrlInput
     ? "custom"
     : defaultNewTabUrl === null
@@ -495,29 +530,6 @@ export function PortalSettingsTab() {
 
   return (
     <div className="space-y-8">
-      <ConfirmDialog
-        isOpen={pendingRemoveId !== null}
-        variant="destructive"
-        title={`Remove '${pendingRemoveLink?.title || "this link"}'?`}
-        description="This removes the link from your portal tab bar. You can add it back later."
-        confirmLabel="Remove link"
-        onConfirm={() => {
-          if (pendingRemoveId !== null) {
-            if (editingLinkId === pendingRemoveId) {
-              setEditingLinkId(null);
-              setEditError(null);
-            }
-            void actionService.dispatch(
-              "portal.links.remove",
-              { id: pendingRemoveId },
-              { source: "user" }
-            );
-          }
-          setPendingRemoveId(null);
-        }}
-        onClose={() => setPendingRemoveId(null)}
-      />
-
       <SettingsSection title="New tab">
         <SettingsGroup>
           <SettingsSelect

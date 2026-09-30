@@ -1149,3 +1149,46 @@ describe("validateOpenAIKey", () => {
     expect(result).toEqual({ valid: false, error: "Failed to connect to OpenAI" });
   });
 });
+
+describe("voiceInput — spoken commands outside English", () => {
+  it.each(["auto", "es"])(
+    "leaves 'new paragraph' literal when language is %s",
+    async (language) => {
+      vi.clearAllMocks();
+      shared.transcriptionEventCallback = null;
+      shared.drainResolve = null;
+      shared.useDeferredDrain = false;
+      const { store } = await import("../../../store.js");
+      vi.mocked(store.get).mockReturnValue({
+        enabled: true,
+        openaiApiKey: "sk-test",
+        correctionEnabled: false,
+        correctionModel: "gpt-5.6-luna",
+        customDictionary: [],
+        correctionCustomInstructions: "",
+        language,
+        transcriptionModel: "gpt-live-transcribe",
+        paragraphingStrategy: "spoken-command",
+        resolveFileLinks: true,
+      });
+
+      const win = buildMainWindow();
+      const cleanup = registerVoiceInputHandlers({
+        mainWindow: win as unknown as Electron.BrowserWindow,
+      } as Parameters<typeof registerVoiceInputHandlers>[0]);
+      try {
+        await (getHandler("voice-input:start") as (e: unknown) => Promise<unknown>)(fakeEvent);
+        emitTranscriptionEvent({ type: "complete", text: "hello new paragraph" });
+
+        const completes = win.__sent.filter(
+          (m) => m.channel === "voice-input:transcription-complete"
+        );
+        expect(completes).toHaveLength(1);
+        expect(completes[0]?.payload).toMatchObject({ text: "hello new paragraph" });
+      } finally {
+        cleanup();
+        vi.mocked(store.get).mockReset();
+      }
+    }
+  );
+});

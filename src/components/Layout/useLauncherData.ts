@@ -5,7 +5,7 @@ import { useScratchStore } from "@/store/scratchStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
-import { useWorktrees } from "@/hooks/useWorktrees";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
 import { sortAgentsByToolbarPin } from "@/lib/agentMenuOrder";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
@@ -13,6 +13,13 @@ import { isAssistantOnlyAgentId, LAUNCHABLE_AGENT_IDS } from "@shared/config/age
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import type { DockLaunchAgent, DockLaunchInventoryState } from "./dockLaunchItems";
 import type { RecipeContext } from "@/utils/recipeVariables";
+
+interface ActiveWorktreeFields {
+  path: string;
+  branch: string | undefined;
+  issueNumber: number | undefined;
+  prNumber: number | undefined;
+}
 
 export interface LauncherData {
   agents: DockLaunchAgent[];
@@ -48,9 +55,21 @@ export function useLauncherData(): LauncherData {
   const leftButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.leftButtons));
   const rightButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.rightButtons));
   const pinnedButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.pinnedButtons));
-  const { worktrees } = useWorktrees();
-
-  const activeWorktree = activeWorktreeId ? worktrees.find((w) => w.id === activeWorktreeId) : null;
+  // Only the fields the launcher reads, compared shallowly: the whole map, or
+  // even the active snapshot, changes on every git-status pass while agents
+  // edit files, and both the dock and the toolbar consume this hook.
+  const activeWorktree = useWorktreeStore(
+    useShallow((state): ActiveWorktreeFields | null => {
+      const w = activeWorktreeId ? state.worktrees.get(activeWorktreeId) : undefined;
+      if (!w) return null;
+      return {
+        path: w.path,
+        branch: w.branch,
+        issueNumber: w.issueNumber,
+        prNumber: w.linked?.pr?.ref.number,
+      };
+    })
+  );
 
   // This cwd rides down as an explicit launch option, and `""` is not nullish —
   // it would win over any fallback further down the chain, so it has to resolve
@@ -135,7 +154,7 @@ export function useLauncherData(): LauncherData {
       activeWorktree
         ? {
             issueNumber: activeWorktree.issueNumber,
-            prNumber: activeWorktree.linked?.pr?.ref.number,
+            prNumber: activeWorktree.prNumber,
             branchName: activeWorktree.branch,
             worktreePath: activeWorktree.path,
           }

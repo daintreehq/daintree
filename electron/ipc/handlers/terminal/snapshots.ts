@@ -17,7 +17,10 @@ import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import { getProjectIdFromSenderUrl } from "../../senderIdentity.js";
 import { defineIpcNamespace, op, opValidated } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
-import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
+import type {
+  SerializeReadOptions,
+  SerializedTerminalSnapshot,
+} from "../../../../shared/types/terminal.js";
 
 type ValidatedReplayHistoryPayload = z.output<typeof TerminalReplayHistoryPayloadSchema>;
 
@@ -51,14 +54,21 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   }
 
   const handleTerminalGetSerializedState = async (
-    terminalId: string
+    terminalId: string,
+    options?: SerializeReadOptions
   ): Promise<SerializedTerminalSnapshot | null> => {
     try {
       if (typeof terminalId !== "string" || !terminalId) {
         throw new Error("Invalid terminal ID: must be a non-empty string");
       }
 
-      const serializedState = await ptyClient.getSerializedStateAsync(terminalId);
+      const tailRows = options?.tailRows;
+      const serializedState = await ptyClient.getSerializedStateAsync(
+        terminalId,
+        typeof tailRows === "number" && Number.isFinite(tailRows) && tailRows >= 0
+          ? { tailRows: Math.floor(tailRows) }
+          : undefined
+      );
 
       if (process.env.DAINTREE_VERBOSE) {
         logDebug(

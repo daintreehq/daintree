@@ -16,6 +16,7 @@ import { formatTimeAgo } from "@/utils/timeAgo";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
 import type { CopyTreeHistoryRecord } from "@shared/types";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * How many recent runs the menu shows. Main keeps twenty per project so the
@@ -80,7 +81,7 @@ function isPinnedDefault(record: CopyTreeHistoryRecord): boolean {
  */
 export function formatRecentMeta(record: CopyTreeHistoryRecord, now?: number): string {
   const { fileCount, totalSize } = record.stats;
-  const parts = [fileCount === 1 ? "1 file" : `${fileCount.toLocaleString()} files`];
+  const parts = [pluralize(fileCount, "file")];
   if (totalSize) parts.push(formatBytes(totalSize));
   if (record.options.format && record.options.format !== DEFAULT_COPYTREE_FORMAT) {
     parts.push(record.options.format);

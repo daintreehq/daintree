@@ -20,7 +20,8 @@ import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { isAgentInstalled } from "../../shared/utils/agentAvailability";
 
 interface UseNewTerminalPaletteProps {
-  worktreeMap: Map<string, WorktreeState>;
+  /** Read at selection time, so the palette never subscribes to the worktree map. */
+  getWorktree: (worktreeId: string) => WorktreeState | undefined;
 }
 
 export type UseNewTerminalPaletteReturn = UseSearchablePaletteReturn<LaunchOption> & {
@@ -41,7 +42,7 @@ function filterLaunchOptions(items: LaunchOption[], query: string): LaunchOption
 export const MORE_AGENTS_TERMINAL_ID = "more-agents";
 
 export function useNewTerminalPalette({
-  worktreeMap,
+  getWorktree,
 }: UseNewTerminalPaletteProps): UseNewTerminalPaletteReturn {
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const currentProject = useProjectStore((state) => state.currentProject);
@@ -100,7 +101,7 @@ export function useNewTerminalPalette({
       }
 
       const targetWorktreeId = activeWorktreeId;
-      const targetWorktree = targetWorktreeId ? worktreeMap.get(targetWorktreeId) : null;
+      const targetWorktree = targetWorktreeId ? getWorktree(targetWorktreeId) : null;
       const cwd = targetWorktree?.path ?? currentProject?.path ?? "";
 
       try {
@@ -135,7 +136,7 @@ export function useNewTerminalPalette({
         logError(`Failed to launch ${option.launchAgentId} terminal`, error);
       }
     },
-    [activeWorktreeId, worktreeMap, currentProject, addPanel, close]
+    [activeWorktreeId, getWorktree, currentProject, addPanel, close]
   );
 
   const confirmSelection = useCallback(() => {

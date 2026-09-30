@@ -94,7 +94,10 @@ import {
 } from "./analysis/headlessViewport.js";
 import { OUTPUT_PROGRESS_SAMPLE_MS, OutputProgressTracker } from "./OutputProgressTracker.js";
 import type { AnalysisFinalCapture } from "./analysis/AnalysisBackend.js";
-import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
+import type {
+  SerializeReadOptions,
+  SerializedTerminalSnapshot,
+} from "../../../shared/types/terminal.js";
 import { TerminalExitObservers, type TerminalExitArgs } from "./TerminalExitObservers.js";
 import { TerminalExitHandler } from "./TerminalExitHandler.js";
 import { gracefulShutdown as runGracefulShutdown } from "./TerminalGracefulShutdown.js";
@@ -1736,7 +1739,9 @@ export class TerminalProcess {
     return serializeTerminal(this.id, this.terminalInfo);
   }
 
-  getSerializedStateAsync(): Promise<SerializedTerminalSnapshot | null> {
+  getSerializedStateAsync(
+    options?: SerializeReadOptions
+  ): Promise<SerializedTerminalSnapshot | null> {
     const terminal = this.terminalInfo;
     // Preserved snapshot served — stamp access time so eviction (issue #10839)
     // treats it as currently-viewed. Checked host-side in both modes; the
@@ -1749,7 +1754,7 @@ export class TerminalProcess {
     // already been fed to the analysis mirror (the pipeline forwards and feeds
     // in the same step), and the serialize below drains exactly those feeds.
     const streamOffset = this.emittedBytes;
-    return this.analysis.serialize().then((snapshot) => {
+    return this.analysis.serialize(options).then((snapshot) => {
       if (!snapshot?.continuation) return snapshot;
       return { ...snapshot, continuation: { ...snapshot.continuation, streamOffset } };
     });

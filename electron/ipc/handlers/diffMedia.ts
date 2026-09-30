@@ -7,15 +7,26 @@ import { isLfsPointer } from "./files.js";
 import { DiffMediaReadFileVersionsPayloadSchema } from "../../schemas/ipc.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { AppError } from "../../utils/errorTypes.js";
+import type { HeadFileReadOptions, HeadFileReadResult } from "../../services/GitService.js";
 import {
   DIFF_MEDIA_MAX_BYTES,
   getDiffMediaImageMime,
-  type DiffMediaFileVersions,
+  type DiffMediaFileVersionsResponse,
+  type DiffMediaKnownVersions,
   type DiffMediaReadFileVersionsPayload,
-  type DiffMediaSide,
+  type DiffMediaWireSide,
 } from "../../../shared/types/ipc/diffMedia.js";
 
-function toImageSide(mime: string, content: Buffer): DiffMediaSide {
+// Modest budget: each call can return up to ~21 MB of base64 (8 MB raw ×
+// ~1.33 × two sides), so the window is tighter than the text-diff channels.
+const READ_MAX_CALLS = 10;
+const READ_WINDOW_MS = 10_000;
+// Revalidations that resend no bytes cost a stat and a rev-parse, so they get
+// their own, looser budget; one that does need bytes also draws on the above.
+const REVALIDATE_CHANNEL = `${DIFF_MEDIA_METHOD_CHANNELS.readFileVersions}:revalidate`;
+const REVALIDATE_MAX_CALLS = 60;
+
+function toImageSide(mime: string, content: Buffer, version?: string): DiffMediaWireSide {
   // Git LFS pointer files are text stand-ins for the real blob — served as
   // image bytes they just render broken.
   if (isLfsPointer(content)) {
@@ -25,7 +36,44 @@ function toImageSide(mime: string, content: Buffer): DiffMediaSide {
     ok: true,
     dataUrl: `data:${mime};base64,${content.toString("base64")}`,
     byteSize: content.byteLength,
+    ...(version !== undefined ? { version } : {}),
   };
+}
+
+function toBlobSide(mime: string, result: HeadFileReadResult): DiffMediaWireSide {
+  if (!result.ok) {
+    return { ok: false, error: result.reason };
+  }
+  if ("unchanged" in result) {
+    return { ok: true, unchanged: true, version: result.version };
+  }
+  return toImageSide(mime, result.content, result.version);
+}
+
+// A file touched this recently may still be rewritten within the
+// filesystem's timestamp granularity without its stat moving (git's "racy
+// clean" problem), so it gets no version and is always reread.
+const RACY_WINDOW_NS = 2_000_000_000n;
+
+// Nanosecond stat fields that move on any rewrite; a same-size in-place edit
+// still changes mtime/ctime, and a replace-by-rename changes the inode.
+function workingVersion(stat: {
+  dev?: unknown;
+  ino?: unknown;
+  size?: unknown;
+  mtimeNs?: unknown;
+  ctimeNs?: unknown;
+}): string | undefined {
+  const parts = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs];
+  if (!parts.every((part): part is bigint => typeof part === "bigint")) {
+    return undefined;
+  }
+  const [, , , mtimeNs, ctimeNs] = parts as bigint[];
+  const newest = mtimeNs! > ctimeNs! ? mtimeNs! : ctimeNs!;
+  if (BigInt(Date.now()) * 1_000_000n - newest < RACY_WINDOW_NS) {
+    return undefined;
+  }
+  return `stat:${parts.join(":")}`;
 }
 
 // Semantic path checks (absoluteness, traversal, null bytes) beyond the
@@ -71,16 +119,19 @@ function validatePayload(payload: DiffMediaReadFileVersionsPayload): void {
   }
 }
 
-async function readHeadSide(cwd: string, filePath: string, mime: string): Promise<DiffMediaSide> {
+async function readHeadSide(
+  cwd: string,
+  filePath: string,
+  mime: string,
+  options: HeadFileReadOptions
+): Promise<DiffMediaWireSide> {
   try {
     const result = await gitServiceCache
       .getGitService(cwd)
-      .readFileAtHead(filePath, DIFF_MEDIA_MAX_BYTES);
-    if (!result.ok) {
-      return { ok: false, error: result.reason };
-    }
-    return toImageSide(mime, result.content);
+      .readFileAtHead(filePath, DIFF_MEDIA_MAX_BYTES, options);
+    return toBlobSide(mime, result);
   } catch (error) {
+    if (isRateLimited(error)) throw error;
     console.error("[IPC] diff-media HEAD read failed:", error);
     return { ok: false, error: "ERROR" };
   }
@@ -89,23 +140,26 @@ async function readHeadSide(cwd: string, filePath: string, mime: string): Promis
 async function readPreviousSide(
   cwd: string,
   filePath: string,
-  mime: string
-): Promise<DiffMediaSide> {
+  mime: string,
+  options: HeadFileReadOptions
+): Promise<DiffMediaWireSide> {
   try {
     const result = await gitServiceCache
       .getGitService(cwd)
-      .readPreviousFileVersion(filePath, DIFF_MEDIA_MAX_BYTES);
-    if (!result.ok) {
-      return { ok: false, error: result.reason };
-    }
-    return toImageSide(mime, result.content);
+      .readPreviousFileVersion(filePath, DIFF_MEDIA_MAX_BYTES, options);
+    return toBlobSide(mime, result);
   } catch (error) {
+    if (isRateLimited(error)) throw error;
     console.error("[IPC] diff-media prior-version read failed:", error);
     return { ok: false, error: "ERROR" };
   }
 }
 
-function isMissing(side: DiffMediaSide): boolean {
+function isRateLimited(error: unknown): boolean {
+  return error instanceof AppError && error.code === "RATE_LIMITED";
+}
+
+function isMissing(side: DiffMediaWireSide): boolean {
   return !side.ok && side.error === "NOT_FOUND";
 }
 
@@ -115,8 +169,9 @@ function isMissing(side: DiffMediaSide): boolean {
 async function readWorkingSide(
   cwd: string,
   filePath: string,
-  mime: string
-): Promise<DiffMediaSide> {
+  mime: string,
+  options: HeadFileReadOptions
+): Promise<DiffMediaWireSide> {
   try {
     let realRoot: string;
     try {
@@ -172,14 +227,22 @@ async function readWorkingSide(
     }
 
     let content: Buffer;
+    let version: string | undefined;
     try {
-      const fdStat = await fileHandle.stat();
+      const fdStat = await fileHandle.stat({ bigint: true });
       if (!fdStat.isFile()) {
         return { ok: false, error: "ERROR" };
       }
       if (fdStat.size > DIFF_MEDIA_MAX_BYTES) {
         return { ok: false, error: "TOO_LARGE" };
       }
+      // Taken from the opened fd before the read, so a write racing the read
+      // leaves content newer than its version — a later revalidation misses.
+      version = workingVersion(fdStat);
+      if (version !== undefined && version === options.knownVersion) {
+        return { ok: true, unchanged: true, version };
+      }
+      options.beforeRead?.();
       content = await fileHandle.readFile();
     } finally {
       await fileHandle.close().catch(() => {});
@@ -188,19 +251,48 @@ async function readWorkingSide(
     if (content.byteLength > DIFF_MEDIA_MAX_BYTES) {
       return { ok: false, error: "TOO_LARGE" };
     }
-    return toImageSide(mime, content);
+    return toImageSide(mime, content, version);
   } catch (error) {
+    if (isRateLimited(error)) throw error;
     console.error("[IPC] diff-media working-tree read failed:", error);
     return { ok: false, error: "ERROR" };
   }
 }
 
+function hasKnownVersions(known: DiffMediaKnownVersions | undefined): boolean {
+  return known?.head !== undefined || known?.working !== undefined;
+}
+
 async function handleReadFileVersions(
   payload: DiffMediaReadFileVersionsPayload
-): Promise<DiffMediaFileVersions> {
-  // Modest budget: each call can return up to ~21 MB of base64 (8 MB raw ×
-  // ~1.33 × two sides), so the window is tighter than the text-diff channels.
-  checkRateLimit(DIFF_MEDIA_METHOD_CHANNELS.readFileVersions, 10, 10_000);
+): Promise<DiffMediaFileVersionsResponse> {
+  const known = hasKnownVersions(payload.known) ? payload.known : undefined;
+  let beforeRead: (() => void) | undefined;
+  if (known) {
+    // A revalidation only draws on the byte budget if some side actually has
+    // to be read and resent.
+    checkRateLimit(REVALIDATE_CHANNEL, REVALIDATE_MAX_CALLS, READ_WINDOW_MS);
+    // Settled once: a denial is remembered so the sibling side can't read
+    // bytes for a request that is already rejected.
+    let charge: { ok: true } | { ok: false; error: unknown } | undefined;
+    beforeRead = () => {
+      if (!charge) {
+        try {
+          checkRateLimit(
+            DIFF_MEDIA_METHOD_CHANNELS.readFileVersions,
+            READ_MAX_CALLS,
+            READ_WINDOW_MS
+          );
+          charge = { ok: true };
+        } catch (error) {
+          charge = { ok: false, error };
+        }
+      }
+      if (!charge.ok) throw charge.error;
+    };
+  } else {
+    checkRateLimit(DIFF_MEDIA_METHOD_CHANNELS.readFileVersions, READ_MAX_CALLS, READ_WINDOW_MS);
+  }
   validatePayload(payload);
 
   const mime = getDiffMediaImageMime(payload.filePath);
@@ -212,8 +304,11 @@ async function handleReadFileVersions(
   }
 
   const [headAtHead, working] = await Promise.all([
-    readHeadSide(payload.cwd, payload.filePath, mime),
-    readWorkingSide(payload.cwd, payload.filePath, mime),
+    readHeadSide(payload.cwd, payload.filePath, mime, { knownVersion: known?.head, beforeRead }),
+    readWorkingSide(payload.cwd, payload.filePath, mime, {
+      knownVersion: known?.working,
+      beforeRead,
+    }),
   ]);
 
   // Both sides missing is the signature of an already-committed deletion —
@@ -223,7 +318,10 @@ async function handleReadFileVersions(
   // return nothing.
   const head =
     isMissing(headAtHead) && isMissing(working)
-      ? await readPreviousSide(payload.cwd, payload.filePath, mime)
+      ? await readPreviousSide(payload.cwd, payload.filePath, mime, {
+          knownVersion: known?.head,
+          beforeRead,
+        })
       : headAtHead;
 
   return { head, working };

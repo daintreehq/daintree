@@ -11,6 +11,7 @@ import {
   parseLocalDay,
   type CalendarKey,
 } from "./pulseCalendar";
+import { pluralize } from "@/lib/pluralize";
 
 interface PulseHeatmapProps {
   cells: HeatCell[];
@@ -88,7 +89,7 @@ function getCountText(cell: HeatCell): string {
     return "No commits";
   }
 
-  return `${cell.count} commit${cell.count !== 1 ? "s" : ""}`;
+  return `${pluralize(cell.count, "commit")}`;
 }
 
 function formatDay(cell: HeatCell): string {

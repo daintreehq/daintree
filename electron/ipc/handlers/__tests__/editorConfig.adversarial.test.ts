@@ -12,7 +12,7 @@ const projectStoreMock = vi.hoisted(() => ({
 }));
 
 const discoverMock = vi.hoisted(() =>
-  vi.fn<() => Array<{ id: string; name: string; available: boolean }>>(() => [])
+  vi.fn<() => Promise<Array<{ id: string; name: string; available: boolean }>>>(async () => [])
 );
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
@@ -142,7 +142,7 @@ describe("editorConfig IPC adversarial", () => {
 
   it("getConfig returns { preferredEditor: null, discoveredEditors } when settings read throws", async () => {
     projectStoreMock.getProjectSettings.mockRejectedValue(new Error("store down"));
-    discoverMock.mockReturnValue([{ id: "vscode", name: "VS Code", available: true }]);
+    discoverMock.mockResolvedValue([{ id: "vscode", name: "VS Code", available: true }]);
 
     const result = (await getHandler(CHANNELS.EDITOR_GET_CONFIG)(fakeEvent(), "p1")) as {
       preferredEditor: unknown;
@@ -154,7 +154,7 @@ describe("editorConfig IPC adversarial", () => {
   });
 
   it("getConfig returns null preferredEditor when projectId is missing or not a string", async () => {
-    discoverMock.mockReturnValue([]);
+    discoverMock.mockResolvedValue([]);
 
     const noProject = (await getHandler(CHANNELS.EDITOR_GET_CONFIG)(fakeEvent())) as {
       preferredEditor: unknown;

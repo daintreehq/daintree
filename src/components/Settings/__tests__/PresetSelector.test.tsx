@@ -141,7 +141,7 @@ describe("PresetSelector", () => {
     expect(getByTestId("preset-option-default").getAttribute("aria-selected")).toBe("false");
   });
 
-  it("renders 'Project Shared' group and badge when project presets are present", () => {
+  it("renders 'Project shared' group and badge when project presets are present", () => {
     const project = mkPreset("team-opus", "Team Opus");
     const { getByTestId, queryByTestId } = render(
       <PresetSelector
@@ -164,7 +164,7 @@ describe("PresetSelector", () => {
   it("project preset with a ccr- prefixed id still renders as Project, not CCR", () => {
     // Regression guard: without a membership-first source classification,
     // a project preset authored with id `ccr-team` would get stolen by the
-    // CCR badge/group path and appear under "CCR Routes".
+    // CCR badge/group path and appear under "CCR routes".
     const project = mkPreset("ccr-team", "Team Route");
     const { getByTestId, queryByTestId } = render(
       <PresetSelector

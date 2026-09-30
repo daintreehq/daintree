@@ -103,6 +103,28 @@ function stateKey(commonDir: string, remote: string): string {
   return `${commonDir}${STATE_KEY_DELIMITER}${remote}`;
 }
 
+/**
+ * The oldest success timestamp among the planned remotes that settled on a
+ * success, or `undefined` when none did. It is when the first of this
+ * worktree's healthy remotes goes stale, which is what the next cadence timer
+ * anchors to — keying off the primary alone would let an auxiliary remote
+ * reused just inside the window ride a full extra interval, and so would
+ * dropping the anchor because a sibling remote failed. A failed remote never
+ * contributes: failures are not freshness.
+ */
+function oldestSuccess(
+  remotes: readonly string[],
+  settled: ReadonlyMap<string, FetchResult>
+): number | undefined {
+  let oldest: number | undefined;
+  for (const remote of remotes) {
+    const result = settled.get(remote);
+    if (result?.status !== "success" || typeof result.lastFetchedAt !== "number") continue;
+    oldest = oldest === undefined ? result.lastFetchedAt : Math.min(oldest, result.lastFetchedAt);
+  }
+  return oldest;
+}
+
 /** `prune` defaults to on — see {@link FetchOptions.prune}. */
 function prunesRefs(opts: FetchOptions): boolean {
   return opts.prune !== false;
@@ -164,6 +186,15 @@ export interface FetchOptions {
    * constant (#12091).
    */
   prune?: boolean;
+  /**
+   * Widens the recency window for a non-forced call: a success of a planned
+   * remote younger than this is reused instead of spawning `git fetch`. Set
+   * only by cadence timers, to their own interval floor — the refs live in the
+   * shared commondir, so a sibling's fetch inside that window is as fresh as
+   * the one the timer was about to run. Never narrows the default window, and
+   * ignored when `force` is set.
+   */
+  maxAgeMs?: number;
 }
 
 /**
@@ -306,7 +337,7 @@ export type FetchResult = WorkspaceFetchResult;
           continue;
         }
       }
-      const recent = this.recentSuccessResult(state, opts.force === true, remote, prunesRefs(opts));
+      const recent = this.recentSuccessResult(state, opts, remote);
       if (recent) {
         settled.set(remote, recent);
         continue;
@@ -342,7 +373,10 @@ export type FetchResult = WorkspaceFetchResult;
     );
     const withInventory =
       inventory !== null ? { ...primaryResult, hasRemote: true } : primaryResult;
-    return auxiliaryFailed ? { ...withInventory, auxiliaryFailed } : withInventory;
+    const freshSince = oldestSuccess(remotes, settled);
+    const withFreshness =
+      freshSince !== undefined ? { ...withInventory, freshSince } : withInventory;
+    return auxiliaryFailed ? { ...withFreshness, auxiliaryFailed } : withFreshness;
   }
 
   /**
@@ -503,15 +537,17 @@ export type FetchResult = WorkspaceFetchResult;
    */
   private recentSuccessResult(
     state: RemoteState,
-    force: boolean,
-    remote: string,
-    prune: boolean
+    opts: FetchOptions,
+    remote: string
   ): FetchResult | null {
     if (state.failure || state.lastSuccessfulFetch === null) return null;
     // A prune request the cached success didn't prune for is a different
     // operation, not a duplicate of it — reusing it would drop the prune.
-    if (prune && !state.lastSuccessfulFetchPruned) return null;
-    const window = force ? FORCE_FETCH_RECENCY_WINDOW_MS : FETCH_RECENCY_WINDOW_MS;
+    if (prunesRefs(opts) && !state.lastSuccessfulFetchPruned) return null;
+    const window =
+      opts.force === true
+        ? FORCE_FETCH_RECENCY_WINDOW_MS
+        : Math.max(FETCH_RECENCY_WINDOW_MS, opts.maxAgeMs ?? 0);
     const elapsed = Date.now() - state.lastSuccessfulFetch;
     if (elapsed < 0 || elapsed >= window) return null;
     return {
@@ -586,12 +622,7 @@ export type FetchResult = WorkspaceFetchResult;
     // Re-check recency after waiting on the chain — back-to-back sibling
     // fetches (wake storm, auth retry) all queue before the first completes,
     // so the dedup has to look at the timestamp the prior link just wrote.
-    const recent = this.recentSuccessResult(
-      stateAtStart,
-      opts.force === true,
-      remote,
-      prunesRefs(opts)
-    );
+    const recent = this.recentSuccessResult(stateAtStart, opts, remote);
     if (recent) {
       return { result: recent, fetched: false };
     }

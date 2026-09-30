@@ -290,9 +290,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const activeVoicePanelId = useVoiceRecordingStore((s) => s.activeTarget?.panelId ?? null);
     const externalDraftRevision = useTerminalInputStore((s) => s.externalDraftRevision);
     const panelWorktreeId = usePanelStore((s) => s.panelsById[terminalId]?.worktreeId);
-    const panelWorktree = useWorktreeStore((s) =>
-      panelWorktreeId ? s.worktrees.get(panelWorktreeId) : undefined
-    );
+    // Selects the drawn label, not the snapshot: the agent's own git-status
+    // passes replace the snapshot while the user is typing here.
+    const panelWorktreeLabel = useWorktreeStore((s) => {
+      const worktree = panelWorktreeId ? s.worktrees.get(panelWorktreeId) : undefined;
+      return worktree?.isMainWorktree ? worktree.name : worktree?.branch || worktree?.name;
+    });
     const isVoiceRecording = activeVoicePanelId === terminalId && voiceStatus === "recording";
     const isVoiceConnecting = activeVoicePanelId === terminalId && voiceStatus === "connecting";
     const isVoiceReconnecting = activeVoicePanelId === terminalId && voiceStatus === "reconnecting";
@@ -1250,11 +1253,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   projectId={currentProject?.id}
                   projectName={currentProject?.name}
                   worktreeId={panelWorktreeId}
-                  worktreeLabel={
-                    panelWorktree?.isMainWorktree
-                      ? panelWorktree?.name
-                      : panelWorktree?.branch || panelWorktree?.name
-                  }
+                  worktreeLabel={panelWorktreeLabel}
                   disabled={disabled}
                 />
               </div>

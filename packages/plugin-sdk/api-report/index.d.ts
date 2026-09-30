@@ -102,6 +102,12 @@ interface RateLimitInfo {
     throttleMultiplier?: number;
 }
 /**
+ * Merge-state observations a provider can report for a PR. `"conflicts"`: the
+ * forge reported the head conflicts with the base branch (GitHub
+ * `mergeStateStatus: DIRTY`, GitLab `detailed_merge_status: conflict`).
+ */
+type PRMergeState = "conflicts";
+/**
  * Boolean-ish CI roll-up. The host renders a summary; it does not graph checks.
  * Callers needing the individual checks behind this verdict read
  * {@link ChecksCapability.getChecks} instead.
@@ -306,6 +312,8 @@ interface LinkedPRSummary {
     state: NormalizedPRState;
     url: string;
     ciStatus?: CIStatusState;
+    /** See {@link PR.mergeState}. */
+    mergeState?: PRMergeState;
 }
 interface Issue {
     number: number;
@@ -435,6 +443,13 @@ interface PR {
     commentCount?: number;
     /** Roll-up CI status for the head commit, when the provider reports one in lists. */
     ciStatus?: CIStatusState;
+    /**
+     * A merge-state observation the provider reported, independent of
+     * {@link mergeable} (which folds in unrelated blockers like drafts or
+     * required approvals). Absent means nothing was reported — including a state
+     * the forge hasn't computed yet — never that the branch merges cleanly.
+     */
+    mergeState?: PRMergeState;
     /** Epoch milliseconds. */
     createdAt: number;
     /** Epoch milliseconds. */
@@ -2918,7 +2933,8 @@ interface PluginHostCallOptions {
  * {@link PluginActivationApi.onDidChangeWorktrees}). `debounceMs` coalesces a
  * burst of change events into a single trailing callback fired `debounceMs`
  * after the last event — the host re-emits the worktree set on every git-status
- * poll, so a UI-updating plugin can opt into far fewer callbacks. Values below a
+ * poll, so a UI-updating plugin can opt into far fewer callbacks. A burst that
+ * never goes quiet still fires at least every few `debounceMs`. Values below a
  * small floor (~50ms) are clamped up; `0` / omitted means no debounce (fire on
  * every change). The coalesced callback receives the most recent snapshot list.
  */

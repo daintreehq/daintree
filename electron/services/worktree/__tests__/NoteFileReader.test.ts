@@ -53,7 +53,7 @@ describe("NoteFileReader", () => {
 
     const result = await reader.read();
     expect(result?.content.length).toBe(500);
-    expect(result?.content.endsWith("...")).toBe(true);
+    expect(result?.content.endsWith("…")).toBe(true);
   });
 
   it("rejects absolute note filename paths", async () => {

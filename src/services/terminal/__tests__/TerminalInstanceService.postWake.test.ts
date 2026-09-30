@@ -158,6 +158,24 @@ describe("TerminalInstanceService post-wake handling", () => {
     expect(mockTerminalClient.resize).toHaveBeenCalledTimes(1);
   });
 
+  it("re-asserts an unchanged grid to the PTY after wake", () => {
+    // A same-grid fit() normally commits nothing; the wake path cannot see what
+    // happened to the PTY while the renderer was hibernated, so it still sends.
+    const id = "term-post-wake-same-grid";
+    if (!service) throw new Error("Service not initialized");
+
+    const instance = makeInstance({ latestCols: 120, latestRows: 30 });
+    Object.assign(instance, { ptyCols: 120, ptyRows: 30 });
+    instance.terminal.cols = 120;
+    instance.terminal.rows = 30;
+    service.instances.set(id, instance);
+
+    service.handlePostWake(id);
+
+    expect(mockTerminalClient.resize).toHaveBeenCalledTimes(1);
+    expect(mockTerminalClient.resize).toHaveBeenCalledWith(id, 120, 30);
+  });
+
   it("fresh-measures a settled terminal and delays both xterm and PTY until commit", () => {
     const id = "term-post-wake-settled";
     if (!service) throw new Error("Service not initialized");

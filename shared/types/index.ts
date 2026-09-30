@@ -279,6 +279,10 @@ export type {
   DiffMediaSide,
   DiffMediaSideError,
   DiffMediaFileVersions,
+  DiffMediaFileVersionsResponse,
+  DiffMediaKnownVersions,
+  DiffMediaUnchangedSide,
+  DiffMediaWireSide,
   // Electron API
   ElectronAPI,
   NotificationSettings,
@@ -551,6 +555,7 @@ export type {
   WorkspaceHostEvent,
   WorkspaceClientConfig,
   WorktreeSnapshot,
+  WorktreeTick,
   WorktreeEventVersion,
   MonitorConfig as WorkspaceMonitorConfig,
   CreateWorktreeOptions as WorkspaceCreateWorktreeOptions,

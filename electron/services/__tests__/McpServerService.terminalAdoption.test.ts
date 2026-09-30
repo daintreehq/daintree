@@ -38,6 +38,7 @@ vi.mock("../../window/webContentsRegistry.js", () => ({
 }));
 
 import { McpServerService } from "../McpServerService.js";
+import { helpOwnershipPrincipal, principalOwnerKey } from "../mcp-server/resourceOwnership.js";
 import { setPtyClientRef } from "../../window/serviceRefs.js";
 import { events } from "../events.js";
 import type { PtyClient } from "../PtyClient.js";
@@ -341,5 +342,54 @@ describe("McpServerService terminal hand-over (#12490)", () => {
         { paneId: "pane-exited", ...ORCHESTRATOR },
       ])
     ).toEqual(["pane-orch", "pane-full"]);
+  });
+});
+
+describe("McpServerService help-bearer revocation (#12993)", () => {
+  const service = new McpServerService();
+
+  it("revokes the help session's principal even when no transport is connected", () => {
+    const ledger = service._sessionStore.resourceOwnership;
+    const principal = helpOwnershipPrincipal("help-session-1");
+    const other = helpOwnershipPrincipal("help-session-2");
+    ledger.bindPrincipal("transport-1", principal);
+    ledger.bindPrincipal("transport-2", other);
+    ledger.record(ledger.ownerOf("transport-1"), [{ kind: "worktree", id: "/repo/wt-1" }]);
+    ledger.record(ledger.ownerOf("transport-2"), [{ kind: "worktree", id: "/repo/wt-2" }]);
+    // The help session's last transport already dropped: only the principal is left.
+    ledger.clearAllSessions();
+
+    service.disconnectHelpBearer("help-token-never-connected", "help-session-1");
+
+    expect(ledger.creatorOf("worktree", "/repo/wt-1")).toBeUndefined();
+    expect(ledger.creatorOf("worktree", "/repo/wt-2")).toBe(principalOwnerKey(other));
+    ledger.revokePrincipal(other);
+  });
+
+  it("still tears the bearer's transports down when revoking the principal throws", () => {
+    const lookup = vi
+      .spyOn(
+        (service as unknown as { httpLifecycle: { findHelpBearerHash(t: string): string | null } })
+          .httpLifecycle,
+        "findHelpBearerHash"
+      )
+      .mockReturnValue("hash-help");
+    const teardown = vi
+      .spyOn(service, "disconnectBearer")
+      .mockReturnValue({ tokenHash: "hash-help", disconnected: true });
+    const revoke = vi.spyOn(service, "revokeOwnershipPrincipal").mockImplementation(() => {
+      throw new Error("ledger failed");
+    });
+    try {
+      expect(() => service.disconnectHelpBearer("help-token", "help-session-3")).toThrow(
+        "ledger failed"
+      );
+      expect(lookup).toHaveBeenCalledWith("help-token");
+      expect(teardown).toHaveBeenCalledWith("hash-help");
+    } finally {
+      teardown.mockRestore();
+      revoke.mockRestore();
+      lookup.mockRestore();
+    }
   });
 });

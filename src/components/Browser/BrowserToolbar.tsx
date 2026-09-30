@@ -3,23 +3,22 @@ import { flushSync } from "react-dom";
 import {
   ArrowLeft,
   ArrowRight,
-  RotateCw,
-  ExternalLink,
-  Copy,
+  Camera,
   Check,
-  Link,
+  Code,
+  Copy,
+  Ellipsis,
+  ExternalLink,
   Globe,
   Lock,
+  PanelRight,
+  RotateCw,
+  Scan,
+  Smartphone,
+  SquareTerminal,
+  X,
   ZoomIn,
   ZoomOut,
-  Scan,
-  Camera,
-  SquareTerminal,
-  Code,
-  Smartphone,
-  PanelRight,
-  Ellipsis,
-  X,
 } from "lucide-react";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { cn } from "@/lib/utils";
@@ -51,9 +50,12 @@ import type {
   BrowserNavigationHistorySnapshot,
 } from "@shared/types/browser";
 import { logError } from "@/utils/logger";
+import { CopyButton } from "@/components/ui/CopyButton";
+import { copyWithToast } from "@/lib/copyWithToast";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 import {
   getUiTransitionDuration,
   UI_ENTER_DURATION,
@@ -197,8 +199,6 @@ export function BrowserToolbar({
   const [inputValue, setInputValue] = useState(getDisplayUrl(address));
   const [isEditing, setIsEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectOnFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [screenshotCopied, setScreenshotCopied] = useState(false);
   const screenshotCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -261,7 +261,6 @@ export function BrowserToolbar({
     return () => {
       if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
       if (screenshotCopiedTimerRef.current) clearTimeout(screenshotCopiedTimerRef.current);
-      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
       if (selectOnFocusTimerRef.current) clearTimeout(selectOnFocusTimerRef.current);
     };
   }, []);
@@ -416,14 +415,13 @@ export function BrowserToolbar({
       // Keys that belong to an IME composition are the composition's to handle.
       if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       if (isDropdownOpen && suggestions.length > 0) {
-        if (e.key === "ArrowDown") {
+        // -1 is the address as typed: Up from the first row returns to it.
+        const next = keyBelongsToField(e)
+          ? null
+          : stepListboxCursor(e.key, highlightedIndex, suggestions.length, { allowNone: true });
+        if (next !== null) {
           e.preventDefault();
-          setHighlightedIndex((i) => Math.min(i + 1, suggestions.length - 1));
-          return;
-        }
-        if (e.key === "ArrowUp") {
-          e.preventDefault();
-          setHighlightedIndex((i) => Math.max(i - 1, -1));
+          setHighlightedIndex(next);
           return;
         }
         if (e.key === "Enter" && highlightedIndex >= 0) {
@@ -502,23 +500,34 @@ export function BrowserToolbar({
     ]
   );
 
-  const handleCopy = useCallback(async () => {
-    try {
+  // Through the action rather than straight to the clipboard, so the copy is
+  // logged like the palette's and the context menu's.
+  const writeUrl = useCallback(
+    async (text: string) => {
       const result = await actionService.dispatch(
         "browser.copyUrl",
-        { terminalId, url: address },
+        { terminalId, url: text },
         { source: "user" }
       );
       if (!result.ok) {
+        logError("Failed to copy URL", undefined, { error: result.error });
         throw new Error(result.error.message);
       }
-      setCopied(true);
-      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
-      copiedTimerRef.current = setTimeout(() => setCopied(false), COPIED_FEEDBACK_RESET_MS);
-    } catch (err) {
-      logError("Failed to copy URL", err);
-    }
-  }, [terminalId, address]);
+    },
+    [terminalId]
+  );
+
+  // The compact layout's menu row closes on select, so it confirms like every
+  // other menu copy: with a toast.
+  const handleMenuCopy = useCallback(() => {
+    copyWithToast("URL", address, {
+      write: (text) =>
+        writeUrl(text).then(
+          () => true,
+          () => false
+        ),
+    });
+  }, [address, writeUrl]);
 
   const handleCaptureScreenshot = useCallback(async () => {
     if (!onCaptureScreenshot) return;
@@ -634,7 +643,7 @@ export function BrowserToolbar({
       onClick={onOpenExternal}
       disabled={!canOpenExternal}
       className={buttonClass}
-      aria-label="Open in browser"
+      aria-label="Open in external browser"
     >
       <ExternalLink className={PANE_TOOLBAR_ICON_CLASS} />
     </button>
@@ -789,9 +798,6 @@ export function BrowserToolbar({
     <div data-testid="browser-toolbar" className="bg-surface border-b border-overlay">
       <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {historyAnnouncement}
-      </span>
-      <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
-        {copied ? "Copied to clipboard" : ""}
       </span>
       <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {screenshotCopied ? "Screenshot copied to clipboard" : ""}
@@ -977,25 +983,16 @@ export function BrowserToolbar({
                   </Popover>
                 )}
                 {!isCompact && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        ref={copyButtonRef}
-                        type="button"
-                        onClick={handleCopy}
-                        disabled={!address}
-                        className="toolbar-icon-button flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary"
-                        aria-label="Copy URL"
-                      >
-                        {copied ? (
-                          <Check className="w-3.5 h-3.5" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Copy URL</TooltipContent>
-                  </Tooltip>
+                  <CopyButton
+                    ref={copyButtonRef}
+                    text={address}
+                    write={writeUrl}
+                    disabled={!address}
+                    aria-label="Copy URL"
+                    tooltipSide="bottom"
+                    // Concentric with the 28px address field it sits in.
+                    className="rounded-[var(--radius-sm)]"
+                  />
                 )}
               </div>
             </div>
@@ -1185,7 +1182,7 @@ export function BrowserToolbar({
                 <span className="inline-flex">{openExternalButton}</span>
               )}
             </TooltipTrigger>
-            <TooltipContent side="bottom">Open in browser</TooltipContent>
+            <TooltipContent side="bottom">Open in external browser</TooltipContent>
           </Tooltip>
 
           {hasMoreMenu && (
@@ -1200,11 +1197,7 @@ export function BrowserToolbar({
                       aria-label="More page actions"
                       data-testid="browser-more-actions"
                     >
-                      {copied && isCompact ? (
-                        <Check className={PANE_TOOLBAR_ICON_CLASS} />
-                      ) : (
-                        <Ellipsis className={PANE_TOOLBAR_ICON_CLASS} />
-                      )}
+                      <Ellipsis className={PANE_TOOLBAR_ICON_CLASS} />
                     </button>
                   </DropdownMenuTrigger>
                 </TooltipTrigger>
@@ -1213,8 +1206,8 @@ export function BrowserToolbar({
               <DropdownMenuContent align="end" className="min-w-[200px]">
                 {isCompact && (
                   <>
-                    <DropdownMenuItem disabled={!address} onSelect={() => void handleCopy()}>
-                      <Link data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                    <DropdownMenuItem disabled={!address} onSelect={handleMenuCopy}>
+                      <Copy data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Copy URL
                     </DropdownMenuItem>
                     {consoleInMenu && (

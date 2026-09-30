@@ -137,7 +137,7 @@ async function openSavedFleetRow(page: Page, fleetName: string) {
 }
 
 async function requestSavedFleetDelete(page: Page, fleetName: string): Promise<void> {
-  // Delete on a focused row is the menu's accelerator to the same confirm the
+  // Delete on a focused row is the menu's accelerator to the same delete the
   // saved-fleets dialog offers as a button.
   const savedRow = await openSavedFleetRow(page, fleetName);
   await savedRow.focus();
@@ -322,7 +322,7 @@ test.describe.serial("Fleet broadcast: confirm and lifecycle paths", () => {
       });
     });
 
-    await test.step("Delete the saved fleet via the confirm dialog", async () => {
+    await test.step("Delete the saved fleet at once, then bring it back with Undo", async () => {
       await armPanels(window, ids);
       await expect(window.locator(SEL.fleet.armedCountChip)).toHaveAttribute(
         "aria-label",
@@ -330,13 +330,19 @@ test.describe.serial("Fleet broadcast: confirm and lifecycle paths", () => {
         { timeout: T_MEDIUM }
       );
 
-      const confirmButton = window.locator('[data-confirm-role="confirm"]').filter({
-        hasText: "Delete fleet",
-      });
       await requestSavedFleetDelete(window, fleetName);
-      await expect(confirmButton).toBeVisible({ timeout: T_MEDIUM });
-      await confirmButton.click();
+      await expect(window.getByRole("alertdialog")).toHaveCount(0);
+      const undo = window
+        .locator(SEL.notifications.toastRegion)
+        .getByRole("button", { name: "Undo" });
+      await expect(undo).toBeVisible({ timeout: T_MEDIUM });
+      // The toast expires before a menu round trip; the final delete below checks removal.
+      await undo.click();
+      await openSavedFleetRow(window, fleetName);
+      await window.keyboard.press("Escape");
 
+      await requestSavedFleetDelete(window, fleetName);
+      await window.locator(SEL.fleet.selectionMenuTrigger).click();
       await expect(window.locator(SEL.fleet.savedRow).filter({ hasText: fleetName })).toHaveCount(
         0,
         { timeout: T_MEDIUM }

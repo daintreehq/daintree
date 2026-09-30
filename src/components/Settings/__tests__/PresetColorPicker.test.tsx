@@ -25,7 +25,8 @@ const PALETTE = [
   "#abb2bf",
 ] as const;
 
-vi.mock("lucide-react", () => ({
+vi.mock("lucide-react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("lucide-react")>()),
   Check: ({ className }: { className?: string }) => (
     <span data-testid="check-icon" className={className} />
   ),

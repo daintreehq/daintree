@@ -25,6 +25,7 @@ import {
 import type { DiagnosticsReviewPayload } from "@shared/types/ipc/system";
 import { safeStringify } from "@/lib/safeStringify";
 import type { DiagnosticsReviewScope } from "@/store/diagnosticsReviewStore";
+import { pluralize } from "@/lib/pluralize";
 
 type TimeWindowId = "5m" | "30m" | "launch" | "update" | "full";
 
@@ -71,7 +72,7 @@ const GROUP_HEADING_CLASS = "text-sm font-medium text-text-primary";
 
 function formatMatches(count: number): string {
   if (count === 0) return "No matches";
-  return count === 1 ? "1 match" : `${count} matches`;
+  return pluralize(count, "match", "matches");
 }
 
 /**
@@ -244,29 +245,28 @@ export function DiagnosticsReviewDialog({
     [ownedRules]
   );
 
-  const preview = useMemo(() => {
-    if (!reviewPayload) {
-      return {
-        text: "",
-        ranges: [] as [number, number][],
-        matchCounts: new Map<PrebuiltRedactionId | number, number>(),
-      };
-    }
+  // The stringified report does not depend on the rules, so typing in a rule
+  // re-runs only the replacement pass below.
+  const reportJson = useMemo(() => {
+    if (!reviewPayload) return "";
     const startMs = computeTimeWindowStart(timeWindow, reviewPayload, openedAt);
-    const filtered = filterLogEntriesByTime(
-      filterSections(reviewPayload.payload, enabledSections),
-      startMs
+    return safeStringify(
+      filterLogEntriesByTime(filterSections(reviewPayload.payload, enabledSections), startMs),
+      2
     );
-    const { output, counts, ranges } = applyReplacementsCounted(
-      safeStringify(filtered, 2),
-      effectiveReplacements
-    );
+  }, [reviewPayload, enabledSections, timeWindow, openedAt]);
+
+  const preview = useMemo(() => {
     const matchCounts = new Map<PrebuiltRedactionId | number, number>();
+    if (!reviewPayload) {
+      return { text: "", ranges: [] as [number, number][], matchCounts };
+    }
+    const { output, counts, ranges } = applyReplacementsCounted(reportJson, effectiveReplacements);
     ownedRules.forEach(({ owner }, i) => {
       matchCounts.set(owner, (matchCounts.get(owner) ?? 0) + (counts[i] ?? 0));
     });
     return { text: output, ranges, matchCounts };
-  }, [reviewPayload, enabledSections, effectiveReplacements, ownedRules, timeWindow, openedAt]);
+  }, [reviewPayload, reportJson, effectiveReplacements, ownedRules]);
 
   // Which replacement "Next replacement" last moved to, tied to the ranges it
   // walked so any edit to the report starts the walk again — even one that
@@ -565,7 +565,7 @@ export function DiagnosticsReviewDialog({
                 aria-live="polite"
                 className="text-xs text-text-secondary tabular-nums"
               >
-                {previewLines.toLocaleString()} lines
+                {pluralize(previewLines, "line")}
                 {replacementCount > 0 &&
                   (activeReplacement === null
                     ? ` · ${replacementCount.toLocaleString()} replaced`

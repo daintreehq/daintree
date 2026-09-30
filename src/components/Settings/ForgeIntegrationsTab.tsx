@@ -20,6 +20,7 @@ import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import { resolveForgeRemote } from "@shared/utils/forgeRemoteSelection";
 import { extractHostname, hostnameMatchesAny } from "@shared/utils/forgeHostnames";
 import { logError } from "@/utils/logger";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 // Non-empty sentinel because Radix's `SelectItem` rejects an empty string value
 // (it reserves `""` to clear the selection and show the placeholder). Mapped
@@ -467,9 +468,9 @@ function ProjectRoutingPanel({
             ) : undefined
           }
           description={
-            <span className="block font-mono truncate" title={remote.fetchUrl}>
-              {remote.fetchUrl}
-            </span>
+            <TruncatedTooltip content={remote.fetchUrl}>
+              <span className="block font-mono truncate">{remote.fetchUrl}</span>
+            </TruncatedTooltip>
           }
           control={<RoutingResult resolved={resolved} failed={failed} noProviders={noProviders} />}
         />

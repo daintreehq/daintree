@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Callout } from "@/components/ui/Callout";
 import {
   AlertTriangle,
@@ -23,6 +24,7 @@ import {
 } from "@/store/mcpConfirmStore";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * Renderer-side timer that beats main's 30s `pendingDispatches` deadline by
@@ -423,9 +425,7 @@ function RequesterRow({ current }: { current: PendingMcpConfirm }) {
           aria-hidden="true"
           className="w-3 h-3 shrink-0 translate-y-0.5 text-daintree-text/45"
         />
-        <span className="truncate text-text-primary" title={callerInfo?.userAgent}>
-          {name}
-        </span>
+        <CallerName name={name} userAgent={callerInfo?.userAgent} />
         {detail && (
           <span className="shrink-0 font-mono text-2xs text-text-secondary">{detail}</span>
         )}
@@ -774,7 +774,7 @@ function GateHint({
   // outcome as Cancel, so it is a nudge, not an error.
   if (emptySelection) parts.push("Nothing selected — cancel, or check something to destroy.");
   if (queueDepth > 0) {
-    parts.push(`${queueDepth} more request${queueDepth === 1 ? "" : "s"} waiting`);
+    parts.push(`${pluralize(queueDepth, "more request")} waiting`);
   }
   if (parts.length === 0) return null;
 
@@ -782,5 +782,19 @@ function GateHint({
     <span aria-live="polite" className="min-w-0 truncate">
       {parts.join(" · ")}
     </span>
+  );
+}
+
+/** The caller's name, with the raw user agent behind it for anyone checking. */
+function CallerName({ name, userAgent }: { name: string; userAgent?: string }) {
+  const text = <span className="truncate text-text-primary">{name}</span>;
+  if (!userAgent) return text;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{text}</TooltipTrigger>
+      <TooltipContent side="bottom" className="break-all">
+        {userAgent}
+      </TooltipContent>
+    </Tooltip>
   );
 }

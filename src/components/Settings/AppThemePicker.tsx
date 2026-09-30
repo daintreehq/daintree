@@ -45,6 +45,7 @@ import {
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
 import { useImageError } from "@/hooks/useImageError";
+import { pluralize } from "@/lib/pluralize";
 
 // Plain-language summary per warning kind. Engine diagnostics (contrast ratios,
 // WCAG clause numbers, token-key names) are written for theme authors, not end
@@ -518,7 +519,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
         warnings: result.warnings,
         message:
           warningCount > 0
-            ? `Imported "${result.scheme.name}" with ${warningCount} warning${warningCount === 1 ? "" : "s"}.`
+            ? `Imported "${result.scheme.name}" with ${pluralize(warningCount, "warning")}.`
             : `Imported "${result.scheme.name}".`,
       });
     } catch (error) {

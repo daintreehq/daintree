@@ -104,6 +104,10 @@ vi.mock("@/hooks", () => ({
   }),
 }));
 vi.mock("@/hooks/useWorktrees", () => ({ useWorktrees: () => ({ worktrees: [] }) }));
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
+    selector({ worktrees: new Map() }),
+}));
 vi.mock("@/hooks/useProjectSettings", () => ({ useProjectSettings: () => ({ settings: null }) }));
 vi.mock("@/utils/workspaceCwd", () => ({ resolveWorkspaceCwd: () => "/tmp" }));
 vi.mock("@/config/agents", () => ({ getAgentIds: () => [], getAgentConfig: () => undefined }));
@@ -115,6 +119,7 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() 
 vi.mock("@dnd-kit/core", () => ({
   useDndContext: () => ({ active: null }),
   useDroppable: () => ({ setNodeRef: vi.fn(), isOver: false }),
+  useDndMonitor: () => {},
 }));
 vi.mock("@dnd-kit/sortable", () => ({
   SortableContext: fixture.passthrough,

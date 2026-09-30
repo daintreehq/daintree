@@ -22,8 +22,7 @@ import { actionService } from "@/services/ActionService";
 import type { ForgeLabel, Issue, PR } from "@shared/types/forge";
 import type { Worktree } from "@shared/types/worktree";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { getPRCIStatusVisual, getPRCIStatusTooltip } from "../utils/prCIStatus";
-import { toGitHubCIStatus } from "../utils/forgeRowAdapters";
+import { getPRStatusVisual, getPRStatusTooltip } from "../utils/prCIStatus";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -248,8 +247,12 @@ export function GitHubListItem({
     : null;
 
   const linkedPR = !isItemPR && "linkedPR" in item ? item.linkedPR : undefined;
-  const linkedPRCIVisual = linkedPR?.ciStatus
-    ? getPRCIStatusVisual(toGitHubCIStatus(linkedPR.ciStatus))
+  // A conflict only blocks an open PR; a closed or merged one keeps its last CI word.
+  const linkedPRCIVisual = linkedPR
+    ? getPRStatusVisual(
+        linkedPR.ciStatus,
+        linkedPR.state === "open" ? linkedPR.mergeState : undefined
+      )
     : null;
 
   /**
@@ -433,10 +436,10 @@ export function GitHubListItem({
 
               {isItemPR &&
                 item.state === "open" &&
-                item.ciStatus &&
+                (item.ciStatus || item.mergeState) &&
                 (() => {
-                  const ciVisual = getPRCIStatusVisual(toGitHubCIStatus(item.ciStatus));
-                  const ciTooltip = getPRCIStatusTooltip(toGitHubCIStatus(item.ciStatus));
+                  const ciVisual = getPRStatusVisual(item.ciStatus, item.mergeState);
+                  const ciTooltip = getPRStatusTooltip(item.ciStatus, item.mergeState);
                   if (!ciVisual || !ciTooltip) return null;
                   return (
                     <Tooltip>
@@ -504,7 +507,7 @@ export function GitHubListItem({
                       // graphical control has to clear.
                       RESOURCE_RAIL_SLOT.menu.box,
                       "rounded-lg text-text-secondary",
-                      "hover:bg-overlay-medium hover:text-text-primary",
+                      "hover:bg-overlay-hover hover:text-text-primary",
                       "transition-[background-color,color] duration-150 ease-out",
                       "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                     )}
@@ -791,7 +794,7 @@ export function GitHubListItem({
                         // issue and used to be thrown away: a merged linkage and
                         // one with failing checks rendered identically.
                         `Open linked pull request #${linkedPR.number} (${linkedPR.state}${
-                          linkedPRCIVisual ? `, CI ${linkedPRCIVisual.shortLabel}` : ""
+                          linkedPRCIVisual ? `, ${linkedPRCIVisual.ariaLabel}` : ""
                         })`
                       }
                     >
@@ -819,7 +822,7 @@ export function GitHubListItem({
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
                     Pull request #{linkedPR.number} &middot; {linkedPR.state}
-                    {linkedPRCIVisual ? ` · CI ${linkedPRCIVisual.shortLabel}` : ""}
+                    {linkedPRCIVisual ? ` · ${linkedPRCIVisual.ariaLabel}` : ""}
                   </TooltipContent>
                 </Tooltip>
               </>

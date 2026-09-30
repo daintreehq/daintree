@@ -17,6 +17,7 @@
  */
 
 import { MCP_PREVIEW_CAUTION_PREFIX } from "@/lib/mcpPreviewLines";
+import { pluralize } from "@/lib/pluralize";
 
 export interface TerminalLaunchPreview {
   /** The command the new terminal runs on start, or undefined for a bare shell. */
@@ -76,7 +77,7 @@ function commandSection(command: string): string[] {
   const section = ["Runs:", ...splitLines(shown).map((line) => `${CONTENT_INDENT}${line}`)];
   if (omitted > 0) {
     section.push(
-      `${MCP_PREVIEW_CAUTION_PREFIX}Shown in part — ${omitted} more character${omitted === 1 ? "" : "s"} will run than appear above.`
+      `${MCP_PREVIEW_CAUTION_PREFIX}Shown in part — ${pluralize(omitted, "more character")} will run than appear above.`
     );
   }
   return section;

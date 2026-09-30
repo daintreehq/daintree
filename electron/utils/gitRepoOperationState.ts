@@ -1,5 +1,6 @@
 // eager-import-allow: reads/writes the git-operation lock via sync fs
 import { readdirSync } from "fs";
+import { readdir } from "fs/promises";
 import type { RepoState } from "../../shared/types/git.js";
 
 /**
@@ -60,7 +61,38 @@ export function isRepoOperationInProgress(gitDir: string): boolean {
  */
 export function getRepoOperationStateSync(gitDir: string): RepoState | undefined {
   const entries = readGitDirEntries(gitDir);
-  if (!entries) return undefined;
+  return entries ? classifyRepoOperationState(entries) : undefined;
+}
+
+/**
+ * Async twin of `getRepoOperationStateSync` for the status poll, which runs on
+ * the workspace-host loop for every worktree: a `readdirSync` there blocks the
+ * whole host when a mount stalls. Same fail-open contract — a filesystem error
+ * yields `undefined`. `readdir` takes no AbortSignal, so callers bound it with
+ * `withTimeout`.
+ */
+export function getRepoOperationState(gitDir: string): Promise<RepoState | undefined> {
+  // Polls that time out on a stalled mount abandon their read rather than
+  // cancel it; joining the outstanding one keeps each gitDir to a single
+  // threadpool slot instead of one more per poll.
+  let pending = inFlightOperationStateReads.get(gitDir);
+  if (!pending) {
+    // Started inside the chain so even a synchronous throw fails open.
+    pending = Promise.resolve()
+      .then(() => readdir(gitDir))
+      .then(
+        (names) => classifyRepoOperationState(new Set(names)),
+        () => undefined
+      )
+      .finally(() => inFlightOperationStateReads.delete(gitDir));
+    inFlightOperationStateReads.set(gitDir, pending);
+  }
+  return pending;
+}
+
+const inFlightOperationStateReads = new Map<string, Promise<RepoState | undefined>>();
+
+function classifyRepoOperationState(entries: Set<string>): RepoState | undefined {
   if (entries.has("rebase-merge") || entries.has("rebase-apply")) {
     return "REBASING";
   }

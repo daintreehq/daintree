@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { memo, useCallback, useMemo } from "react";
 import { SortableWorktreeCard } from "@/components/DragDrop/SortableWorktreeCard";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { WorktreeCard } from "@/components/Worktree";
@@ -153,5 +153,9 @@ function SidebarWorktreeRow({
   );
 }
 
-export { SidebarWorktreeRow };
+// Rendered from Virtuoso's item renderer, which re-invokes on every sidebar
+// render; memo lets rows whose props are unchanged skip the whole card subtree.
+const MemoizedSidebarWorktreeRow = memo(SidebarWorktreeRow);
+
+export { MemoizedSidebarWorktreeRow as SidebarWorktreeRow };
 export type { SidebarWorktreeRowProps };

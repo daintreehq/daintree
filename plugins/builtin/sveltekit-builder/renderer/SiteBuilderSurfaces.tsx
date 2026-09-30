@@ -20,16 +20,18 @@ import {
   PanelRightOpen,
   SquareDashedMousePointer,
   Unplug,
-  X,
 } from "lucide-react";
 import type { DevPreviewToolSurfaceProps } from "@/registry/devPreviewToolRegistry";
 import type { SelectedNode } from "../shared/model.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { cn } from "@/lib/utils";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
-import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
+import { KBD_COMPACT_CLASS, KbdChord } from "@/components/ui/Kbd";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import {
   Select,
@@ -257,15 +259,11 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
         />
       </div>
       <DrawerToggle panelId={props.panelId} expanded={hasDetails && !drawerCollapsed} />
-      <Button
-        variant="ghost"
-        size="icon-xs"
+      <DismissButton
         aria-label="Close SvelteKit Tools"
-        title="Close SvelteKit Tools"
+        tooltip="Close SvelteKit Tools"
         onClick={props.onClose}
-      >
-        <X aria-hidden="true" />
-      </Button>
+      />
     </div>
   );
 }
@@ -283,16 +281,24 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
 function DrawerToggle({ panelId, expanded }: { panelId: string; expanded: boolean }) {
   const collapsed = useDrawerCollapsed(panelId);
   return (
-    <Button
-      variant="ghost"
-      size="icon-xs"
-      aria-label="Site Builder details"
-      aria-expanded={expanded}
-      title="Site Builder details"
-      onClick={() => setDrawerCollapsed(panelId, !collapsed)}
-    >
-      {collapsed ? <PanelRightOpen aria-hidden="true" /> : <PanelRightClose aria-hidden="true" />}
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Site Builder details"
+          aria-expanded={expanded}
+          onClick={() => setDrawerCollapsed(panelId, !collapsed)}
+        >
+          {collapsed ? (
+            <PanelRightOpen aria-hidden="true" />
+          ) : (
+            <PanelRightClose aria-hidden="true" />
+          )}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">Site Builder details</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -305,11 +311,12 @@ function KeyHints() {
     // running sentence.
     <span className="ml-auto hidden shrink-0 items-center gap-2 text-3xs text-text-secondary @[640px]/strip:flex">
       <span className="flex items-center gap-1">
-        <kbd className={KBD_COMPACT_CLASS}>↑↓←→</kbd>
+        {/* Sans, as KbdChord sets its arrows: the mono face has no arrow glyphs. */}
+        <kbd className={KBD_COMPACT_CLASS.replace("font-mono", "font-sans")}>↑↓←→</kbd>
         move
       </span>
       <span className="flex items-center gap-1">
-        <kbd className={KBD_COMPACT_CLASS}>⌥↑</kbd>
+        <KbdChord shortcut="Alt+Up" density="compact" />
         component
       </span>
     </span>
@@ -425,12 +432,17 @@ function StripStatus({
           {location && !drawerShowing ? (
             <>
               <div aria-hidden="true" className="toolbar-divider mx-1 h-4 w-px shrink-0" />
-              <span
-                className="min-w-0 shrink truncate font-mono text-3xs text-text-secondary"
-                title={location}
+              {/* Pointer-only: the strip is a roving toolbar with one tab
+                  stop, and the drawer names the full source for the keyboard. */}
+              <TruncatedTooltip
+                content={location}
+                focusable={false}
+                isTruncated={middleTruncatePath(location, 38) !== location || undefined}
               >
-                {middleTruncatePath(location, 38)}
-              </span>
+                <span className="min-w-0 shrink truncate font-mono text-3xs text-text-secondary">
+                  {middleTruncatePath(location, 38)}
+                </span>
+              </TruncatedTooltip>
             </>
           ) : null}
         </>
@@ -493,14 +505,23 @@ function StripMessage({
   title?: string;
   children: ReactNode;
 }) {
-  return (
-    <span className="flex min-w-0 items-center gap-1.5" title={title}>
+  const message = (
+    <span className="flex min-w-0 items-center gap-1.5">
       <Icon
         className={cn("h-3.5 w-3.5 shrink-0", tone === "warning" && "text-status-warning")}
         aria-hidden="true"
       />
       <span className="truncate">{children}</span>
     </span>
+  );
+  if (!title) return message;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{message}</TooltipTrigger>
+      <TooltipContent side="bottom" align="start">
+        {title}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -734,19 +755,27 @@ function SiteSourceBody({
               const relative = relativeTo(worktreePath, appRoot);
               return (
                 <li key={appRoot}>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-full justify-between gap-2 px-2 font-mono text-xs font-normal"
-                    title={appRoot}
-                    onClick={() => void controller.openWorkspace(appRoot)}
-                  >
-                    <span className="min-w-0 truncate">{relative === "." ? "./" : relative}</span>
-                    <ChevronRight
-                      className="h-3.5 w-3.5 shrink-0 text-text-secondary"
-                      aria-hidden="true"
-                    />
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-full justify-between gap-2 px-2 font-mono text-xs font-normal"
+                        onClick={() => void controller.openWorkspace(appRoot)}
+                      >
+                        <span className="min-w-0 truncate">
+                          {relative === "." ? "./" : relative}
+                        </span>
+                        <ChevronRight
+                          className="h-3.5 w-3.5 shrink-0 text-text-secondary"
+                          aria-hidden="true"
+                        />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" align="start">
+                      {appRoot}
+                    </TooltipContent>
+                  </Tooltip>
                 </li>
               );
             })}

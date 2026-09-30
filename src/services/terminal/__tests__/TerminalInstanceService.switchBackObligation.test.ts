@@ -63,6 +63,8 @@ type ObligationService = {
   instances: Map<string, unknown>;
   suppressResizesDuringProjectSwitch: (ids: string[], durationMs: number) => void;
   resetRenderer: (id: string) => boolean;
+  clearResizeSuppression: (id: string) => void;
+  resizeController: { lockResize: (id: string, locked: boolean, ttlMs?: number) => void };
 };
 
 interface HostConfig {
@@ -101,7 +103,7 @@ function makeManaged(id: string, host: HTMLDivElement, isDetached: boolean) {
     attachGeneration: 7,
     latestCols: 80,
     latestRows: 24,
-    resizeSuppressionTimer: undefined as number | undefined,
+    resizeSuppressionToken: undefined as number | undefined,
     resizeSuppressionEndTime: undefined as number | undefined,
     isResizeSuppressed: false,
     revealPendingRepair: undefined as boolean | undefined,
@@ -201,5 +203,90 @@ describe("#10632 rule #1 — suppression-clear preserves the redraw obligation",
     expect(resetSpy).toHaveBeenCalledWith("visible");
     expect(resetSpy.mock.results[0]?.value).toBe(true); // redraw actually ran
     expect(managed.revealPendingRepair).toBeUndefined(); // nothing owed
+  });
+
+  describe("one timer per arm", () => {
+    const visibleHost = () =>
+      makeHost({ connected: true, clientWidth: 800, clientHeight: 600, checkVisibility: true });
+
+    it("a re-arm before the first clear moves the redraw to the later deadline", () => {
+      const managed = makeManaged("rearm", visibleHost(), false);
+      service.instances.set("rearm", managed);
+      const resetSpy = vi.spyOn(service, "resetRenderer");
+
+      service.suppressResizesDuringProjectSwitch(["rearm"], SUPPRESSION_MS);
+      vi.advanceTimersByTime(SUPPRESSION_MS / 2);
+      service.suppressResizesDuringProjectSwitch(["rearm"], SUPPRESSION_MS);
+
+      vi.advanceTimersByTime(SUPPRESSION_MS / 2);
+      expect(resetSpy).not.toHaveBeenCalled();
+      expect(managed.isResizeSuppressed).toBe(true);
+
+      vi.advanceTimersByTime(SUPPRESSION_MS / 2);
+      expect(resetSpy).toHaveBeenCalledTimes(1);
+      expect(managed.isResizeSuppressed).toBe(false);
+    });
+
+    it("clearResizeSuppression cancels the pending clear's redraw", () => {
+      const managed = makeManaged("cleared", visibleHost(), false);
+      service.instances.set("cleared", managed);
+      const resetSpy = vi.spyOn(service, "resetRenderer");
+
+      service.suppressResizesDuringProjectSwitch(["cleared"], SUPPRESSION_MS);
+      service.clearResizeSuppression("cleared");
+      vi.advanceTimersByTime(SUPPRESSION_MS);
+
+      expect(resetSpy).not.toHaveBeenCalled();
+    });
+
+    it("clears every pane at once but redraws them one task at a time, arming obligations as it goes", async () => {
+      const ids = ["a", "b", "c"];
+      const managed = ids.map((id) => {
+        const m = makeManaged(
+          id,
+          id === "b"
+            ? makeHost({ connected: false, clientWidth: 0, clientHeight: 0 })
+            : visibleHost(),
+          false
+        );
+        service.instances.set(id, m);
+        return m;
+      });
+      const resetSpy = vi.spyOn(service, "resetRenderer");
+
+      service.suppressResizesDuringProjectSwitch(ids, SUPPRESSION_MS);
+      vi.advanceTimersByTime(SUPPRESSION_MS);
+
+      expect(managed.every((m) => m.isResizeSuppressed === false)).toBe(true);
+      expect(resetSpy).toHaveBeenCalledTimes(1);
+
+      await vi.runAllTimersAsync();
+
+      expect(resetSpy.mock.calls.map(([id]) => id)).toEqual(["a", "c"]);
+      expect(managed[1]!.revealPendingRepair).toBe(true);
+      expect(managed[0]!.revealPendingRepair).toBeUndefined();
+    });
+
+    it("a throwing unlock on one pane still clears and redraws the rest of the arm", async () => {
+      const ids = ["x", "y", "z"];
+      const managed = ids.map((id) => {
+        const m = makeManaged(id, visibleHost(), false);
+        service.instances.set(id, m);
+        return m;
+      });
+      const lockResize = service.resizeController.lockResize.bind(service.resizeController);
+      vi.spyOn(service.resizeController, "lockResize").mockImplementation((id, locked, ttl) => {
+        if (id === "x" && !locked) throw new Error("replay failed");
+        lockResize(id, locked, ttl);
+      });
+      const resetSpy = vi.spyOn(service, "resetRenderer");
+
+      service.suppressResizesDuringProjectSwitch(ids, SUPPRESSION_MS);
+      vi.advanceTimersByTime(SUPPRESSION_MS);
+      await vi.runAllTimersAsync();
+
+      expect(managed.every((m) => m.isResizeSuppressed === false)).toBe(true);
+      expect(resetSpy.mock.calls.map(([id]) => id)).toEqual(ids);
+    });
   });
 });

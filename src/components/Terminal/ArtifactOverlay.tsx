@@ -1,8 +1,10 @@
 import { useState, useCallback, useEffect, useId, useRef, type ReactNode } from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import {
   Check,
   ChevronRight,
-  CircleAlert,
+  CircleX,
   CircleCheck,
   Copy,
   Download,
@@ -13,9 +15,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { FLOATING_CARD_CLASS } from "@/components/ui/floatingSurface";
 import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
-import { SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
+import { SurfaceHeader, SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FileStack } from "@/components/icons";
@@ -23,6 +26,7 @@ import { orderPatchesForApply, useArtifacts, type SaveArtifactOutcome } from "@/
 import { useUnseenOutput } from "@/hooks/useUnseenOutput";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import type { Artifact } from "@shared/types";
+import { pluralize } from "@/lib/pluralize";
 
 type ApplyPatchOutcome =
   | { success: true; modifiedFiles: string[] }
@@ -243,13 +247,12 @@ function PatchDiffLines({ content }: { content: string }) {
 function PatchStats({ content, className }: { content: string; className?: string }) {
   const { additions, deletions } = getPatchStats(content);
   return (
-    <span
-      className={cn("font-mono text-xs tabular-nums shrink-0", className)}
+    <DiffStat
+      insertions={additions}
+      deletions={deletions}
+      className={cn("text-xs shrink-0", className)}
       aria-label={`${additions} added, ${deletions} removed`}
-    >
-      <span className="text-diff-gutter-insert">+{additions}</span>{" "}
-      <span className="text-diff-gutter-delete">−{deletions}</span>
-    </span>
+    />
   );
 }
 
@@ -262,9 +265,9 @@ function PatchPreview({ patch, scrollClassName }: { patch: Artifact; scrollClass
         <span className="min-w-0 flex-1 text-xs text-text-primary">
           {files.length > 0 ? (
             files.map((file) => (
-              <span key={file} className="block truncate font-mono" title={file}>
-                {file}
-              </span>
+              <TruncatedTooltip key={file} content={file}>
+                <span className="block truncate font-mono">{file}</span>
+              </TruncatedTooltip>
             ))
           ) : (
             <span className="font-mono">{patch.filename || "patch"}</span>
@@ -323,10 +326,6 @@ function splitPath(path: string): { base: string; dir: string } {
 
 function artifactName(artifact: Artifact): string {
   return splitPath(artifact.filename || ARTIFACT_TYPE_LABELS[artifact.type] || "Artifact").base;
-}
-
-function plural(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
 }
 
 function OutcomeLine({
@@ -484,11 +483,18 @@ function ArtifactItem({
           )}
         />
         <Icon aria-hidden="true" className="size-3.5 shrink-0 text-text-secondary" />
-        <span className="min-w-0 flex-1 truncate text-sm" title={artifact.filename || undefined}>
-          <span className="sr-only">{typeLabel}: </span>
-          <span className="font-medium text-text-primary">{base}</span>
-          {dir && <span className="ml-1.5 text-xs text-text-secondary">{dir}</span>}
-        </span>
+        {/* Pointer-only: the whole row is the button. */}
+        <TruncatedTooltip
+          content={artifact.filename}
+          disabled={!artifact.filename}
+          focusable={false}
+        >
+          <span className="min-w-0 flex-1 truncate text-sm">
+            <span className="sr-only">{typeLabel}: </span>
+            <span className="font-medium text-text-primary">{base}</span>
+            {dir && <span className="ml-1.5 text-xs text-text-secondary">{dir}</span>}
+          </span>
+        </TruncatedTooltip>
         {applyResult && (
           <span className="shrink-0 text-xs text-text-secondary">
             {applyResult.kind === "applied" ? "Applied" : "Didn't apply"}
@@ -498,7 +504,7 @@ function ArtifactItem({
           <PatchStats content={artifact.content} />
         ) : (
           <span className="shrink-0 text-xs tabular-nums text-text-secondary">
-            {plural(lines, "line", "lines")}
+            {pluralize(lines, "line", "lines")}
           </span>
         )}
       </button>
@@ -561,7 +567,7 @@ function ArtifactItem({
             {copied && <span className="sr-only">Copied to clipboard</span>}
             {applyResult?.kind === "applied" && (
               <OutcomeLine tone="success" icon={CircleCheck}>
-                Applied to {plural(applyResult.files.length, "file", "files")}
+                Applied to {pluralize(applyResult.files.length, "file", "files")}
                 {applyResult.files.map((file) => (
                   <span key={file} className="block break-all font-mono text-text-secondary">
                     {file}
@@ -572,7 +578,7 @@ function ArtifactItem({
             {applyResult?.kind === "failed" && (
               <OutcomeLine
                 tone="error"
-                icon={CircleAlert}
+                icon={CircleX}
                 onDismiss={() => onApplyResult(artifact.id, null)}
               >
                 Patch didn't apply. {describeApplyFailure(applyResult.message)}
@@ -582,19 +588,19 @@ function ArtifactItem({
               </OutcomeLine>
             )}
             {feedback?.kind === "saved" && (
-              <OutcomeLine tone="neutral" icon={Check}>
+              <OutcomeLine tone="neutral" icon={CircleCheck}>
                 Saved to{" "}
                 <span className="break-all font-mono text-text-secondary">{feedback.filePath}</span>
               </OutcomeLine>
             )}
             {feedback?.kind === "save-failed" && (
-              <OutcomeLine tone="error" icon={CircleAlert} onDismiss={() => setFeedback(null)}>
+              <OutcomeLine tone="error" icon={CircleX} onDismiss={() => setFeedback(null)}>
                 Couldn't save. Try again, or copy it instead.
                 <span className="block text-text-secondary">{feedback.message}</span>
               </OutcomeLine>
             )}
             {feedback?.kind === "copy-failed" && (
-              <OutcomeLine tone="error" icon={CircleAlert} onDismiss={() => setFeedback(null)}>
+              <OutcomeLine tone="error" icon={CircleX} onDismiss={() => setFeedback(null)}>
                 Couldn't copy to the clipboard. Save it as a file instead.
               </OutcomeLine>
             )}
@@ -774,7 +780,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     const result = await copyAll(!codeOnly);
     if (result.succeeded > 0) {
       showBulkStatus({
-        text: `Copied ${plural(result.succeeded, "artifact", "artifacts")}`,
+        text: `Copied ${pluralize(result.succeeded, "artifact", "artifacts")}`,
         tone: "success",
         persistent: false,
       });
@@ -791,7 +797,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     const result = await saveAll();
     if (result.succeeded > 0 && result.failed === 0) {
       showBulkStatus({
-        text: `Saved ${plural(result.succeeded, "artifact", "artifacts")}`,
+        text: `Saved ${pluralize(result.succeeded, "artifact", "artifacts")}`,
         tone: "success",
         persistent: false,
       });
@@ -861,8 +867,8 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     if (result.succeeded > 0 && result.failed === 0) {
       const files = result.modifiedFiles?.length ?? 0;
       showBulkStatus({
-        text: `Applied ${plural(result.succeeded, "patch", "patches")}${
-          files ? ` to ${plural(files, "file", "files")}` : ""
+        text: `Applied ${pluralize(result.succeeded, "patch", "patches")}${
+          files ? ` to ${pluralize(files, "file", "files")}` : ""
         }`,
         tone: "success",
         persistent: true,
@@ -872,7 +878,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         text:
           result.succeeded > 0
             ? `Applied ${result.succeeded}, ${result.failed} didn't apply. Each row says why.`
-            : `${plural(result.failed, "patch", "patches")} didn't apply. Each row says why.`,
+            : `${pluralize(result.failed, "patch", "patches")} didn't apply. Each row says why.`,
         tone: "error",
         persistent: true,
       });
@@ -958,10 +964,10 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
           >
             <FileStack aria-hidden="true" />
             <span className="tabular-nums text-text-primary">
-              {plural(artifacts.length, "artifact", "artifacts")}
+              {pluralize(artifacts.length, "artifact", "artifacts")}
             </span>
             {patchCount > 0 && (
-              <span className="tabular-nums">· {plural(patchCount, "patch", "patches")}</span>
+              <span className="tabular-nums">· {pluralize(patchCount, "patch", "patches")}</span>
             )}
           </Button>
         </div>
@@ -982,14 +988,17 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
               ? "bottom-10 max-h-[min(34rem,calc(100%-3.25rem))]"
               : "bottom-3 max-h-[min(34rem,calc(100%-1.5rem))]",
             "w-[26rem] max-w-[calc(100%-1.5rem)]",
-            "rounded-[var(--radius-lg)] border border-border-default bg-surface-sidebar shadow-[var(--theme-shadow-floating)]",
+            FLOATING_CARD_CLASS,
             className
           )}
         >
-          <header className="shrink-0 border-b border-border-default bg-surface-canvas">
-            <div className="flex items-center gap-2 pl-3 pr-1.5 py-1.5">
+          {/* The divider belongs to the whole header block, not the title row:
+              the bulk bar and its status line sit under the title as part of
+              the same chrome, so the row's own compact divider is dropped. */}
+          <header className="shrink-0 border-b border-divider bg-surface-canvas">
+            <SurfaceHeader density="compact" className="gap-2 border-b-0">
               <FileStack aria-hidden="true" className="size-4 shrink-0 text-text-secondary" />
-              <h2 className="flex-1 text-sm font-medium text-text-primary">
+              <h2 className="flex-1 text-xs font-medium text-text-primary">
                 Artifacts{" "}
                 <span className="font-normal tabular-nums text-text-secondary">
                   {artifacts.length}
@@ -1003,8 +1012,13 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
               >
                 Clear
               </Button>
-              <SurfaceHeaderCloseButton onClick={closePanel} aria-label="Close artifacts" />
-            </div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <SurfaceHeaderCloseButton onClick={closePanel} aria-label="Close artifacts" />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Close artifacts</TooltipContent>
+              </Tooltip>
+            </SurfaceHeader>
 
             {showBulkBar && (
               <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2.5">
@@ -1037,7 +1051,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
                       Copy all takes only the{" "}
-                      {plural(codeArtifactCount, "code block", "code blocks")}
+                      {pluralize(codeArtifactCount, "code block", "code blocks")}
                     </TooltipContent>
                   </Tooltip>
                 </div>
@@ -1072,7 +1086,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                           }
                           loading={bulkProgress?.action === "apply"}
                         >
-                          Apply {plural(unappliedPatchCount, "patch", "patches")}
+                          Apply {pluralize(unappliedPatchCount, "patch", "patches")}
                         </Button>
                       </span>
                     </TooltipTrigger>
@@ -1101,7 +1115,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                           className="size-3.5 shrink-0 mt-px text-status-success"
                         />
                       ) : (
-                        <CircleAlert
+                        <CircleX
                           aria-hidden="true"
                           className="size-3.5 shrink-0 mt-px text-status-error"
                         />
@@ -1167,7 +1181,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
       <ConfirmDialog
         isOpen={pendingBulkPatches !== null}
         onClose={handleCancelApplyAllPatches}
-        title={`Apply ${plural(pendingBulkCount, "patch", "patches")} to this worktree?`}
+        title={`Apply ${pluralize(pendingBulkCount, "patch", "patches")} to this worktree?`}
         description={
           <span>
             Runs <span className="font-mono">git apply</span> on each patch below, in this order, in{" "}
@@ -1175,7 +1189,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
             one fails, the others still apply. There's no automatic undo.
           </span>
         }
-        confirmLabel={`Apply ${plural(pendingBulkCount, "patch", "patches")}`}
+        confirmLabel={`Apply ${pluralize(pendingBulkCount, "patch", "patches")}`}
         variant="destructive"
         size="lg"
         hasPreview={true}

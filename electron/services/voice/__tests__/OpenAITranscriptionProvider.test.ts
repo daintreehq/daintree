@@ -412,6 +412,41 @@ describe("OpenAITranscriptionProvider", () => {
     service.stop();
   });
 
+  it("omits languages and the language directive for auto-detect", async () => {
+    const service = new OpenAITranscriptionProvider();
+    void service.start({ ...BASE_SETTINGS, language: "auto", keyterms: ["Daintree"] });
+    await Promise.resolve();
+    const socket = latestInstance();
+    socket.simulateOpen();
+    const transcription = readTranscription(socket);
+    expect(transcription).not.toHaveProperty("languages");
+    expect(transcription).not.toHaveProperty("language");
+    expect(transcription.prompt).toBe("Keywords: Daintree");
+    service.stop();
+  });
+
+  it("adds a no-translate directive to the prompt for a fixed language, even without keyterms", async () => {
+    const service = new OpenAITranscriptionProvider();
+    void service.start({ ...BASE_SETTINGS, language: "es" });
+    await Promise.resolve();
+    const socket = latestInstance();
+    socket.simulateOpen();
+    const transcription = readTranscription(socket);
+    expect(transcription.prompt).toBe("Transcribe in Spanish. Do not translate.");
+    expect(transcription).not.toHaveProperty("keywords");
+    service.stop();
+  });
+
+  it("sends no directive for an unknown language code, keeping the prompt bounded", async () => {
+    const service = new OpenAITranscriptionProvider();
+    void service.start({ ...BASE_SETTINGS, language: "x".repeat(380) });
+    await Promise.resolve();
+    const socket = latestInstance();
+    socket.simulateOpen();
+    expect(readTranscription(socket)).not.toHaveProperty("prompt");
+    service.stop();
+  });
+
   it.each([
     ["empty", ""],
     ["whitespace-only", "   "],
@@ -453,7 +488,9 @@ describe("OpenAITranscriptionProvider", () => {
     socket.simulateOpen();
     const transcription = readTranscription(socket);
     expect(transcription.keywords).toEqual(["Daintree", "xterm"]);
-    expect(transcription.prompt).toBe("Keywords: Daintree, xterm");
+    expect(transcription.prompt).toBe(
+      "Transcribe in English. Do not translate. Keywords: Daintree, xterm"
+    );
     service.stop();
   });
 
@@ -470,14 +507,16 @@ describe("OpenAITranscriptionProvider", () => {
     socket.simulateOpen();
     const transcription = readTranscription(socket);
     expect(transcription.keywords).toEqual(["Daintree", "xterm"]);
-    expect(transcription.prompt).toBe("Keywords: Daintree, xterm");
+    expect(transcription.prompt).toBe(
+      "Transcribe in English. Do not translate. Keywords: Daintree, xterm"
+    );
     expect(socket.sent[0]).not.toContain("<div>");
     service.stop();
   });
 
-  it("omits both keywords and prompt when there are no frozen keyterms", async () => {
+  it("omits both keywords and prompt for auto language with no frozen keyterms", async () => {
     const service = new OpenAITranscriptionProvider();
-    void service.start(BASE_SETTINGS);
+    void service.start({ ...BASE_SETTINGS, language: "auto" });
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
@@ -532,10 +571,10 @@ describe("OpenAITranscriptionProvider", () => {
     service.stop();
   });
 
-  it("omits both keywords and prompt when every keyterm is rejected", async () => {
+  it("omits both keywords and prompt when every keyterm is rejected (auto language)", async () => {
     // Never send `[]` / `""` — omit the fields entirely.
     const service = new OpenAITranscriptionProvider();
-    void service.start({ ...BASE_SETTINGS, keyterms: ["<a>", "b>c"] });
+    void service.start({ ...BASE_SETTINGS, language: "auto", keyterms: ["<a>", "b>c"] });
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
@@ -563,7 +602,9 @@ describe("OpenAITranscriptionProvider", () => {
 
     const reconnected = readTranscription(socket2);
     expect(reconnected.keywords).toEqual(["Daintree", "xterm"]);
-    expect(reconnected.prompt).toBe("Keywords: Daintree, xterm");
+    expect(reconnected.prompt).toBe(
+      "Transcribe in English. Do not translate. Keywords: Daintree, xterm"
+    );
     expect(reconnected).toEqual(readTranscription(socket));
     service.stop();
   });

@@ -29,6 +29,7 @@ import { INSERT_FILE_REFERENCE_COMBO } from "@/panels/file-browser/fileReference
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
 import { notify } from "@/lib/notify";
+import { copyWithToast } from "@/lib/copyWithToast";
 import { actionService } from "@/services/ActionService";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { CopyTreeRunSource, GitStatus } from "@shared/types";
@@ -86,6 +87,7 @@ function runRowAction<Result>(
   actionId: BuiltInRuntimeActionId,
   args: Record<string, string>,
   errorTitle: string,
+  worktreeId: string | null,
   onSuccess?: (result: Result) => void
 ): void {
   const run = async () => {
@@ -97,6 +99,7 @@ function runRowAction<Result>(
         type: "error",
         title: errorTitle,
         message: result.error.message,
+        context: worktreeId ? { worktreeId } : undefined,
         action: { label: "Retry", onClick: () => void run() },
       });
       return;
@@ -268,26 +271,8 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
   const reveal = useMemo(() => revealCopy(), []);
   const insertAriaKeyshortcuts = comboToAriaKeyshortcuts(INSERT_FILE_REFERENCE_COMBO, isMac());
 
-  const copyToClipboard = useCallback((text: string, errorTitle: string) => {
-    const write = () =>
-      navigator.clipboard.writeText(text).catch((error: unknown) => {
-        // A silent failure leaves the previous clipboard contents in place,
-        // and the user's next paste would be the wrong value.
-        notify({
-          type: "error",
-          title: errorTitle,
-          message:
-            error instanceof Error && error.name === "NotAllowedError"
-              ? "The clipboard is unavailable while another app holds it."
-              : "The clipboard rejected the write.",
-          action: { label: "Retry", onClick: () => void write() },
-        });
-      });
-    void write();
-  }, []);
-
   const handleCopyFileContents = useCallback(
-    (absolutePath: string) =>
+    (absolutePath: string, name: string) =>
       // `file.read`, not filesClient: the action resolves the path against the
       // project and its worktrees and refuses anything outside them, and reports
       // binary, oversized and LFS-pointer files as named failures rather than
@@ -297,18 +282,19 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
         "file.read",
         { path: absolutePath },
         "Couldn't copy file contents",
+        worktreeId,
         // Written straight off the read: clipboard writes want a fresh
         // transient activation, and parking the text in state first would put a
         // render between the gesture and the write for no gain.
-        (result) => copyToClipboard(result.content, "Couldn't copy file contents")
+        (result) => copyWithToast("File contents", result.content, { message: name })
       ),
-    [copyToClipboard]
+    [worktreeId]
   );
 
   const handleReveal = useCallback(
     (absolutePath: string) =>
-      runRowAction("file.showItemInFolder", { path: absolutePath }, reveal.errorTitle),
-    [reveal]
+      runRowAction("file.showItemInFolder", { path: absolutePath }, reveal.errorTitle, worktreeId),
+    [reveal, worktreeId]
   );
 
   const handleCopyContext = useCallback(
@@ -440,20 +426,20 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
                   <ContextMenuSeparator />
                 </>
               )}
-              <ContextMenuItem onSelect={() => copyToClipboard(absolutePath, "Couldn't copy path")}>
+              <ContextMenuItem onSelect={() => copyWithToast("Path", absolutePath)}>
                 <Copy className={ICON_CLASS} />
                 Copy path
               </ContextMenuItem>
-              <ContextMenuItem onSelect={() => copyToClipboard(relativePath, "Couldn't copy path")}>
+              <ContextMenuItem onSelect={() => copyWithToast("Relative path", relativePath)}>
                 <Copy className={ICON_CLASS} />
                 Copy relative path
               </ContextMenuItem>
-              <ContextMenuItem onSelect={() => copyToClipboard(name, "Couldn't copy file name")}>
+              <ContextMenuItem onSelect={() => copyWithToast("File name", name)}>
                 <Copy className={ICON_CLASS} />
                 Copy file name
               </ContextMenuItem>
               {showCopyFileContents && (
-                <ContextMenuItem onSelect={() => handleCopyFileContents(absolutePath)}>
+                <ContextMenuItem onSelect={() => handleCopyFileContents(absolutePath, name)}>
                   <Copy className={ICON_CLASS} />
                   Copy file contents
                 </ContextMenuItem>
@@ -514,7 +500,6 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       insert,
       insertAriaKeyshortcuts,
       reveal,
-      copyToClipboard,
       handleCopyContext,
       handleCopyFileContents,
       handleReveal,

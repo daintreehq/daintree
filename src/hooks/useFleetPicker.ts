@@ -31,6 +31,9 @@ export const FALLBACK_GROUP_ID = "__no_worktree__";
 export const FALLBACK_GROUP_NAME = "Unassigned";
 const SEMANTIC_SEARCH_DEBOUNCE_MS = 300;
 
+const EMPTY_PANEL_IDS: string[] = [];
+const EMPTY_PANELS_BY_ID: ReturnType<typeof usePanelStore.getState>["panelsById"] = {};
+
 /**
  * Lifetime-monotonic counter — never reset across opens. Each `useFleetPicker`
  * instance reads its own current request id from this counter, and the IPC
@@ -170,9 +173,15 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
 
   const armedIds = useFleetArmingStore((s) => s.armedIds);
 
-  const { panelIds, panelsById } = usePanelStore(
-    useShallow((s) => ({ panelIds: s.panelIds, panelsById: s.panelsById }))
-  );
+  const [acquired, setAcquired] = useState(false);
+  // Both hosts stay mounted while closed (the palette always, the ribbon's
+  // count chip whenever 2+ panes are armed), so subscribe to the panel map
+  // only while the picker UI can render — consumers gate it on `acquired`,
+  // which outlives `isOpen` by one commit on close. Otherwise every status
+  // flush and agent-state flip re-renders the closed host.
+  const live = isOpen || acquired;
+  const panelIds = usePanelStore((s) => (live ? s.panelIds : EMPTY_PANEL_IDS));
+  const panelsById = usePanelStore((s) => (live ? s.panelsById : EMPTY_PANELS_BY_ID));
   // Tolerate hosts that mount the picker without a worktree-store provider —
   // names are display-only and `groupedVisible` falls back to the worktreeId.
   // `path` and `branch` widen the fuzzy haystack so the picker matches on
@@ -214,7 +223,6 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     })
   );
 
-  const [acquired, setAcquired] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
   const [snippetMap, setSnippetMap] = useState<Map<string, SemanticSearchMatch>>(() => new Map());
@@ -453,7 +461,10 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
   // Keep `focusedId` valid as the visible list changes (search/filter/open).
   // Clamps to the first visible id when the focused row is filtered out, or
   // resets to null when the list is empty.
+  // Skipped while closed so the emptied list doesn't wipe the focused row a
+  // reopen would otherwise restore.
   useEffect(() => {
+    if (!live) return;
     if (flatVisibleIds.length === 0) {
       setFocusedId(null);
       return;
@@ -462,7 +473,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
       if (prev !== null && flatVisibleIds.includes(prev)) return prev;
       return flatVisibleIds[0]!;
     });
-  }, [flatVisibleIds]);
+  }, [flatVisibleIds, live]);
 
   const isSingleWorktree = useMemo(() => {
     const ids = new Set<string>();

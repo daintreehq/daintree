@@ -63,11 +63,6 @@ const EXEMPT: Record<string, string[]> = {
     "flex items-center gap-1.5 ml-auto text-2xs text-status-error",
     "flex items-center gap-1.5 ml-auto text-2xs text-status-warning",
   ],
-  // The broken-plugins summary is a button that opens the list, not a callout.
-  "src/components/Plugin/PluginManagerView.tsx": [
-    "text-2xs text-status-danger min-w-0 flex-1",
-    "text-2xs text-status-danger underline underline-offset-2 shrink-0",
-  ],
   // A destructive row button ("Delete all"), not a message.
   "src/components/Project/ProjectSwitcherPalette.tsx": [
     "text-xs font-medium text-status-error transition-colors hover:bg-status-error/10",

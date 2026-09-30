@@ -549,4 +549,33 @@ describe("TerminalInstanceService attach reveal", () => {
     expect((managed as Record<string, unknown>).attachRevealDisposable).toBeUndefined();
     expect(managed.hostElement.style.opacity).toBe("");
   });
+
+  it("a pane attached during a batch flush waits for its own frame", () => {
+    vi.spyOn(service.resizeController, "fit").mockImplementation(() => {});
+    const a = makeMockManaged("a");
+    const b = makeMockManaged("b");
+    const c = makeMockManaged("c");
+    for (const m of [a, b, c]) {
+      document.createElement("div").appendChild(m.hostElement);
+      service.instances.set(m.id, m);
+    }
+    const containerC = document.createElement("div");
+    a.terminal.refresh.mockImplementation(() => {
+      service.attach("c", containerC);
+    });
+
+    service.attach("a", document.createElement("div"));
+    service.attach("b", document.createElement("div"));
+
+    // Frame one drains a+b; b's leftover callback must not pull c in early.
+    vi.advanceTimersByTime(16);
+    expect(a.terminal.refresh).toHaveBeenCalledTimes(1);
+    expect(b.terminal.refresh).toHaveBeenCalledTimes(1);
+    expect(c.terminal.refresh).not.toHaveBeenCalled();
+    expect(c.isAttaching).toBe(true);
+
+    vi.advanceTimersByTime(16);
+    expect(c.terminal.refresh).toHaveBeenCalledTimes(1);
+    expect(c.isAttaching).toBe(false);
+  });
 });

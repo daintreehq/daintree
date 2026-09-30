@@ -171,6 +171,14 @@ export interface ManagedTerminal {
   resizeDebounceTimer?: number;
   latestCols: number;
   latestRows: number;
+  /**
+   * The grid this renderer last sent the PTY, or undefined when unknown. Lets
+   * `fit()` skip a commit only when the PTY is known to be on the grid already;
+   * `invalidatePtyGrid` clears it wherever the PTY may have been replaced or
+   * moved out of sight (host restart, pane restart, wake).
+   */
+  ptyCols?: number;
+  ptyRows?: number;
   latestWasAtBottom: boolean;
   isUserScrolledBack: boolean;
 
@@ -200,7 +208,9 @@ export interface ManagedTerminal {
   postCompleteMarker?: IMarker;
 
   // Project-switch resize suppression
-  resizeSuppressionTimer?: number;
+  // Which suppressResizesDuringProjectSwitch arm owns the pending clear; a
+  // re-arm or clearResizeSuppression supersedes it.
+  resizeSuppressionToken?: number;
   isResizeSuppressed?: boolean;
   resizeSuppressionEndTime?: number;
   // A background resize that arrived while the resize lock was held (e.g. during

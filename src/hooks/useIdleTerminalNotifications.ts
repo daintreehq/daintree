@@ -2,15 +2,12 @@ import { useEffect } from "react";
 import { isElectronAvailable } from "./useElectron";
 import { idleTerminalClient } from "@/clients/idleTerminalClient";
 import { notify } from "@/lib/notify";
+import { pluralize } from "@/lib/pluralize";
 
 // One-way latch: the broadcast IPC listener is an app-lifetime, notify-only
 // singleton with no teardown. Never reset this — resetting it on unmount let a
 // PostHydrationListeners remount re-subscribe and fire duplicate toasts (#10455).
 let ipcListenerAttached = false;
-
-function pluralize(n: number, word: string): string {
-  return `${n} ${word}${n === 1 ? "" : "s"}`;
-}
 
 export function useIdleTerminalNotifications(): void {
   useEffect(() => {

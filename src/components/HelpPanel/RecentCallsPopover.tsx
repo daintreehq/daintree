@@ -1,12 +1,19 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Check, ChevronRight, Copy } from "lucide-react";
+import { TimeAgo } from "@/components/ui/TimeAgo";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { ChevronRight } from "lucide-react";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
+import { EmptyState } from "@/components/ui/EmptyState";
+import {
+  POPOVER_HEADER_CLASS,
+  POPOVER_ROW_HOVER_CLASS,
+  POPOVER_TITLE_CLASS,
+} from "@/components/ui/popoverHeader";
 import { cn } from "@/lib/utils";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
-import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
-import { formatTimeAgo } from "@/utils/timeAgo";
 import type { HelpAssistantTier, McpAuditRecord, McpAuditResult } from "@shared/types";
 
 // Local mirror of the Settings audit viewer's outcome→severity mapping. The
@@ -92,6 +99,8 @@ interface RecentCallsPopoverProps {
   busy: boolean;
   onRetry: () => void;
   onOpenAuditLog: () => void;
+  /** The id the host's `PopoverContent` points `aria-labelledby` at. */
+  titleId?: string;
 }
 
 export function RecentCallsPopover({
@@ -101,6 +110,7 @@ export function RecentCallsPopover({
   busy,
   onRetry,
   onOpenAuditLog,
+  titleId,
 }: RecentCallsPopoverProps) {
   const groups = useMemo(() => groupCallsByTurn(records), [records]);
   // Ages stay honest while the popover sits open; the ticker only runs while
@@ -151,11 +161,13 @@ export function RecentCallsPopover({
       ref={containerRef}
       className="flex max-h-[min(440px,var(--radix-popover-content-available-height,440px))] flex-col text-2xs text-text-primary"
     >
-      <div className="shrink-0 px-3 pt-2.5 pb-1.5 text-text-secondary font-medium">
-        Recent tool calls
+      <div className={cn(POPOVER_HEADER_CLASS, "shrink-0")}>
+        <span id={titleId} className={POPOVER_TITLE_CLASS}>
+          Recent tool calls
+        </span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-1">
+      <div className="min-h-0 flex-1 overflow-y-auto p-1">
         {error && records.length === 0 ? (
           // Checked before `loading` so a retry in flight keeps its button.
           <div
@@ -176,9 +188,12 @@ export function RecentCallsPopover({
             <SkeletonHint firstThreshold={5000} className="px-2" />
           </>
         ) : records.length === 0 ? (
-          <p className="px-2 py-1.5 text-text-secondary">
-            Ask the assistant to work on your project to see its tool calls here
-          </p>
+          <EmptyState
+            variant="zero-data"
+            scale="popover"
+            title="Ask the assistant to work on your project to see its tool calls here"
+            className="py-6"
+          />
         ) : (
           <>
             {/* A failed refresh keeps what was already read on screen. */}
@@ -192,7 +207,7 @@ export function RecentCallsPopover({
                 {retry}
               </div>
             )}
-            <ul className="divide-y divide-border-subtle">
+            <ul className="divide-y divide-divider">
               {groups.map((group, index) => {
                 const headingId = `${baseId}-group-${index}`;
                 return (
@@ -215,11 +230,14 @@ export function RecentCallsPopover({
 
       {/* The popover is five calls by design; the rest of the history is one
           step away rather than something the user has to know to look for. */}
-      <div className="shrink-0 border-t border-border-subtle px-1 py-1">
+      <div className="shrink-0 border-t border-divider px-1 py-1">
         <button
           type="button"
           onClick={onOpenAuditLog}
-          className="w-full rounded-[var(--radius-md)] px-2 py-1 text-left text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+          className={cn(
+            "w-full rounded-[var(--radius-md)] px-2 py-1 text-left text-text-secondary hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
+            POPOVER_ROW_HOVER_CLASS
+          )}
         >
           Open full audit log
         </button>
@@ -267,7 +285,6 @@ function RecentCallRow({ record, now }: { record: McpAuditRecord; now: number })
   const panelId = useId();
   const hasArgs = record.argsSummary !== "" && record.argsSummary !== "{}";
   const detail = outcomeDetail(record);
-  const date = new Date(record.timestamp);
 
   return (
     <li>
@@ -276,7 +293,10 @@ function RecentCallRow({ record, now }: { record: McpAuditRecord; now: number })
         aria-expanded={expanded}
         aria-controls={panelId}
         onClick={() => setExpanded((v) => !v)}
-        className="grid w-full grid-cols-[auto_auto_1fr_auto] items-start gap-2 rounded-[var(--radius-md)] px-2 py-1 text-left hover:bg-overlay-soft transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+        className={cn(
+          "grid w-full grid-cols-[auto_auto_1fr_auto] items-start gap-2 rounded-[var(--radius-md)] px-2 py-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
+          POPOVER_ROW_HOVER_CLASS
+        )}
       >
         <ChevronRight
           data-animated-chevron
@@ -293,24 +313,25 @@ function RecentCallRow({ record, now }: { record: McpAuditRecord; now: number })
         />
         {/* Truncated at rest to keep the row one line; expanded, the full id
             wraps so the call can be told apart from its near-namesakes. */}
-        <span
-          title={expanded ? undefined : record.toolId}
-          className={cn(
-            "min-w-0 font-mono text-text-primary",
-            expanded ? "whitespace-normal [overflow-wrap:anywhere]" : "truncate"
-          )}
-        >
-          {record.toolId}
-        </span>
+        {/* Pointer-only: the row is the button, and expanding it is the
+            keyboard's way to the full id. */}
+        <TruncatedTooltip content={record.toolId} disabled={expanded} focusable={false}>
+          <span
+            className={cn(
+              "min-w-0 font-mono text-text-primary",
+              expanded ? "whitespace-normal [overflow-wrap:anywhere]" : "truncate"
+            )}
+          >
+            {record.toolId}
+          </span>
+        </TruncatedTooltip>
         {/* Recency, not duration — calls are almost always sub-100ms, so
             "when did this run" is the metric worth a column. */}
-        <time
-          dateTime={date.toISOString()}
-          title={date.toLocaleString()}
-          className="text-text-secondary whitespace-nowrap tabular-nums"
-        >
-          {formatTimeAgo(record.timestamp, now)}
-        </time>
+        <TimeAgo
+          timestamp={record.timestamp}
+          now={now}
+          className="text-text-secondary whitespace-nowrap"
+        />
       </button>
       <div id={panelId} hidden={!expanded}>
         {expanded && (
@@ -343,23 +364,17 @@ function RecentCallRow({ record, now }: { record: McpAuditRecord; now: number })
 
 /** A labelled, copyable block of redacted JSON or output. */
 function Payload({ label, text }: { label: string; text: string }) {
-  const { copied, copy } = useCopyWithFeedback();
   return (
     <div>
       <div className="flex items-center justify-between gap-2">
         <span className="text-text-secondary">{label}</span>
-        {/* Labelled, like the other copy controls that sit beside a payload.
-            The name stays put; the hook announces the copy. */}
-        <Button
-          variant="ghost"
-          size="xs"
-          className="-my-1"
-          onClick={() => void copy(text)}
+        {/* Labelled, like the other copy controls that sit beside a payload. */}
+        <CopyButton
+          label="Copy"
           aria-label={`Copy ${label.toLowerCase()}`}
-        >
-          {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
-          Copy
-        </Button>
+          className="-my-1"
+          text={text}
+        />
       </div>
       <pre className={PAYLOAD_CLASS}>{text}</pre>
     </div>

@@ -75,6 +75,10 @@ export async function handleFallbackTriggered(data: {
   // fallback preset" success archives the prior error from the inbox instead
   // of leaving a stale "unavailable" row behind.
   const fallbackSupersedeKey = `terminal.${terminalId}.fallback`;
+  const fallbackAddress = {
+    panelId: terminalId,
+    ...(panel.worktreeId ? { worktreeId: panel.worktreeId } : {}),
+  };
 
   if (!nextPresetId) {
     // Chain exhausted: surface a single error notification. No respawn.
@@ -88,6 +92,7 @@ export async function handleFallbackTriggered(data: {
         : `${fromName} provider is unreachable. Configure fallbacks in Settings to auto-recover.`,
       duration: 12000,
       supersedeKey: fallbackSupersedeKey,
+      context: { ...fallbackAddress },
       action: {
         label: "Open agent settings",
         actionId: "app.settings.openTab",
@@ -114,6 +119,7 @@ export async function handleFallbackTriggered(data: {
       message: `Preset "${nextPresetId}" is no longer configured. Check fallback settings or restart the terminal.`,
       duration: 12000,
       supersedeKey: fallbackSupersedeKey,
+      context: { ...fallbackAddress },
       action: {
         label: "Open agent settings",
         actionId: "app.settings.openTab",
@@ -156,8 +162,13 @@ export async function handleFallbackTriggered(data: {
             ? `${fromName} authentication failed — now running "${nextPreset.name}".`
             : `${fromName} unreachable — now running "${nextPreset.name}".`,
         supersedeKey: fallbackSupersedeKey,
+        context: { ...fallbackAddress },
       });
     } else {
+      // A spawn failure lands on the panel as `restartError`, which the pane
+      // shows inline; a precondition refusal leaves nothing on screen.
+      const after = usePanelStore.getState().panelsById[terminalId];
+      const shownInline = Boolean(after && isPtyPanel(after) && after.restartError);
       notify({
         type: "error",
         priority: "high",
@@ -165,7 +176,8 @@ export async function handleFallbackTriggered(data: {
         message: `Could not switch to "${nextPreset.name}": ${result.error ?? "unknown error"}`,
         duration: 12000,
         supersedeKey: fallbackSupersedeKey,
-        context: { eventKind: "agent", panelId: terminalId },
+        context: { eventKind: "agent", ...fallbackAddress },
+        suppressWhenOriginVisible: shownInline,
         action: {
           label: "Send diagnostics",
           actionId: "diagnostics.openReview",

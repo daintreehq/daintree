@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { CircleAlert, Gauge, Info, RefreshCw, TriangleAlert } from "lucide-react";
+import { OctagonAlert, Gauge, Info, RefreshCw, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { systemClient } from "@/clients/systemClient";
 import { logError } from "@/utils/logger";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import type { WhySlowSnapshot } from "@shared/types/whySlow";
 import type { HostMemoryPauseSnapshot } from "@shared/types/pty-host";
 import { HOST_MEMORY_PAUSE_COPY } from "@/lib/hostMemoryPauseCopy";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { MetricTile, type MetricTone } from "./MetricTile";
 import { DiagnosticsNotice } from "./DiagnosticsNotice";
+import { pluralize } from "@/lib/pluralize";
+import { formatBytes } from "@/lib/formatBytes";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 
 export interface WhySlowContentProps {
   className?: string;
@@ -22,24 +26,6 @@ export interface WhySlowContentProps {
 // app-metrics cache TTL (~5s) so polling doesn't force redundant metric scans —
 // avoiding adding the very overhead this panel exists to diagnose.
 const REFRESH_INTERVAL_MS = 5_000;
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatSnapshotAge(ageMs: number): string {
-  if (ageMs < 10_000) return "just now";
-  if (ageMs < 60_000) return `${Math.floor(ageMs / 1000)}s ago`;
-  const minutes = Math.floor(ageMs / 60_000);
-  if (minutes < 60) return `${minutes}m ago`;
-  return `${Math.floor(minutes / 60)}h ago`;
-}
-
-function plural(count: number, one: string, many: string): string {
-  return `${count} ${count === 1 ? one : many}`;
-}
 
 // Shared by the PTY-lag tile tone, the findings and isAllClear so the calm
 // summary can never disagree with a warn-toned tile over the same number.
@@ -190,7 +176,7 @@ export function describeSlowdowns(
     findings.push({
       id: "webgl",
       tone: "warn",
-      text: `${plural(terminals, "terminal is", "terminals are")} drawn without GPU acceleration`,
+      text: `${pluralize(terminals, "terminal is", "terminals are")} drawn without GPU acceleration`,
       suggestion: "Closing some terminals may bring it back",
     });
   }
@@ -204,7 +190,7 @@ export function describeSlowdowns(
         tone: "warn",
         text:
           backlogPaused > 0
-            ? `${plural(backlogPaused, "terminal is", "terminals are")} paused because output arrives faster than it can be drawn (${formatBytes(p.totalPendingBytes)} waiting)`
+            ? `${pluralize(backlogPaused, "terminal is", "terminals are")} paused because output arrives faster than it can be drawn (${formatBytes(p.totalPendingBytes)} waiting)`
             : `${formatBytes(p.totalPendingBytes)} of terminal output is waiting to be drawn`,
       });
     }
@@ -220,7 +206,7 @@ export function describeSlowdowns(
     findings.push({
       id: "fetch",
       tone: "info",
-      text: `${plural(snapshot.worktrees.fetchInFlightCount, "git fetch is", "git fetches are")} running`,
+      text: `${pluralize(snapshot.worktrees.fetchInFlightCount, "git fetch is", "git fetches are")} running`,
     });
   }
   const w = snapshot.workers;
@@ -228,14 +214,14 @@ export function describeSlowdowns(
     findings.push({
       id: "queue",
       tone: "warn",
-      text: `${plural(w.totalQueueDepth, "background job is", "background jobs are")} waiting in the queue`,
+      text: `${pluralize(w.totalQueueDepth, "background job is", "background jobs are")} waiting in the queue`,
     });
   }
   if (w && w.degraded.length > 0) {
     findings.push({
       id: "degraded",
       tone: "warn",
-      text: `${plural(w.degraded.length, "background worker is", "background workers are")} running on a slower fallback`,
+      text: `${pluralize(w.degraded.length, "background worker is", "background workers are")} running on a slower fallback`,
     });
   }
   const order: Record<SlowdownFinding["tone"], number> = { alert: 0, warn: 1, info: 2 };
@@ -328,14 +314,10 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const hostMemory = useHostMemoryPauseStore((s) => s.snapshot);
   const mountedRef = useRef(true);
-  const inFlightRef = useRef(false);
+  const inFlightRef = useRef<Promise<void> | null>(null);
   const failStreakRef = useRef(0);
 
-  const refresh = useCallback(async () => {
-    // Skip if a fetch is already in flight so the poll interval can't stack
-    // overlapping requests when a snapshot is slow to return.
-    if (inFlightRef.current) return;
-    inFlightRef.current = true;
+  const fetchSnapshot = useCallback(async () => {
     setIsRefreshing(true);
     try {
       const next = await systemClient.getWhySlowSnapshot();
@@ -355,26 +337,73 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
       }
       setError(true);
     } finally {
-      inFlightRef.current = false;
       if (mountedRef.current) setIsRefreshing(false);
     }
   }, []);
 
+  const refresh = useCallback(() => {
+    // Skip if a fetch is already in flight so the poll interval can't stack
+    // overlapping requests when a snapshot is slow to return.
+    if (inFlightRef.current) return inFlightRef.current;
+    // Cleared off the returned promise, not inside the fetch, so a fetch that
+    // settles synchronously can't clear the slot before it is claimed.
+    const run: Promise<void> = fetchSnapshot().finally(() => {
+      if (inFlightRef.current === run) inFlightRef.current = null;
+    });
+    inFlightRef.current = run;
+    return run;
+  }, [fetchSnapshot]);
+
   useEffect(() => {
     mountedRef.current = true;
-    void refresh();
-    const timer = setInterval(() => {
-      void refresh();
-    }, REFRESH_INTERVAL_MS);
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    // Each snapshot fans out to five collectors across main and the hosts, so
+    // polling while nobody can see the dock is pure cost. A cached project view
+    // keeps reporting "visible", hence the separate lifecycle gate (#11212).
+    const shouldPoll = () => !document.hidden && !isProjectViewCached();
+
+    // The interval handle is the polling-state sentinel, so a repeated signal
+    // (visible while visible, `revealed` right after `active`) can't stack
+    // intervals or double-fetch. Resuming refreshes at once, so what the user
+    // sees on coming back is as fresh as a new mount.
+    const syncPolling = () => {
+      if (!shouldPoll()) {
+        if (timer !== null) {
+          clearInterval(timer);
+          timer = null;
+        }
+        return;
+      }
+      if (timer !== null) return;
+      timer = setInterval(() => {
+        void refresh();
+      }, REFRESH_INTERVAL_MS);
+      // A read started before the pause would otherwise stand in for this one.
+      const stale = inFlightRef.current;
+      if (stale) {
+        void stale.then(() => {
+          if (mountedRef.current && shouldPoll()) void refresh();
+        });
+      } else {
+        void refresh();
+      }
+    };
+
+    const offViewLifecycle = subscribeProjectViewLifecycle(() => syncPolling());
+    document.addEventListener("visibilitychange", syncPolling);
+    syncPolling();
     return () => {
       mountedRef.current = false;
-      clearInterval(timer);
+      document.removeEventListener("visibilitychange", syncPolling);
+      offViewLifecycle();
+      if (timer !== null) clearInterval(timer);
     };
   }, [refresh]);
 
   const renderer = snapshot ? aggregateRenderer(snapshot) : null;
   const resource = snapshot?.resource ?? null;
-  const snapshotAgeMs = snapshot ? Math.max(0, Date.now() - snapshot.timestamp) : 0;
+  const now = snapshot ? Math.max(Date.now(), snapshot.timestamp) : Date.now();
   const sortedReasons = resource ? sortReasonsByContribution(resource.reasons) : [];
   const findings = snapshot ? describeSlowdowns(snapshot, hostMemory) : [];
   const allClear = snapshot ? isAllClear(snapshot, hostMemory) : false;
@@ -419,7 +448,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
               data-testid="why-slow-updated-note"
               className="text-2xs tabular-nums text-text-secondary"
             >
-              Updated {formatSnapshotAge(snapshotAgeMs)}
+              <TimeAgo timestamp={snapshot.timestamp} now={now} prefix="Updated " />
             </span>
           ) : null}
           {/* While a read is failing, the notice's Retry is the one action. */}
@@ -455,7 +484,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
           title="Showing older data"
           description={
             <span data-testid="why-slow-stale-note">
-              Refresh failed · data from {formatSnapshotAge(snapshotAgeMs)}
+              Refresh failed · last updated <TimeAgo timestamp={snapshot.timestamp} now={now} />
             </span>
           }
           onRetry={() => void refresh()}
@@ -687,10 +716,11 @@ function Verdict({
   if (!snapshot) {
     text = error ? "Performance snapshot unavailable" : "Checking what's slowing Daintree down";
   } else if (problems > 0) {
-    text =
-      problems === 1
-        ? "1 thing may be slowing Daintree down"
-        : `${problems} things may be slowing Daintree down`;
+    text = pluralize(
+      problems,
+      "thing may be slowing Daintree down",
+      "things may be slowing Daintree down"
+    );
   } else if (error) {
     // Stale data must not claim "right now" — the notice below carries the age.
     text = incomplete
@@ -739,7 +769,7 @@ function FindingsList({ findings }: { findings: SlowdownFinding[] }) {
   const hiddenProblems = hidden - hiddenNotes;
   const moreLabel = [
     hiddenProblems > 0 ? `${hiddenProblems} more` : null,
-    hiddenNotes > 0 ? plural(hiddenNotes, "note", "notes") : null,
+    hiddenNotes > 0 ? pluralize(hiddenNotes, "note", "notes") : null,
   ]
     .filter(Boolean)
     .join(" and ");
@@ -771,7 +801,7 @@ function FindingsList({ findings }: { findings: SlowdownFinding[] }) {
 
 function FindingRow({ finding }: { finding: SlowdownFinding }) {
   const Glyph =
-    finding.tone === "alert" ? CircleAlert : finding.tone === "warn" ? TriangleAlert : Info;
+    finding.tone === "alert" ? OctagonAlert : finding.tone === "warn" ? TriangleAlert : Info;
   return (
     <li className="flex items-start gap-2" data-finding={finding.id}>
       <Glyph

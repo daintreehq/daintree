@@ -17,6 +17,7 @@ import { actionService } from "@/services/ActionService";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { notify, EVENT_KIND_TO_SETTING_KEY, EVENT_KIND_LABEL } from "@/lib/notify";
 import type { NotificationEventKind } from "@/lib/notify";
+import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import type { NotificationAction } from "@/store/notificationStore";
 import { switchToLastWorkspace } from "@/lib/projectHistoryNav";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -746,7 +747,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
           type: "success",
           message: "Project notifications muted",
           priority: "high",
-          duration: 5000,
+          duration: UNDO_TOAST_DURATION_MS,
           context: { eventKind: "settings" },
           // One-shot Undo confirmation; mute is reversible from the project's
           // notification settings tab, so the 5s Undo window plus the settings
@@ -841,7 +842,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
           type: "success",
           message: `Silenced ${label}${scopeSuffix}`,
           priority: "high",
-          duration: 5000,
+          duration: UNDO_TOAST_DURATION_MS,
           context: { eventKind: "settings" },
           // One-shot Undo confirmation; silenced kinds are reversible from
           // notification settings, so the 5s Undo plus the settings surface

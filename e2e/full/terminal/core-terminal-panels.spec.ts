@@ -224,15 +224,11 @@ test.describe.serial("Core: Terminal & Panels", () => {
       await panel.hover();
       await overflowBtn.click();
 
-      // First click on Restart arms confirmation (menu stays open)
+      // A plain shell restarts on the first click; only a working agent asks.
       const restartBtn = window.locator(SEL.panel.restart).first();
       await expect(restartBtn).toBeVisible({ timeout: T_SHORT });
       await restartBtn.click();
-
-      // Second click confirms the restart (text changes to "Confirm Restart")
-      const confirmBtn = window.locator(SEL.panel.restartConfirm).first();
-      await expect(confirmBtn).toBeVisible({ timeout: T_SHORT });
-      await confirmBtn.click();
+      await expect(window.getByRole("alertdialog")).toHaveCount(0);
 
       await expect(panel).toBeVisible({ timeout: T_LONG });
     });

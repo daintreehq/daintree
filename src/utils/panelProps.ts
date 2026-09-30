@@ -14,6 +14,10 @@ type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 const activityCache = new Map<string, ActivityState>();
 
+export function forgetPanelActivity(id: string): void {
+  activityCache.delete(id);
+}
+
 function getStableActivity(
   id: string,
   headline: string | undefined,

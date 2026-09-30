@@ -155,6 +155,10 @@ export function useMemoryLeakDetection(
             message: `RSS: ${formatMb(metric.memoryKb)} (growing ${formatGrowthRate(slope)})`,
             inboxMessage: `Memory leak: ${terminalTitle} at ${formatMb(metric.memoryKb)}, growing ${formatGrowthRate(slope)}`,
             correlationId: `memory-leak-${id}`,
+            context: {
+              panelId: id,
+              ...(terminal?.worktreeId ? { worktreeId: terminal.worktreeId } : {}),
+            },
             actions: [
               {
                 label: "Restart",
@@ -197,6 +201,7 @@ export function useMemoryLeakDetection(
             !terminal.isInputLocked
           ) {
             leakState.dismissed = true;
+            const worktreeId = terminal.worktreeId;
             usePanelStore.getState().restartTerminal(id);
             notify({
               type: "info",
@@ -206,6 +211,7 @@ export function useMemoryLeakDetection(
               message: `RSS exceeded ${autoRestartThresholdMb.toLocaleString()} MB threshold`,
               inboxMessage: `Auto-restarted ${terminal.title}: RSS exceeded ${autoRestartThresholdMb.toLocaleString()} MB`,
               correlationId: `memory-leak-${id}`,
+              context: { panelId: id, ...(worktreeId ? { worktreeId } : {}) },
             });
           }
         }

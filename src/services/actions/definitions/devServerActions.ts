@@ -165,7 +165,7 @@ export function registerDevServerActions(
       // panel it created instead of guessing from the panel list.
       const panelId = await usePanelStore.getState().addPanel({
         kind: "dev-preview",
-        title: "Dev Server",
+        title: "Dev server",
         cwd,
         worktreeId: ctx.activeWorktreeId,
         location,

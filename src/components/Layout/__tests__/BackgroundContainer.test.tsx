@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
+import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import type { AgentState } from "@/types";
 import type { TrashedTerminalGroupMetadata } from "@/store/slices";
 
@@ -27,12 +28,11 @@ vi.mock("@/hooks/useTerminalSelectors", () => ({
 }));
 
 vi.mock("@/hooks/useWorktrees", () => ({
-  useWorktrees: () => ({
-    worktreeMap: new Map([
-      ["wt-1", { id: "wt-1", name: "feature-auth" }],
-      ["wt-2", { id: "wt-2", name: "feature-ui" }],
+  useWorktreeNames: () =>
+    new Map([
+      ["wt-1", "feature-auth"],
+      ["wt-2", "feature-ui"],
     ]),
-  }),
 }));
 
 vi.mock("@/store", () => ({
@@ -150,6 +150,13 @@ vi.mock("@/components/ui/popover", () => ({
   },
 }));
 
+const markEscapeYieldedMock = vi.fn();
+
+vi.mock("@/lib/dialogEscapeBackstop", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/dialogEscapeBackstop")>()),
+  markEscapeYieldedToDialog: (event: unknown) => markEscapeYieldedMock(event),
+}));
+
 vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: ({
     isOpen,
@@ -179,6 +186,17 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
   },
 }));
 
+// Right-click on a row must be that row's panel, so the menu records whose it is.
+vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
+  TerminalContextMenu: ({
+    terminalId,
+    children,
+  }: {
+    terminalId: string;
+    children: React.ReactNode;
+  }) => <div data-menu-for={terminalId}>{children}</div>,
+}));
+
 import { BackgroundContainer } from "../BackgroundContainer";
 
 function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
@@ -198,6 +216,7 @@ function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
 }
 
 beforeEach(() => {
+  markEscapeYieldedMock.mockReset();
   watchPanelMock.mockReset();
   unwatchPanelMock.mockReset();
   removePanelMock.mockReset();
@@ -214,6 +233,13 @@ beforeEach(() => {
   mockBackgroundedTerminals = new Map();
   mockWatchedPanels = new Set();
 });
+
+/** Where the real kill confirm holds focus: inside a backstop-managed dialog. */
+function focusInsideBackstopDialog() {
+  const dialog = screen.getByTestId("kill-confirm-dialog");
+  dialog.setAttribute(ESCAPE_BACKSTOP_DIALOG_ATTR, "");
+  within(dialog).getByRole("button", { name: "Cancel" }).focus();
+}
 
 describe("BackgroundContainer", () => {
   it("stays mounted but hidden when there are no backgrounded terminals", () => {
@@ -295,32 +321,34 @@ describe("BackgroundContainer", () => {
       expect(away).toContain("feature-ui");
     });
 
-    it("uses ambient border + tint for waiting state, not panel-state classes", () => {
-      mockTerminals = [makeTerminal({ id: "t1", agentState: "waiting" })];
+    it("carries agent state in the glyph and label, never in the row's surface", () => {
+      // A popover row is highlighted by hover and focus alone, as in the other
+      // three status popovers; a coloured rail per state was a second language.
+      mockTerminals = [
+        makeTerminal({ id: "t-wait", title: "a", agentState: "waiting" }),
+        makeTerminal({ id: "t-work", title: "b", agentState: "working" }),
+        makeTerminal({ id: "t-idle", title: "c", agentState: "idle" }),
+      ];
       render(<BackgroundContainer />);
-      const row = screen.getByTestId("background-single-item");
-      expect(row.className).toContain("border-l-2");
-      expect(row.className).toContain("border-l-[color:var(--color-activity-waiting)]");
-      expect(row.className).toContain(
-        "bg-[color-mix(in_oklab,var(--color-activity-waiting)_8%,transparent)]"
-      );
-      expect(row.className).not.toContain("panel-state-waiting");
+      const rows = screen.getAllByTestId("background-single-item");
+      expect(rows).toHaveLength(3);
+      expect(new Set(rows.map((row) => row.className)).size).toBe(1);
+      for (const row of rows) expect(row.className).not.toMatch(/panel-state-|border-l-/);
+      expect(screen.getAllByText(/waiting/i).length).toBeGreaterThan(0);
     });
+  });
 
-    it("uses working ambient styling without panel-state classes", () => {
-      mockTerminals = [makeTerminal({ id: "t1", agentState: "working" })];
+  describe("row context menu", () => {
+    it("scopes each row's right-click to that row's own panel", () => {
+      mockTerminals = [
+        makeTerminal({ id: "t1", title: "first" }),
+        makeTerminal({ id: "t2", title: "second" }),
+      ];
       render(<BackgroundContainer />);
-      const row = screen.getByTestId("background-single-item");
-      expect(row.className).toContain("border-l-[color:var(--color-activity-working)]");
-      expect(row.className).not.toContain("panel-state-working");
-    });
-
-    it("uses a transparent border placeholder for passive states (no layout shift)", () => {
-      mockTerminals = [makeTerminal({ id: "t1", agentState: "idle" })];
-      render(<BackgroundContainer />);
-      const row = screen.getByTestId("background-single-item");
-      expect(row.className).toContain("border-l-2");
-      expect(row.className).toContain("border-l-transparent");
+      const rows = screen.getAllByTestId("background-single-item");
+      expect(
+        rows.map((row) => row.closest("[data-menu-for]")?.getAttribute("data-menu-for"))
+      ).toEqual(["t1", "t2"]);
     });
   });
 
@@ -451,6 +479,7 @@ describe("BackgroundContainer", () => {
       popoverHandlers.onInteractOutside?.({ preventDefault });
       popoverHandlers.onEscapeKeyDown?.({ preventDefault });
       expect(preventDefault).not.toHaveBeenCalled();
+      expect(markEscapeYieldedMock).not.toHaveBeenCalled();
     });
 
     it("prevents dismiss when the kill confirm dialog is open", () => {
@@ -459,6 +488,8 @@ describe("BackgroundContainer", () => {
       // Open kill confirm to enter the guarded state.
       fireEvent.click(screen.getByTestId("bg-kill-button"));
       expect(screen.getByTestId("kill-confirm-dialog")).toBeTruthy();
+
+      focusInsideBackstopDialog();
 
       const pointer = { preventDefault: vi.fn() };
       const interact = { preventDefault: vi.fn() };
@@ -469,7 +500,27 @@ describe("BackgroundContainer", () => {
 
       expect(pointer.preventDefault).toHaveBeenCalledTimes(1);
       expect(interact.preventDefault).toHaveBeenCalledTimes(1);
-      expect(escape.preventDefault).toHaveBeenCalledTimes(1);
+      expect(escape.preventDefault).toHaveBeenCalled();
+      // Handed on to the confirm's backstop, or Escape closes nothing (#13081).
+      expect(markEscapeYieldedMock).toHaveBeenCalledWith(escape);
+    });
+
+    it("keeps Escape from a surface it cannot hand the keypress to", () => {
+      // Something above the confirm that the backstop does not manage: the
+      // yield would close the confirm underneath it instead.
+      mockTerminals = [makeTerminal({ id: "t1" })];
+      render(<BackgroundContainer />);
+      fireEvent.click(screen.getByTestId("bg-kill-button"));
+      const outside = document.createElement("button");
+      document.body.appendChild(outside);
+      outside.focus();
+
+      const escape = { preventDefault: vi.fn() };
+      popoverHandlers.onEscapeKeyDown?.(escape);
+
+      expect(escape.preventDefault).toHaveBeenCalled();
+      expect(markEscapeYieldedMock).not.toHaveBeenCalled();
+      outside.remove();
     });
   });
 
@@ -493,6 +544,28 @@ describe("BackgroundContainer", () => {
       // Expanded by default → the toggle offers to collapse, not expand.
       expect(screen.getByRole("button", { name: "Collapse group" })).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Expand group" })).toBeNull();
+    });
+
+    it("gives every member its own Restore, the row's keyboard target", () => {
+      const groupMetadata: TrashedTerminalGroupMetadata = {
+        panelIds: ["t1", "t2"],
+        activeTabId: "t1",
+        location: "dock",
+        worktreeId: "wt-1",
+      };
+      mockTerminals = [
+        makeTerminal({ id: "t1", title: "claude" }),
+        makeTerminal({ id: "t2", title: "gemini" }),
+      ];
+      mockBackgroundedTerminals = new Map([
+        ["t1", { groupRestoreId: "g1", groupMetadata }],
+        ["t2", { groupRestoreId: "g1", groupMetadata }],
+      ]);
+      render(<BackgroundContainer />);
+      for (const row of screen.getAllByTestId("background-single-item")) {
+        const target = row.querySelector("[data-dock-row-target]");
+        expect(target?.getAttribute("aria-label")).toMatch(/^Restore /);
+      }
     });
   });
 });

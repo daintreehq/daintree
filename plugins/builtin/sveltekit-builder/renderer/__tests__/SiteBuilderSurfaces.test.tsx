@@ -1002,7 +1002,11 @@ describe("stale selections", () => {
     expect(chips.length).toBeGreaterThan(0);
     const chip = chips[0]!;
     const label = chip.textContent?.trim() ?? "";
-    const promised = chip.getAttribute("title") ?? "";
+    // Shown through the shared tooltip before the click, never the OS one.
+    expect(chip.hasAttribute("title")).toBe(false);
+    fireEvent.focus(chip);
+    const promised = (await screen.findByRole("tooltip")).textContent ?? "";
+    fireEvent.blur(chip);
     expect(promised.length).toBeGreaterThan(0);
     fireEvent.click(chip);
     const request = screen.getByRole("textbox", {
@@ -2638,7 +2642,7 @@ describe("details disclosure", () => {
     // not claim it is open.
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
     expect(toggle().hasAttribute("aria-pressed")).toBe(false);
-    expect(toggle().getAttribute("title")).toBe("Site Builder details");
+    expect(toggle().hasAttribute("title")).toBe(false);
 
     await act(async () => host.select(0));
     await screen.findByRole("region", { name: "Selected element" });
@@ -2648,7 +2652,8 @@ describe("details disclosure", () => {
     await waitFor(() => expect(toggle().getAttribute("aria-expanded")).toBe("false"));
     // The name held still across both flips; only the state moved.
     expect(toggle().getAttribute("aria-label")).toBe("Site Builder details");
-    expect(toggle().getAttribute("title")).toBe("Site Builder details");
+    fireEvent.focus(toggle());
+    expect((await screen.findByRole("tooltip")).textContent).toContain("Site Builder details");
     expect(screen.queryByRole("region", { name: "Selected element" })).toBeNull();
   });
 });

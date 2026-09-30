@@ -103,6 +103,13 @@ export interface RateLimitInfo {
 }
 
 /**
+ * Merge-state observations a provider can report for a PR. `"conflicts"`: the
+ * forge reported the head conflicts with the base branch (GitHub
+ * `mergeStateStatus: DIRTY`, GitLab `detailed_merge_status: conflict`).
+ */
+export type PRMergeState = "conflicts";
+
+/**
  * Boolean-ish CI roll-up. The host renders a summary; it does not graph checks.
  * Callers needing the individual checks behind this verdict read
  * {@link ChecksCapability.getChecks} instead.
@@ -324,6 +331,8 @@ export interface LinkedPRSummary {
   state: NormalizedPRState;
   url: string;
   ciStatus?: CIStatusState;
+  /** See {@link PR.mergeState}. */
+  mergeState?: PRMergeState;
 }
 
 export interface Issue {
@@ -462,6 +471,13 @@ export interface PR {
   commentCount?: number;
   /** Roll-up CI status for the head commit, when the provider reports one in lists. */
   ciStatus?: CIStatusState;
+  /**
+   * A merge-state observation the provider reported, independent of
+   * {@link mergeable} (which folds in unrelated blockers like drafts or
+   * required approvals). Absent means nothing was reported — including a state
+   * the forge hasn't computed yet — never that the branch merges cleanly.
+   */
+  mergeState?: PRMergeState;
   /** Epoch milliseconds. */
   createdAt: number;
   /** Epoch milliseconds. */

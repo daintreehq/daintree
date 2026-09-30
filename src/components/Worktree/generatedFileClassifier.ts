@@ -63,8 +63,22 @@ const GENERATED_HEADER_RE = /code generated.*do not edit|auto[- ]?generated/i;
 const SNIFF_MAX_LINES = 20;
 const SNIFF_MAX_CHARS = 500;
 
+// The status list re-classifies the same paths on every render and git status
+// refresh; the verdict is a pure function of the path.
+const GENERATED_CACHE_MAX = 50_000;
+const generatedCache = new Map<string, boolean>();
+
 export function isGeneratedFile(filePath: string): boolean {
   if (!filePath) return false;
+  const cached = generatedCache.get(filePath);
+  if (cached !== undefined) return cached;
+  const result = classifyGeneratedPath(filePath);
+  if (generatedCache.size >= GENERATED_CACHE_MAX) generatedCache.clear();
+  generatedCache.set(filePath, result);
+  return result;
+}
+
+function classifyGeneratedPath(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, "/");
   const segments = normalized.split("/");
   const basename = segments[segments.length - 1];

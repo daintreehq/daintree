@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight, CircleHelp, CircleStop, Ellipsis, RotateCcw } from "lucide-react";
+import { ChevronRight, CircleHelp, CircleStop, Ellipsis, RotateCw } from "lucide-react";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import {
   DropdownMenu,
@@ -11,14 +11,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { SurfaceHeader, SURFACE_HEADER_FOCUS_LIFT_CLASS } from "@/components/ui/SurfaceHeader";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import type { AgentState } from "@/types";
 
-/**
- * The panel-chrome action button (`icon-xs`, 14px glyph), pulled in a pixel at
- * top and bottom so the 24px target fits the header's existing height.
- */
-const HEADER_ACTION_CLASS = "-my-px [&_svg]:size-3.5";
+/** The panel-chrome action button: `icon-xs` (24px target) with a 14px glyph. */
+const HEADER_ACTION_CLASS = "[&_svg]:size-3.5";
 
 /** What the active lane's state is called when it is spoken rather than drawn. */
 const SPOKEN_STATE: Partial<Record<NonNullable<AgentState>, string>> = {
@@ -85,23 +83,24 @@ export function HelpPanelHeader({
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   useEscapeStack(isMenuOpen, () => setIsMenuOpen(false));
   return (
-    <div
+    <SurfaceHeader
+      density="compact"
       className={cn(
-        "flex items-center gap-1 px-3 py-2 border-b border-border-default shrink-0 transition-colors",
-        // Title-bar lift owns the surface-highlight for the focused assistant
-        // region. Uses `--color-surface-highlight` (= theme-aware
-        // `surface-panel-elevated`) — the same token grid panels swap to via
-        // `.terminal-selected`, so the visual weight matches a selected
-        // panel's title bar across every theme. Scoping the fill here (not
-        // on the aside via `.assistant-focused`) keeps the launching
-        // skeleton, empty state, and any future no-terminal content anchored
-        // to `bg-surface-canvas`. Neutral lift — no accent — per the
-        // single-anchor-per-region rule.
-        isFocused && "bg-[var(--color-surface-highlight)] border-b-[var(--border-overlay)]"
+        "gap-1 transition-colors",
+        // The same lift a focused grid pane's title bar takes, so the assistant
+        // and the pane beside it read as one family when either has the
+        // keyboard. The divider steps up to `--border-overlay` to match the
+        // `.terminal-selected` header rule in index.css — through the
+        // `border-overlay` class, because the frame's `.border-divider` is a
+        // custom rule that outranks an arbitrary `border-b-[…]` colour. Scoped to the header
+        // (not the aside) so the launching skeleton, the empty state and any
+        // no-terminal content stay on `bg-surface-canvas`. Neutral lift, no
+        // accent, per the single-anchor-per-region rule.
+        isFocused && [SURFACE_HEADER_FOCUS_LIFT_CLASS, "border-overlay"]
       )}
     >
       <div className="flex items-center min-w-0 flex-1">
-        <DaintreeIcon className="w-4 h-4 text-daintree-text/50 shrink-0" />
+        <DaintreeIcon className="w-4 h-4 text-text-secondary shrink-0" />
         <span className="ml-1.5 text-xs font-medium text-text-secondary truncate">
           Daintree Assistant
         </span>
@@ -142,7 +141,7 @@ export function HelpPanelHeader({
           {canRestartConversation && (
             <>
               <DropdownMenuItem destructive onSelect={onRestartConversation}>
-                <RotateCcw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                <RotateCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                 Restart conversation
               </DropdownMenuItem>
               <DropdownMenuSeparator />
@@ -177,6 +176,6 @@ export function HelpPanelHeader({
         </TooltipTrigger>
         <TooltipContent side="bottom">Hide Daintree Assistant</TooltipContent>
       </Tooltip>
-    </div>
+    </SurfaceHeader>
   );
 }

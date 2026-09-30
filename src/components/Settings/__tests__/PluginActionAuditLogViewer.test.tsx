@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { PluginActionAuditLogViewer } from "../PluginActionAuditLogViewer";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { PLUGIN_AUDIT_SCHEMA_VERSION, type PluginActionAuditRecord } from "@shared/types";
 
 // Driven as a value and a change event, not as a Radix popup.
@@ -29,10 +30,11 @@ function renderViewer(records: PluginActionAuditRecord[]) {
       loading={false}
       maxRecords={500}
       onRefresh={vi.fn()}
-      onCopy={vi.fn()}
       onExport={vi.fn()}
       onClear={vi.fn()}
-    />
+    />,
+    // The app root supplies the TooltipProvider.
+    { wrapper: TooltipProvider }
   );
 }
 

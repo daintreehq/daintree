@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useId } from "react";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Callout } from "@/components/ui/Callout";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
 import type { GitPushDestination } from "@shared/types/git";
@@ -14,6 +15,7 @@ import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { REVIEW_HUB_DISABLED_CTA } from "./reviewHubUtils";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { RefChip } from "@/components/Git/GitOperationPreview";
+import { pluralize } from "@/lib/pluralize";
 
 const MAX_SUBJECT_LENGTH = 72;
 const HISTORY_FETCH_POLL_INTERVAL_MS = 10;
@@ -45,10 +47,6 @@ const PUSH_STAGE_LABELS: Record<string, string> = {
 function pushStageLabel(stage: string): string {
   const key = stage.replace(/:$/, "").toLowerCase();
   return PUSH_STAGE_LABELS[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
-}
-
-function formatFileCount(count: number): string {
-  return `${count} file${count === 1 ? "" : "s"}`;
 }
 
 /**
@@ -456,7 +454,7 @@ export function CommitPanel({
   const primaryBusy = hasRemote ? pendingAction === "commit-push" || isPushing : isCommitting;
   const primaryKeyshortcuts = comboToAriaKeyshortcuts(PRIMARY_SHORTCUT, onMac);
   const pushTarget = pushTargetBranch ?? destinationLabel;
-  const stagedSummary = `${formatFileCount(stagedCount)} staged`;
+  const stagedSummary = `${pluralize(stagedCount, "file")} staged`;
 
   // One line under the message box answers "can I commit, and if so what happens".
   // It replaces a hover-only checklist: the buttons point at it with
@@ -474,7 +472,7 @@ export function CommitPanel({
     );
     statusTitle = pushTarget ? `Pushing to ${pushTarget}` : undefined;
   } else if (isCommitting) {
-    statusContent = `Committing ${formatFileCount(pendingCount)}…`;
+    statusContent = `Committing ${pluralize(pendingCount, "file")}…`;
   } else if (isBlocked) {
     statusTone = isDetachedHead || hasConflicts ? "warning" : "neutral";
     statusContent = describeBlockers({
@@ -641,19 +639,7 @@ export function CommitPanel({
             return (
               <div key={e.stage} className="contents">
                 <span className="whitespace-nowrap">{label}</span>
-                <div
-                  role="progressbar"
-                  aria-label={label}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={value}
-                  className="h-1 rounded-full bg-overlay-soft overflow-hidden"
-                >
-                  <div
-                    className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
-                    style={{ width: `${value}%` }}
-                  />
-                </div>
+                <ProgressBar label={label} value={value} />
                 <span className="tabular-nums text-right min-w-[4ch]" aria-hidden="true">
                   {value}%
                 </span>

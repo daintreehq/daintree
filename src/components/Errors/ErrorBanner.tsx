@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
-import { RotateCcw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import type { ErrorRecord, RetryAction } from "@/store/errorStore";
@@ -140,7 +140,7 @@ export function ErrorBanner({
   } else {
     const cta = bannerCtaFor(error, Boolean(onRetry));
     if (cta === "retry") {
-      action = { id: "retry", label: "Retry", icon: RotateCcw, onClick: handleRetry };
+      action = { id: "retry", label: "Retry", icon: RefreshCw, onClick: handleRetry };
     } else if (cta === "recovery" && error.recoveryAction) {
       action = {
         id: "recovery",

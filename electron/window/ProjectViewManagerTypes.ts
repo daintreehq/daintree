@@ -10,6 +10,15 @@ import type { ProjectSwitchTrace } from "../../shared/types/ipc/project.js";
 
 export type ViewState = "loading" | "active" | "cached";
 
+export interface SwitchRequestOptions {
+  /**
+   * The renderer that asked for this switch and reports its failure itself. Main
+   * stays quiet about a cancelled switch only when this is the view the
+   * rollback put back on screen.
+   */
+  requesterWebContentsId?: number;
+}
+
 /**
  * `"unpainted"` means a frame-confirmed gate gave up on its view: the hard bound
  * passed without a single confirmed frame and the extended `unpaintedHardMs`

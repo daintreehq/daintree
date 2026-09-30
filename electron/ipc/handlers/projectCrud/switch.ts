@@ -454,6 +454,7 @@ type SwitchOperation = Readonly<{
   incomingProjectId: string;
   outgoingProjectId: string | null;
   senderWindow: Electron.BrowserWindow | null;
+  senderWebContentsId: number;
   windowId: number | undefined;
   projectViewManager: ReturnType<typeof resolveProjectViewManager>;
 }>;
@@ -471,6 +472,7 @@ function captureSwitchOperation(
     incomingProjectId,
     outgoingProjectId: resolveOutgoingProjectId(ctx, projectViewManager),
     senderWindow,
+    senderWebContentsId: ctx.webContentsId,
     windowId: senderWindow?.id ?? deps.mainWindow?.id,
     projectViewManager,
   });
@@ -694,7 +696,9 @@ async function activateProjectView(
       void prefetchTerminalInventory(projectId, (id) => buildTerminalInventory(ptyClient, id));
     }
     try {
-      swapResult = await pvm.switchTo(projectId, project.path, trace);
+      swapResult = await pvm.switchTo(projectId, project.path, trace, {
+        requesterWebContentsId: operation.senderWebContentsId,
+      });
     } finally {
       options.onSwapSettled?.();
     }

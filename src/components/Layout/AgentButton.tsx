@@ -23,6 +23,7 @@ import { BrandMark } from "@/components/icons";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
+import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { actionService } from "@/services/ActionService";
 import {
@@ -163,25 +164,29 @@ function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
           >
             <FolderGit2 data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             <span className="flex-1 truncate">{label}</span>
-            <span
-              role="presentation"
-              aria-hidden="true"
-              data-testid={`agent-context-worktree-dock-${wt.id}`}
-              title="Launch in dock"
-              onPointerDown={stopPointer}
-              onPointerUp={stopPointer}
-              onClick={() => {
-                dockClickedRef.current = true;
-                void actionService.dispatch(
-                  "agent.launch",
-                  { agentId: agentType, worktreeId: wt.id, location: "dock" },
-                  { source }
-                );
-              }}
-              className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-sm text-text-secondary opacity-0 transition-opacity hover:bg-overlay-hover hover:text-text-primary group-data-[highlighted]/wt-row:opacity-100"
-            >
-              <PanelBottom className="h-3 w-3" />
-            </span>
+            <RowControlTooltip label="Launch in dock">
+              <span
+                role="presentation"
+                aria-hidden="true"
+                data-testid={`agent-context-worktree-dock-${wt.id}`}
+                onPointerDown={stopPointer}
+                onPointerUp={stopPointer}
+                onClick={() => {
+                  dockClickedRef.current = true;
+                  void actionService.dispatch(
+                    "agent.launch",
+                    { agentId: agentType, worktreeId: wt.id, location: "dock" },
+                    { source }
+                  );
+                }}
+                className={cn(
+                  ROW_CONTROL_CLASS,
+                  "-my-1 ml-2 opacity-0 group-data-[highlighted]/wt-row:opacity-100"
+                )}
+              >
+                <PanelBottom className="h-3 w-3" />
+              </span>
+            </RowControlTooltip>
           </ContextMenuItem>
         );
       })}
@@ -300,7 +305,7 @@ export function AgentButton({
     : null;
   // Group by source. Project presets are identified by membership so that a
   // project preset whose id happens to start with "ccr-" still lands in
-  // "Project Shared" rather than being stolen by the CCR group. Everything
+  // "Project shared" rather than being stolen by the CCR group. Everything
   // that isn't CCR-prefixed or project-member falls through to the "Custom"
   // bucket — this preserves the historical rendering for user-authored
   // presets regardless of whether they're also in `entry.customPresets`.
@@ -324,6 +329,8 @@ export function AgentButton({
   // through wsl.exe yet); all other binary-on-PATH agents reach `ready`.
   // `needsSetup` dims the button for these genuinely non-launchable cases —
   // presentation only. Clicking still launches; the gate owns recovery (#11760).
+  // The dim is the one unavailable level (50%); the cursor stays a pointer
+  // because the click still goes somewhere.
   const needsSetup = isAgentInstalled(availability) && !isLaunchable;
   // Surfaced in the tooltip only — launchable agents whose passive auth
   // probe came back empty get a soft cue rather than a disabled look,
@@ -497,20 +504,35 @@ export function AgentButton({
           launchWithPreset(preset.id);
         }}
       >
-        <span
-          data-zone="gutter"
-          title={isDefault ? "Current default" : "Set as default (D)"}
-          className="flex w-8 shrink-0 items-center justify-center self-stretch rounded-l-[var(--radius-sm)] text-text-secondary transition-colors hover:bg-overlay-raised"
+        <RowControlTooltip
+          label={isDefault ? "Current default" : "Set as default"}
+          shortcut={isDefault ? undefined : "D"}
         >
-          {isDefault ? (
-            <Check className="h-3.5 w-3.5" aria-hidden="true" />
-          ) : (
-            <Circle
-              className="h-2.5 w-2.5 opacity-0 transition-opacity duration-150 group-hover/preset-row:opacity-40 group-data-[highlighted]/preset-row:opacity-40"
+          <span
+            data-zone="gutter"
+            // The whole gutter is the hit zone (the row's onClick routes it by
+            // `data-zone`); the fill is a standard row control centred in it, so
+            // hover reads as a button rather than a full-height band.
+            className="group/gutter flex w-8 shrink-0 cursor-pointer items-center justify-center self-stretch"
+          >
+            <span
               aria-hidden="true"
-            />
-          )}
-        </span>
+              className={cn(
+                ROW_CONTROL_CLASS,
+                "group-hover/gutter:bg-overlay-hover group-hover/gutter:text-text-primary"
+              )}
+            >
+              {isDefault ? (
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <Circle
+                  className="h-2.5 w-2.5 opacity-0 transition-opacity duration-150 group-hover/preset-row:opacity-40 group-data-[highlighted]/preset-row:opacity-40"
+                  aria-hidden="true"
+                />
+              )}
+            </span>
+          </span>
+        </RowControlTooltip>
         <span data-zone="label" className="flex min-w-0 flex-1 items-center py-1.5">
           <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
             <BrandMark brandColor={presetColor}>
@@ -573,7 +595,7 @@ export function AgentButton({
                     onBlur={hover.onBlur}
                     className={cn(
                       "toolbar-agent-button text-text-primary relative",
-                      needsSetup && "opacity-70",
+                      needsSetup && "opacity-50",
                       "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                     )}
                     aria-label={ariaLabel}
@@ -676,7 +698,7 @@ export function AgentButton({
                 onBlur={hover.onBlur}
                 className={cn(
                   "toolbar-agent-button text-text-primary rounded-r-none relative",
-                  needsSetup && "opacity-70",
+                  needsSetup && "opacity-50",
                   "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                 )}
                 aria-label={ariaLabel}
@@ -778,20 +800,35 @@ export function AgentButton({
                   launchWithPreset(null);
                 }}
               >
-                <span
-                  data-zone="gutter"
-                  title={!savedPresetId ? "Current default" : "Set as default (D)"}
-                  className="flex w-8 shrink-0 items-center justify-center self-stretch rounded-l-[var(--radius-sm)] text-text-secondary transition-colors hover:bg-overlay-raised"
+                <RowControlTooltip
+                  label={!savedPresetId ? "Current default" : "Set as default"}
+                  shortcut={!savedPresetId ? undefined : "D"}
                 >
-                  {!savedPresetId ? (
-                    <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                  ) : (
-                    <Circle
-                      className="h-2.5 w-2.5 opacity-0 transition-opacity duration-150 group-hover/preset-row:opacity-40 group-data-[highlighted]/preset-row:opacity-40"
+                  <span
+                    data-zone="gutter"
+                    // The whole gutter is the hit zone (the row's onClick routes it by
+                    // `data-zone`); the fill is a standard row control centred in it, so
+                    // hover reads as a button rather than a full-height band.
+                    className="group/gutter flex w-8 shrink-0 cursor-pointer items-center justify-center self-stretch"
+                  >
+                    <span
                       aria-hidden="true"
-                    />
-                  )}
-                </span>
+                      className={cn(
+                        ROW_CONTROL_CLASS,
+                        "group-hover/gutter:bg-overlay-hover group-hover/gutter:text-text-primary"
+                      )}
+                    >
+                      {!savedPresetId ? (
+                        <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                      ) : (
+                        <Circle
+                          className="h-2.5 w-2.5 opacity-0 transition-opacity duration-150 group-hover/preset-row:opacity-40 group-data-[highlighted]/preset-row:opacity-40"
+                          aria-hidden="true"
+                        />
+                      )}
+                    </span>
+                  </span>
+                </RowControlTooltip>
                 <span data-zone="label" className="flex min-w-0 flex-1 items-center py-1.5">
                   <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
                     <BrandMark brandColor={getBrandColorHex(type)}>
@@ -805,14 +842,14 @@ export function AgentButton({
               {ccrPresetGroup.length > 0 && (
                 <>
                   {hasMultiplePresetGroups && <DropdownMenuSeparator />}
-                  {hasMultiplePresetGroups && <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>}
+                  {hasMultiplePresetGroups && <DropdownMenuLabel>CCR routes</DropdownMenuLabel>}
                   {ccrPresetGroup.map((preset) => renderPresetRow(preset))}
                 </>
               )}
               {projectPresetGroup.length > 0 && (
                 <>
                   {hasMultiplePresetGroups && <DropdownMenuSeparator />}
-                  {hasMultiplePresetGroups && <DropdownMenuLabel>Project Shared</DropdownMenuLabel>}
+                  {hasMultiplePresetGroups && <DropdownMenuLabel>Project shared</DropdownMenuLabel>}
                   {projectPresetGroup.map((preset) => renderPresetRow(preset))}
                 </>
               )}

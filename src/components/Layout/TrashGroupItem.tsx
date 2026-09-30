@@ -1,6 +1,7 @@
 import { useState, useCallback, useSyncExternalStore } from "react";
 import { RotateCcw, X, Layers, ChevronRight, Unlink } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DOCK_POPOVER_ROW_HOVER_CLASS } from "./dockStatusPill";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
@@ -22,6 +23,7 @@ import {
   useTrashCountdown,
   type TrashRemovalRequest,
 } from "./trashCountdown";
+import { pluralize } from "@/lib/pluralize";
 
 interface TrashGroupItemProps {
   groupRestoreId: string;
@@ -63,12 +65,13 @@ export function TrashGroupItem({
   const countdown = useTrashCountdown(earliestExpiry);
 
   const handleRestoreGroup = useCallback(() => {
+    if (!canRestore) return;
     if (isOrphan && activeWorktreeId) {
       restoreTrashedGroup(groupRestoreId, activeWorktreeId);
     } else {
       restoreTrashedGroup(groupRestoreId);
     }
-  }, [restoreTrashedGroup, groupRestoreId, isOrphan, activeWorktreeId]);
+  }, [canRestore, restoreTrashedGroup, groupRestoreId, isOrphan, activeWorktreeId]);
 
   const tabCount = terminals.length;
 
@@ -96,7 +99,7 @@ export function TrashGroupItem({
     return null;
   })();
 
-  const fallbackName = `Tab group (${tabCount} ${tabCount === 1 ? "tab" : "tabs"})`;
+  const fallbackName = `Tab group (${pluralize(tabCount, "tab")})`;
   const groupName = resolvedActiveTitle
     ? tabCount > 1
       ? `${resolvedActiveTitle} +${tabCount - 1} more`
@@ -119,9 +122,16 @@ export function TrashGroupItem({
     <div
       data-trash-row
       data-row-id={groupRestoreId}
-      className="relative shrink-0 overflow-hidden rounded-[var(--radius-sm)] bg-transparent transition-colors hover:bg-tint/5"
+      className="relative shrink-0 overflow-hidden rounded-[var(--radius-sm)]"
     >
-      <div className="flex items-start gap-2 px-2.5 py-1.5 group">
+      {/* The header is its own row: hovering a member must not light the whole group too. */}
+      <div
+        data-dock-row=""
+        className={cn(
+          "flex items-start gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 group",
+          DOCK_POPOVER_ROW_HOVER_CLASS
+        )}
+      >
         <Button
           variant="ghost"
           size="icon-xs"
@@ -182,7 +192,9 @@ export function TrashGroupItem({
                   variant="ghost"
                   size="icon-sm"
                   onClick={handleRestoreGroup}
-                  disabled={!canRestore}
+                  // Focusable while unavailable, so it stays the row's keyboard
+                  // target instead of Remove all.
+                  aria-disabled={!canRestore || undefined}
                   aria-label={
                     isOrphan
                       ? canRestore
@@ -242,7 +254,11 @@ export function TrashGroupItem({
               return (
                 <div
                   key={terminal.id}
-                  className="flex items-center gap-2 px-2 py-1 text-2xs rounded-[var(--radius-sm)] hover:bg-tint/5 group/panel"
+                  data-dock-row=""
+                  className={cn(
+                    "flex items-center gap-2 px-2 py-1 text-2xs rounded-[var(--radius-sm)] group/panel",
+                    DOCK_POPOVER_ROW_HOVER_CLASS
+                  )}
                 >
                   <TerminalIcon
                     kind={terminal.kind}
@@ -266,20 +282,25 @@ export function TrashGroupItem({
                             size="icon-xs"
                             className="-my-1"
                             onClick={() => {
+                              if (!canRestore) return;
                               if (isOrphan && activeWorktreeId) {
                                 restoreTerminal(terminal.id, activeWorktreeId);
                               } else {
                                 restoreTerminal(terminal.id);
                               }
                             }}
-                            disabled={!canRestore}
+                            aria-disabled={!canRestore || undefined}
                             aria-label={`Restore ${terminalName} only`}
                           >
                             <RotateCcw aria-hidden="true" />
                           </Button>
                         </span>
                       </TooltipTrigger>
-                      <TooltipContent side="bottom">{`Restore ${terminalName} only`}</TooltipContent>
+                      <TooltipContent side="bottom">
+                        {canRestore
+                          ? `Restore ${terminalName} only`
+                          : "No active worktree - select a worktree first"}
+                      </TooltipContent>
                     </Tooltip>
                     <Tooltip>
                       <TooltipTrigger asChild>

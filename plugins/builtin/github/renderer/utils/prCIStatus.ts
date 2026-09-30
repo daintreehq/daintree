@@ -1,5 +1,8 @@
 import { Check, X } from "lucide-react";
+import type { CIStatusState, PRMergeState } from "@shared/types/forge";
+import { GitMergeConflict } from "@/components/icons";
 import type { GitHubPRCIStatus, GitHubPRCISummary } from "../../shared/types.js";
+import { toGitHubCIStatus } from "./forgeRowAdapters.js";
 
 export type PRCIStatusVisual =
   | { kind: "icon"; Icon: typeof Check; colorClass: string; shortLabel: string; ariaLabel: string }
@@ -62,4 +65,39 @@ export function getPRCIStatusTooltip(
     default:
       return null;
   }
+}
+
+const MERGE_CONFLICT_VISUAL: PRCIStatusVisual = {
+  kind: "icon",
+  Icon: GitMergeConflict,
+  colorClass: "text-status-warning",
+  shortLabel: "conflicts",
+  ariaLabel: "Merge conflicts",
+};
+
+// GitHub skips `pull_request` workflows while the head conflicts with the base,
+// so a conflicted PR usually has no roll-up at all. `pull_request_target`
+// workflows still run, hence naming the event rather than claiming "no CI".
+const MERGE_CONFLICT_TOOLTIP =
+  "Merge conflicts with the base branch — GitHub skips pull_request workflows until they're resolved";
+
+/**
+ * Status for a forge PR's CI slot. A reported merge conflict takes the slot
+ * over any roll-up: it has to be resolved before anything else moves.
+ */
+export function getPRStatusVisual(
+  ciStatus: CIStatusState | undefined,
+  mergeState: PRMergeState | undefined
+): PRCIStatusVisual | null {
+  if (mergeState === "conflicts") return MERGE_CONFLICT_VISUAL;
+  return getPRCIStatusVisual(toGitHubCIStatus(ciStatus));
+}
+
+/** Tooltip counterpart to {@link getPRStatusVisual}. */
+export function getPRStatusTooltip(
+  ciStatus: CIStatusState | undefined,
+  mergeState: PRMergeState | undefined
+): string | null {
+  if (mergeState === "conflicts") return MERGE_CONFLICT_TOOLTIP;
+  return getPRCIStatusTooltip(toGitHubCIStatus(ciStatus));
 }

@@ -104,6 +104,7 @@ export interface HydrationOptions {
     exitBehavior?: import("@shared/types/panel").PanelExitBehavior;
     agentSessionId?: string;
     agentLaunchFlags?: string[];
+    callerLaunchFlags?: string[];
     agentModelId?: string;
     agentPresetId?: string;
     agentPresetColor?: string;

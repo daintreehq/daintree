@@ -7,6 +7,10 @@ import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { PluginManagerView } from "../PluginManagerView";
 import { CAPABILITY_META } from "../capabilityMeta";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
+import {
+  __resetProjectPluginStoreForTesting,
+  useProjectPluginStore,
+} from "@/store/projectPluginStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
   LoadedPluginInfo,
@@ -1284,6 +1288,67 @@ describe("PluginManagerView", () => {
 
       await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalled());
       expect(onConsumed).toHaveBeenCalledOnce();
+    });
+
+    it("moves the one selection to the target, off a selected project plugin", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makePlugin({ manifest: { ...makePlugin().manifest, name: "acme.demo" } }),
+      ]);
+      useProjectPluginStore.setState({
+        projectId: "proj-a",
+        plugins: [
+          {
+            projectId: "proj-a",
+            id: "acme.local",
+            displayName: "Local Helper",
+            version: "0.1.0",
+            capabilities: [],
+            dirName: "local",
+            muted: false,
+            collidesWithGlobal: false,
+            state: "active",
+          },
+        ],
+      });
+      try {
+        const { rerender } = render(
+          <TooltipProvider>
+            <PluginManagerView />
+          </TooltipProvider>
+        );
+        const local = await waitFor(() => {
+          const match = screen
+            .getAllByRole("button")
+            .find(
+              (el) =>
+                el.getAttribute("aria-current") === null &&
+                /Local Helper/.test(el.textContent ?? "")
+            );
+          if (!match) throw new Error("project plugin row not rendered");
+          return match;
+        });
+        fireEvent.click(local);
+        await waitFor(() => expect(local.getAttribute("aria-current")).toBe("true"));
+
+        rerender(
+          <TooltipProvider>
+            <PluginManagerView
+              deepLinkIntent={{ action: "open", pluginId: "acme.demo" }}
+              onDeepLinkConsumed={() => {}}
+            />
+          </TooltipProvider>
+        );
+
+        await waitFor(() =>
+          expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBe("true")
+        );
+        const lit = screen
+          .getAllByRole("button")
+          .filter((el) => el.getAttribute("aria-current") === "true");
+        expect(lit).toEqual([pluginRowButton("Acme Demo")]);
+      } finally {
+        __resetProjectPluginStoreForTesting();
+      }
     });
 
     it("does not clobber a URL dialog the user already has open", async () => {

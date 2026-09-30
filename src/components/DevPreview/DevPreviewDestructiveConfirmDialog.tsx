@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PathSegments } from "@/components/ui/PathSegments";
 import {
@@ -13,7 +14,6 @@ import {
   SummaryRow,
 } from "@/components/Git/GitOperationPreview";
 import { formatBytes } from "@/lib/formatBytes";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type {
@@ -21,6 +21,7 @@ import type {
   DevPreviewDestructivePreviewSizes,
   DevPreviewDirMeta,
 } from "@shared/types/ipc/devPreview";
+import { pluralize } from "@/lib/pluralize";
 
 export type DevPreviewDestructiveTier = "restartAndClearCache" | "reinstallAndRestart";
 
@@ -235,7 +236,7 @@ function settledAnnouncement(
   if (tier === "restartAndClearCache") {
     const total = cacheTotal(present, sizes);
     return typeof total === "number"
-      ? `Preview ready. ${present.length} ${present.length === 1 ? "cache" : "caches"}, ${formatBytes(total)} in all.`
+      ? `Preview ready. ${pluralize(present.length, "cache")}, ${formatBytes(total)} in all.`
       : "Preview ready. Some sizes couldn't be measured.";
   }
   return typeof sizes.nodeModulesSizeBytes === "number"
@@ -333,7 +334,7 @@ function CacheDirsPreview({
                 >
                   <td className="pl-3 pr-2 py-1 font-mono text-text-primary">{dir.relPath}</td>
                   <td className="w-full px-2 py-1 text-2xs text-text-secondary whitespace-nowrap">
-                    {dir.mtimeMs ? formatRelativeTime(dir.mtimeMs) : <MissingValue />}
+                    {dir.mtimeMs ? <TimeAgo timestamp={dir.mtimeMs} verbose /> : <MissingValue />}
                   </td>
                   <td className="pl-2 pr-3 py-1 text-right whitespace-nowrap">
                     <SizeValue
@@ -415,9 +416,7 @@ function NodeModulesPreview({
           </SummaryRow>
           <SummaryRow label="Modified">
             {meta.nodeModules.mtimeMs ? (
-              <span className="text-text-primary">
-                {formatRelativeTime(meta.nodeModules.mtimeMs)}
-              </span>
+              <TimeAgo timestamp={meta.nodeModules.mtimeMs} verbose className="text-text-primary" />
             ) : (
               <MissingValue />
             )}

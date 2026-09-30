@@ -3,8 +3,9 @@ import { STATE_ICONS, STATE_COLORS } from "../terminalStateConfig";
 import { BranchLabel } from "../BranchLabel";
 import { UpstreamSyncBadge } from "./UpstreamSyncBadge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
-import { GitBranch } from "lucide-react";
+import { FolderGit2 } from "lucide-react";
 import type { AggregateCounts } from "./MainWorktreeSummaryRows";
+import { pluralize } from "@/lib/pluralize";
 
 interface MainWorktreeSecondaryRowProps {
   branchLabel: string;
@@ -71,7 +72,7 @@ export function MainWorktreeSecondaryRow({
                 data-testid="aggregate-worktree-row"
               >
                 <span className="flex items-center gap-0.5">
-                  <GitBranch className="w-2.5 h-2.5" aria-hidden="true" />
+                  <FolderGit2 className="w-2.5 h-2.5" aria-hidden="true" />
                   <span className="font-mono tabular-nums">{aggregateCounts.worktrees}</span>
                 </span>
                 {aggregateCounts.working > 0 && (
@@ -100,8 +101,7 @@ export function MainWorktreeSecondaryRow({
               </span>
             </TooltipTrigger>
             <TooltipContent side="right" className="text-xs">
-              {aggregateCounts.worktrees} worktree
-              {aggregateCounts.worktrees !== 1 ? "s" : ""}
+              {pluralize(aggregateCounts.worktrees, "worktree")}
               {(aggregateCounts.working > 0 ||
                 aggregateCounts.waiting > 0 ||
                 aggregateCounts.finished > 0) &&

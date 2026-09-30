@@ -173,11 +173,9 @@ vi.mock("@/config/agents", () => ({
   },
 }));
 
-import {
-  DaintreeAssistantSettingsTab,
-  formatGrantRemaining,
-} from "../DaintreeAssistantSettingsTab";
+import { DaintreeAssistantSettingsTab } from "../DaintreeAssistantSettingsTab";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { actionService } from "@/services/ActionService";
 import { DEFAULT_AGENT_SETTINGS } from "@shared/types/agentSettings";
 import { SettingsValidationProvider } from "../SettingsValidationRegistry";
 import {
@@ -511,7 +509,57 @@ describe("DaintreeAssistantSettingsTab", () => {
         </SettingsValidationProvider>
       );
       await waitForContent(container, "Daintree confirmations");
-      expect(container.textContent).toContain("Use Skip permission prompts (currently: on)");
+      expect(container.textContent).toContain("Follow global setting");
+      expect(container.textContent).toContain(
+        "Settings > Agents > Skip permission prompts, which is on."
+      );
+    });
+
+    it("links to the global Skip permission prompts row (#12989)", async () => {
+      const dispatch = vi.spyOn(actionService, "dispatch");
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Settings > Agents > Skip permission prompts");
+      const link = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent === "Settings > Agents > Skip permission prompts"
+      );
+      if (!link) throw new Error("expected the Skip permission prompts link");
+      fireEvent.click(link);
+      expect(dispatch).toHaveBeenCalledWith(
+        "app.settings.openTab",
+        { tab: "agents", subtab: "general", sectionId: "agents-skip-permissions" },
+        { source: "user" }
+      );
+      dispatch.mockRestore();
+    });
+
+    it("says Daintree's confirmations are skipped under never ask with the global off (#12989)", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      useAgentSettingsStore.setState({
+        settings: { ...DEFAULT_AGENT_SETTINGS, globalSkipPermissions: false },
+      });
+      installApi({
+        getSettings: vi.fn().mockResolvedValue({
+          docSearch: true,
+          daintreeControl: true,
+          tier: "core" as const,
+          bypassPermissions: true,
+          auditRetention: 7,
+          customArgs: "",
+          daintreeConfirmations: "never-ask",
+        }),
+      });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "closing panels included, are skipped as well");
+      expect(container.textContent).toContain("Never ask");
+      expect(container.textContent).not.toContain("unless an automation grant covers them");
     });
 
     it("says Daintree's confirmations are skipped too when that is in effect", async () => {
@@ -534,7 +582,7 @@ describe("DaintreeAssistantSettingsTab", () => {
           <DaintreeAssistantSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "Daintree's own confirmations are skipped as well");
+      await waitForContent(container, "closing panels included, are skipped as well");
       expect(container.textContent).not.toContain("unless an automation grant covers them");
     });
 
@@ -2131,28 +2179,5 @@ describe("SessionLiveStatusCard (live help session)", () => {
     );
 
     await waitFor(() => expect(getLiveSessionStatus).toHaveBeenCalledWith({ sessionId: "help-1" }));
-  });
-});
-
-describe("formatGrantRemaining", () => {
-  it("renders sub-minute durations as bare seconds", () => {
-    expect(formatGrantRemaining(0)).toBe("0s");
-    expect(formatGrantRemaining(1)).toBe("1s");
-    expect(formatGrantRemaining(59)).toBe("59s");
-  });
-
-  it("renders an exact minute without a trailing seconds component", () => {
-    expect(formatGrantRemaining(60)).toBe("1m");
-    expect(formatGrantRemaining(120)).toBe("2m");
-  });
-
-  it("renders mixed minute+second durations", () => {
-    expect(formatGrantRemaining(61)).toBe("1m 1s");
-    expect(formatGrantRemaining(125)).toBe("2m 5s");
-  });
-
-  it("floors fractional seconds and clamps negatives to zero", () => {
-    expect(formatGrantRemaining(61.9)).toBe("1m 1s");
-    expect(formatGrantRemaining(-5)).toBe("0s");
   });
 });

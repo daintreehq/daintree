@@ -73,9 +73,21 @@ describe("notifyRecipeSpawnFailures", () => {
     expect(payload.context).toEqual({ eventKind: "agent", projectId: "p1" });
     // The banned error + priority:"low" combination silently drops the toast.
     expect(payload.priority).toBeUndefined();
-    // worktreeId would trigger notify()'s origin-surface suppression and
-    // swallow the toast when the failing worktree is active — must never be set.
-    expect(payload.context.worktreeId).toBeUndefined();
+    // An address never opts into origin suppression — the toast must fire
+    // even when the failing worktree is the active one.
+    expect(payload.suppressWhenOriginVisible).toBeUndefined();
+  });
+
+  it("addresses the failure to the worktree the recipe launched into", () => {
+    notifyRecipeSpawnFailures(
+      { spawned: [], failed: [failure(0, "spawn ENOENT")] },
+      { recipeName: "Dev setup", projectId: "p1", worktreeId: "/repo/wt-a" }
+    );
+    expect(notifyMock.mock.calls[0]![0].context).toEqual({
+      eventKind: "agent",
+      projectId: "p1",
+      worktreeId: "/repo/wt-a",
+    });
   });
 
   it("emits a warning when only some terminals failed", () => {

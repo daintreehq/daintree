@@ -126,6 +126,8 @@ let _cachedCustomSchemes: TerminalColorScheme[] | null = null;
 let _cachedAppThemeId: string | null = null;
 let _cachedAppPreviewSchemeId: string | null = null;
 let _cachedAppCustomSchemes: unknown[] | null = null;
+// The unknown-scheme fallback reads CSS variables, which colour-vision mode rewrites.
+let _cachedColorVisionMode: string | null = null;
 
 /**
  * Clears the internal cache. Exported for testing.
@@ -138,12 +140,14 @@ export function clearThemeCache(): void {
   _cachedAppThemeId = null;
   _cachedAppPreviewSchemeId = null;
   _cachedAppCustomSchemes = null;
+  _cachedColorVisionMode = null;
 }
 
 export function selectEffectiveTheme(state: TerminalColorSchemeState): ITheme {
   const appThemeId = useAppThemeStore.getState().selectedSchemeId;
   const appPreviewSchemeId = useAppThemeStore.getState().previewSchemeId;
   const appCustomSchemes = useAppThemeStore.getState().customSchemes;
+  const colorVisionMode = useAppThemeStore.getState().colorVisionMode;
   const activeId = resolveActiveSchemeId(state);
 
   if (
@@ -153,7 +157,8 @@ export function selectEffectiveTheme(state: TerminalColorSchemeState): ITheme {
     _cachedCustomSchemes === state.customSchemes &&
     _cachedAppThemeId === appThemeId &&
     _cachedAppPreviewSchemeId === appPreviewSchemeId &&
-    _cachedAppCustomSchemes === appCustomSchemes
+    _cachedAppCustomSchemes === appCustomSchemes &&
+    _cachedColorVisionMode === colorVisionMode
   ) {
     return _cachedTheme;
   }
@@ -163,6 +168,7 @@ export function selectEffectiveTheme(state: TerminalColorSchemeState): ITheme {
   _cachedAppThemeId = appThemeId;
   _cachedAppPreviewSchemeId = appPreviewSchemeId;
   _cachedAppCustomSchemes = appCustomSchemes;
+  _cachedColorVisionMode = colorVisionMode;
 
   if (activeId === "app-preview") {
     _cachedTheme = computeAppPreviewTheme(

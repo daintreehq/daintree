@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Info, AlertTriangle, XCircle, CheckCircle2, Pin } from "lucide-react";
+import { Pin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { cn } from "@/lib/utils";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
+import { FLOATING_CARD_RADIUS_CLASS } from "@/components/ui/floatingSurface";
 import { useUIStore } from "@/store/uiStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
@@ -19,15 +21,6 @@ import type { ReEntrySummaryState } from "@/hooks/useReEntrySummary";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 
 export const AUTO_DISMISS_MS = 8000;
-
-// The toaster's and the inbox's vocabulary, so an entry keeps its glyph as it
-// moves between the three surfaces that show it.
-const SEVERITY_ICON: Record<NotificationHistoryEntry["type"], typeof XCircle> = {
-  error: XCircle,
-  warning: AlertTriangle,
-  info: Info,
-  success: CheckCircle2,
-};
 
 const SEVERITY_CLASS: Record<NotificationHistoryEntry["type"], string> = {
   error: "text-status-error",
@@ -116,7 +109,8 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
           "relative flex flex-col w-full max-w-[360px]",
           // The severity edge must follow `border`: cn() resolves conflicts
           // last-wins, and a later `border` erases a left width set before it.
-          "rounded-[var(--radius-sm)] border border-tint/[0.08] border-l-[3px]",
+          FLOATING_CARD_RADIUS_CLASS,
+          "border border-tint/[0.08] border-l-[3px]",
           "bg-surface-panel/85 backdrop-blur-xl",
           "px-3 py-2.5 pr-2",
           "text-sm text-text-primary",
@@ -174,7 +168,9 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
 
         <ul className="mt-1.5 space-y-0.5">
           {displayRows.map((row) => {
-            const Icon = SEVERITY_ICON[row.worstType];
+            // The toaster's and the inbox's glyphs, so an entry keeps its shape as it
+            // moves between the three surfaces that show it.
+            const Icon = SEVERITY_GLYPH[row.worstType];
             return (
               <li key={row.worktreeId}>
                 <button
@@ -183,7 +179,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
                   className={cn(
                     "flex items-center gap-1.5 w-full text-left text-xs",
                     "rounded-[var(--radius-xs)] px-0.5 py-0.5 -mx-0.5",
-                    "hover:bg-tint/5 transition-colors duration-150",
+                    "hover:bg-overlay-subtle transition-colors duration-150",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                     row.worstType === "error" || row.worstType === "warning"
                       ? "text-text-primary"

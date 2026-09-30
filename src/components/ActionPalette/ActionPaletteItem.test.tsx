@@ -7,9 +7,20 @@ import {
   PIN_SHORTCUT,
   paletteSummary,
 } from "./ActionPaletteItem";
-import { labelWithShortcut } from "@/lib/kbdShortcut";
-import { isMac } from "@/lib/platform";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
+import type { ReactNode } from "react";
+import { KbdChord } from "@/components/ui/Kbd";
+
+// The app root supplies the TooltipProvider. Triggers render inline; the
+// content is left out so a disclosed label is not counted twice.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: ReactNode }) => (
+    <span data-testid="tooltip-content">{children}</span>
+  ),
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
@@ -365,8 +376,12 @@ describe("ActionPaletteItem", () => {
         ["action-palette-pin", PIN_SHORTCUT],
         ["action-palette-hide", HIDE_SHORTCUT],
       ] as const) {
-        const title = screen.getByTestId(testId).getAttribute("title") ?? "";
-        expect(title).toBe(labelWithShortcut(title.split(" (")[0]!, shortcut, isMac()));
+        const control = screen.getByTestId(testId);
+        expect(control.hasAttribute("title")).toBe(false);
+        const tip = control.nextElementSibling;
+        expect(tip?.getAttribute("data-testid")).toBe("tooltip-content");
+        const keycaps = render(<KbdChord shortcut={shortcut} />).container.textContent;
+        expect(tip?.textContent).toContain(keycaps);
       }
     });
 

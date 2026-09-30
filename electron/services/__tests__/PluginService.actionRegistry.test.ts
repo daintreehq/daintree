@@ -266,8 +266,11 @@ describe("Plugin action registry", () => {
     broadcastToRendererMock.mockClear();
   });
 
-  it("registerPluginAction adds a descriptor and broadcasts the full list", () => {
+  it("registerPluginAction adds a descriptor and broadcasts the full list", async () => {
     service.registerPluginAction("acme.my-plugin", validContribution());
+    // Action snapshots are coalesced into one broadcast per microtask.
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    await Promise.resolve();
 
     const actions = service.listPluginActions();
     expect(actions).toHaveLength(1);
@@ -614,11 +617,13 @@ describe("Plugin action registry", () => {
     ).toBe("safe");
   });
 
-  it("unregisterPluginAction removes a single action and broadcasts", () => {
+  it("unregisterPluginAction removes a single action and broadcasts", async () => {
     service.registerPluginAction("acme.my-plugin", validContribution());
+    await Promise.resolve();
     broadcastToRendererMock.mockClear();
 
     service.unregisterPluginAction("acme.my-plugin", "acme.my-plugin.doThing");
+    await Promise.resolve();
 
     expect(service.listPluginActions()).toEqual([]);
     expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.EVENTS_PUSH, {
@@ -627,8 +632,9 @@ describe("Plugin action registry", () => {
     });
   });
 
-  it("unregisterPluginAction is a silent no-op for unknown ids", () => {
+  it("unregisterPluginAction is a silent no-op for unknown ids", async () => {
     service.unregisterPluginAction("acme.my-plugin", "acme.my-plugin.missing");
+    await Promise.resolve();
     expect(broadcastToRendererMock).not.toHaveBeenCalled();
   });
 
@@ -650,9 +656,11 @@ describe("Plugin action registry", () => {
       id: "acme.my-plugin.other",
     });
     expect(service.listPluginActions()).toHaveLength(2);
+    await Promise.resolve();
 
     broadcastToRendererMock.mockClear();
     service.unloadPlugin("acme.my-plugin");
+    await Promise.resolve();
 
     expect(service.listPluginActions()).toEqual([]);
     // Exactly one broadcast for the bulk removal (no per-action spam)
@@ -923,9 +931,10 @@ describe("createHost — registerAction", () => {
     broadcastToRendererMock.mockClear();
   });
 
-  it("namespaces the un-prefixed id to {pluginId}.{id} and stores the descriptor", () => {
+  it("namespaces the un-prefixed id to {pluginId}.{id} and stores the descriptor", async () => {
     const { host } = getHost("acme.act-test");
     host.registerAction(descriptor(), () => "ok");
+    await Promise.resolve();
 
     const actions = service.listPluginActions();
     expect(actions).toHaveLength(1);
@@ -939,6 +948,22 @@ describe("createHost — registerAction", () => {
       name: "plugin:actions-changed",
       payload: { actions },
     });
+  });
+
+  it("coalesces a burst of registerAction calls into one snapshot", async () => {
+    const { host } = getHost("acme.act-test");
+    for (const id of ["a", "b", "c"]) host.registerAction(descriptor({ id }), () => "ok");
+    await Promise.resolve();
+
+    const broadcasts = broadcastToRendererMock.mock.calls.filter(
+      (call: unknown[]) => (call[1] as { name?: unknown }).name === "plugin:actions-changed"
+    );
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0]?.[1]).toEqual({
+      name: "plugin:actions-changed",
+      payload: { actions: service.listPluginActions() },
+    });
+    expect(service.listPluginActions()).toHaveLength(3);
   });
 
   it("invokes the handler with the args payload only — no IPC ctx", async () => {
@@ -1269,5 +1294,63 @@ describe("createHost — registerAction", () => {
         [{}]
       )
     ).rejects.toThrow('plugin:invoke rejected: plugin "acme.act-test" is not loaded');
+  });
+});
+
+describe("startup broadcast hold", () => {
+  const actionBroadcasts = () =>
+    broadcastToRendererMock.mock.calls.filter(
+      (call: unknown[]) => (call[1] as { name?: unknown }).name === "plugin:actions-changed"
+    );
+  const command = {
+    id: "run",
+    title: "Run",
+    description: "Runs",
+    category: "plugin",
+    kind: "command",
+    danger: "safe",
+  };
+
+  it("releases the hold when a scan throws partway through", async () => {
+    const builtinDir = path.join(tmpDir, "builtin");
+    await fs.mkdir(path.join(builtinDir, "acme.cmds"), { recursive: true });
+    await fs.writeFile(
+      path.join(builtinDir, "acme.cmds", "plugin.json"),
+      JSON.stringify({ name: "acme.cmds", version: "1.0.0", contributes: { commands: [command] } })
+    );
+    // A file where the user plugin root should be: readdir throws ENOTDIR.
+    const userRoot = path.join(tmpDir, "not-a-dir");
+    await fs.writeFile(userRoot, "");
+    const svc = new PluginService(userRoot, "0.0.0", { builtinPluginsRoot: builtinDir });
+
+    await expect(svc.initialize()).rejects.toThrow();
+    await Promise.resolve();
+
+    expect(actionBroadcasts()).toHaveLength(1);
+    const payload = (actionBroadcasts()[0]?.[1] as { payload: { actions: { id: string }[] } })
+      .payload;
+    expect(payload.actions.map((a) => a.id)).toEqual(["acme.cmds.run"]);
+    svc.dispose();
+  });
+
+  it("publishes held snapshots before a plugin activates mid-scan", async () => {
+    await writePlugin("acme.mid", { name: "acme.mid", version: "1.0.0" });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+    broadcastToRendererMock.mockClear();
+
+    const broadcaster = (svc as unknown as { broadcaster: { holdBroadcasts: () => () => void } })
+      .broadcaster;
+    const release = broadcaster.holdBroadcasts();
+    svc.registerPluginAction("acme.mid", { ...command, id: "acme.mid.run" } as never);
+    await Promise.resolve();
+    expect(actionBroadcasts()).toHaveLength(0);
+
+    const activation = svc.activatePlugin("acme.mid");
+    await Promise.resolve();
+    expect(actionBroadcasts()).toHaveLength(1);
+    await activation;
+    release();
+    svc.dispose();
   });
 });

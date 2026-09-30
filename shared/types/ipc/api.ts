@@ -68,7 +68,7 @@ import type {
   SemanticSearchMatch,
 } from "./terminal.js";
 import type { AppVersionInfo } from "./app.js";
-import type { SerializedTerminalSnapshot } from "../terminal.js";
+import type { SerializeReadOptions, SerializedTerminalSnapshot } from "../terminal.js";
 import type {
   SaveArtifactOptions,
   SaveArtifactResult,
@@ -333,7 +333,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     reconnect(terminalId: string): Promise<TerminalReconnectResult>;
     reconnectBulk(terminalIds: string[]): Promise<Record<string, TerminalReconnectResult>>;
     replayHistory(terminalId: string, maxLines?: number): Promise<{ replayed: number }>;
-    getSerializedState(terminalId: string): Promise<SerializedTerminalSnapshot | null>;
+    getSerializedState(
+      terminalId: string,
+      options?: SerializeReadOptions
+    ): Promise<SerializedTerminalSnapshot | null>;
     getSerializedStates(
       terminalIds: string[]
     ): Promise<Record<string, SerializedTerminalSnapshot | null>>;
@@ -403,7 +406,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onBackendReady(callback: () => void): () => void;
     sendKey(id: string, key: string): void;
     batchDoubleEscape(ids: string[]): void;
-    broadcastWrite(ids: string[], data: string): void;
+    broadcastWrite(ids: string[], data: string, reportSuccess?: boolean): void;
     onBroadcastWriteResult(callback: (data: BroadcastWriteResultPayload) => void): () => void;
     reportTitleState(id: string, state: "working" | "waiting"): void;
     updateObservedTitle(id: string, title: string): void;
@@ -2565,10 +2568,10 @@ export type HelpAssistantIdleHibernateMinutes = 0 | 5 | 15 | 30 | 60 | 120;
 /**
  * Whether the assistant's confirm-gated Daintree actions ask first (#12874).
  * `inherit` follows the global "Skip permission prompts" setting; `always-ask`
- * keeps Daintree's dialog regardless. There is deliberately no value that
- * skips while the global setting is off.
+ * keeps Daintree's dialog regardless; `never-ask` skips it whatever the global
+ * setting says (#12989).
  */
-export type HelpAssistantDaintreeConfirmations = "inherit" | "always-ask";
+export type HelpAssistantDaintreeConfirmations = "inherit" | "always-ask" | "never-ask";
 
 export interface HelpAssistantSettings {
   /** Allow the help assistant to search Daintree documentation. Defaults to true. */
@@ -2640,9 +2643,10 @@ export interface HelpAssistantSettings {
    */
   loadGlobalHooksAndServers: boolean;
   /**
-   * Whether help sessions' `danger: "confirm"` Daintree actions skip the host
-   * confirmation while the global "Skip permission prompts" is on. Read per
-   * dispatch, not snapshotted at launch. Defaults to `"inherit"`.
+   * Whether help sessions' Daintree confirmations are skipped: always under
+   * `never-ask`, while the global "Skip permission prompts" is on under
+   * `inherit`. Read per dispatch, not snapshotted at launch. Defaults to
+   * `"inherit"`.
    */
   daintreeConfirmations: HelpAssistantDaintreeConfirmations;
 }

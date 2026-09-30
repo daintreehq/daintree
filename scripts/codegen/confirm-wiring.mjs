@@ -93,11 +93,6 @@ const CONFIRMED_WIRED = [
   "worktree.sessions.restartAll",
   "worktree.sessions.clearHistory",
   "worktree.resource.teardown",
-  "fleet.kill",
-  "fleet.trash",
-  "fleet.restart",
-  "fleet.deleteNamedFleet",
-  "portal.links.remove",
   "keybinding.resetAll",
   "logs.clear",
   "recipe.delete",
@@ -110,6 +105,15 @@ const CONFIRMED_WIRED = [
 // and are excluded from the co-location scan.
 // Mirror of BYPASS_WIRED in actionDefinitions.quality.test.ts.
 const BYPASS_WIRED = new Set([
+  // The fleet ribbon's own inline confirmation (useFleetPendingActionStore,
+  // buildConfirmMessage), not a ConfirmDialog-family component.
+  "fleet.kill",
+  "fleet.trash",
+  "fleet.restart",
+  // Deleted at once with an Undo toast from the UI (exactly restorable, D0 there);
+  // danger:"confirm" still gates agent and palette dispatch, which get no Undo.
+  "fleet.deleteNamedFleet",
+  "portal.links.remove",
   "git.push", // deferred-promise via gitPushConfirmStore; GitPushConfirmDialog resolves it
   "git.pullRebase", // IPC bypass in ReviewHubContent.tsx; ConfirmDialog wired but ID not co-located
   // Deferred-promise via gitWorktreeOperationConfirmStore (#12092); the dialog

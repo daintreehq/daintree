@@ -21,6 +21,7 @@ import { useAgentSettingsStore } from "./agentSettingsStore";
 import { useHelpPanelStore } from "./helpPanelStore";
 import { usePortalStore } from "./portalStore";
 import { removeArtifactsForTerminal } from "@/hooks/useArtifacts";
+import { forgetPanelActivity } from "@/utils/panelProps";
 import {
   setPanelStoreAccessor,
   setPanelStoreClearForSwitchAccessor,
@@ -404,6 +405,7 @@ export function initStoreOrchestrator(): () => void {
             // are ephemeral and a stale lock would silently break routing.
             useVoiceRecordingStore.getState().clearLockedTarget(removedId);
             unregisterInputController(removedId);
+            forgetPanelActivity(removedId);
             // Drop the renderer-side artifact store entry so content strings
             // don't pin the dead panel's heap for the rest of the renderer
             // lifetime (#10023). The hook listener Set is owned by each

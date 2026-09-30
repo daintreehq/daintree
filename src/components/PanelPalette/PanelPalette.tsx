@@ -13,6 +13,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { countPanelsTowardLimit } from "@/store/slices/panelRegistry/panelCount";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
+import { keyBelongsToField } from "@/hooks/useListboxCursor";
 
 interface PanelPaletteProps {
   isOpen: boolean;
@@ -82,6 +83,19 @@ export function PanelPalette({
           e.preventDefault();
           onSelectNext();
           break;
+        // First and last, as in every other palette. Shift+Home selects the
+        // query instead, and an empty list leaves the keys to the caret.
+        case "Home":
+        case "End": {
+          if (keyBelongsToField(e) || !onHoverIndex) break;
+          // A stale row is never selectable; the ends are the live rows.
+          const live = results.flatMap((item, index) => (item.isStale ? [] : [index]));
+          const target = (e.key === "Home" ? live[0] : live[live.length - 1]) ?? -1;
+          if (target < 0) break;
+          e.preventDefault();
+          onHoverIndex(target);
+          break;
+        }
         case "Enter":
           e.preventDefault();
           onConfirm();
@@ -109,7 +123,16 @@ export function PanelPalette({
           break;
       }
     },
-    [onSelectPrevious, onSelectNext, onConfirm, onClose, query, onQueryChange]
+    [
+      onSelectPrevious,
+      onSelectNext,
+      onConfirm,
+      onClose,
+      query,
+      onQueryChange,
+      onHoverIndex,
+      results,
+    ]
   );
 
   const panelCount = usePanelStore((state) =>
@@ -237,7 +260,7 @@ export function PanelPalette({
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Select a panel type..."
+          placeholder="Select a panel type…"
           role="combobox"
           // The listbox only exists while there are rows to put in it.
           aria-expanded={isOpen && results.length > 0}

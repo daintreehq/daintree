@@ -15,6 +15,7 @@ import {
   type DestructivePreviewGroup,
   type TerminalPendingDestructiveActionSnapshot,
 } from "@/store/terminalPendingDestructiveActionStore";
+import { pluralize } from "@/lib/pluralize";
 
 export interface DestructiveConfirmCopy {
   title: string;
@@ -38,10 +39,6 @@ function quoted(name: string | undefined, fallback: string): string {
   return trimmed ? `'${trimmed}'` : fallback;
 }
 
-function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
-  return count === 1 ? singular : pluralForm;
-}
-
 /**
  * `outcome` is omitted for recoverable actions, whose recovery sentence
  * already says what happens to the process; repeating it in the lead would
@@ -49,7 +46,7 @@ function plural(count: number, singular: string, pluralForm = `${singular}s`): s
  */
 function workingLead(count: number, outcome?: string): string | undefined {
   if (count <= 0) return undefined;
-  const subject = count === 1 ? "1 agent is working" : `${count} agents are working`;
+  const subject = pluralize(count, "agent is working", "agents are working");
   return outcome ? `${subject} and ${outcome}.` : `${subject}.`;
 }
 
@@ -97,60 +94,60 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): Destructi
     case "restart":
       return buildRestartRunningAgentCopy(pending.terminalTitle);
     case "killAll": {
-      const noun = plural(count, "terminal");
+      const counted = pluralize(count, "terminal");
       return {
-        title: `Kill ${count} ${noun}?`,
+        title: `Kill ${counted}?`,
         lead: workingLead(pending.runningAgentCount, "will be stopped"),
         description:
           count === 1
             ? "The process ends and its scrollback is discarded."
             : "Every terminal's process ends and its scrollback is discarded.",
-        confirmLabel: `Kill ${count} ${noun}`,
+        confirmLabel: `Kill ${counted}`,
       };
     }
     case "restartAll": {
-      const noun = plural(count, "terminal");
+      const counted = pluralize(count, "terminal");
       return {
-        title: `Restart ${count} ${noun}?`,
+        title: `Restart ${counted}?`,
         lead: workingLead(pending.runningAgentCount, "will be interrupted"),
         description:
           count === 1
             ? "The process respawns and its scrollback is discarded."
             : "Every terminal respawns and its scrollback is discarded.",
-        confirmLabel: `Restart ${count} ${noun}`,
+        confirmLabel: `Restart ${counted}`,
       };
     }
     case "worktreeRestartAll": {
-      const noun = plural(count, "session");
+      const counted = pluralize(count, "session");
       return {
-        title: `Restart ${count} ${noun} in ${worktree}?`,
+        title: `Restart ${counted} in ${worktree}?`,
         lead: workingLead(pending.runningAgentCount, "will be interrupted"),
         description:
           count === 1
             ? "The session respawns and its scrollback is discarded."
             : "Every session respawns and its scrollback is discarded.",
-        confirmLabel: `Restart ${count} ${noun}`,
+        confirmLabel: `Restart ${counted}`,
       };
     }
     case "worktreeTrashAll": {
-      const noun = plural(count, "session");
+      const counted = pluralize(count, "session");
       return {
-        title: `Trash ${count} ${noun} in ${worktree}?`,
+        title: `Trash ${counted} in ${worktree}?`,
         lead: workingLead(pending.runningAgentCount),
         description: recentlyClosedSentence(count),
-        confirmLabel: `Trash ${count} ${noun}`,
+        confirmLabel: `Trash ${counted}`,
       };
     }
     case "worktreeEndAll": {
-      const noun = plural(count, "session");
+      const counted = pluralize(count, "session");
       return {
-        title: `End ${count} ${noun} in ${worktree}?`,
+        title: `End ${counted} in ${worktree}?`,
         lead: workingLead(pending.runningAgentCount, "will be stopped"),
         description:
           count === 1
             ? "The session is removed outright and its scrollback is discarded. Unlike trashing, it can't be restored."
             : "The sessions are removed outright and their scrollback is discarded. Unlike trashing, they can't be restored.",
-        confirmLabel: `End ${count} ${noun}`,
+        confirmLabel: `End ${counted}`,
       };
     }
     case "worktreeClearHistory": {
@@ -164,33 +161,33 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): Destructi
       };
     }
     case "deletedWorktreeDismiss": {
-      const noun = plural(count, "terminal");
+      const counted = pluralize(count, "terminal");
       return {
-        title: `Close ${count} ${noun} from ${worktree}?`,
+        title: `Close ${counted} from ${worktree}?`,
         lead: workingLead(pending.runningAgentCount),
         description: recentlyClosedSentence(count),
         note:
           count === 1
             ? "To keep it open, cancel and drag it to another worktree."
             : "To keep one open, cancel and drag it to another worktree.",
-        confirmLabel: `Close ${count} ${noun}`,
+        confirmLabel: `Close ${counted}`,
       };
     }
     case "deletedWorktreeGroupDismiss": {
       const worktreeCount = pending.preview?.length ?? 0;
       // A member whose terminals all left is dropped from the preview, so the
       // group can be clearing a single worktree even though it holds several.
-      const worktreeNoun = plural(worktreeCount, "deleted worktree");
-      const noun = plural(count, "terminal");
+      const countedWorktrees = pluralize(worktreeCount, "deleted worktree");
+      const counted = pluralize(count, "terminal");
       return {
-        title: `Close ${count} ${noun} from ${worktreeCount} ${worktreeNoun}?`,
+        title: `Close ${counted} from ${countedWorktrees}?`,
         lead: workingLead(pending.runningAgentCount),
         description: recentlyClosedSentence(count),
         note:
           count === 1
             ? "To keep it open, cancel and drag it to another worktree."
             : "To keep one open, cancel and drag it to another worktree.",
-        confirmLabel: `Close ${count} ${noun}`,
+        confirmLabel: `Close ${counted}`,
       };
     }
   }
@@ -348,14 +345,12 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         break;
       case "killAll": {
         void actionService.dispatch("terminal.killAll", { confirmed: true }, { source });
-        const noun = pending.targetCount === 1 ? "terminal" : "terminals";
-        announcement = `Killed ${pending.targetCount} ${noun}`;
+        announcement = `Killed ${pluralize(pending.targetCount, "terminal")}`;
         break;
       }
       case "restartAll": {
         void actionService.dispatch("terminal.restartAll", { confirmed: true }, { source });
-        const noun = pending.targetCount === 1 ? "terminal" : "terminals";
-        announcement = `Restarted ${pending.targetCount} ${noun}`;
+        announcement = `Restarted ${pluralize(pending.targetCount, "terminal")}`;
         break;
       }
       case "worktreeRestartAll": {
@@ -365,8 +360,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { worktreeId: pending.worktreeId, confirmed: true },
           { source }
         );
-        const noun = pending.targetCount === 1 ? "session" : "sessions";
-        announcement = `Restarted ${pending.targetCount} ${noun}`;
+        announcement = `Restarted ${pluralize(pending.targetCount, "session")}`;
         break;
       }
       case "worktreeTrashAll": {
@@ -376,8 +370,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { worktreeId: pending.worktreeId, confirmed: true },
           { source }
         );
-        const noun = pending.targetCount === 1 ? "session" : "sessions";
-        announcement = `Trashed ${pending.targetCount} ${noun}`;
+        announcement = `Trashed ${pluralize(pending.targetCount, "session")}`;
         break;
       }
       case "worktreeEndAll": {
@@ -387,8 +380,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { worktreeId: pending.worktreeId, confirmed: true },
           { source }
         );
-        const noun = pending.targetCount === 1 ? "session" : "sessions";
-        announcement = `Ended ${pending.targetCount} ${noun}`;
+        announcement = `Ended ${pluralize(pending.targetCount, "session")}`;
         break;
       }
       case "worktreeClearHistory": {
@@ -412,8 +404,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { worktreeId: pending.worktreeId, confirmed: true },
           { source }
         );
-        const noun = pending.targetCount === 1 ? "terminal" : "terminals";
-        announcement = `Closed ${pending.targetCount} ${noun}`;
+        announcement = `Closed ${pluralize(pending.targetCount, "terminal")}`;
         break;
       }
       case "deletedWorktreeGroupDismiss": {
@@ -432,8 +423,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
             { source }
           );
         }
-        const noun = pending.targetCount === 1 ? "terminal" : "terminals";
-        announcement = `Closed ${pending.targetCount} ${noun}`;
+        announcement = `Closed ${pluralize(pending.targetCount, "terminal")}`;
         break;
       }
     }

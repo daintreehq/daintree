@@ -16,6 +16,7 @@ import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { applyDictationCommands } from "../../services/voiceDictationCommands.js";
 import { VOICE_DICTATION_AI_MODEL } from "../../../shared/config/voiceCorrection.js";
+import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
 import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
@@ -392,7 +393,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         // them post-hoc to \n\n / "." / \n etc., gated on the session-
         // snapshotted paragraphing strategy.
         const processedText =
-          settings.paragraphingStrategy === "spoken-command"
+          settings.paragraphingStrategy === "spoken-command" &&
+          normalizeVoiceLanguage(settings.language) === "en"
             ? applyDictationCommands(rawText)
             : rawText;
 
@@ -623,6 +625,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         apiKey: settings.openaiApiKey,
         customDictionary: settings.customDictionary,
         customInstructions: settings.correctionCustomInstructions,
+        language: normalizeVoiceLanguage(settings.language),
         projectName: projectInfo.name,
         projectPath: projectInfo.path,
         organizationId: settings.organizationId,

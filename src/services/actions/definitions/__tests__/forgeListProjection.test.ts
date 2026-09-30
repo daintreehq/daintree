@@ -111,6 +111,23 @@ describe("summary projection drops what a chooser does not need", () => {
     expect(ForgePRSummarySchema.strict().safeParse(projectPRSummary(pr)).success).toBe(true);
   });
 
+  it("keeps a reported merge conflict on the PR and on an issue's linked PR", () => {
+    const conflicted: PR = { ...pr, mergeState: "conflicts" };
+    const linked: Issue = {
+      ...issue,
+      linkedPR: { number: 900, state: "open", url: "u", mergeState: "conflicts" },
+    };
+    expect(projectPRSummary(conflicted).mergeState).toBe("conflicts");
+    expect(projectIssueSummary(linked).linkedPR?.mergeState).toBe("conflicts");
+    expect(ForgePRSummarySchema.strict().safeParse(projectPRSummary(conflicted)).success).toBe(
+      true
+    );
+    expect(ForgeIssueSummarySchema.strict().safeParse(projectIssueSummary(linked)).success).toBe(
+      true
+    );
+    expect("mergeState" in projectPRSummary(pr)).toBe(false);
+  });
+
   it("drops the PR body as well as the issue body", () => {
     const summary = projectPRSummary(pr);
     expect("body" in summary).toBe(false);

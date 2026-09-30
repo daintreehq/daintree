@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useId } from "react";
 import { InlineError } from "@/components/ui/field";
-import { CheckCircle, AlertCircle, RefreshCw, ExternalLink, ChevronRight } from "lucide-react";
+import { CheckCircle2, XCircle, RefreshCw, ExternalLink, ChevronRight } from "lucide-react";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import {
@@ -27,6 +27,8 @@ import { invalidateProjectSettingsCache } from "@/clients/projectClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
+import { pluralize } from "@/lib/pluralize";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 const EDITOR_LABELS: Record<KnownEditorId, string> = {
   vscode: "VS Code",
@@ -202,9 +204,9 @@ export function EditorIntegrationTab() {
       className="flex min-w-0 items-center gap-2 text-xs text-text-secondary"
     >
       {d.available ? (
-        <CheckCircle className="w-3.5 h-3.5 text-text-secondary shrink-0" aria-label="Found" />
+        <CheckCircle2 className="w-3.5 h-3.5 text-text-secondary shrink-0" aria-label="Found" />
       ) : (
-        <AlertCircle className="w-3.5 h-3.5 text-text-secondary shrink-0" aria-label="Not found" />
+        <XCircle className="w-3.5 h-3.5 text-text-secondary shrink-0" aria-label="Not found" />
       )}
       <span
         className={cn(
@@ -215,9 +217,9 @@ export function EditorIntegrationTab() {
         {EDITOR_LABELS[d.id]}
       </span>
       {d.executablePath && (
-        <span className="min-w-0 truncate font-mono text-text-secondary" title={d.executablePath}>
-          {d.executablePath}
-        </span>
+        <TruncatedTooltip content={d.executablePath}>
+          <span className="min-w-0 truncate font-mono text-text-secondary">{d.executablePath}</span>
+        </TruncatedTooltip>
       )}
     </li>
   );
@@ -327,7 +329,7 @@ export function EditorIntegrationTab() {
                       data-editor-missing=""
                       className="flex min-w-0 items-start gap-2 text-xs text-text-secondary"
                     >
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" />
+                      <XCircle className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" />
                       <span>
                         Not found: {missingEditors.map((d) => EDITOR_LABELS[d.id]).join(", ")}
                       </span>
@@ -359,7 +361,7 @@ export function EditorIntegrationTab() {
                   />
                   {showDetected
                     ? "Hide other found editors"
-                    : `Show ${otherFoundEditors.length} other found editor${otherFoundEditors.length === 1 ? "" : "s"}`}
+                    : `Show ${pluralize(otherFoundEditors.length, "other found editor")}`}
                 </button>
                 <div id={detectedRegionId}>
                   {showDetected && (
@@ -434,7 +436,7 @@ export function EditorIntegrationTab() {
               <InlineError>{saveError}</InlineError>
             ) : testResult === "ok" ? (
               <span className="flex items-center gap-1">
-                <CheckCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> Open requested
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> Open requested
               </span>
             ) : testResult === "error" ? (
               <InlineError>Failed to open</InlineError>

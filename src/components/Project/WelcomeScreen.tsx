@@ -1,22 +1,23 @@
 import { useMemo, useState } from "react";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 import { InlineError } from "@/components/ui/field";
 import {
+  Check,
+  ExternalLink,
   FolderOpen,
   FolderPlus,
-  Check,
-  Newspaper,
-  ExternalLink,
-  GitBranch,
-  Plug,
-  Pin,
-  Sparkles,
   type LucideIcon,
+  Newspaper,
+  Pin,
+  Plug,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card, ChoiceCard } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { KbdChord } from "@/components/ui/Kbd";
-import { AppWindow, BrandMark, DaintreeIcon } from "@/components/icons";
+import { AppWindow, BrandMark, DaintreeIcon, FolderDown } from "@/components/icons";
 import { useProjectStore } from "@/store/projectStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -25,8 +26,9 @@ import { compareProjectsByMode } from "@/lib/projectSort";
 import { cn } from "@/lib/utils";
 import { keybindingService } from "@/services/KeybindingService";
 import { getProjectGradient, getBrandColorHex } from "@/lib/colorUtils";
-import { formatTimeAgo } from "@/utils/timeAgo";
-import { middleTruncate } from "@/utils/textParsing";
+import { formatPath, middleTruncatePath } from "@/utils/textParsing";
+import { useHomeDir } from "@/hooks/app/useHomeDir";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { CHECKLIST_ITEMS } from "@/components/Onboarding/checklistItems";
 import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboarding";
 import { TourWelcomeLink } from "@/components/Tour/TourInviteCard";
@@ -39,6 +41,7 @@ import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import type { AgentAvailabilityState } from "../../../shared/types/ipc/system";
 import type { GettingStartedChecklistState } from "@/hooks/app/useGettingStartedChecklist";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 interface WelcomeScreenProps {
   gettingStarted: GettingStartedChecklistState;
@@ -150,7 +153,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
       },
       {
         id: "clone-repository",
-        icon: GitBranch,
+        icon: FolderDown,
         title: "Clone repository",
         description: "Pull a repo from a Git URL",
         onClick: openCloneRepoDialog,
@@ -229,32 +232,19 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                   // color — that load-bearing signal is owned by the checklist.
                   const lifted = primary && !hasProjects;
                   const card = (
-                    <button
+                    <ChoiceCard
                       key={id}
-                      type="button"
                       onClick={onClick}
+                      tone={lifted ? "elevated" : "default"}
                       // Title is the accessible name; the description is announced
                       // once via aria-describedby. aria-label keeps the name clean
                       // so the in-button description text isn't double-announced.
                       aria-label={title}
                       aria-describedby={`qa-desc-${id}`}
                       className={cn(
-                        "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left cursor-pointer @min-[1800px]/welcome:p-4",
+                        "flex-col items-start gap-1 @min-[1800px]/welcome:p-4",
                         // Room for the secondary action pinned in the corner.
-                        secondary && "h-full w-full pr-10 @min-[1800px]/welcome:pr-11",
-                        "transition-colors duration-150",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                        lifted
-                          ? // Correct elevate-to-select inversion (ring-border-strong
-                            // + elevated fill). Dark keeps its /95 wash; on light the
-                            // alpha makes the elevated lift translucency-inert (RC-9),
-                            // so .light forces the fully opaque elevated surface to
-                            // preserve the real ~0.03-0.04 dL lift over the panel.
-                            "ring-1 ring-border-strong bg-surface-panel-elevated/95 [.light_&]:bg-surface-panel-elevated hover:bg-surface-panel-elevated"
-                          : // Idle hover: overlay-soft already clears the JND on dark
-                            // but composites sub-JND over the light panel, so .light
-                            // steps it up to overlay-medium.
-                            "ring-1 ring-border-strong/40 hover:bg-overlay-soft [.light_&]:hover:bg-overlay-medium"
+                        secondary && "h-full w-full pr-10 @min-[1800px]/welcome:pr-11"
                       )}
                     >
                       <span className="flex items-center gap-2 text-sm font-medium text-text-primary @min-[1920px]/welcome:text-base">
@@ -267,7 +257,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                       >
                         {description}
                       </span>
-                    </button>
+                    </ChoiceCard>
                   );
                   if (!secondary) return card;
                   // A sibling of the card rather than a child: a button can't
@@ -446,6 +436,7 @@ function TopProjects({
   projects: ReturnType<typeof useProjectStore.getState>["projects"];
   onSelect: (projectId: string) => Promise<void>;
 }) {
+  const { homeDir } = useHomeDir();
   return (
     <div className="w-full">
       {/* "Your projects", not "Recent projects": the order follows the switcher's
@@ -480,19 +471,25 @@ function TopProjects({
               <span className="text-sm font-semibold text-text-primary truncate block @min-[1920px]/welcome:text-base">
                 {project.name}
               </span>
-              <span
-                className="text-xs text-text-secondary truncate block @min-[1920px]/welcome:text-sm"
-                title={project.path}
+              {/* Inside the row's button, so a pointer disclosure only. The path is
+                middle-truncated in JS, which CSS overflow detection cannot see. */}
+              <TruncatedTooltip
+                content={project.path}
+                focusable={false}
+                isTruncated={
+                  middleTruncatePath(formatPath(project.path, homeDir), 48) !== project.path ||
+                  undefined
+                }
               >
-                {middleTruncate(project.path, 48)}
-              </span>
+                <span className="font-mono text-xs text-text-secondary truncate block @min-[1920px]/welcome:text-sm">
+                  {middleTruncatePath(formatPath(project.path, homeDir), 48)}
+                </span>
+              </TruncatedTooltip>
             </div>
-            <span
+            <TimeAgo
+              timestamp={project.lastOpened}
               className="text-xs text-text-secondary shrink-0 @min-[1920px]/welcome:text-sm"
-              title={new Date(project.lastOpened).toLocaleString()}
-            >
-              {formatTimeAgo(project.lastOpened)}
-            </span>
+            />
           </button>
         ))}
       </div>
@@ -516,7 +513,11 @@ function AgentSetupBannerCard() {
 
   return (
     <div className="w-full" data-testid="agent-setup-banner">
-      <div className="relative w-full rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4">
+      <Card
+        variant="subtle"
+        padding="none"
+        className="relative w-full px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4"
+      >
         <DismissButton
           onClick={handleDismiss}
           aria-label="Dismiss agent setup banner"
@@ -560,7 +561,7 @@ function AgentSetupBannerCard() {
             </div>
           </div>
         </div>
-      </div>
+      </Card>
     </div>
   );
 }
@@ -619,7 +620,11 @@ function AgentWelcomeCard() {
 
   return (
     <div className="w-full">
-      <div className="relative w-full rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4">
+      <Card
+        variant="subtle"
+        padding="none"
+        className="relative w-full px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4"
+      >
         <DismissButton
           onClick={handleDismiss}
           aria-label="Dismiss welcome card"
@@ -689,7 +694,7 @@ function AgentWelcomeCard() {
             )}
           </div>
         </div>
-      </div>
+      </Card>
     </div>
   );
 }
@@ -727,19 +732,12 @@ function InlineChecklist({
         />
       </div>
 
-      <div
-        role="progressbar"
-        aria-label="Getting started progress"
-        aria-valuemin={0}
-        aria-valuemax={progressTotal}
-        aria-valuenow={progressDone}
-        className="w-full h-1 bg-overlay-medium rounded-full mb-4 overflow-hidden"
-      >
-        <div
-          className="h-full bg-text-secondary rounded-full transition-[width] duration-150 ease-out"
-          style={{ width: `${(progressDone / progressTotal) * 100}%` }}
-        />
-      </div>
+      <ProgressBar
+        label="Getting started progress"
+        value={progressDone}
+        max={progressTotal}
+        className="mb-4"
+      />
 
       <ol className="space-y-1">
         <ChecklistReportRow done label="Install Daintree" />

@@ -106,7 +106,9 @@ export interface McpTargetPolicy {
    * the session did not create or whose agent is mid-task (#12881). A client
    * reading only
    * {@link danger} would call such a target expecting no dialog and get
-   * `CONFIRMATION_REQUIRED` instead.
+   * `CONFIRMATION_REQUIRED` instead. False while the session's skip preference
+   * waives every dialog (#12989); the compatibility hash keeps the target's own
+   * answer, so it does not move with that preference.
    */
   confirmationMayEscalate: boolean;
   /**

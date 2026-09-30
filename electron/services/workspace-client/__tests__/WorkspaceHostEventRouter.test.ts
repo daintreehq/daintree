@@ -117,6 +117,138 @@ describe("WorkspaceHostEventRouter", () => {
   // Number of ms past the `sys:worktree:update` debounce window.
   const SYS_WORKTREE_DEBOUNCE_MS = 50;
 
+  describe("worktree-tick", () => {
+    const EPOCH = "550e8400-e29b-41d4-a716-446655440000";
+    function tickEvent(
+      tick: Record<string, unknown>,
+      epoch = EPOCH
+    ): Extract<WorkspaceHostEvent, { type: "worktree-tick" }> {
+      return {
+        type: "worktree-tick",
+        tick: { worktreeId: "wt-1", path: "/project/test", generation: 1, ...tick },
+        epoch,
+        seq: 2,
+      };
+    }
+
+    it("expands onto the last full snapshot and routes it like a worktree-update", () => {
+      const emit = vi.fn();
+      router = new WorkspaceHostEventRouter({
+        emit,
+        worktreePathToProject: new Map(),
+        copyTreeProgressCallbacks: copyTreeCallbacks,
+      });
+      const entry = makeEntry();
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({ generation: 1, modifiedCount: 4, workingTreeChangedAt: 10 })
+      );
+      emit.mockClear();
+      fileSearchCacheInvalidatorMock.handleWorktreeUpdate.mockClear();
+
+      router.routeHostEvent(entry, tickEvent({ workingTreeChangedAt: 20, timestamp: 99 }));
+
+      const expected = expect.objectContaining({
+        id: "wt-1",
+        modifiedCount: 4,
+        workingTreeChangedAt: 20,
+        timestamp: 99,
+      });
+      expect(emit).toHaveBeenCalledWith("worktree-update", {
+        worktree: expected,
+        projectPath: entry.projectPath,
+      });
+      expect(fileSearchCacheInvalidatorMock.handleWorktreeUpdate).toHaveBeenCalledWith(expected, {
+        projectPath: entry.projectPath,
+        hostEpoch: EPOCH,
+      });
+      vi.advanceTimersByTime(SYS_WORKTREE_DEBOUNCE_MS);
+      expect(events.emit).toHaveBeenCalledWith("sys:worktree:update", expected);
+    });
+
+    function setup() {
+      const emit = vi.fn();
+      router = new WorkspaceHostEventRouter({
+        emit,
+        worktreePathToProject: new Map(),
+        copyTreeProgressCallbacks: copyTreeCallbacks,
+      });
+      const entry = makeEntry();
+      const updates = () => emit.mock.calls.filter(([name]) => name === "worktree-update");
+      return { entry, emit, updates };
+    }
+
+    it("drops a tick with no base snapshot", () => {
+      const { entry, updates } = setup();
+      router.routeHostEvent(entry, tickEvent({}));
+      expect(updates()).toHaveLength(0);
+    });
+
+    it("drops a tick from another monitor incarnation", () => {
+      const { entry, emit, updates } = setup();
+      router.routeHostEvent(entry, makeWorktreeUpdateEvent({ generation: 2 }));
+      emit.mockClear();
+      router.routeHostEvent(entry, tickEvent({ generation: 1 }));
+      expect(updates()).toHaveLength(0);
+    });
+
+    it("drops a tick after the worktree was removed", () => {
+      const { entry, emit, updates } = setup();
+      router.routeHostEvent(entry, makeWorktreeUpdateEvent({ generation: 1 }));
+      router.routeHostEvent(entry, {
+        type: "worktree-removed",
+        worktreeId: "wt-1",
+        epoch: EPOCH,
+        seq: 3,
+      });
+      emit.mockClear();
+      router.routeHostEvent(entry, tickEvent({}));
+      expect(updates()).toHaveLength(0);
+    });
+
+    it("drops a tick from a new host run until that run's full snapshot arrives", () => {
+      const { entry, emit, updates } = setup();
+      router.routeHostEvent(entry, makeWorktreeUpdateEvent({ generation: 1 }));
+      emit.mockClear();
+      router.routeHostEvent(entry, tickEvent({}, "another-host-run"));
+      expect(updates()).toHaveLength(0);
+
+      router.routeHostEvent(entry, {
+        ...makeWorktreeUpdateEvent({ generation: 1, modifiedCount: 7 }),
+        epoch: "another-host-run",
+      });
+      emit.mockClear();
+      router.routeHostEvent(entry, tickEvent({ workingTreeChangedAt: 3 }, "another-host-run"));
+      expect(updates()).toEqual([
+        [
+          "worktree-update",
+          expect.objectContaining({
+            worktree: expect.objectContaining({ modifiedCount: 7, workingTreeChangedAt: 3 }),
+          }),
+        ],
+      ]);
+    });
+
+    it("keeps the replacement's base when a retired monitor's snapshot lands late", () => {
+      const { entry, emit, updates } = setup();
+      router.routeHostEvent(entry, makeWorktreeUpdateEvent({ generation: 2, modifiedCount: 2 }));
+      // The late one still reaches consumers exactly as before.
+      router.routeHostEvent(entry, makeWorktreeUpdateEvent({ generation: 1, modifiedCount: 1 }));
+      expect(updates()).toHaveLength(2);
+      emit.mockClear();
+
+      router.routeHostEvent(entry, tickEvent({ generation: 2 }));
+      expect(updates()).toEqual([
+        [
+          "worktree-update",
+          expect.objectContaining({
+            worktree: expect.objectContaining({ generation: 2, modifiedCount: 2 }),
+          }),
+        ],
+      ]);
+    });
+  });
+
   describe("file-search cache invalidation", () => {
     it("hands every worktree-update snapshot to the invalidator", () => {
       // The router does not decide; it delivers. The `workingTreeChangedAt`

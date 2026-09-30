@@ -408,6 +408,7 @@ export function registerWorkflowCreationActions(
             notifyRecipeSpawnFailures(results, {
               recipeName: useRecipeStore.getState().getRecipeById(recipeId)?.name,
               projectId: currentProject.id,
+              worktreeId,
             });
           } catch (err) {
             throw partialSuccessError(
@@ -680,6 +681,7 @@ export function registerWorkflowCreationActions(
             notifyRecipeSpawnFailures(results, {
               recipeName: useRecipeStore.getState().getRecipeById(recipeId)?.name,
               projectId: currentProject.id,
+              worktreeId,
             });
           } catch (err) {
             throw partialSuccessError(

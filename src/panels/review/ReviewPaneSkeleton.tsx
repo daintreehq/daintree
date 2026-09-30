@@ -1,4 +1,7 @@
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
+import { surfaceHeaderVariants } from "@/components/ui/SurfaceHeader";
+import { REVIEW_HUB_SECTION_BAND } from "@/components/Worktree/ReviewHub/reviewHubUtils";
+import { cn } from "@/lib/utils";
 
 // Bones are immediate, not delayed: this renders as a Suspense fallback, which
 // React already throttles ~300ms before commit (FALLBACK_THROTTLE_MS), so the
@@ -11,7 +14,7 @@ export function ReviewPaneSkeleton() {
       <Skeleton label={label} className="flex flex-col h-full w-full bg-surface-canvas">
         {/* Header — matches ReviewHubContent: title, branch chip, diff-mode toggle */}
         <div
-          className="flex items-center justify-between px-4 py-3 border-b border-divider shrink-0"
+          className={cn(surfaceHeaderVariants({ density: "compact" }), "gap-2")}
           aria-hidden="true"
         >
           <div className="flex items-center gap-2">
@@ -23,13 +26,13 @@ export function ReviewPaneSkeleton() {
 
         {/* Staged/unstaged section headers and file rows */}
         <div
-          className="flex items-center justify-between px-4 py-2 bg-overlay-subtle border-b border-divider shrink-0"
+          className={cn(REVIEW_HUB_SECTION_BAND, "border-b border-divider shrink-0")}
           aria-hidden="true"
         >
           <SkeletonBone immediate className="h-3 w-16" />
           <SkeletonBone immediate className="h-3 w-8" />
         </div>
-        <div className="flex flex-col gap-2 px-4 py-3 shrink-0" aria-hidden="true">
+        <div className="flex flex-col gap-2 px-3 py-3 shrink-0" aria-hidden="true">
           <div className="flex items-center gap-2">
             <SkeletonBone immediate className="h-3.5 w-3.5" />
             <SkeletonBone immediate className="h-3 w-2/5" />
@@ -40,13 +43,13 @@ export function ReviewPaneSkeleton() {
           </div>
         </div>
         <div
-          className="flex items-center justify-between px-4 py-2 bg-overlay-subtle border-y border-divider shrink-0"
+          className={cn(REVIEW_HUB_SECTION_BAND, "border-y border-divider shrink-0")}
           aria-hidden="true"
         >
           <SkeletonBone immediate className="h-3 w-20" />
           <SkeletonBone immediate className="h-3 w-8" />
         </div>
-        <div className="flex flex-col gap-2 px-4 py-3 shrink-0" aria-hidden="true">
+        <div className="flex flex-col gap-2 px-3 py-3 shrink-0" aria-hidden="true">
           <div className="flex items-center gap-2">
             <SkeletonBone immediate className="h-3.5 w-3.5" />
             <SkeletonBone immediate className="h-3 w-1/2" />

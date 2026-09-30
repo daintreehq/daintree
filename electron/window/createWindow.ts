@@ -375,10 +375,10 @@ export function setupBrowserWindow(
     // theme/sidebar/focus state.
     // Resolve the persisted last-active project so the initial host skeleton
     // paints that project's accent + name/emoji, matching a cold project switch
-    // (#10942). readLastActiveProjectIdentitySync reads via its own throwaway
-    // read-only sqlite connection — the shared DB is NOT open yet on the
-    // early-renderer boot path (and opening it would run migrations on the
-    // loadURL-dispatch path), so projectStore.getProjectById can't be used here.
+    // (#10942). On the first window's early-renderer boot path the shared DB is
+    // NOT open yet (and opening it would run migrations on the loadURL-dispatch
+    // path), so readLastActiveProjectIdentitySync falls back to a throwaway
+    // read-only sqlite connection; later windows read through the shared one.
     // When the id is missing, the project row is gone, or the read fails, the
     // anonymous gray skeleton (the prior behavior) remains the fallback. Mirrors
     // the cold-switch handler in ProjectViewManager, minus instantReveal (the

@@ -3,6 +3,7 @@ import {
   getCachedStagingStatus,
   rememberStagingStatus,
 } from "./stagingStatusCache";
+import { DiffStat } from "@/components/ui/DiffStat";
 import {
   useCallback,
   useDeferredValue,
@@ -48,6 +49,7 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 import { basename, join } from "@shared/utils/path";
 import {
   isFileRowMenuKey,
@@ -83,7 +85,12 @@ import {
 // think-time; useKeepMounted gates the first mount so nothing is fetched (or
 // rendered) until a diff is actually opened.
 import { Button } from "@/components/ui/button";
-import { SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
+import {
+  SurfaceHeader,
+  SurfaceHeaderCloseButton,
+  SURFACE_HEADER_FOCUS_LIFT_CLASS,
+} from "@/components/ui/SurfaceHeader";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { debounce } from "@/utils/debounce";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useFileDecorations } from "@/hooks/useFileDecorations";
@@ -105,6 +112,7 @@ import {
   DEFAULT_SECTION_STATE,
   matchesFilter,
   REVIEW_HUB_COUNT_CHIP,
+  REVIEW_HUB_SECTION_BAND,
   REVIEW_HUB_STICKY_BAND,
   readGitErrorFields,
   resolveBulkScope,
@@ -115,6 +123,7 @@ import { isGeneratedFile } from "../generatedFileClassifier";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { BranchBadge } from "@/components/ui/BranchBadge";
 import { Badge } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * Floor for the dialog-hosted body, so the pane stops resizing itself around
@@ -151,6 +160,13 @@ export interface ReviewHubContentProps {
    * location. Defaults to `"grid"`.
    */
   location?: PanelLocation;
+  /**
+   * Whether the hosting pane has the keyboard. Review renders no PanelHeader,
+   * so its own title bar takes the focused-pane lift a PanelHeader would —
+   * in the grid only, as PanelHeader does (the dock keeps its flat bar and a
+   * dialog draws no bar of ours at all).
+   */
+  isFocused?: boolean;
   /**
    * Where to attach the Escape-key listener. Defaults to `document` so the
    * modal shell continues to capture Escape globally. Non-modal callers can
@@ -191,6 +207,7 @@ export function ReviewHubContent({
   onClose,
   panelId,
   location = "grid",
+  isFocused = false,
   keyboardScope,
   initialCommitMessage,
   autoStageOnOpen,
@@ -1163,15 +1180,24 @@ export function ReviewHubContent({
     // Per-view worktree MessagePort — the same delivery the worktree store
     // consumes. The main-relayed events:push copy of worktree-update was
     // removed (this component was its only subscriber).
-    const unsubscribe = window.electron.worktreePort.onEvent("worktree-update", (data) => {
+    const unsubscribeUpdate = window.electron.worktreePort.onEvent("worktree-update", (data) => {
       const event = data as { worktree?: { path?: string } };
       if (event?.worktree?.path === worktreePath) {
         debouncedBgRefresh();
       }
     });
+    // A stamp-only update (a watcher flush, a forced status pass) arrives as a
+    // tick; it still means the files on disk may have moved.
+    const unsubscribeTick = window.electron.worktreePort.onEvent("worktree-tick", (data) => {
+      const event = data as { tick?: { path?: string } };
+      if (event?.tick?.path === worktreePath) {
+        debouncedBgRefresh();
+      }
+    });
 
     return () => {
-      unsubscribe();
+      unsubscribeUpdate();
+      unsubscribeTick();
       debouncedBgRefresh.cancel();
       debouncedBgRefreshRef.current = null;
     };
@@ -1719,6 +1745,9 @@ export function ReviewHubContent({
     // The file list is collapsed — no rows are visible, so don't let keys mutate
     // the index or fire stage/unstage/open-diff on rows the user can't see.
     if (!fileListExpanded) return;
+    // The base-branch comparison swaps the working-tree list out; its rows are
+    // not on screen to step through, open or stage.
+    if (diffMode !== "working-tree") return;
     if (navigableItems.length === 0) return;
 
     // Shift+F10 / the ContextMenu key open the focused row's menu. The rows
@@ -1772,19 +1801,18 @@ export function ReviewHubContent({
       fileListRef.current?.focus({ preventScroll: true });
     };
 
+    // A persistent file list, so the arrows stop at its ends rather than wrap.
+    const next = keyBelongsToField(e)
+      ? null
+      : stepListboxCursor(e.key, focusedIndex, navigableItems.length, { wrap: false });
+    if (next !== null) {
+      e.preventDefault();
+      e.stopPropagation();
+      moveFocus(next);
+      return;
+    }
+
     switch (e.key) {
-      case "ArrowDown": {
-        e.preventDefault();
-        e.stopPropagation();
-        moveFocus(focusedIndex < 0 ? 0 : Math.min(focusedIndex + 1, navigableItems.length - 1));
-        return;
-      }
-      case "ArrowUp": {
-        e.preventDefault();
-        e.stopPropagation();
-        moveFocus(focusedIndex < 0 ? navigableItems.length - 1 : Math.max(focusedIndex - 1, 0));
-        return;
-      }
       case "Enter": {
         if (targetIsControl || focusedIndex < 0) return;
         const item = navigableItems[focusedIndex];
@@ -1875,16 +1903,21 @@ export function ReviewHubContent({
         )}
         data-testid="review-hub-content"
       >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-divider shrink-0">
+        {/* The pane's own title bar: review renders no PanelHeader, so this is
+            the compact SurfaceHeader a grid pane would otherwise get. */}
+        <SurfaceHeader
+          density="compact"
+          data-testid="review-hub-header"
+          className={cn(
+            "gap-2 transition-colors",
+            location === "grid" && isFocused && [SURFACE_HEADER_FOCUS_LIFT_CLASS, "border-overlay"]
+          )}
+        >
           <div className="flex items-center gap-2 min-w-0">
             {/* The dialog host already draws the title in AppDialog.Header —
                 drawing it again would stack two "Review & Commit" headings. */}
             {!isDialog && (
-              <h2
-                id="review-hub-title"
-                className="text-text-primary font-semibold text-sm tracking-wide shrink-0"
-              >
+              <h2 id="review-hub-title" className="text-xs font-medium text-text-primary shrink-0">
                 Review & commit
               </h2>
             )}
@@ -1922,34 +1955,44 @@ export function ReviewHubContent({
             />
 
             {diffMode === "working-tree" && (
-              <button
-                onClick={() => {
-                  if (!loading) void refresh();
-                }}
-                // Not `disabled`: pressing it would drop keyboard focus to the page.
-                aria-disabled={loading || undefined}
-                aria-busy={loading || isBackgroundRefreshing || undefined}
-                className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
-                aria-label="Refresh"
-              >
-                <SpinningIcon
-                  icon={RefreshCw}
-                  active={loading || isBackgroundRefreshing}
-                  className={PANE_TOOLBAR_ICON_CLASS}
-                />
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => {
+                      if (!loading) void refresh();
+                    }}
+                    // Not `disabled`: pressing it would drop keyboard focus to the page.
+                    aria-disabled={loading || undefined}
+                    aria-busy={loading || isBackgroundRefreshing || undefined}
+                    className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
+                    aria-label="Refresh"
+                  >
+                    <SpinningIcon
+                      icon={RefreshCw}
+                      active={loading || isBackgroundRefreshing}
+                      className={PANE_TOOLBAR_ICON_CLASS}
+                    />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Refresh</TooltipContent>
+              </Tooltip>
             )}
             {/* Same reason as the title: AppDialog.Header supplies the close
                 control at this location. */}
             {!isDialog && (
-              <SurfaceHeaderCloseButton
-                onClick={onClose}
-                aria-label="Close"
-                data-testid="review-hub-close"
-              />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <SurfaceHeaderCloseButton
+                    onClick={onClose}
+                    aria-label="Close review & commit"
+                    data-testid="review-hub-close"
+                  />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Close review & commit</TooltipContent>
+              </Tooltip>
             )}
           </div>
-        </div>
+        </SurfaceHeader>
 
         {/* Merge-readiness rail — hidden until staging status resolves.
             While `PushErrorBanner` is mounted it owns the push failure outright:
@@ -2075,7 +2118,7 @@ export function ReviewHubContent({
                         ))}
                       </div>
                     </Skeleton>
-                    <SkeletonHint className="px-4 py-2" onRetry={() => void fetchBaseBranch()} />
+                    <SkeletonHint className="px-3 py-2" onRetry={() => void fetchBaseBranch()} />
                   </>
                 ) : null
               ) : baseBranchError ? (
@@ -2114,22 +2157,21 @@ export function ReviewHubContent({
               ) : sortedBaseBranchFiles !== null ? (
                 <div>
                   <div className={REVIEW_HUB_STICKY_BAND}>
-                    <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle border-b border-divider">
+                    <div className={cn(REVIEW_HUB_SECTION_BAND, "border-b border-divider")}>
                       <span className={SECTION_LABEL_CLASS}>
                         Changed vs{" "}
                         <span className="font-mono font-medium normal-case tracking-normal">
                           {mainBranch}
                         </span>
                         <span className={REVIEW_HUB_COUNT_CHIP}>
-                          {sortedBaseBranchFiles.length} file
-                          {sortedBaseBranchFiles.length !== 1 ? "s" : ""}
+                          {pluralize(sortedBaseBranchFiles.length, "file")}
                           {(baseBranchChurn.ins > 0 || baseBranchChurn.del > 0) && (
                             <>
                               {" "}
-                              <span className="text-status-success">
-                                +{baseBranchChurn.ins}
-                              </span>{" "}
-                              <span className="text-status-error">-{baseBranchChurn.del}</span>
+                              <DiffStat
+                                insertions={baseBranchChurn.ins}
+                                deletions={baseBranchChurn.del}
+                              />
                             </>
                           )}
                         </span>
@@ -2159,16 +2201,16 @@ export function ReviewHubContent({
                         The commit-panel skeleton lives outside this scroll
                         container (below), matching the real layout. */}
                       <Skeleton label="Loading review changes">
-                        <div className="px-4 py-2 bg-overlay-subtle border-b border-divider">
+                        <div className={cn(REVIEW_HUB_SECTION_BAND, "border-b border-divider")}>
                           <SkeletonBone immediate className="h-3.5 w-28" />
                         </div>
                         {fileListExpanded && (
                           <>
-                            <div className="px-4 py-2 flex items-center justify-between">
+                            <div className="px-3 py-2 flex items-center justify-between">
                               <SkeletonBone immediate className="h-3.5 w-20" />
                               <SkeletonBone immediate className="h-5 w-32" />
                             </div>
-                            <div className="px-4 pb-2 flex flex-col gap-2">
+                            <div className="px-3 pb-2 flex flex-col gap-2">
                               {SKELETON_FILE_ROW_WIDTHS.map((w) => (
                                 <SkeletonBone key={w} immediate className={cn("h-3.5", w)} />
                               ))}
@@ -2176,7 +2218,7 @@ export function ReviewHubContent({
                           </>
                         )}
                       </Skeleton>
-                      <SkeletonHint className="px-4 py-2" onRetry={() => void refresh()} />
+                      <SkeletonHint className="px-3 py-2" onRetry={() => void refresh()} />
                     </>
                   ) : null
                 ) : loadError ? (
@@ -2234,10 +2276,10 @@ export function ReviewHubContent({
                         icon={<ArrowUpFromLine />}
                         title={
                           pushError
-                            ? `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} not pushed`
+                            ? `${pluralize(aheadCount ?? 0, "commit")} not pushed`
                             : isPushing
-                              ? `Pushing ${aheadCount} commit${aheadCount !== 1 ? "s" : ""}`
-                              : `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} ready to push`
+                              ? `Pushing ${pluralize(aheadCount ?? 0, "commit")}`
+                              : `${pluralize(aheadCount ?? 0, "commit")} ready to push`
                         }
                         // "Ready to push" is a readiness claim, so it must not
                         // survive a rejection: after a push fails, `pushReady`
@@ -2286,7 +2328,7 @@ export function ReviewHubContent({
                       no space either (fixed-height dialog, commit box pinned
                       below). Still collapsible — state lives per worktree in
                       uiStore (session-scoped, in-memory only). */}
-                    <div className="px-4 py-2 bg-overlay-subtle border-b border-divider flex items-center justify-between">
+                    <div className={cn(REVIEW_HUB_SECTION_BAND, "border-b border-divider")}>
                       <button
                         type="button"
                         onClick={() => setFileListExpanded(worktreePath, !fileListExpanded)}
@@ -2295,7 +2337,7 @@ export function ReviewHubContent({
                         data-testid="review-hub-file-list-toggle"
                         className={cn(
                           "inline-flex items-center gap-1 text-2xs font-medium text-text-secondary hover:text-text-primary transition-colors",
-                          "rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                          "rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                         )}
                       >
                         <ChevronRight
@@ -2347,9 +2389,7 @@ export function ReviewHubContent({
                               role="status"
                               ariaLive="polite"
                               icon={AlertTriangle}
-                              title={`${status.conflicted.length} conflicted file${
-                                status.conflicted.length !== 1 ? "s" : ""
-                              }`}
+                              title={pluralize(status.conflicted.length, "conflicted file")}
                               description="Resolve these before committing."
                               animated={false}
                             />

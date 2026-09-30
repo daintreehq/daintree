@@ -8,10 +8,12 @@ import {
   useState,
 } from "react";
 import PQueue from "p-queue";
-import { Check, AlertTriangle, UserPlus, RotateCcw } from "lucide-react";
+import { Check, AlertTriangle, UserPlus, RefreshCw, CheckCircle2, XCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { FolderGit2 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { cn } from "@/lib/utils";
@@ -1138,10 +1140,12 @@ export function BulkCreateWorktreeDialog({
             isExecuting ? (
               <Spinner size="lg" className="text-activity-working" />
             ) : isDone ? (
-              failedCount > 0 ? (
+              succeededCount === 0 && failedCount > 0 ? (
+                <XCircle className="w-5 h-5 text-status-error" />
+              ) : failedCount > 0 ? (
                 <AlertTriangle className="w-5 h-5 text-status-warning" />
               ) : (
-                <Check className="w-5 h-5 text-status-success" />
+                <CheckCircle2 className="w-5 h-5 text-status-success" />
               )
             ) : (
               <FolderGit2 className="w-5 h-5 text-text-muted" />
@@ -1151,7 +1155,9 @@ export function BulkCreateWorktreeDialog({
           {isExecuting
             ? "Creating worktrees\u2026"
             : isDone
-              ? "Creation complete"
+              ? succeededCount === 0 && failedCount > 0
+                ? "Couldn't create worktrees"
+                : "Creation complete"
               : `Create ${creatableCount} worktree${creatableCount !== 1 ? "s" : ""}`}
         </AppDialog.Title>
         <AppDialog.CloseButton />
@@ -1171,33 +1177,14 @@ export function BulkCreateWorktreeDialog({
               {mode === "issue" && (
                 <FormRow label="Assign to me" htmlFor="bulk-assign-to-self">
                   <div className="flex items-center gap-2 text-xs text-text-secondary">
-                    <span className="relative inline-flex shrink-0">
-                      <input
-                        id="bulk-assign-to-self"
-                        type="checkbox"
-                        checked={assignWorktreeToSelf && !assignUnavailable}
-                        onChange={(e) => setAssignWorktreeToSelf(e.target.checked)}
-                        disabled={assignUnavailable}
-                        className={cn(
-                          "h-4 w-7 appearance-none rounded-full border transition-colors duration-150 ease-out",
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                          assignWorktreeToSelf && !assignUnavailable
-                            ? "border-text-primary bg-text-primary"
-                            : "border-border-strong bg-surface-inset",
-                          assignUnavailable && "cursor-not-allowed opacity-50"
-                        )}
-                      />
-                      <span
-                        className={cn(
-                          "pointer-events-none absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full",
-                          "transition-[left] duration-150 ease-out",
-                          assignWorktreeToSelf && !assignUnavailable
-                            ? "left-[0.875rem] bg-text-inverse"
-                            : "left-0.5 bg-text-secondary"
-                        )}
-                        aria-hidden="true"
-                      />
-                    </span>
+                    {/* A checkbox, not a switch: the value is committed by Create
+                        with the rest of the batch, exactly as New Worktree offers it. */}
+                    <Checkbox
+                      id="bulk-assign-to-self"
+                      checked={assignWorktreeToSelf && !assignUnavailable}
+                      onCheckedChange={(checked) => setAssignWorktreeToSelf(checked === true)}
+                      disabled={assignUnavailable}
+                    />
                     {currentUser ? (
                       <Avatar
                         src={avatarUrlAtSize(currentUserAvatar, 32)}
@@ -1268,9 +1255,9 @@ export function BulkCreateWorktreeDialog({
                       )}
                     </div>
                     {item.skipped && (
-                      <span className="text-3xs px-1.5 py-0.5 rounded bg-status-warning/10 text-status-warning shrink-0">
+                      <Badge size="xs" tone="warning">
                         {item.skipReason}
-                      </span>
+                      </Badge>
                     )}
                   </li>
                 ))}
@@ -1300,9 +1287,9 @@ export function BulkCreateWorktreeDialog({
                         {isInProgress ? (
                           <Spinner size="md" className="text-activity-working" />
                         ) : itemStatus?.stage === "succeeded" ? (
-                          <Check className="w-4 h-4 text-status-success" />
+                          <CheckCircle2 className="w-4 h-4 text-status-success" />
                         ) : itemStatus?.stage === "failed" ? (
-                          <AlertTriangle className="w-4 h-4 text-status-warning" />
+                          <XCircle className="w-4 h-4 text-status-error" />
                         ) : (
                           <div className="w-4 h-4 rounded-full border border-border-default" />
                         )}
@@ -1314,9 +1301,9 @@ export function BulkCreateWorktreeDialog({
                           </span>
                           <span className="text-text-primary truncate">{item.item.title}</span>
                           {isInProgress && itemStatus.attempt > 1 && (
-                            <span className="text-3xs px-1.5 py-0.5 rounded bg-status-info/10 text-status-info shrink-0">
+                            <Badge size="xs" tone="info">
                               retry {itemStatus.attempt - 1}
-                            </span>
+                            </Badge>
                           )}
                         </div>
                         {stageLabel && (
@@ -1377,7 +1364,7 @@ export function BulkCreateWorktreeDialog({
                   onClick={handleRetryFailed}
                   data-testid="bulk-create-retry-button"
                 >
-                  <RotateCcw />
+                  <RefreshCw />
                   Retry failed
                 </Button>
               )}

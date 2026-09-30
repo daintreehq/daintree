@@ -1374,6 +1374,102 @@ describe("project plugin load errors", () => {
     return bridge as unknown as { deps: { onActivationResult?: (r: unknown) => void } };
   }
 
+  /**
+   * A service whose loads wait on a protocol gate the test controls, the way
+   * the singleton waits on `whenPluginDirResolverLive()` (#12996). `reached`
+   * settles the first time a load arrives at the gate.
+   */
+  function gatedService(): {
+    service: PluginService;
+    reached: Promise<void>;
+    release: () => void;
+  } {
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let arrive!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      arrive = resolve;
+    });
+    const service = new PluginService(tmpDir, "0.0.0", {
+      whenProtocolReady: () => {
+        arrive();
+        return ready;
+      },
+    });
+    openedServices.push(service);
+    return { service, reached, release };
+  }
+
+  it("publishes no view URL before the plugin:// resolver is live (#12996)", async () => {
+    // A background-restored project view reaches `onProjectOpened` through
+    // `notifyProjectPluginsOpened`, which never waits on the deferred
+    // `plugin-service` task that installs the live resolver. A panel published
+    // in that window is imported against the placeholder, 404s, and stays
+    // failed for that specifier. The load must hold until the resolver is live.
+    const projectRoot = await writeProjectPlugin("export function activate() {}");
+    const { service, reached, release } = gatedService();
+    let protocolLive = false;
+    const published: Array<{ id: string; componentPath: string; live: boolean }> = [];
+    vi.mocked(registerPanelKind).mockImplementation((config) => {
+      if (config.componentPath) {
+        published.push({ id: config.id, componentPath: config.componentPath, live: protocolLive });
+      }
+    });
+
+    // Fire-and-forget, the way the restore path calls it — nothing from the
+    // deferred startup queue has run.
+    const opening = service.onProjectOpened(PROJECT_ID, projectRoot);
+    try {
+      await reached;
+      expect(published).toEqual([]);
+
+      protocolLive = true;
+      release();
+      await opening;
+    } finally {
+      release();
+      await opening.catch(() => {});
+      vi.mocked(registerPanelKind).mockReset();
+    }
+
+    const panel = published.find((entry) => entry.id === PANEL_KIND_ID);
+    expect(panel).toBeDefined();
+    expect(published.every((entry) => entry.live)).toBe(true);
+    // And the URL it did publish is one the live resolver serves.
+    const pluginDir = await fs.realpath(path.join(projectRoot, ".daintree", "plugins", PLUGIN_ID));
+    expect(service.getPluginRootByAuthority(new URL(panel!.componentPath).hostname)).toBe(
+      pluginDir
+    );
+  });
+
+  it("drops a gated project load whose project closed while it waited (#12996)", async () => {
+    // The controller's own staleness check runs only after a load returns, by
+    // which point the plugin would already be published and, for a startup
+    // plugin, activated — and unloading cannot take an activation back.
+    const projectRoot = await writeProjectPlugin("export function activate() {}");
+    const { service, reached, release } = gatedService();
+    const opening = service.onProjectOpened(PROJECT_ID, projectRoot);
+    let closing: Promise<void> | undefined;
+    try {
+      await reached;
+      // Not awaited: the close invalidates in-flight work synchronously, but its
+      // teardown queues behind the open, which is parked at the gate.
+      closing = service.onProjectClosed(PROJECT_ID);
+      release();
+      await opening;
+      await closing;
+    } finally {
+      release();
+      await opening.catch(() => {});
+      await closing?.catch(() => {});
+    }
+
+    expect(vi.mocked(registerPanelKind)).not.toHaveBeenCalled();
+    expect(service.getPluginRootByAuthority(INSTANCE_KEY)).toBeUndefined();
+  });
+
   it("returns the real cause from activatePluginForView instead of a clean result", async () => {
     const service = await openWithPlugin(
       "export function activate() { throw new Error('project-boom'); }"

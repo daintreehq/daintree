@@ -1,5 +1,6 @@
 import type { CrashType } from "@shared/types/pty-host";
 import type { PanelSuspectReason } from "@shared/types/ipc/crashRecovery";
+import { pluralize } from "@/lib/pluralize";
 
 export interface RecoveryBannerCopy {
   title: string;
@@ -56,7 +57,7 @@ export const RESTORE_CONFIRMATION_TITLE = "Session recovered after unexpected ex
  */
 export function getRestoreConfirmationDescription(suspectCount: number): string | undefined {
   if (suspectCount <= 0) return undefined;
-  return `${suspectCount} ${suspectCount === 1 ? "panel" : "panels"} created near the crash may be affected.`;
+  return `${pluralize(suspectCount, "panel")} created near the crash may be affected.`;
 }
 
 export function getSuspectPanelBannerTitle(count: number, deselected: boolean): string {

@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { Copy, Radio } from "lucide-react";
+import { TimeAgo } from "@/components/ui/TimeAgo";
+import { Radio } from "lucide-react";
 import { Workflow } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
@@ -11,18 +13,11 @@ import {
   SettingsGroup,
   SettingsRow,
 } from "@/components/Settings/SettingsGroup";
-import { InlineErrorRow } from "@/components/Settings/auditLogParts";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { useRunHistoryStore } from "@/store/runHistoryStore";
 import type { RunHistoryRecord } from "@shared/types";
 import { Badge } from "@/components/ui/badge";
-
-const COPY_FEEDBACK_MS = 2000;
-
-function plural(count: number, one: string, many: string = `${one}s`): string {
-  return `${count} ${count === 1 ? one : many}`;
-}
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * A neutral count. Failures carry the error glyph rather than a red fill: severity
@@ -38,16 +33,7 @@ function CountPill({ label, failed = false }: { label: string; failed?: boolean 
 }
 
 function RunTime({ timestamp }: { timestamp: number }) {
-  const date = new Date(timestamp);
-  return (
-    <time
-      dateTime={date.toISOString()}
-      title={date.toLocaleString()}
-      className="shrink-0 text-xs text-text-secondary"
-    >
-      {formatRelativeTime(timestamp)}
-    </time>
-  );
+  return <TimeAgo timestamp={timestamp} verbose className="shrink-0 text-xs text-text-secondary" />;
 }
 
 /** Per-target failures, in the row's text colour with the error glyph as the signal. */
@@ -143,7 +129,7 @@ function FleetRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "fl
               <CountPill failed label={`${record.failureCount} failed`} />
             ) : null}
             {waitingCount > 0 ? <CountPill label={`${waitingCount} ended waiting`} /> : null}
-            <CountPill label={plural(record.targetCount, "target")} />
+            <CountPill label={pluralize(record.targetCount, "target")} />
           </div>
         </div>
         <RunTime timestamp={record.timestamp} />
@@ -169,8 +155,6 @@ export function RunHistorySettingsTab() {
   const [isClearing, setIsClearing] = useState(false);
   const [clearFailed, setClearFailed] = useState(false);
   const [cleared, setCleared] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [copyFailed, setCopyFailed] = useState(false);
 
   useEffect(() => {
     init();
@@ -187,19 +171,6 @@ export function RunHistorySettingsTab() {
     setShowClearConfirm(false);
     if (ok) setCleared(true);
     else setClearFailed(true);
-  };
-
-  // Snapshots of what each run did, so a failed fleet send can be reported
-  // without reconstructing it by hand.
-  const copyRecords = async () => {
-    setCopyFailed(false);
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(records, null, 2));
-      setCopied(true);
-      setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
-    } catch {
-      setCopyFailed(true);
-    }
   };
 
   return (
@@ -233,15 +204,16 @@ export function RunHistorySettingsTab() {
             </ul>
           )}
           {!loading && records.length > 0 && (
-            <SettingsActions status={copied ? "Copied!" : plural(records.length, "run")}>
-              <Button variant="outline" size="sm" onClick={() => void copyRecords()}>
-                <Copy aria-hidden="true" />
-                Copy all as JSON
-              </Button>
+            <SettingsActions status={pluralize(records.length, "run")}>
+              {/* Snapshots of what each run did, so a failed fleet send can be
+                  reported without reconstructing it by hand. */}
+              <CopyButton
+                label="Copy all as JSON"
+                variant="outline"
+                size="sm"
+                text={JSON.stringify(records, null, 2)}
+              />
             </SettingsActions>
-          )}
-          {copyFailed && (
-            <InlineErrorRow>Run history couldn&apos;t be copied. Try again.</InlineErrorRow>
           )}
           <SettingsRow
             label="Clear run history"
@@ -272,7 +244,7 @@ export function RunHistorySettingsTab() {
         onClose={() => setShowClearConfirm(false)}
         isConfirmLoading={isClearing}
         title="Clear run history?"
-        description={`This permanently deletes ${plural(records.length, "recorded run")} on this machine. New runs will still be recorded.`}
+        description={`This permanently deletes ${pluralize(records.length, "recorded run")} on this machine. New runs will still be recorded.`}
         confirmLabel="Clear history"
       />
     </div>

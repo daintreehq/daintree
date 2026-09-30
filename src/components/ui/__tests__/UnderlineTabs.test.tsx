@@ -79,7 +79,7 @@ describe("TabErrorCount", () => {
   it("caps what it shows but never what it says", () => {
     for (const count of [1, 42, 99, 100, 1234]) {
       const { shown, spoken } = read(count);
-      expect(spoken).toMatch(new RegExp(`^${count} errors?$`));
+      expect(spoken).toMatch(new RegExp(`^${count.toLocaleString()} errors?$`));
       expect(shown!.length).toBeLessThanOrEqual(3);
       expect(Number.parseInt(shown!, 10)).toBe(Math.min(count, 99));
       expect(shown!.endsWith("+")).toBe(count > 99);

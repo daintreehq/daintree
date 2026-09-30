@@ -10,7 +10,7 @@ import { triggerPopStash, triggerStashInput } from "@/store/terminalInputStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isPtyPanel } from "@shared/types/panel";
 import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
-import { tailCapturedOutput } from "@shared/utils/artifactParser";
+import { readTailSnapshot, tailCapturedOutput } from "@shared/utils/artifactParser";
 import { planChoice } from "@shared/utils/terminalChoice";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
@@ -116,6 +116,7 @@ const SendKeysResultSchema = z.object({
 /** How long after the last key the screen is read back. */
 const SEND_KEYS_SETTLE_MS = 700;
 const SEND_KEYS_SCREEN_LINES = 12;
+const CHOOSE_SCREEN_LINES = 40;
 
 export function registerTerminalInputActions(
   actions: ActionRegistry,
@@ -166,7 +167,7 @@ export function registerTerminalInputActions(
     id: "terminal.injectOwned",
     title: "Inject context to owned terminal",
     description:
-      "Write the active worktree's prepared context into a terminal this connection created or was handed, to give its agent a large codebase context. Any other panel is refused. Target an idle terminal.",
+      "Write the active worktree's prepared context into a terminal this connection created or was handed (right-click > Hand to orchestrator), to give its agent a large codebase context. Any other panel is refused. Target an idle terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -327,7 +328,7 @@ export function registerTerminalInputActions(
     id: "terminal.interruptOwned",
     title: "Interrupt owned agent",
     description:
-      "Interrupt the turn an agent is running in a panel this connection created or was handed, keeping the panel and conversation. Sends cancel keystrokes, not prompt text. An idle agent, or one binding a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
+      "Interrupt the turn an agent is running in a panel this connection created or was handed (right-click > Hand to orchestrator), keeping the panel and conversation. Sends cancel keystrokes, not prompt text. An idle agent, or one binding a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -381,9 +382,14 @@ export function registerTerminalInputActions(
       }
       let keys = args.keys;
       if (choose !== undefined) {
-        const snapshot = await window.electron.terminal.getSerializedState(terminalId);
+        const snapshot = await readTailSnapshot(
+          (options) => window.electron.terminal.getSerializedState(terminalId, options),
+          CHOOSE_SCREEN_LINES
+        );
         const plan = planChoice(
-          snapshot === null ? "" : tailCapturedOutput(snapshot.data, 40, true).content,
+          snapshot === null
+            ? ""
+            : tailCapturedOutput(snapshot.data, CHOOSE_SCREEN_LINES, true).content,
           choose
         );
         if (!plan.ok) throw new UnactionableTargetError(`${plan.reason} Nothing was pressed.`);
@@ -401,9 +407,10 @@ export function registerTerminalInputActions(
       // A wrong key on a dialog (Quit instead of Continue) shows up here, a
       // call sooner than a separate read would find it.
       await new Promise((resolve) => setTimeout(resolve, SEND_KEYS_SETTLE_MS));
-      const snapshot = await window.electron.terminal
-        .getSerializedState(terminalId)
-        .catch(() => null);
+      const snapshot = await readTailSnapshot(
+        (options) => window.electron.terminal.getSerializedState(terminalId, options),
+        SEND_KEYS_SCREEN_LINES
+      ).catch(() => null);
       const screen =
         snapshot === null
           ? undefined
@@ -418,7 +425,7 @@ export function registerTerminalInputActions(
     id: "terminal.sendKeysOwned",
     title: "Press keys in owned terminal",
     description:
-      "Answer a CLI's own dialog (trust, permission, a list) by option label or named keys, in a terminal this connection created or was handed.",
+      "Answer a CLI's own dialog (trust, permission, a list) by option label or named keys, in a terminal this connection created or was handed (right-click > Hand to orchestrator).",
     category: "terminal",
     kind: "command",
     danger: "safe",

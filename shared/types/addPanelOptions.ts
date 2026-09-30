@@ -162,6 +162,12 @@ export interface AddPanelOptionsBase {
   handbackCode?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
   agentLaunchFlags?: string[];
+  /**
+   * The flags the `agent.launch` caller passed verbatim (#13046) — the tail of
+   * `agentLaunchFlags`, recorded so restart/restore/recovery can rebuild or
+   * reconcile the settings-derived part and re-append these untouched.
+   */
+  callerLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
   /** Sticky "runtime agent ever detected" flag, rehydrated from backend during reconnect. */

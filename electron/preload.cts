@@ -1349,8 +1349,10 @@ function buildElectronApi(): ElectronAPI {
       replayHistory: (terminalId: string, maxLines?: number) =>
         _unwrappingInvoke(CHANNELS.TERMINAL_REPLAY_HISTORY, { terminalId, maxLines }),
 
-      getSerializedState: (terminalId: string) =>
-        _unwrappingInvoke(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, terminalId),
+      getSerializedState: (terminalId: string, options?: { tailRows?: number }) =>
+        options === undefined
+          ? _unwrappingInvoke(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, terminalId)
+          : _unwrappingInvoke(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, terminalId, options),
 
       getSerializedStates: (terminalIds: string[]) =>
         _unwrappingInvoke(CHANNELS.TERMINAL_GET_SERIALIZED_STATES, terminalIds),
@@ -1422,8 +1424,8 @@ function buildElectronApi(): ElectronAPI {
       batchDoubleEscape: (ids: string[]) =>
         ipcRenderer.send(CHANNELS.TERMINAL_BATCH_DOUBLE_ESCAPE, ids),
 
-      broadcastWrite: (ids: string[], data: string) =>
-        ipcRenderer.send(CHANNELS.TERMINAL_BROADCAST_WRITE, ids, data),
+      broadcastWrite: (ids: string[], data: string, reportSuccess?: boolean) =>
+        ipcRenderer.send(CHANNELS.TERMINAL_BROADCAST_WRITE, ids, data, reportSuccess === true),
 
       onBroadcastWriteResult: (callback: (data: BroadcastWriteResultPayload) => void) =>
         _typedOn(CHANNELS.TERMINAL_BROADCAST_WRITE_RESULT, callback),

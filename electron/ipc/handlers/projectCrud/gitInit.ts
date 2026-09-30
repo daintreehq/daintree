@@ -96,13 +96,13 @@ export function registerGitInitHandlers(): () => void {
 
       const git = await createHardenedGit(directoryPath);
 
-      emitProgress("init", "start", "Initializing Git repository...");
+      emitProgress("init", "start", "Initializing Git repository…");
       await git.init();
       completedSteps.push("init");
       emitProgress("init", "success", "Git repository initialized");
 
       if (createGitignore && gitignoreTemplate !== "none") {
-        emitProgress("gitignore", "start", "Creating .gitignore file...");
+        emitProgress("gitignore", "start", "Creating .gitignore file…");
         const gitignoreContent = getGitignoreTemplate(gitignoreTemplate);
         if (!gitignoreContent) {
           emitProgress(
@@ -147,13 +147,13 @@ export function registerGitInitHandlers(): () => void {
       }
 
       if (createInitialCommit) {
-        emitProgress("add", "start", "Staging files for initial commit...");
+        emitProgress("add", "start", "Staging files for initial commit…");
         await git.add(".");
         completedSteps.push("add");
         emitProgress("add", "success", "Files staged");
 
         const commitMessage = initialCommitMessage.trim() || "Initial commit";
-        emitProgress("commit", "start", "Creating initial commit...");
+        emitProgress("commit", "start", "Creating initial commit…");
         try {
           await git.commit(commitMessage);
           completedSteps.push("commit");

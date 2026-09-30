@@ -5,7 +5,7 @@ import { useWebviewEviction } from "@/hooks/useWebviewEviction";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { useWebviewEvents } from "@/hooks/useWebviewEvents";
 import { useBrowserActionListeners } from "@/hooks/useBrowserActionListeners";
-import { AlertTriangle, RotateCw, XCircle } from "lucide-react";
+import { AlertTriangle, RefreshCw, RotateCw, XCircle } from "lucide-react";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { usePanelStore } from "@/store";
 import type { BrowserHistory, BrowserNavigationHistorySnapshot } from "@shared/types/browser";
@@ -49,6 +49,7 @@ import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { logError } from "@/utils/logger";
 import { buildBrowserPartition } from "@shared/utils/partitionUtils";
 import { notify } from "@/lib/notify";
+import { panelNotificationAddress } from "@/lib/notificationAddress";
 
 export interface BrowserPaneProps extends BasePanelProps {
   initialUrl: string;
@@ -389,7 +390,9 @@ export function BrowserPane({
           message: `The browser page crashed (${details.reason}) twice within 60 seconds. Auto-recovery stopped. Use Reload to recover.`,
           priority: "high",
           duration: 0,
-          context: { eventKind: "recovery", panelId: id },
+          context: { eventKind: "recovery", ...panelNotificationAddress(id) },
+          // The pane's own crash banner already says this while it's focused.
+          suppressWhenOriginVisible: true,
           supersedeKey: `browser-pane-crash-loop:${id}`,
           correlationId: id,
         });
@@ -703,6 +706,7 @@ export function BrowserPane({
     if (!url || url === "about:blank") return false;
     if (screenshotInFlightRef.current) return false;
     screenshotInFlightRef.current = true;
+    const address = panelNotificationAddress(id);
     try {
       const image = await webview.capturePage();
       const pngData = new Uint8Array(image.toPNG());
@@ -714,12 +718,13 @@ export function BrowserPane({
         type: "error",
         title: "Screenshot failed",
         message: "Couldn't copy the screenshot to clipboard",
+        context: address,
       });
       return false;
     } finally {
       screenshotInFlightRef.current = false;
     }
-  }, [isWebviewReady]);
+  }, [isWebviewReady, id]);
 
   const handleToggleDevTools = useCallback(() => {
     const webview = webviewRef.current;
@@ -1002,7 +1007,7 @@ export function BrowserPane({
                   action={{
                     id: "retry-open-external",
                     label: "Retry",
-                    icon: RotateCw,
+                    icon: RefreshCw,
                     variant: "dangerFilled",
                     loading: blockedNav.phase === "opening",
                     onClick: () =>

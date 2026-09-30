@@ -86,6 +86,8 @@ export type HostToWorkerMessage =
       terminalId: string;
       op: AnalysisRequestOp;
       generation: number;
+      /** `serialize` only: cap the read to this many scrollback rows. */
+      tailRows?: number;
     };
 
 export interface AnalysisFinalSnapshot {
@@ -93,6 +95,11 @@ export interface AnalysisFinalSnapshot {
   snapshot: SerializedTerminalSnapshot | null;
   /** Banner-stripped serialize for on-disk session persistence. */
   persistence: SerializedTerminalSnapshot | null;
+  /**
+   * Set when `persistence` would be identical to `snapshot` (no restore banner);
+   * the worker then omits it so the buffer crosses the thread boundary once.
+   */
+  persistenceMatchesSnapshot?: boolean;
 }
 
 /**

@@ -157,6 +157,13 @@ describe("McpActivityStrip", () => {
     expect(screen.getByText("beta-tool")).toBeTruthy();
   });
 
+  it("asks main for only this session's newest calls rather than the whole log", async () => {
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    expect(await screen.findByText(/to see its tool calls here/i)).toBeTruthy();
+    expect(getAuditRecords).toHaveBeenCalledWith({ helpSessionId: "session-a", limit: 5 });
+  });
+
   it("labels the unassociated group so null-turn calls are explained (#10067)", async () => {
     getAuditRecords.mockResolvedValue([
       makeRecord({ id: "1", toolId: "no-turn-tool", helpSessionId: "session-a" }),

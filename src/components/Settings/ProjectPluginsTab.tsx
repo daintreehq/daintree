@@ -55,6 +55,7 @@ import {
   type ProjectPluginState,
 } from "@shared/types/plugin";
 import { PathSegments } from "@/components/ui/PathSegments";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * The word beside a project plugin's name.
@@ -433,7 +434,7 @@ function ProjectOverviewPane({
         description={
           count === 0
             ? "None found in .daintree/plugins"
-            : `${count} plugin${count === 1 ? "" : "s"} in .daintree/plugins`
+            : `${pluralize(count, "plugin")} in .daintree/plugins`
         }
       >
         <div className="grid gap-3">

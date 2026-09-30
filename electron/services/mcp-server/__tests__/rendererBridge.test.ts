@@ -1186,6 +1186,187 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
       warn.mockRestore();
     }
   });
+
+  describe("manifest request coalescing", () => {
+    /** Holds each manifest request until the test answers it. */
+    function holdManifests(wc: FakeWebContents) {
+      const requestIds: string[] = [];
+      wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+        if (channel === CHANNELS.MCP_SERVER_GET_MANIFEST_REQUEST) {
+          requestIds.push(payload.requestId);
+        }
+      });
+      return {
+        requestIds,
+        answer: (requestId: string, manifest: unknown[]) =>
+          mockIpcMain.emit(
+            CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE,
+            { sender: { id: wc.id } },
+            { requestId, manifest }
+          ),
+      };
+    }
+
+    function bridgeFor(focusRef: { current: ReturnType<typeof makeContext>[] }) {
+      const bridge = createRendererBridge(
+        pendingManifests,
+        pendingDispatches,
+        () => makeRegistry(focusRef.current, focusRef) as never
+      );
+      bridge.setupListeners([]);
+      return bridge;
+    }
+
+    it("sends one request for concurrent callers targeting the same view", async () => {
+      const wc = makeWebContents(951);
+      const held = holdManifests(wc);
+      const bridge = bridgeFor({ current: [makeContext({ activeWebContents: wc })] });
+
+      const calls = [bridge.requestManifest(), bridge.requestManifest(), bridge.requestManifest()];
+      expect(held.requestIds).toHaveLength(1);
+
+      const manifest = [{ id: "actions.list" }];
+      held.answer(held.requestIds[0], manifest);
+      const results = await Promise.all(calls);
+
+      for (const result of results) expect(result).toEqual(manifest);
+      expect(bridge.getCachedManifest()).toEqual(manifest);
+    });
+
+    it("fetches fresh once the in-flight request has settled", async () => {
+      const wc = makeWebContents(952);
+      const held = holdManifests(wc);
+      const bridge = bridgeFor({ current: [makeContext({ activeWebContents: wc })] });
+
+      const first = bridge.requestManifest();
+      held.answer(held.requestIds[0], [{ id: "a" }]);
+      await first;
+
+      const second = bridge.requestManifest();
+      expect(held.requestIds).toHaveLength(2);
+      held.answer(held.requestIds[1], [{ id: "b" }]);
+      expect(await second).toEqual([{ id: "b" }]);
+    });
+
+    it("does not answer a caller from the view that was focused before it", async () => {
+      const wcA = makeWebContents(953);
+      const wcB = makeWebContents(954);
+      const heldA = holdManifests(wcA);
+      const heldB = holdManifests(wcB);
+      const ctxA = makeContext({ activeWebContents: wcA });
+      const ctxB = makeContext({ activeWebContents: wcB });
+      const focusRef = { current: [ctxA, ctxB] };
+      const bridge = bridgeFor(focusRef);
+
+      const fromA = bridge.requestManifest();
+      focusRef.current = [ctxB, ctxA];
+      const fromB = bridge.requestManifest();
+
+      expect(heldA.requestIds).toHaveLength(1);
+      expect(heldB.requestIds).toHaveLength(1);
+      heldA.answer(heldA.requestIds[0], [{ id: "a" }]);
+      heldB.answer(heldB.requestIds[0], [{ id: "b" }]);
+      expect(await fromA).toEqual([{ id: "a" }]);
+      expect(await fromB).toEqual([{ id: "b" }]);
+    });
+
+    it("rejects every coalesced caller when the view is destroyed mid-flight", async () => {
+      const wc = makeWebContents(955);
+      const held = holdManifests(wc);
+      const bridge = bridgeFor({ current: [makeContext({ activeWebContents: wc })] });
+
+      const calls = [bridge.requestManifest(), bridge.requestManifest()];
+      expect(held.requestIds).toHaveLength(1);
+      wc.isDestroyed.mockReturnValue(true);
+      wc.triggerDestroyed();
+      for (const call of calls) {
+        await expect(call).rejects.toThrow("MCP renderer bridge destroyed");
+      }
+    });
+
+    it("retries the same view after a failed request instead of rejoining it", async () => {
+      const wc = makeWebContents(956);
+      const held = holdManifests(wc);
+      const send = wc.send.getMockImplementation()!;
+      wc.send.mockImplementationOnce(() => {
+        throw new Error("ipc closed");
+      });
+      const bridge = bridgeFor({ current: [makeContext({ activeWebContents: wc })] });
+
+      await expect(bridge.requestManifest()).rejects.toThrow("ipc closed");
+
+      wc.send.mockImplementation(send);
+      const retry = bridge.requestManifest();
+      expect(held.requestIds).toHaveLength(1);
+      held.answer(held.requestIds[0], [{ id: "a" }]);
+      expect(await retry).toEqual([{ id: "a" }]);
+    });
+
+    it("does not hand a same-turn caller another caller's send failure", async () => {
+      const wc = makeWebContents(959);
+      const held = holdManifests(wc);
+      const send = wc.send.getMockImplementation()!;
+      wc.send.mockImplementationOnce(() => {
+        throw new Error("ipc closed");
+      });
+      const bridge = bridgeFor({ current: [makeContext({ activeWebContents: wc })] });
+
+      const failed = bridge.requestManifest();
+      wc.send.mockImplementation(send);
+      const next = bridge.requestManifest();
+
+      await expect(failed).rejects.toThrow("ipc closed");
+      expect(held.requestIds).toHaveLength(1);
+      held.answer(held.requestIds[0], [{ id: "a" }]);
+      expect(await next).toEqual([{ id: "a" }]);
+    });
+
+    it("gives a late joiner its own full deadline", async () => {
+      vi.useFakeTimers();
+      const wc = makeWebContents(957);
+      const held = holdManifests(wc);
+      const bridge = bridgeFor({ current: [makeContext({ activeWebContents: wc })] });
+
+      const early = bridge.requestManifest();
+      const earlyOutcome = early.then(
+        () => "resolved",
+        (err: Error) => err.message
+      );
+      await vi.advanceTimersByTimeAsync(4_900);
+      const late = bridge.requestManifest();
+      expect(held.requestIds).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(200);
+      expect(await earlyOutcome).toBe("Manifest request timed out");
+
+      held.answer(held.requestIds[0], [{ id: "a" }]);
+      expect(await late).toEqual([{ id: "a" }]);
+      expect(pendingManifests.size).toBe(0);
+    });
+
+    it("still times out a late joiner on its own clock", async () => {
+      vi.useFakeTimers();
+      const wc = makeWebContents(958);
+      holdManifests(wc);
+      const bridge = bridgeFor({ current: [makeContext({ activeWebContents: wc })] });
+
+      const early = bridge.requestManifest().catch((err: Error) => err.message);
+      await vi.advanceTimersByTimeAsync(3_000);
+      const late = bridge.requestManifest().catch((err: Error) => err.message);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await early).toBe("Manifest request timed out");
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(await late).toBe("Manifest request timed out");
+      expect(pendingManifests.size).toBe(0);
+    });
+
+    it("rejects without a request when no view is reachable", async () => {
+      const bridge = bridgeFor({ current: [] });
+      await expect(bridge.requestManifest()).rejects.toThrow();
+      await expect(bridge.requestManifest()).rejects.toThrow();
+    });
+  });
 });
 
 describe("rendererBridge — workspace-bound routing (#11789)", () => {

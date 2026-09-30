@@ -13,12 +13,13 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { useRecipeStore } from "@/store/recipeStore";
-import { formatPath, middleTruncate, shortSha } from "@/utils/textParsing";
+import { formatPath, middleTruncatePath, shortSha } from "@/utils/textParsing";
 import { RotatingTip } from "./contentGridTips";
 import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
 import { ResumeSessionLine } from "./ResumeSessionLine";
 import { LauncherQuickActions } from "./LauncherQuickActions";
 import { TourInviteCard } from "@/components/Tour/TourInviteCard";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 const PATH_TRUNCATE_LENGTH = 52;
 
@@ -235,7 +236,7 @@ export function ContentGridEmptyState({
     : activeWorktreeBranch || null;
   const BranchGlyph = isDetachedLabel ? GitCommitHorizontal : GitBranch;
   const pathLabel = activeWorktreePath
-    ? middleTruncate(formatPath(activeWorktreePath, homeDir), PATH_TRUNCATE_LENGTH)
+    ? middleTruncatePath(formatPath(activeWorktreePath, homeDir), PATH_TRUNCATE_LENGTH)
     : null;
   const hasWorkspaceIdentity = Boolean(workspaceName);
 
@@ -372,12 +373,15 @@ export function ContentGridEmptyState({
                           </div>
                         )}
                         {pathLabel && (
-                          <p
-                            className="text-xs truncate max-w-full"
-                            title={activeWorktreePath ?? undefined}
+                          <TruncatedTooltip
+                            content={activeWorktreePath}
+                            // Middle-truncated and home-abbreviated in JS, which
+                            // overflow detection cannot see: disclose the path
+                            // whenever the label is not the path.
+                            isTruncated={pathLabel !== activeWorktreePath || undefined}
                           >
-                            {pathLabel}
-                          </p>
+                            <p className="text-xs truncate max-w-full">{pathLabel}</p>
+                          </TruncatedTooltip>
                         )}
                       </div>
                     )}

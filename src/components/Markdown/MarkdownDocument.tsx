@@ -1,7 +1,7 @@
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, type CSSProperties } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useMarkdownRenderPolicy } from "./markdownRenderPolicy";
+import { MarkdownImageCacheBust, useMarkdownRenderPolicy } from "./markdownRenderPolicy";
 import { useScopedSelectAll, type SelectAllScope } from "@/hooks/useScopedSelectAll";
 import { cn } from "@/lib/utils";
 import type { MarkdownFontSize } from "@/store/preferencesStore";
@@ -32,6 +32,8 @@ export const MARKDOWN_FONT_SIZE_TOKEN = {
 
 /** `MarkdownDocument.css` reads this; declaring it here is what applies the rung. */
 type MarkdownFontStyle = CSSProperties & Record<"--markdown-font-size", string>;
+
+const REMARK_PLUGINS = [remarkGfm];
 
 export interface MarkdownDocumentProps {
   /** Markdown source text */
@@ -99,11 +101,25 @@ export function MarkdownDocument({
   const rootRef = useRef<HTMLDivElement>(null);
   useScopedSelectAll(rootRef, true, selectAllScope);
 
-  const { components, urlTransform } = useMarkdownRenderPolicy({
-    filePath,
-    rootPath,
-    cacheBust,
-  });
+  const { components, urlTransform } = useMarkdownRenderPolicy({ filePath, rootPath });
+
+  // react-markdown re-parses the whole document on every render. Hosts re-render
+  // this on each refresh tick with only `cacheBust` moving, which reaches the
+  // images through context, so the parsed tree is held until the text or policy
+  // changes.
+  const rendered = useMemo(
+    () => (
+      <ReactMarkdown
+        remarkPlugins={REMARK_PLUGINS}
+        urlTransform={urlTransform}
+        components={components}
+        skipHtml
+      >
+        {content}
+      </ReactMarkdown>
+    ),
+    [content, urlTransform, components]
+  );
 
   const fontStyle: MarkdownFontStyle | undefined =
     fontSize === undefined
@@ -112,14 +128,7 @@ export function MarkdownDocument({
 
   return (
     <div ref={rootRef} className={cn("markdown-document prose", className)} style={fontStyle}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        urlTransform={urlTransform}
-        components={components}
-        skipHtml
-      >
-        {content}
-      </ReactMarkdown>
+      <MarkdownImageCacheBust value={cacheBust}>{rendered}</MarkdownImageCacheBust>
     </div>
   );
 }

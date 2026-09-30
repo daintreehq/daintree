@@ -15,6 +15,11 @@ const SENSITIVE_EVENT_TYPES = new Set<keyof DaintreeEventMap>([
   "agent:state-changed",
 ]);
 
+// Snapshot events the bus treats as immutable (listeners only read them, and the
+// emitter builds a fresh object per emit). Cloning them on every push costs
+// tens of µs per window; readers still get clones via cloneRecord.
+const BY_REFERENCE_EVENT_TYPES = new Set<keyof DaintreeEventMap>(["sys:worktree:update"]);
+
 const REDACTED = "[REDACTED - May contain sensitive information]";
 
 export interface FilterOptions {
@@ -164,7 +169,9 @@ export class EventBuffer {
   }
 
   private push(event: EventRecord): void {
-    const storedEvent = this.cloneRecord(event);
+    const storedEvent = BY_REFERENCE_EVENT_TYPES.has(event.type as keyof DaintreeEventMap)
+      ? event
+      : this.cloneRecord(event);
 
     this.buffer.push(storedEvent);
 

@@ -1,13 +1,16 @@
+import { useId } from "react";
 import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
 import type { LoadedPluginInfo } from "@shared/types/plugin";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ChoiceCard } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { categoryIconFor, PluginIconTile } from "./pluginIcons";
 import { pluginLabel } from "./PluginDetailPane";
 import { groupPluginsByCategory } from "./pluginGrouping";
 import { pluginSignalFor } from "./pluginStatus";
 import { Badge, CountBadge } from "@/components/ui/badge";
+import { pluralize } from "@/lib/pluralize";
 
 const CARD_GRID_CLASS = "grid gap-3 grid-cols-[repeat(auto-fill,minmax(260px,1fr))]";
 
@@ -18,15 +21,13 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
   // failed plugin still looked healthy, and they are the first thing the wide
   // pane shows on open.
   const signal = pluginSignalFor(plugin);
+  const idBase = useId();
   return (
-    <button
-      type="button"
+    <ChoiceCard
       onClick={onSelect}
-      className={cn(
-        "flex items-start gap-3 p-4 text-left rounded-[var(--radius-lg)] border border-border-default bg-overlay-subtle transition-colors",
-        "hover:bg-overlay-soft hover:border-border-interactive",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-      )}
+      aria-labelledby={`${idBase}-name`}
+      aria-describedby={`${idBase}-detail`}
+      className="items-start gap-3 p-4"
     >
       <PluginIconTile
         manifest={plugin.manifest}
@@ -38,6 +39,7 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
             shared it, and a prerelease-and-build semver cut "Enterprise
             Compliance…" down to "Ent…" beside its own full version string. */}
         <span
+          id={`${idBase}-name`}
           className={cn(
             "block text-sm font-medium truncate",
             disabled ? "text-text-secondary" : "text-text-primary"
@@ -45,20 +47,22 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
         >
           {pluginLabel(plugin)}
         </span>
-        <span className="mt-0.5 flex items-center gap-1.5 min-w-0 text-2xs text-text-secondary">
-          <span className="truncate">v{plugin.manifest.version}</span>
-          {disabled && <Badge size="xs">Disabled</Badge>}
-        </span>
-        {signal ? (
-          <span className={cn("mt-1 flex items-center gap-1 text-xs font-medium", signal.tone)}>
-            <signal.icon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            <span className="truncate">{signal.label}</span>
+        <span id={`${idBase}-detail`} className="contents">
+          <span className="mt-0.5 flex items-center gap-1.5 min-w-0 text-2xs text-text-secondary">
+            <span className="truncate">v{plugin.manifest.version}</span>
+            {disabled && <Badge size="xs">Disabled</Badge>}
           </span>
-        ) : (
-          blurb && <span className="mt-1 text-xs line-clamp-2 text-text-secondary">{blurb}</span>
-        )}
+          {signal ? (
+            <span className={cn("mt-1 flex items-center gap-1 text-xs font-medium", signal.tone)}>
+              <signal.icon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span className="truncate">{signal.label}</span>
+            </span>
+          ) : (
+            blurb && <span className="mt-1 text-xs line-clamp-2 text-text-secondary">{blurb}</span>
+          )}
+        </span>
       </span>
-    </button>
+    </ChoiceCard>
   );
 }
 
@@ -119,9 +123,7 @@ export function PluginCatalog({
           <p className="text-sm text-text-secondary mt-1">
             {plugins.length === 0
               ? "Only this project's plugins match. Pick one in the list."
-              : plugins.length === 1
-                ? "1 installed plugin matches"
-                : `${plugins.length} installed plugins match`}
+              : pluralize(plugins.length, "installed plugin matches", "installed plugins match")}
           </p>
         </div>
         {plugins.length > 0 && (
@@ -161,9 +163,7 @@ export function PluginCatalog({
             <div className="flex items-center gap-2">
               <CategoryIcon className="w-4 h-4 text-text-secondary" aria-hidden="true" />
               <h4 className="text-sm font-medium text-text-primary">{category.label}</h4>
-              <CountBadge
-                label={`${sectionPlugins.length} ${sectionPlugins.length === 1 ? "plugin" : "plugins"}`}
-              >
+              <CountBadge label={`${pluralize(sectionPlugins.length, "plugin")}`}>
                 {sectionPlugins.length}
               </CountBadge>
             </div>

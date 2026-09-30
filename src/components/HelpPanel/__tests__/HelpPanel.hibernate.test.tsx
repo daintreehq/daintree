@@ -176,6 +176,17 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuSeparator: () => <hr />,
 }));
 
+// The session tabs' per-lane menu is incidental here, and the real primitive
+// drags the keybinding graph in behind these suites' partial mocks.
+vi.mock("@/components/ui/context-menu", () => ({
+  ContextMenu: ({ children }: { children?: unknown }) => <>{children as never}</>,
+  ContextMenuTrigger: ({ children }: { children?: unknown }) => <>{children as never}</>,
+  ContextMenuContent: () => null,
+  ContextMenuItem: () => null,
+  ContextMenuSeparator: () => null,
+  stopContextMenuPropagation: () => {},
+}));
+
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
 
 vi.mock("@/components/ui/button", () => ({

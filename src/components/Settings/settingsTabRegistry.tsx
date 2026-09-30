@@ -1099,17 +1099,21 @@ export const SETTINGS_REGISTRY = [
         section: "Security",
         title: "Daintree confirmations",
         description:
-          "Whether Daintree asks before the assistant runs an action, or follows Skip permission prompts",
+          "Whether Daintree asks before the assistant runs an action: follow Skip permission prompts, always ask, or never ask",
         keywords: [
           "assistant",
           "confirmations",
           "confirm",
           "dialog",
           "ask",
+          "never ask",
+          "always ask",
           "skip",
           "permissions",
           "security",
           "delete",
+          "close",
+          "kill",
         ],
       },
       {
@@ -1186,7 +1190,7 @@ export const SETTINGS_REGISTRY = [
         section: "All agents",
         title: "Default agent",
         description:
-          'Agent used for the help dock button (⌘⇧H) and automated workflows ("What\'s Next?", onboarding, project explanations). Distinct from the Portal "Default new tab agent".',
+          'Agent used for the help dock button and automated workflows ("What\'s Next?", onboarding, project explanations). Distinct from the Portal "Default new tab agent".',
         keywords: [
           "default",
           "agent",
@@ -1279,8 +1283,7 @@ export const SETTINGS_REGISTRY = [
     importer: LazyCodeForgeSettingsTab.preload,
     LazyComponent: LazyCodeForgeSettingsTab,
     needsSubtabs: true,
-    searchNavDescription:
-      "Configure forge providers (GitHub, GitLab, Gitea, ...) and authentication",
+    searchNavDescription: "Configure forge providers (GitHub, GitLab, Gitea, …) and authentication",
     searchNavKeywords: [
       "forge",
       "provider",

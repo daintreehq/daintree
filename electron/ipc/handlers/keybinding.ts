@@ -96,7 +96,7 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
       const json = exportProfile(overrides);
       const parentWindow = ctx.senderWindow;
       const saveOpts: Electron.SaveDialogOptions = {
-        title: "Export Keyboard Shortcuts",
+        title: "Export keyboard shortcuts",
         defaultPath: "daintree-keybindings.json",
         filters: [{ name: "Keybinding Profile", extensions: ["json"] }],
       };
@@ -119,7 +119,7 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
       async (ctx): Promise<ImportResult> => {
         const parentWindow = ctx.senderWindow;
         const openOpts: Electron.OpenDialogOptions = {
-          title: "Import Keyboard Shortcuts",
+          title: "Import keyboard shortcuts",
           filters: [{ name: "Keybinding Profile", extensions: ["json"] }],
           properties: ["openFile"],
         };

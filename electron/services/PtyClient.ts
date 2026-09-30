@@ -124,7 +124,10 @@ import {
   type PowerPolicyLevel,
 } from "../../shared/types/powerPolicy.js";
 import { getPowerPolicy } from "../window/powerPolicy.js";
-import type { SerializedTerminalSnapshot } from "../../shared/types/terminal.js";
+import type {
+  SerializeReadOptions,
+  SerializedTerminalSnapshot,
+} from "../../shared/types/terminal.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
 import type { TerminalHandback } from "../../shared/types/handback.js";
@@ -162,6 +165,11 @@ interface TerminalInfoResponse {
   activityTier?: "active" | "background";
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
   hasPty?: boolean;
+  /**
+   * The process has exited. Narrower than `!hasPty`, which also folds in a kill
+   * still waiting on its exit — the host's project stats count those.
+   */
+  isExited?: boolean;
   agentSessionId?: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
@@ -1832,13 +1840,13 @@ export class PtyClient extends EventEmitter {
    * shard instead of N renderer→main IPC hops, cutting fan-out latency on
    * large fleets.
    */
-  broadcastWrite(ids: string[], data: string): void {
+  broadcastWrite(ids: string[], data: string, reportSuccess = false): void {
     if (!Array.isArray(ids) || ids.length === 0 || typeof data !== "string" || data.length === 0)
       return;
     const validIds = ids.filter((id) => typeof id === "string" && id.length > 0);
     if (validIds.length === 0) return;
     for (const [shard, shardIds] of this.groupByOwnerShard(validIds)) {
-      shard.send({ type: "broadcast-write", ids: shardIds, data });
+      shard.send({ type: "broadcast-write", ids: shardIds, data, reportSuccess });
     }
   }
 
@@ -2643,13 +2651,21 @@ export class PtyClient extends EventEmitter {
    * @param id - Terminal identifier
    * @returns Serialized state string or null if terminal not found
    */
-  async getSerializedStateAsync(id: string): Promise<SerializedTerminalSnapshot | null> {
+  async getSerializedStateAsync(
+    id: string,
+    options?: SerializeReadOptions
+  ): Promise<SerializedTerminalSnapshot | null> {
     const shard = this.shardForTerminal(id);
     // Extended timeout for large terminals with lots of scrollback (see PTY_TIMEOUTS).
     const promise = sendPtyHostRpc<SerializedTerminalSnapshot | null>(
       shard,
       `serialize-${id}`,
-      (requestId) => ({ type: "get-serialized-state", id, requestId }),
+      (requestId) => ({
+        type: "get-serialized-state",
+        id,
+        requestId,
+        ...(options?.tailRows !== undefined ? { tailRows: options.tailRows } : {}),
+      }),
       { method: "get-serialized-state", timeoutMs: PTY_TIMEOUTS["get-serialized-state"] }
     );
     return promise.catch(() => {

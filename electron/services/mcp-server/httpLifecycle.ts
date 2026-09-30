@@ -32,6 +32,7 @@ import type {
 } from "./shared.js";
 import { parseWorkspaceSelector, type WorkspaceSelectorRejection } from "./workspaceSelector.js";
 import { projectAuditResult } from "./auditResultProjection.js";
+import { helpOwnershipPrincipal } from "./resourceOwnership.js";
 import { WorkspaceBindingError } from "./rendererBridge.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
@@ -72,6 +73,7 @@ import {
   RESTART_JITTER_MS,
   RESTART_STABLE_RESET_MS,
   MCP_STOP_DRAIN_TIMEOUT_MS,
+  MCP_SSE_HEARTBEAT_INTERVAL_MS,
   MCP_TIER_ELEVATION_TTL_MS,
   MCP_GRANT_MAX_LIFETIME_MS,
   MCP_NATIVE_GRANT_DEFAULT_MAX_USES,
@@ -226,6 +228,32 @@ export interface HttpLifecycleDeps {
 function resolveUserAgent(req: http.IncomingMessage): string {
   const ua = req.headers["user-agent"];
   return typeof ua === "string" && ua.trim().length > 0 ? ua : "Unknown client";
+}
+
+/**
+ * Keeps an idle `/sse` stream from looking dead to the client. Claude Code's
+ * HTTP client (undici) aborts a response body that goes 300 s without a byte,
+ * which silently churned the session — and everything keyed to it — after
+ * five quiet minutes (#12994). An SSE comment line is ignored by every parser
+ * and carries no MCP traffic, so it deliberately does not reset the session's
+ * idle timer: only real requests do.
+ */
+function startSseHeartbeat(res: http.ServerResponse): ReturnType<typeof setInterval> | undefined {
+  if (res.writableEnded || res.destroyed) return undefined;
+  const heartbeat = setInterval(() => {
+    if (res.writableEnded || res.destroyed) {
+      clearInterval(heartbeat);
+      return;
+    }
+    try {
+      res.write(": keepalive\n\n");
+    } catch {
+      clearInterval(heartbeat);
+    }
+  }, MCP_SSE_HEARTBEAT_INTERVAL_MS);
+  heartbeat.unref?.();
+  res.once("close", () => clearInterval(heartbeat));
+  return heartbeat;
 }
 
 /**
@@ -483,8 +511,9 @@ export class HttpLifecycle {
   }
 
   /**
-   * The principal a pane bearer's resource ownership is held under (#12487),
-   * or null for every other bearer.
+   * The principal a pane bearer's (#12487) or help-session bearer's (#12993)
+   * resource ownership is held under, or null for every other bearer — an api
+   * key is shared by every external client, so it keeps session-scoped records.
    *
    * Resolved before any session state is written, like the pane's workspace
    * binding, and bound with no await in between, so no revocation can land
@@ -496,7 +525,10 @@ export class HttpLifecycle {
   private resolveOwnershipPrincipal(authHeader: string): string | null {
     const token = extractBearerToken(authHeader);
     if (!token) return null;
-    return this.paneOwnershipPrincipalResolver?.(token) ?? null;
+    const panePrincipal = this.paneOwnershipPrincipalResolver?.(token) ?? null;
+    if (panePrincipal !== null) return panePrincipal;
+    const helpSessionId = this.helpSessionIdResolver?.(token) ?? null;
+    return helpSessionId === null ? null : helpOwnershipPrincipal(helpSessionId);
   }
 
   /**
@@ -1399,7 +1431,9 @@ export class HttpLifecycle {
 
       const idleTimer = this.deps.sessionStore.createIdleTimer(sessionId);
       this.deps.sessionStore.sessions.set(sessionId, { transport, server, idleTimer });
+      let heartbeat: ReturnType<typeof setInterval> | undefined;
       transport.onclose = () => {
+        clearInterval(heartbeat);
         const session = this.deps.sessionStore.sessions.get(sessionId);
         if (session) {
           clearTimeout(session.idleTimer);
@@ -1445,6 +1479,11 @@ export class HttpLifecycle {
         transport.onclose = undefined;
         await transport.close().catch(() => {});
         throw err;
+      }
+      // A client that hung up while `connect` was in flight has already run
+      // teardown; arming now would leak an interval against a dead stream.
+      if (this.deps.sessionStore.sessions.get(sessionId)?.transport === transport) {
+        heartbeat = startSseHeartbeat(res);
       }
     } else if (req.method === "POST" && url.pathname === "/messages") {
       const sid = url.searchParams.get("sessionId") ?? "";

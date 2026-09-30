@@ -267,6 +267,27 @@ const STATES: State[] = [
     },
   },
   {
+    name: "severity-vocabulary",
+    page: PAGE,
+    capture: async (page, theme) => {
+      const root = await scene(page, "severity-vocabulary", theme, 1100);
+      await mustShow(root, "Couldn't save settings", "Error banner", "Name is required");
+      return root;
+    },
+  },
+  {
+    // Forced colours repaint every glyph in one ink, so shape alone has to
+    // keep the severities apart.
+    name: "severity-vocabulary-forced",
+    page: PAGE,
+    capture: async (page, theme) => {
+      await page.emulateMedia({ forcedColors: "active" });
+      const root = await scene(page, "severity-vocabulary", theme, 1100);
+      await mustShow(root, "Couldn't save settings", "Error banner", "Name is required");
+      return root;
+    },
+  },
+  {
     name: "archive-install",
     page: PAGE,
     capture: async (page, theme) => {

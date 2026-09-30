@@ -11,6 +11,7 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { notify } from "@/lib/notify";
+import { pluralize } from "@/lib/pluralize";
 
 export const DELETED_WORKTREE_SWEEP_INTERVAL_MS = 1000;
 
@@ -206,12 +207,28 @@ function forgetRow(id: string): void {
   holdStartedAt.delete(id);
 }
 
-export function resetDeletedWorktreeCleanupState(): void {
+function forgetAllRows(): void {
   firedIds.clear();
   armedTtlMs.clear();
   heldRemaining.clear();
   holdStartedAt.clear();
+}
+
+export function resetDeletedWorktreeCleanupState(): void {
+  forgetAllRows();
   lastSweepAt = null;
+}
+
+/**
+ * The interval does not run while there are no rows, so nothing advances
+ * `lastSweepAt` across that stretch. Stamp it wherever an idle sweep would
+ * have: at any moment the view was observable. Left alone while cached or
+ * hidden, so a row that arrives then is still credited the unobserved time —
+ * possibly more of it than before, which only ever defers a deadline.
+ */
+function markIdleObservation(deps: SweepDeps = DEFAULT_DEPS): void {
+  if (deps.isViewCached() || deps.isViewHidden()) return;
+  lastSweepAt = deps.now();
 }
 
 function clampRemaining(remainingMs: number, ttlMs: number): number {
@@ -220,10 +237,12 @@ function clampRemaining(remainingMs: number, ttlMs: number): number {
 
 /**
  * The sweep is the one path that closes terminals with nobody watching: the
- * row vanishes and the trash TTL kills the PTYs shortly after, so a user who
- * stepped away would otherwise have no record it happened and no chance at the
- * only inverse (restore from trash). Inbox-only — the event is unattended by
- * definition, so a toast would interrupt whatever the user moved on to.
+ * row vanishes and the trash TTL kills the PTYs seconds later, so a user who
+ * stepped away would otherwise have no record it happened. The entry is only a
+ * record — the inbox is usually read long after the trash window closes, so it
+ * carries no restore action and its copy is past tense. Inbox-only — the event
+ * is unattended by definition, so a toast would interrupt whatever the user
+ * moved on to.
  */
 interface SweptRow {
   worktreeId: string;
@@ -241,16 +260,9 @@ interface SweptRow {
 function notifySweepTrashed(swept: readonly SweptRow[]): void {
   if (swept.length === 0) return;
   const terminalCount = swept.reduce((n, row) => n + row.count, 0);
-  const terminalNoun = terminalCount === 1 ? "terminal" : "terminals";
   const single = swept.length === 1 ? swept[0]! : null;
-  let message: string;
-  if (single === null) {
-    message = `${swept.length} deleted worktrees still had ${terminalCount} ${terminalNoun} open — they moved to trash and close shortly.`;
-  } else if (single.count === 1) {
-    message = `${single.title} still had 1 terminal open — it moved to trash and closes shortly.`;
-  } else {
-    message = `${single.title} still had ${single.count} terminals open — they moved to trash and close shortly.`;
-  }
+  const where = single ? single.title : pluralize(swept.length, "worktree");
+  const message = `Closed ${pluralize(terminalCount, "terminal")} left open in ${where}.`;
   notify({
     type: "info",
     title: single ? "Deleted worktree cleaned up" : "Deleted worktrees cleaned up",
@@ -429,7 +441,8 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
 }
 
 /**
- * Start the 1 Hz cleanup sweep.
+ * Start the 1 Hz cleanup sweep. The interval only runs while there is at
+ * least one deleted-worktree row to count down.
  *
  * A cached project view keeps reporting `visibilityState === "visible"` while
  * main has it detached, hidden and (absent a live agent) frozen, so the
@@ -452,6 +465,9 @@ export function startDeletedWorktreeCleanup(): () => void {
     // A controller constructed during a cached window never receives a
     // `cached` phase, so the arm has to check the seeded state itself.
     if (isProjectViewCached()) return;
+    // Nearly every session has no deleted rows; a 1 Hz timer with nothing to
+    // count down is an idle wakeup a second for the life of the view.
+    if (useWorktreeSelectionStore.getState().deletedWorktrees.size === 0) return;
     interval = setInterval(() => sweepDeletedWorktreeCleanup(), DELETED_WORKTREE_SWEEP_INTERVAL_MS);
   };
 
@@ -477,6 +493,18 @@ export function startDeletedWorktreeCleanup(): () => void {
     if (phase === "revealed") sweepDeletedWorktreeCleanup();
   });
 
+  const offRows = useWorktreeSelectionStore.subscribe((state, prevState) => {
+    if (state.deletedWorktrees === prevState.deletedWorktrees) return;
+    if (state.deletedWorktrees.size > 0) {
+      if (prevState.deletedWorktrees.size === 0) markIdleObservation();
+      startSweeping();
+      return;
+    }
+    stopSweeping();
+    forgetAllRows();
+    markIdleObservation();
+  });
+
   const onVisibilityChange = () => {
     if (!document.hidden) sweepDeletedWorktreeCleanup();
   };
@@ -484,6 +512,7 @@ export function startDeletedWorktreeCleanup(): () => void {
 
   return () => {
     stopSweeping();
+    offRows();
     offViewLifecycle();
     document.removeEventListener("visibilitychange", onVisibilityChange);
   };

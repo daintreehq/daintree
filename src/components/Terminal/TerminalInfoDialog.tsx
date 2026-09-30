@@ -16,6 +16,8 @@ import { notify } from "@/lib/notify";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
+import { formatTimeAgo } from "@/utils/timeAgo";
+import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 
 const SYNC_MODE_POLL_MS = 250;
 /**
@@ -64,35 +66,15 @@ interface TerminalInfoDialogProps {
   terminalId: string;
 }
 
-function formatDuration(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-
-  if (days > 0) {
-    return `${days}d ${hours % 24}h ${minutes % 60}m`;
-  }
-  if (hours > 0) {
-    return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${seconds % 60}s`;
-  }
-  return `${seconds}s`;
-}
-
 function formatTimestamp(timestamp: number): string {
   if (timestamp === 0) return "Never";
   const date = new Date(timestamp);
   return date.toLocaleString();
 }
 
-function formatRelativeTime(timestamp: number): string {
+function formatLastActivity(timestamp: number): string {
   if (timestamp === 0) return "Never";
-  const now = Date.now();
-  const diff = now - timestamp;
-  return `${formatDuration(diff)} ago`;
+  return formatTimeAgo(timestamp);
 }
 
 function formatSyncMode(value: boolean | null): string {
@@ -652,15 +634,15 @@ Terminal internals:
   TTY device: ${info?.ptyTty ?? UNAVAILABLE}
 
 Runtime:
-  ${hasExited ? "Started" : "Runtime"}: ${startedAt == null ? UNAVAILABLE : hasExited ? formatRelativeTime(startedAt) : formatDuration(Date.now() - startedAt)}
+  ${hasExited ? "Started" : "Runtime"}: ${startedAt == null ? UNAVAILABLE : hasExited ? formatLastActivity(startedAt) : formatElapsedDuration(Date.now() - startedAt)}
   Spawned at: ${info ? formatTimestamp(info.spawnedAt) : UNAVAILABLE}
   Restarts: ${info?.restartCount ?? UNAVAILABLE}
 
 Activity:
-  Last input: ${info ? `${formatRelativeTime(info.lastInputTime)} (${formatTimestamp(info.lastInputTime)})` : UNAVAILABLE}
-  Last output: ${info ? `${formatRelativeTime(info.lastOutputTime)} (${formatTimestamp(info.lastOutputTime)})` : UNAVAILABLE}
+  Last input: ${info ? `${formatLastActivity(info.lastInputTime)} (${formatTimestamp(info.lastInputTime)})` : UNAVAILABLE}
+  Last output: ${info ? `${formatLastActivity(info.lastOutputTime)} (${formatTimestamp(info.lastOutputTime)})` : UNAVAILABLE}
   Agent state: ${agentState || NONE}
-  Last state change: ${info?.lastStateChange != null ? formatRelativeTime(info.lastStateChange) : NONE}
+  Last state change: ${info?.lastStateChange != null ? formatLastActivity(info.lastStateChange) : NONE}
   Activity tier: ${info?.activityTier ?? UNAVAILABLE}
 
 Performance:
@@ -718,10 +700,14 @@ Performance:
         title: "Couldn't copy diagnostics",
         message: "The clipboard refused the write. Selecting the values by hand still works.",
         action: { label: "Try again", onClick: () => void copy(payload) },
-        context: { eventKind: "settings" },
+        context: {
+          eventKind: "settings",
+          panelId: terminalId,
+          ...(worktreeId ? { worktreeId } : {}),
+        },
       });
     });
-  }, [buildDiagnostics, copy]);
+  }, [buildDiagnostics, copy, terminalId, worktreeId]);
 
   // Arrive on the overview's heading rather than the first control: every
   // control here sits below the overview, and focusing one scrolls the body
@@ -807,15 +793,15 @@ Performance:
                   startedAt == null
                     ? undefined
                     : hasExited
-                      ? formatRelativeTime(startedAt)
-                      : formatDuration(Date.now() - startedAt)
+                      ? formatLastActivity(startedAt)
+                      : formatElapsedDuration(Date.now() - startedAt)
                 }
                 pending={pending}
                 fallback={UNAVAILABLE}
               />
               <Row
                 label="Last output"
-                value={info ? formatRelativeTime(info.lastOutputTime) : undefined}
+                value={info ? formatLastActivity(info.lastOutputTime) : undefined}
                 pending={pending}
                 fallback={UNAVAILABLE}
               />
@@ -978,7 +964,7 @@ Performance:
                 label="State changed"
                 value={
                   info?.lastStateChange != null
-                    ? formatRelativeTime(info.lastStateChange)
+                    ? formatLastActivity(info.lastStateChange)
                     : undefined
                 }
                 pending={pending}
@@ -990,13 +976,13 @@ Performance:
           <Group title="Activity">
             <Row
               label="Last input"
-              value={info ? formatRelativeTime(info.lastInputTime) : undefined}
+              value={info ? formatLastActivity(info.lastInputTime) : undefined}
               pending={pending}
               fallback={UNAVAILABLE}
             />
             <Row
               label="Last output"
-              value={info ? formatRelativeTime(info.lastOutputTime) : undefined}
+              value={info ? formatLastActivity(info.lastOutputTime) : undefined}
               pending={pending}
               fallback={UNAVAILABLE}
             />

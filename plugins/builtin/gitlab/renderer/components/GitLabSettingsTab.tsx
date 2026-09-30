@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Check, FlaskConical, ExternalLink } from "lucide-react";
+import { Check, FlaskConical, ExternalLink, CheckCircle2 } from "lucide-react";
 import { actionService } from "@/services/ActionService";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
@@ -321,7 +321,7 @@ export function GitLabSettingsTab() {
   const tokenStatus =
     validationResult === "success" ? (
       <span className="flex items-center gap-1">
-        <Check className="w-3 h-3 shrink-0" aria-hidden="true" />
+        <CheckCircle2 className="w-3 h-3 shrink-0" aria-hidden="true" />
         Checked and saved
       </span>
     ) : validationResult === "test-success" ? (

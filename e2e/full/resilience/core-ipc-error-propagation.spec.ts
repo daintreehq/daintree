@@ -389,7 +389,7 @@ test.describe.serial("Core: IPC Error Propagation", () => {
 
     // Retry and Trash buttons should be visible
     await expect(banner.locator('[aria-label="Retry starting terminal"]')).toBeVisible();
-    await openRecoveryMenu(ctx.window, banner, ["Remove terminal"]);
+    await openRecoveryMenu(ctx.window, banner, ["Trash terminal"]);
   });
 
   test("ENOTDIR spawn error shows Change directory action", async () => {
@@ -423,6 +423,6 @@ test.describe.serial("Core: IPC Error Propagation", () => {
     await expect(banner.locator('button:has-text("Change directory")')).toBeVisible();
 
     // Retry is demoted into overflow when Change directory is the primary action.
-    await openRecoveryMenu(ctx.window, banner, ["Retry starting terminal", "Remove terminal"]);
+    await openRecoveryMenu(ctx.window, banner, ["Retry starting terminal", "Trash terminal"]);
   });
 });

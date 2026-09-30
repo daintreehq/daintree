@@ -10040,6 +10040,129 @@ describe("session-scoped resource ownership (#11909)", () => {
       );
     });
 
+    // #12980 — a pane refused by a tool that takes a hand-over is told how the
+    // user grants one, in words that never depend on the refused id.
+    describe("the hand-over hint on a refusal (#12980)", () => {
+      const HINT = "right-click it, choose 'Hand to orchestrator', and select this agent's pane";
+      const GRANT_PATH = { grantPath: "context-menu:hand-to-orchestrator" };
+
+      function refusalPayload(result: { content: unknown }) {
+        return payloadOf<{ code: string; message: string; details?: unknown }>(result);
+      }
+
+      it.each([
+        ["terminal.sendCommandOwned", { command: "1" }],
+        ["terminal.interruptOwned", {}],
+        ["terminal.injectOwned", {}],
+        ["terminal.revealOwned", {}],
+        ["terminal.readLastMessageOwned", {}],
+      ])("names the grant path when %s refuses a pane", async (name, extra) => {
+        const store = makeStore();
+        const dispatchAction = listingDispatch();
+        const server = orchestratorSession(store, "s-orch", dispatchAction);
+
+        const result = await callTool(server, {
+          name,
+          arguments: { terminalId: "terminal-users-own", ...extra },
+        });
+
+        expect(result.isError).toBe(true);
+        const payload = refusalPayload(result);
+        expect(payload.code).toBe("RESOURCE_NOT_OWNED");
+        expect(payload.message).toContain(HINT);
+        expect(payload.details).toEqual(GRANT_PATH);
+        expect(dispatchAction).not.toHaveBeenCalled();
+      });
+
+      it("reads byte-for-byte the same for an unknown id, another pane's and another session's", async () => {
+        const store = makeStore();
+        const dispatchAction = listingDispatch();
+        const server = orchestratorSession(store, "s-orch", dispatchAction);
+        orchestratorSession(store, "s-other", dispatchAction, "principal-other");
+        seedLiveSession(store, "s-api", "full");
+        // One id throughout: the message names it, so only its state may vary.
+        const refusalFor = async () =>
+          errorText(
+            await callTool(server, {
+              name: "terminal.sendCommandOwned",
+              arguments: { terminalId: "terminal-x", command: "1" },
+            })
+          );
+
+        const unknown = await refusalFor();
+        handOver(store, "terminal-x", "principal-other");
+        const otherPanes = await refusalFor();
+        store.terminalAdoption.revokePrincipal("principal-other");
+        store.resourceOwnership.record("s-api", [{ kind: "terminal", id: "terminal-x" }]);
+        const otherSessions = await refusalFor();
+
+        expect(otherPanes).toBe(unknown);
+        expect(otherSessions).toBe(unknown);
+        expect(unknown).toContain("context-menu:hand-to-orchestrator");
+      });
+
+      it("is not given to a session no pane bearer bound", async () => {
+        const store = makeStore();
+        seedLiveSession(store, "s-api", "full");
+        store.sessionOriginMap.set("s-api", "external");
+        const server = createSessionServer(
+          "s-api",
+          fakeDeps({
+            sessionStore: store,
+            dispatchAction: listingDispatch(),
+            requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+            getCachedManifest: vi.fn(() => ownedManifest()),
+          })
+        );
+
+        const payload = refusalPayload(
+          await callTool(server, {
+            name: "terminal.sendCommandOwned",
+            arguments: { terminalId: "terminal-users-own", command: "1" },
+          })
+        );
+
+        expect(payload.code).toBe("RESOURCE_NOT_OWNED");
+        expect(payload.message).not.toContain("Hand to orchestrator");
+        expect(payload.details).toBeUndefined();
+      });
+
+      it.each([
+        ["terminal.closeOwned", { terminalId: "terminal-users-own" }],
+        ["worktree.deleteOwned", { worktreeId: "/repo/worktrees/users-own" }],
+      ])("is not given by %s, which a hand-over never satisfies", async (name, args) => {
+        const store = makeStore();
+        const server = orchestratorSession(store, "s-orch", listingDispatch());
+
+        const payload = refusalPayload(await callTool(server, { name, arguments: args }));
+
+        expect(payload.code).toBe("RESOURCE_NOT_OWNED");
+        expect(payload.message).not.toContain("Hand to orchestrator");
+        expect(payload.details).toBeUndefined();
+      });
+
+      it.each([
+        ["help", "terminal.interruptOwned"],
+        ["help", "terminal.readLastMessageOwned"],
+        ["assistant-pane", "terminal.interruptOwned"],
+      ] as const)(
+        "is not given to Daintree's own assistant (%s origin, %s)",
+        async (origin, name) => {
+          const store = makeStore();
+          const server = orchestratorSession(store, "s-help", listingDispatch());
+          store.sessionOriginMap.set("s-help", origin);
+
+          const payload = refusalPayload(
+            await callTool(server, { name, arguments: { terminalId: "terminal-users-own" } })
+          );
+
+          expect(payload.code).toBe("RESOURCE_NOT_OWNED");
+          expect(payload.message).not.toContain("Hand to orchestrator");
+          expect(payload.details).toBeUndefined();
+        }
+      );
+    });
+
     it("lists handed-over terminals as ones the pane can drive", async () => {
       const store = makeStore();
       const server = orchestratorSession(store, "s-orch", listingDispatch());
@@ -11336,13 +11459,10 @@ describe("assistant skip preference (#12874)", () => {
     help.sessionStore.grantCache.dispose();
   });
 
-  // #12881's protected close is asked whatever a grant says, and the skip
-  // preference covers only what a grant could, so it never waives that ask.
-  it("still asks before closing a panel the assistant did not open", async () => {
-    const requestCloseApproval = vi.fn().mockResolvedValue({
-      result: { ok: true, result: { selectedTargetIds: ["t-user"] } },
-      confirmationDecision: "approved",
-    });
+  // #12989: the skip covers the protected close (#12881) and the
+  // target-picking tools a native grant cannot.
+  it("closes a panel the assistant did not open without asking, audited as the skip", async () => {
+    const requestCloseApproval = vi.fn();
     const help = skipServer({
       origin: "help",
       skipped: true,
@@ -11356,21 +11476,100 @@ describe("assistant skip preference (#12874)", () => {
 
     await callTool(help.server, { name: "terminal.close", arguments: { terminalId: "t-user" } });
 
-    expect(requestCloseApproval).toHaveBeenCalledTimes(1);
-    expect(help.dispatchAction).toHaveBeenCalledTimes(1);
-    expect(help.dispatchAction.mock.calls[0][3]).not.toBe("skip-preference");
-    expect(lastAudit(help.appendAuditRecord).authorization).not.toBe("skip-preference");
+    expect(requestCloseApproval).not.toHaveBeenCalled();
+    expect(help.dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([true, "skip-preference"]);
+    expect(lastAudit(help.appendAuditRecord)).toMatchObject({ authorization: "skip-preference" });
+    expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "terminal.close", danger: false })
+    );
     help.sessionStore.grantCache.dispose();
   });
 
-  it("closes nothing unasked when the user declines a protected close under the preference", async () => {
+  it("does not stamp a close of the session's own idle panel, which would never have asked", async () => {
+    const help = skipServer({
+      origin: "help",
+      skipped: true,
+      entries: [makeManifestEntry("terminal.close")],
+      extraDeps: { readTerminalAgentState: vi.fn(async () => null) },
+    });
+    help.sessionStore.resourceOwnership.record("s", [{ kind: "terminal", id: "t-own" }]);
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "terminal.close", arguments: { terminalId: "t-own" } });
+
+    expect(help.dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([false]);
+    expect(lastAudit(help.appendAuditRecord).authorization).toBeUndefined();
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("stamps only the items of a mixed closeMany that would have asked", async () => {
+    const requestCloseApproval = vi.fn();
+    const help = skipServer({
+      origin: "help",
+      skipped: true,
+      entries: [makeManifestEntry("terminal.close"), makeManifestEntry("terminal.closeMany")],
+      extraDeps: {
+        requestCloseApproval,
+        readTerminalAgentState: vi.fn(async () => null),
+      },
+    });
+    help.sessionStore.resourceOwnership.record("s", [{ kind: "terminal", id: "t-own" }]);
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, {
+      name: "terminal.closeMany",
+      arguments: { terminalIds: ["t-own", "t-user"] },
+    });
+
+    expect(requestCloseApproval).not.toHaveBeenCalled();
+    expect(help.dispatchAction.mock.calls.map((c) => [c[1], ...c.slice(2)])).toEqual([
+      [{ terminalId: "t-own" }, false],
+      [{ terminalId: "t-user" }, true, "skip-preference"],
+    ]);
+    expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "terminal.closeMany", danger: false })
+    );
+    for (const call of help.notifyToolCallStarted.mock.calls) {
+      expect(call[0]).toMatchObject({ danger: false });
+    }
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("still asks before an assistant-pane session's closeMany, whatever the preference says", async () => {
+    const requestCloseApproval = vi.fn().mockResolvedValue({
+      result: { ok: false, error: { code: "USER_REJECTED", message: "declined" } },
+      confirmationDecision: "rejected",
+    });
+    const pane = skipServer({
+      origin: "assistant-pane",
+      skipped: true,
+      entries: [makeManifestEntry("terminal.close"), makeManifestEntry("terminal.closeMany")],
+      extraDeps: {
+        requestCloseApproval,
+        readTerminalAgentState: vi.fn(async () => null),
+      },
+    });
+    await pane.server.connect(makeMockTransport());
+
+    await callTool(pane.server, {
+      name: "terminal.closeMany",
+      arguments: { terminalIds: ["t-user"] },
+    });
+
+    expect(pane.readAssistantConfirmationsSkipped).not.toHaveBeenCalled();
+    expect(requestCloseApproval).toHaveBeenCalledTimes(1);
+    expect(pane.dispatchAction).not.toHaveBeenCalled();
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("still asks before a protected close while the preference resolves to ask", async () => {
     const requestCloseApproval = vi.fn().mockResolvedValue({
       result: { ok: false, error: { code: "USER_REJECTED", message: "declined" } },
       confirmationDecision: "rejected",
     });
     const help = skipServer({
       origin: "help",
-      skipped: true,
+      skipped: false,
       entries: [makeManifestEntry("terminal.close")],
       extraDeps: {
         requestCloseApproval,
@@ -11384,15 +11583,75 @@ describe("assistant skip preference (#12874)", () => {
       arguments: { terminalId: "t-user" },
     });
 
+    expect(requestCloseApproval).toHaveBeenCalledTimes(1);
     expect(help.dispatchAction).not.toHaveBeenCalled();
     expect(toolErrorPayload(result).code).toBe("USER_REJECTED");
     help.sessionStore.grantCache.dispose();
   });
 
-  it("leaves an agent's close-all to its dialog, which is where the sweep is approved", async () => {
+  it("runs a closeMany of panels it did not open without asking, each item under the skip", async () => {
+    const requestCloseApproval = vi.fn();
     const help = skipServer({
       origin: "help",
       skipped: true,
+      entries: [makeManifestEntry("terminal.close"), makeManifestEntry("terminal.closeMany")],
+      extraDeps: {
+        requestCloseApproval,
+        readTerminalAgentState: vi.fn(async () => null),
+      },
+    });
+    await help.server.connect(makeMockTransport());
+
+    const result = await callTool(help.server, {
+      name: "terminal.closeMany",
+      arguments: { terminalIds: ["t-a", "t-b"] },
+    });
+
+    expect(requestCloseApproval).not.toHaveBeenCalled();
+    expect(help.dispatchAction.mock.calls.map((c) => [c[1], ...c.slice(2)])).toEqual([
+      [{ terminalId: "t-a" }, true, "skip-preference"],
+      [{ terminalId: "t-b" }, true, "skip-preference"],
+    ]);
+    expect(result.structuredContent).toMatchObject({
+      results: [
+        { target: "t-a", ok: true },
+        { target: "t-b", ok: true },
+      ],
+    });
+    // One strip row for the batch, and none of it waits.
+    for (const call of help.notifyToolCallStarted.mock.calls) {
+      expect(call[0]).toMatchObject({ danger: false });
+    }
+    expect(
+      help.appendAuditRecord.mock.calls.map((c) => (c[0] as Record<string, unknown>).authorization)
+    ).toEqual(["skip-preference", "skip-preference", "skip-preference"]);
+    help.sessionStore.grantCache.dispose();
+  });
+
+  // The target-picking tools a native grant cannot cover. `killAll` and
+  // `killBatch` sit in no assistant tier today; the gate is the same for them.
+  it("runs an agent's close-all pre-confirmed under the skip", async () => {
+    const help = skipServer({
+      origin: "help",
+      skipped: true,
+      entries: [makeManifestEntry("terminal.closeAll")],
+    });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "terminal.closeAll", arguments: {} });
+
+    expect(help.dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([true, "skip-preference"]);
+    expect(lastAudit(help.appendAuditRecord)).toMatchObject({ authorization: "skip-preference" });
+    expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "terminal.closeAll", danger: false })
+    );
+    help.sessionStore.grantCache.dispose();
+  });
+
+  it("leaves an agent's close-all to its dialog while the preference resolves to ask", async () => {
+    const help = skipServer({
+      origin: "help",
+      skipped: false,
       entries: [makeManifestEntry("terminal.closeAll")],
     });
     await help.server.connect(makeMockTransport());

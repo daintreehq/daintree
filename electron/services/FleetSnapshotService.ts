@@ -3,6 +3,10 @@ import { typedBroadcast } from "../ipc/utils.js";
 import { events } from "./events.js";
 import { classifyRun } from "./projectAgentCounts.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
+import {
+  getSharedTerminalSnapshot,
+  invalidateSharedTerminalSnapshot,
+} from "./sharedTerminalSnapshot.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { RunAttentionService } from "./RunAttentionService.js";
 import type { FleetRunRow, FleetSnapshot } from "../../shared/types/ipc/fleet.js";
@@ -33,10 +37,8 @@ export const STALL_QUIET_MS = 10 * 60_000;
  * 5s poll, same 200ms debounce on the same three events, same unchanged-payload
  * suppression, same cold-start replay. The two differ only in projection —
  * that one reduces `getAllTerminalsAsync()` to per-project counts, this one
- * keeps the runs. They read the same source on the same cadence but sample it
- * independently, so two surfaces can briefly disagree across one transition;
- * collapsing them into a single read with two projections is the fix, and is
- * deliberately not attempted here.
+ * keeps the runs. Both read through {@link getSharedTerminalSnapshot}, so a
+ * tick or a transition costs one fan-out to the PTY host rather than two.
  *
  * Main is the only process that can answer this question. Each project renders
  * in its own `WebContentsView` with its own V8 context and is LRU-evicted under
@@ -83,7 +85,12 @@ export class FleetSnapshotService {
     // the `PtyHostEvent` union, so it never crosses into main and subscribing
     // would be dead code. Direct kills already arrive as `agent:state-changed`.
     const subscribe = (event: Parameters<typeof events.on>[0]) => {
-      this.eventUnsubscribes.push(events.on(event, () => this.debouncedCompute()));
+      this.eventUnsubscribes.push(
+        events.on(event, () => {
+          invalidateSharedTerminalSnapshot(this.ptyClient);
+          this.debouncedCompute();
+        })
+      );
     };
     subscribe("agent:state-changed");
     subscribe("terminal:trashed");
@@ -106,7 +113,9 @@ export class FleetSnapshotService {
     if (this.started) this.armPollInterval();
   }
 
+  /** An explicit recompute, so it reads the host afresh rather than a sibling's snapshot. */
   refresh(): void {
+    invalidateSharedTerminalSnapshot(this.ptyClient);
     this.scheduleCompute();
   }
 
@@ -252,8 +261,7 @@ export class FleetSnapshotService {
     }
 
     try {
-      const { terminals: allTerminals, degraded } =
-        await this.ptyClient.getAllTerminalsWithCompletenessAsync();
+      const { terminals: allTerminals, degraded } = await getSharedTerminalSnapshot(this.ptyClient);
       if (this.generation !== gen) return;
 
       // A shard that failed to answer contributed an empty list, not a true

@@ -93,8 +93,7 @@ export function useContextDetection({
           if (isUserChange) {
             const terminalId = latest?.terminalId;
             if (terminalId) {
-              const resultingValue = update.state.doc.toString();
-              if (resultingValue.trim().length === 0) {
+              if (nextValue.trim().length === 0) {
                 terminalInstanceService.clearDirectingState(terminalId);
               } else {
                 terminalInstanceService.notifyUserInput(terminalId);
@@ -105,9 +104,19 @@ export function useContextDetection({
       }
 
       if (update.docChanged || update.selectionSet) {
+        // A completion token is whitespace-delimited, so it never spans a line
+        // break: scanning the caret's line gives the same answer as the whole
+        // doc without flattening a large draft on every caret move.
         const caret = update.state.selection.main.head;
-        const text = update.state.doc.toString();
-        const next = getActiveCompletionContext(text, caret, activeTriggersRef.current);
+        const line = update.state.doc.lineAt(caret);
+        const local = getActiveCompletionContext(
+          line.text,
+          caret - line.from,
+          activeTriggersRef.current
+        );
+        const next = local
+          ? { ...local, start: local.start + line.from, tokenEnd: local.tokenEnd + line.from }
+          : null;
         if (!contextsEqual(trackerRef.current, next)) {
           trackerRef.current = next;
           setActiveCompletionContext(next);

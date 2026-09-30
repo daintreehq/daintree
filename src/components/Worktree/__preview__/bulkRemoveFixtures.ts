@@ -9,6 +9,7 @@ import {
   type BulkRemoveTargetStatus,
   type UseWorktreeBulkRemoveReturn,
 } from "../useWorktreeBulkRemove";
+import { pluralize } from "@/lib/pluralize";
 
 /**
  * Hook snapshots for the bulk-remove confirm's visual-review harness. The
@@ -189,7 +190,7 @@ function snapshot(
     hasRetryablePreviews: targets.some(isBulkRemoveRetryable),
     isRetryingPreviews: false,
     consentKey: `1:${isPreviewPending ? "pending" : "settled"}`,
-    typedNameTarget: eligibleCount === 1 ? "1 worktree" : `${eligibleCount} worktrees`,
+    typedNameTarget: pluralize(eligibleCount, "worktree"),
     canConfirm: !isPreviewPending && eligibleCount > 0,
     isExecuting: false,
     handleRemoveClick: noop,

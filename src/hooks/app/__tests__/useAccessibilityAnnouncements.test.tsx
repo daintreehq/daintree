@@ -1069,3 +1069,148 @@ describe("useAccessibilityAnnouncements — location and maximize announcements 
     expect(useAnnouncerStore.getState().polite).toBeNull();
   });
 });
+
+// Single-record writes that keep `panelIds` and `commandQueueCountById` by
+// reference take the incremental path; `setPanels` rebuilds both, so these
+// cases drive the store directly.
+describe("useAccessibilityAnnouncements — stable-membership record writes", () => {
+  function replacePanel(id: string, patch: Partial<Terminal>) {
+    panelMockStore.setState((state) => {
+      const panel = state.panelsById[id];
+      if (!panel) throw new Error(`no panel ${id}`);
+      return { panelsById: { ...state.panelsById, [id]: { ...panel, ...patch } } };
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
+    panelMockStore.setState({
+      focusedId: null,
+      panelsById: {},
+      panelIds: [],
+      commandQueueCountById: {},
+      maximizedId: null,
+    });
+    hibernationState.clear();
+    hibernationListeners.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function mountWith(panels: Terminal[]) {
+    renderHook(() => useAccessibilityAnnouncements());
+    act(() => {
+      setPanels(panels);
+    });
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+  }
+
+  it("announces an agent-state change on a single replaced record", () => {
+    mountWith([
+      { id: "t1", title: "Agent A", agentState: "idle" },
+      { id: "t2", title: "Agent B", agentState: "idle" },
+    ]);
+
+    act(() => replacePanel("t2", { agentState: "exited" }));
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Agent B exited");
+  });
+
+  it("does not re-announce when the same record is replaced again without a state change", () => {
+    mountWith([
+      { id: "t1", title: "Agent A", agentState: "idle" },
+      { id: "t2", title: "Agent B", agentState: "idle" },
+    ]);
+
+    act(() => replacePanel("t1", { agentState: "exited" }));
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => replacePanel("t1", { title: "Agent A (renamed)" }));
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+
+  it("keeps another pane's pending announcement across unrelated record writes", () => {
+    mountWith([
+      { id: "t1", title: "Agent A", agentState: "idle" },
+      { id: "t2", title: "Agent B", agentState: "idle" },
+    ]);
+
+    act(() => replacePanel("t1", { agentState: "exited" }));
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    act(() => replacePanel("t2", { title: "Agent B (renamed)" }));
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Agent A exited");
+  });
+
+  it("holds a low-confidence state until a confirmed write, across unrelated writes", () => {
+    mountWith([
+      { id: "t1", title: "Agent A", agentState: "working" },
+      { id: "t2", title: "Agent B", agentState: "idle" },
+    ]);
+
+    act(() => replacePanel("t1", { agentState: "exited", stateChangeConfidence: 0.5 }));
+    act(() => replacePanel("t2", { title: "Agent B (renamed)" }));
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+
+    act(() => replacePanel("t1", { stateChangeConfidence: 0.9 }));
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Agent A exited");
+  });
+
+  it("announces a grid → dock move on a single replaced record immediately", () => {
+    mountWith([
+      { id: "t1", title: "Pane A", location: "grid" },
+      { id: "t2", title: "Pane B", location: "grid" },
+    ]);
+
+    act(() => replacePanel("t2", { location: "dock" }));
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane B minimized to dock");
+  });
+
+  it("cancels a pending announcement when the record leaves panelsById but not panelIds", () => {
+    mountWith([
+      { id: "t1", title: "Agent A", agentState: "idle" },
+      { id: "t2", title: "Agent B", agentState: "idle" },
+    ]);
+
+    act(() => replacePanel("t1", { agentState: "exited" }));
+    act(() => {
+      panelMockStore.setState((state) => {
+        const { t1: _removed, ...rest } = state.panelsById;
+        return { panelsById: rest };
+      });
+    });
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+});

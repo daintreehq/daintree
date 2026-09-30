@@ -11,6 +11,9 @@ release/
 *.asar
 stats.html
 
+# React Compiler test modules (compileWithReactCompiler.ts)
+/.compiled-tests/
+
 # Screenshot capture output (design-review + theme-tour harnesses)
 artifacts/
 

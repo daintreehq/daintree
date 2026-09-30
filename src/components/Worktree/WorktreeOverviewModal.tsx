@@ -46,6 +46,7 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
 import { useWorktreeIds } from "@/hooks/useTerminalSelectors";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
+import { pluralize } from "@/lib/pluralize";
 
 const LIST_ID = "worktree-overview-list";
 
@@ -60,6 +61,11 @@ const EMPTY_META: DerivedWorktreeMeta = {
   hasMergeConflict: false,
   chipState: null,
 };
+
+const WORKING_AGENT = 1;
+const WAITING_AGENT = 2;
+const COMPLETED_AGENT = 4;
+const EXITED_AGENT = 8;
 
 export interface WorktreeOverviewModalProps {
   isOpen: boolean;
@@ -131,34 +137,49 @@ export function WorktreeOverviewModal({
   const hasFacetFiltersActive = hasFacetFilters();
   const setQuickStateFilter = useWorktreeFilterStore((state) => state.setQuickStateFilter);
 
-  const panelsById = usePanelStore((state) => state.panelsById);
-  const panelIdsByWorktreeId = usePanelStore((state) => state.panelIdsByWorktreeId);
-  const isInTrash = usePanelStore((state) => state.isInTrash);
   const worktreeIds = useWorktreeIds();
+
+  // Three primitives per worktree, in `worktrees` order: visible terminal
+  // count, waiting agent count, agent-state flags. Streaming agents replace
+  // their panel objects on every activity-headline flush; a shallow-equal
+  // tally lets those writes pass without recomputing the meta below.
+  const agentTallies = usePanelStore(
+    useShallow((state) => {
+      const tallies: number[] = [];
+      for (const worktree of worktrees) {
+        let terminalCount = 0;
+        let waitingTerminalCount = 0;
+        let flags = 0;
+        for (const id of state.panelIdsByWorktreeId[worktree.id] ?? []) {
+          const t = state.panelsById[id];
+          if (!t || !isTerminalVisible(t, state.isInTrash, worktreeIds)) continue;
+          terminalCount++;
+          if (!isAgentTerminal(t)) continue;
+          if (!isPtyPanel(t)) continue;
+          if (t.agentState === "working") flags |= WORKING_AGENT;
+          if (t.agentState === "waiting") {
+            flags |= WAITING_AGENT;
+            waitingTerminalCount++;
+          }
+          if (t.agentState === "completed") flags |= COMPLETED_AGENT;
+          if (t.agentState === "exited") flags |= EXITED_AGENT;
+        }
+        tallies.push(terminalCount, waitingTerminalCount, flags);
+      }
+      return tallies;
+    })
+  );
 
   const derivedMetaMap = useMemo(() => {
     const map = new Map<string, DerivedWorktreeMeta>();
-    for (const worktree of worktrees) {
-      let terminalCount = 0;
-      let waitingTerminalCount = 0;
-      let hasWorkingAgent = false;
-      let hasWaitingAgent = false;
-      let hasCompletedAgent = false;
-      let hasExitedAgent = false;
-      for (const id of panelIdsByWorktreeId[worktree.id] ?? []) {
-        const t = panelsById[id];
-        if (!t || !isTerminalVisible(t, isInTrash, worktreeIds)) continue;
-        terminalCount++;
-        if (!isAgentTerminal(t)) continue;
-        if (!isPtyPanel(t)) continue;
-        if (t.agentState === "working") hasWorkingAgent = true;
-        if (t.agentState === "waiting") {
-          hasWaitingAgent = true;
-          waitingTerminalCount++;
-        }
-        if (t.agentState === "completed") hasCompletedAgent = true;
-        if (t.agentState === "exited") hasExitedAgent = true;
-      }
+    worktrees.forEach((worktree, index) => {
+      const terminalCount = agentTallies[index * 3] ?? 0;
+      const waitingTerminalCount = agentTallies[index * 3 + 1] ?? 0;
+      const flags = agentTallies[index * 3 + 2] ?? 0;
+      const hasWorkingAgent = (flags & WORKING_AGENT) !== 0;
+      const hasWaitingAgent = (flags & WAITING_AGENT) !== 0;
+      const hasCompletedAgent = (flags & COMPLETED_AGENT) !== 0;
+      const hasExitedAgent = (flags & EXITED_AGENT) !== 0;
       const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
       const isComplete =
         !!worktree.issueNumber &&
@@ -191,9 +212,9 @@ export function WorktreeOverviewModal({
           worktree.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false,
         chipState,
       });
-    }
+    });
     return map;
-  }, [worktrees, panelsById, panelIdsByWorktreeId, isInTrash, worktreeIds]);
+  }, [worktrees, agentTallies]);
 
   const facetFilters = useMemo<FilterState>(
     () => ({
@@ -642,7 +663,7 @@ export function WorktreeOverviewModal({
 
   const countLabel =
     filteredWorktrees.length === worktrees.length
-      ? `${worktrees.length} ${worktrees.length === 1 ? "worktree" : "worktrees"}`
+      ? `${pluralize(worktrees.length, "worktree")}`
       : `${filteredWorktrees.length} of ${worktrees.length}`;
 
   const renderRow = (worktree: WorktreeState, isLast: boolean) => (
@@ -822,7 +843,7 @@ export function WorktreeOverviewModal({
                     data-testid="worktree-bulk-remove"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
-                    Remove worktrees
+                    Delete worktrees
                   </Button>
                 </div>
               </FocusHandoffGuard>

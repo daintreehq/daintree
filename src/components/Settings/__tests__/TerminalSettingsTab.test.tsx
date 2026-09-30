@@ -7,7 +7,11 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => dispatch(...args) },
 }));
 
+const mockNotify = vi.fn();
+vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...args) }));
+
 import { TerminalSettingsTab } from "../TerminalSettingsTab";
+import { useTwoPaneSplitStore } from "@/store/twoPaneSplitStore";
 import { useLayoutConfigStore } from "@/store";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
@@ -251,5 +255,34 @@ describe("TerminalSettingsTab auto-restart threshold", () => {
     fireEvent.blur(input);
     expect(input.value).toBe(String(effective));
     expect(input.getAttribute("aria-invalid")).not.toBe("true");
+  });
+});
+
+describe("TerminalSettingsTab worktree split ratios", () => {
+  it("clears at once and offers an Undo that puts every ratio back", () => {
+    mockNotify.mockClear();
+    const split = useTwoPaneSplitStore.getState();
+    split.resetAllWorktreeRatios();
+    split.setWorktreeRatio("wt-a", 0.3, ["p1", "p2"]);
+    split.setWorktreeRatio("wt-b", 0.7, ["p3", "p4"]);
+    const before = useTwoPaneSplitStore.getState().ratioByWorktreeId;
+    renderSubtab("layout");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset all worktree split ratios" }));
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(useTwoPaneSplitStore.getState().ratioByWorktreeId).toEqual({});
+    const payload = mockNotify.mock.calls[0]![0] as {
+      action: { label: string; onClick: () => void };
+    };
+    expect(payload.action.label).toBe("Undo");
+
+    // A ratio set after the reset outranks the one Undo brings back.
+    useTwoPaneSplitStore.getState().setWorktreeRatio("wt-b", 0.6, ["p3", "p4"]);
+    act(() => payload.action.onClick());
+    expect(useTwoPaneSplitStore.getState().ratioByWorktreeId).toEqual({
+      ...before,
+      "wt-b": { ratio: 0.6, panels: ["p3", "p4"] },
+    });
   });
 });

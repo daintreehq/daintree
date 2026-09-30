@@ -723,6 +723,7 @@ export const createCorePanelActions = (
     }
 
     if (atLimit) {
+      const worktreeId = get().panelsById[id]?.worktreeId;
       notify({
         type: "warning",
         priority: "high",
@@ -735,7 +736,7 @@ export const createCorePanelActions = (
         duration: 5000,
         // Direct feedback on a click the user just made — it has to reach them
         // where they are, which is the open dialog.
-        context: { eventKind: "uiFeedback" },
+        context: { eventKind: "uiFeedback", panelId: id, ...(worktreeId ? { worktreeId } : {}) },
       });
     }
 

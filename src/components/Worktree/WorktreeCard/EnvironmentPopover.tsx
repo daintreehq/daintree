@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { TimeAgo } from "@/components/ui/TimeAgo";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { cn } from "@/lib/utils";
 import {
   Check,
@@ -16,7 +18,7 @@ import {
   Terminal as TerminalIcon,
 } from "lucide-react";
 import type { WorktreeLifecycleStatus } from "@shared/types/worktree";
-import { Hourglass, TriangleAlert } from "@/components/icons";
+import { CircleX, Hourglass } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { Button } from "../../ui/button";
@@ -25,7 +27,6 @@ import { Spinner } from "../../ui/Spinner";
 import { SpinningIcon } from "../../ui/SpinningIcon";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { systemClient } from "@/clients/systemClient";
-import { formatTimeAgo } from "@/utils/timeAgo";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 import { actionService } from "@/services/ActionService";
@@ -60,7 +61,7 @@ const STATUS_GLYPHS: Partial<
   >
 > = {
   yellow: { icon: Hourglass, className: "text-status-warning" },
-  red: { icon: TriangleAlert, className: "text-status-error" },
+  red: { icon: CircleX, className: "text-status-error" },
 };
 
 const RELATIVE_TIME_REFRESH_MS = 30_000;
@@ -320,12 +321,11 @@ export function EnvironmentPopover({
                 {/* The icon buttons' own padding would pull the row's right edge in
                   from the status and Check status above and below it. */}
                 <div className="-mr-1.5 flex min-w-0 items-center gap-1">
-                  <span
-                    className="min-w-0 flex-1 truncate font-mono text-2xs text-text-primary"
-                    title={resourceEndpoint}
-                  >
-                    {resourceEndpoint}
-                  </span>
+                  <TruncatedTooltip content={resourceEndpoint}>
+                    <span className="min-w-0 flex-1 truncate font-mono text-2xs text-text-primary">
+                      {resourceEndpoint}
+                    </span>
+                  </TruncatedTooltip>
                   <CopyButton
                     text={resourceEndpoint}
                     aria-label="Copy endpoint"
@@ -344,7 +344,7 @@ export function EnvironmentPopover({
                           <ExternalLink aria-hidden="true" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent side="top">Open in browser</TooltipContent>
+                      <TooltipContent side="top">Open endpoint in browser</TooltipContent>
                     </Tooltip>
                   )}
                 </div>
@@ -356,13 +356,12 @@ export function EnvironmentPopover({
         {(checkedAt || onCheckResourceStatus) && (
           <div className="flex items-center justify-between gap-2 border-t border-divider px-3 py-1.5">
             {checkedAt ? (
-              <time
-                dateTime={checkedAt.toISOString()}
-                title={checkedAt.toLocaleString()}
-                className="text-text-secondary tabular-nums"
-              >
-                Checked {formatTimeAgo(checkedAt.getTime(), Math.max(now, checkedAt.getTime()))}
-              </time>
+              <TimeAgo
+                timestamp={checkedAt.getTime()}
+                now={Math.max(now, checkedAt.getTime())}
+                prefix="Last checked "
+                className="text-text-secondary"
+              />
             ) : (
               <span className="text-text-secondary">Not checked yet</span>
             )}

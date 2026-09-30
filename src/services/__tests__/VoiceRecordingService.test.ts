@@ -366,6 +366,69 @@ describe("VoiceRecordingService — background recording", () => {
     expect(gainMock.connect).toHaveBeenCalledWith(ctx.destination);
   });
 
+  // Constructed after getUserMedia, the context's synchronous output-device
+  // lookup queued behind the input stream start and froze the renderer ~650ms.
+  it("constructs the AudioContext before opening the microphone", async () => {
+    const { ctx } = setupGlobals();
+    const audioContextCtor = vi.fn(function () {
+      return ctx;
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+    const getUserMedia = vi.mocked(navigator.mediaDevices.getUserMedia);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(audioContextCtor.mock.invocationCallOrder[0]).toBeLessThan(
+      getUserMedia.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("closes the pre-built AudioContext when the microphone can't be opened", async () => {
+    const { ctx } = setupGlobals();
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValue(
+      new DOMException("denied", "NotAllowedError")
+    );
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+
+    expect(ctx.close).toHaveBeenCalledTimes(1);
+    expect(ctx.createMediaStreamSource).not.toHaveBeenCalled();
+  });
+
+  it("closes the pre-built AudioContext when the start is cancelled while the microphone is pending", async () => {
+    const { ctx } = setupGlobals();
+    const getUserMedia = vi.mocked(navigator.mediaDevices.getUserMedia);
+    const stream = await getUserMedia({ audio: true });
+    const getTracks = vi.spyOn(stream, "getTracks");
+    getUserMedia.mockClear();
+    let grantMicrophone = () => {};
+    getUserMedia.mockReturnValue(
+      new Promise((resolve) => {
+        grantMicrophone = () => resolve(stream);
+      })
+    );
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const starting = voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+    await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalled());
+
+    await voiceRecordingService.stop();
+    expect(ctx.close).toHaveBeenCalledTimes(1);
+
+    grantMicrophone();
+    await starting;
+
+    // The stale start still releases the late-arriving microphone, without
+    // closing the already-closed context a second time.
+    expect(getTracks).toHaveBeenCalled();
+    expect(ctx.close).toHaveBeenCalledTimes(1);
+    expect(ctx.createMediaStreamSource).not.toHaveBeenCalled();
+  });
+
   it("tears down the keep-alive oscillator and AudioContext when stop() is called", async () => {
     const { ctx, oscillatorMock, gainMock } = setupGlobals();
 

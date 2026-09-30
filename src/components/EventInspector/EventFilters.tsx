@@ -1,6 +1,8 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { POPOVER_ROW_HOVER_CLASS } from "@/components/ui/popoverHeader";
 import { SearchField, clearSearchBeforeDismiss } from "@/components/ui/SearchField";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { Check, ListFilter } from "lucide-react";
@@ -262,7 +264,12 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
           </div>
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
             {Object.keys(groupedTypes).length === 0 ? (
-              <p className="px-1 pb-1 text-xs text-text-secondary">No events captured yet</p>
+              <EmptyState
+                variant="zero-data"
+                scale="popover"
+                title="No events captured yet"
+                className="py-6"
+              />
             ) : null}
             {Object.entries(groupedTypes).map(([category, types]) => (
               <div key={category}>
@@ -272,27 +279,23 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
                 {types.map((type) => {
                   const isChecked = filters.types?.includes(type) || false;
                   return (
-                    <button
+                    <Button
                       key={type}
-                      type="button"
+                      variant="ghost"
+                      size="xs"
                       aria-pressed={isChecked}
                       onClick={() => toggleTypeFilter(type)}
-                      className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-1 py-1 text-left hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                      className={cn(
+                        "w-full justify-start gap-1.5 font-mono text-text-primary focus-visible:-outline-offset-2",
+                        POPOVER_ROW_HOVER_CLASS
+                      )}
                     >
-                      <Check
-                        aria-hidden="true"
-                        className={cn(
-                          "h-3 w-3 shrink-0 text-text-primary",
-                          !isChecked && "invisible"
-                        )}
-                      />
-                      <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">
-                        {type}
-                      </span>
-                      <span className="text-2xs tabular-nums text-text-secondary">
+                      <Check aria-hidden="true" className={cn(!isChecked && "invisible")} />
+                      <span className="min-w-0 flex-1 truncate text-left">{type}</span>
+                      <span className="tabular-nums text-text-secondary">
                         {typeCounts.get(type) || 0}
                       </span>
-                    </button>
+                    </Button>
                   );
                 })}
               </div>

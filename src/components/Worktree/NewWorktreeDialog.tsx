@@ -3,13 +3,13 @@ import { Callout } from "@/components/ui/Callout";
 import { InlineError } from "@/components/ui/field";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
+import { KbdChord } from "@/components/ui/Kbd";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { FolderGit2, GitBranch } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
@@ -19,6 +19,7 @@ import { worktreeClient, forgeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { notify } from "@/lib/notify";
+import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
 import { systemClient } from "@/clients/systemClient";
 import { useRecipeStore } from "@/store/recipeStore";
@@ -848,6 +849,7 @@ export function NewWorktreeDialog({
                     type: "warning",
                     title: "Couldn't undo assignment",
                     message: `${formatErrorMessage(err, "Couldn't unassign issue")} — you can unassign manually on ${forgeName}`,
+                    context: { worktreeId },
                   });
                 });
             };
@@ -857,12 +859,12 @@ export function NewWorktreeDialog({
               message: `#${snapIssue.number} assigned to you`,
               correlationId: worktreeId,
               priority: "high",
-              context: { eventKind: "uiFeedback" },
+              context: { worktreeId, eventKind: "uiFeedback" },
               // Auto-dismiss after a short window instead of staying sticky:
               // notify() defaults action-bearing toasts to duration 0, but the
               // Undo here is an optional, time-limited affordance — not a reason
               // to keep the confirmation on screen until manually dismissed.
-              duration: 5_000,
+              duration: UNDO_TOAST_DURATION_MS,
               action: {
                 label: "Undo",
                 onClick: undoOnClick,
@@ -875,6 +877,7 @@ export function NewWorktreeDialog({
               type: "warning",
               title: "Couldn't assign issue",
               message: `${message} — you can assign it manually on ${forgeName}`,
+              context: { worktreeId },
               actions: issueUrl
                 ? [
                     {
@@ -909,6 +912,7 @@ export function NewWorktreeDialog({
               type: "warning",
               title: "Couldn't clone layout",
               message: `${message} — the worktree itself was created`,
+              context: { worktreeId },
             });
           }
         } else if (snapSelectedRecipe) {
@@ -934,6 +938,7 @@ export function NewWorktreeDialog({
             notifyRecipeSpawnFailures(results, {
               recipeName: snapSelectedRecipe.name,
               projectId,
+              worktreeId,
             });
           } catch (recipeErr) {
             const message = formatErrorMessage(recipeErr, "Couldn't run recipe");
@@ -950,6 +955,7 @@ export function NewWorktreeDialog({
               type: "warning",
               title: "Couldn't run recipe",
               message: `${message} — the worktree itself was created`,
+              context: { worktreeId: recipeWorktreeId },
               actions: [
                 {
                   label: "Retry recipe",
@@ -959,6 +965,7 @@ export function NewWorktreeDialog({
                         notifyRecipeSpawnFailures(results, {
                           recipeName: snapSelectedRecipe.name,
                           projectId,
+                          worktreeId: recipeWorktreeId,
                         })
                       )
                       .catch((err) => logError("Failed to run recipe", err));
@@ -1448,11 +1455,9 @@ export function NewWorktreeDialog({
               data-testid="create-worktree-button"
             >
               {initialPR ? "Check out" : "Create worktree"}
-              <span
-                className="ml-1 rounded-xs bg-text-inverse/15 px-1 py-0.5 font-mono text-3xs leading-none text-text-inverse"
-                aria-hidden="true"
-              >
-                {isMac() ? "\u2318\u21A9" : "Ctrl\u21A9"}
+              {/* Hidden from the name: `aria-keyshortcuts` already says it. */}
+              <span className="inline-flex" aria-hidden="true">
+                <KbdChord shortcut="Cmd+Enter" density="compact" foreground="inverse" />
               </span>
             </Button>
           </div>

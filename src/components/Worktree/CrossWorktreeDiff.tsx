@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState, useCallback, useMemo, type ReactNode } from "react";
+import { DiffStat } from "@/components/ui/DiffStat";
 import { GitCompare, ChevronLeft, ChevronRight, Folder, RefreshCw, WrapText } from "lucide-react";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { useRovingRows, type UseRovingRowsResult } from "@/hooks/useRovingRows";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useSkeletonFloor, useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -21,6 +24,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { DIFF_STATUS_CONFIG, formatDiffDir } from "@/components/FileViewer/diffChangeSet";
 import { isProseFilePath } from "@/components/FileViewer/isProseFile";
+import { pluralize } from "@/lib/pluralize";
 
 interface CrossWorktreeDiffProps {
   isOpen: boolean;
@@ -92,14 +96,21 @@ interface CrossWorktreeFileRowProps {
   /** The directory band above is shortened or clipped, so the path is not on screen. */
   directoryHidden: boolean;
   onClick: () => void;
+  roving: RowRoving;
 }
+
+type RowRoving = Pick<UseRovingRowsResult, "tabStopKey" | "onRowFocus" | "rowRef">;
+
+const fileKey = (file: CrossWorktreeFile) => `${file.status}:${file.path}`;
 
 function CrossWorktreeFileRow({
   file,
   isSelected,
   directoryHidden,
   onClick,
+  roving,
 }: CrossWorktreeFileRowProps) {
+  const key = fileKey(file);
   const { ref, isTruncated } = useTruncationDetection();
   const status = statusDisplay(file.status);
   const insertions = file.insertions ?? 0;
@@ -110,15 +121,22 @@ function CrossWorktreeFileRow({
       <button
         type="button"
         onClick={onClick}
+        ref={roving.rowRef(key)}
+        data-roving-row=""
+        // One tab stop for the shelf; the arrow keys move it.
+        tabIndex={roving.tabStopKey === key ? 0 : -1}
+        onFocus={() => roving.onRowFocus(key)}
         aria-current={isSelected || undefined}
+        // A list-detail row, not a listbox option: `aria-current` for AT and
+        // `data-selected` for the shared selected-row fill (and its forced-colors
+        // outline, which `.palette-row` carries).
+        data-selected={isSelected ? "true" : undefined}
         aria-label={fileRowLabel(file)}
         data-file-path={file.path}
         className={cn(
-          "flex w-full items-center rounded-[var(--radius-lg)] px-1.5 py-1 text-left text-xs font-mono transition-colors duration-150 ease-out",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-          isSelected
-            ? "bg-overlay-subtle forced-colors:outline forced-colors:outline-1 forced-colors:-outline-offset-1 forced-colors:outline-[Highlight]"
-            : "hover:bg-tint/5"
+          LIST_DETAIL_ROW_CLASS,
+          "flex w-full items-center rounded-[var(--radius-md)] px-1.5 py-1 text-left text-xs font-mono",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         )}
       >
         <span className={cn("w-4 shrink-0 font-bold", status.color)} aria-hidden="true">
@@ -133,10 +151,11 @@ function CrossWorktreeFileRow({
         >
           {basename(file.path)}
         </span>
-        <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-2xs tabular-nums">
-          {insertions > 0 && <span className="text-status-success">+{insertions}</span>}
-          {deletions > 0 && <span className="text-status-error">-{deletions}</span>}
-        </span>
+        <DiffStat
+          insertions={insertions}
+          deletions={deletions}
+          className="ml-auto shrink-0 pl-2 text-2xs"
+        />
       </button>
     </TruncatedTooltip>
   );
@@ -146,10 +165,12 @@ function FileGroupSection({
   group,
   selectedFile,
   onOpen,
+  roving,
 }: {
   group: FileGroup;
   selectedFile: CrossWorktreeFile | null;
   onOpen: (file: CrossWorktreeFile) => void;
+  roving: RowRoving;
 }) {
   const { ref, isTruncated } = useTruncationDetection();
   const label = formatDiffDir(group.dir);
@@ -165,7 +186,8 @@ function FileGroupSection({
       <div className="flex flex-col gap-px">
         {group.files.map((file) => (
           <CrossWorktreeFileRow
-            key={`${file.status}:${file.path}`}
+            key={fileKey(file)}
+            roving={roving}
             file={file}
             isSelected={selectedFile !== null && isSameFile(selectedFile, file)}
             directoryHidden={directoryHidden}
@@ -188,13 +210,8 @@ function ChangeSetSummary({ files }: { files: CrossWorktreeFile[] }) {
 
   return (
     <div className="flex items-baseline justify-between gap-2 text-xs">
-      <span className="font-medium text-text-primary">
-        {files.length} {files.length === 1 ? "file" : "files"}
-      </span>
-      <span className="flex items-center gap-1.5 font-mono text-2xs tabular-nums">
-        {totalInsertions > 0 && <span className="text-status-success">+{totalInsertions}</span>}
-        {totalDeletions > 0 && <span className="text-status-error">-{totalDeletions}</span>}
-      </span>
+      <span className="font-medium text-text-primary">{pluralize(files.length, "file")}</span>
+      <DiffStat insertions={totalInsertions} deletions={totalDeletions} className="text-2xs" />
     </div>
   );
 }
@@ -331,6 +348,14 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   // File stepping through the comparison set, mirroring the diff modals:
   // `[` / `]` keys plus a footer stepper in the diff panel.
   const groups = useMemo(() => (result ? groupComparisonFiles(result.files) : null), [result]);
+  const rovingKeys = useMemo(
+    () => groups?.flatMap((group) => group.files.map(fileKey)) ?? [],
+    [groups]
+  );
+  const roving = useRovingRows({
+    keys: rovingKeys,
+    preferredKey: selectedFile ? fileKey(selectedFile) : null,
+  });
   // Stepping walks the list in the order it is drawn, not git's output order.
   const files = useMemo(() => groups?.flatMap((group) => group.files) ?? null, [groups]);
   // `null` means auto — prose wraps, code doesn't. Derived from the file on
@@ -489,7 +514,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
-      <div className="flex items-end gap-3 px-6 py-3 border-b border-border-default shrink-0">
+      <div className="flex items-end gap-3 px-6 py-3 border-b border-divider shrink-0">
         <div className="flex-1 min-w-0">
           <WorktreeSelector
             label="Base"
@@ -525,6 +550,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           )}
           <div
             ref={listRef}
+            onKeyDown={roving.onKeyDown}
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-1.5"
           >
             {showListSkeleton && (
@@ -544,6 +570,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                   group={group}
                   selectedFile={selectedFile}
                   onOpen={(file) => void fetchFileDiff(file)}
+                  roving={roving}
                 />
               ))}
           </div>

@@ -1,4 +1,6 @@
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
+import { surfaceHeaderVariants } from "@/components/ui/SurfaceHeader";
+import { cn } from "@/lib/utils";
 
 interface BrowserPaneSkeletonProps {
   label?: string;
@@ -25,7 +27,7 @@ export function BrowserPaneSkeleton({
     <div className="relative flex flex-col h-full w-full">
       <Skeleton label={label} className="flex flex-col h-full w-full">
         {/* Header row — PanelHeader's compact frame: h-8, px-3, kind icon + title, controls */}
-        <div className="flex items-center justify-between px-3 shrink-0 h-8 border-b border-divider bg-surface">
+        <div className={cn(surfaceHeaderVariants({ density: "compact" }), "bg-surface")}>
           <div className="flex items-center gap-2">
             <SkeletonBone immediate className="size-3.5" />
             <SkeletonBone immediate className="h-2.5 w-24" />

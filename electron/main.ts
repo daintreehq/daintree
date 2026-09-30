@@ -13,7 +13,13 @@ import { app, BrowserWindow, crashReporter, protocol, webContents } from "electr
 nodeV8.setHeapSnapshotNearHeapLimit(2);
 import { registerGlobalErrorHandlers } from "./setup/globalErrorHandlers.js";
 import { startDevDiagnostics } from "./setup/devDiagnostics.js";
-import { isE2EFaultMode, isE2EMode, isIdleHarness } from "./setup/runtimeFlags.js";
+import {
+  isE2EBackgroundWindows,
+  isE2EFaultMode,
+  isE2EMode,
+  isIdleHarness,
+} from "./setup/runtimeFlags.js";
+import { installE2EBackgroundWindows } from "./setup/e2eBackgroundWindows.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -288,6 +294,10 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 // lever, not a boot win.)
 const disabledFeatures = ["BackForwardCache", "Translate"];
 app.commandLine.appendSwitch("disable-features", disabledFeatures.join(","));
+
+if (isE2EMode && isE2EBackgroundWindows && process.platform === "darwin") {
+  installE2EBackgroundWindows();
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -904,10 +914,12 @@ if (!gotTheLock) {
       // `setPluginDirResolver()` to point it at the real authority resolver and
       // drains queued `.dntr` paths via `activateOpenFileInstaller`. The
       // placeholder is unobservable because a renderer can only learn a
-      // `plugin://` module URL from a panel-kind contribution, and those are
-      // published by PluginService — which installs the live resolver as its
-      // first act, before any plugin loads (#11728). Keep that ordering: a 404
-      // served here is permanent for that specifier in the renderer's module map.
+      // `plugin://` module URL from a plugin load, and every load awaits
+      // `whenPluginDirResolverLive()` before minting one (#12996) — including a
+      // background-restored project's, which reaches PluginService through
+      // `notifyProjectPluginsOpened` without waiting on the deferred task. Keep
+      // that gate: a 404 served here is permanent for that specifier in the
+      // renderer's module map.
       registerPluginProtocol(() => undefined);
       // Wire the `daintree://` deep-link path (#9559): take over live macOS
       // `open-url` events and drain any cold-launch URL (queued `open-url` on

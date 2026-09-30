@@ -43,7 +43,7 @@ function blockAt(offset: number): string {
 describe("sidebar selection accent", () => {
   it("dims the active row's accent edge while a control inside it owns the focus ring", () => {
     const offsets = ruleOffsets(
-      /\.sidebar-worktree-card\[data-active="true"\]:has\(:focus-visible\)/
+      /\.sidebar-worktree-card\[data-active="true"\](?::not\(\[data-drop-target="true"\]\))?:has\(:focus-visible\)/
     );
     expect(
       offsets.length,
@@ -64,7 +64,7 @@ describe("sidebar selection accent", () => {
     // file is unlayered — so order is the whole mechanism.
     const base = ruleOffsets(/\.sidebar-worktree-card\[data-active="true"\]\s*\{/);
     const focused = ruleOffsets(
-      /\.sidebar-worktree-card\[data-active="true"\]:has\(:focus-visible\)/
+      /\.sidebar-worktree-card\[data-active="true"\](?::not\(\[data-drop-target="true"\]\))?:has\(:focus-visible\)/
     );
     expect(base.length).toBeGreaterThan(0);
     expect(focused.length).toBeGreaterThan(0);

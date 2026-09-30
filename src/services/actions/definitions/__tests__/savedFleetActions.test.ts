@@ -629,6 +629,41 @@ describe("fleet.deleteNamedFleet", () => {
     expect(saved[0]).toMatchObject({ id: "s2" });
   });
 
+  it("puts back only the deleted scope when the save fails, keeping edits made meanwhile", async () => {
+    const scope = (id: string): FleetSavedScope => ({
+      kind: "snapshot",
+      id,
+      name: id,
+      terminalIds: [],
+      createdAt: 1,
+    });
+    useProjectSettingsStore.setState({
+      projectId: "proj-1",
+      settings: { runCommands: [], fleetSavedScopes: [scope("s1"), scope("s2")] },
+    });
+    let rejectSave: (error: Error) => void = () => {};
+    saveSettingsMock.mockImplementationOnce(
+      () => new Promise((_, reject) => (rejectSave = reject))
+    );
+
+    const registry = await buildRegistry();
+    const deleting = run(registry, "fleet.deleteNamedFleet", { id: "s1" });
+    await Promise.resolve();
+    // Another fleet is saved while the delete's write is still in flight.
+    useProjectSettingsStore.setState((s) => ({
+      settings: {
+        ...s.settings!,
+        fleetSavedScopes: [...(s.settings!.fleetSavedScopes ?? []), scope("s3")],
+      },
+    }));
+    rejectSave(new Error("disk full"));
+    await deleting;
+
+    expect(useProjectSettingsStore.getState().settings?.fleetSavedScopes?.map((s) => s.id)).toEqual(
+      ["s1", "s2", "s3"]
+    );
+  });
+
   it("is idempotent — unknown id does not call saveSettings", async () => {
     getSettingsMock.mockResolvedValue({
       runCommands: [],

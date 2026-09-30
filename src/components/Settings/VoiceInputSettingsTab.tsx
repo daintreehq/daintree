@@ -1,6 +1,15 @@
 import { useCallback, useState, useEffect, useId, useRef } from "react";
 import type { ReactNode } from "react";
-import { Eye, EyeOff, Plus, X, Check, AlertCircle, ExternalLink, ChevronRight } from "lucide-react";
+import {
+  Eye,
+  EyeOff,
+  Plus,
+  X,
+  XCircle,
+  ExternalLink,
+  ChevronRight,
+  CheckCircle2,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -25,6 +34,7 @@ import { useAudioDevices, SYSTEM_DEFAULT_VALUE } from "@/hooks/useAudioDevices";
 import { useTabLoad } from "@/hooks";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { VOICE_LANGUAGES } from "@shared/config/voiceLanguages";
 import { CORE_CORRECTION_PROMPT, VOICE_DICTATION_AI_MODEL } from "@shared/config/voiceCorrection";
 import type {
   VoiceInputSettings,
@@ -34,19 +44,6 @@ import type {
   VoiceTranscriptionProvider,
   VoiceRecordingMode,
 } from "@shared/types";
-
-const LANGUAGES = [
-  { code: "en", label: "English" },
-  { code: "es", label: "Spanish" },
-  { code: "fr", label: "French" },
-  { code: "de", label: "German" },
-  { code: "ja", label: "Japanese" },
-  { code: "zh", label: "Chinese" },
-  { code: "ko", label: "Korean" },
-  { code: "pt", label: "Portuguese" },
-  { code: "it", label: "Italian" },
-  { code: "ru", label: "Russian" },
-];
 
 const PROVIDER_NAME: Record<VoiceTranscriptionProvider, string> = {
   openai: "OpenAI",
@@ -534,7 +531,7 @@ export function VoiceInputSettingsTab() {
                     value={settings.organizationId}
                     onChange={(e) => void update({ organizationId: e.target.value })}
                     onBlur={(e) => void update({ organizationId: e.target.value.trim() })}
-                    placeholder="org-..."
+                    placeholder="org-…"
                     layout="inline"
                     controlWidth="wide"
                     className="font-mono"
@@ -547,7 +544,7 @@ export function VoiceInputSettingsTab() {
                     value={settings.projectId}
                     onChange={(e) => void update({ projectId: e.target.value })}
                     onBlur={(e) => void update({ projectId: e.target.value.trim() })}
-                    placeholder="proj_..."
+                    placeholder="proj_…"
                     layout="inline"
                     controlWidth="wide"
                     className="font-mono"
@@ -607,7 +604,7 @@ export function VoiceInputSettingsTab() {
               description="The language you dictate in"
               value={settings.language}
               onValueChange={(v) => void update({ language: v })}
-              options={LANGUAGES.map(({ code, label }) => ({ value: code, label }))}
+              options={VOICE_LANGUAGES.map(({ code, label }) => ({ value: code, label }))}
               isModified={settings.language !== DEFAULT_SETTINGS.language}
               onReset={() => void update({ language: DEFAULT_SETTINGS.language })}
             />
@@ -844,7 +841,7 @@ function ApiKeyRow({
   const statusLine =
     status.kind === "saved" ? (
       <>
-        <Check
+        <CheckCircle2
           className={cn(
             "w-3.5 h-3.5 shrink-0",
             // Green only for a key the provider actually accepted.
@@ -858,22 +855,22 @@ function ApiKeyRow({
       </>
     ) : status.kind === "invalid" ? (
       <>
-        <AlertCircle className="w-3.5 h-3.5 shrink-0 text-status-error" aria-hidden="true" />
+        <XCircle className="w-3.5 h-3.5 shrink-0 text-status-error" aria-hidden="true" />
         {status.message}
       </>
     ) : status.kind === "removed" ? (
       <>
-        <Check className="w-3.5 h-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
+        <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
         Key removed
       </>
     ) : status.kind === "remove-failed" ? (
       <>
-        <AlertCircle className="w-3.5 h-3.5 shrink-0 text-status-error" aria-hidden="true" />
+        <XCircle className="w-3.5 h-3.5 shrink-0 text-status-error" aria-hidden="true" />
         Couldn't remove the key. It's still saved, so you can try again.
       </>
     ) : status.kind === "save-failed" ? (
       <>
-        <AlertCircle className="w-3.5 h-3.5 shrink-0 text-status-error" aria-hidden="true" />
+        <XCircle className="w-3.5 h-3.5 shrink-0 text-status-error" aria-hidden="true" />
         Couldn't save the key. It's still in the field, so you can try Save again.
       </>
     ) : null;

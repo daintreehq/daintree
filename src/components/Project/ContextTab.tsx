@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Callout } from "@/components/ui/Callout";
-import { AlertTriangle, Play, Check } from "lucide-react";
+import { AlertTriangle, Play, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
@@ -20,28 +20,10 @@ import type {
   Worktree,
 } from "@/types";
 import { logError } from "@/utils/logger";
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
-}
-
-/**
- * Token counts are a ±20% heuristic, so they read better rounded than exact.
- * Thresholds are picked off the *rounded* value so it can never print "1000k",
- * and so the one-decimal form stops before it would round up to two digits.
- */
-function formatTokenEstimate(tokens: number): string {
-  if (tokens < 1000) return String(Math.round(tokens));
-  if (tokens < 999_500) {
-    const thousands = tokens / 1000;
-    return thousands < 9.95 ? `${thousands.toFixed(1)}k` : `${Math.round(thousands)}k`;
-  }
-  return `${(tokens / 1_000_000).toFixed(1)}M`;
-}
+import { pluralize } from "@/lib/pluralize";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { formatBytes } from "@/lib/formatBytes";
+import { formatTokenCount } from "@/utils/formatTokenCount";
 
 // Keyed loosely on purpose: exclusion reasons are additive upstream, and an
 // unrecognized one falls back to showing its own key rather than nothing.
@@ -80,7 +62,7 @@ const EXCLUSION_REASON_PREVIEW_COUNT = 3;
  */
 function formatTruncationNotice(count?: number, by?: CopyTreeTruncatedBy): string {
   const subject =
-    count === undefined ? "Some files were" : count === 1 ? "1 file was" : `${count} files were`;
+    count === undefined ? "Some files were" : pluralize(count, "file was", "files were");
   const cause = by ? ` — ${TRUNCATION_LABELS[by]} was reached first` : "";
   return `${subject} truncated or left out${cause}`;
 }
@@ -425,7 +407,7 @@ export function ContextTab({
                     </p>
                   ) : (
                     <div className="flex items-center gap-2 flex-wrap">
-                      <Check className="h-4 w-4 text-status-success" />
+                      <CheckCircle2 className="h-4 w-4 text-status-success" />
                       <span className="text-sm font-medium text-text-primary">
                         {testConfigResult.includedFiles} files would be included
                       </span>
@@ -434,7 +416,7 @@ export function ContextTab({
                       </span>
                       {testConfigResult.estimatedTokens !== undefined && (
                         <span className="text-xs text-text-secondary">
-                          ~{formatTokenEstimate(testConfigResult.estimatedTokens)} tokens
+                          ~{formatTokenCount(testConfigResult.estimatedTokens)} tokens
                         </span>
                       )}
                     </div>
@@ -482,12 +464,11 @@ export function ContextTab({
                             key={file.path}
                             className="flex items-center justify-between gap-2 text-xs"
                           >
-                            <span
-                              className="font-mono text-text-primary truncate"
-                              title={file.path}
-                            >
-                              {file.path}
-                            </span>
+                            <TruncatedTooltip content={file.path}>
+                              <span className="font-mono text-text-primary truncate">
+                                {file.path}
+                              </span>
+                            </TruncatedTooltip>
                             <span className="text-text-secondary shrink-0">
                               {formatBytes(file.size)}
                             </span>

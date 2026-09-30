@@ -8,7 +8,10 @@ import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
 import { useShallow } from "zustand/react/shallow";
 import { formatTokenCount } from "@/utils/formatTokenCount";
-import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
+import {
+  isSettledResourceState,
+  useResourceMonitoringStore,
+} from "@/store/resourceMonitoringStore";
 import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
 import { SubagentChip } from "./SubagentChip";
 import {
@@ -21,6 +24,7 @@ import { TerminalRateLimitBadge } from "./TerminalRateLimitBadge";
 import { TerminalNotifyChip } from "./TerminalNotifyChip";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { describeExitStatus } from "./exitStatus";
+import { pluralize } from "@/lib/pluralize";
 
 export interface TerminalHeaderContentProps {
   id: string;
@@ -115,8 +119,16 @@ const DE_ESCALATION_HYSTERESIS_POLLS = 5;
  * Coming down, the run counts readings below the shown band and lands on the
  * hottest band seen during it, so a quiet spell with a spike in it steps down
  * rather than falling straight through.
+ *
+ * A `settled` poll has held for a full history window, longer than either run,
+ * and the store stops issuing new polls for it — so it shows as-is rather than
+ * starting a run that would never complete.
  */
-function useStickySeverity(raw: ResourceSeverity | null, poll: unknown): ResourceSeverity {
+function useStickySeverity(
+  raw: ResourceSeverity | null,
+  poll: unknown,
+  settled: boolean
+): ResourceSeverity {
   const [sticky, setSticky] = useState<ResourceSeverity>("muted");
   // The bookkeeping lives in refs and is keyed to the poll it last counted, so
   // StrictMode's doubled mount effect cannot count one sample twice.
@@ -144,6 +156,14 @@ function useStickySeverity(raw: ResourceSeverity | null, poll: unknown): Resourc
     if (countedPollRef.current === poll) return;
     countedPollRef.current = poll;
 
+    if (settled) {
+      above.amber = 0;
+      above.red = 0;
+      below.count = 0;
+      show(raw);
+      return;
+    }
+
     const level = SEVERITY_ORDER[raw];
     const shown = SEVERITY_ORDER[shownRef.current];
     above.amber = level >= SEVERITY_ORDER.amber ? above.amber + 1 : 0;
@@ -169,7 +189,7 @@ function useStickySeverity(raw: ResourceSeverity | null, poll: unknown): Resourc
       below.count = 0;
       show(below.peak);
     }
-  }, [raw, poll]);
+  }, [raw, poll, settled]);
 
   return sticky;
 }
@@ -201,14 +221,17 @@ export function TerminalHeaderContent({
   const resourceState = useResourceMonitoringStore((s) => s.metrics.get(id));
   const hasPtyKind = kind == null || panelKindHasPty(kind);
   const showResource = resourceEnabled && hasPtyKind && resourceState != null;
+  const resourceSettled = showResource && isSettledResourceState(resourceState);
 
   const cpuSeverity = useStickySeverity(
     showResource ? getCpuSeverity(resourceState.cpuPercent) : null,
-    showResource ? resourceState : null
+    showResource ? resourceState : null,
+    resourceSettled
   );
   const memorySeverity = useStickySeverity(
     showResource ? getMemorySeverity(resourceState.memoryKb) : null,
-    showResource ? resourceState : null
+    showResource ? resourceState : null,
+    resourceSettled
   );
   const resourceSeverity =
     SEVERITY_ORDER[cpuSeverity] >= SEVERITY_ORDER[memorySeverity] ? cpuSeverity : memorySeverity;
@@ -272,7 +295,7 @@ export function TerminalHeaderContent({
               Finished, no changes
             </span>
           </TooltipTrigger>
-          <TooltipContent side="bottom">No file changes since the agent started.</TooltipContent>
+          <TooltipContent side="bottom">No file changes since the agent started</TooltipContent>
         </Tooltip>
       );
     }
@@ -373,7 +396,7 @@ export function TerminalHeaderContent({
             </div>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {`${queueCount} command${queueCount > 1 ? "s" : ""} queued`}
+            {`${pluralize(queueCount, "command")} queued`}
           </TooltipContent>
         </Tooltip>
       )}

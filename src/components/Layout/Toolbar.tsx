@@ -111,6 +111,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentity";
 import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
+import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
@@ -134,8 +135,11 @@ import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
-import { LazyProjectSwitcherPalette } from "@/lazyPanels";
-import { ProjectIdentityEditor } from "@/components/Project/ProjectIdentityEditor";
+import {
+  LazyProjectIdentityEditor,
+  LazyProjectSwitcherPalette,
+  preloadProjectIdentityEditor,
+} from "@/lazyPanels";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { ToolbarProjectPill, ToolbarProjectPillTooltipBody } from "./ToolbarProjectPill";
 import { shortSha } from "@/utils/textParsing";
@@ -168,6 +172,7 @@ import {
   isBuiltInAgentId,
   type BuiltInAgentId,
 } from "@shared/config/agentIds";
+import { pluralize } from "@/lib/pluralize";
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
 
@@ -342,7 +347,7 @@ function OverflowMenu({
   const n = overflowIds.length;
   const observations: string[] = [];
   if (overflowIds.includes("problems") && errorCount > 0) {
-    observations.push(`${errorCount} ${errorCount === 1 ? "error" : "errors"}`);
+    observations.push(`${pluralize(errorCount, "error")}`);
   }
   if (overflowIds.includes("notification-center") && notificationUnreadCount > 0) {
     observations.push(`${notificationUnreadCount} unread`);
@@ -586,9 +591,9 @@ function OverflowMenu({
             ];
           }
           const Icon = meta.icon;
-          // Mirror the visible copy-tree button, which is aria-disabled both
-          // when no worktree is active ("Open a worktree first" tooltip) and
-          // while a copy is in flight — without this the overflow item would
+          // Mirror the visible copy-tree button, which declines both when no
+          // worktree is active ("Open a worktree first" tooltip) and while a
+          // copy is in flight — without this the overflow item would
           // look live yet silently close with no feedback, since its handler
           // guards on the same two conditions.
           const disabled = id === "copy-tree" && (!hasActiveWorktree || isCopyingTree);
@@ -717,6 +722,12 @@ export function Toolbar({
   const { entry: forgeProviderEntry } = useResolvedForgeProvider(currentProject?.id ?? null);
   const forgeProviderName = forgeProviderEntry?.contribution.name ?? null;
   const projectSwitcher = projectSwitcherPalette;
+  // Read from the store rather than `projectSwitcher.activeProject`, whose
+  // counts are held while the switcher is closed — which is when this pill's
+  // menu opens.
+  const activeProjectHasProcesses = useProjectStatsStore((state) =>
+    currentProject ? (state.stats[currentProject.id]?.processCount ?? 0) > 0 : false
+  );
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const activeWorktree = useWorktreeStore((state) =>
@@ -1065,7 +1076,7 @@ export function Toolbar({
   );
 
   // The anchor stops being interactive without a worktree or while a copy is
-  // in flight (it renders aria-disabled for both), and the menu's entries
+  // in flight (aria-disabled for the first, busy for the second), and the menu's entries
   // decline in both states — leaving it open would strand a dead menu over the
   // toolbar. The in-flight half matters because copies start without the
   // trigger: MCP and assistant dispatches, Cmd+Shift+C, and the palette can
@@ -1511,11 +1522,14 @@ export function Toolbar({
                           variant="ghost"
                           size="icon"
                           data-toolbar-item=""
-                          aria-disabled={isCopyingTree || !activeWorktree || undefined}
+                          // Busy is the spinner, not a dim: a copy in flight keeps
+                          // the button at full strength and the handlers veto a
+                          // second run. Only "no worktree" is unavailable.
+                          aria-disabled={!activeWorktree || undefined}
+                          aria-busy={isCopyingTree || undefined}
                           className={cn(
                             "toolbar-icon-button relative",
                             "text-text-primary",
-                            isCopyingTree && "cursor-wait opacity-70",
                             "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                           )}
                           aria-label={isCopyingTree ? "Copying…" : "Copy context"}
@@ -2255,8 +2269,9 @@ export function Toolbar({
     setPillTooltipOpen(false);
     isRestoringFocusPillRef.current = true;
   }, []);
-  const clearPillTooltipFocusSuppression = useCallback(() => {
+  const handlePillPointerEnter = useCallback(() => {
     isRestoringFocusPillRef.current = false;
+    void preloadProjectIdentityEditor().catch(() => {});
   }, []);
   const handlePillDropdownClose = useCallback(() => {
     suppressPillTooltipForFocusRestore();
@@ -2302,6 +2317,7 @@ export function Toolbar({
     setIdentityEditorProjectId(null);
   }
   const isIdentityEditorOpen = identityEditorProjectId !== null;
+  const shouldMountIdentityEditor = useKeepMounted(isIdentityEditorOpen);
   // Selecting the item records the intent; the menu's own close hook spends it.
   // Opening straight from `onSelect` would raise the popover inside the menu's
   // teardown, where Radix still holds the focus trap and the outside-pointer
@@ -2320,7 +2336,10 @@ export function Toolbar({
   // the user has visibly superseded, rather than a popover that springs open on
   // some later, unrelated close.
   const handlePillContextMenuOpenChange = useCallback((open: boolean) => {
-    if (open) pendingIdentityEditRef.current = null;
+    if (!open) return;
+    pendingIdentityEditRef.current = null;
+    // Keyboard-opened menus never see the pill's hover preload.
+    void preloadProjectIdentityEditor().catch(() => {});
   }, []);
   const handlePillContextMenuCloseAutoFocus = useCallback(
     (event: Event) => {
@@ -2332,8 +2351,23 @@ export function Toolbar({
       // opening the editor over it. Every other close keeps the shared
       // restore policy, so a keyboard dismissal lands back on the pill.
       if (pendingProjectId === null || pendingProjectId !== currentProject?.id) return;
-      event.preventDefault();
-      setIdentityEditorProjectId(pendingProjectId);
+      if (LazyProjectIdentityEditor.isLoaded()) {
+        event.preventDefault();
+        setIdentityEditorProjectId(pendingProjectId);
+        return;
+      }
+      // Chunk still in flight: nothing would take focus in the meantime, so let
+      // the menu restore it to the pill, and open only if the user hasn't moved
+      // on by the time it lands — a late popover must not steal focus.
+      void preloadProjectIdentityEditor().then(
+        () => {
+          const active = document.activeElement;
+          const pill = document.querySelector('[data-testid="project-switcher-trigger"]');
+          if (active !== pill && active !== document.body) return;
+          setIdentityEditorProjectId(pendingProjectId);
+        },
+        () => {}
+      );
     },
     [currentProject?.id, suppressPillTooltipForFocusRestore]
   );
@@ -2355,7 +2389,7 @@ export function Toolbar({
           headSha={headSha}
           isDropdownOpen={isDropdownOpen}
           onClick={() => projectSwitcher.open("dropdown")}
-          onPointerEnter={clearPillTooltipFocusSuppression}
+          onPointerEnter={handlePillPointerEnter}
         />
       </TooltipTrigger>
     </ContextMenuTrigger>
@@ -2374,7 +2408,7 @@ export function Toolbar({
             onKeyDown={handleToolbarKeyDown}
             onFocusCapture={handleToolbarFocusCapture}
             className={cn(
-              "@container/toolbar relative z-[60] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-3 h-12 items-center px-4 shrink-0 app-drag-region surface-toolbar border-b border-divider",
+              "@container/toolbar relative z-[var(--z-toolbar)] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-3 h-12 items-center px-4 shrink-0 app-drag-region surface-toolbar border-b border-divider",
               // macOS paints its window-rim highlight over our top pixel row, and
               // the eye reads it as separate from the strip; centre in what's left.
               // Fullscreen has no rim.
@@ -2437,13 +2471,15 @@ export function Toolbar({
               className="app-no-drag relative flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
             >
               {/* Anchor-only sibling of the pill — see ProjectIdentityEditor. */}
-              {currentProject && (
-                <ProjectIdentityEditor
-                  project={currentProject}
-                  open={isIdentityEditorOpen}
-                  onOpenChange={handleIdentityEditorOpenChange}
-                  onCloseAutoFocus={suppressPillTooltipForFocusRestore}
-                />
+              {currentProject && shouldMountIdentityEditor && (
+                <Suspense fallback={null}>
+                  <LazyProjectIdentityEditor
+                    project={currentProject}
+                    open={isIdentityEditorOpen}
+                    onOpenChange={handleIdentityEditorOpenChange}
+                    onCloseAutoFocus={suppressPillTooltipForFocusRestore}
+                  />
+                </Suspense>
               )}
               <Tooltip
                 open={workspaceIdentity.kind !== "none" ? pillTooltipOpen : false}
@@ -2567,7 +2603,7 @@ export function Toolbar({
                         <Settings data-menu-icon className="mr-2 h-3.5 w-3.5" />
                         Project settings…
                       </ContextMenuItem>
-                      {activeSearchableProject && activeSearchableProject.processCount > 0 && (
+                      {activeSearchableProject && activeProjectHasProcesses && (
                         <ContextMenuItem
                           destructive
                           onSelect={() => handleStopProject(currentProject.id)}

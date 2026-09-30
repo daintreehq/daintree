@@ -38,6 +38,7 @@ import { hasActiveAgent, initAgentStateCache } from "./ProjectViewAgentStateCach
 import type {
   PaintGate,
   PaintGateOutcome,
+  SwitchRequestOptions,
   ViewEntry,
   ViewHydrationOutcome,
 } from "./ProjectViewManagerTypes.js";
@@ -606,9 +607,12 @@ export class ProjectViewManager {
   async switchTo(
     projectId: string,
     projectPath: string,
-    trace?: ProjectSwitchTrace
+    trace?: ProjectSwitchTrace,
+    request?: SwitchRequestOptions
   ): Promise<{ view: WebContentsView; isNew: boolean }> {
-    const task = this.switchChain.then(() => performSwitch(this, projectId, projectPath, trace));
+    const task = this.switchChain.then(() =>
+      performSwitch(this, projectId, projectPath, trace, request)
+    );
     this.switchChain = task.then(
       () => undefined,
       () => undefined

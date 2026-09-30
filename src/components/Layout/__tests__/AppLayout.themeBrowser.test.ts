@@ -46,7 +46,7 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
    * block around it contains a close() call and several other class strings.
    */
   function extractShield(src: string): string {
-    const start = src.indexOf('className="fixed inset-0 z-30 bg-scrim-soft');
+    const start = src.indexOf('className="fixed inset-0 z-[var(--z-panel-scrim)] bg-scrim-soft');
     expect(start, "theme-browser shield not found in AppLayout").toBeGreaterThan(-1);
     const open = src.lastIndexOf("<div", start);
     const end = src.indexOf("/>", start);
@@ -71,7 +71,9 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
     // Bug 2: backdrop-filter on an ancestor creates a containing block for
     // position:fixed children (lesson #2574). The scrim must be a flat sibling
     // of the panel.
-    expect(source).toMatch(/className="fixed inset-0 z-30 bg-scrim-soft\/30[^"]*"/);
+    expect(source).toMatch(
+      /className="fixed inset-0 z-\[var\(--z-panel-scrim\)\] bg-scrim-soft\/30[^"]*"/
+    );
   });
 
   it("blurs the workspace only on hover, and never animates the blur", () => {
@@ -114,7 +116,7 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
   });
 
   it("offsets the panel by the toolbar height PLUS the banner height — issue #11893", () => {
-    // A global banner pushes the z-[60] toolbar below 48px, so the old static
+    // A global banner pushes the --z-toolbar toolbar below 48px, so the old static
     // top-12 left the panel's top strip (hero ✕ close) painted under it. The
     // offset must ADD the measured banner height to the toolbar's own height —
     // replacing one with the other would just move the clipping around. The

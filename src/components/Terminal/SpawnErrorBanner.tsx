@@ -1,4 +1,4 @@
-import { XCircle, RotateCcw, FolderEdit, Trash2, Settings2 } from "lucide-react";
+import { FolderEdit, RefreshCw, Settings2, Trash2, XCircle } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "./InlineStatusBanner";
 import { BannerOverflowMenu } from "./BannerOverflowMenu";
 import { createCopyErrorAction } from "./copyErrorAction";
@@ -43,7 +43,7 @@ export function SpawnErrorBanner({
   const retryAction: BannerAction = {
     id: "retry",
     label: "Retry",
-    icon: RotateCcw,
+    icon: RefreshCw,
     variant: "primary",
     onClick: () => onRetry(terminalId),
     title: "Retry",
@@ -76,7 +76,7 @@ export function SpawnErrorBanner({
   };
   const trashAction: BannerAction = {
     id: "trash",
-    label: "Remove terminal",
+    label: "Trash terminal",
     icon: Trash2,
     onClick: () => onTrash(terminalId),
     title: "Move to trash",
