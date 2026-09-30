@@ -51,6 +51,7 @@ import { KbdChord } from "@/components/ui/Kbd";
 import { Spinner } from "@/components/ui/Spinner";
 import { textareaVariants } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { stepListboxCursor } from "@/hooks/useListboxCursor";
 import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
@@ -425,7 +426,15 @@ function menuPosition(
     viewWidth - width - VIEWPORT_MARGIN,
     Math.max(floor, bounds.right - width)
   );
-  const left = Math.max(floor, Math.min(rect.left + caret.left - VIEWPORT_MARGIN, ceiling));
+  // The viewport has the last word: a field near the window's edge lends the
+  // menu room to its left rather than letting it run off screen.
+  const left = Math.max(
+    VIEWPORT_MARGIN,
+    Math.min(
+      Math.max(floor, Math.min(rect.left + caret.left - VIEWPORT_MARGIN, ceiling)),
+      viewWidth - width - VIEWPORT_MARGIN
+    )
+  );
   const above = top - VIEWPORT_MARGIN;
   const below = viewHeight - top - height - VIEWPORT_MARGIN;
   return {
@@ -1240,6 +1249,7 @@ function KitInlineEdit(props: PluginInlineEditProps) {
   const [draft, setDraft] = useState(current);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const showPending = useDohertyGate(pending);
   const [wasEditing, setWasEditing] = useState(isEditing);
   // Each edit is its own session: a commit still out when it ends (a
   // controlled close, a re-open) must not settle the next one.
@@ -1344,15 +1354,22 @@ function KitInlineEdit(props: PluginInlineEditProps) {
     setPending(true);
     setError(null);
     const started = generation;
+    const stillHere = () => {
+      const input = inputRef.current;
+      const active = input?.ownerDocument.activeElement;
+      return !!input && (active === input || active === input.ownerDocument.body || !active);
+    };
     settleThenable(outcome.value).then(
       () => {
-        if (generationRef.current === started) finish(!fromBlur);
+        // Focus goes back to the text only if the user is still here;
+        // someone who tabbed on while it saved keeps their place.
+        if (generationRef.current === started) finish(!fromBlur && stillHere());
       },
       (reason: unknown) => {
         if (generationRef.current !== started) return;
         setPending(false);
         setError(messageOf(reason, "Couldn't rename"));
-        inputRef.current?.focus();
+        if (stillHere()) inputRef.current?.focus();
       }
     );
   };
@@ -1456,7 +1473,7 @@ function KitInlineEdit(props: PluginInlineEditProps) {
             )}
           />
         </span>
-        {pending ? <Spinner size="xs" className="shrink-0 text-text-secondary" /> : null}
+        {showPending ? <Spinner size="xs" className="shrink-0 text-text-secondary" /> : null}
       </span>
       {error ? (
         <InlineError id={errorId} as="span">
@@ -1504,7 +1521,12 @@ function KitSecretInput(props: PluginSecretInputProps) {
   const replaceRef = useRef<HTMLButtonElement>(null);
   // Each Replace is a session; a save still out when it ends is ignored.
   const replaceSessionRef = useRef(0);
-  const savingRef = useRef(false);
+  // The save in flight, if any: the session it belongs to. Only that save
+  // may end the pending state or close the field.
+  const savingRef = useRef<{ session: number } | null>(null);
+  const [saving, setSaving] = useState(false);
+  // A save under 400ms shows nothing, per the app's loading gate.
+  const showSaving = useDohertyGate(saving);
   const handleValue = fn(onValueChange);
   const replace = fn(onReplace);
   const cancelReplace = fn(onCancelReplace);
@@ -1559,28 +1581,38 @@ function KitSecretInput(props: PluginSecretInputProps) {
       return;
     }
     if (!replacing || stored !== true) return;
-    const session = replaceSessionRef.current;
-    const done = () => {
-      savingRef.current = false;
-      // A save that lands after the user backed out, or started another
-      // replace, must not close or clear the field they are in now.
-      if (replaceSessionRef.current !== session) return;
+    const close = () => {
       change("");
       setReplacing(false);
       setShown(false);
       setFocusTarget("replace");
     };
     if (!isThenable(outcome.value)) {
-      done();
+      close();
       return;
     }
-    savingRef.current = true;
-    settleThenable(outcome.value).then(done, () => {
-      savingRef.current = false;
-    });
+    // While it saves the field holds read-only, so the value that lands is
+    // the value that was typed; Cancel stays available.
+    const token = { session: replaceSessionRef.current };
+    savingRef.current = token;
+    setSaving(true);
+    const settle = (saved: boolean) => {
+      // A save that lands after the user backed out, or started another
+      // replace, changes nothing in the field they are in now.
+      if (savingRef.current !== token) return;
+      savingRef.current = null;
+      setSaving(false);
+      if (saved && replaceSessionRef.current === token.session) close();
+    };
+    settleThenable(outcome.value).then(
+      () => settle(true),
+      () => settle(false)
+    );
   };
   const backOut = () => {
     replaceSessionRef.current++;
+    savingRef.current = null;
+    setSaving(false);
     change("");
     setReplacing(false);
     setShown(false);
@@ -1622,7 +1654,8 @@ function KitSecretInput(props: PluginSecretInputProps) {
           disabled={inert}
           onClick={() => {
             replaceSessionRef.current++;
-            savingRef.current = false;
+            savingRef.current = null;
+            setSaving(false);
             change("");
             setReplacing(true);
             setShown(false);
@@ -1666,6 +1699,8 @@ function KitSecretInput(props: PluginSecretInputProps) {
             (replacing ? "Paste a new value to replace the saved one" : undefined)
           }
           disabled={inert}
+          readOnly={saving}
+          aria-busy={saving ? true : undefined}
           autoFocus={autoFocus === true}
           autoComplete="new-password"
           spellCheck={false}
@@ -1718,6 +1753,7 @@ function KitSecretInput(props: PluginSecretInputProps) {
           </button>
         ) : null}
       </div>
+      {showSaving ? <Spinner size="xs" className="shrink-0 text-text-secondary" /> : null}
       {replacing ? (
         <Button
           type="button"
