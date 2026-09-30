@@ -158,7 +158,10 @@ describe("element rules", () => {
       expect.stringContaining('type="email">; prefer `Input`'),
       expect.stringContaining('type="number">; prefer `Input`'),
       expect.stringContaining("`Button`"),
+      expect.stringContaining('type="date">; prefer `DatePicker`'),
       expect.stringContaining('type="range">; prefer `Slider`'),
+      expect.stringContaining('type="color">; prefer `ColorPicker`'),
+      expect.stringContaining('type="time">; prefer `TimePicker`'),
     ]);
   });
 
@@ -462,7 +465,7 @@ describe("zero-build views written with createElement", () => {
     ],
     "raw-form-control": [
       `h("input", { value: "", placeholder: "Search" })`,
-      `h("input", { type: "date" })`,
+      `h("input", { type: "hidden" })`,
     ],
     "native-title-tooltip": [
       `h("span", { title: "Full path" }, "x")`,

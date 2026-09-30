@@ -123,6 +123,18 @@ import type {
   PluginUnreadDotProps,
   PluginVisuallyHiddenProps,
 } from "@shared/types/plugin-sdk-react";
+import type {
+  PluginColorPickerProps,
+  PluginColorSwatchProps,
+  PluginDateTimePickerProps,
+  PluginFormProps,
+  PluginFormStatusProps,
+  PluginRangeSliderProps,
+  PluginSchemaFormProps,
+  PluginSplitButtonProps,
+  PluginTimePickerProps,
+  PluginToggleGroupProps,
+} from "@shared/types/plugin-sdk-react";
 import { fromKit } from "./kit";
 
 export { preloadPluginUi, whenPluginUiReady } from "./kit";
@@ -583,6 +595,57 @@ export const OverflowToolbar: ComponentType<PluginOverflowToolbarProps> = fromKi
   (kit) => kit.OverflowToolbar
 );
 
+// Colour, time and range pickers, toggle groups, split buttons and forms.
+
+export const ColorSwatch: ComponentType<PluginColorSwatchProps> = fromKit(
+  "ColorSwatch",
+  (kit) => kit.ColorSwatch
+);
+export const ColorPicker: ComponentType<PluginColorPickerProps> = fromKit(
+  "ColorPicker",
+  (kit) => kit.ColorPicker
+);
+export const TimePicker: ComponentType<PluginTimePickerProps> = fromKit(
+  "TimePicker",
+  (kit) => kit.TimePicker
+);
+export const DateTimePicker: ComponentType<PluginDateTimePickerProps> = fromKit(
+  "DateTimePicker",
+  (kit) => kit.DateTimePicker
+);
+export const RangeSlider: ComponentType<PluginRangeSliderProps> = fromKit(
+  "RangeSlider",
+  (kit) => kit.RangeSlider
+);
+export const ToggleGroup: ComponentType<PluginToggleGroupProps> = fromKit(
+  "ToggleGroup",
+  (kit) => kit.ToggleGroup
+);
+export const SplitButton: ComponentType<PluginSplitButtonProps> = fromKit(
+  "SplitButton",
+  (kit) => kit.SplitButton
+);
+// What Form's loading fallback may render of untyped children: what the
+// loaded adapter keeps, so a plain object is dropped rather than crashing.
+const renderableTree = (children: unknown): ReactNode =>
+  Array.isArray(children) ? children.map(renderableTree) : renderableChild(children);
+
+export const Form: ComponentType<PluginFormProps> = fromKit(
+  "Form",
+  (kit) => kit.Form,
+  // The fields are there from the first frame; only the submit wiring waits.
+  ({ children }) => renderableTree(children)
+);
+export const FormStatus: ComponentType<PluginFormStatusProps> = fromKit(
+  "FormStatus",
+  (kit) => kit.FormStatus
+);
+export const SchemaForm: ComponentType<PluginSchemaFormProps> = fromKit(
+  "SchemaForm",
+  (kit) => kit.SchemaForm
+);
+export { useForm } from "./form";
+
 export type {
   PluginMarkdownProps as MarkdownProps,
   PluginButtonProps as ButtonProps,
@@ -800,4 +863,29 @@ export type {
   PluginIndicatorPlacement as IndicatorPlacement,
   PluginUnreadDotProps as UnreadDotProps,
   PluginCountIndicatorProps as CountIndicatorProps,
+} from "@shared/types/plugin-sdk-react";
+
+export type {
+  PluginColorSwatch as ColorSwatchEntry,
+  PluginColorSwatchProps as ColorSwatchProps,
+  PluginColorPickerProps as ColorPickerProps,
+  PluginIsoTime as IsoTime,
+  PluginTimePickerProps as TimePickerProps,
+  PluginIsoDateTime as IsoDateTime,
+  PluginDateTimePickerProps as DateTimePickerProps,
+  PluginRangeSliderMark as RangeSliderMark,
+  PluginRangeSliderProps as RangeSliderProps,
+  PluginToggleGroupItem as ToggleGroupItem,
+  PluginToggleGroupProps as ToggleGroupProps,
+  PluginSplitButtonProps as SplitButtonProps,
+  PluginFormError as FormError,
+  PluginFieldValidator as FieldValidator,
+  UseFormOptions,
+  PluginFormFieldBinding as FormFieldBinding,
+  PluginFormStatus as FormStatusValue,
+  UseFormResult,
+  PluginFormHandle as FormHandle,
+  PluginFormProps as FormProps,
+  PluginFormStatusProps as FormStatusProps,
+  PluginSchemaFormProps as SchemaFormProps,
 } from "@shared/types/plugin-sdk-react";
