@@ -2582,3 +2582,89 @@ describe("rendererBridge — reveal routing and window raise (#12315)", () => {
     expect(raiseLog).toEqual(["1:restore", "1:show", "1:focus"]);
   });
 });
+
+describe("rendererBridge — terminal in another project (#13120)", () => {
+  let pendingDispatches: Map<string, PendingRequest<DispatchEnvelope>>;
+
+  const inOtherProject = {
+    ok: false,
+    error: {
+      code: "TERMINAL_IN_OTHER_PROJECT",
+      message: 'terminal.close: terminal "t1" is not in this project',
+      details: {
+        actionId: "terminal.close",
+        terminalId: "t1",
+        projectId: "proj-b",
+        viewResident: false,
+      },
+    },
+  };
+
+  function replyWith(wc: FakeWebContents, result: unknown): void {
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+      queueMicrotask(() => {
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: wc.id } },
+          { requestId: payload.requestId, result }
+        );
+      });
+    });
+  }
+
+  beforeEach(() => {
+    mockIpcMain.removeAllListeners();
+    mockWebContentsRegistry.clear();
+    pendingDispatches = new Map();
+  });
+
+  it("collapses the code into the ordinary miss for a routed (pinned) session", async () => {
+    const wc = makeWebContents(1301);
+    mockWebContentsRegistry.set(1301, wc);
+    const bridge = createRendererBridge(new Map(), pendingDispatches, () => null);
+    bridge.setupListeners([]);
+    replyWith(wc, inOtherProject);
+
+    const envelope = await bridge.dispatchActionForWebContents(1301, "terminal.close", {
+      terminalId: "t1",
+    });
+
+    expect(envelope.result.ok).toBe(false);
+    if (envelope.result.ok) return;
+    expect(envelope.result.error.code).toBe("EXECUTION_ERROR");
+    expect(envelope.result.error.message).toBe(
+      'terminal.close: no panel with id "t1" — pass an `id` from the terminal listing.'
+    );
+    expect(JSON.stringify(envelope.result)).not.toContain("proj-b");
+  });
+
+  it("passes the code and its details through for an unrouted session", async () => {
+    const wc = makeWebContents(1302);
+    const contexts = [
+      {
+        browserWindow: { isDestroyed: () => false },
+        services: {
+          projectViewManager: {
+            getActiveView: () => ({ webContents: wc }),
+            getWorkspaceRefForWebContents: () => null,
+          },
+        },
+      },
+    ];
+    const registry = {
+      all: () => contexts,
+      focusOrder: () => contexts,
+      getByWebContentsId: (id: number) => (id === wc.id ? contexts[0] : undefined),
+    };
+    const bridge = createRendererBridge(new Map(), pendingDispatches, () => registry as never);
+    bridge.setupListeners([]);
+    replyWith(wc, inOtherProject);
+
+    const envelope = await bridge.dispatchAction("terminal.close", { terminalId: "t1" }, false);
+
+    expect(envelope.result).toEqual(inOtherProject);
+    // Retrying from the same view cannot reach another project's panel.
+    expect(RETRIABLE_ERROR_CODES.has("TERMINAL_IN_OTHER_PROJECT")).toBe(false);
+  });
+});

@@ -18,6 +18,7 @@ import { useUIStore } from "@/store/uiStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
 import { PartialSuccessError } from "@shared/utils/partialSuccess";
+import { TerminalInOtherProjectError } from "@shared/utils/terminalInOtherProject";
 import { ConfirmationStagedError } from "./actions/confirmationStaged";
 import { UnactionableTargetError } from "./actions/unactionableTarget";
 import {
@@ -707,6 +708,9 @@ export class ActionService {
         // `VALIDATION_ERROR` for one reason — `EXECUTION_ERROR` is in
         // `RETRIABLE_ERROR_CODES`, and telling a caller to retry a refusal it
         // cannot change is how a model ends up looping on one (#12338).
+        // `TerminalInOtherProjectError` gets its own code (#13120) and, unlike
+        // the others, plain `details`: its fields are the point, and custom
+        // `Error` properties are dropped by the structured clone to plugins.
         code:
           err instanceof ConfirmationStagedError
             ? "CONFIRMATION_REQUIRED"
@@ -714,9 +718,11 @@ export class ActionService {
               ? "PARTIAL_SUCCESS"
               : err instanceof UnactionableTargetError
                 ? "VALIDATION_ERROR"
-                : "EXECUTION_ERROR",
+                : err instanceof TerminalInOtherProjectError
+                  ? "TERMINAL_IN_OTHER_PROJECT"
+                  : "EXECUTION_ERROR",
         message,
-        details: err,
+        details: err instanceof TerminalInOtherProjectError ? err.toDetails() : err,
       };
       return { ok: false, error };
     }

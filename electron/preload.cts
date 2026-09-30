@@ -1359,6 +1359,8 @@ function buildElectronApi(): ElectronAPI {
 
       getInfo: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_GET_INFO, id),
 
+      locate: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_LOCATE, id),
+
       getSharedBuffers: (): Promise<{
         visualBuffers: SharedArrayBuffer[];
         signalBuffer: SharedArrayBuffer | null;

@@ -277,6 +277,61 @@ describe("PluginRendererDispatcher", () => {
     });
   });
 
+  describe("terminal in another project (#13120)", () => {
+    const inOtherProject = {
+      ok: false,
+      error: {
+        code: "TERMINAL_IN_OTHER_PROJECT",
+        message: 'terminal.close: terminal "t1" is not in this project',
+        details: {
+          actionId: "terminal.close",
+          terminalId: "t1",
+          projectId: "B",
+          viewResident: true,
+        },
+      },
+    };
+
+    it("passes the code and its details through to an unbound plugin", async () => {
+      const wc = makeWebContents(7);
+      setFocusedWebContents(wc);
+      const d = new PluginRendererDispatcher({ isDisposed: () => false });
+
+      const promise = d.sendDispatchToRenderer("terminal.close", { terminalId: "t1" });
+      const requestId = lastRequestId(wc, CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST);
+      ipcMainMock._emit(
+        CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE,
+        { sender: { id: 7 } },
+        { requestId, result: inOtherProject }
+      );
+
+      await expect(promise).resolves.toEqual(inOtherProject);
+    });
+
+    it("collapses it into the ordinary miss for a project-bound plugin", async () => {
+      const wcA = makeWebContents(11);
+      setProjectViews({ A: [wcA] });
+      const d = new PluginRendererDispatcher({ isDisposed: () => false });
+
+      const promise = d.sendDispatchToRenderer("terminal.close", { terminalId: "t1" }, "A");
+      const requestId = lastRequestId(wcA, CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST);
+      ipcMainMock._emit(
+        CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE,
+        { sender: { id: 11 } },
+        { requestId, result: inOtherProject }
+      );
+
+      const result = await promise;
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe("EXECUTION_ERROR");
+      expect(result.error.message).toBe(
+        'terminal.close: no panel with id "t1" — pass an `id` from the terminal listing.'
+      );
+      expect(JSON.stringify(result)).not.toContain('"B"');
+    });
+  });
+
   it("resolveScopeWebContents stays focused-window-only and fails closed", () => {
     const wcA = makeWebContents(11);
     setProjectViews({ A: [wcA] });

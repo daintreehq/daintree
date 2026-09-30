@@ -64,6 +64,7 @@ import type {
   TerminalReconnectResult,
   BackendTerminalInfo,
   TerminalInfoPayload,
+  TerminalLocation,
   TerminalActivityPayload,
   SemanticSearchMatch,
 } from "./terminal.js";
@@ -345,6 +346,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       signalBuffer: SharedArrayBuffer | null;
     }>;
     getInfo(id: string): Promise<TerminalInfoPayload>;
+    locate(id: string): Promise<TerminalLocation>;
     onData(
       id: string,
       callback: (data: string | Uint8Array, streamEnd?: number) => void
