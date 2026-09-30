@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { QuickRun, QuickRunToggle, useQuickRunExpanded } from "@/components/Project/QuickRun";
 import { ProjectPluginIndicator } from "@/components/Plugin/ProjectPluginIndicator";
+import { SidebarMemoryNotice } from "./SidebarMemoryNotice";
 import { SidebarStatusBar } from "./SidebarStatusBar";
 
 /**
@@ -12,8 +13,9 @@ import { SidebarStatusBar } from "./SidebarStatusBar";
  *
  * It used to be three full-width strips (Run command, plugins, status), each
  * with its own border and its own leading glyph, which read as accreted rather
- * than designed. The occasional plugin row sits at the top so it never comes
- * between the Run command toggle and the panel it opens.
+ * than designed. The occasional rows — high system memory, then plugins — sit
+ * at the top so they never come between the Run command toggle and the panel
+ * it opens.
  *
  * `@container/footer` is what lets the row's labels shorten at the 200px floor
  * without the sidebar having to tell its footer how wide it is.
@@ -34,6 +36,7 @@ export function SidebarFooter({ projectId }: { projectId: string | null }) {
       data-sidebar-footer=""
       className="@container/footer flex shrink-0 flex-col border-t border-divider surface-chrome"
     >
+      <SidebarMemoryNotice />
       <ProjectPluginIndicator />
       {projectId != null && runOpen && (
         <QuickRun key={projectId} projectId={projectId} focusOnMount={openedByUser} />

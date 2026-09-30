@@ -7,9 +7,10 @@ import { getDefaultAgentId } from "@/lib/resolveAgentId";
 import { actionService } from "@/services/ActionService";
 import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import { useNotificationStore, type NotificationAction } from "@/store/notificationStore";
+import type { NotificationAction } from "@/store/notificationStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
+import { useSystemMemoryNoticeStore } from "@/store/systemMemoryNoticeStore";
 import { resolveViewWorkspace } from "@/store/viewWorkspace";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 
@@ -20,8 +21,6 @@ const SUPERSEDE_KEY = "system-memory-pressure";
 let ipcListenerAttached = false;
 /** This renderer raised the notice for the episode now open. */
 let noticeRaised = false;
-/** The live grid-bar entry; "" when quiet hours kept it to the inbox. */
-let noticeId = "";
 
 function formatGb(mb: number): string {
   const gb = mb / 1024;
@@ -130,35 +129,38 @@ function buildDiagnosisAction(payload: SystemMemoryPressurePayload): Notificatio
   const args = resolveDiagnosisLaunch(payload);
   if (!args) return null;
   let launching = false;
-  return {
+  const action: NotificationAction = {
     label: "Ask agent about memory",
     actionId: "agent.launch",
     actionArgs: args,
     onClick: async () => {
       if (launching) return;
+      const store = useSystemMemoryNoticeStore.getState();
+      // Captured now: recovery and a new episode can both land mid-launch, and
+      // an inbox row from an episode long gone still launches but must never
+      // clear a later episode's row.
+      const clickedNotice = store.notice?.action === action ? store.notice : null;
       launching = true;
-      // Captured now: recovery and a new episode can both land mid-launch.
-      const clickedNoticeId = noticeId;
       try {
         const result = await actionService.dispatch<{ launched: boolean }>("agent.launch", args, {
           source: "user",
         });
-        // The bar stays until recovery otherwise, so each click would start
+        // The row stays until recovery otherwise, so each click would start
         // another agent. The inbox row keeps its normal lifecycle.
         if (
           result.ok &&
           result.result?.launched &&
-          clickedNoticeId &&
-          noticeId === clickedNoticeId
+          clickedNotice &&
+          useSystemMemoryNoticeStore.getState().notice === clickedNotice
         ) {
-          useNotificationStore.getState().removeNotification(clickedNoticeId);
-          noticeId = "";
+          useSystemMemoryNoticeStore.getState().clearNotice();
         }
       } finally {
         launching = false;
       }
     },
   };
+  return action;
 }
 
 export function handleSystemMemoryPressure(payload: SystemMemoryPressurePayload): void {
@@ -166,11 +168,12 @@ export function handleSystemMemoryPressure(payload: SystemMemoryPressurePayload)
     // Recovery reaches every view; only the one that raised the notice answers.
     if (!noticeRaised) return;
     noticeRaised = false;
-    if (noticeId) useNotificationStore.getState().removeNotification(noticeId);
-    noticeId = "";
+    useSystemMemoryNoticeStore.getState().clearNotice();
     notify({
       type: "success",
       priority: "low",
+      urgent: false,
+      countable: false,
       supersedeKey: SUPERSEDE_KEY,
       title: "System memory readings recovered",
       message: "Every monitored reading has stayed below its threshold for three samples in a row.",
@@ -180,19 +183,21 @@ export function handleSystemMemoryPressure(payload: SystemMemoryPressurePayload)
   }
 
   if (noticeRaised) return;
+  const reading = describeSystemMemoryReadings(payload);
   const message = formatSystemMemoryPressureMessage(payload, isMac());
-  if (!message) return;
+  if (!reading || !message) return;
   noticeRaised = true;
   const diagnosis = buildDiagnosisAction(payload);
-  // Main publishes once per episode. Grid-bar because the signal originates
-  // outside the visible UI; `urgent: false` overrides the `host` policy default
-  // so quiet hours still apply, and the bar stays until dismissed or recovered.
-  noticeId = notify({
+  // Main publishes once per episode. The live reading is an ambient sidebar
+  // footer row (#13101): a system state Daintree didn't cause and can't fix
+  // doesn't earn a grid bar. The inbox keeps a quiet, uncounted record, which
+  // the recovery row supersedes.
+  useSystemMemoryNoticeStore.getState().setNotice({ reading, detail: message, action: diagnosis });
+  notify({
     type: "warning",
     priority: "low",
     urgent: false,
-    placement: "grid-bar",
-    duration: 0,
+    countable: false,
     title: "High system memory use",
     message,
     supersedeKey: SUPERSEDE_KEY,
