@@ -106,6 +106,7 @@ import { pluginKitFileTree } from "./PluginKitFileTree";
 import { pluginKitDates } from "./PluginKitDates";
 import { pluginKitNavigation } from "./PluginKitNavigation";
 import { pluginKitLayout } from "./PluginKitLayout";
+import { pluginKitLayoutCore } from "./PluginKitLayoutCore";
 import { pluginKitInputs } from "./PluginKitInputs";
 import { normalizeSelectOptions } from "./kitOptions";
 import { pluginKitCharts } from "./PluginKitCharts";
@@ -1249,6 +1250,7 @@ export const pluginKit = {
   ...pluginKitDates,
   ...pluginKitNavigation,
   ...pluginKitLayout,
+  ...pluginKitLayoutCore,
   ...pluginKitInputs,
   ...pluginKitCharts,
   ...pluginKitTypography,

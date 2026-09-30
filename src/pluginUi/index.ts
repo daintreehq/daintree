@@ -6,6 +6,7 @@
 import { isValidElement, type ComponentType, type ReactNode } from "react";
 import type {
   PluginAccordionProps,
+  PluginAutoGridProps,
   PluginAvatarGroupProps,
   PluginAvatarProps,
   PluginBadgeProps,
@@ -16,6 +17,7 @@ import type {
   PluginCalloutProps,
   PluginCardProps,
   PluginCheckboxProps,
+  PluginClusterProps,
   PluginComboboxProps,
   PluginCommandPaletteProps,
   PluginConfirmDialogProps,
@@ -40,9 +42,11 @@ import type {
   PluginFilterChipProps,
   PluginFormFieldGroupProps,
   PluginFormFieldProps,
+  PluginGridProps,
   PluginHighlightedTextProps,
   PluginIconButtonProps,
   PluginIconProps,
+  PluginInlineProps,
   PluginInputProps,
   PluginKbdChordProps,
   PluginKbdProps,
@@ -53,13 +57,16 @@ import type {
   PluginMultiSelectProps,
   PluginNavListProps,
   PluginNumberInputProps,
+  PluginOverflowToolbarProps,
   PluginPaneHeaderProps,
+  PluginPaneLayoutProps,
   PluginPaneStateProps,
   PluginPopoverProps,
   PluginPopoverSearchFieldProps,
   PluginProgressBarProps,
   PluginRadioGroupProps,
   PluginResizableSplitProps,
+  PluginScrollAreaProps,
   PluginScrollShadowProps,
   PluginSearchFieldProps,
   PluginSectionLabelProps,
@@ -79,7 +86,9 @@ import type {
   PluginSparklineProps,
   PluginSpinnerProps,
   PluginSpinningIconProps,
+  PluginStackProps,
   PluginStatCardProps,
+  PluginStatusBarProps,
   PluginStepperProps,
   PluginSwitchProps,
   PluginTabsProps,
@@ -117,6 +126,7 @@ export { preloadPluginUi, whenPluginUiReady } from "./kit";
 export { Markdown } from "./Markdown";
 export { getDaintreeTheme, onDidChangeDaintreeTheme, useDaintreeTheme } from "./theme";
 export { useListNavigation } from "./listNavigation";
+export { useBreakpoint, useContainerSize } from "./containerSize";
 export {
   formatBytes,
   formatCount,
@@ -505,6 +515,34 @@ export const CountIndicator: ComponentType<PluginCountIndicatorProps> = fromKit(
 );
 export { useAnnounce } from "./announce";
 
+// Stacks, grids, the pane shell, status strips, two-axis scrollers and the
+// folding toolbar.
+
+export const Stack: ComponentType<PluginStackProps> = fromKit("Stack", (kit) => kit.Stack);
+export const Inline: ComponentType<PluginInlineProps> = fromKit("Inline", (kit) => kit.Inline);
+export const Cluster: ComponentType<PluginClusterProps> = fromKit("Cluster", (kit) => kit.Cluster);
+export const Grid: ComponentType<PluginGridProps> = fromKit("Grid", (kit) => kit.Grid);
+export const AutoGrid: ComponentType<PluginAutoGridProps> = fromKit(
+  "AutoGrid",
+  (kit) => kit.AutoGrid
+);
+export const PaneLayout: ComponentType<PluginPaneLayoutProps> = fromKit(
+  "PaneLayout",
+  (kit) => kit.PaneLayout
+);
+export const StatusBar: ComponentType<PluginStatusBarProps> = fromKit(
+  "StatusBar",
+  (kit) => kit.StatusBar
+);
+export const ScrollArea: ComponentType<PluginScrollAreaProps> = fromKit(
+  "ScrollArea",
+  (kit) => kit.ScrollArea
+);
+export const OverflowToolbar: ComponentType<PluginOverflowToolbarProps> = fromKit(
+  "OverflowToolbar",
+  (kit) => kit.OverflowToolbar
+);
+
 export type {
   PluginMarkdownProps as MarkdownProps,
   PluginButtonProps as ButtonProps,
@@ -646,6 +684,26 @@ export type {
   PluginBarChartProps as BarChartProps,
   PluginLineChartProps as LineChartProps,
   PluginDonutChartProps as DonutChartProps,
+  PluginLayoutGap as LayoutGap,
+  PluginLayoutAlign as LayoutAlign,
+  PluginLayoutJustify as LayoutJustify,
+  PluginLayoutElement as LayoutElement,
+  PluginLayoutBaseProps as LayoutBaseProps,
+  PluginStackProps as StackProps,
+  PluginInlineProps as InlineProps,
+  PluginClusterProps as ClusterProps,
+  PluginGridProps as GridProps,
+  PluginAutoGridProps as AutoGridProps,
+  PluginPaneLayoutProps as PaneLayoutProps,
+  PluginStatusBarProps as StatusBarProps,
+  PluginStatusBarSlot as StatusBarSlot,
+  PluginScrollAreaProps as ScrollAreaProps,
+  PluginOverflowToolbarProps as OverflowToolbarProps,
+  PluginOverflowToolbarItem as OverflowToolbarItem,
+  PluginOverflowToolbarAction as OverflowToolbarAction,
+  PluginOverflowToolbarSeparator as OverflowToolbarSeparator,
+  PluginContainerSize as ContainerSize,
+  PluginContainerTarget as ContainerTarget,
 } from "@shared/types/plugin-sdk-react";
 
 export type {
