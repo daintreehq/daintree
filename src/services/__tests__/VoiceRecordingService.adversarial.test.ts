@@ -606,18 +606,45 @@ describe("VoiceRecordingService adversarial", () => {
     });
 
     it("discards queued audio when the backend fails to start", async () => {
-      runtime.startQueue.push({ ok: false, error: "boom" });
+      const backendStart = deferred<{ ok: boolean; error?: string }>();
+      runtime.startQueue.push(backendStart.promise);
 
       const { voiceRecordingService } = await import("../VoiceRecordingService");
       const starting = voiceRecordingService.start(panelOne);
       await vi.waitFor(() => {
-        expect(runtime.createdWorkletNodes).toHaveLength(1);
+        expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
       });
+      expect(runtime.createdWorkletNodes[0]?.port.onmessage).toBeTypeOf("function");
       emitChunk(0, 100);
+
+      backendStart.resolve({ ok: false, error: "boom" });
       await starting;
 
       expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
-      expect(runtime.createdStreams[0]?.track.stop).toHaveBeenCalled();
+      expect(runtime.createdStreams[0]!.track.stop).toHaveBeenCalled();
+      expect(runtime.voiceFns.setLastError).toHaveBeenCalledWith(
+        expect.objectContaining({ code: "backend_start_failed" })
+      );
+    });
+
+    it("releases capture when the backend start IPC rejects", async () => {
+      const backendStart = deferred<{ ok: boolean }>();
+      runtime.startQueue.push(backendStart.promise);
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const starting = voiceRecordingService.start(panelOne);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+      });
+      emitChunk(0, 100);
+
+      backendStart.reject(new Error("service import failed"));
+      await expect(starting).resolves.toBeUndefined();
+
+      expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+      expect(runtime.createdStreams[0]!.track.stop).toHaveBeenCalled();
+      expect(runtime.createdAudioContexts[0]!.close).toHaveBeenCalled();
+      expect(runtime.voiceFns.finishSession).toHaveBeenCalledWith({ nextStatus: "error" });
     });
 
     it("caps the startup queue by dropping the oldest audio", async () => {
@@ -694,17 +721,44 @@ describe("VoiceRecordingService adversarial", () => {
       await vi.waitFor(() => {
         expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
       });
+      const newStream = runtime.createdStreams[1]!;
+      expect(runtime.createdWorkletNodes).toHaveLength(2);
       emitChunk(1, 100);
 
       const cancelling = voiceRecordingService.stop("Dictation stopped.");
+      // Released while the previous session is still draining.
+      await vi.waitFor(() => {
+        expect(newStream.track.stop).toHaveBeenCalled();
+      });
+      expect(runtime.createdAudioContexts[1]!.close).toHaveBeenCalled();
+      expect(runtime.createdWorkletNodes[1]!.port.onmessage).toBeNull();
+
       drain.resolve();
       await Promise.all([retargeting, cancelling]);
 
-      expect(runtime.createdStreams[1]?.track.stop).toHaveBeenCalled();
-      expect(runtime.createdAudioContexts[1]?.close).toHaveBeenCalled();
       expect(runtime.voiceFns.beginSession).toHaveBeenCalledTimes(1);
       expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
       expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+    });
+
+    it("ends the previous session when a retarget fails to set up capture", async () => {
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start(panelOne);
+      runtime.voiceState.status = "recording";
+      const oldStream = runtime.createdStreams[0]!;
+
+      const failure = Promise.reject(new Error("module failed"));
+      failure.catch(() => {});
+      runtime.addModuleQueue.push(failure);
+      await voiceRecordingService.start(panelTwo);
+
+      expect(oldStream.track.stop).toHaveBeenCalled();
+      expect(runtime.createdStreams[1]!.track.stop).toHaveBeenCalled();
+      expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
+      expect(runtime.voiceFns.finishSession).toHaveBeenLastCalledWith(
+        expect.objectContaining({ nextStatus: "error" })
+      );
+      expect(runtime.voiceFns.beginSession).toHaveBeenCalledTimes(1);
     });
   });
 

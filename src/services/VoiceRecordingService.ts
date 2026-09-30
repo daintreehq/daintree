@@ -13,6 +13,7 @@ import { keybindingService } from "@/services/KeybindingService";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { notify } from "@/lib/notify";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 const LOG_PREFIX = "[VoiceRecording]";
 
@@ -552,9 +553,19 @@ class VoiceRecordingService {
    * an error and is about to return. Without this, the store would stay
    * `{ status: "arming", activeTarget: T }` indefinitely — the toolbar and
    * panel border would keep showing the pre-recording cue with no mic to
-   * back it up.
+   * back it up. A failed retarget also ends the session it was replacing:
+   * the store is about to report an error with no target, and that session's
+   * microphone must not keep recording behind it.
    */
-  private failArming(): void {
+  private async failArming(): Promise<void> {
+    if (this.stream) {
+      await this.stop(undefined, {
+        nextStatus: "error",
+        announce: false,
+        preservePendingStart: true,
+      });
+      return;
+    }
     useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
   }
 
@@ -588,7 +599,7 @@ class VoiceRecordingService {
         useVoiceRecordingStore
           .getState()
           .announce("Voice dictation is not configured. Open Voice settings to continue.");
-        this.failArming();
+        await this.failArming();
       }
       return;
     }
@@ -606,7 +617,7 @@ class VoiceRecordingService {
           code: "mic_permission_check_failed",
           message: "Could not check microphone permission. Try again.",
         });
-        this.failArming();
+        await this.failArming();
       }
       return;
     }
@@ -623,7 +634,7 @@ class VoiceRecordingService {
         .getState()
         .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
       useVoiceRecordingStore.getState().announce(message);
-      this.failArming();
+      await this.failArming();
       safeFireAndForget(window.electron.voiceInput.openMicSettings(), {
         context: "Opening OS microphone settings",
       });
@@ -645,7 +656,7 @@ class VoiceRecordingService {
             code: "mic_permission_request_failed",
             message: "Could not request microphone permission. Try again.",
           });
-          this.failArming();
+          await this.failArming();
         }
         return;
       }
@@ -659,7 +670,7 @@ class VoiceRecordingService {
           .getState()
           .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
         useVoiceRecordingStore.getState().announce(message);
-        this.failArming();
+        await this.failArming();
         return;
       }
     }
@@ -692,27 +703,32 @@ class VoiceRecordingService {
       }
     };
 
-    // Keep the AudioContext in "running" state while backgrounded. Chromium
-    // suspends capture-only contexts (no output to destination) when the window
-    // loses focus. Connecting a silent oscillator to the destination tricks the
-    // engine into treating the context as audible so AudioWorkletNode keeps firing.
-    const keepAliveGain = audioContext.createGain();
-    keepAliveGain.gain.value = 0;
-    const keepAliveOscillator = audioContext.createOscillator();
-    keepAliveOscillator.connect(keepAliveGain);
-    keepAliveGain.connect(audioContext.destination);
-    keepAliveOscillator.start();
-    capture.keepAliveGain = keepAliveGain;
-    capture.keepAliveOscillator = keepAliveOscillator;
+    // Build the rest of the graph while the microphone is still opening, so it
+    // is ready to attach the moment the stream arrives. Observed immediately so
+    // a bail before it is awaited can't surface as an unhandled rejection.
+    const graphReady = (async () => {
+      // Keep the AudioContext in "running" state while backgrounded. Chromium
+      // suspends capture-only contexts (no output to destination) when the
+      // window loses focus. Connecting a silent oscillator to the destination
+      // tricks the engine into treating the context as audible so
+      // AudioWorkletNode keeps firing.
+      const keepAliveGain = audioContext.createGain();
+      capture.keepAliveGain = keepAliveGain;
+      keepAliveGain.gain.value = 0;
+      const keepAliveOscillator = audioContext.createOscillator();
+      keepAliveOscillator.connect(keepAliveGain);
+      keepAliveGain.connect(audioContext.destination);
+      keepAliveOscillator.start();
+      // Recorded only once started: cleanup calls stop(), which throws on an
+      // oscillator that never started.
+      capture.keepAliveOscillator = keepAliveOscillator;
 
-    // Resume and load the worklet while the microphone is still opening, so
-    // the graph is ready to attach the moment the stream arrives. Observed
-    // immediately so a bail before it is awaited can't surface as unhandled.
-    logDebug(`${LOG_PREFIX} Loading pcm-processor worklet`);
-    const graphReady = Promise.all([
-      audioContext.state === "suspended" ? audioContext.resume() : undefined,
-      audioContext.audioWorklet.addModule("/pcm-processor.js"),
-    ]).then(
+      logDebug(`${LOG_PREFIX} Loading pcm-processor worklet`);
+      await Promise.all([
+        audioContext.state === "suspended" ? audioContext.resume() : undefined,
+        audioContext.audioWorklet.addModule("/pcm-processor.js"),
+      ]);
+    })().then(
       () => ({ ok: true as const }),
       (error: unknown) => ({ ok: false as const, error })
     );
@@ -746,7 +762,7 @@ class VoiceRecordingService {
           .getState()
           .setLastError({ severity: "fatal", code: micCode, message });
         useVoiceRecordingStore.getState().announce(message);
-        this.failArming();
+        await this.failArming();
       }
       return;
     }
@@ -801,16 +817,19 @@ class VoiceRecordingService {
       abandonCapture(stream);
       return;
     }
-    if (!graphResult.ok) {
+    const failCaptureSetup = async (error: unknown) => {
       abandonCapture(stream);
-      logError(`${LOG_PREFIX} Failed to load pcm-processor worklet`, graphResult.error);
+      logError(`${LOG_PREFIX} Failed to set up the audio graph`, error);
       useVoiceRecordingStore.getState().setLastError({
         severity: "fatal",
         code: "renderer_error",
         message: "Failed to load the audio processor.",
       });
       useVoiceRecordingStore.getState().announce("Voice dictation failed to initialize.");
-      this.failArming();
+      await this.failArming();
+    };
+    if (!graphResult.ok) {
+      await failCaptureSetup(graphResult.error);
       return;
     }
     logDebug(`${LOG_PREFIX} pcm-processor worklet loaded`);
@@ -818,24 +837,30 @@ class VoiceRecordingService {
     // Attach capture now, ahead of any retarget drain and the backend start.
     // Until the session is promoted, chunks only land in this attempt's queue:
     // they must not reach the previous session's send path or its meters.
-    const source = audioContext.createMediaStreamSource(stream);
-    const workletNode = new AudioWorkletNode(audioContext, "pcm-processor");
-    capture.workletNode = workletNode;
+    let workletNode: AudioWorkletNode;
     let sessionGeneration: number | null = null;
-    workletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
-      if (sessionGeneration === null) {
-        this.enqueueCapturedChunk(capture, event.data);
-        return;
-      }
-      if (this.generation !== sessionGeneration) return;
-      this.meterAudioChunk(event.data);
-      if (capture.queue) {
-        this.enqueueCapturedChunk(capture, event.data);
-      } else {
-        window.electron.voiceInput.sendAudioChunk(event.data);
-      }
-    };
-    source.connect(workletNode);
+    try {
+      const source = audioContext.createMediaStreamSource(stream);
+      workletNode = new AudioWorkletNode(audioContext, "pcm-processor");
+      capture.workletNode = workletNode;
+      workletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+        if (sessionGeneration === null) {
+          this.enqueueCapturedChunk(capture, event.data);
+          return;
+        }
+        if (this.generation !== sessionGeneration) return;
+        this.meterAudioChunk(event.data);
+        if (capture.queue) {
+          this.enqueueCapturedChunk(capture, event.data);
+        } else {
+          window.electron.voiceInput.sendAudioChunk(event.data);
+        }
+      };
+      source.connect(workletNode);
+    } catch (error) {
+      await failCaptureSetup(error);
+      return;
+    }
     logDebug(`${LOG_PREFIX} Eager audio capture started`);
 
     // Only an actually-started session (open mic stream) needs to be torn
@@ -870,8 +895,8 @@ class VoiceRecordingService {
     if (this.pendingCapture === capture) this.pendingCapture = null;
     this.stream = stream;
     this.audioContext = audioContext;
-    this.keepAliveOscillator = keepAliveOscillator;
-    this.keepAliveGain = keepAliveGain;
+    this.keepAliveOscillator = capture.keepAliveOscillator;
+    this.keepAliveGain = capture.keepAliveGain;
     this.workletNode = workletNode;
     sessionGeneration = generation;
     logInfo(`${LOG_PREFIX} AudioContext created`, {
@@ -900,7 +925,12 @@ class VoiceRecordingService {
     // once its own async setup finishes, so anything sent before start()
     // resolves could land on the previous provider or be dropped.
     logDebug(`${LOG_PREFIX} Calling voiceInput.start() IPC`);
-    const result = await window.electron.voiceInput.start();
+    const result = await window.electron.voiceInput
+      .start()
+      .catch((error: unknown): { ok: false; error: string } => ({
+        ok: false,
+        error: formatErrorMessage(error, "Voice input failed to start."),
+      }));
     logDebug(`${LOG_PREFIX} voiceInput.start() returned`, {
       ok: result.ok,
       error: !result.ok ? result.error : undefined,
@@ -911,8 +941,8 @@ class VoiceRecordingService {
       capture.queue = null;
       await this.cleanupCaptureResources({
         audioContext,
-        keepAliveGain,
-        keepAliveOscillator,
+        keepAliveGain: capture.keepAliveGain,
+        keepAliveOscillator: capture.keepAliveOscillator,
         stream,
         workletNode,
       });
@@ -922,10 +952,12 @@ class VoiceRecordingService {
     if (!result.ok) {
       logError(`${LOG_PREFIX} Backend start failed`, { error: result.error });
       capture.queue = null;
+      await this.cleanupAudioCapture();
+      // A newer start may have taken over while the teardown awaited.
+      if (this.generation !== generation || this.isStartRequestStale(startRequestId)) return;
       useVoiceRecordingStore
         .getState()
         .setLastError({ severity: "fatal", code: "backend_start_failed", message: result.error });
-      await this.cleanupAudioCapture();
       useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
       useVoiceRecordingStore.getState().announce("Voice dictation failed to start.");
       return;
@@ -1642,19 +1674,21 @@ class VoiceRecordingService {
       }
     }
 
-    if (resources.audioContext) {
-      await resources.audioContext.close().catch(() => {});
-      if (this.audioContext === resources.audioContext) {
-        this.audioContext = null;
-      }
-    }
-
+    // Tracks stop before the context closes: close() can be slow, and the OS
+    // microphone indicator must go out the moment capture is released.
     if (resources.stream) {
       for (const track of resources.stream.getTracks()) {
         track.stop();
       }
       if (this.stream === resources.stream) {
         this.stream = null;
+      }
+    }
+
+    if (resources.audioContext) {
+      await resources.audioContext.close().catch(() => {});
+      if (this.audioContext === resources.audioContext) {
+        this.audioContext = null;
       }
     }
   }
