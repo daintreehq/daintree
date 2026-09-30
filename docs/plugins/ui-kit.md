@@ -220,7 +220,7 @@ A view is part of Daintree's own window, so `FileDropzone` (or your own `<input 
 | `ListRow` | `title`, `subtitle?`, `icon?`, `meta?`, `selected?`, `active?`, `checked?`, `selecting?`, `onToggle?`, `onSelect?`, `disabled?`, `className?`; DOM props except `title` | A row with Daintree's highlight. Spread `getRowProps(index)` into it for a keyboard listbox; otherwise, with `onSelect`, it is a button, and without, a plain row. In a listbox, report disabled rows through `useListNavigation`'s `isDisabled` too. In a multi-select listbox (see [`useSelection`](#hooks)) the highlight follows `aria-selected`, so set that from the selection and `active={index === activeIndex}` for the cursor's focus outline. `checked` draws the app's membership mark, the host checkbox in the icon's slot, as the app's own multi-select lists do: on checked rows, on the row under the pointer or the cursor, and on every row while `selecting` (pass `selection.count > 0`); `onToggle` makes a click on the checkbox toggle just that row. A row whose context menu is open keeps a neutral ring while the menu is up. |
 | `ScrollShadow` | `children`, `className?` (the frame; size it here), `scrollClassName?` (the scroller; pad it here), `compact?`, `ref?` (the scroller); DOM props | A vertical scroller with fades that show there is more. DOM props land on the scrolling element, so it can be a listbox. For a windowed list use `VirtualList` with `shadows`. |
 
-`useListNavigation(options)` is the keyboard model of a list: one tab stop, Up/Down/Home/End move the cursor, Enter or Space selects, typing jumps when `getLabel` is given. Options are `count`, `onSelect?(index, event)` (the key or click that selected, so a multi-select list can read its modifiers), `onActiveIndexChange?(index, event)` (the cursor moved by keyboard; see [`useSelection`](#hooks)), `loop?` (false), `initialIndex?` (0), `getLabel?(index)` and `isDisabled?(index)` (rows the cursor, typeahead, Enter, Space and clicks all skip). It returns `{ activeIndex, setActiveIndex, containerProps, getRowProps }`: `containerProps` is `{ role: "listbox", tabIndex: 0, "aria-activedescendant", onKeyDown }`, and `getRowProps(index)` is `{ id, role: "option", "aria-selected", "aria-disabled"?, onClick, onPointerMove }`. `activeIndex` is `-1` for an empty list.
+`useListNavigation(options)` is the keyboard model of a list: one tab stop, Up/Down/Home/End move the cursor, Enter or Space selects, typing jumps when `getLabel` is given. Options are `count`, `onSelect?(index, event)` (the key or click that selected, so a multi-select list can read its modifiers), `onActiveIndexChange?(index, event)` (the cursor moved by keyboard; see [`useSelection`](#hooks)), `hasRowMenus?` (rows carry a kit `ContextMenu`: Shift+F10 and the Menu key open the cursor row's menu, since focus stays on the list), `loop?` (false), `initialIndex?` (0), `getLabel?(index)` and `isDisabled?(index)` (rows the cursor, typeahead, Enter, Space and clicks all skip). It returns `{ activeIndex, setActiveIndex, containerProps, getRowProps }`: `containerProps` is `{ role: "listbox", tabIndex: 0, "aria-activedescendant", onKeyDown }`, and `getRowProps(index)` is `{ id, role: "option", "aria-selected", "aria-disabled"?, onClick, onPointerMove }`. `activeIndex` is `-1` for an empty list.
 
 ### Pane chrome
 
@@ -330,11 +330,14 @@ const nav = useListNavigation({
   getLabel: (i) => snippets[i].title,
   onSelect: (i, event) => selection.handleSelect(ids[i], event),
   onActiveIndexChange: (i, event) => selection.handleNavigate(ids[i], event),
+  hasRowMenus: true, // each row sits in a ContextMenu
 });
 useHotkeys([
   { combo: "Cmd+A", handler: () => selection.selectAll() },
   { combo: "Delete", handler: () => removeSelected(), disabled: selection.count === 0 },
 ]);
+// An Undo toast should restore its own change, not whatever the history head is by then:
+// toast.showUndo({ message: "3 snippets deleted", onUndo: () => restore(removedRows) });
 // <VirtualList {...nav.containerProps} aria-multiselectable …> with each row
 // <ListRow {...nav.getRowProps(i)} aria-selected={selection.isSelected(id)} active={i === nav.activeIndex}
 //   checked={selection.isSelected(id)} selecting={selection.count > 0} onToggle={() => selection.toggle(id)} …>

@@ -483,3 +483,46 @@ describe("two-line menu rows", () => {
     expect(trigger.className).toContain("items-start");
   });
 });
+
+describe("row menus in a keyboard list", () => {
+  function List({ hasRowMenus, onOpen }: { hasRowMenus: boolean; onOpen: () => void }) {
+    const rows = ["Alpha", "Beta", "Gamma"];
+    const nav = kit.useListNavigation({ count: rows.length, hasRowMenus });
+    return createElement(
+      "div",
+      { ...nav.containerProps, "aria-label": "Rows" },
+      rows.map((title, index) =>
+        createElement(kit.ContextMenu, {
+          key: title,
+          onOpenChange: (open: boolean) => {
+            if (open) onOpen();
+          },
+          items: [{ label: `Rename ${title}`, onSelect: () => {} }],
+          children: createElement(kit.ListRow, { ...nav.getRowProps(index), title }),
+        })
+      )
+    );
+  }
+
+  it("opens the cursor row's menu on Shift+F10 while the list holds focus", async () => {
+    const onOpen = vi.fn();
+    render(createElement(List, { hasRowMenus: true, onOpen }));
+    const list = screen.getByRole("listbox", { name: "Rows" });
+    expect(list.hasAttribute("data-row-menu")).toBe(true);
+    list.focus();
+    fireEvent.keyDown(list, { key: "ArrowDown" });
+    fireEvent.keyDown(list, { key: "F10", shiftKey: true });
+    expect(await screen.findByRole("menuitem", { name: "Rename Beta" })).toBeTruthy();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the menu keys to the app when the rows have no menus", async () => {
+    const onOpen = vi.fn();
+    render(createElement(List, { hasRowMenus: false, onOpen }));
+    const list = screen.getByRole("listbox", { name: "Rows" });
+    expect(list.hasAttribute("data-row-menu")).toBe(false);
+    fireEvent.keyDown(list, { key: "ContextMenu" });
+    await tick();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+});

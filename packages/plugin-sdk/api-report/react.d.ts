@@ -1133,6 +1133,11 @@ interface UseListNavigationOptions {
      */
     onSelect?: (index: number, event?: KeyboardEvent<HTMLElement> | MouseEvent<HTMLElement>) => void;
     /**
+     * Rows carry a kit `ContextMenu`. Shift+F10 and the Menu key then open the
+     * cursor row's menu, since focus stays on the list rather than on the row.
+     */
+    hasRowMenus?: boolean;
+    /**
      * The cursor moved by keyboard (arrows, Home/End, typeahead), with the key
      * that moved it. With `useSelection`, pass `handleNavigate` here so
      * Shift+Arrow extends the selection.
@@ -1157,6 +1162,8 @@ interface PluginListNavigationContainerProps {
     tabIndex: 0;
     "aria-activedescendant": string | undefined;
     onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
+    /** Set with `hasRowMenus`: the app's Shift+F10 handler leaves the key to the rows. */
+    "data-row-menu"?: "";
 }
 /** Props `useListNavigation` hands each row. */
 interface PluginListNavigationRowProps {
