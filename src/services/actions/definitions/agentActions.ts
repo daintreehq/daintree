@@ -477,6 +477,10 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       worktreePath: z.string().nullable(),
       branch: z.string().nullable(),
       cwd: z.string().nullable(),
+      // Observation, not a filing decision: cwd is not a worktree selector, so
+      // a cwd in another repo still files under the resolved worktree (#13130).
+      // Null when either path is unknown.
+      cwdOutsideWorktree: z.boolean().nullable(),
       // Filled in by main when the call waits for the reply.
       reply: AwaitedReplySchema.nullable(),
     }),
@@ -632,6 +636,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
           worktreePath: null,
           branch: null,
           cwd: null,
+          cwdOutsideWorktree: null,
           reply: null,
         };
       }
@@ -646,6 +651,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         worktreePath: result.worktreePath,
         branch: result.branch,
         cwd: result.cwd,
+        cwdOutsideWorktree: result.cwdOutsideWorktree,
         reply: null,
       };
     },
