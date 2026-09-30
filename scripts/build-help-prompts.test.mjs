@@ -80,6 +80,20 @@ describe("help prompt outputs", () => {
       expect(grounding).toMatch(/untested limit/i);
     });
 
+    // After a Daintree restart a help session's first two `terminal.list` calls
+    // hit a 404 on the old MCP session, and the assistant told the user the
+    // session could never reconnect and to start a new one. The same call
+    // worked on the next turn.
+    it.each(ALL_GENERATED)("%s retries a stale MCP session instead of giving up", (_name, body) => {
+      const grounding = section(body, "## How to Answer");
+      const line = grounding.split("\n").find((l) => l.includes("Session not found")) ?? "";
+      expect(line).toMatch(/`daintree`.*404/);
+      expect(line).toMatch(/restart/i);
+      expect(line).toMatch(/\btransient\b/i);
+      expect(line).toMatch(/retry this turn/i);
+      expect(line).toMatch(/don't[^\n]*new session/i);
+    });
+
     // The same session answered a permission dialog with a guessed `1` while
     // saying outright it could not see what the dialog asked. The rule against
     // guessing a key was already there; the branch for "I can't read it at
