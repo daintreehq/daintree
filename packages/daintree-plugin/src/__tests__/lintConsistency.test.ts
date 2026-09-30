@@ -157,6 +157,33 @@ describe("element rules", () => {
     ]);
   });
 
+  it("never reads a capitalised kit component as the intrinsic of the same name", async () => {
+    const kit = `import { Input, Checkbox, Select, Textarea, Button, Icon } from "@daintreehq/plugin-ui";\nimport * as UI from "@daintreehq/plugin-ui";\n`;
+    const jsx = `<div><Input type="date" /><Input type="checkbox" /><Input /><UI.Input type="text" /><Select /><Textarea /><Checkbox /><Button title="Go" /><Icon viewBox="0 0 24 24" /></div>`;
+    for (const ruleId of [
+      "raw-form-control",
+      "raw-button",
+      "native-title-tooltip",
+      "inline-svg-icon",
+    ]) {
+      expect(await lintFor(ruleId, view(jsx, kit)), ruleId).toEqual([]);
+    }
+    const intrinsic = await lintFor(
+      "raw-form-control",
+      view(`<div><Input type="date" /><input type="text" /></div>`, kit)
+    );
+    expect(intrinsic.map((f) => f.message)).toEqual([expect.stringContaining('type="text"')]);
+  });
+
+  it('reads createElement(Input, …) as the kit component and createElement("input", …) as raw', async () => {
+    const findings = await lintFor("raw-form-control", {
+      "dist/panel.js": `import { createElement } from "react";\nimport { Input } from "@daintreehq/plugin-ui";\nexport default function P() {\n  return [createElement(Input, { type: "date" }), createElement(Input, { type: "text" }), createElement("input", { type: "email" })];\n}\n`,
+      "dist/index.mjs": "export async function activate() {}\n",
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain('type="email"');
+  });
+
   it("does not suggest the single-choice kit Select for a multi-select", async () => {
     expect(await lintFor("raw-form-control", view(`<select multiple />`))).toEqual([]);
     expect(await lintFor("raw-form-control", view(`<select />`))).toHaveLength(1);

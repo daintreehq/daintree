@@ -383,6 +383,131 @@ export function record(host, event) {
   });
 });
 
+describe("whole-state-push: buffers flushed and replaced", () => {
+  it("accepts a buffer reassigned to a fresh array after it is posted", async () => {
+    const findings = await lintFor("whole-state-push", {
+      "src/index.ts": `export async function activate(host) {
+  let buf = [];
+  host.onLine((line) => {
+    buf.push(line);
+  });
+  const timer = setInterval(() => {
+    void host.postToPanel("lines", buf);
+    buf = [];
+  }, 100);
+  let queue = new Array();
+  host.onEvent((event) => {
+    queue.push(event);
+    host.postToPanel("events", { queue });
+    queue = new Array();
+  });
+  const state = { calls: [] };
+  host.onToolCall((call) => {
+    state.calls.push(call);
+    host.postToPanel("calls", state);
+    state.calls = [];
+  });
+  return () => clearInterval(timer);
+}
+`,
+    });
+    expect(findings).toEqual([]);
+  });
+
+  it("still flags a buffer only declared empty, or reset before it is posted", async () => {
+    const findings = await lintFor("whole-state-push", {
+      "src/index.ts": `export async function activate(host) {
+  let buf = [];
+  host.onLine((line) => {
+    buf.push(line);
+    void host.postToPanel("lines", buf);
+  });
+  let log = [];
+  host.onReset(() => {
+    log = [];
+  });
+  host.onEntry((entry) => {
+    log.push(entry);
+    void host.postToPanel("log", log);
+    if (log === []) return;
+  });
+  let seen = [];
+  host.onSeen((item) => {
+    seen.push(item);
+    void host.postToPanel("seen", seen);
+  });
+  host.onClear(() => {
+    seen = [];
+  });
+}
+`,
+    });
+    expect(findings.map((f) => f.line)).toEqual([5, 13, 19]);
+  });
+
+  it("accepts a spread or concat that is capped as it is rebuilt", async () => {
+    const findings = await lintFor("whole-state-push", {
+      "src/index.ts": `export async function activate(host) {
+  let recent = [];
+  host.onLine((line) => {
+    recent = [...recent, line].slice(-100);
+    void host.postToPanel("recent", recent);
+  });
+  let tail = [];
+  host.onChunk((chunk) => {
+    tail = tail.concat(chunk).slice(-50);
+    void host.postToPanel("tail", tail);
+  });
+  let all = [];
+  host.onItem((item) => {
+    all = [...all, item];
+    void host.postToPanel("all", all);
+  });
+  let copied = [];
+  host.onCopy((item) => {
+    copied = [...copied, item].slice();
+    void host.postToPanel("copied", copied);
+  });
+  let fromZero = [];
+  host.onZero((item) => {
+    fromZero = fromZero.concat(item).slice(0);
+    void host.postToPanel("fromZero", fromZero);
+  });
+  let windowed = [];
+  host.onWindow((item) => {
+    windowed = [...windowed, item]
+      // keep the newest page
+      .slice(0, 200);
+    void host.postToPanel("windowed", windowed);
+  });
+}
+`,
+    });
+    expect(findings.map((f) => f.line)).toEqual([15, 20, 25]);
+  });
+});
+
+describe("render-on-every-event: capped appends", () => {
+  it("does not call a capped append a growing copy", async () => {
+    const findings = await lintFor("render-on-every-event", {
+      "src/panel.tsx": `import { useEffect } from "react";
+export default function Panel({ pluginId }) {
+  useEffect(() => {
+    const a = window.electron.plugin.on(pluginId, "notice", (n) => setNotices((prev) => [...prev, n].slice(-20)));
+    const b = window.electron.plugin.on(pluginId, "line", (line) => setLines((prev) => [...prev, line].slice(-500)));
+    const c = window.electron.plugin.on(pluginId, "notice", (n) => setAll((prev) => prev.concat(n)));
+    return () => { a(); b(); c(); };
+  }, [pluginId]);
+  return null;
+}
+`,
+    });
+    expect(findings.map((f) => f.line)).toEqual([5, 6]);
+    expect(findings[0]!.message).toMatch(/every "line" event/);
+    expect(findings[1]!.message).toMatch(/copies the collection/);
+  });
+});
+
 describe("perf hints point at the SDK hooks", () => {
   it("names useStreamBuffer and useSyncedCollection for per-event appends", async () => {
     const findings = await lintFor("render-on-every-event", {

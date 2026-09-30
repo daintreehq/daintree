@@ -84,6 +84,20 @@ describe("lintPlugin", () => {
     expect(result.notes[0]).toMatch(/No readable plugin.json/);
   });
 
+  it("measures the 2 MB bundle cut-off in bytes, not characters", async () => {
+    // 1.1M characters either way; only the non-ASCII one is over 2 MiB on disk.
+    const count = 1_100_000;
+    const dir = await writePlugin({
+      "src/wide.ts": `// ${"é".repeat(count)}\nexport const a = 1;\n`,
+      "src/narrow.ts": `// ${"e".repeat(count)}\nexport const b = 1;\n`,
+    });
+    const result = await lintPlugin({ dir, styleReport: false });
+    expect(result.files).toEqual(["src/narrow.ts"]);
+    expect(result.notes).toEqual([
+      expect.stringMatching(/^Skipped src\/wide\.ts: larger than 2 MB/),
+    ]);
+  });
+
   it("reports the author's line in TSX, not esbuild's", async () => {
     const dir = await writePlugin({
       "src/panel.tsx": `import { useEffect } from "react";
