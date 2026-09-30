@@ -2172,7 +2172,10 @@ export interface PluginDateRangePickerProps extends PluginDateFieldBaseProps {
   defaultValue?: PluginDateRange | null;
   /** The new range, or `null` when the field was cleared. */
   onValueChange?: (value: PluginDateRange | null) => void;
-  /** Shortcuts such as "Last 7 days", listed beside the calendar. */
+  /**
+   * Shortcuts such as "Last 7 days", listed beside the calendar. One whose
+   * ends `min`, `max` or `isDateDisabled` rule out is shown disabled.
+   */
   presets?: readonly PluginDateRangePreset[];
 }
 
