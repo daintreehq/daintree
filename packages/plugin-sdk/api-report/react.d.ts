@@ -1359,7 +1359,10 @@ interface PluginChartBaseProps extends PluginRootAttributes {
 interface PluginBarChartProps extends PluginChartBaseProps {
     /** The key in each row that holds the category ("day", "branch"). */
     x: string;
-    /** Up to six series; any past the sixth are not drawn. */
+    /**
+     * Up to six series are drawn. Any past the sixth are not: the legend ends
+     * with "+N more not shown" and the accessible table still lists them.
+     */
     series: readonly PluginChartSeries[];
     /** `grouped` (the default) sets a category's bars side by side; `stacked` piles them. */
     mode?: "grouped" | "stacked";
@@ -1377,14 +1380,21 @@ interface PluginBarChartProps extends PluginChartBaseProps {
 interface PluginLineChartProps extends PluginChartBaseProps {
     /** The key in each row that holds x: a number, a `Date`, epoch ms, or an ISO date string. */
     x: string;
-    /** Up to six series; any past the sixth are not drawn. */
+    /**
+     * Up to six series are drawn. Any past the sixth are not: the legend ends
+     * with "+N more not shown" and the accessible table still lists them.
+     */
     series: readonly PluginChartSeries[];
     /**
      * `time` reads x as a date and ticks on calendar steps; `number` as a plain
      * number. Omitted, `time` when the first x is a `Date` or a string.
      */
     xType?: "number" | "time";
-    /** Fills under each line with a faint wash of its colour, down to zero. */
+    /**
+     * Fills under the first series with a faint wash of its colour, down to
+     * zero. With several series only the first fills; overlapping washes would
+     * blend into a colour no line has.
+     */
     area?: boolean;
     /** `linear` (the default) joins points straight; `monotone` smooths without overshooting a value. */
     curve?: "linear" | "monotone";

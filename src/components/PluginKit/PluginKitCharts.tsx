@@ -79,10 +79,29 @@ export const MAX_TABLE_ROWS = 250;
 // Parts a DonutChart draws by name; the rest fold into one "Other" part.
 export const MAX_DONUT_PARTS = 6;
 
-interface ResolvedSeries {
+// Each series also keeps a stroke by its index, so lines tell apart without
+// hue (colour is never the only signal): solid, dashed, dotted, long dash,
+// dash-dot, dash-dot-dot. Caps are round, which grows every dash by the stroke
+// width, so the drawn gaps are about 2px shorter than written here; the
+// periods stay short enough to show whole in a legend swatch.
+export const SERIES_DASHES: readonly (string | undefined)[] = [
+  undefined,
+  "4 6",
+  "0 4",
+  "10 6",
+  "4 5 0 5",
+  "4 5 0 4 0 5",
+];
+
+interface NamedSeries {
   key: string;
   label: string;
+}
+
+interface ResolvedSeries extends NamedSeries {
   color: string;
+  /** The stroke signature a line draws with; `undefined` is solid. */
+  dash: string | undefined;
 }
 
 function finite(value: unknown): number | null {
@@ -96,9 +115,14 @@ function rowsOf(value: unknown): object[] {
 
 let warnedSeriesCap = false;
 
-/** Series from untyped JS, each with its colour: pinned ones keep theirs, the rest take free slots in order. */
-export function resolveSeries(value: unknown): ResolvedSeries[] {
-  if (!Array.isArray(value)) return [];
+/**
+ * Series from untyped JS, each with its colour: pinned ones keep theirs, the
+ * rest take free slots in order. Past {@link MAX_SERIES} the rest are
+ * `omitted`: not drawn, but still named in the legend's count and the table.
+ * Exported for tests.
+ */
+export function chartSeries(value: unknown): { drawn: ResolvedSeries[]; omitted: NamedSeries[] } {
+  if (!Array.isArray(value)) return { drawn: [], omitted: [] };
   const seen = new Set<string>();
   const valid: { key: string; label: string; pinned: PluginChartColor | undefined }[] = [];
   for (const entry of value) {
@@ -122,10 +146,46 @@ export function resolveSeries(value: unknown): ResolvedSeries[] {
   const taken = new Set(kept.map((entry) => entry.pinned).filter((color) => color !== undefined));
   const free = SLOTS.filter((slot) => !taken.has(slot));
   let next = 0;
-  return kept.map((entry) => {
+  const drawn = kept.map((entry, index) => {
     const color = entry.pinned ?? free[next++] ?? "neutral";
-    return { key: entry.key, label: entry.label, color: chartColor(color) };
+    return {
+      key: entry.key,
+      label: entry.label,
+      color: chartColor(color),
+      dash: SERIES_DASHES[index],
+    };
   });
+  const omitted = valid.slice(MAX_SERIES).map(({ key, label }) => ({ key, label }));
+  return { drawn, omitted };
+}
+
+/** The series a chart draws. Exported for tests. */
+export function resolveSeries(value: unknown): ResolvedSeries[] {
+  return chartSeries(value).drawn;
+}
+
+// Pixels a tick aims to have to itself along an axis: an x label is a word
+// wide, a y label one line tall.
+export const X_TICK_SPACING = 100;
+export const Y_TICK_SPACING = 50;
+// niceTicks rounds its step to 1, 2 or 5, which can land up to about 1.6×
+// denser than asked; a gap under this share of the spacing asks for fewer.
+const MIN_TICK_GAP = 0.8;
+const MIN_TICKS = 3;
+
+/**
+ * Round ticks over `[low, high]` for an axis `length` pixels long: about one
+ * per `spacing` pixels, never packed tighter than {@link MIN_TICK_GAP} of it
+ * unless the axis is down to its minimum. Exported for tests.
+ */
+export function axisTicks(low: number, high: number, length: number, spacing: number): number[] {
+  let count = Math.max(MIN_TICKS, Math.floor(length / spacing));
+  let ticks = niceTicks(low, high, count);
+  while (count > MIN_TICKS && length / (ticks.length - 1) < spacing * MIN_TICK_GAP) {
+    count -= 1;
+    ticks = niceTicks(low, high, count);
+  }
+  return ticks;
 }
 
 function tickStep(low: number, high: number, count: number): number {
@@ -462,6 +522,7 @@ interface ReadoutRow {
   key: string;
   label: string;
   color: string;
+  dash?: string | undefined;
   value: string;
 }
 
@@ -469,27 +530,61 @@ interface ReadoutRow {
 interface Readout {
   title: string;
   rows: ReadoutRow[];
+  /** The anchor column or point the tooltip sits beside. */
   x: number;
+  /** The tooltip's top edge. */
   y: number;
   /** Half the width of the mark at `x`, so the tooltip sits beside it rather than over it. */
   clear?: number;
+  swatch: "bar" | "line";
 }
 
 const TOOLTIP_OFFSET = 12;
 
+/**
+ * The tooltip's left edge: to the right of the anchor, clear of its mark, and
+ * on the left only when the right would run past the chart, so the marks just
+ * before the anchor (the ones being compared) stay in view. When neither side
+ * has room it takes the roomier one and stays inside. Exported for tests.
+ */
+export function tooltipLeft(anchor: number, clear: number, tip: number, width: number): number {
+  const gap = TOOLTIP_OFFSET + clear;
+  const right = anchor + gap;
+  if (right + tip <= width) return right;
+  const left = anchor - gap - tip;
+  if (left >= 0) return left;
+  return width - right >= anchor - gap
+    ? Math.max(0, Math.min(right, width - tip))
+    : Math.max(0, left);
+}
+
 // One tooltip for every chart, positioned inside the plot box rather than in
 // a portal: it tracks a point, not an element, and it never takes focus, so
-// none of the overlay focus-restore machinery applies. It flips to the
-// pointer's left past the middle so it stays inside the chart.
+// none of the overlay focus-restore machinery applies. Its own width decides
+// the flip, measured before paint.
 function PointTooltip({ readout, width }: { readout: Readout; width: number }) {
-  const flip = readout.x > width / 2;
-  const top = Math.max(0, readout.y - TOOLTIP_OFFSET);
-  const gap = TOOLTIP_OFFSET + (readout.clear ?? 0);
-  const style = flip
-    ? { right: Math.max(0, width - readout.x + gap), top }
-    : { left: readout.x + gap, top };
+  const [element, setElement] = useState<HTMLDivElement | null>(null);
+  const [tip, setTip] = useState(0);
+  useLayoutEffect(() => {
+    if (element === null) return;
+    const settle = (next: number) => setTip((previous) => (previous === next ? previous : next));
+    settle(element.offsetWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    // Its width follows its rows; the observer reports after layout, before paint.
+    const observer = new ResizeObserver((entries) => {
+      const box = entries[0]?.borderBoxSize?.[0];
+      if (box) settle(Math.ceil(box.inlineSize));
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  const style = {
+    left: tooltipLeft(readout.x, readout.clear ?? 0, tip, width),
+    top: Math.max(0, readout.y),
+  };
   return (
     <div
+      ref={setElement}
       data-chart-tooltip=""
       aria-hidden="true"
       style={style}
@@ -501,10 +596,7 @@ function PointTooltip({ readout, width }: { readout: Readout; width: number }) {
       {readout.title ? <div className="text-text-secondary">{readout.title}</div> : null}
       {readout.rows.map((row) => (
         <div key={row.key} className="flex items-center gap-2">
-          <span
-            className="h-0.5 w-3 shrink-0 rounded-full"
-            style={{ backgroundColor: row.color }}
-          />
+          <Swatch color={row.color} shape={readout.swatch} dash={row.dash} />
           <span className="font-semibold tabular-nums">{row.value}</span>
           <span className="min-w-0 truncate text-text-secondary">{row.label}</span>
         </div>
@@ -568,21 +660,61 @@ function useCursor(count: number) {
 
 type Cursor = ReturnType<typeof useCursor>;
 
-function Swatch({ color, shape }: { color: string; shape: "bar" | "line" }) {
+const LINE_SWATCH_PX = 20;
+
+/** A series key: a square for a bar, a short stroke in the line's own dash for a line. */
+function Swatch({
+  color,
+  shape,
+  dash,
+}: {
+  color: string;
+  shape: "bar" | "line";
+  dash?: string | undefined;
+}) {
+  if (shape === "line") {
+    return (
+      <svg
+        aria-hidden="true"
+        data-chart-swatch="line"
+        width={LINE_SWATCH_PX}
+        height={4}
+        className="shrink-0"
+        style={{ color }}
+      >
+        <line
+          x1={1}
+          x2={LINE_SWATCH_PX - 1}
+          y1={2}
+          y2={2}
+          stroke="currentColor"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeDasharray={dash}
+        />
+      </svg>
+    );
+  }
   return (
     <span
       aria-hidden="true"
-      className={cn(
-        "shrink-0",
-        shape === "line" ? "h-0.5 w-3 rounded-full" : "h-2 w-2 rounded-[var(--radius-xs)]"
-      )}
+      data-chart-swatch="bar"
+      className="h-2 w-2 shrink-0 rounded-[var(--radius-xs)]"
       style={{ backgroundColor: color }}
     />
   );
 }
 
-function Legend({ series, shape }: { series: ResolvedSeries[]; shape: "bar" | "line" }) {
-  if (series.length < 2) return null;
+function Legend({
+  series,
+  omitted,
+  shape,
+}: {
+  series: ResolvedSeries[];
+  omitted: number;
+  shape: "bar" | "line";
+}) {
+  if (series.length < 2 && omitted === 0) return null;
   return (
     <ul
       aria-label="Legend"
@@ -590,10 +722,15 @@ function Legend({ series, shape }: { series: ResolvedSeries[]; shape: "bar" | "l
     >
       {series.map((entry) => (
         <li key={entry.key} className="flex min-w-0 items-center gap-1.5">
-          <Swatch color={entry.color} shape={shape} />
+          <Swatch color={entry.color} shape={shape} dash={entry.dash} />
           <span className="min-w-0 truncate">{entry.label}</span>
         </li>
       ))}
+      {omitted > 0 ? (
+        <li data-chart-omitted="" className="shrink-0 tabular-nums">
+          +{omitted.toLocaleString()} more not shown
+        </li>
+      ) : null}
     </ul>
   );
 }
@@ -649,7 +786,10 @@ function ChartEmpty({
 
 interface TableModel {
   xLabel: string;
-  series: ResolvedSeries[];
+  /** Every series, the omitted ones after the drawn ones. */
+  series: NamedSeries[];
+  /** Series in the table the chart does not draw, named in the caption. */
+  omitted: NamedSeries[];
   /** `null` past {@link MAX_TABLE_ROWS}: the summary stands in. */
   rows: { key: string; x: string; values: string[] }[] | null;
   summary: string;
@@ -657,17 +797,18 @@ interface TableModel {
 
 /** The chart's numbers for assistive tech: a table when it is small enough to walk, a summary otherwise. */
 function DataFallback({ id, label, table }: { id: string; label: string; table: TableModel }) {
+  const note = omittedNote(table.omitted);
   if (table.rows === null) {
     return (
       <p id={id} className="sr-only">
-        {table.summary}
+        {note ? `${table.summary} ${note}.` : table.summary}
       </p>
     );
   }
   return (
     <div id={id} className="sr-only">
       <table>
-        <caption>{label}</caption>
+        <caption>{note ? `${label}. ${note}` : label}</caption>
         <thead>
           <tr>
             <th scope="col">{table.xLabel}</th>
@@ -693,11 +834,17 @@ function DataFallback({ id, label, table }: { id: string; label: string; table: 
   );
 }
 
+function omittedNote(omitted: NamedSeries[]): string {
+  if (omitted.length === 0) return "";
+  const names = omitted.map((entry) => entry.label).join(", ");
+  return `The chart draws ${MAX_SERIES} series; not drawn: ${names}`;
+}
+
 function summarise(
   count: number,
   first: string,
   last: string,
-  series: ResolvedSeries[],
+  series: NamedSeries[],
   values: (number | null)[][],
   format: Format<number>
 ): string {
@@ -736,8 +883,14 @@ function readoutRows(
     key: entry.key,
     label: entry.label,
     color: entry.color,
+    dash: entry.dash,
     value: texts[s] ?? NO_VALUE,
   }));
+}
+
+/** Each of `series`' values per row, for the table's columns past the drawn ones. */
+function columnsOf(rows: readonly object[], series: readonly NamedSeries[]): (number | null)[][] {
+  return series.map((entry) => rows.map((row) => finite(field(row, entry.key))));
 }
 
 /**
@@ -831,6 +984,7 @@ function ValueGrid({
               x2={to}
               y1={at}
               y2={at}
+              data-chart-grid={tick}
               strokeWidth={1}
               className={zero ? "stroke-border-strong" : "stroke-border-subtle"}
             />
@@ -852,6 +1006,7 @@ function ValueGrid({
               x2={at}
               y1={from}
               y2={to}
+              data-chart-grid={tick}
               strokeWidth={1}
               className={zero ? "stroke-border-strong" : "stroke-border-subtle"}
             />
@@ -927,7 +1082,7 @@ function KitBarChart({
   const stacked = oneOf(mode, ["grouped", "stacked"] as const) === "stacked";
   const across = oneOf(orientation, ["vertical", "horizontal"] as const) === "horizontal";
   const [measure, width] = useWidth();
-  const resolved = useMemo(() => resolveSeries(series), [series]);
+  const { drawn: resolved, omitted } = useMemo(() => chartSeries(series), [series]);
   const rows = useMemo(() => rowsOf(data).slice(0, MAX_BAR_CATEGORIES), [data]);
   const formats = useMemo(() => valueFormats(formatValue), [formatValue]);
   const categories = useMemo(() => {
@@ -967,18 +1122,18 @@ function KitBarChart({
         }
       }
     });
-    const valueSpan = across ? width : px;
-    const ticks = niceTicks(low, high, Math.max(2, Math.floor(valueSpan / (across ? 80 : 40))));
-    const d0 = ticks[0]!;
-    const d1 = ticks[ticks.length - 1]!;
-    const left = across
-      ? axisWidth(categories, Math.min(160, width * 0.35))
-      : axisWidth(ticks.map(formats.axis), 72);
     const right = across ? 12 : 4;
     const top = TOP_PAD;
     const bottom = X_AXIS_PX;
-    const plotW = Math.max(1, width - left - right);
     const plotH = Math.max(1, px - top - bottom);
+    const categoryAxis = across ? axisWidth(categories, Math.min(160, width * 0.35)) : 0;
+    const ticks = across
+      ? axisTicks(low, high, Math.max(1, width - categoryAxis - right), X_TICK_SPACING)
+      : axisTicks(low, high, plotH, Y_TICK_SPACING);
+    const d0 = ticks[0]!;
+    const d1 = ticks[ticks.length - 1]!;
+    const left = across ? categoryAxis : axisWidth(ticks.map(formats.axis), 72);
+    const plotW = Math.max(1, width - left - right);
     const scale = across ? linear(d0, d1, left, left + plotW) : linear(d0, d1, top + plotH, top);
     const bandSpan = across ? plotH : plotW;
     const band = bandSpan / rows.length;
@@ -1102,17 +1257,20 @@ function KitBarChart({
   }, [rows, resolved, values, categories, formats, stacked, across, width, px]);
 
   // Built from the data alone, so moving the cursor never rescans it.
-  const table = useMemo<TableModel>(
-    () => ({
+  const table = useMemo<TableModel>(() => {
+    const all = [...values, ...columnsOf(rows, omitted)];
+    const named = [...resolved, ...omitted];
+    return {
       xLabel: str(xLabel) ?? "Category",
-      series: resolved,
+      series: named,
+      omitted,
       rows:
         rows.length > MAX_TABLE_ROWS
           ? null
           : rows.map((_, index) => ({
               key: String(index),
               x: categories[index] ?? "",
-              values: cellTexts(values, index, formats.full),
+              values: cellTexts(all, index, formats.full),
             })),
       summary:
         rows.length > MAX_TABLE_ROWS
@@ -1120,14 +1278,13 @@ function KitBarChart({
               rows.length,
               categories[0] ?? "",
               categories[categories.length - 1] ?? "",
-              resolved,
-              values,
+              named,
+              all,
               formats.full
             )
           : "",
-    }),
-    [xLabel, resolved, rows, categories, values, formats]
-  );
+    };
+  }, [xLabel, resolved, omitted, rows, categories, values, formats]);
 
   if (loading === true) return <ChartLoading height={px} className={classes} root={root} />;
   if (
@@ -1145,8 +1302,11 @@ function KitBarChart({
           title: categories[active] ?? "",
           rows: readoutRows(resolved, values, active, formats.full),
           x: across ? geometry.ends[active]! : geometry.bandStart + (active + 0.5) * geometry.band,
-          y: across ? geometry.bandStart + (active + 0.5) * geometry.band : geometry.ends[active]!,
+          // Up in the plot's top margin where bars are shortest, beside the
+          // column; a horizontal bar's tooltip starts level with its band.
+          y: across ? geometry.bandStart + active * geometry.band : geometry.top,
           clear: across ? 0 : geometry.groupSpan / 2,
+          swatch: "bar",
         }
       : null;
 
@@ -1156,7 +1316,7 @@ function KitBarChart({
       className={classes}
       label={label}
       height={px}
-      legend={<Legend series={resolved} shape="bar" />}
+      legend={<Legend series={resolved} omitted={omitted.length} shape="bar" />}
       table={table}
       cursor={cursor}
       readout={readout}
@@ -1281,7 +1441,7 @@ function KitLineChart({
   const root = pickRootProps(rest);
   const { px, label, classes } = chartProps(height, ariaLabel, className);
   const [measure, width] = useWidth();
-  const resolved = useMemo(() => resolveSeries(series), [series]);
+  const { drawn: resolved, omitted } = useMemo(() => chartSeries(series), [series]);
   const formats = useMemo(() => valueFormats(formatValue), [formatValue]);
   const smooth = oneOf(curve, ["linear", "monotone"] as const) === "monotone";
   const filled = area === true;
@@ -1301,13 +1461,11 @@ function KitLineChart({
       points.sort((a, b) => a.x - b.x);
     }
     const xs = points.map((point) => point.x);
-    const values = resolved.map((entry) =>
-      points.map((point) => finite(field(point.row, entry.key)))
-    );
-    return { time, xs, values };
-  }, [data, x, xType, resolved]);
+    const ordered = points.map((point) => point.row);
+    return { time, xs, values: columnsOf(ordered, resolved), hidden: columnsOf(ordered, omitted) };
+  }, [data, x, xType, resolved, omitted]);
 
-  const { time, xs, values } = model;
+  const { time, xs, values, hidden } = model;
   const cursor = useCursor(xs.length);
 
   const formatPoint = useMemo(
@@ -1339,23 +1497,26 @@ function KitLineChart({
       low = Math.min(0, low);
       high = Math.max(0, high);
     }
-    const ticks = niceTicks(low, high, Math.max(2, Math.floor(px / 40)));
+    const top = TOP_PAD;
+    const plotH = Math.max(1, px - top - X_AXIS_PX);
+    const ticks = axisTicks(low, high, plotH, Y_TICK_SPACING);
     const d0 = ticks[0]!;
     const d1 = ticks[ticks.length - 1]!;
     const left = axisWidth(ticks.map(formats.axis), 72);
     const right = 8;
-    const top = TOP_PAD;
     const plotW = Math.max(1, width - left - right);
-    const plotH = Math.max(1, px - top - X_AXIS_PX);
     const x0 = xs[0]!;
     const x1 = xs[xs.length - 1]!;
     const sx = linear(x0, x1, left, left + plotW);
     const sy = linear(d0, d1, top + plotH, top);
     const pixels = xs.map(sx);
-    const tickCount = Math.max(2, Math.floor(plotW / 90));
     let xTicks: { at: number; text: string }[];
     if (time) {
-      const { ticks: stamps, unit } = timeTicks(x0, x1, tickCount);
+      const { ticks: stamps, unit } = timeTicks(
+        x0,
+        x1,
+        Math.max(2, Math.floor(plotW / X_TICK_SPACING))
+      );
       const axisFormat = userFormat<number>(formatX, (value) =>
         TIME_AXIS_FORMATS[unit].format(value)
       );
@@ -1365,7 +1526,7 @@ function KitLineChart({
       xTicks =
         x0 === x1
           ? [{ at: sx(x0), text: axisFormat(x0) }]
-          : niceTicks(x0, x1, tickCount)
+          : axisTicks(x0, x1, plotW, X_TICK_SPACING)
               .filter((tick) => tick >= x0 && tick <= x1)
               .map((tick) => ({ at: sx(tick), text: axisFormat(tick) }));
     }
@@ -1387,36 +1548,43 @@ function KitLineChart({
         .filter((points) => points.length > 1)
         .map((points) => (smooth ? monotonePath(points) : linearPath(points)))
         .join("");
-      const fill = filled
-        ? drawn
-            .filter((points) => points.length > 1)
-            .map((points) => {
-              const start = points[0]![0];
-              const end = points[points.length - 1]![0];
-              const outline = smooth ? monotonePath(points) : linearPath(points);
-              return `${outline}L${fixed(end)},${fixed(baseline)}L${fixed(start)},${fixed(baseline)}Z`;
-            })
-            .join("")
-        : "";
+      // Only the first series fills: stacked translucent fills blend into
+      // one slate that belongs to no line, and the first series is the one a
+      // comparison chart leads with; the rest read as strokes above it.
+      const fill =
+        filled && s === 0
+          ? drawn
+              .filter((points) => points.length > 1)
+              .map((points) => {
+                const start = points[0]![0];
+                const end = points[points.length - 1]![0];
+                const outline = smooth ? monotonePath(points) : linearPath(points);
+                return `${outline}L${fixed(end)},${fixed(baseline)}L${fixed(start)},${fixed(baseline)}Z`;
+              })
+              .join("")
+          : "";
       const dots = drawn.flatMap((points) => (points.length === 1 ? points : []));
       const entry = resolved[s]!;
-      return { key: entry.key, color: entry.color, stroke, fill, dots };
+      return { key: entry.key, color: entry.color, dash: entry.dash, stroke, fill, dots };
     });
     return { ticks, sy, left, top, plotW, plotH, pixels, xTicks, lines };
   }, [time, xs, values, resolved, formats, width, px, filled, smooth, formatX]);
 
   // Built from the data alone, so moving the cursor never rescans it.
-  const table = useMemo<TableModel>(
-    () => ({
+  const table = useMemo<TableModel>(() => {
+    const all = [...values, ...hidden];
+    const named = [...resolved, ...omitted];
+    return {
       xLabel: str(xLabel) ?? (time ? "Time" : "X"),
-      series: resolved,
+      series: named,
+      omitted,
       rows:
         xs.length > MAX_TABLE_ROWS
           ? null
           : xs.map((value, index) => ({
               key: String(index),
               x: formatPoint(value),
-              values: cellTexts(values, index, formats.full),
+              values: cellTexts(all, index, formats.full),
             })),
       summary:
         xs.length > MAX_TABLE_ROWS
@@ -1424,14 +1592,13 @@ function KitLineChart({
               xs.length,
               formatPoint(xs[0] ?? 0),
               formatPoint(xs[xs.length - 1] ?? 0),
-              resolved,
-              values,
+              named,
+              all,
               formats.full
             )
           : "",
-    }),
-    [xLabel, time, resolved, xs, values, formats, formatPoint]
-  );
+    };
+  }, [xLabel, time, resolved, omitted, xs, values, hidden, formats, formatPoint]);
 
   if (loading === true) return <ChartLoading height={px} className={classes} root={root} />;
   if (xs.length === 0 || resolved.length === 0 || values.every((c) => c.every((v) => v === null))) {
@@ -1452,8 +1619,10 @@ function KitLineChart({
       title: formatPoint(xs[active] ?? 0),
       rows: readoutRows(resolved, values, active, formats.full),
       x: at,
-      y:
-        dots.length > 0 ? Math.min(...dots.map((dot) => dot.y)) : geometry.top + geometry.plotH / 2,
+      // Level with the plot's top, right of the crosshair: the stretch of
+      // line up to the point stays in view.
+      y: geometry.top,
+      swatch: "line",
     };
   }
 
@@ -1463,7 +1632,7 @@ function KitLineChart({
       className={classes}
       label={label}
       height={px}
-      legend={<Legend series={resolved} shape="line" />}
+      legend={<Legend series={resolved} omitted={omitted.length} shape="line" />}
       table={table}
       cursor={cursor}
       readout={readout}
@@ -1509,6 +1678,7 @@ function KitLineChart({
                 strokeWidth={2}
                 strokeLinecap="round"
                 strokeLinejoin="round"
+                strokeDasharray={line.dash}
               />
               {line.dots.map(([cx, cy], index) => (
                 <circle key={index} cx={cx} cy={cy} r={2} fill="currentColor" />
@@ -1688,7 +1858,8 @@ function KitDonutChart({
         },
       ],
       x: ax,
-      y: ay,
+      y: ay - TOOLTIP_OFFSET,
+      swatch: "bar",
     };
   }
   const figure = hasContent(centerValue) ? node(centerValue) : format(total);

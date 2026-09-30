@@ -11,6 +11,9 @@ import * as kit from "@daintreehq/plugin-ui";
 import {
   MAX_SERIES,
   MAX_TABLE_ROWS,
+  SERIES_DASHES,
+  X_TICK_SPACING,
+  axisTicks,
   barPath,
   chartColor,
   decimate,
@@ -20,6 +23,7 @@ import {
   edgeAnchor,
   resolveSeries,
   timeTicks,
+  tooltipLeft,
 } from "@/components/PluginKit/PluginKitCharts";
 
 // The setup file's ResizeObserver never reports; charts size from its
@@ -183,6 +187,156 @@ describe("chart scales and geometry", () => {
     expect(parts.map((part) => part.name)).toEqual(["a", "p0", "p1", "p2", "p3", "Other"]);
     expect(parts[5]?.value).toBe(5 + 6 + 7);
     expect(parts[5]?.color).toBe(chartColor("neutral"));
+  });
+});
+
+describe("chart legibility rules", () => {
+  const SIX = Array.from({ length: MAX_SERIES }, (_, index) => ({
+    key: `s${index}`,
+    label: `S${index}`,
+  }));
+  const SIX_ROWS = [1, 2, 3].map((at) => ({
+    at,
+    ...Object.fromEntries(SIX.map((entry, index) => [entry.key, at * (index + 1)])),
+  }));
+
+  it("tells every drawn line apart by its stroke, in the line, the legend and the tooltip", () => {
+    expect(new Set(SERIES_DASHES).size).toBe(MAX_SERIES);
+    const { container } = render(
+      createElement(kit.LineChart, { data: SIX_ROWS, x: "at", series: SIX, "aria-label": "Six" })
+    );
+    const strokes = [...container.querySelectorAll("[data-chart-series]")].map(
+      (group) => group.querySelector("path[fill='none']")?.getAttribute("stroke-dasharray") ?? null
+    );
+    // The first series is solid; no two share a stroke, whatever their colour.
+    expect(strokes[0]).toBeNull();
+    expect(new Set(strokes).size).toBe(MAX_SERIES);
+    const legend = screen.getByRole("list", { name: "Legend" });
+    const legendDashes = [...legend.querySelectorAll("[data-chart-swatch='line'] line")].map(
+      (line) => line.getAttribute("stroke-dasharray")
+    );
+    expect(legendDashes).toEqual(strokes);
+    fireEvent.keyDown(plot(), { key: "Home" });
+    const tipDashes = [...tooltip()!.querySelectorAll("[data-chart-swatch='line'] line")].map(
+      (line) => line.getAttribute("stroke-dasharray")
+    );
+    expect(tipDashes).toEqual(strokes);
+  });
+
+  it("keys a bar chart's tooltip with squares, a line chart's with strokes", () => {
+    render(
+      createElement(kit.BarChart, {
+        data: BUILDS,
+        x: "day",
+        series: BUILD_SERIES,
+        "aria-label": "B",
+      })
+    );
+    fireEvent.keyDown(plot(), { key: "Home" });
+    expect(tooltip()!.querySelectorAll("[data-chart-swatch='bar']")).toHaveLength(2);
+    expect(tooltip()!.querySelector("[data-chart-swatch='line']")).toBeNull();
+  });
+
+  it("fills only the first series' area when several share the plot", () => {
+    const { container } = render(
+      createElement(kit.LineChart, {
+        data: SIX_ROWS,
+        x: "at",
+        series: SIX.slice(0, 3),
+        "aria-label": "Area",
+        area: true,
+      })
+    );
+    const fills = container.querySelectorAll("[data-chart-series] path[fill='currentColor']");
+    expect(fills).toHaveLength(1);
+    expect(fills[0]?.closest("[data-chart-series]")?.getAttribute("data-chart-series")).toBe("s0");
+  });
+
+  it("says how many series it could not draw, and keeps them in the table", () => {
+    const series = Array.from({ length: MAX_SERIES + 2 }, (_, index) => ({
+      key: `s${index}`,
+      label: `Series ${index}`,
+    }));
+    const row = Object.fromEntries(series.map((entry, index) => [entry.key, index + 1]));
+    const { container } = render(
+      createElement(kit.BarChart, {
+        data: [{ day: "Mon", ...row }],
+        x: "day",
+        series,
+        "aria-label": "Many",
+      })
+    );
+    expect(container.querySelectorAll("[data-chart-bar]")).toHaveLength(MAX_SERIES);
+    const legend = screen.getByRole("list", { name: "Legend" });
+    expect(legend.lastElementChild?.textContent).toBe("+2 more not shown");
+    const headers = [...container.querySelectorAll("thead th")].map((cell) => cell.textContent);
+    expect(headers).toContain("Series 6");
+    expect(headers).toContain("Series 7");
+    const caption = container.querySelector("caption")?.textContent ?? "";
+    expect(caption).toContain("Series 6");
+    expect(caption).toContain("Series 7");
+  });
+
+  it("puts the tooltip right of its anchor, and left only when the right would overflow", () => {
+    const width = 600;
+    const tip = 150;
+    for (let anchor = 0; anchor <= width; anchor += 25) {
+      const left = tooltipLeft(anchor, 10, tip, width);
+      const fitsRight = anchor + 10 + 12 + tip <= width;
+      // Inside the chart, and clear of the anchor's mark on whichever side it took.
+      expect(left).toBeGreaterThanOrEqual(0);
+      expect(left + tip).toBeLessThanOrEqual(width);
+      if (fitsRight) expect(left).toBeGreaterThan(anchor + 10);
+      else expect(left + tip).toBeLessThan(anchor - 10);
+    }
+  });
+
+  it("keeps a column chart's tooltip at the plot's top, beside the column", () => {
+    render(
+      createElement(kit.BarChart, {
+        data: BUILDS,
+        x: "day",
+        series: BUILD_SERIES,
+        "aria-label": "B",
+      })
+    );
+    fireEvent.keyDown(plot(), { key: "Home" });
+    const mondayTop = tooltip()!.style.top;
+    const mondayLeft = parseFloat(tooltip()!.style.left);
+    // Monday's centre is a sixth of the way across; the tooltip starts past it.
+    expect(mondayLeft).toBeGreaterThan(480 / 6);
+    fireEvent.keyDown(plot(), { key: "ArrowRight" });
+    // Tuesday's bars differ in height; the tooltip does not follow them down.
+    expect(tooltip()!.style.top).toBe(mondayTop);
+  });
+
+  it("spaces value ticks by the pixels available, not a fixed step", () => {
+    // A short axis still gets a scale.
+    expect(axisTicks(0, 34, 90, X_TICK_SPACING).length).toBeGreaterThanOrEqual(3);
+    for (const length of [400, 800, 1164, 1600, 2400]) {
+      for (const high of [7, 34, 95, 1234, 0.8, 71]) {
+        const ticks = axisTicks(-high / 4, high, length, X_TICK_SPACING);
+        expect(ticks.length).toBeGreaterThanOrEqual(3);
+        expect(length / (ticks.length - 1)).toBeGreaterThanOrEqual(X_TICK_SPACING * 0.8);
+      }
+    }
+    reportedWidth = 1200;
+    const { container } = render(
+      createElement(kit.BarChart, {
+        data: [34, 27, 19, 8, 5].map((n, index) => ({ reason: `r${index}`, n })),
+        x: "reason",
+        series: [{ key: "n", label: "Count" }],
+        orientation: "horizontal",
+        "aria-label": "Reasons",
+      })
+    );
+    const xs = [...container.querySelectorAll("line[data-chart-grid]")].map((line) =>
+      Number(line.getAttribute("x1"))
+    );
+    expect(xs.length).toBeGreaterThanOrEqual(3);
+    for (let i = 1; i < xs.length; i++) {
+      expect(xs[i]! - xs[i - 1]!).toBeGreaterThanOrEqual(X_TICK_SPACING * 0.8);
+    }
   });
 });
 
