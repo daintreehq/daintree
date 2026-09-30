@@ -386,6 +386,27 @@ describe("VoiceRecordingService — background recording", () => {
     );
   });
 
+  it("reads settings and microphone permission together rather than in series", async () => {
+    const electronStub = buildElectronStub();
+    let resolveSettings: (value: unknown) => void = () => {};
+    electronStub.voiceInput.getSettings.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSettings = resolve;
+      })
+    );
+    setupGlobals(electronStub);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const starting = voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+
+    await vi.waitFor(() => expect(electronStub.voiceInput.checkMicPermission).toHaveBeenCalled());
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+
+    resolveSettings({ enabled: true, openaiApiKey: "sk-key", correctionEnabled: false });
+    await starting;
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
+  });
+
   it("closes the pre-built AudioContext when the microphone can't be opened", async () => {
     const { ctx } = setupGlobals();
     vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValue(
