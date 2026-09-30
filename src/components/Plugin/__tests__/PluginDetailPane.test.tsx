@@ -201,7 +201,7 @@ describe("PluginDetailPane project targeting switch (#13119)", () => {
     await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
 
     fireEvent.click(targetingSwitch());
-    await vi.waitFor(() => expect(screen.getByText(/Couldn't save this setting/)).toBeTruthy());
+    await vi.waitFor(() => expect(screen.getByText(/Couldn't save turning this off/)).toBeTruthy());
     // Re-read from main rather than guessing what is in force after a failed write.
     await vi.waitFor(() =>
       expect(projectTargetingMock.getProjectTargeting).toHaveBeenCalledTimes(2)
@@ -232,6 +232,56 @@ describe("PluginDetailPane project targeting switch (#13119)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
     expect(screen.queryByText("Couldn't read this setting.")).toBeNull();
+  });
+
+  it("holds the row disabled while it re-reads after a failed save", async () => {
+    projectTargetingMock.setProjectTargeting.mockRejectedValueOnce(new Error("disk full"));
+    renderPane(withCapabilities(["project:dispatch"]));
+    await vi.waitFor(() => expect(targetingSwitch().hasAttribute("disabled")).toBe(false));
+
+    let finishRead!: (value: boolean) => void;
+    projectTargetingMock.getProjectTargeting.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        finishRead = resolve;
+      })
+    );
+    fireEvent.click(targetingSwitch());
+    await vi.waitFor(() => expect(screen.getByText("Couldn't turn this on.")).toBeTruthy());
+    // Nothing can race the recovery read: the switch and Retry wait for it.
+    expect(targetingSwitch().hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled")).toBe(true);
+
+    finishRead(false);
+    await vi.waitFor(() => expect(targetingSwitch().hasAttribute("disabled")).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(screen.queryByText("Couldn't turn this on.")).toBeNull();
+  });
+
+  it("keeps the unsaved-off warning when the recovery read also fails, and retries the write", async () => {
+    projectTargetingMock.getProjectTargeting.mockResolvedValueOnce(true);
+    projectTargetingMock.getProjectTargeting.mockRejectedValueOnce(new Error("ipc down"));
+    projectTargetingMock.setProjectTargeting.mockRejectedValueOnce(new Error("disk full"));
+    renderPane(withCapabilities(["project:dispatch"]));
+    await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
+
+    fireEvent.click(targetingSwitch());
+    await vi.waitFor(() =>
+      expect(projectTargetingMock.getProjectTargeting).toHaveBeenCalledTimes(2)
+    );
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled")).toBe(false)
+    );
+    expect(screen.getByText(/Couldn't save turning this off/)).toBeTruthy();
+    expect(screen.queryByText("Couldn't read this setting.")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await vi.waitFor(() => expect(screen.queryByText(/Couldn't save turning this off/)).toBeNull());
+    expect(projectTargetingMock.setProjectTargeting).toHaveBeenLastCalledWith({
+      pluginId: "acme.demo",
+      enabled: false,
+    });
+    expect(targetingSwitch().getAttribute("aria-checked")).toBe("false");
   });
 
   it("is absent when the plugin does not declare project:dispatch", () => {

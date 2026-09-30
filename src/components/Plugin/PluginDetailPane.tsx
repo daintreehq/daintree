@@ -130,49 +130,71 @@ function PluginCapabilityList({
  */
 function ProjectTargetingSwitch({ pluginId }: { pluginId: string }) {
   const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<"read" | "save" | null>(null);
-  const [loadNonce, setLoadNonce] = useState(0);
+  const [busy, setBusy] = useState(true);
+  const [readFailed, setReadFailed] = useState(false);
+  // The value a write failed to persist. Kept until a write succeeds: a failed
+  // "off" is still revoked in memory but comes back after a restart, so a later
+  // successful read must not quietly clear the warning.
+  const [unsaved, setUnsaved] = useState<boolean | null>(null);
+  // Only the latest request may settle the row, so a slow read can't overwrite
+  // the result of a save that started after it.
+  const requestSeq = useRef(0);
+
+  const [readNonce, setReadNonce] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    const seq = ++requestSeq.current;
+    const current = () => !cancelled && seq === requestSeq.current;
+    setBusy(true);
     window.electron.pluginCapability
       .getProjectTargeting({ pluginId })
       .then((value) => {
-        if (cancelled) return;
+        if (!current()) return;
         setEnabled(value);
-        // A save error stays up through the re-read that follows it.
-        setError((current) => (current === "read" ? null : current));
+        setReadFailed(false);
       })
       .catch(() => {
-        if (!cancelled) {
-          setEnabled(null);
-          setError("read");
-        }
+        if (current()) setReadFailed(true);
+      })
+      .finally(() => {
+        if (current()) setBusy(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [pluginId, loadNonce]);
+  }, [pluginId, readNonce]);
 
-  const handleChange = (next: boolean) => {
-    setSaving(true);
-    setError(null);
+  const save = (next: boolean) => {
+    const seq = ++requestSeq.current;
+    setBusy(true);
     window.electron.pluginCapability
       .setProjectTargeting({ pluginId, enabled: next })
-      .then((persisted) => setEnabled(persisted))
-      .catch(() => {
-        // Main may have kept the change in memory without writing it (a failed
-        // disable stays off), so show what is in force now, not a guess.
-        setError("save");
-        setLoadNonce((n) => n + 1);
+      .then((persisted) => {
+        if (seq !== requestSeq.current) return;
+        setEnabled(persisted);
+        setUnsaved(null);
+        setBusy(false);
       })
-      .finally(() => setSaving(false));
+      .catch(() => {
+        if (seq !== requestSeq.current) return;
+        setUnsaved(next);
+        // Show what main has in force now rather than guessing.
+        setReadNonce((n) => n + 1);
+      });
   };
 
   const switchId = `plugin-project-targeting-${pluginId}`;
   const descriptionId = `${switchId}-description`;
   const errorId = `${switchId}-error`;
+  const errorText =
+    unsaved === false
+      ? "Couldn't save turning this off, so it will be back on after a restart."
+      : unsaved === true
+        ? "Couldn't turn this on."
+        : readFailed
+          ? "Couldn't read this setting."
+          : null;
 
   return (
     <div className="flex items-start justify-between gap-3 pt-2 border-t border-border-default">
@@ -184,28 +206,27 @@ function ProjectTargetingSwitch({ pluginId }: { pluginId: string }) {
           Lets this plugin run actions in any open project, not just the one in front. Each targeted
           action is recorded in the plugin audit log.
         </div>
-        {error && (
+        {errorText && (
           <div id={errorId} className="flex items-center gap-2 mt-0.5">
-            <span className="text-2xs text-status-danger">
-              {error === "read"
-                ? "Couldn't read this setting."
-                : "Couldn't save this setting. Try again."}
-            </span>
-            {error === "read" && (
-              <Button variant="ghost" size="xs" onClick={() => setLoadNonce((n) => n + 1)}>
-                Retry
-              </Button>
-            )}
+            <span className="text-2xs text-status-danger">{errorText}</span>
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={busy}
+              onClick={() => (unsaved !== null ? save(unsaved) : setReadNonce((n) => n + 1))}
+            >
+              Retry
+            </Button>
           </div>
         )}
       </div>
       <SettingsSwitch
         id={switchId}
         checked={enabled === true}
-        onCheckedChange={handleChange}
-        disabled={enabled === null || saving}
-        aria-describedby={error ? `${descriptionId} ${errorId}` : descriptionId}
-        aria-invalid={error === "save"}
+        onCheckedChange={save}
+        disabled={enabled === null || busy}
+        aria-describedby={errorText ? `${descriptionId} ${errorId}` : descriptionId}
+        aria-invalid={unsaved !== null}
         data-testid="plugin-project-targeting-switch"
       />
     </div>
