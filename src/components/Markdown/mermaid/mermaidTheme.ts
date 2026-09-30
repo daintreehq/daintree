@@ -199,6 +199,10 @@ export function subscribeThemeSignature(listener: () => void): () => void {
       attributes: true,
       attributeFilter: ["style", "class", "data-theme", "data-color-mode", "data-colorblind"],
     });
+    // Nothing was watching before this point, so a signature read earlier may
+    // already be stale; a missed change would otherwise stand until the next.
+    if (signature === null) signature = readThemeSignature();
+    else refreshSignature();
   }
   return () => {
     listeners.delete(listener);

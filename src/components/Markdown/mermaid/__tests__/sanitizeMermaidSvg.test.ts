@@ -118,7 +118,7 @@ describe("sanitizeMermaidSvg", () => {
           " #m1 .x, body{display:none;}" +
           " .toolbar{display:none;}" +
           " #m10 .y{fill:#222;}" +
-          " @keyframes m1-dash{to{stroke-dashoffset:0;}}</style>"
+          " @keyframes dash{to{stroke-dashoffset:0;}}</style>"
       )
     );
     const css = out.querySelector("style")?.textContent ?? "";
@@ -128,6 +128,73 @@ describe("sanitizeMermaidSvg", () => {
     expect(css).not.toContain("body");
     expect(css).not.toContain(".toolbar");
     expect(css).not.toContain("#m10");
+  });
+
+  it("rejects selectors that reach the diagram's siblings, and nested rules", () => {
+    const out = parse(
+      sanitize(
+        "<style>#m1 ~ *{display:none;}" +
+          " #m1 + div{display:none;}" +
+          " #m1:hover ~ nav{display:none;}" +
+          " #m1 .a ~ .b{fill:#010101;}" +
+          " #m1{ :is(&, body){opacity:0;} }</style>"
+      )
+    );
+    const css = out.querySelector("style")?.textContent ?? "";
+    expect(css).not.toContain("display");
+    expect(css).not.toContain("opacity");
+    // A sibling combinator inside the diagram stays inside it.
+    expect(css).toContain("#m1 .a ~ .b");
+  });
+
+  it("keeps only Mermaid's own keyframe names", () => {
+    const out = parse(
+      sanitize(
+        "<style>@keyframes dash{to{stroke-dashoffset:0;}}" +
+          " @keyframes spin{to{opacity:0;}}</style>"
+      )
+    );
+    const css = out.querySelector("style")?.textContent ?? "";
+    expect(css).toContain("dash");
+    expect(css).not.toContain("spin");
+  });
+
+  it("keeps a local url() reference however it is spaced or quoted", () => {
+    const out = parse(sanitize('<rect width="1" fill="url( \'#m1_grad\' )"/>'));
+    expect(out.querySelector("rect")?.getAttribute("fill")).toContain("#m1_grad");
+  });
+
+  it("namespaces bare ids under the root and rewrites every reference to them", () => {
+    const out = parse(
+      sanitize(
+        "<style>#m1 #linearGradient-3{stop-color:#fff;}</style>" +
+          '<defs><linearGradient id="linearGradient-3"/><marker id="m1_arrow"/></defs>' +
+          '<path fill="url(#linearGradient-3)" marker-end="url(#m1_arrow)"/>' +
+          '<text id="title-1">t</text><g aria-labelledby="title-1 m1_arrow"/>'
+      )
+    );
+    const gradient = out.querySelector("linearGradient, lineargradient");
+    expect(gradient?.id).toBe("m1-linearGradient-3");
+    expect(out.querySelector("path")?.getAttribute("fill")).toBe("url(#m1-linearGradient-3)");
+    expect(out.querySelector("path")?.getAttribute("marker-end")).toBe("url(#m1_arrow)");
+    expect(out.querySelector("g")?.getAttribute("aria-labelledby")).toBe("m1-title-1 m1_arrow");
+    expect(out.querySelector("style")?.textContent).toContain("#m1-linearGradient-3");
+    for (const element of out.querySelectorAll("[id]")) {
+      expect(element.id.startsWith("m1")).toBe(true);
+    }
+  });
+
+  it("gives up rather than drop labels Mermaid could only draw as HTML", () => {
+    expect(
+      sanitizeMermaidSvg(
+        DOMPurify,
+        `${SVG_OPEN}<foreignObject><div xmlns="http://www.w3.org/1999/xhtml"><span>x²</span></div></foreignObject></svg>`
+      )
+    ).toBeNull();
+    // An empty one (Mermaid emits a few) costs nothing to drop.
+    expect(
+      sanitizeMermaidSvg(DOMPurify, `${SVG_OPEN}<foreignObject></foreignObject></svg>`)
+    ).not.toBeNull();
   });
 
   it("returns null when the output is not a single svg root", () => {

@@ -65,6 +65,33 @@ const SECURE_KEYS = [
   "logLevel",
 ];
 
+/**
+ * Source that would make Mermaid fetch something while it lays the diagram
+ * out, before any sanitizer sees the output: image shapes load through
+ * `new Image()`, and `classDef`/`style` CSS is live in a temporary node under
+ * <body> for the length of the render. Such a diagram shows as source.
+ */
+const RESOURCE_SYNTAX = /\bimg\s*:|url\s*\(|image-set|@import/i;
+const ESCAPED_STYLE_LINE = /^\s*(?:classDef|style|linkStyle)\b.*\\/im;
+
+function requestsExternalResources(source: string): boolean {
+  return RESOURCE_SYNTAX.test(source) || ESCAPED_STYLE_LINE.test(source);
+}
+
+/**
+ * A lazy chunk that failed to load — Mermaid imports each diagram type on
+ * demand, inside `parse` and `render` — says nothing about the diagram, and a
+ * later attempt can succeed.
+ */
+function isChunkLoadError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /dynamically imported module|Importing a module script failed|error loading dynamically/i.test(
+      error.message
+    )
+  );
+}
+
 const TRANSIENT: MermaidRenderResult = { ok: false, transient: true };
 const FAILED: MermaidRenderResult = { ok: false };
 
@@ -180,12 +207,15 @@ async function renderNow(
   source: string,
   themeSignature: string
 ): Promise<MermaidRenderResult> {
+  // A job its requester dropped, or one queued before the theme changed, is
+  // not worth a layout pass — and the latter would cache colors under the
+  // wrong signature. Checked again after every await that can span a theme
+  // switch, up to the point the palette is read.
+  const isStale = (): boolean =>
+    (jobs.get(key)?.waiters ?? 0) === 0 || readThemeSignature() !== themeSignature;
+  if (isStale()) return TRANSIENT;
   await yieldToScheduler();
-  // Checked after the yield, when this job is really about to run: a job its
-  // requester dropped, or one queued before the theme changed, is not worth a
-  // layout pass (and the latter would cache colors under the wrong signature).
-  if ((jobs.get(key)?.waiters ?? 0) === 0) return TRANSIENT;
-  if (readThemeSignature() !== themeSignature) return TRANSIENT;
+  if (isStale()) return TRANSIENT;
 
   let runtime: MermaidRuntime;
   try {
@@ -193,6 +223,7 @@ async function renderNow(
   } catch {
     return TRANSIENT;
   }
+  if (isStale()) return TRANSIENT;
   const { mermaid, purify, sanitize } = runtime;
   if (appliedThemeSignature !== themeSignature) {
     mermaid.initialize(buildConfig());
@@ -200,13 +231,14 @@ async function renderNow(
   }
   const id = `${idStem}${++renderSequence}`;
   try {
-    const parsed = await mermaid.parse(source, { suppressErrors: true });
-    if (!parsed) return FAILED;
+    // Not `suppressErrors`: it folds a failed diagram chunk into the same
+    // `false` as a syntax error, and only one of those deserves caching.
+    await mermaid.parse(source);
     const { svg } = await mermaid.render(id, source);
     const clean = sanitize(purify, svg);
     return clean === null ? FAILED : { ok: true, svg: clean, templateId: id };
-  } catch {
-    return FAILED;
+  } catch (error) {
+    return isChunkLoadError(error) ? TRANSIENT : FAILED;
   } finally {
     removeStrayRenderNodes(id);
   }
@@ -222,7 +254,7 @@ export function requestMermaidRender(source: string, themeSignature: string): Me
   const key = cacheKey(source, themeSignature);
   const cached = peekMermaidRender(source, themeSignature);
   if (cached !== undefined) return { result: Promise.resolve(cached), cancel: () => {} };
-  if (source.length > MERMAID_MAX_SOURCE_CHARS) {
+  if (source.length > MERMAID_MAX_SOURCE_CHARS || requestsExternalResources(source)) {
     return { result: Promise.resolve(FAILED), cancel: () => {} };
   }
 

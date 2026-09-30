@@ -143,16 +143,38 @@ describe("requestMermaidRender", () => {
     expect(mermaidMock.render).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back when the source does not parse, without rendering it", async () => {
-    mermaidMock.parse.mockResolvedValue(false);
+  it("falls back when the source does not parse, and caches that verdict", async () => {
+    mermaidMock.parse.mockRejectedValue(new Error("Parse error on line 1"));
 
     const result = await render("not a diagram");
 
     expect(result).toEqual({ ok: false });
-    expect(mermaidMock.parse).toHaveBeenCalledWith("not a diagram", { suppressErrors: true });
     expect(mermaidMock.render).not.toHaveBeenCalled();
     expect(peekMermaidRender("not a diagram", "theme-a")).toEqual({ ok: false });
   });
+
+  it("does not cache a diagram chunk that failed to load, so a later attempt can succeed", async () => {
+    mermaidMock.parse.mockRejectedValueOnce(
+      new TypeError("Failed to fetch dynamically imported module: flowDiagram-abc.js")
+    );
+
+    expect(await render("graph TD; A-->B")).toEqual({ ok: false, transient: true });
+    expect(peekMermaidRender("graph TD; A-->B", "theme-a")).toBeUndefined();
+    expect((await render("graph TD; A-->B")).ok).toBe(true);
+  });
+
+  it.each([
+    ["an image shape", 'flowchart TD\n  A@{ img: "https://tracker.example/p.png" }'],
+    ["a classDef url()", "flowchart TD\n  classDef x fill:url(https://tracker.example/p.png)"],
+    ["a style image-set()", "flowchart TD\n  style A background:image-set('x.png' 1x)"],
+    ["an escaped style value", "flowchart TD\n  classDef x fill:u\\72l(https://t.example)"],
+  ])(
+    "never hands mermaid a source with %s, since it would fetch before sanitizing",
+    async (_, source) => {
+      expect(await render(source)).toEqual({ ok: false });
+      expect(mermaidMock.parse).not.toHaveBeenCalled();
+    }
+  );
 
   it("falls back and removes mermaid's scratch nodes when render throws", async () => {
     mermaidMock.render.mockImplementation(async (id) => {

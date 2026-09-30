@@ -37,7 +37,7 @@ const FORBID_TAGS = [
 /** Larger than any real diagram; past it the markup is not worth a DOM parse. */
 const MAX_SVG_CHARS = 5_000_000;
 
-const EXTERNAL_URL = /url\(\s*(?!['"]?\s*#)/i;
+const EXTERNAL_URL = /url\((?!\s*['"]?\s*#)/i;
 const RESOURCE_FUNCTION = /image-set\(|image\(|cross-fade\(|element\(/i;
 
 /**
@@ -48,10 +48,33 @@ function isUnsafeCss(text: string): boolean {
   return text.includes("\\") || EXTERNAL_URL.test(text) || RESOURCE_FUNCTION.test(text);
 }
 
+/**
+ * Mermaid's own animation names. An author-supplied `@keyframes spin` would
+ * replace the app's animation of the same name everywhere, so no other name
+ * gets through.
+ */
+const KEYFRAME_NAMES = new Set(["dash", "edge-animation-frame"]);
+
+/**
+ * True when the selector can only match the diagram root or something inside
+ * it: it opens with the root's id (or one of the ids namespaced under it), and
+ * that first compound is not followed by a sibling combinator, which would
+ * reach the elements next to the diagram.
+ */
 function isScopedSelector(selector: string, scope: string): boolean {
   if (!selector.startsWith(scope)) return false;
-  const next = selector.charAt(scope.length);
-  return next === "" || /[\s.:[>+~]/.test(next);
+  const rest = selector.slice(scope.length);
+  if (rest !== "" && !/^[\s.:[>\-_]/.test(rest)) return false;
+  let depth = 0;
+  let index = 0;
+  for (; index < rest.length; index++) {
+    const char = rest.charAt(index);
+    if (char === "(" || char === "[") depth++;
+    else if (char === ")" || char === "]") depth--;
+    else if (depth === 0 && /[\s>+~]/.test(char)) break;
+  }
+  const combinator = rest.slice(index).trimStart().charAt(0);
+  return combinator !== "+" && combinator !== "~";
 }
 
 function parseStyleSheet(css: string): CSSStyleSheet | null {
@@ -77,14 +100,95 @@ function scopeStyleSheet(css: string, rootId: string): string {
     if (isUnsafeCss(text)) continue;
     // Keyframes carry no selector, only a global animation name.
     if ("name" in rule && "findRule" in rule) {
-      kept.push(text);
+      if (typeof rule.name === "string" && KEYFRAME_NAMES.has(rule.name)) kept.push(text);
       continue;
     }
     if (!("selectorText" in rule) || typeof rule.selectorText !== "string") continue;
+    // A nested rule (`#id { :is(&, body) {} }`) picks its own targets; Mermaid
+    // never emits one.
+    if ("cssRules" in rule && rule.cssRules.length > 0) continue;
     const selectors = rule.selectorText.split(",").map((selector) => selector.trim());
     if (selectors.every((selector) => isScopedSelector(selector, scope))) kept.push(text);
   }
   return kept.join("\n");
+}
+
+const ID_REFERENCE_ATTRS = ["aria-labelledby", "aria-describedby"];
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Moves every id in the diagram under its root id. Most of Mermaid's ids
+ * already are, but some renderers mint bare ones (`linearGradient-3`), which
+ * collide with the same diagram mounted twice or with another diagram's. Once
+ * everything shares the root's prefix, renaming the root renames them all.
+ */
+function namespaceIds(root: Element, rootId: string): void {
+  const renamed = new Map<string, string>();
+  const taken = new Set<string>();
+  for (const element of root.querySelectorAll("[id]")) {
+    const id = element.getAttribute("id") ?? "";
+    if (id.startsWith(rootId)) {
+      taken.add(id);
+      continue;
+    }
+    let next = `${rootId}-${id.replace(/[^\w-]/g, "_")}`;
+    while (taken.has(next)) next = `${next}_`;
+    taken.add(next);
+    renamed.set(id, next);
+    element.setAttribute("id", next);
+  }
+  if (renamed.size === 0) return;
+
+  const renameReferences = (value: string): string =>
+    value.replace(/url\(\s*(['"]?)#([^'")\s]+)\1\s*\)/g, (match, quote: string, id: string) => {
+      const next = renamed.get(id);
+      return next === undefined ? match : `url(${quote}#${next}${quote})`;
+    });
+
+  for (const element of [root, ...Array.from(root.querySelectorAll("*"))]) {
+    for (const attribute of Array.from(element.attributes)) {
+      const { name, value } = attribute;
+      if (name === "id") continue;
+      if (name === "href" || name === "xlink:href") {
+        const next = renamed.get(value.trim().slice(1));
+        if (value.trim().startsWith("#") && next !== undefined) {
+          element.setAttribute(name, `#${next}`);
+        }
+      } else if (ID_REFERENCE_ATTRS.includes(name)) {
+        element.setAttribute(
+          name,
+          value
+            .split(/\s+/)
+            .map((token) => renamed.get(token) ?? token)
+            .join(" ")
+        );
+      } else if (value.includes("url(")) {
+        element.setAttribute(name, renameReferences(value));
+      }
+    }
+    if (element.localName === "style" && element.textContent) {
+      let css = renameReferences(element.textContent);
+      for (const [id, next] of renamed) {
+        css = css.replace(new RegExp(`#${escapeRegExp(id)}(?![\\w-])`, "g"), `#${next}`);
+      }
+      element.textContent = css;
+    }
+  }
+}
+
+/**
+ * Mermaid still routes some labels (math, a few class-diagram members)
+ * through `foreignObject` whatever `htmlLabels` says. Stripping those leaves a
+ * diagram with holes in it, which reads worse than the source.
+ */
+function hasHtmlOnlyLabels(svg: string): boolean {
+  for (const match of svg.matchAll(/<foreignObject\b[^>]*>([\s\S]*?)<\/foreignObject>/gi)) {
+    if ((match[1] ?? "").replace(/<[^>]*>/g, "").trim()) return true;
+  }
+  return false;
 }
 
 function scrubAttributes(element: Element): void {
@@ -102,7 +206,7 @@ function scrubAttributes(element: Element): void {
 
 /** Returns the sanitized SVG markup, or null when nothing diagram-shaped is left. */
 export function sanitizeMermaidSvg(purify: DOMPurify, svg: string): string | null {
-  if (svg.length > MAX_SVG_CHARS) return null;
+  if (svg.length > MAX_SVG_CHARS || hasHtmlOnlyLabels(svg)) return null;
   const fragment = purify.sanitize(svg, {
     USE_PROFILES: { svg: true, svgFilters: true },
     FORBID_TAGS,
@@ -115,9 +219,10 @@ export function sanitizeMermaidSvg(purify: DOMPurify, svg: string): string | nul
 
   for (const element of [root, ...Array.from(root.querySelectorAll("*"))]) {
     scrubAttributes(element);
-    if (element.localName === "style") {
-      element.textContent = scopeStyleSheet(element.textContent ?? "", rootId);
-    }
+  }
+  namespaceIds(root, rootId);
+  for (const element of root.querySelectorAll("style")) {
+    element.textContent = scopeStyleSheet(element.textContent ?? "", rootId);
   }
   const holder = document.createElement("div");
   holder.appendChild(fragment);

@@ -62,6 +62,20 @@ describe("theme signature", () => {
   });
 });
 
+describe("subscription gap", () => {
+  it("picks up a re-theme that landed between the first snapshot and the first subscription", () => {
+    root.style.setProperty("--color-text-primary", "#111111");
+    const early = getThemeSignature();
+    root.style.setProperty("--color-text-primary", "#eeeeee");
+
+    const listener = vi.fn();
+    const unsubscribe = subscribeThemeSignature(listener);
+
+    expect(getThemeSignature()).not.toBe(early);
+    unsubscribe();
+  });
+});
+
 describe("resolveMermaidPalette", () => {
   function stubCanvas(pixelFor: (painted: string[]) => number[]) {
     const painted: string[] = [];

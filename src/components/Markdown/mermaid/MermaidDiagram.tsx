@@ -51,7 +51,10 @@ export function MermaidDiagram({ source, fallback }: { source: string; fallback:
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) setNearViewport(true);
       },
-      { rootMargin: PRERENDER_MARGIN }
+      // `rootMargin` only grows the viewport; the pane's own scroller would
+      // still clip a diagram until it scrolled in. `scrollMargin` grows every
+      // scroll container on the way.
+      { rootMargin: PRERENDER_MARGIN, scrollMargin: PRERENDER_MARGIN }
     );
     observer.observe(element);
     return () => observer.disconnect();
