@@ -326,6 +326,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   // back in its commit-order slot rather than after the text that follows it.
   private itemDeltaText = new Map<string, string>();
   private heldCompletionTimer: ReturnType<typeof setTimeout> | null = null;
+  // The item the hold timer is waiting on. The deadline belongs to that item,
+  // so later completions queuing behind it don't keep pushing it back.
+  private heldCompletionTimerItemId: string | null = null;
 
   /** Cumulative delta text since the last complete event — used for incremental diffs. */
   private liveText = "";
@@ -1111,10 +1114,14 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       this.heldCompletions.delete(itemId);
       this.emitCompletion(transcript, itemId);
     }
+    const blockingItemId = this.heldCompletions.size > 0 ? (this.commitOrder[0] ?? null) : null;
+    if (this.heldCompletionTimer && this.heldCompletionTimerItemId === blockingItemId) return;
     this.clearHeldCompletionTimer();
-    if (this.heldCompletions.size > 0) {
+    if (blockingItemId) {
+      this.heldCompletionTimerItemId = blockingItemId;
       this.heldCompletionTimer = setTimeout(() => {
         this.heldCompletionTimer = null;
+        this.heldCompletionTimerItemId = null;
         this.releaseHeldCompletions(false, true);
         if (this.isDraining && this.pendingCommits === 0) {
           this.settleDrain("held-completion-timeout");
@@ -1128,6 +1135,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       clearTimeout(this.heldCompletionTimer);
       this.heldCompletionTimer = null;
     }
+    this.heldCompletionTimerItemId = null;
   }
 
   private emitCompletion(transcript: string, itemId?: string): void {

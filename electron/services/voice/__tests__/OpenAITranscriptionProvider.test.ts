@@ -2731,6 +2731,58 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
     ]);
   });
 
+  it("does not let later completions postpone the hold deadline", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-C" });
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+    await vi.advanceTimersByTimeAsync(4_000);
+    socket.simulateMessage("conversation.item.done", done("item-C", "third"));
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(completions(events)).toEqual([
+      { text: "", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+      { text: "third", itemId: "item-C" },
+    ]);
+  });
+
+  it("settles the drain when a failed predecessor releases the last outstanding commit", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    vadCommitSegment(service, worker);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+
+    const drainPromise = service.stopGracefully();
+    let settled = false;
+    void drainPromise.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    socket.simulateMessage("conversation.item.input_audio_transcription.failed", {
+      item_id: "item-A",
+    });
+    await drainPromise;
+    expect(completions(events)).toEqual([
+      { text: "", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+    ]);
+  });
+
   it("treats a failed transcription as an empty completion that unblocks later items", async () => {
     const service = new OpenAITranscriptionProvider();
     const events: VoiceTranscriptionEvent[] = [];
