@@ -1,7 +1,14 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
 import { CircleAlert } from "lucide-react";
-import { Checkbox, Icon, Tooltip } from "@daintreehq/plugin-ui";
-import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
+import {
+  Avatar,
+  Checkbox,
+  DropdownMenu,
+  Icon,
+  Tooltip,
+  type DropdownMenuEntry,
+} from "@daintreehq/plugin-ui";
+import { avatarUrlAtSize } from "@/components/ui/Avatar";
 import { cn } from "@/lib/utils";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import { formatTimeAgo } from "@/utils/timeAgo";
@@ -9,14 +16,6 @@ import { actionService } from "@/services/ActionService";
 import type { ForgeLabel, Issue, PR } from "@shared/types/forge";
 import type { Worktree } from "@shared/types/worktree";
 import { getPRStatusVisual, getPRStatusTooltip } from "../utils/prCIStatus";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuShortcut,
-} from "@/components/ui/dropdown-menu";
 import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
@@ -241,6 +240,60 @@ export function GitHubListItem({
     : null;
 
   const linkedPR = !isItemPR && "linkedPR" in item ? item.linkedPR : undefined;
+
+  // The row's own action leads. It used to sit below a separator under "Open
+  // on GitHub", which contradicted what the row actually does when you
+  // activate it. The shortcuts are the keys the search field answers to for
+  // this row, so the menu teaches them; Enter opens the forge only when the row
+  // has nothing local to do.
+  const menuItems: DropdownMenuEntry[] = [];
+  if (primaryAction.kind === "switch" && onSwitchToWorktree && !isActiveWorktree) {
+    const worktreeId = primaryAction.worktreeId;
+    menuItems.push({
+      label: "Switch to worktree",
+      icon: "worktree",
+      shortcut: "Enter",
+      onSelect: () => onSwitchToWorktree(worktreeId),
+    });
+  }
+  if (primaryAction.kind === "create" && onCreateWorktree) {
+    menuItems.push({
+      label: "Create worktree",
+      icon: "worktree",
+      shortcut: "Enter",
+      onSelect: () => onCreateWorktree(item),
+    });
+  }
+  menuItems.push(
+    {
+      label: "Open on GitHub",
+      icon: "external-link",
+      shortcut: primaryAction.kind === "open" ? "Enter" : "Cmd+Enter",
+      onSelect: () => handleOpenExternal(),
+    },
+    { label: "Copy number", icon: "copy", onSelect: () => void handleCopyNumber() }
+  );
+  if (linkedPR) {
+    menuItems.push({
+      label: `Open pull request #${linkedPR.number}`,
+      icon: "git-pull-request",
+      onSelect: () => handleOpenLinkedPR(),
+    });
+  }
+  // Selection's only accessible, non-hover entry point. The checkbox on the
+  // state icon is a pointer shortcut for the same command, not the way you are
+  // meant to find it.
+  if (onToggleSelect) {
+    menuItems.push(
+      { type: "separator" },
+      {
+        label: isSelected ? "Deselect" : "Select",
+        icon: "list-checks",
+        shortcut: "Shift+Space",
+        onSelect: () => onToggleSelect({ shiftKey: false }),
+      }
+    );
+  }
   // A conflict only blocks an open PR; a closed or merged one keeps its last CI word.
   const linkedPRCIVisual = linkedPR
     ? getPRStatusVisual(
@@ -476,15 +529,36 @@ export function GitHubListItem({
                   >
                     <Avatar
                       src={avatarUrlAtSize(firstAssignee.avatarUrl, 32)}
-                      alt=""
-                      className="w-4 h-4"
+                      name={firstAssignee.login}
+                      size="xs"
+                      decorative
                     />
                   </span>
                 </Tooltip>
               )}
 
-              <DropdownMenu open={menuOpen} onOpenChange={onMenuOpenChange}>
-                <DropdownMenuTrigger asChild>
+              <DropdownMenu
+                open={menuOpen}
+                onOpenChange={onMenuOpenChange}
+                side="bottom"
+                align="end"
+                /* Radix restores focus to the trigger, which is `tabIndex={-1}`
+                   and not where this widget keeps focus. Hand it back to the
+                   search input, which is the grid's real focus holder. */
+                onCloseAutoFocus={(e: Event) => {
+                  if (!onMenuClose) return;
+                  e.preventDefault();
+                  onMenuClose();
+                }}
+                /* The menu portals out of the row's DOM but not out of the
+                   React tree, so without this a click on any item also runs
+                   the row's primary action underneath it — "Copy number"
+                   would copy AND switch worktree, and "Select" would toggle
+                   and then activate. FixedDropdown already reads a press in
+                   a menu opened from inside it as its own. */
+                stopPropagation
+                items={menuItems}
+                trigger={
                   <button
                     type="button"
                     tabIndex={-1}
@@ -511,85 +585,8 @@ export function GitHubListItem({
                   >
                     <Icon name="more-horizontal" className="h-3.5 w-3.5" />
                   </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  side="bottom"
-                  align="end"
-                  /* Radix restores focus to the trigger, which is `tabIndex={-1}`
-                     and not where this widget keeps focus. Hand it back to the
-                     search input, which is the grid's real focus holder. */
-                  onCloseAutoFocus={(e: Event) => {
-                    if (!onMenuClose) return;
-                    e.preventDefault();
-                    onMenuClose();
-                  }}
-                  /* The menu portals out of the dropdown's DOM, so without
-                     these `FixedDropdown` reads a click on "Copy number" as an
-                     outside click and closes the panel out from under the
-                     feedback. Same guard the sort popover carries. */
-                  onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
-                  onTouchStart={(e: React.TouchEvent) => e.stopPropagation()}
-                  /* The menu portals out of the row's DOM but not out of the
-                     React tree, so without this a click on any item also runs
-                     the row's primary action underneath it — "Copy number"
-                     would copy AND switch worktree, and "Select" would toggle
-                     and then activate. */
-                  onClick={(e: React.MouseEvent) => e.stopPropagation()}
-                >
-                  {/* The row's own action leads. It used to sit below a
-                      separator under "Open on GitHub", which contradicted what
-                      the row actually does when you activate it. */}
-                  {primaryAction.kind === "switch" && onSwitchToWorktree && !isActiveWorktree && (
-                    <DropdownMenuItem onSelect={() => onSwitchToWorktree(primaryAction.worktreeId)}>
-                      <Icon name="worktree" className="h-3.5 w-3.5 mr-2" />
-                      Switch to worktree
-                      <DropdownMenuShortcut shortcut="Enter" />
-                    </DropdownMenuItem>
-                  )}
-                  {primaryAction.kind === "create" && onCreateWorktree && (
-                    <DropdownMenuItem onSelect={() => onCreateWorktree(item)}>
-                      <Icon name="worktree" className="h-3.5 w-3.5 mr-2" />
-                      Create worktree
-                      <DropdownMenuShortcut shortcut="Enter" />
-                    </DropdownMenuItem>
-                  )}
-
-                  <DropdownMenuItem onSelect={() => handleOpenExternal()}>
-                    <Icon name="external-link" className="h-3.5 w-3.5 mr-2" />
-                    Open on GitHub
-                    {/* The keys the search field answers to for this row, so the
-                        menu teaches them. Enter opens the forge only when the
-                        row has nothing local to do. */}
-                    <DropdownMenuShortcut
-                      shortcut={primaryAction.kind === "open" ? "Enter" : "Cmd+Enter"}
-                    />
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => void handleCopyNumber()}>
-                    <Icon name="copy" className="h-3.5 w-3.5 mr-2" />
-                    Copy number
-                  </DropdownMenuItem>
-                  {linkedPR && (
-                    <DropdownMenuItem onSelect={() => handleOpenLinkedPR()}>
-                      <Icon name="git-pull-request" className="h-3.5 w-3.5 mr-2" />
-                      Open pull request #{linkedPR.number}
-                    </DropdownMenuItem>
-                  )}
-
-                  {/* Selection's only accessible, non-hover entry point. The
-                      checkbox on the state icon is a pointer shortcut for the
-                      same command, not the way you are meant to find it. */}
-                  {onToggleSelect && (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onSelect={() => onToggleSelect({ shiftKey: false })}>
-                        <Icon name="list-checks" className="h-3.5 w-3.5 mr-2" />
-                        {isSelected ? "Deselect" : "Select"}
-                        <DropdownMenuShortcut shortcut="Shift+Space" />
-                      </DropdownMenuItem>
-                    </>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
+                }
+              />
             </div>
           </div>
 

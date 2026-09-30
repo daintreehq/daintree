@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
-import { primePluginKit } from "./primePluginKit";
+import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { GitHubSettingsTab } from "../components/GitHubSettingsTab";
 import { SettingsValidationProvider } from "@/components/Settings/SettingsValidationRegistry";
@@ -31,7 +31,7 @@ function setupStore(overrides: Record<string, unknown> = {}) {
   } as ReturnType<typeof useGitHubConfigStore>);
 }
 
-beforeAll(primePluginKit, 30_000);
+beforeAll(() => whenPluginUiReady(), 30_000);
 
 describe("GitHubSettingsTab accessibility", () => {
   beforeEach(() => {

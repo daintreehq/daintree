@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, FlaskConical, ExternalLink, CheckCircle2 } from "lucide-react";
 import {
   Button,
   Callout,
+  ConfirmDialog,
+  Icon,
   Input,
   SettingsActions,
   SettingsGroup,
@@ -10,9 +11,6 @@ import {
   SettingsSection,
 } from "@daintreehq/plugin-ui";
 import { actionService } from "@/services/ActionService";
-// The host dialog, not the kit's: this tab renders inside the Settings modal,
-// and only the host ConfirmDialog takes the `nested` layer that opens above it.
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { BUILTIN_GITLAB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import type { GitLabTokenValidation } from "../../shared/types.js";
 import { logError } from "@/utils/logger";
@@ -327,12 +325,12 @@ export function GitLabSettingsTab() {
   const tokenStatus =
     validationResult === "success" ? (
       <span className="flex items-center gap-1">
-        <CheckCircle2 className="w-3 h-3 shrink-0" aria-hidden="true" />
+        <Icon name="circle-check" className="w-3 h-3 shrink-0" />
         Checked and saved
       </span>
     ) : validationResult === "test-success" ? (
       <span className="flex items-center gap-1">
-        <Check className="w-3 h-3 shrink-0" aria-hidden="true" />
+        <Icon name="check" className="w-3 h-3 shrink-0" />
         Token works — not saved yet
       </span>
     ) : tokenError ? (
@@ -405,7 +403,7 @@ export function GitLabSettingsTab() {
               label="Status"
               control={
                 <span className="flex items-center gap-1 text-xs text-text-secondary">
-                  {hasToken && <Check className="w-3 h-3" aria-hidden="true" />}
+                  {hasToken && <Icon name="check" className="w-3 h-3" />}
                   {hasToken ? `Token saved for ${hostOf(savedInstanceUrl)}` : "No token saved"}
                 </span>
               }
@@ -452,7 +450,7 @@ export function GitLabSettingsTab() {
               variant="outline"
               size="sm"
               aria-label="Test token"
-              icon={<FlaskConical aria-hidden="true" />}
+              icon="flask"
             >
               Test
             </Button>
@@ -485,12 +483,7 @@ export function GitLabSettingsTab() {
             layout="stacked"
             control={
               <div className="flex flex-wrap gap-2">
-                <Button
-                  onClick={openTokenPage}
-                  variant="outline"
-                  size="sm"
-                  icon={<ExternalLink aria-hidden="true" />}
-                >
+                <Button onClick={openTokenPage} variant="outline" size="sm" icon="external-link">
                   Create token on GitLab
                 </Button>
               </div>
@@ -520,8 +513,9 @@ export function GitLabSettingsTab() {
         )}
       </SettingsSection>
 
+      {/* `nested`: this tab renders inside the Settings modal. */}
       <ConfirmDialog
-        isOpen={pendingSwitch !== null}
+        open={pendingSwitch !== null}
         variant="destructive"
         onConfirm={() => {
           const action = pendingSwitch;
@@ -537,18 +531,18 @@ export function GitLabSettingsTab() {
             : "The new token is then checked and saved."
         }`}
         confirmLabel="Switch instance"
-        zIndex="nested"
+        layer="nested"
       />
 
       <ConfirmDialog
-        isOpen={confirmingClear}
+        open={confirmingClear}
         variant="destructive"
         onConfirm={() => void handleClearToken()}
         onClose={() => setConfirmingClear(false)}
         title="Clear the GitLab token?"
         description={`Daintree's copy is deleted. GitLab issues, merge requests and repository stats stop until you add a token again.`}
         confirmLabel="Clear token"
-        zIndex="nested"
+        layer="nested"
       />
     </div>
   );

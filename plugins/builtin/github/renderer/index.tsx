@@ -3,17 +3,22 @@ import { registerBuiltinView } from "@/registry/builtinRendererRegistry";
 import { GitHubIcon } from "@/components/icons/brands";
 import { GitHubStatsDropdown } from "./components/GitHubStatsDropdown";
 import { useGitHubConfigStore } from "./stores/githubConfigStore";
+import { withPluginUi } from "./withPluginUi";
 
 const BulkCreateWorktreeDialog = lazy(() =>
-  import("./components/BulkCreateWorktreeDialog").then((m) => ({
+  withPluginUi(() => import("./components/BulkCreateWorktreeDialog")).then((m) => ({
     default: m.BulkCreateWorktreeDialog,
   }))
 );
 const IssueSelector = lazy(() =>
-  import("./components/IssueSelector").then((m) => ({ default: m.IssueSelector }))
+  withPluginUi(() => import("./components/IssueSelector")).then((m) => ({
+    default: m.IssueSelector,
+  }))
 );
 const GitHubSettingsTab = lazy(() =>
-  import("./components/GitHubSettingsTab").then((m) => ({ default: m.GitHubSettingsTab }))
+  withPluginUi(() => import("./components/GitHubSettingsTab")).then((m) => ({
+    default: m.GitHubSettingsTab,
+  }))
 );
 
 // Registration stays synchronous while infrequently used views load only when rendered.

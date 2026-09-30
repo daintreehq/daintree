@@ -1,17 +1,24 @@
 import { useState, useEffect, useRef } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useListboxCursor } from "@/hooks/useListboxCursor";
-import { ChevronsUpDown, RefreshCw, XCircle } from "lucide-react";
-import { Button, EmptyState, Icon, Tooltip } from "@daintreehq/plugin-ui";
+import {
+  Button,
+  Callout,
+  EmptyState,
+  Icon,
+  PopoverSearchField,
+  ScrollShadow,
+  Tooltip,
+} from "@daintreehq/plugin-ui";
 import { cn } from "@/lib/utils";
 import { forgeClient } from "@/clients/forgeClient";
 import type { Issue } from "@shared/types/forge";
 import type { ForgeIssueSelectorProps } from "@/types/forgeSlotProps";
+// The host popover: the panel anchors to the whole compound field (trigger and
+// clear), not the trigger alone, and it owns its open focus and Escape. The kit
+// Popover has no anchor and neither handler.
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
-import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { FIELD_SURFACE } from "@/components/Worktree/views/WorktreeFormLayout";
 import { FORGE_OPTION_ROW, ForgeOptionRowsSkeleton } from "./GitHubDropdownSkeletons";
 import { logError } from "@/utils/logger";
@@ -172,7 +179,7 @@ export function IssueSelector({
               ) : (
                 <span className="text-text-secondary">Select an issue (optional)</span>
               )}
-              <ChevronsUpDown className="h-4 w-4 text-text-secondary shrink-0" aria-hidden="true" />
+              <Icon name="chevrons-up-down" className="h-4 w-4 text-text-secondary shrink-0" />
             </button>
           </PopoverTrigger>
           {selectedIssue && !disabled && (
@@ -215,7 +222,7 @@ export function IssueSelector({
           ref={inputRef}
           placeholder="Search issues"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onValueChange={setQuery}
           onKeyDown={handleKeyDown}
           role="combobox"
           aria-label="Search issues"
@@ -228,21 +235,29 @@ export function IssueSelector({
           // Component-owned: the signal and its recovery both live here, so this
           // is a banner rather than a toast. It sits above the rows so a failed
           // refetch cannot leave the previous list reading as current.
-          <InlineStatusBanner
+          // A strip across the popover, even when the popover opens from a
+          // dialog body: the kit's strip never takes the dialog's inset box.
+          <Callout
+            variant="strip"
             severity="error"
-            // A strip across the popover, even when the popover opens from a
-            // dialog body, whose inset context would otherwise make it a box.
-            inset={false}
-            icon={XCircle}
             title="Couldn't load issues"
-            description="The forge didn't answer."
-            action={{
-              id: "retry-issues",
-              label: "Retry",
-              icon: RefreshCw,
-              onClick: () => setRetryTick((tick) => tick + 1),
-            }}
-          />
+            actionPlacement="below"
+            action={
+              <Button
+                variant="outline"
+                size="sm"
+                icon="refresh"
+                // The banner's own mark for its recommended action, which the
+                // forced-colours rules draw with the heavier border.
+                data-notification-action="primary"
+                onClick={() => setRetryTick((tick) => tick + 1)}
+              >
+                Retry
+              </Button>
+            }
+          >
+            {"The forge didn't answer."}
+          </Callout>
         )}
         <ScrollShadow
           ref={listRef}

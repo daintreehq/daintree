@@ -7,7 +7,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { MarkdownEditorStatusBar } from "../MarkdownEditorStatusBar";
 import { FILE_METADATA_STRIP_CLASS } from "@/components/FileViewer/fileMetadataStrip";
-import { kitReady } from "./kitReady";
+import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 
 const BASE = {
   lineCount: 117,
@@ -27,7 +27,7 @@ const saveButton = () => screen.getByTestId("markdown-editor-save") as HTMLButto
 const repoRoot = path.resolve(__dirname, "../../../../..");
 const read = (relative: string) => readFileSync(path.join(repoRoot, relative), "utf8");
 
-beforeAll(kitReady);
+beforeAll(() => whenPluginUiReady(), 30_000);
 afterEach(cleanup);
 
 describe("MarkdownEditorStatusBar", () => {

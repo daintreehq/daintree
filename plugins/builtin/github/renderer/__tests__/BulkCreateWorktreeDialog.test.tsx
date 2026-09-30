@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
-import { primePluginKit } from "./primePluginKit";
+import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 import { render, screen, cleanup, act, fireEvent, within } from "@testing-library/react";
 import React from "react";
 import type { Issue, PR } from "@shared/types/forge";
@@ -363,7 +363,7 @@ const makePR = (n: number, title?: string, headRef?: string): PR => ({
   rawData: null,
 });
 
-beforeAll(primePluginKit, 30_000);
+beforeAll(() => whenPluginUiReady(), 30_000);
 
 beforeEach(() => {
   vi.clearAllMocks();

@@ -18,18 +18,16 @@ import { actionService } from "@/services/ActionService";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import {
   Button,
+  Kbd,
   SegmentedControl,
   Textarea,
   Tooltip,
   TruncatedTooltip,
 } from "@daintreehq/plugin-ui";
-// Host pieces the kit has no equivalent for: the `pill` button variant the
-// suggestions wear, the compact key-cap class inside Send, and a Select whose
-// items carry their own markup (agent marks, two-line call sites).
-import { Button as HostButton } from "@/components/ui/button";
-import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
 import { cn } from "@/lib/utils";
 import { PropertyRow } from "./InspectorSection.js";
+// The host Select: these items carry their own markup (agent marks, two-line
+// call sites), which the kit Select's `options` cannot.
 import {
   Select,
   SelectContent,
@@ -704,7 +702,9 @@ export function AgentComposer({
             className="gap-1.5 disabled:bg-overlay-subtle disabled:text-text-secondary disabled:opacity-100 disabled:shadow-none disabled:ring-0"
           >
             Send
-            <kbd className={cn(KBD_COMPACT_CLASS, "bg-transparent text-inherit opacity-70")}>⏎</kbd>
+            <Kbd density="compact" className="bg-transparent text-inherit opacity-70">
+              ⏎
+            </Kbd>
           </Button>
         </Tooltip>
       </div>
@@ -732,14 +732,14 @@ export function AgentComposer({
             // The words that will actually land in the draft, for anyone who
             // wants them before committing.
             <Tooltip key={intent.label} side="bottom" content={intent.prompt}>
-              <HostButton
+              <Button
                 variant="pill"
                 size="xs"
                 className="min-w-0 justify-start font-normal text-text-secondary"
                 onClick={() => applyIntent(intent.prompt)}
               >
                 <span className="truncate">{intent.label}</span>
-              </HostButton>
+              </Button>
             </Tooltip>
           ))}
         </div>

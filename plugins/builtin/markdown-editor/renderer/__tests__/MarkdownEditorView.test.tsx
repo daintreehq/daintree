@@ -33,7 +33,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CHANNELS, identityKey } from "../../shared/protocol";
 import { createFakeMain, type FakeMain } from "./testHost";
-import { kitReady } from "./kitReady";
+import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 
 const FILE = "/repo/docs/plan.md";
 
@@ -77,7 +77,7 @@ let uninstall: () => void;
 // the hook itself, not a getState() stub.
 let announceMock: ReturnType<typeof vi.spyOn>;
 
-beforeAll(kitReady);
+beforeAll(() => whenPluginUiReady(), 30_000);
 
 beforeEach(() => {
   main = createFakeMain();

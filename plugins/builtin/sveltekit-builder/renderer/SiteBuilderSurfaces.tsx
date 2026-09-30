@@ -28,18 +28,17 @@ import {
   Button,
   DismissButton,
   IconButton,
+  Kbd,
   KbdChord,
   ScrollShadow,
   SegmentedControl,
   Tooltip,
+  TruncatedTooltip,
 } from "@daintreehq/plugin-ui";
 import { cn } from "@/lib/utils";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
-// Host pieces the kit has no equivalent for: TruncatedTooltip's `isTruncated`
-// (the path is shortened in JS, not by overflow), the compact key-cap class for
-// a literal arrow row, and a Select whose items take their own class and title.
-import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
+// The host Select: this one's items take their own class and title, which the
+// kit Select's `options` cannot carry.
 import {
   Select,
   SelectContent,
@@ -312,14 +311,16 @@ function DrawerToggle({ panelId, expanded }: { panelId: string; expanded: boolea
 /** How to walk the page from the keyboard once something is selected. */
 function KeyHints() {
   return (
-    // `KBD_COMPACT_CLASS`, not a hand-rolled box: the product already has one
+    // The compact key cap, not a hand-rolled box: the product already has one
     // key-cap grammar and this row is exactly the dense case it was tightened
     // for. Unstyled, the two hints and the file path beside them read as one
     // running sentence.
     <span className="ml-auto hidden shrink-0 items-center gap-2 text-3xs text-text-secondary @[640px]/strip:flex">
       <span className="flex items-center gap-1">
         {/* Sans, as KbdChord sets its arrows: the mono face has no arrow glyphs. */}
-        <kbd className={KBD_COMPACT_CLASS.replace("font-mono", "font-sans")}>↑↓←→</kbd>
+        <Kbd density="compact" className="font-sans">
+          ↑↓←→
+        </Kbd>
         move
       </span>
       <span className="flex items-center gap-1">

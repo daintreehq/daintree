@@ -8,12 +8,21 @@ import {
   useState,
 } from "react";
 import PQueue from "p-queue";
-import { UserPlus } from "lucide-react";
-import { Badge, Button, Checkbox, Icon, ProgressBar, Spinner } from "@daintreehq/plugin-ui";
+import {
+  Avatar,
+  Badge,
+  Button,
+  Checkbox,
+  Dialog,
+  Icon,
+  ProgressBar,
+  Spinner,
+} from "@daintreehq/plugin-ui";
+// The primary stays focusable while unavailable (`aria-disabled`), and a kit
+// Button can only be natively disabled, so it takes the host's disabled look.
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
-import { AppDialog } from "@/components/ui/AppDialog";
 import { cn } from "@/lib/utils";
-import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
+import { avatarUrlAtSize } from "@/components/ui/Avatar";
 import { worktreeClient, forgeClient, agentSettingsClient, systemClient } from "@/clients";
 import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
 import { logError } from "@/utils/logger";
@@ -1123,274 +1132,258 @@ export function BulkCreateWorktreeDialog({
   );
 
   return (
-    <AppDialog
-      isOpen={isOpen}
+    <Dialog
+      open={isOpen}
       onClose={handleClose}
       size="md"
       dismissible={!isExecuting}
       data-testid="bulk-create-worktree-dialog"
+      icon={
+        isExecuting ? (
+          <Spinner size="lg" className="text-activity-working" />
+        ) : isDone ? (
+          succeededCount === 0 && failedCount > 0 ? (
+            <Icon name="circle-x" className="w-5 h-5 text-status-error" />
+          ) : failedCount > 0 ? (
+            <Icon name="alert-triangle" className="w-5 h-5 text-status-warning" />
+          ) : (
+            <Icon name="circle-check" className="w-5 h-5 text-status-success" />
+          )
+        ) : (
+          <Icon name="worktree" className="w-5 h-5 text-text-muted" />
+        )
+      }
+      title={
+        isExecuting
+          ? "Creating worktrees\u2026"
+          : isDone
+            ? succeededCount === 0 && failedCount > 0
+              ? "Couldn't create worktrees"
+              : "Creation complete"
+            : `Create ${creatableCount} worktree${creatableCount !== 1 ? "s" : ""}`
+      }
+      // Only while idle: once the run starts, the body's own progress line is
+      // the authority on counts and a second tally would drift from it.
+      hint={progress.phase === "idle" ? batchSummary : undefined}
+      footer={
+        isDone ? (
+          <>
+            {failedCount > 0 && (
+              <Button
+                variant="ghost"
+                onClick={handleRetryFailed}
+                data-testid="bulk-create-retry-button"
+                icon="refresh"
+              >
+                Retry failed
+              </Button>
+            )}
+            <Button
+              variant="contrast"
+              onClick={handleDone}
+              data-testid="bulk-create-done-button"
+              icon="check"
+            >
+              Done
+            </Button>
+          </>
+        ) : (
+          // The primary stays mounted while executing: dropping it made Cancel
+          // the rightmost button, so it inherited the CTA's hit area one render
+          // after the click that started the run.
+          <>
+            <Button variant="ghost" onClick={handleClose}>
+              Cancel
+            </Button>
+            <Button
+              aria-disabled={isExecuting || creatableCount === 0 || undefined}
+              variant="contrast"
+              onClick={isExecuting || creatableCount === 0 ? undefined : handleCreate}
+              className={cn(
+                "min-w-[100px]",
+                (isExecuting || creatableCount === 0) && ARIA_DISABLED_CLASSES
+              )}
+              data-testid="bulk-create-confirm-button"
+              icon="check"
+            >
+              Create {creatableCount} worktree{creatableCount !== 1 ? "s" : ""}
+            </Button>
+          </>
+        )
+      }
     >
-      <AppDialog.Header>
-        <AppDialog.Title
-          icon={
-            isExecuting ? (
-              <Spinner size="lg" className="text-activity-working" />
-            ) : isDone ? (
-              succeededCount === 0 && failedCount > 0 ? (
-                <Icon name="circle-x" className="w-5 h-5 text-status-error" />
-              ) : failedCount > 0 ? (
-                <Icon name="alert-triangle" className="w-5 h-5 text-status-warning" />
-              ) : (
-                <Icon name="circle-check" className="w-5 h-5 text-status-success" />
-              )
-            ) : (
-              <Icon name="worktree" className="w-5 h-5 text-text-muted" />
-            )
-          }
-        >
-          {isExecuting
-            ? "Creating worktrees\u2026"
-            : isDone
-              ? succeededCount === 0 && failedCount > 0
-                ? "Couldn't create worktrees"
-                : "Creation complete"
-              : `Create ${creatableCount} worktree${creatableCount !== 1 ? "s" : ""}`}
-        </AppDialog.Title>
-        <AppDialog.CloseButton />
-      </AppDialog.Header>
-
-      <AppDialog.Body>
-        {progress.phase === "idle" ? (
-          <FormGrid>
-            <FormSection title="Setup">
-              {/* Rendered for every issue-mode batch, not just once identity
+      {progress.phase === "idle" ? (
+        <FormGrid>
+          <FormSection title="Setup">
+            {/* Rendered for every issue-mode batch, not just once identity
                   resolves: the row is the same height either way, so a viewer
                   arriving mid-open populates it instead of inserting it. The
                   toggle keeps tracking the preference while the lookup is in
                   flight — the run loop reads the viewer per item, so identity
                   landing mid-run still assigns — and only goes dead once the
                   lookup has come back with no account to assign to. */}
-              {mode === "issue" && (
-                <FormRow label="Assign to me" htmlFor="bulk-assign-to-self">
-                  <div className="flex items-center gap-2 text-xs text-text-secondary">
-                    {/* A checkbox, not a switch: the value is committed by Create
+            {mode === "issue" && (
+              <FormRow label="Assign to me" htmlFor="bulk-assign-to-self">
+                <div className="flex items-center gap-2 text-xs text-text-secondary">
+                  {/* A checkbox, not a switch: the value is committed by Create
                         with the rest of the batch, exactly as New Worktree offers it. */}
-                    <Checkbox
-                      id="bulk-assign-to-self"
-                      checked={assignWorktreeToSelf && !assignUnavailable}
-                      onCheckedChange={setAssignWorktreeToSelf}
-                      disabled={assignUnavailable}
+                  <Checkbox
+                    id="bulk-assign-to-self"
+                    checked={assignWorktreeToSelf && !assignUnavailable}
+                    onCheckedChange={setAssignWorktreeToSelf}
+                    disabled={assignUnavailable}
+                  />
+                  {currentUser ? (
+                    <Avatar
+                      src={avatarUrlAtSize(currentUserAvatar, 32)}
+                      name={currentUser}
+                      size="xs"
+                      decorative
                     />
-                    {currentUser ? (
-                      <Avatar
-                        src={avatarUrlAtSize(currentUserAvatar, 32)}
-                        alt=""
-                        className="h-4 w-4"
-                      />
-                    ) : (
-                      <span
-                        className="flex h-4 w-4 shrink-0 items-center justify-center"
-                        aria-hidden="true"
-                      >
-                        <UserPlus className="h-3.5 w-3.5" />
-                      </span>
-                    )}
-                    {/* Blank while the lookup is still out: naming a failure
+                  ) : (
+                    <span
+                      className="flex h-4 w-4 shrink-0 items-center justify-center"
+                      aria-hidden="true"
+                    >
+                      <Icon name="user-plus" className="h-3.5 w-3.5" />
+                    </span>
+                  )}
+                  {/* Blank while the lookup is still out: naming a failure
                         before there is one is worse than naming nothing. */}
-                    {(currentUser || assignUnavailable) && (
-                      <span className="truncate">
-                        {currentUser ? `@${currentUser}` : "Account unavailable"}
-                      </span>
-                    )}
-                  </div>
-                </FormRow>
-              )}
-
-              <FormRow label="Recipe" htmlFor="bulk-recipe-selector-trigger">
-                <RecipePickerPopover
-                  recipes={startingLayoutRecipes}
-                  selectedRecipeId={selectedRecipeId}
-                  selectedRecipe={selectedRecipe}
-                  defaultRecipeId={defaultRecipeId}
-                  open={recipePickerOpen}
-                  onOpenChange={setRecipePickerOpen}
-                  onSelectRecipe={handleRecipeSelectCombined}
-                  onMarkTouched={() => {}}
-                  listId="bulk-recipe-selector"
-                />
+                  {(currentUser || assignUnavailable) && (
+                    <span className="truncate">
+                      {currentUser ? `@${currentUser}` : "Account unavailable"}
+                    </span>
+                  )}
+                </div>
               </FormRow>
-            </FormSection>
+            )}
 
-            {/* Spans both columns: the batch preview is content, not a field, and
+            <FormRow label="Recipe" htmlFor="bulk-recipe-selector-trigger">
+              <RecipePickerPopover
+                recipes={startingLayoutRecipes}
+                selectedRecipeId={selectedRecipeId}
+                selectedRecipe={selectedRecipe}
+                defaultRecipeId={defaultRecipeId}
+                open={recipePickerOpen}
+                onOpenChange={setRecipePickerOpen}
+                onSelectRecipe={handleRecipeSelectCombined}
+                onMarkTouched={() => {}}
+                listId="bulk-recipe-selector"
+              />
+            </FormRow>
+          </FormSection>
+
+          {/* Spans both columns: the batch preview is content, not a field, and
                 a 300px scroller pinned beside a 4rem label rail would give up the
                 width the branch names need. */}
-            <FormSection title="Worktrees to create">
-              <ul className="col-span-2 max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas divide-y divide-border-default">
-                {planned.map((item) => (
-                  <li
-                    key={item.item.number}
-                    className={cn(
-                      "px-3 py-2 flex items-center gap-3 text-sm",
-                      item.skipped && "opacity-50"
+          <FormSection title="Worktrees to create">
+            <ul className="col-span-2 max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas divide-y divide-border-default">
+              {planned.map((item) => (
+                <li
+                  key={item.item.number}
+                  className={cn(
+                    "px-3 py-2 flex items-center gap-3 text-sm",
+                    item.skipped && "opacity-50"
+                  )}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-text-secondary text-xs font-mono shrink-0">
+                        #{item.item.number}
+                      </span>
+                      <span className="text-text-primary truncate">{item.item.title}</span>
+                    </div>
+                    {!item.skipped && (
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <Icon name="worktree" className="w-3 h-3 text-daintree-text/40 shrink-0" />
+                        <span className="text-xs text-text-secondary font-mono truncate">
+                          {item.branchName}
+                        </span>
+                      </div>
                     )}
-                  >
+                  </div>
+                  {item.skipped && (
+                    <Badge size="xs" tone="warning">
+                      {item.skipReason}
+                    </Badge>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </FormSection>
+        </FormGrid>
+      ) : (
+        <div className="space-y-4">
+          {/* Per-item status list */}
+          <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas divide-y divide-border-default">
+            {planned
+              .filter((p) => progress.items.has(p.item.number))
+              .map((item) => {
+                const itemStatus = progress.items.get(item.item.number);
+                const stageLabel = getStageLabel(itemStatus);
+                const isInProgress =
+                  itemStatus &&
+                  itemStatus.stage !== "pending" &&
+                  itemStatus.stage !== "succeeded" &&
+                  itemStatus.stage !== "failed";
+                return (
+                  <div key={item.item.number} className="px-3 py-2 flex items-start gap-3 text-sm">
+                    <div className="mt-0.5 shrink-0">
+                      {isInProgress ? (
+                        <Spinner size="md" className="text-activity-working" />
+                      ) : itemStatus?.stage === "succeeded" ? (
+                        <Icon name="circle-check" className="w-4 h-4 text-status-success" />
+                      ) : itemStatus?.stage === "failed" ? (
+                        <Icon name="circle-x" className="w-4 h-4 text-status-error" />
+                      ) : (
+                        <div className="w-4 h-4 rounded-full border border-border-default" />
+                      )}
+                    </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="text-text-secondary text-xs font-mono shrink-0">
                           #{item.item.number}
                         </span>
                         <span className="text-text-primary truncate">{item.item.title}</span>
+                        {isInProgress && itemStatus.attempt > 1 && (
+                          <Badge size="xs" tone="info">
+                            retry {itemStatus.attempt - 1}
+                          </Badge>
+                        )}
                       </div>
-                      {!item.skipped && (
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          <Icon
-                            name="worktree"
-                            className="w-3 h-3 text-daintree-text/40 shrink-0"
-                          />
-                          <span className="text-xs text-text-secondary font-mono truncate">
-                            {item.branchName}
-                          </span>
-                        </div>
+                      {stageLabel && (
+                        <p className="text-xs text-text-secondary mt-0.5">{stageLabel}</p>
+                      )}
+                      {itemStatus?.stage === "failed" && itemStatus.error && (
+                        <p className="text-xs text-status-warning mt-0.5 break-words">
+                          {itemStatus.error}
+                        </p>
                       )}
                     </div>
-                    {item.skipped && (
-                      <Badge size="xs" tone="warning">
-                        {item.skipReason}
-                      </Badge>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </FormSection>
-          </FormGrid>
-        ) : (
-          <div className="space-y-4">
-            {/* Per-item status list */}
-            <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas divide-y divide-border-default">
-              {planned
-                .filter((p) => progress.items.has(p.item.number))
-                .map((item) => {
-                  const itemStatus = progress.items.get(item.item.number);
-                  const stageLabel = getStageLabel(itemStatus);
-                  const isInProgress =
-                    itemStatus &&
-                    itemStatus.stage !== "pending" &&
-                    itemStatus.stage !== "succeeded" &&
-                    itemStatus.stage !== "failed";
-                  return (
-                    <div
-                      key={item.item.number}
-                      className="px-3 py-2 flex items-start gap-3 text-sm"
-                    >
-                      <div className="mt-0.5 shrink-0">
-                        {isInProgress ? (
-                          <Spinner size="md" className="text-activity-working" />
-                        ) : itemStatus?.stage === "succeeded" ? (
-                          <Icon name="circle-check" className="w-4 h-4 text-status-success" />
-                        ) : itemStatus?.stage === "failed" ? (
-                          <Icon name="circle-x" className="w-4 h-4 text-status-error" />
-                        ) : (
-                          <div className="w-4 h-4 rounded-full border border-border-default" />
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-text-secondary text-xs font-mono shrink-0">
-                            #{item.item.number}
-                          </span>
-                          <span className="text-text-primary truncate">{item.item.title}</span>
-                          {isInProgress && itemStatus.attempt > 1 && (
-                            <Badge size="xs" tone="info">
-                              retry {itemStatus.attempt - 1}
-                            </Badge>
-                          )}
-                        </div>
-                        {stageLabel && (
-                          <p className="text-xs text-text-secondary mt-0.5">{stageLabel}</p>
-                        )}
-                        {itemStatus?.stage === "failed" && itemStatus.error && (
-                          <p className="text-xs text-status-warning mt-0.5 break-words">
-                            {itemStatus.error}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
+                  </div>
+                );
+              })}
+          </div>
 
-            {/* Progress bar + summary */}
-            <div className="space-y-2">
-              <ProgressBar
-                label="Creating worktrees"
-                value={progress.items.size > 0 ? processedCount / progress.items.size : 0}
-                valueText={`${processedCount} of ${progress.items.size}`}
-              />
-              <div className="flex items-center justify-center gap-1.5 text-sm tabular-nums text-text-secondary">
-                <span>
-                  {succeededCount} of {progress.items.size} created
-                </span>
-                {failedCount > 0 && (
-                  <span className="text-status-warning">&middot; {failedCount} failed</span>
-                )}
-              </div>
+          {/* Progress bar + summary */}
+          <div className="space-y-2">
+            <ProgressBar
+              label="Creating worktrees"
+              value={progress.items.size > 0 ? processedCount / progress.items.size : 0}
+              valueText={`${processedCount} of ${progress.items.size}`}
+            />
+            <div className="flex items-center justify-center gap-1.5 text-sm tabular-nums text-text-secondary">
+              <span>
+                {succeededCount} of {progress.items.size} created
+              </span>
+              {failedCount > 0 && (
+                <span className="text-status-warning">&middot; {failedCount} failed</span>
+              )}
             </div>
           </div>
-        )}
-      </AppDialog.Body>
-
-      {/* Only while idle: once the run starts, the body's own progress line is
-          the authority on counts and a second tally would drift from it. */}
-      <AppDialog.Footer hint={progress.phase === "idle" ? batchSummary : undefined}>
-        {/* One container, because a hint switches the footer to justify-between
-            and loose button children would scatter across it. */}
-        <div className="flex items-center gap-3">
-          {isDone ? (
-            <>
-              {failedCount > 0 && (
-                <Button
-                  variant="ghost"
-                  onClick={handleRetryFailed}
-                  data-testid="bulk-create-retry-button"
-                  icon="refresh"
-                >
-                  Retry failed
-                </Button>
-              )}
-              <Button
-                variant="contrast"
-                onClick={handleDone}
-                data-testid="bulk-create-done-button"
-                icon="check"
-              >
-                Done
-              </Button>
-            </>
-          ) : (
-            // The primary stays mounted while executing: dropping it made Cancel
-            // the rightmost button, so it inherited the CTA's hit area one render
-            // after the click that started the run.
-            <>
-              <Button variant="ghost" onClick={handleClose}>
-                Cancel
-              </Button>
-              <Button
-                aria-disabled={isExecuting || creatableCount === 0 || undefined}
-                variant="contrast"
-                onClick={isExecuting || creatableCount === 0 ? undefined : handleCreate}
-                className={cn(
-                  "min-w-[100px]",
-                  (isExecuting || creatableCount === 0) && ARIA_DISABLED_CLASSES
-                )}
-                data-testid="bulk-create-confirm-button"
-                icon="check"
-              >
-                Create {creatableCount} worktree{creatableCount !== 1 ? "s" : ""}
-              </Button>
-            </>
-          )}
         </div>
-      </AppDialog.Footer>
-    </AppDialog>
+      )}
+    </Dialog>
   );
 }

@@ -3,17 +3,18 @@ import { EditorView } from "@codemirror/view";
 import { EditorState, EditorSelection } from "@codemirror/state";
 import { openSearchPanel } from "@codemirror/search";
 import type { LanguageSupport } from "@codemirror/language";
-import { AlertTriangle, ExternalLink, FileWarning, RefreshCw, XCircle } from "lucide-react";
 import type { FileEditorViewProps } from "@/registry/fileEditorRegistry";
 import { loadMarkdownSupport } from "@/components/FileViewer/codeMirrorLanguages";
 import { activateMarkdownLink } from "@/components/Markdown/markdownRenderPolicy";
+// The host banner for the conflict strip only: its Compare action has to stay
+// focusable while unavailable, and a kit Button can only be natively disabled.
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
-// The host dialog: the kit ConfirmDialog has neither the `nested` layer nor a
-// `hint` line, and both dialogs below use one of them.
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   Button,
+  Callout,
+  ConfirmDialog,
   EmptyState,
+  Icon,
   Input,
   Skeleton,
   SkeletonBone,
@@ -272,7 +273,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
         <EmptyState
           variant="zero-data"
           scale="canvas"
-          icon={<FileWarning className="h-6 w-6" />}
+          icon={<Icon name="file-warning" className="h-6 w-6" />}
           title="Can't edit this file here"
           description={REFUSAL_COPY[record.refusal ?? "NOT_A_FILE"]}
           action={
@@ -280,7 +281,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
               variant="outline"
               size="sm"
               onClick={props.onOpenExternalEditor}
-              icon={<ExternalLink />}
+              icon="external-link"
             >
               Open in editor
             </Button>
@@ -297,7 +298,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
         <EmptyState
           variant="zero-data"
           scale="canvas"
-          icon={<FileWarning className="h-6 w-6" />}
+          icon={<Icon name="file-warning" className="h-6 w-6" />}
           title="File isn't available"
           description={
             orphanDraft === null
@@ -310,7 +311,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
                 variant="outline"
                 size="sm"
                 onClick={() => void controller.load({ restoreDraft: true })}
-                icon={<RefreshCw />}
+                icon="refresh"
               >
                 Retry
               </Button>
@@ -352,33 +353,44 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
       />
 
       {record.status === "unavailable" && (
-        <InlineStatusBanner
+        <Callout
+          variant="strip"
           severity="warning"
-          icon={AlertTriangle}
           title="File isn't where it was"
-          description="The draft is kept. Save it somewhere else, or retry once the file is back."
           role="status"
-          ariaLive="polite"
-          actions={[
-            {
-              id: "retry-unavailable",
-              label: "Retry",
-              icon: RefreshCw,
-              onClick: () => void controller.revalidate(),
-            },
-            {
-              id: "save-as-unavailable",
-              label: "Save draft as…",
-              onClick: () => setSaveAsPath(props.filePath.replace(/(\.[^./\\]+)?$/, "-draft$1")),
-            },
-          ]}
-        />
+          aria-live="polite"
+          actionPlacement="below"
+          action={
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                icon="refresh"
+                // The banner's own mark for its recommended action, which the
+                // forced-colours rules draw with the heavier border.
+                data-notification-action="primary"
+                onClick={() => void controller.revalidate()}
+              >
+                Retry
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                data-notification-action="primary"
+                onClick={() => setSaveAsPath(props.filePath.replace(/(\.[^./\\]+)?$/, "-draft$1"))}
+              >
+                Save draft as…
+              </Button>
+            </>
+          }
+        >
+          The draft is kept. Save it somewhere else, or retry once the file is back.
+        </Callout>
       )}
 
       {record.conflict && (
         <InlineStatusBanner
           severity="warning"
-          icon={AlertTriangle}
           title="File changed on disk"
           description="Your draft is kept and saving is held. Compare the two, load the disk version, or save the draft elsewhere."
           role="status"
@@ -405,36 +417,48 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
       )}
 
       {record.error && (
-        <InlineStatusBanner
+        <Callout
+          variant="strip"
           severity="error"
-          icon={XCircle}
           title="Couldn't save"
-          description={record.error}
-          action={{
-            id: "retry-save",
-            label: "Retry",
-            icon: RefreshCw,
-            onClick: () => void handleSave(),
-          }}
-        />
+          actionPlacement="below"
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              icon="refresh"
+              data-notification-action="primary"
+              onClick={() => void handleSave()}
+            >
+              Retry
+            </Button>
+          }
+        >
+          {record.error}
+        </Callout>
       )}
 
       {record.storageWarning && (
-        <InlineStatusBanner
+        <Callout
+          variant="strip"
           severity="warning"
-          icon={AlertTriangle}
           title="Draft isn't backed up"
-          description={record.storageWarning}
           role="status"
-          ariaLive="polite"
-          actions={[
-            {
-              id: "copy-draft",
-              label: "Copy draft",
-              onClick: () => void navigator.clipboard.writeText(text),
-            },
-          ]}
-        />
+          aria-live="polite"
+          actionPlacement="below"
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              data-notification-action="primary"
+              onClick={() => void navigator.clipboard.writeText(text)}
+            >
+              Copy draft
+            </Button>
+          }
+        >
+          {record.storageWarning}
+        </Callout>
       )}
 
       {compareDiff !== null && (
@@ -458,10 +482,10 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
       />
 
       <ConfirmDialog
-        isOpen={confirmLoadDisk}
+        open={confirmLoadDisk}
         onClose={() => setConfirmLoadDisk(false)}
         variant="destructive"
-        zIndex="nested"
+        layer="nested"
         title={`Discard changes to '${props.fileName}'?`}
         description="The version on disk replaces your unsaved edits, and the draft isn't kept."
         confirmLabel="Discard changes"
@@ -469,7 +493,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
       />
 
       <ConfirmDialog
-        isOpen={saveAsPath !== null}
+        open={saveAsPath !== null}
         onClose={() => {
           setSaveAsPath(null);
           setSaveAsError(null);
