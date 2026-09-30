@@ -20,6 +20,7 @@ import {
   Eye,
   EyeOff,
   Lock,
+  LockOpen,
   Paperclip,
   Plus,
   Square,
@@ -388,12 +389,20 @@ interface MenuPosition {
 }
 
 /**
- * The menu hangs off the line the trigger is on, starting at the trigger,
- * the way the host composer's does. Above the line unless there is plainly
- * more room below, since a composer usually sits at the bottom of its pane.
+ * The menu starts at the trigger, the way the host composer's does, and
+ * stays within the field's own width where it can. It hangs off the line
+ * the trigger is on, or off the whole of `frame` when there is one (a
+ * composer's shell), so it never covers the shell's chips or edge. Above
+ * unless there is plainly more room below, since a composer usually sits at
+ * the bottom of its pane.
  */
-function menuPosition(textarea: HTMLTextAreaElement, start: number): MenuPosition {
+function menuPosition(
+  textarea: HTMLTextAreaElement,
+  start: number,
+  frame?: HTMLElement | null
+): MenuPosition {
   const rect = textarea.getBoundingClientRect();
+  const bounds = frame?.getBoundingClientRect() ?? rect;
   const caret = caretBox(textarea, start);
   const view = textarea.ownerDocument.defaultView;
   const viewWidth = view?.innerWidth ?? 1024;
@@ -403,16 +412,20 @@ function menuPosition(textarea: HTMLTextAreaElement, start: number): MenuPositio
     Math.max(rect.top + caret.top, rect.top),
     Math.max(rect.top, rect.bottom - caret.height)
   );
-  const left = Math.max(
-    VIEWPORT_MARGIN,
-    Math.min(rect.left + caret.left - VIEWPORT_MARGIN, viewWidth - width - VIEWPORT_MARGIN)
+  const top = frame ? bounds.top : lineTop;
+  const height = frame ? bounds.height : caret.height;
+  const floor = Math.max(VIEWPORT_MARGIN, frame ? bounds.left : rect.left - VIEWPORT_MARGIN);
+  const ceiling = Math.min(
+    viewWidth - width - VIEWPORT_MARGIN,
+    Math.max(floor, bounds.right - width)
   );
-  const above = lineTop - VIEWPORT_MARGIN;
-  const below = viewHeight - lineTop - caret.height - VIEWPORT_MARGIN;
+  const left = Math.max(floor, Math.min(rect.left + caret.left - VIEWPORT_MARGIN, ceiling));
+  const above = top - VIEWPORT_MARGIN;
+  const below = viewHeight - top - height - VIEWPORT_MARGIN;
   return {
     left,
-    top: lineTop,
-    height: caret.height,
+    top,
+    height,
     placement: above >= MENU_ROOM || above >= below ? "above" : "below",
   };
 }
@@ -462,6 +475,8 @@ interface MentionFieldProps extends PluginMentionTextareaProps {
   onPaste?: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
   defaultMinRows?: number;
   defaultMaxRows?: number;
+  /** The element the menu hangs off instead of the trigger's line. */
+  menuFrame?: RefObject<HTMLElement | null>;
 }
 
 const BARE_TEXTAREA_CLASS =
@@ -496,6 +511,7 @@ function MentionField(props: MentionFieldProps) {
     onPaste,
     defaultMinRows = 1,
     defaultMaxRows = 8,
+    menuFrame,
   } = props;
   const controlled = Object.hasOwn(props, "value");
   const [own, setOwn] = useState(() => str(defaultValue) ?? "");
@@ -576,14 +592,14 @@ function MentionField(props: MentionFieldProps) {
     const el = innerRef.current;
     const view = el?.ownerDocument.defaultView;
     if (!el || !view) return;
-    const place = () => setPosition(menuPosition(el, sessionStart));
+    const place = () => setPosition(menuPosition(el, sessionStart, menuFrame?.current));
     view.addEventListener("resize", place);
     view.addEventListener("scroll", place, true);
     return () => {
       view.removeEventListener("resize", place);
       view.removeEventListener("scroll", place, true);
     };
-  }, [sessionStart]);
+  }, [sessionStart, menuFrame]);
 
   const request = (next: MentionSession) => {
     const seq = ++requestRef.current;
@@ -641,7 +657,7 @@ function MentionField(props: MentionFieldProps) {
       return;
     }
     setSession(next);
-    setPosition(menuPosition(el, next.start));
+    setPosition(menuPosition(el, next.start, menuFrame?.current));
     request(next);
   };
 
@@ -698,9 +714,11 @@ function MentionField(props: MentionFieldProps) {
     safely("MentionTextarea onKeyDown", handleKeyDown, event);
   };
 
+  // A row shows the token it inserts ("/explain", "@alice"), as the host's
+  // own menu does, unless the plugin inserts something else.
   const menuItems: AutocompleteItem[] = shownItems.map((item) => ({
     key: item.id,
-    label: item.label,
+    label: item.insertText ? item.label : `${session?.char ?? ""}${item.label}`,
     insertText: item.insertText ?? `${session?.char ?? ""}${item.label}`,
     description: item.description,
     badge: item.badge,
@@ -910,6 +928,7 @@ function KitComposer(props: PluginComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const chipsRef = useRef<HTMLUListElement>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
   const countId = useId();
   const submit = fn(onSubmit);
   const stop = fn(onStop);
@@ -977,12 +996,15 @@ function KitComposer(props: PluginComposerProps) {
   return (
     <div
       {...pickRootProps(props)}
+      ref={shellRef}
       data-busy={working ? "" : undefined}
       data-drag-over={dragging ? "" : undefined}
       aria-disabled={inert ? true : undefined}
       className={cn(
-        "flex min-w-0 flex-col gap-1.5 rounded-[var(--radius-md)] border bg-surface-input px-2.5 pt-2 pb-1.5 transition-colors duration-150 ease-out",
-        "has-[textarea:focus-visible]:outline has-[textarea:focus-visible]:outline-2 has-[textarea:focus-visible]:outline-offset-2 has-[textarea:focus-visible]:outline-accent-primary",
+        "flex min-w-0 flex-col gap-1.5 rounded-[var(--radius-md)] border bg-surface-input px-2.5 pt-2 pb-1.5 transition-[border-color,background-color,box-shadow] duration-150 ease-out",
+        // The host composer's focus: the shell's own edge takes the accent
+        // and a one-pixel halo, rather than a second outline around it.
+        "has-[textarea:focus-visible]:border-[color-mix(in_oklab,var(--color-accent-primary)_70%,var(--color-border-input))] has-[textarea:focus-visible]:ring-1 has-[textarea:focus-visible]:ring-[color-mix(in_oklab,var(--color-accent-primary)_25%,transparent)]",
         dragging ? "border-text-secondary bg-overlay-soft" : "border-border-input",
         inert ? "cursor-not-allowed opacity-50" : "cursor-text",
         str(className)
@@ -1030,6 +1052,7 @@ function KitComposer(props: PluginComposerProps) {
       <MentionField
         {...pickAria(props)}
         chrome="bare"
+        menuFrame={shellRef}
         ref={(element) => {
           textareaRef.current = element;
           assignRef(ref, element);
@@ -1067,13 +1090,15 @@ function KitComposer(props: PluginComposerProps) {
           <>
             <Tooltip>
               <TooltipTrigger asChild>
+                {/* The host composer's accessory control: a 24px round glyph. */}
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon-xs"
                   aria-label="Attach files"
                   disabled={inert}
                   onClick={() => fileRef.current?.click()}
+                  className="rounded-full [&_svg]:size-3.5"
                 >
                   <Paperclip aria-hidden="true" />
                 </Button>
@@ -1112,41 +1137,37 @@ function KitComposer(props: PluginComposerProps) {
             <span className="sr-only">{`${text.length} of ${limit ?? 0} characters`}</span>
           </span>
         ) : null}
-        {working ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={inert || !stop}
-            onClick={halt}
-          >
-            <Square aria-hidden="true" className="fill-current" />
-            Stop
-          </Button>
-        ) : (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="contrast"
-                size="sm"
-                disabled={!canSend}
-                aria-keyshortcuts={sendKeys}
-                onClick={send}
-              >
+        {/* One button that changes between Send and Stop, so a keyboard user
+            who sent from it is still on it when it becomes Stop. */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant={working ? "outline" : "contrast"}
+              size="sm"
+              disabled={working ? inert || !stop : !canSend}
+              aria-keyshortcuts={working ? "Escape" : sendKeys}
+              onClick={working ? halt : send}
+            >
+              {working ? (
+                <Square aria-hidden="true" className="fill-current" />
+              ) : (
                 <ArrowUp aria-hidden="true" />
-                {label}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              <span className="inline-flex items-center gap-2">
-                {label}
-                <KbdChord shortcut={sendCombo} density="compact" />
-              </span>
-            </TooltipContent>
-          </Tooltip>
-        )}
+              )}
+              {working ? "Stop" : label}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            <span className="inline-flex items-center gap-2">
+              {working ? "Stop" : label}
+              <KbdChord shortcut={working ? "Escape" : sendCombo} density="compact" />
+            </span>
+          </TooltipContent>
+        </Tooltip>
       </div>
+      <span role="status" aria-live="polite" className="sr-only">
+        {working ? "Working" : ""}
+      </span>
     </div>
   );
 }
@@ -1337,7 +1358,11 @@ function KitInlineEdit(props: PluginInlineEditProps) {
           }
         }}
         className={cn(
-          "inline-block max-w-full min-w-0 truncate rounded-sm px-1 -mx-1 align-middle transition-colors duration-150 ease-out",
+          // No negative margin: it would take 8px off the width the text
+          // claims from its container, and a `truncate` title (a PaneHeader's)
+          // would then clip it with room to spare. The text, the sizer and
+          // the field below all share one box, so nothing shifts on edit.
+          "inline-block max-w-full min-w-0 truncate rounded-sm border border-transparent px-1 align-middle transition-colors duration-150 ease-out",
           sizing.text,
           sizing.box,
           current === "" ? "text-text-secondary" : "text-text-primary",
@@ -1362,7 +1387,7 @@ function KitInlineEdit(props: PluginInlineEditProps) {
           <span
             aria-hidden="true"
             className={cn(
-              "invisible col-start-1 row-start-1 block min-w-[6ch] truncate whitespace-pre px-1",
+              "invisible col-start-1 row-start-1 block min-w-[6ch] truncate whitespace-pre border border-transparent px-1",
               sizing.text,
               sizing.box
             )}
@@ -1402,7 +1427,7 @@ function KitInlineEdit(props: PluginInlineEditProps) {
             }}
             className={cn(
               inlineRenameFieldClassName,
-              "col-start-1 row-start-1 -mx-1 w-[calc(100%+0.5rem)] min-w-0",
+              "col-start-1 row-start-1 w-full min-w-0",
               sizing.text,
               sizing.box,
               error && "border-status-error focus-visible:border-status-error"
@@ -1495,6 +1520,26 @@ function KitSecretInput(props: PluginSecretInputProps) {
   const change = (next: string) => {
     if (!controlled) setOwn(next);
     safely("SecretInput onValueChange", handleValue, next);
+  };
+  // A replacement saved while `stored` stays true (the usual case: a token
+  // swapped for a new one) goes back to the saved state once `onSubmit`
+  // returns, or once its promise resolves. A throw or a rejection keeps the
+  // typed value in the field to try again.
+  const submitDraft = () => {
+    const outcome = attempt(() => submit?.(text));
+    if (!outcome.ok) {
+      logError("[plugin-ui] SecretInput onSubmit threw", outcome.error);
+      return;
+    }
+    if (!replacing || stored !== true) return;
+    const done = () => {
+      change("");
+      setReplacing(false);
+      setShown(false);
+      setFocusTarget("replace");
+    };
+    if (isThenable(outcome.value)) settleThenable(outcome.value).then(done, () => {});
+    else done();
   };
   const backOut = () => {
     change("");
@@ -1594,7 +1639,7 @@ function KitSecretInput(props: PluginSecretInputProps) {
             if (event.nativeEvent.isComposing) return;
             if (event.key === "Enter" && submit) {
               event.preventDefault();
-              safely("SecretInput onSubmit", submit, text);
+              submitDraft();
             } else if (event.key === "Escape" && replacing) {
               event.preventDefault();
               event.stopPropagation();
@@ -1607,27 +1652,29 @@ function KitSecretInput(props: PluginSecretInputProps) {
               invalid: shownInvalid,
             }),
             "font-mono placeholder:font-sans",
-            canReveal && (compact ? "pr-7" : "pr-9")
+            canReveal && (compact ? "pr-8" : "pr-9")
           )}
         />
         {canReveal ? (
-          <Button
+          // A glyph inside the field, not a Button: the pressed Button's
+          // ring and fill drew a second box against the field's own edge.
+          // The eye itself says which state it is in, and 24px is the
+          // target floor.
+          <button
             type="button"
-            variant="ghost"
-            size="icon-xs"
             disabled={inert}
             aria-label="Show value"
-            pressed={revealed}
+            aria-pressed={revealed}
             // The field keeps focus, so a blur-to-save around it never fires.
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => setShown((open) => !open)}
             className={cn(
-              "absolute top-1/2 -translate-y-1/2 [&_svg]:size-3.5",
-              compact ? "right-0.5 h-5 w-5" : "right-1"
+              "absolute top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-hover hover:text-text-primary focus-visible:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary disabled:pointer-events-none [&_svg]:size-3.5",
+              compact ? "right-px" : "right-1"
             )}
           >
             {revealed ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
-          </Button>
+          </button>
         ) : null}
       </div>
       {replacing ? (
@@ -1750,7 +1797,16 @@ function useFocusRequest(
 }
 
 const REMOVE_ROW_CLASS =
-  "h-7 w-7 shrink-0 text-text-secondary hover:text-text-primary [&_svg]:size-3.5";
+  "h-6 w-6 shrink-0 text-text-secondary hover:text-text-primary [&_svg]:size-3.5";
+
+/**
+ * Key, value and the row's actions, as one grid the column heads share, so
+ * a head sits over its fields whatever the actions column holds.
+ */
+const KV_GRID = "grid min-w-0 grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-center gap-1.5";
+
+/** A column head over a compact field: its text on the field text's own left edge. */
+const KV_HEAD = "min-w-0 truncate pl-[calc(0.5rem+1px)]";
 
 function KitKeyValueEditor(props: PluginKeyValueEditorProps) {
   const {
@@ -1784,6 +1840,8 @@ function KitKeyValueEditor(props: PluginKeyValueEditorProps) {
   const limit = wholeCount(max, 10_000);
   const full = limit !== undefined && rows.length >= limit;
   const ariaLabel = nonEmpty(props["aria-label"]) ?? "Entries";
+  // One 24px action, or two with the gap between them.
+  const actionsWidth = allowSecretToggle === true ? "w-[3.375rem]" : "w-6";
   const errors = keyValueErrors(rows, {
     caseInsensitive: caseInsensitiveKeys === true,
     allowDuplicates: allowDuplicateKeys === true,
@@ -1846,7 +1904,7 @@ function KitKeyValueEditor(props: PluginKeyValueEditorProps) {
     const name = row.key.trim() === "" ? `row ${index + 1}` : row.key.trim();
     return (
       <div className="grid min-w-0 flex-1 gap-1" data-kv-row={row.id}>
-        <div className="flex min-w-0 items-center gap-1.5">
+        <div className={KV_GRID}>
           <input
             data-row-focus={`key:${row.id}`}
             type="text"
@@ -1862,10 +1920,10 @@ function KitKeyValueEditor(props: PluginKeyValueEditorProps) {
             onPaste={(event) => paste(index, event)}
             className={cn(
               inputVariants({ density: "compact", invalid: error !== null }),
-              "min-w-0 flex-[2] font-mono"
+              "min-w-0 font-mono"
             )}
           />
-          <div className="min-w-0 flex-[3]">
+          <div className="min-w-0">
             {row.secret ? (
               <KitSecretInput
                 value={row.value}
@@ -1889,31 +1947,33 @@ function KitKeyValueEditor(props: PluginKeyValueEditorProps) {
               />
             )}
           </div>
-          {allowSecretToggle === true ? (
+          <div className={cn("flex items-center gap-1.5", actionsWidth)}>
+            {allowSecretToggle === true ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                disabled={inert}
+                aria-label={`Mask value of ${name}`}
+                pressed={row.secret}
+                onClick={() => patch(row.id, { secret: !row.secret })}
+                className={REMOVE_ROW_CLASS}
+              >
+                {row.secret ? <Lock aria-hidden="true" /> : <LockOpen aria-hidden="true" />}
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="ghost"
-              size="icon-sm"
+              size="icon-xs"
               disabled={inert}
-              aria-label={`Mask value of ${name}`}
-              pressed={row.secret}
-              onClick={() => patch(row.id, { secret: !row.secret })}
+              aria-label={`Remove ${name}`}
+              onClick={() => remove(index)}
               className={REMOVE_ROW_CLASS}
             >
-              <Lock aria-hidden="true" />
+              <X aria-hidden="true" />
             </Button>
-          ) : null}
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={inert}
-            aria-label={`Remove ${name}`}
-            onClick={() => remove(index)}
-            className={REMOVE_ROW_CLASS}
-          >
-            <X aria-hidden="true" />
-          </Button>
+          </div>
         </div>
         {error ? (
           <InlineError id={errorId} className="pl-0.5">
@@ -1937,13 +1997,15 @@ function KitKeyValueEditor(props: PluginKeyValueEditorProps) {
         <div
           aria-hidden="true"
           className={cn(
-            "flex min-w-0 items-center gap-1.5 text-2xs font-medium text-text-secondary",
-            reorderable === true ? "pl-9 pr-2" : ""
+            KV_GRID,
+            "text-2xs font-medium text-text-secondary",
+            // A sortable row insets its content past the grip.
+            reorderable === true && "pl-8 pr-2"
           )}
         >
-          <span className="min-w-0 flex-[2] px-2">{nonEmpty(keyLabel) ?? "Key"}</span>
-          <span className="min-w-0 flex-[3] px-2">{nonEmpty(valueLabel) ?? "Value"}</span>
-          <span className={cn("shrink-0", allowSecretToggle === true ? "w-[3.625rem]" : "w-7")} />
+          <span className={KV_HEAD}>{nonEmpty(keyLabel) ?? "Key"}</span>
+          <span className={KV_HEAD}>{nonEmpty(valueLabel) ?? "Value"}</span>
+          <span className={actionsWidth} />
         </div>
       ) : null}
       {reorderable === true && rows.length > 0 ? (
@@ -2125,7 +2187,7 @@ function KitListEditor(props: PluginListEditorProps) {
           <Button
             type="button"
             variant="ghost"
-            size="icon-sm"
+            size="icon-xs"
             disabled={inert}
             aria-label={`Remove ${row.value.trim() || `item ${index + 1}`}`}
             onClick={() => remove(index)}
@@ -2212,7 +2274,13 @@ const CHORD_WINDOW_STYLE: CSSProperties & Record<"--chord-window", string> = {
 };
 
 const RECORDER_FIELD =
-  "flex h-8 min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-md)] border px-2.5 text-sm transition-colors duration-150 ease-out";
+  "flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-md)] border transition-colors duration-150 ease-out";
+
+/** The heights of `Input`'s two densities, so a recorder lines up with the fields beside it. */
+const RECORDER_DENSITY = {
+  default: "min-h-[2.125rem] px-3 text-sm",
+  compact: "min-h-[1.625rem] px-2 text-xs",
+} as const;
 
 function findHostConflicts(combo: string): ReturnType<typeof keybindingService.findConflicts> {
   try {
@@ -2246,8 +2314,12 @@ function KitShortcutRecorder(props: PluginShortcutRecorderProps) {
     checkHostConflicts,
     placeholder,
     disabled,
+    density,
     className,
   } = props;
+  const compact = oneOf(density, ["default", "compact"] as const) === "compact";
+  const chipDensity = compact ? "compact" : "default";
+  const fieldRef = useRef<HTMLDivElement>(null);
   const controlled = Object.hasOwn(props, "value");
   const [own, setOwn] = useState<string | null>(() => nonEmpty(defaultValue) ?? null);
   const combo = controlled ? (nonEmpty(value) ?? null) : own;
@@ -2395,8 +2467,11 @@ function KitShortcutRecorder(props: PluginShortcutRecorderProps) {
     finish([step]);
   };
 
-  const hostWarning = combo && checkHostConflicts !== false ? hostConflict(combo) : null;
-  const ownWarning = combo ? verdict(conflictOf, combo, null) : null;
+  // While a new shortcut is being pressed, the warnings about the one it
+  // would replace are beside the point.
+  const shownCombo = recording ? null : combo;
+  const hostWarning = shownCombo && checkHostConflicts !== false ? hostConflict(shownCombo) : null;
+  const ownWarning = shownCombo ? verdict(conflictOf, shownCombo, null) : null;
   const warnings = [ownWarning, hostWarning].filter((line): line is string => line !== null);
   const describedBy = joinIds([
     // Inside a FormField the field's ids already include the caller's.
@@ -2412,7 +2487,7 @@ function KitShortcutRecorder(props: PluginShortcutRecorderProps) {
     status = "Press the second key, or wait to finish";
     content = (
       <>
-        <KbdChord shortcut={firstStep} foreground="primary" />
+        <KbdChord shortcut={firstStep} foreground="primary" density={chipDensity} />
         <span className="truncate text-xs text-text-secondary">Press second key or wait</span>
         <span
           aria-hidden="true"
@@ -2429,7 +2504,7 @@ function KitShortcutRecorder(props: PluginShortcutRecorderProps) {
     status = "Now press a key";
     content = (
       <>
-        <KbdChord shortcut={held.join("+")} foreground="primary" />
+        <KbdChord shortcut={held.join("+")} foreground="primary" density={chipDensity} />
         <span className="truncate text-xs text-text-secondary">Now press a key</span>
       </>
     );
@@ -2443,7 +2518,7 @@ function KitShortcutRecorder(props: PluginShortcutRecorderProps) {
     );
   } else if (combo) {
     status = "";
-    content = <KbdChord shortcut={combo} foreground="primary" />;
+    content = <KbdChord shortcut={combo} foreground="primary" density={chipDensity} />;
   } else {
     status = "";
     content = (
@@ -2484,8 +2559,10 @@ function KitShortcutRecorder(props: PluginShortcutRecorderProps) {
             setHeld([]);
             setRecording(false);
           }}
+          ref={fieldRef}
           className={cn(
             RECORDER_FIELD,
+            RECORDER_DENSITY[compact ? "compact" : "default"],
             "relative select-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary",
             recording
               ? "border-border-strong bg-overlay-subtle text-text-primary"
@@ -2500,15 +2577,20 @@ function KitShortcutRecorder(props: PluginShortcutRecorderProps) {
           <Button
             type="button"
             variant="ghost"
-            size="icon-sm"
+            size="icon-xs"
             aria-label="Clear shortcut"
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => {
+            onClick={(event) => {
+              // The button goes with the shortcut; a keyboard user lands on
+              // the field, ready to record the next one.
+              const hadFocus =
+                event.currentTarget.ownerDocument.activeElement === event.currentTarget;
               stopTimer();
               setFirstStep(null);
               setHeld([]);
               setError(null);
               setCombo(null);
+              if (hadFocus) fieldRef.current?.focus();
             }}
             className={REMOVE_ROW_CLASS}
           >

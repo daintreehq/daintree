@@ -3616,6 +3616,8 @@ interface PluginShortcutRecorderProps extends PluginAriaRootAttributes {
     /** Shown while no shortcut is set. Defaults to "Not set". */
     placeholder?: string;
     disabled?: boolean;
+    /** `compact` matches a compact `Input` beside it. */
+    density?: "default" | "compact";
     "aria-label"?: string;
     "aria-labelledby"?: string;
     "aria-describedby"?: string;
