@@ -439,6 +439,71 @@ describe("BarChart", () => {
     expect(svg()?.getAttribute("width")).toBe("300");
   });
 
+  // jsdom does no layout, so the rule is structural: an author's empty node lands in
+  // the very frame the default "No data" does — the chart's height, centred both ways
+  // — and only the default's own type rides on that frame.
+  it.each([
+    [
+      "BarChart",
+      (extra: object) =>
+        createElement(kit.BarChart, {
+          x: "day",
+          series: BUILD_SERIES,
+          data: [],
+          "aria-label": "E",
+          height: 140,
+          ...extra,
+        }),
+    ],
+    [
+      "LineChart",
+      (extra: object) =>
+        createElement(kit.LineChart, {
+          x: "at",
+          series: [{ key: "p50", label: "p50" }],
+          data: [],
+          "aria-label": "E",
+          height: 140,
+          ...extra,
+        }),
+    ],
+    [
+      "DonutChart",
+      (extra: object) =>
+        createElement(kit.DonutChart, {
+          x: "name",
+          value: "size",
+          data: [],
+          "aria-label": "E",
+          height: 140,
+          ...extra,
+        }),
+    ],
+  ] as const)("centres a custom empty node in the default's frame (%s)", (_, chart) => {
+    const frameOf = (extra: object) => {
+      render(chart(extra));
+      const frame = screen.getByRole("group", { name: "E" });
+      const snapshot = {
+        height: frame.style.height,
+        classes: frame.className.split(/\s+/).filter(Boolean),
+        firstChild: frame.firstElementChild,
+      };
+      cleanup();
+      return snapshot;
+    };
+    const fallback = frameOf({});
+    const custom = frameOf({ empty: createElement("p", { "data-own": "" }, "No builds yet") });
+    expect(custom.height).toBe(fallback.height);
+    expect(custom.height).toBe("140px");
+    for (const layout of ["flex", "items-center", "justify-center"]) {
+      expect(fallback.classes).toContain(layout);
+      expect(custom.classes).toContain(layout);
+    }
+    expect(custom.firstChild?.hasAttribute("data-own")).toBe(true);
+    // The frame styles the default's words, never the author's node.
+    expect(custom.classes.some((c) => c.startsWith("text-"))).toBe(false);
+  });
+
   it("shows loading and empty states and survives bad props", () => {
     const { container } = render(
       createElement(kit.BarChart, {
