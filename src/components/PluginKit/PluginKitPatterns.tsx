@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type ReactNode } from "react";
+import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import type {
   PluginFormFieldControlProps,
@@ -49,7 +49,7 @@ import { PaneState, PaneStateActions } from "@/components/ui/PaneState";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { UnderlineTabs, type UnderlineTabItem } from "@/components/ui/UnderlineTabs";
+import { documentTabClassName, revealTabInStrip } from "@/components/ui/document-tab";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { SEVERITY_VISUAL } from "@/lib/statusSeverity";
 import { formatCompactCount } from "@/lib/formatCount";
@@ -478,12 +478,6 @@ function KitTabs({
   const indexOf = (id: string) => tabs.findIndex((tab) => tab.value === id);
   const tabId = (id: string) => `${baseId}tab-${indexOf(id)}`;
   const panelId = (id: string) => `${baseId}panel-${indexOf(id)}`;
-  const strip: UnderlineTabItem[] = tabs.map((tab) => ({
-    id: tab.value,
-    label: tab.label,
-    renderIcon: tab.icon === undefined ? undefined : () => sizedIcon(tab.icon, "h-3.5 w-3.5"),
-    trailing: tabBadge(tab.badge),
-  }));
   if (active === undefined) return null;
   const mapped =
     typeof panels === "object" && panels !== null && Object.hasOwn(panels, active)
@@ -491,18 +485,77 @@ function KitTabs({
       : undefined;
   const panel =
     typeof children === "function" ? node(children(active)) : (mapped ?? node(children));
+  const compact = oneOf(density, ["page", "strip"] as const) === "strip";
+  // APG tabs with automatic activation: arrows and Home/End move and select in
+  // one step, wrapping at the ends, and only the selected tab is a tab stop.
+  const onStripKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]'));
+    const at = buttons.findIndex((button) => button === document.activeElement);
+    if (at === -1) return;
+    const last = buttons.length - 1;
+    const next =
+      event.key === "ArrowRight"
+        ? (at + 1) % buttons.length
+        : event.key === "ArrowLeft"
+          ? (at - 1 + buttons.length) % buttons.length
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? last
+              : -1;
+    if (next === -1) return;
+    event.preventDefault();
+    const tab = tabs[next];
+    const button = buttons[next];
+    if (!tab || !button) return;
+    button.focus();
+    revealTabInStrip(event.currentTarget, button, "smooth");
+    handleChange?.(tab.value);
+  };
   return (
     <div {...pickRootProps(rest)} className={cn("flex min-h-0 flex-col", str(className))}>
-      <div className="border-b border-border-default">
-        <UnderlineTabs
-          tabs={strip}
-          activeId={active}
-          onChange={(next) => handleChange?.(next)}
-          aria-label={str(ariaLabel) ?? ""}
-          tabId={tabId}
-          panelId={panelId}
-          density={oneOf(density, ["page", "strip"] as const) ?? "page"}
-        />
+      {/* The app's document-tab cells, divided by hairlines, with the selected
+          cell filled rather than underlined: several plugin tab strips can sit
+          in one window, and the accent stays free for the pane's one signal. */}
+      <div
+        role="tablist"
+        aria-label={str(ariaLabel) ?? ""}
+        onKeyDown={onStripKeyDown}
+        data-kit-tabs=""
+        className="flex shrink-0 overflow-x-auto border-b border-divider [scrollbar-width:none]"
+      >
+        {tabs.map((tab) => {
+          const selected = tab.value === active;
+          return (
+            <button
+              key={tab.value}
+              type="button"
+              role="tab"
+              id={tabId(tab.value)}
+              aria-selected={selected}
+              aria-controls={panelId(tab.value)}
+              tabIndex={selected ? 0 : -1}
+              data-tab={tab.value}
+              onClick={(event) => {
+                const strip = event.currentTarget.parentElement;
+                if (strip) revealTabInStrip(strip, event.currentTarget, "smooth");
+                handleChange?.(tab.value);
+              }}
+              className={cn(
+                documentTabClassName(selected),
+                "shrink-0 whitespace-nowrap",
+                compact ? "h-8 gap-1.5 px-3 text-xs" : "h-9 gap-2 px-4 text-sm",
+                selected && "bg-overlay-selected"
+              )}
+            >
+              {tab.icon === undefined
+                ? null
+                : sizedIcon(tab.icon, compact ? "h-3.5 w-3.5" : "h-4 w-4")}
+              <span>{tab.label}</span>
+              {tabBadge(tab.badge) ?? null}
+            </button>
+          );
+        })}
       </div>
       <div
         role="tabpanel"
