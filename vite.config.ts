@@ -611,6 +611,7 @@ const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly string[
   "@daintreehq/plugin-ui": [
     "Avatar",
     "Badge",
+    "BarChart",
     "Button",
     "Callout",
     "Checkbox",
@@ -619,6 +620,7 @@ const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly string[
     "DataTable",
     "Dialog",
     "DismissButton",
+    "DonutChart",
     "DropdownMenu",
     "EmptyState",
     "FileTree",
@@ -629,6 +631,7 @@ const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly string[
     "Input",
     "Kbd",
     "KbdChord",
+    "LineChart",
     "ListRow",
     "LogView",
     "Markdown",

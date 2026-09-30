@@ -250,6 +250,7 @@ What the no-build path costs, and what it doesn't: the worker cannot import npm 
 | A list or table of any length | `DataTable`, `VirtualList` with `ListRow`, `LogView` for output |
 | A file tree | `FileTree` (takes `host.fs.walk` entries as they come) |
 | A headline number, a trend | `StatCard`, `Sparkline` |
+| A chart | `BarChart` for categories, `LineChart` for change over time, `DonutChart` for parts of a whole (up to six series or parts; fold the rest into "Other") |
 | Pane chrome | `PaneHeader`, `Toolbar` with `ToolbarButton`, `Tabs` |
 | Loading, empty, error | `PaneState` for the whole pane, `EmptyState`, `Callout` (`severity="error"` with a Retry `action` is the error banner), `Skeleton`, `Spinner`, `ProgressBar` |
 | A status chip | `Badge` |
@@ -259,7 +260,7 @@ What the no-build path costs, and what it doesn't: the worker cannot import npm 
 | Relative times, sizes, durations | `formatTimeAgo`, `formatBytes`, `formatDuration`, `formatCount` |
 | Colours for a canvas or WebGL | `useDaintreeTheme()` / `onDidChangeDaintreeTheme` |
 
-A settings view builds from `SettingsSection`, `SettingsGroup` and `SettingsRow`. The full list with props is [views.md → Host UI components](./views.md#host-ui-components), and `plugin-ui.d.ts` in `@daintreehq/plugin-sdk` is the authoritative one. Nothing is locked down: for anything the kit has no component for — a chart beyond a sparkline, say — use the token vocabulary below.
+A settings view builds from `SettingsSection`, `SettingsGroup` and `SettingsRow`. The full list with props is [views.md → Host UI components](./views.md#host-ui-components), and `plugin-ui.d.ts` in `@daintreehq/plugin-sdk` is the authoritative one. Nothing is locked down: for anything the kit has no component for — a scatter or a graph of nodes, say — use the token vocabulary below.
 
 Things the lab watched agents get wrong, each of which the kit or the host already covers:
 
