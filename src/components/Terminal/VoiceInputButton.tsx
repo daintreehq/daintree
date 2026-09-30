@@ -69,6 +69,7 @@ export function VoiceInputButton({
   const status = useVoiceRecordingStore((state) => state.status);
   const isConfigured = useVoiceRecordingStore((state) => state.isConfigured);
   const lastError = useVoiceRecordingStore((state) => state.lastError);
+  const micSignal = useVoiceRecordingStore((state) => state.micSignal);
   const activePanelId = useVoiceRecordingStore((state) => state.activeTarget?.panelId ?? null);
 
   const isRecording = activePanelId === panelId && status === "recording";
@@ -76,10 +77,16 @@ export function VoiceInputButton({
   const isReconnecting = activePanelId === panelId && status === "reconnecting";
   const isFinishing = activePanelId === panelId && status === "finishing";
   const isPaused = activePanelId === panelId && status === "paused";
-  const isListening = isRecording || isConnecting || isReconnecting;
+  // Mic state and backend state are separate: the session is open (and a press
+  // stops it) as soon as capture starts, but it only counts as listening once
+  // the mic delivers real audio. Until then the orbit holds still (#13105).
+  const isSessionOpen = isRecording || isConnecting || isReconnecting;
+  const isListening = isSessionOpen && micSignal === "live";
+  const isMicStarting = isSessionOpen && !isListening;
   // Keep orbit visible through finishing and paused for continuity
-  const showOrbit = isListening || isFinishing || isPaused;
-  const isActive = isListening || isFinishing || isPaused;
+  const showOrbit = isSessionOpen || isFinishing || isPaused;
+  const isActive = isSessionOpen || isFinishing || isPaused;
+  const isOrbitStill = isPaused || isMicStarting;
 
   // Animation refs
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -93,10 +100,10 @@ export function VoiceInputButton({
   useEffect(() => {
     if (!showOrbit) return;
 
-    // Paused: freeze the orbit at a dim static state and skip the RAF loop
-    // entirely. Burning CPU on an interpolating loop adds nothing while the
-    // user is composing their next thought.
-    if (isPaused) {
+    // Paused or mic still starting: freeze the orbit at a dim static state and
+    // skip the RAF loop entirely. A spinning orbit reads as "listening", which
+    // is false in both cases.
+    if (isOrbitStill) {
       const wrapper = wrapperRef.current;
       if (wrapper) {
         wrapper.style.transform = `rotate(0deg) scale(${SCALE_MIN}) translateZ(0)`;
@@ -219,7 +226,7 @@ export function VoiceInputButton({
 
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [showOrbit, isFinishing, isPaused]);
+  }, [showOrbit, isFinishing, isOrbitStill]);
 
   const handleClick = useCallback(() => {
     if (disabled && !isActive) return;
@@ -261,11 +268,15 @@ export function VoiceInputButton({
         ? "Finishing transcription…"
         : isPaused
           ? "Paused — click to resume"
-          : isReconnecting
-            ? "Reconnecting… Click to stop"
-            : isListening
-              ? "Stop recording"
-              : "Start voice input";
+          : isMicStarting
+            ? micSignal === "silent"
+              ? "No audio from microphone · Click to stop"
+              : "Starting microphone… Click to stop"
+            : isReconnecting
+              ? "Reconnecting… Click to stop"
+              : isListening
+                ? "Stop recording"
+                : "Start voice input";
 
   return (
     <div
@@ -361,11 +372,11 @@ export function VoiceInputButton({
                 ? "Set up voice input"
                 : isPaused
                   ? "Resume voice recording"
-                  : isListening
+                  : isSessionOpen
                     ? "Stop voice recording"
                     : "Start voice recording"
             }
-            aria-pressed={isConfigured ? isListening || isPaused : undefined}
+            aria-pressed={isConfigured ? isSessionOpen || isPaused : undefined}
           >
             {isFinishing && !showOrbit ? (
               <Spinner size="sm" />

@@ -40,6 +40,7 @@ describe("VoiceInputButton", () => {
       lastError: null,
       activeTarget: null,
       elapsedSeconds: 0,
+      micSignal: "pending",
       panelBuffers: {},
       announcement: null,
     });
@@ -114,4 +115,31 @@ describe("VoiceInputButton", () => {
     expect(togglePauseSpy).toHaveBeenCalledTimes(1);
     expect(toggleSpy).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { status: "connecting" as const, micSignal: "pending" as const, tip: "Starting microphone…" },
+    { status: "recording" as const, micSignal: "pending" as const, tip: "Starting microphone…" },
+    { status: "recording" as const, micSignal: "silent" as const, tip: "No audio from microphone" },
+    { status: "connecting" as const, micSignal: "live" as const, tip: "Stop recording" },
+    { status: "recording" as const, micSignal: "live" as const, tip: "Stop recording" },
+  ])(
+    "only claims listening once the mic delivers audio ($status, mic $micSignal) — #13105",
+    async ({ status, micSignal, tip }) => {
+      useVoiceRecordingStore.setState({
+        isConfigured: true,
+        status,
+        micSignal,
+        activeTarget: { panelId: "panel-1" },
+      });
+      const { getByRole } = render(
+        <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Daintree" />
+      );
+      const button = getByRole("button");
+      // Either way the session is open and a press stops it.
+      expect(button.getAttribute("aria-label")).toBe("Stop voice recording");
+      expect(button.getAttribute("aria-pressed")).toBe("true");
+      fireEvent.focus(button);
+      expect((await screen.findByRole("tooltip")).textContent).toContain(tip);
+    }
+  );
 });

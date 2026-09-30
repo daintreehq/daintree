@@ -6,7 +6,6 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/component
 import { cn } from "@/lib/utils";
 import { useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
@@ -49,6 +48,7 @@ export function VoiceRecordingToolbarButton({
   const activeTarget = useVoiceRecordingStore((state) => state.activeTarget);
   const status = useVoiceRecordingStore((state) => state.status);
   const elapsedSeconds = useVoiceRecordingStore((state) => state.elapsedSeconds);
+  const micSignal = useVoiceRecordingStore((state) => state.micSignal);
   const shortcut = useEffectiveCombo("voiceInput.toggle");
   const pauseShortcut = useEffectiveCombo("voiceInput.togglePause");
   const hover = useShortcutHintHover("voiceInput.toggle");
@@ -63,22 +63,21 @@ export function VoiceRecordingToolbarButton({
     Boolean(activeTarget) &&
     (isArming || isConnecting || isRecording || isReconnecting || isFinishing || isPaused);
 
-  // Doherty gate — under 400ms of "connecting" should never paint the orbit;
-  // it would flash before the recording state arrives.
-  const showConnecting = useDohertyGate(isConnecting);
+  // The orbit means "listening", so it waits for the mic to deliver real
+  // audio — not for the transcription backend, which is a separate state
+  // (captured audio is buffered while it connects). #13105.
+  const isSessionOpen = isConnecting || isRecording || isReconnecting;
+  const isMicLive = micSignal === "live";
+  const isMicStarting = isSessionOpen && !isMicLive;
   // Gate the orbit on isActive too — protects against a transient teardown
   // race where status briefly stays "recording"/"finishing" while
   // activeTarget has already been cleared, which would otherwise leave the
   // RAF loop spinning on null refs.
-  const showOrbit =
-    isActive && (isRecording || isReconnecting || isFinishing || isPaused || showConnecting);
-  // Arming paints immediately with no Doherty gate — the visual confirmation
-  // IS the point of the state, and a gate would defeat it. The cue is a
-  // static accent ring instead of the orbit (which only spins once audio
-  // chunks land). Hold the static ring through the pre-Doherty connecting
-  // window so the indicator never blanks out between the arming flash and
-  // the orbit appearing.
-  const showArming = isActive && (isArming || (isConnecting && !showConnecting));
+  const showOrbit = isActive && ((isSessionOpen && isMicLive) || isFinishing || isPaused);
+  // Arming paints immediately — the visual confirmation IS the point of the
+  // state. The static accent ring holds from the hotkey press until the mic
+  // is live, so the indicator never blanks out before the orbit takes over.
+  const showArming = isActive && (isArming || isMicStarting);
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<HTMLSpanElement>(null);
@@ -206,19 +205,25 @@ export function VoiceRecordingToolbarButton({
     ? targetLabel
       ? `Arming dictation: ${targetLabel}`
       : "Arming dictation…"
-    : isConnecting
-      ? "Preparing dictation…"
-      : isReconnecting
-        ? "Reconnecting…"
-        : isFinishing
-          ? "Finishing transcription…"
-          : isPaused
-            ? contextLabel
-              ? `Paused: ${contextLabel}`
-              : "Dictation paused"
-            : contextLabel
-              ? `Recording: ${contextLabel}`
-              : "Recording in another panel";
+    : isMicStarting
+      ? micSignal === "silent"
+        ? "No audio from microphone"
+        : "Starting microphone…"
+      : isConnecting
+        ? contextLabel
+          ? `Recording: ${contextLabel} · Connecting…`
+          : "Recording · Connecting…"
+        : isReconnecting
+          ? "Reconnecting…"
+          : isFinishing
+            ? "Finishing transcription…"
+            : isPaused
+              ? contextLabel
+                ? `Paused: ${contextLabel}`
+                : "Dictation paused"
+              : contextLabel
+                ? `Recording: ${contextLabel}`
+                : "Recording in another panel";
   const elapsedLabel = isRecording || isPaused ? formatDuration(elapsedSeconds) : null;
   // The toggle shortcut would start a new session when focused elsewhere; the
   // pause shortcut is the resume affordance the user actually wants.

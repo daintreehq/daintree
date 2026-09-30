@@ -61,6 +61,7 @@ describe("VoiceRecordingToolbarButton — tooltip names what a click does", () =
     useVoiceRecordingStore.setState({
       isConfigured: true,
       status,
+      micSignal: "live",
       elapsedSeconds: 42,
       activeTarget: {
         panelId: "p-1",
@@ -99,4 +100,36 @@ describe("VoiceRecordingToolbarButton — tooltip names what a click does", () =
       expect(shortcutRow).toBeNull();
     }
   });
+
+  it.each([
+    { status: "connecting" as const, micSignal: "pending" as const, title: "Starting microphone…" },
+    { status: "recording" as const, micSignal: "pending" as const, title: "Starting microphone…" },
+    {
+      status: "recording" as const,
+      micSignal: "silent" as const,
+      title: "No audio from microphone",
+    },
+    {
+      status: "connecting" as const,
+      micSignal: "live" as const,
+      title: "Recording: Daintree / main · Connecting…",
+    },
+  ])(
+    "separates mic state from backend state ($status, mic $micSignal) — #13105",
+    ({ status, micSignal, title }) => {
+      useVoiceRecordingStore.setState({
+        isConfigured: true,
+        status,
+        micSignal,
+        activeTarget: {
+          panelId: "p-1",
+          panelTitle: "claude · notes",
+          projectName: "Daintree",
+          worktreeLabel: "main",
+        },
+      });
+      const { container } = render(<VoiceRecordingToolbarButton />);
+      expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(title);
+    }
+  );
 });

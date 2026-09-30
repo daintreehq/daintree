@@ -62,16 +62,18 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
     });
   });
 
-  describe("Doherty anti-flicker gate", () => {
-    it("imports useDohertyGate from the deferred-loading hook module", () => {
-      expect(source).toContain("useDohertyGate");
-      expect(source).toContain('from "@/hooks/useDeferredLoading"');
+  describe("orbit waits for real mic audio — issue #13105", () => {
+    it("spins the orbit only once the mic signal is live, not when the backend connects", () => {
+      // A Bluetooth mic can hand over zeros long after the backend is ready;
+      // the orbit claims "listening" so it keys off micSignal, not status.
+      expect(source).toMatch(/const\s+isMicLive\s*=\s*micSignal\s*===\s*"live"/);
+      expect(source).not.toContain("useDohertyGate");
     });
 
-    it("gates the connecting-state orbit reveal behind the 400ms Doherty threshold", () => {
-      // Sub-400ms connections must never paint the orbit ring — the
-      // placeholder stays visible throughout.
-      expect(source).toMatch(/useDohertyGate\(isConnecting\)/);
+    it("holds the static arming ring from the hotkey press until the mic is live", () => {
+      expect(source).toMatch(
+        /const\s+showArming\s*=\s*isActive\s*&&\s*\(isArming\s*\|\|\s*isMicStarting\)/
+      );
     });
   });
 
@@ -102,7 +104,7 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
       // isPaused as another isActive sub-state that should still render the
       // (frozen) orbit chrome.
       expect(source).toMatch(
-        /const\s+showOrbit\s*=\s*[\s\S]*isActive\s*&&\s*\(isRecording\s*\|\|\s*isReconnecting\s*\|\|\s*isFinishing\s*\|\|\s*isPaused\s*\|\|\s*showConnecting\)/
+        /const\s+showOrbit\s*=\s*isActive\s*&&\s*\(\(isSessionOpen\s*&&\s*isMicLive\)\s*\|\|\s*isFinishing\s*\|\|\s*isPaused\)/
       );
     });
 

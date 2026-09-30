@@ -187,6 +187,18 @@ interface VoiceTranscriptBuffer {
   sessionCorrectedText: string | null;
 }
 
+/**
+ * What the microphone is actually delivering, independent of the transcription
+ * backend's `status`. Bluetooth mics (AirPods switching A2DP→HFP) hand Web Audio
+ * zeros for a while after `getUserMedia` resolves, so an open stream is not
+ * proof of capture (#13105).
+ *
+ * - pending: stream open (or opening), no real samples seen yet.
+ * - live: a PCM chunk above the noise floor has arrived; latched for the session.
+ * - silent: still no real samples after the grace window.
+ */
+export type VoiceMicSignal = "pending" | "live" | "silent";
+
 interface VoiceAnnouncement {
   id: number;
   text: string;
@@ -220,6 +232,7 @@ interface VoiceRecordingState {
   recentTargets: RecentDictationTarget[];
   elapsedSeconds: number;
   audioLevel: number;
+  micSignal: VoiceMicSignal;
   panelBuffers: Record<string, VoiceTranscriptBuffer>;
   announcement: VoiceAnnouncement | null;
   setConfigured: (isConfigured: boolean) => void;
@@ -227,6 +240,7 @@ interface VoiceRecordingState {
   setLearnFromCorrections: (enabled: boolean) => void;
   setSessionCorrectedText: (panelId: string, text: string | null) => void;
   setAudioLevel: (level: number) => void;
+  setMicSignal: (signal: VoiceMicSignal) => void;
   setArming: (target: VoiceRecordingTarget) => void;
   beginSession: (target: VoiceRecordingTarget) => void;
   setStatus: (status: VoiceInputStatus) => void;
@@ -284,6 +298,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       recentTargets: [],
       elapsedSeconds: 0,
       audioLevel: 0,
+      micSignal: "pending",
       panelBuffers: {},
       announcement: null,
 
@@ -309,6 +324,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
       setAudioLevel: (audioLevel) => set({ audioLevel }),
 
+      setMicSignal: (micSignal) => set({ micSignal }),
+
       // Atomic single-set transition into the pre-audio confirmation phase.
       // Fires synchronously before any await in start() so the target panel
       // and toolbar can paint the arming cue before microphone init begins.
@@ -317,6 +334,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           activeTarget: target,
           status: "arming",
           lastError: null,
+          micSignal: "pending",
         }),
 
       beginSession: (target) =>
@@ -325,6 +343,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           status: "connecting",
           lastError: null,
           elapsedSeconds: 0,
+          micSignal: "pending",
           panelBuffers: {
             ...state.panelBuffers,
             [target.panelId]: {
@@ -529,6 +548,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               status: nextStatus,
               elapsedSeconds: 0,
               audioLevel: 0,
+              micSignal: "pending" as VoiceMicSignal,
             };
           }
 
@@ -544,6 +564,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
             status: nextStatus,
             elapsedSeconds: 0,
             audioLevel: 0,
+            micSignal: "pending" as VoiceMicSignal,
             panelBuffers: {
               ...state.panelBuffers,
               [panelId]: {
@@ -659,6 +680,23 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
     }
   )
 );
+
+/**
+ * True while a session is open but the mic hasn't delivered real audio yet —
+ * the window in which the UI must not claim it is listening. Independent of
+ * whether the transcription backend is still connecting.
+ */
+export function isVoiceMicPending(state: {
+  status: VoiceInputStatus;
+  micSignal: VoiceMicSignal;
+}): boolean {
+  return (
+    (state.status === "connecting" ||
+      state.status === "recording" ||
+      state.status === "reconnecting") &&
+    state.micSignal !== "live"
+  );
+}
 
 registerPersistedStore({
   storeId: "voiceRecordingStore",

@@ -13,6 +13,7 @@ vi.mock("@/store/voiceRecordingStore", () => {
     isConfigured: false,
     lockedTarget: null as { panelId: string } | null,
     recentTargets: [] as Array<unknown>,
+    micSignal: "pending" as string,
   };
   const fns = {
     setLastError: vi.fn(),
@@ -26,6 +27,9 @@ vi.mock("@/store/voiceRecordingStore", () => {
     beginSession: vi.fn(),
     finishSession: vi.fn(),
     setAudioLevel: vi.fn(),
+    setMicSignal: vi.fn((signal: string) => {
+      state.micSignal = signal;
+    }),
     setElapsedSeconds: vi.fn(),
     appendDelta: vi.fn(),
     completeSegment: vi.fn(),
@@ -42,6 +46,8 @@ vi.mock("@/store/voiceRecordingStore", () => {
   const subscribe = vi.fn(() => () => {});
   return {
     useVoiceRecordingStore: Object.assign(getState, { getState, subscribe }),
+    isVoiceMicPending: (s: { status: string; micSignal: string }) =>
+      ["connecting", "recording", "reconnecting"].includes(s.status) && s.micSignal !== "live",
     __state: state,
   };
 });

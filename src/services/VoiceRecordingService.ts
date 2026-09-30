@@ -4,7 +4,11 @@ import { isPtyPanel } from "@shared/types/panel";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
-import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
+import {
+  isVoiceMicPending,
+  useVoiceRecordingStore,
+  type VoiceRecordingTarget,
+} from "@/store/voiceRecordingStore";
 import { isActiveVoiceSession, type VoiceInputError, type VoiceRecordingMode } from "@shared/types";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -111,6 +115,19 @@ class VoiceRecordingService {
   private totalPausedMs = 0;
   private pauseTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private static readonly PAUSE_AUTO_STOP_MS = 60_000;
+  // An open stream is not proof of capture: a Bluetooth mic switching to HFP
+  // hands Web Audio zeros for a while (#13105). The UI only claims it is
+  // listening once a chunk clears the same floor the start diagnostics use
+  // (`hasRealSignal`), and flags the mic as silent if nothing does within the
+  // grace window of unpaused capture. Neither gates PCM forwarding — the
+  // leading audio is still captured and held or sent either way.
+  private static readonly MIC_SILENCE_GRACE_MS = 3_000;
+  private micSilenceTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  // Owner of the silence countdown, so resume can re-arm it for the same
+  // capture after a pause cancelled it.
+  private micSilenceSession: { generation: number; startRequestId: number } | null = null;
+  // performance.now() when the live session's capture was attached.
+  private micCaptureAttachedAt = 0;
 
   initialize(): void {
     if (this.initialized) return;
@@ -958,6 +975,16 @@ class VoiceRecordingService {
           return;
         }
         this.meterAudioChunk(event.data, stats ?? undefined);
+        // Held chunks count too: the user may be speaking before the backend
+        // is connected, and the cue should follow the mic, not the socket.
+        if (
+          stats &&
+          hasRealSignal(stats) &&
+          !this.isStartRequestStale(startRequestId) &&
+          isVoiceMicPending(useVoiceRecordingStore.getState())
+        ) {
+          this.markMicLive(target, arrivedChunks);
+        }
         if (capture.queue) {
           this.enqueueCapturedChunk(capture, event.data);
         } else {
@@ -971,6 +998,7 @@ class VoiceRecordingService {
     }
     logDebug(`${LOG_PREFIX} Eager audio capture started`);
     logStep("source_attach");
+    const captureAttachedAt = performance.now();
 
     // Only an actually-started session (open mic stream) needs to be torn
     // down here. `this.stream` is the canonical "audio is open" flag and is
@@ -1024,12 +1052,26 @@ class VoiceRecordingService {
       this.meterAudioChunk(chunk);
     }
 
-    // Start the timer and announce immediately — user is already speaking.
+    // The "Dictation started" announcement waits for real audio (markMicLive);
+    // announcing here would tell the user to speak into a mic still delivering
+    // zeros.
     this.sessionStartedAt = Date.now();
     this.startElapsedTimer();
-    useVoiceRecordingStore
-      .getState()
-      .announce(`Dictation started in ${formatTargetLabel(target)}.`);
+    this.micCaptureAttachedAt = captureAttachedAt;
+    // Audio that arrived while a previous session drained already counts, and
+    // the grace window runs from capture attach rather than from promotion.
+    if (firstSignalChunk) {
+      this.markMicLive(target, firstSignalChunk);
+    } else {
+      this.startMicSilenceTimer(
+        generation,
+        startRequestId,
+        Math.max(
+          0,
+          VoiceRecordingService.MIC_SILENCE_GRACE_MS - (performance.now() - captureAttachedAt)
+        )
+      );
+    }
 
     // Connect in parallel — audio keeps queueing until the backend is ready.
     // Chunks can't go out earlier: main only swaps in this session's provider
@@ -1050,6 +1092,7 @@ class VoiceRecordingService {
 
     if (this.generation !== generation || this.isStartRequestStale(startRequestId)) {
       logWarn(`${LOG_PREFIX} Generation mismatch after IPC start`);
+      this.clearMicSilenceTimerFor(generation, startRequestId);
       capture.queue = null;
       this.flushOpeningAudio(openingAudio);
       await this.cleanupCaptureResources({
@@ -1645,9 +1688,62 @@ class VoiceRecordingService {
     this.pauseTimeoutId = null;
   }
 
+  private markMicLive(target: VoiceRecordingTarget, chunkCount: number): void {
+    this.clearMicSilenceTimer();
+    const state = useVoiceRecordingStore.getState();
+    logInfo(`${LOG_PREFIX} Microphone delivering audio`, {
+      chunk: chunkCount,
+      msSinceCaptureAttach: Math.round(performance.now() - this.micCaptureAttachedAt),
+      wasSilent: state.micSignal === "silent",
+    });
+    state.setMicSignal("live");
+    state.announce(`Dictation started in ${formatTargetLabel(target)}.`);
+  }
+
+  private startMicSilenceTimer(
+    generation: number,
+    startRequestId: number,
+    delayMs: number = VoiceRecordingService.MIC_SILENCE_GRACE_MS
+  ): void {
+    this.clearMicSilenceTimer();
+    this.micSilenceSession = { generation, startRequestId };
+    this.micSilenceTimeoutId = setTimeout(() => {
+      this.micSilenceTimeoutId = null;
+      if (this.generation !== generation || this.isStartRequestStale(startRequestId)) return;
+      const state = useVoiceRecordingStore.getState();
+      // Paused (or finishing) before the mic came up: the worklet isn't
+      // forwarding, so the absence of audio says nothing about the mic.
+      if (state.micSignal !== "pending" || !isVoiceMicPending(state)) return;
+      logWarn(`${LOG_PREFIX} No audio from microphone after grace window`, {
+        graceMs: VoiceRecordingService.MIC_SILENCE_GRACE_MS,
+        chunkCount: this.sessionChunkCount,
+        peakRms: Number(this.sessionPeakRms.toFixed(4)),
+      });
+      state.setMicSignal("silent");
+      state.announce("No audio from the microphone yet.");
+    }, delayMs);
+  }
+
+  private clearMicSilenceTimer(): void {
+    if (this.micSilenceTimeoutId === null) return;
+    clearTimeout(this.micSilenceTimeoutId);
+    this.micSilenceTimeoutId = null;
+  }
+
+  // A superseded start must not cancel a newer session's countdown.
+  private clearMicSilenceTimerFor(generation: number, startRequestId: number): void {
+    const owner = this.micSilenceSession;
+    if (!owner || owner.generation !== generation || owner.startRequestId !== startRequestId) {
+      return;
+    }
+    this.clearMicSilenceTimer();
+    this.micSilenceSession = null;
+  }
+
   private clearTimers(): void {
     this.clearElapsedTimer();
     this.clearPauseTimeout();
+    this.clearMicSilenceTimer();
     useVoiceRecordingStore.getState().setElapsedSeconds(0);
   }
 
@@ -1669,6 +1765,9 @@ class VoiceRecordingService {
     this.workletNode?.port.postMessage({ type: "setPaused", value: true });
     this.pauseStartedAt = Date.now();
     this.clearElapsedTimer();
+    // The worklet stops forwarding while paused, so no audio says nothing
+    // about the mic — the grace window only counts unpaused capture.
+    this.clearMicSilenceTimer();
     state.setStatus("paused");
     state.announce("Dictation paused.");
     this.clearPauseTimeout();
@@ -1707,8 +1806,21 @@ class VoiceRecordingService {
     }
     this.workletNode?.port.postMessage({ type: "setPaused", value: false });
     state.setStatus("recording");
-    state.announce("Dictation resumed.");
     this.startElapsedTimer();
+    // Resuming before the mic ever went live must not invite the user to speak
+    // into zeros; the first real chunk announces the start instead.
+    if (state.micSignal === "live") {
+      state.announce("Dictation resumed.");
+    } else {
+      const silenceSession = this.micSilenceSession;
+      if (
+        state.micSignal === "pending" &&
+        silenceSession &&
+        silenceSession.generation === this.generation
+      ) {
+        this.startMicSilenceTimer(silenceSession.generation, silenceSession.startRequestId);
+      }
+    }
   }
 
   /**
@@ -1732,6 +1844,7 @@ class VoiceRecordingService {
     // timers must be cleared or they fire against the new singleton's state.
     this.clearPauseTimeout();
     this.clearElapsedTimer();
+    this.clearMicSilenceTimer();
     for (const unsub of this.unsubscribers) {
       unsub();
     }
@@ -1820,6 +1933,10 @@ class VoiceRecordingService {
     ) {
       cancelAnimationFrame(this.levelRaf);
       this.levelRaf = null;
+    }
+
+    if (resources.workletNode && this.workletNode === resources.workletNode) {
+      this.clearMicSilenceTimer();
     }
 
     if (resources.workletNode) {
