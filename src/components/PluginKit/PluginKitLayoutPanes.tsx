@@ -1248,9 +1248,8 @@ function KitDrawer({
             if (event.button === 0) close(true);
           }}
           className={cn(
-            // The dialog scrim on dark themes, where the soft step barely moves
-            // the page; light themes read a layer from the soft step already.
-            "absolute inset-0 z-10 bg-scrim-medium [.light_&]:bg-scrim-soft transition-opacity ease-out motion-reduce:transition-none",
+            // The host's modal scrim, as its dialogs and in-pane webview dialog use.
+            "absolute inset-0 z-10 bg-scrim-medium transition-opacity ease-out motion-reduce:transition-none",
             isOpen ? "opacity-100 duration-200" : "pointer-events-none opacity-0 duration-[120ms]"
           )}
         />
