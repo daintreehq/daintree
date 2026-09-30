@@ -94,13 +94,16 @@ function isAnyRadixLayerOpen(): boolean {
   // Escape handler: Popover, Select, DropdownMenu, ContextMenu, HoverCard,
   // Tooltip. Dialogs are matched separately (`role="dialog"` without
   // `aria-modal`) — modal Dialogs are AppDialog/AppPaletteDialog and live
-  // in the backstop stack, not the Radix-layer category.
+  // in the backstop stack, not the Radix-layer category. A popover's dialog
+  // content is still a Radix layer when it declares `aria-modal` (a date
+  // picker's calendar), and only popper content sits in the wrapper.
   return (
     document.querySelector(
       '[role="listbox"][data-state="open"], ' +
         '[role="menu"][data-state="open"], ' +
         '[role="tooltip"][data-state="open"], ' +
-        '[role="dialog"][data-state="open"]:not([aria-modal="true"])'
+        '[role="dialog"][data-state="open"]:not([aria-modal="true"]), ' +
+        '[data-radix-popper-content-wrapper] [role="dialog"][data-state="open"]'
     ) !== null
   );
 }

@@ -66,6 +66,28 @@ describe("dialogEscapeBackstop — capture-phase Radix probe", () => {
     expect(radixLayerWasOpenWhenEscapePressed()).toBe(false);
   });
 
+  it("counts a modal popover dialog (aria-modal inside a popper wrapper) as a Radix layer", () => {
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute("data-radix-popper-content-wrapper", "");
+    document.body.appendChild(wrapper);
+    const el = addRadixLayer("dialog");
+    el.setAttribute("aria-modal", "true");
+    wrapper.appendChild(el);
+    fireEscape();
+    expect(radixLayerWasOpenWhenEscapePressed()).toBe(true);
+  });
+
+  it("does not count a closing modal popover dialog as open", () => {
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute("data-radix-popper-content-wrapper", "");
+    document.body.appendChild(wrapper);
+    const el = addRadixLayer("dialog", "closed");
+    el.setAttribute("aria-modal", "true");
+    wrapper.appendChild(el);
+    fireEscape();
+    expect(radixLayerWasOpenWhenEscapePressed()).toBe(false);
+  });
+
   it("records radixLayerOpenAtCapture=false when no Radix layer is in the DOM", () => {
     fireEscape();
     expect(radixLayerWasOpenWhenEscapePressed()).toBe(false);
