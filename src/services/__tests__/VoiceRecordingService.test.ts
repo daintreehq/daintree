@@ -13,6 +13,7 @@ vi.mock("@/store/voiceRecordingStore", () => {
     isConfigured: false,
     lockedTarget: null as { panelId: string } | null,
     recentTargets: [] as Array<unknown>,
+    micSignal: "pending" as string,
   };
   const fns = {
     setLastError: vi.fn(),
@@ -26,6 +27,9 @@ vi.mock("@/store/voiceRecordingStore", () => {
     beginSession: vi.fn(),
     finishSession: vi.fn(),
     setAudioLevel: vi.fn(),
+    setMicSignal: vi.fn((signal: string) => {
+      state.micSignal = signal;
+    }),
     setElapsedSeconds: vi.fn(),
     appendDelta: vi.fn(),
     completeSegment: vi.fn(),
@@ -42,6 +46,8 @@ vi.mock("@/store/voiceRecordingStore", () => {
   const subscribe = vi.fn(() => () => {});
   return {
     useVoiceRecordingStore: Object.assign(getState, { getState, subscribe }),
+    isVoiceMicPending: (s: { status: string; micSignal: string }) =>
+      ["connecting", "recording", "reconnecting"].includes(s.status) && s.micSignal !== "live",
     __state: state,
   };
 });
@@ -1266,7 +1272,7 @@ describe("VoiceRecordingService — pause/resume (#9191)", () => {
 
   async function getVoiceMockState() {
     const mod = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: { activeTarget: { panelId: string } | null; status: string };
+      __state: { activeTarget: { panelId: string } | null; status: string; micSignal: string };
     };
     return mod.__state;
   }
@@ -1331,6 +1337,7 @@ describe("VoiceRecordingService — pause/resume (#9191)", () => {
     const voiceState = await getVoiceMockState();
     voiceState.activeTarget = { panelId: "panel-1" };
     voiceState.status = "paused";
+    voiceState.micSignal = "live";
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
@@ -1345,6 +1352,28 @@ describe("VoiceRecordingService — pause/resume (#9191)", () => {
     expect(node.port.postMessage).toHaveBeenCalledWith({ type: "setPaused", value: false });
     expect(useVoiceRecordingStore.getState().setStatus).toHaveBeenCalledWith("recording");
     expect(useVoiceRecordingStore.getState().announce).toHaveBeenCalledWith("Dictation resumed.");
+  });
+
+  it("resume() before the mic went live defers the announcement to real audio (#13105)", async () => {
+    setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "paused";
+    voiceState.micSignal = "pending";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    vi.mocked(useVoiceRecordingStore.getState().announce).mockClear();
+
+    voiceRecordingService.resume();
+
+    expect(useVoiceRecordingStore.getState().setStatus).toHaveBeenCalledWith("recording");
+    expect(useVoiceRecordingStore.getState().announce).not.toHaveBeenCalledWith(
+      "Dictation resumed."
+    );
+    voiceRecordingService.destroy();
   });
 
   it("resume() is a no-op when status is not paused", async () => {

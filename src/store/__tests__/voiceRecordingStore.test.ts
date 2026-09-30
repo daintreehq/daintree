@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { useVoiceRecordingStore } from "../voiceRecordingStore";
+import { isVoiceMicPending, useVoiceRecordingStore } from "../voiceRecordingStore";
 
 const PANEL_ID = "panel-1";
 const TARGET = { panelId: PANEL_ID };
@@ -15,6 +15,7 @@ function reset() {
     recentTargets: [],
     elapsedSeconds: 0,
     audioLevel: 0,
+    micSignal: "pending",
     panelBuffers: {},
     announcement: null,
   });
@@ -62,6 +63,41 @@ describe("voiceRecordingStore — setArming", () => {
     const state = useVoiceRecordingStore.getState();
     expect(state.status).toBe("connecting");
     expect(state.activeTarget).toEqual(TARGET);
+  });
+});
+
+describe("voiceRecordingStore — micSignal (#13105)", () => {
+  beforeEach(reset);
+
+  it("resets to pending at every session boundary", () => {
+    for (const enter of [
+      () => useVoiceRecordingStore.getState().setArming(TARGET),
+      () => useVoiceRecordingStore.getState().beginSession(TARGET),
+      () => useVoiceRecordingStore.getState().finishSession(),
+    ]) {
+      useVoiceRecordingStore.getState().setMicSignal("live");
+      enter();
+      expect(useVoiceRecordingStore.getState().micSignal).toBe("pending");
+    }
+  });
+
+  it("stays latched across backend status changes such as a reconnect", () => {
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    useVoiceRecordingStore.getState().setMicSignal("live");
+    useVoiceRecordingStore.getState().setStatus("reconnecting");
+    useVoiceRecordingStore.getState().setStatus("recording");
+    expect(useVoiceRecordingStore.getState().micSignal).toBe("live");
+  });
+
+  it("isVoiceMicPending covers an open session whose mic isn't live, whatever the backend says", () => {
+    for (const status of ["connecting", "recording", "reconnecting"] as const) {
+      expect(isVoiceMicPending({ status, micSignal: "pending" })).toBe(true);
+      expect(isVoiceMicPending({ status, micSignal: "silent" })).toBe(true);
+      expect(isVoiceMicPending({ status, micSignal: "live" })).toBe(false);
+    }
+    for (const status of ["idle", "arming", "paused", "finishing", "error"] as const) {
+      expect(isVoiceMicPending({ status, micSignal: "pending" })).toBe(false);
+    }
   });
 });
 

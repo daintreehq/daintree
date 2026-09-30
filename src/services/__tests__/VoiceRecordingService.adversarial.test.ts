@@ -92,6 +92,7 @@ const runtime = vi.hoisted(() => ({
     panelBuffers: {} as Record<string, MockPanelBuffer>,
     correctionEnabled: false,
     isConfigured: false,
+    micSignal: "pending" as string,
   },
   voiceFns: {
     setLastError: vi.fn<(error: VoiceInputError | null) => void>(),
@@ -105,6 +106,7 @@ const runtime = vi.hoisted(() => ({
     finishSession:
       vi.fn<(options?: { nextStatus?: "idle" | "error"; preserveLiveText?: boolean }) => void>(),
     setAudioLevel: vi.fn<(level: number) => void>(),
+    setMicSignal: vi.fn<(signal: string) => void>(),
     setElapsedSeconds: vi.fn<(seconds: number) => void>(),
     appendDelta: vi.fn<(delta: string) => void>(),
     completeSegment: vi.fn<(text: string) => void>(),
@@ -215,6 +217,7 @@ function resetRuntime(): void {
   runtime.voiceFns.beginSession.mockImplementation((target) => {
     runtime.voiceState.activeTarget = target;
     runtime.voiceState.status = "connecting";
+    runtime.voiceState.micSignal = "pending";
     runtime.voiceState.panelBuffers[target.panelId] = createPanelBuffer({
       projectId: target.projectId,
     });
@@ -224,6 +227,9 @@ function resetRuntime(): void {
     runtime.voiceState.status = options?.nextStatus ?? "idle";
   });
   runtime.voiceFns.setAudioLevel.mockImplementation(() => undefined);
+  runtime.voiceFns.setMicSignal.mockImplementation((signal) => {
+    runtime.voiceState.micSignal = signal;
+  });
   runtime.voiceFns.setElapsedSeconds.mockImplementation(() => undefined);
   runtime.voiceFns.appendDelta.mockImplementation(() => undefined);
   runtime.voiceFns.completeSegment.mockImplementation(() => undefined);
@@ -307,6 +313,9 @@ vi.mock("@/store/voiceRecordingStore", () => {
   const subscribe = vi.fn(() => () => {});
   return {
     useVoiceRecordingStore: Object.assign(getState, { getState, subscribe }),
+    isVoiceMicPending: (state: { status: string; micSignal: string }) =>
+      ["connecting", "recording", "reconnecting"].includes(state.status) &&
+      state.micSignal !== "live",
   };
 });
 
@@ -493,6 +502,11 @@ function emitError(error: VoiceInputError): void {
   }
 }
 
+// A real MessageEvent carrying one PCM16 chunk, as the worklet port delivers it.
+function pcmEvent(samples: Int16Array<ArrayBuffer>): MessageEvent<ArrayBuffer> {
+  return new MessageEvent("message", { data: samples.buffer });
+}
+
 describe("VoiceRecordingService adversarial", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -500,7 +514,11 @@ describe("VoiceRecordingService adversarial", () => {
     setupGlobals();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // resetModules() doesn't stop the old singleton; its silence timer would
+    // otherwise fire into a later test's shared runtime mock.
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -723,6 +741,58 @@ describe("VoiceRecordingService adversarial", () => {
       expect(runtime.createdStreams[1]?.track.stop).not.toHaveBeenCalled();
     });
 
+    it("marks the mic live from held audio before the backend connects (#13105)", async () => {
+      const backendStart = deferred<{ ok: boolean }>();
+      runtime.startQueue.push(backendStart.promise);
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const starting = voiceRecordingService.start(panelOne);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+      });
+
+      emitChunk(0, 0);
+      expect(runtime.voiceFns.setMicSignal).not.toHaveBeenCalled();
+      expect(runtime.voiceFns.announce).not.toHaveBeenCalledWith(
+        expect.stringContaining("Dictation started")
+      );
+
+      emitChunk(0, 10);
+      expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+      expect(runtime.voiceState.micSignal).toBe("live");
+      expect(runtime.voiceFns.announce).toHaveBeenCalledWith(
+        expect.stringContaining("Dictation started")
+      );
+
+      backendStart.resolve({ ok: true });
+      await starting;
+      expect(runtime.voiceFns.setMicSignal).toHaveBeenCalledTimes(1);
+    });
+
+    it("carries real audio captured during a retarget drain into the new session's mic signal", async () => {
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start(panelOne);
+      runtime.voiceState.status = "recording";
+
+      const drain = deferred<void>();
+      runtime.stopQueue.push(drain.promise);
+      const retargeting = voiceRecordingService.start(panelTwo);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
+      });
+
+      // Room tone only: live, though below the diagnostic signal floor.
+      emitChunk(1, 10);
+      expect(runtime.voiceFns.setMicSignal).not.toHaveBeenCalled();
+
+      drain.resolve();
+      await retargeting;
+
+      expect(runtime.voiceFns.beginSession).toHaveBeenLastCalledWith(panelTwo);
+      expect(runtime.voiceFns.setMicSignal).toHaveBeenLastCalledWith("live");
+      expect(runtime.voiceState.micSignal).toBe("live");
+    });
+
     it("releases the new microphone when a retarget is cancelled during the drain", async () => {
       const { voiceRecordingService } = await import("../VoiceRecordingService");
       await voiceRecordingService.start(panelOne);
@@ -916,6 +986,139 @@ describe("VoiceRecordingService adversarial", () => {
     expect(Number.isFinite(level)).toBe(true);
     expect(level).toBeLessThanOrEqual(1);
     expect(runtime.voiceInput.sendAudioChunk).toHaveBeenCalledTimes(2);
+  });
+
+  it("MIC_ZERO_CHUNKS_DO_NOT_CLAIM_LISTENING_BUT_STILL_FORWARD", async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+    const handler = runtime.createdWorkletNodes[0]?.port.onmessage;
+
+    // Bluetooth HFP warm-up: digital silence plus rounding dither.
+    const zeros = new Int16Array(2400);
+    const dither = new Int16Array(2400);
+    dither[10] = 3;
+    dither[20] = -3;
+    handler?.(pcmEvent(zeros));
+    handler?.(pcmEvent(dither));
+
+    expect(runtime.voiceFns.setMicSignal).not.toHaveBeenCalled();
+    expect(runtime.voiceFns.announce).not.toHaveBeenCalledWith(
+      expect.stringContaining("Dictation started")
+    );
+    // The leading audio is never gated on the mic signal.
+    expect(runtime.voiceInput.sendAudioChunk).toHaveBeenCalledTimes(2);
+
+    const speech = new Int16Array(2400);
+    speech[100] = -4;
+    handler?.(pcmEvent(speech));
+    handler?.(pcmEvent(speech.slice()));
+
+    expect(runtime.voiceFns.setMicSignal).toHaveBeenCalledTimes(1);
+    expect(runtime.voiceFns.setMicSignal).toHaveBeenCalledWith("live");
+    expect(
+      runtime.voiceFns.announce.mock.calls.filter(([text]) => text.startsWith("Dictation started"))
+    ).toHaveLength(1);
+    expect(runtime.voiceInput.sendAudioChunk).toHaveBeenCalledTimes(4);
+  });
+
+  it("MIC_NOISE_FLOOR_CLAIMS_LISTENING_BEFORE_SPEECH", async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+    const handler = runtime.createdWorkletNodes[0]?.port.onmessage;
+
+    // A quiet room after noise suppression: well under the diagnostic
+    // speech-level floor, but plainly not digital silence.
+    const roomTone = new Int16Array(2400);
+    roomTone[5] = 10;
+    roomTone[50] = -9;
+    roomTone[500] = 6;
+    handler?.(pcmEvent(roomTone));
+
+    expect(runtime.voiceFns.setMicSignal).toHaveBeenCalledTimes(1);
+    expect(runtime.voiceFns.setMicSignal).toHaveBeenCalledWith("live");
+    expect(runtime.voiceFns.announce).toHaveBeenCalledWith(
+      expect.stringContaining("Dictation started")
+    );
+  });
+
+  it("MIC_SILENT_AFTER_GRACE_WINDOW_THEN_RECOVERS", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+      const handler = runtime.createdWorkletNodes[0]?.port.onmessage;
+      handler?.(pcmEvent(new Int16Array(2400)));
+
+      vi.advanceTimersByTime(2_999);
+      expect(runtime.voiceFns.setMicSignal).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(runtime.voiceFns.setMicSignal).toHaveBeenCalledWith("silent");
+      expect(runtime.voiceFns.announce).toHaveBeenCalledWith("No audio from the microphone yet.");
+
+      const speech = new Int16Array(2400);
+      speech[0] = 1200;
+      handler?.(pcmEvent(speech));
+      expect(runtime.voiceFns.setMicSignal).toHaveBeenLastCalledWith("live");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("MIC_SILENCE_GRACE_ONLY_COUNTS_UNPAUSED_CAPTURE", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+      runtime.voiceState.status = "recording";
+
+      voiceRecordingService.pause();
+      vi.advanceTimersByTime(10_000);
+      expect(runtime.voiceFns.setMicSignal).not.toHaveBeenCalledWith("silent");
+
+      runtime.voiceState.status = "paused";
+      voiceRecordingService.resume();
+      runtime.voiceState.status = "recording";
+      vi.advanceTimersByTime(3_000);
+      expect(runtime.voiceFns.setMicSignal).toHaveBeenCalledWith("silent");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("MIC_STALE_CAPTURE_CANNOT_MARK_NEW_SESSION_LIVE", async () => {
+    runtime.getUserMediaQueue.push(createStream(), createStream());
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+    const staleHandler = runtime.createdWorkletNodes[0]?.port.onmessage;
+    expect(staleHandler).toBeTypeOf("function");
+
+    await voiceRecordingService.start({ panelId: "panel-2", panelTitle: "Panel Two" });
+    expect(runtime.voiceState.activeTarget?.panelId).toBe("panel-2");
+    runtime.voiceFns.setMicSignal.mockClear();
+    runtime.voiceFns.announce.mockClear();
+
+    const speech = new Int16Array(2400);
+    speech[0] = 1200;
+    staleHandler?.(pcmEvent(speech));
+
+    expect(runtime.voiceFns.setMicSignal).not.toHaveBeenCalled();
+    expect(runtime.voiceFns.announce).not.toHaveBeenCalled();
+    expect(runtime.voiceState.micSignal).toBe("pending");
+  });
+
+  it("MIC_SILENCE_TIMER_CLEARED_ON_STOP", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+      await voiceRecordingService.stop();
+      runtime.voiceFns.setMicSignal.mockClear();
+
+      vi.advanceTimersByTime(10_000);
+      expect(runtime.voiceFns.setMicSignal).not.toHaveBeenCalledWith("silent");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("STOP_DURING_CONNECTING_IGNORES_RACE", async () => {

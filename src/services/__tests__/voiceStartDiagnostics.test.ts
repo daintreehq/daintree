@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  MIC_LIVE_PEAK_THRESHOLD,
   SIGNAL_PEAK_THRESHOLD,
   hasRealSignal,
+  isMicLive,
   measurePcm16Chunk,
   summarizeOpeningChunks,
 } from "../voiceStartDiagnostics";
@@ -41,6 +43,19 @@ describe("measurePcm16Chunk", () => {
     const threshold = Math.ceil(SIGNAL_PEAK_THRESHOLD * 32768);
     expect(hasRealSignal(measurePcm16Chunk(Int16Array.from([1, -2, 3, 0])))).toBe(false);
     expect(hasRealSignal(measurePcm16Chunk(Int16Array.from([0, threshold])))).toBe(true);
+  });
+
+  it("counts a quiet noise floor as a live mic while it stays below the diagnostic signal floor", () => {
+    const noiseFloor = measurePcm16Chunk(Int16Array.from([0, 10, -7, 4, -10, 2]));
+    expect(isMicLive(noiseFloor)).toBe(true);
+    expect(hasRealSignal(noiseFloor)).toBe(false);
+  });
+
+  it("keeps ±3 warm-up dither and digital silence below the mic-live floor", () => {
+    expect(MIC_LIVE_PEAK_THRESHOLD * 32768).toBe(4);
+    expect(isMicLive(measurePcm16Chunk(new Int16Array(2400)))).toBe(false);
+    expect(isMicLive(measurePcm16Chunk(Int16Array.from([0, 3, -3, 1, -2])))).toBe(false);
+    expect(isMicLive(measurePcm16Chunk(Int16Array.from([0, -4])))).toBe(true);
   });
 });
 

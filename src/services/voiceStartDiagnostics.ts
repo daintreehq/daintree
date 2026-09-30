@@ -45,6 +45,18 @@ export function hasRealSignal(stats: PcmChunkStats): boolean {
   return stats.peak >= SIGNAL_PEAK_THRESHOLD;
 }
 
+/**
+ * Mic-liveness floor: a peak of 4 LSB on PCM16, just above ±3 warm-up dither.
+ * Deliberately far below SIGNAL_PEAK_THRESHOLD — liveness asks "is the mic
+ * delivering anything but digital silence", so a quiet room's noise floor must
+ * count before the user speaks, whereas the diagnostic floor is speech-ish.
+ */
+export const MIC_LIVE_PEAK_THRESHOLD = 4 / 32768;
+
+export function isMicLive(stats: PcmChunkStats): boolean {
+  return stats.peak >= MIC_LIVE_PEAK_THRESHOLD;
+}
+
 const round4 = (value: number) => Number(value.toFixed(4));
 
 /**
