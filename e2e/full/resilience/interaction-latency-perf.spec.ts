@@ -11,6 +11,12 @@ import { addAndSwitchToProject } from "../../helpers/workflows";
 import { connectGitHub, makeFixtureIssue, stubRepoStats } from "../../helpers/githubHelpers";
 import { seedNotificationHistory } from "../../helpers/notifications";
 import {
+  installProjectPlugin,
+  openProjectPluginPanel,
+  trustProjectPlugins,
+  waitForProjectPluginPanelKind,
+} from "../../helpers/projectPlugins";
+import {
   armProbe,
   installProbe,
   probeResult,
@@ -69,6 +75,54 @@ const BRANCHES = [
   "feat/hotel",
 ];
 
+// A project plugin, so it takes the third-party path: trusted, then activated
+// in a forked worker the first time its view opens. Zero-build; the view
+// renders kit components so the host's kit and styles load as they would for a
+// real plugin.
+const BENCH_PLUGIN = "acme.ilatview";
+const BENCH_PLUGIN_ROOT = '[data-testid="ilat-plugin-root"]';
+const BENCH_PLUGIN_VIEW = String.raw`
+import { createElement as h } from "react";
+import { Button, Icon, useDaintreeTheme } from "@daintreehq/plugin-ui";
+export default function View() {
+  const theme = useDaintreeTheme();
+  return h(
+    "div",
+    { "data-testid": "ilat-plugin-root", "data-color-mode": theme.colorMode, className: "flex gap-2 p-3" },
+    h(Button, { icon: "check" }, "Run"),
+    h(Icon, { name: "activity", "aria-label": "Activity" })
+  );
+}
+`;
+
+function installBenchPlugin(repoDir: string): void {
+  installProjectPlugin(repoDir, BENCH_PLUGIN, {
+    manifest: {
+      version: "0.1.0",
+      scope: "project",
+      displayName: "Latency Probe",
+      main: "dist/index.mjs",
+      engines: { daintree: ">=0.11.0" },
+      capabilities: [],
+      contributes: {
+        panels: [
+          {
+            id: "main",
+            name: "Latency Probe",
+            iconId: "puzzle",
+            color: "var(--theme-category-orange)",
+          },
+        ],
+        views: [{ id: "main", componentPath: "dist/panel.js", location: "panel" }],
+      },
+    },
+    files: {
+      "dist/index.mjs": "export async function activate() { return () => {}; }\n",
+      "dist/panel.js": BENCH_PLUGIN_VIEW,
+    },
+  });
+}
+
 interface Fixture {
   mainDir: string;
   otherDir: string;
@@ -105,6 +159,9 @@ function buildFixture(): Fixture {
   writeSourceTree(main.dir, 16, 20);
   writeFileSync(path.join(main.dir, "bench-a.ts"), "export const BENCH_FILE_ALPHA = 1;\n");
   writeFileSync(path.join(main.dir, "bench-b.ts"), "export const BENCH_FILE_BRAVO = 2;\n");
+  // Committed with the seed, so the plugin adds nothing to git status for the
+  // worktree and review scenarios.
+  installBenchPlugin(main.dir);
   git("add -A", main.dir);
   git('commit -m "seed source tree"', main.dir);
   const wtRoot = path.join(path.dirname(main.dir), `${path.basename(main.dir)}-worktrees`);
@@ -487,6 +544,19 @@ function scenarios(): Scenario[] {
   let closePanel = "";
   let shellPanel = "";
   let typed = "";
+  let pluginKindId = "";
+  let pluginDockPanel = "";
+  // Trusting is deferred to the first plugin scenario so every other scenario
+  // runs with the plugin dark, as before it existed.
+  const ensurePluginKind = async (): Promise<string> => {
+    if (!pluginKindId) {
+      await trustProjectPlugins(page);
+      pluginKindId = (await waitForProjectPluginPanelKind(page, BENCH_PLUGIN, "main", 30_000))
+        .kindId;
+    }
+    return pluginKindId;
+  };
+  const pluginOption = () => `[id=${JSON.stringify(`panel-option-${pluginKindId}`)}]`;
   return [
     // ── Toolbar popovers and palettes ──────────────────────────────────
     {
@@ -1214,6 +1284,76 @@ function scenarios(): Scenario[] {
         text: rep % 2 === 0 ? "BENCH_FILE_ALPHA" : "BENCH_FILE_BRAVO",
       }),
       cleanup: killNewPanels,
+    },
+    {
+      // Rep 0 is the cold open: the worker forks and activates, and the view
+      // module and plugin styles load for the first time. Later reps reopen
+      // with the worker running.
+      id: "plugin-panel-open",
+      label: "Open worker plugin panel (panel palette) → view painted",
+      setup: async () => {
+        await ensurePluginKind();
+      },
+      before: async () => {
+        await snapshotPanels();
+        await page.keyboard.press(`${MOD}+n`);
+        await waitVisible(pluginOption());
+      },
+      trigger: () => hoverClick(pluginOption()),
+      cond: () => ({ kind: "newPanel", inner: BENCH_PLUGIN_ROOT }),
+      after: async () => {
+        await escapeUntilGone('[role="dialog"][aria-label="Panel palette"]');
+        await killNewPanels();
+      },
+    },
+    {
+      id: "plugin-panel-dock-open",
+      label: "Switch to docked worker plugin panel → view painted",
+      setup: async () => {
+        await snapshotPanels();
+        pluginDockPanel = await openProjectPluginPanel(page, await ensurePluginKind(), {
+          reuseExisting: false,
+        });
+        await waitVisible(`[data-panel-id="${pluginDockPanel}"] ${BENCH_PLUGIN_ROOT}`, 60_000);
+        await page
+          .locator(`[data-panel-id="${pluginDockPanel}"] [data-testid="panel-move-to-dock"]`)
+          .first()
+          .click();
+        await waitVisible(`[data-dock-item-id="${pluginDockPanel}"]`);
+      },
+      before: async () => {
+        for (let i = 0; i < 3; i++) {
+          const open = await page
+            .locator(`[data-dock-portal-target="${pluginDockPanel}"] ${BENCH_PLUGIN_ROOT}`)
+            .first()
+            .isVisible()
+            .catch(() => false);
+          if (!open) break;
+          await escape();
+          await page.waitForTimeout(250);
+        }
+      },
+      trigger: () => hoverClick(`[data-dock-item-id="${pluginDockPanel}"] [data-dock-item]`),
+      cond: () => ({
+        kind: "visible",
+        selector: `[data-dock-portal-target="${pluginDockPanel}"] ${BENCH_PLUGIN_ROOT}`,
+      }),
+      after: async () => {
+        await page.waitForTimeout(600);
+        await page
+          .locator(`[data-dock-item-id="${pluginDockPanel}"] [data-dock-item]`)
+          .first()
+          .click();
+        await waitGone(`[data-dock-portal-target="${pluginDockPanel}"] ${BENCH_PLUGIN_ROOT}`);
+        await page.waitForTimeout(600);
+      },
+      // Unload the plugin and its worker so later scenarios run as they did
+      // before it existed.
+      cleanup: async () => {
+        await killNewPanels();
+        await page.evaluate(() => window.electron.plugin.setProjectPluginTrust("disabled"));
+        pluginKindId = "";
+      },
     },
     {
       id: "panel-maximize",
