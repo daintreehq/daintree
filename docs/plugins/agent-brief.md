@@ -245,7 +245,7 @@ What the no-build path costs, and what it doesn't: the worker cannot import npm 
 
 | You need | Use |
 | --- | --- |
-| A button, an icon button, a menu | `Button` (no `variant` is the accent primary: one per region; `secondary`, `outline`, `ghost`, `subtle` for the rest), `IconButton`, `DropdownMenu` |
+| A button, an icon button, a menu | `Button` (no `variant` is the accent primary: one per region; `secondary`, `outline`, `ghost`, `subtle` for the rest), `IconButton`, `DropdownMenu`, `ContextMenu` for a right-click menu |
 | A form | `Input` (including `number`, `date`, `time`), `Textarea`, `Select`, `Checkbox`, `Switch`, `SegmentedControl`, `SearchField`, wrapped in `FormField`; `FormFieldGroup` for one label over a set of controls |
 | A list or table of any length | `DataTable`, `VirtualList` with `ListRow`, `LogView` for output, `HighlightedText` for the matches in a filtered row |
 | A filter bar | `FilterChip` (toggles, or removable "Status: Open" chips) beside a `SearchField` |
@@ -257,9 +257,10 @@ What the no-build path costs, and what it doesn't: the worker cannot import npm 
 | A date, a date range, a calendar | `DatePicker`, `DateRangePicker` (with `presets`), `Calendar`; values are ISO `"YYYY-MM-DD"` strings, never `Date` objects |
 | An age that stays current ("5m ago") | `TimeAgo` |
 | Pane chrome | `PaneHeader`, `Toolbar` with `ToolbarButton`, `Tabs` |
+| App navigation | `NavList` for the left rail, `Breadcrumbs`, `Stepper` for a wizard, `CommandPalette` for a quick switcher |
 | Loading, empty, error | `PaneState` for the whole pane, `EmptyState`, `Callout` (`severity="error"` with a Retry `action` is the error banner), `Skeleton`, `Spinner`, `ProgressBar` |
 | A status chip | `Badge` |
-| A confirm or a modal | `ConfirmDialog`, `Dialog` |
+| A confirm or a modal | `ConfirmDialog`, `Dialog`, `Sheet` for a record's detail or edit form beside its list |
 | People on something | `Avatar`, `AvatarGroup` for several |
 | An icon | `Icon` by name (`git-branch`, `folder-open`, `alert-triangle`, `worktree`, …) |
 | Rendered Markdown | `Markdown` |

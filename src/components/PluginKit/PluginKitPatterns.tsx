@@ -72,7 +72,7 @@ import {
 } from "./kitProps";
 
 /** A kit icon source at a fixed size: names resolve to host glyphs, elements get sized. */
-function sizedIcon(source: unknown, className: string): ReactNode {
+export function sizedIcon(source: unknown, className: string): ReactNode {
   if (typeof source === "string") {
     const Glyph = resolvePluginKitIcon(source);
     return Glyph ? <Glyph className={className} aria-hidden="true" /> : null;

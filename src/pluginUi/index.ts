@@ -7,6 +7,12 @@ import { isValidElement, type ComponentType, type ReactNode } from "react";
 import type {
   PluginAvatarGroupProps,
   PluginAvatarProps,
+  PluginBreadcrumbsProps,
+  PluginCommandPaletteProps,
+  PluginContextMenuProps,
+  PluginNavListProps,
+  PluginSheetProps,
+  PluginStepperProps,
   PluginBadgeProps,
   PluginButtonProps,
   PluginCalendarProps,
@@ -308,6 +314,25 @@ export const DateRangePicker: ComponentType<PluginDateRangePickerProps> = fromKi
   (kit) => kit.DateRangePicker
 );
 export const TimeAgo: ComponentType<PluginTimeAgoProps> = fromKit("TimeAgo", (kit) => kit.TimeAgo);
+// Context menus, sheets, command palettes, breadcrumbs, nav lists and steppers.
+
+export const ContextMenu: ComponentType<PluginContextMenuProps> = fromKit(
+  "ContextMenu",
+  (kit) => kit.ContextMenu,
+  // The surface is there from the first frame; only the menu waits on the kit.
+  ({ children }) => (isValidElement(children) ? children : null)
+);
+export const Sheet: ComponentType<PluginSheetProps> = fromKit("Sheet", (kit) => kit.Sheet);
+export const CommandPalette: ComponentType<PluginCommandPaletteProps> = fromKit(
+  "CommandPalette",
+  (kit) => kit.CommandPalette
+);
+export const Breadcrumbs: ComponentType<PluginBreadcrumbsProps> = fromKit(
+  "Breadcrumbs",
+  (kit) => kit.Breadcrumbs
+);
+export const NavList: ComponentType<PluginNavListProps> = fromKit("NavList", (kit) => kit.NavList);
+export const Stepper: ComponentType<PluginStepperProps> = fromKit("Stepper", (kit) => kit.Stepper);
 
 export type {
   PluginMarkdownProps as MarkdownProps,
@@ -410,4 +435,16 @@ export type {
   PluginDateRangePickerProps as DateRangePickerProps,
   PluginDateRangePreset as DateRangePreset,
   PluginTimeAgoProps as TimeAgoProps,
+  PluginContextMenuProps as ContextMenuProps,
+  PluginSheetProps as SheetProps,
+  PluginCommandPaletteProps as CommandPaletteProps,
+  PluginCommandPaletteItem as CommandPaletteItem,
+  PluginBreadcrumbsProps as BreadcrumbsProps,
+  PluginBreadcrumbItem as BreadcrumbItem,
+  PluginNavListProps as NavListProps,
+  PluginNavListItem as NavListItem,
+  PluginNavListSection as NavListSection,
+  PluginStepperProps as StepperProps,
+  PluginStepperStep as StepperStep,
+  PluginStepState as StepState,
 } from "@shared/types/plugin-sdk-react";
