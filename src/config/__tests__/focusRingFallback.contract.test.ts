@@ -580,6 +580,12 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "Parent shows focus: the diff search bar wrapper has `focus-within:border-accent-primary focus-within:ring-1`",
   },
   {
+    file: "src/components/PluginKit/PluginKitInputs.tsx",
+    fragment: "h-6 min-w-24 flex-1 bg-transparent px-1 text-text-primary outline-hidden",
+    reason:
+      "Parent shows focus: the kit TagInput's box wraps the tags and this input as one field and paints the ring once via has-[input:focus-visible], as WorktreePathPicker does",
+  },
+  {
     file: "src/components/Project/QuickRun.tsx",
     fragment: "focus:outline-hidden min-w-0",
     reason:
