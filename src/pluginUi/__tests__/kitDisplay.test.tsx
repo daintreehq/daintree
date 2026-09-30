@@ -1,12 +1,23 @@
 // @vitest-environment jsdom
 import { createElement, useState, type ComponentType, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { VirtuosoMockContext } from "react-virtuoso";
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn(() => Promise.resolve()) },
 }));
+
+// jsdom lays nothing out, so nothing ever clips; a test flips this to stand in
+// for a label the chip's slot is ellipsising.
+const truncation = vi.hoisted(() => ({ clipped: false }));
+vi.mock("@/hooks/useTruncationDetection", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/hooks/useTruncationDetection")>();
+  return {
+    ...actual,
+    useTruncationDetection: () => ({ ref: () => {}, isTruncated: truncation.clipped }),
+  };
+});
 
 import * as kit from "@daintreehq/plugin-ui";
 import {
@@ -23,7 +34,10 @@ beforeAll(async () => {
   await kit.whenPluginUiReady();
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  truncation.clipped = false;
+});
 
 function withTooltips(children: ReactNode) {
   return createElement(TooltipProvider, null, children);
@@ -46,7 +60,7 @@ function loose<P extends object>(component: ComponentType<P>, props: object) {
 describe("FilterChip", () => {
   it("toggles uncontrolled and reports the next state", () => {
     const onSelectedChange = vi.fn();
-    render(createElement(kit.FilterChip, { onSelectedChange, count: 3 }, "Open"));
+    render(withTooltips(createElement(kit.FilterChip, { onSelectedChange, count: 3 }, "Open")));
     const chip = screen.getByRole("button", { name: "Open (3)" });
     expect(chip.getAttribute("aria-pressed")).toBe("false");
     expect(chip.hasAttribute("data-filter-chip")).toBe(true);
@@ -56,7 +70,7 @@ describe("FilterChip", () => {
   });
 
   it("groups the digits of a large count", () => {
-    render(createElement(kit.FilterChip, { count: 2172 }, "Active"));
+    render(withTooltips(createElement(kit.FilterChip, { count: 2172 }, "Active")));
     expect(screen.getByRole("button", { name: "Active (2,172)" })).toBeTruthy();
   });
 
@@ -65,7 +79,7 @@ describe("FilterChip", () => {
       const [on, setOn] = useState(true);
       return createElement(kit.FilterChip, { selected: on, onSelectedChange: setOn }, "Mine");
     }
-    render(createElement(Controlled));
+    render(withTooltips(createElement(Controlled)));
     const chip = screen.getByRole("button", { name: "Mine" });
     expect(chip.getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(chip);
@@ -97,16 +111,46 @@ describe("FilterChip", () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
+  it("ellipsises a long label beside a fixed × and reads it in full in the tooltip", async () => {
+    const long = "Company: Contoso Pharmaceuticals International";
+    render(
+      withTooltips(
+        createElement(kit.FilterChip, { onRemove: () => {}, "data-testid": "company" }, long)
+      )
+    );
+    const chip = screen.getByTestId("company");
+    const label = chip.querySelector("[data-filter-chip-label]")!;
+    expect(label.textContent).toBe(long);
+    expect(label.className.split(" ")).toEqual(expect.arrayContaining(["min-w-0", "truncate"]));
+    expect(chip.querySelector("svg")?.getAttribute("class")).toContain("shrink-0");
+    cleanup();
+
+    truncation.clipped = true;
+    render(
+      withTooltips(
+        createElement(kit.FilterChip, { onRemove: () => {}, "data-testid": "company" }, long)
+      )
+    );
+    await act(async () => {
+      fireEvent.pointerMove(screen.getByTestId("company"), { pointerType: "mouse" });
+    });
+    const tip = await screen.findByRole("tooltip", { hidden: true }, { timeout: 3000 });
+    // One tooltip: the full label first, then what a click does.
+    expect(tip.textContent).toBe(`${long}Remove filter`);
+  });
+
   it("degrades bad props to a plain chip", () => {
     expect(() =>
       render(
-        loose(kit.FilterChip, {
-          selected: "yes",
-          count: "many",
-          onRemove: "nope",
-          onSelectedChange: 4,
-          children: { label: "x" },
-        })
+        withTooltips(
+          loose(kit.FilterChip, {
+            selected: "yes",
+            count: "many",
+            onRemove: "nope",
+            onSelectedChange: 4,
+            children: { label: "x" },
+          })
+        )
       )
     ).not.toThrow();
     const chip = screen.getByRole("button");
