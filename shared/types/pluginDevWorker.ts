@@ -38,6 +38,7 @@ import type {
   PluginMcpToolAnnotations,
   PluginSendToAgentOptions,
   PluginFsReadFilesEncoding,
+  PluginFsWalkOptions,
   PluginWorktreeSnapshot,
   PluginWorktreesChange,
 } from "./plugin.js";
@@ -74,6 +75,7 @@ export type PluginHostCallMethod =
   | "fs.mkdir"
   | "fs.appendFile"
   | "fs.readdir"
+  | "fs.walk"
   | "fs.stat"
   | "fs.watch"
   | "git.status"
@@ -125,6 +127,9 @@ export type PluginHostNotifyMethod =
  * own panel transitions (#11301) — the host replays each live panel's current
  * phase at subscribe time. `system-wake` streams machine resume pulses
  * (#12175); nothing is replayed for it, since a pulse has no resting state.
+ * `push-listeners` streams whether any renderer in scope listens on the push
+ * channel named by `key` — a boolean, the current value first, then each
+ * change — backing the worker's synchronous `host.hasListeners`.
  */
 export type PluginWorkerSubscriptionKind =
   | "active-worktree"
@@ -134,6 +139,7 @@ export type PluginWorkerSubscriptionKind =
   | "agent-state"
   | "panel-lifecycle"
   | "system-wake"
+  | "push-listeners"
   | "process-exit"
   | "process-crash"
   | "process-data";
@@ -567,6 +573,12 @@ export interface FsReadFilesParams {
   paths: readonly string[];
   encoding?: PluginFsReadFilesEncoding;
   maxBytesPerFile?: number;
+}
+
+/** Params for `fs.walk` (`host-call`); options are forwarded as given, minus the signal. */
+export interface FsWalkParams {
+  root: string;
+  options?: Omit<PluginFsWalkOptions, "signal">;
 }
 
 /**

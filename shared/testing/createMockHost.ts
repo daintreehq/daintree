@@ -72,6 +72,9 @@ import type {
   PluginFsApi,
   PluginFsReadFilesEntry,
   PluginFsReadFilesOptions,
+  PluginFsWalkEntry,
+  PluginFsWalkOptions,
+  PluginFsWalkResult,
   PluginWorktreesResult,
   PluginAgentSnapshot,
   PluginAgentPane,
@@ -305,6 +308,14 @@ export interface MockHostState {
    * waiting for a window to regain focus.
    */
   simulateSystemWake(event: PluginSystemWakeEvent): void;
+
+  /**
+   * Set what `host.hasListeners(channel)` answers and, when that changes it,
+   * call every `onDidChangeListeners(channel, …)` callback. Every channel
+   * starts out listened to — the answer a real host gives before it has heard
+   * from a renderer — so a plugin that never asks is unaffected.
+   */
+  simulateListenersChange(channel: string, hasListeners: boolean): void;
 
   /**
    * Pre-seed a deterministic `dispatch()` result for one action id. Overrides
@@ -713,6 +724,26 @@ function mockWorktreeChange(
   };
 }
 
+/** The host's `fs.walk` bounds (electron/services/plugin/pluginFsWalk.ts). */
+const MOCK_WALK_DEFAULT_LIMIT = 10_000;
+const MOCK_WALK_MAX_LIMIT = 50_000;
+const MOCK_WALK_MAX_DEPTH = 64;
+const MOCK_WALK_MAX_PATTERNS = 64;
+
+/** The host's walk ordering: by path, with `/` before every other character. */
+function compareWalkPaths(a: string, b: string): number {
+  const length = Math.min(a.length, b.length);
+  for (let i = 0; i < length; i++) {
+    const ca = a.charCodeAt(i);
+    const cb = b.charCodeAt(i);
+    if (ca === cb) continue;
+    if (ca === 47) return -1;
+    if (cb === 47) return 1;
+    return ca - cb;
+  }
+  return a.length - b.length;
+}
+
 /** The host's `fs.readFiles` bounds (electron/services/plugin/pluginFsReadFiles.ts). */
 const MOCK_READ_FILES_MAX_PATHS = 1024;
 const MOCK_READ_FILES_MAX_TOTAL_BYTES = PLUGIN_INVOKE_MAX_RESULT_BYTES / 2;
@@ -783,6 +814,17 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const agentStateSubs = new Set<(snapshot: PluginAgentSnapshot) => void>();
   const panelLifecycleSubs = new Set<(event: PluginPanelLifecycleEvent) => void>();
   const systemWakeSubs = new Set<(event: PluginSystemWakeEvent) => void>();
+  /** Channels a test marked as having no listener; every other channel has one. */
+  const unlistenedChannels = new Set<string>();
+  const listenerSubs = new Map<string, Set<(hasListeners: boolean) => void>>();
+  const assertListenerChannel = (method: string, channel: unknown): string => {
+    if (isInvalidChannel(channel, false)) {
+      throw new Error(
+        `${method}: channel must be a non-empty string without colons: ${String(channel)}`
+      );
+    }
+    return channel as string;
+  };
 
   // Capability gating + active-agent presence for the agent APIs (#10617).
   // Default permissive so manifest-free tests are unaffected; restrict to assert
@@ -1334,6 +1376,25 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       }
       postToPanelCalls.push({ channel, payload, panelId: panelId ?? null });
       return Promise.resolve();
+    },
+    hasListeners(channel) {
+      return !unlistenedChannels.has(assertListenerChannel("hasListeners", channel));
+    },
+    onDidChangeListeners(channel, callback) {
+      const name = assertListenerChannel("onDidChangeListeners", channel);
+      if (typeof callback !== "function") {
+        throw new Error("onDidChangeListeners: callback must be a function");
+      }
+      let subs = listenerSubs.get(name);
+      if (!subs) {
+        subs = new Set();
+        listenerSubs.set(name, subs);
+      }
+      const registered = (hasListeners: boolean): void => callback(hasListeners);
+      subs.add(registered);
+      return () => {
+        listenerSubs.get(name)?.delete(registered);
+      };
     },
     async getActiveWorktree() {
       if (worktreesResult) {
@@ -2024,6 +2085,111 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
           return collator.compare(a.name, b.name);
         });
       },
+      // Same validation, ordering, pruning and truncation as the host, over the
+      // mock's files and directories. There is no git here, so
+      // `respectGitignore` is accepted and has nothing to act on; nor are there
+      // symlinks to skip.
+      async walk(root: string, walkOptions?: PluginFsWalkOptions): Promise<PluginFsWalkResult> {
+        const fail = (why: string): never => {
+          throw new Error(`VALIDATION: plugin "${pluginId}" fs.walk: ${why}`);
+        };
+        if (typeof root !== "string" || root.length === 0) fail("root must be a non-empty string");
+        if (
+          walkOptions !== undefined &&
+          (walkOptions === null || typeof walkOptions !== "object")
+        ) {
+          fail("options must be an object");
+        }
+        const opts = walkOptions ?? {};
+        const patterns = (name: string, value: unknown): readonly string[] | null => {
+          if (value === undefined) return null;
+          if (!Array.isArray(value)) return fail(`${name} must be an array of glob strings`);
+          if (value.length > MOCK_WALK_MAX_PATTERNS) {
+            fail(`${name} takes at most ${MOCK_WALK_MAX_PATTERNS} patterns (got ${value.length})`);
+          }
+          if (value.some((p) => typeof p !== "string" || p.length === 0 || p.length > 1024)) {
+            fail(`every ${name} pattern must be a non-empty string of at most 1024 characters`);
+          }
+          return value as string[];
+        };
+        const integer = (name: string, value: unknown, max: number, fallback: number): number => {
+          if (value === undefined) return fallback;
+          if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > max) {
+            return fail(`${name} must be an integer from 1 to ${max}`);
+          }
+          return value;
+        };
+        const include = patterns("include", opts.include);
+        const exclude = patterns("exclude", opts.exclude) ?? [];
+        const maxDepth = integer(
+          "maxDepth",
+          opts.maxDepth,
+          MOCK_WALK_MAX_DEPTH,
+          MOCK_WALK_MAX_DEPTH
+        );
+        const limit = integer("limit", opts.limit, MOCK_WALK_MAX_LIMIT, MOCK_WALK_DEFAULT_LIMIT);
+        for (const name of ["respectGitignore", "includeSize"] as const) {
+          if (opts[name] !== undefined && typeof opts[name] !== "boolean") {
+            fail(`${name} must be a boolean`);
+          }
+        }
+        opts.signal?.throwIfAborted();
+        const base = trimDir(root);
+        if (!mockDirExists(base)) {
+          throw new Error(`ENOENT: mock fs has no directory "${root}"`);
+        }
+        const prefix = base === "/" ? "/" : `${base}/`;
+        const types = new Map<string, "file" | "dir">();
+        const addDirs = (rel: string): void => {
+          const parts = rel.split("/");
+          for (let i = 1; i < parts.length; i++) types.set(parts.slice(0, i).join("/"), "dir");
+        };
+        for (const made of fsDirs) {
+          if (!made.startsWith(prefix)) continue;
+          const rel = made.slice(prefix.length);
+          if (rel.length === 0) continue;
+          addDirs(rel);
+          types.set(rel, "dir");
+        }
+        for (const [filePath] of fsFiles) {
+          if (!filePath.startsWith(prefix)) continue;
+          const rel = filePath.slice(prefix.length);
+          addDirs(rel);
+          if (!types.has(rel)) types.set(rel, "file");
+        }
+        const matches = (list: readonly string[], rel: string): boolean =>
+          list.some((pattern) => path.posix.matchesGlob(rel, pattern));
+        const depthOf = (rel: string): number => rel.split("/").length;
+        // Breadth-first, like the host: truncation keeps the shallowest entries.
+        const candidates = [...types.entries()]
+          .filter(([rel]) => depthOf(rel) <= maxDepth)
+          .filter(([rel]) => {
+            // An excluded entry is left out, and so is everything under an
+            // excluded directory.
+            const parts = rel.split("/");
+            for (let i = 1; i <= parts.length; i++) {
+              if (matches(exclude, parts.slice(0, i).join("/"))) return false;
+            }
+            return true;
+          })
+          .sort(([a], [b]) => depthOf(a) - depthOf(b) || compareWalkPaths(a, b));
+        const entries: PluginFsWalkEntry[] = [];
+        let truncated = false;
+        for (const [rel, type] of candidates) {
+          if (include !== null && !matches(include, rel)) continue;
+          if (entries.length >= limit) {
+            truncated = true;
+            break;
+          }
+          const size =
+            opts.includeSize === true && type === "file"
+              ? new TextEncoder().encode(fsFiles.get(`${prefix}${rel}`) ?? "").length
+              : undefined;
+          entries.push(size === undefined ? { path: rel, type } : { path: rel, type, size });
+        }
+        entries.sort((a, b) => compareWalkPaths(a.path, b.path));
+        return { entries, truncated };
+      },
       async stat(targetPath, options) {
         options?.signal?.throwIfAborted();
         return {
@@ -2234,6 +2400,13 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       if (frozen.phase === "removed") panelPhases.delete(frozen.panelId);
       else if (frozen.phase !== "restored") panelPhases.set(frozen.panelId, frozen);
       for (const cb of [...panelLifecycleSubs]) cb(frozen);
+    },
+    simulateListenersChange(channel, hasListeners) {
+      const was = !unlistenedChannels.has(channel);
+      if (hasListeners) unlistenedChannels.delete(channel);
+      else unlistenedChannels.add(channel);
+      if (was === hasListeners) return;
+      for (const cb of [...(listenerSubs.get(channel) ?? [])]) cb(hasListeners);
     },
     simulateSystemWake(event) {
       // Frozen like production delivery, for the same reason.

@@ -4105,6 +4105,51 @@ type PluginFsReadFilesEntry<C = string> = {
         readonly message: string;
     };
 };
+/** Options for {@link PluginFsApi.walk}. */
+interface PluginFsWalkOptions extends PluginHostCallOptions {
+    /**
+     * Globs (the `path.matchesGlob` dialect: `*`, `**`, `?`, `[…]`, `{a,b}`)
+     * matched against each entry's root-relative path. When given, only entries
+     * matching at least one are returned; directories are still walked, so
+     * `["**\/*.ts"]` finds every TypeScript file. At most 64 patterns.
+     */
+    include?: readonly string[];
+    /**
+     * Globs, as for `include`. A matching entry is left out, and a matching
+     * directory is not descended into — `["node_modules", "**\/dist"]` prunes
+     * both. At most 64 patterns.
+     */
+    exclude?: readonly string[];
+    /**
+     * How deep to go: `1` lists `root`'s own children (like {@link PluginFsApi.readdir}),
+     * `2` their children too, and so on. An integer from 1 to 64; omitted means
+     * 64.
+     */
+    maxDepth?: number;
+    /**
+     * Most entries to return, counted after `include` filtering. An integer from
+     * 1 to 50,000; default 10,000. Past it the result is `truncated`.
+     */
+    limit?: number;
+    /** Leave out what git ignores (see {@link PluginFsApi.walk}). Default `true`. */
+    respectGitignore?: boolean;
+    /** Report each file's size in bytes. Default `false`; it costs one stat per file. */
+    includeSize?: boolean;
+}
+/** One entry of a {@link PluginFsApi.walk} result. */
+interface PluginFsWalkEntry {
+    /** Relative to the walk's root, `/`-separated, never starting with `/` or `./`. */
+    readonly path: string;
+    readonly type: "file" | "dir";
+    /** Size in bytes, for a file, when {@link PluginFsWalkOptions.includeSize} was set. */
+    readonly size?: number;
+}
+/** What a {@link PluginFsApi.walk} call returns. */
+interface PluginFsWalkResult {
+    readonly entries: PluginFsWalkEntry[];
+    /** True when the walk stopped at `limit` or the result budget with entries left unlisted. */
+    readonly truncated: boolean;
+}
 /** Options for {@link PluginFsApi.watch}. */
 interface PluginFsWatchOptions extends PluginHostCallOptions {
     /**
@@ -4281,6 +4326,41 @@ interface PluginFsApi {
      * browser uses — see {@link PluginFsReaddirOptions.detail}.
      */
     readdir(dirPath: string, options?: PluginFsReaddirOptions): Promise<PluginFsDirEntry[]>;
+    /**
+     * List a directory tree in one host round trip — the recursive counterpart
+     * to {@link readdir} for a file search or an index build, where one
+     * `readdir` per directory costs a round trip each.
+     *
+     * `root` gets exactly the checks {@link readdir} applies (containment
+     * against `scopes.fs.allowedPaths` and the root's read capability), and the
+     * walk stays inside it: symbolic links are neither followed nor listed, and
+     * a directory's listing is dropped unless it still resolves to where it was
+     * reached both before and after it is read. (Like {@link readdir}, reads are
+     * by pathname, so a directory swapped for a link and back between those two
+     * checks is not excluded.)
+     *
+     * Entries carry the path relative to `root`, with `/` separators, and come
+     * back sorted by path, directories before the entries inside them. The walk
+     * is breadth-first, so when `limit` (or the host's result budget) cuts it
+     * short, `truncated` is `true` and what was kept is the shallowest part of
+     * the tree; the same tree always truncates the same way. Besides `limit`,
+     * the host bounds a walk's cost — at most 200,000 directory entries
+     * examined and 1,000,000 glob tests — and a walk that reaches either bound
+     * returns what it had with `truncated: true`.
+     *
+     * With `respectGitignore` (the default), inside a git repository an entry
+     * git ignores — and not tracked — is left out and not descended into,
+     * `.git` itself is skipped, and a nested repository or submodule is listed
+     * but not entered. Outside a repository the option has no effect. On macOS
+     * and Windows, a repository that tracks a file matching its own ignore rules
+     * is walked without ignore filtering, since git can misreport such a file
+     * under a different letter case as ignored.
+     *
+     * Optional in the type so hand-written {@link PluginFsApi} fakes keep
+     * compiling; Daintree's host, the worker host and `createMockHost` always
+     * provide it.
+     */
+    walk?(root: string, options?: PluginFsWalkOptions): Promise<PluginFsWalkResult>;
     /** Stat a path. Rejects on a missing read capability or an out-of-scope path. */
     stat(targetPath: string, options?: PluginHostCallOptions): Promise<PluginFsStat>;
     /**
@@ -4934,6 +5014,37 @@ interface PluginHostApi extends PluginActivationApi {
      */
     postToPanel(channel: string, payload: unknown, panelId?: string | null): Promise<void>;
     /**
+     * Whether any renderer this host pushes to may currently be subscribed to
+     * `channel` — through `window.electron.plugin.on` / `onPanel` or the SDK
+     * hooks built on them. Use it to stop producing pushes nobody will receive:
+     * the host already drops a push for every renderer that reported no
+     * subscriber for it, but the work of computing the payload is the plugin's.
+     *
+     * Errs towards `true`: a renderer that has not reported its subscriptions
+     * yet (one just created) counts as listening, and in a worker the first
+     * call for a channel answers `true` until the host's first report for it
+     * arrives a moment later. `false` once the plugin is unloaded. Synchronous
+     * and cheap — read it on every produce.
+     *
+     * A view that subscribes after a push was skipped did not miss anything it
+     * could have caught: the push would have reached no subscriber. A view must
+     * still pull its initial state when it mounts, as it always had to.
+     *
+     * Optional in the type so hand-written {@link PluginHostApi} fakes keep
+     * compiling; Daintree's host, the worker host and `createMockHost` always
+     * provide it. `channel` is validated like {@link postToPanel}'s.
+     */
+    hasListeners?(channel: string): boolean;
+    /**
+     * Call `callback` whenever {@link hasListeners} for `channel` changes —
+     * with `false` when the last subscriber anywhere in scope goes away, `true`
+     * when one appears. Not called with the current value; read that with
+     * {@link hasListeners}. Returns a disposer; every registration is also
+     * removed when the plugin unloads. Not revoke-guarded — callable any time
+     * after activation, like {@link postToPanel}.
+     */
+    onDidChangeListeners?(channel: string, callback: (hasListeners: boolean) => void): () => void;
+    /**
      * Returns the currently-active worktree (`isCurrent === true`) of the project
      * this host reads for, as a frozen snapshot, or `null` if none is active.
      *
@@ -5583,6 +5694,13 @@ interface SyncedCollection<T> {
 interface SyncedCollectionHost {
     registerHandler(channel: string, handler: (...args: unknown[]) => unknown): Promise<void>;
     postToPanel(channel: string, payload: unknown): Promise<void>;
+    /**
+     * Optional: whether any view may be listening on a channel. When the host
+     * provides it (Daintree hosts that know which renderers subscribe), deltas
+     * are not built or sent while it answers `false`. Older hosts omit it and
+     * every delta is sent, as before.
+     */
+    hasListeners?(channel: string): boolean;
 }
 /** The invoke channel a synced collection's snapshot is served on. */
 declare function syncedCollectionSnapshotChannel(channel: string): string;
@@ -5610,11 +5728,12 @@ declare function syncedCollectionSnapshotChannel(channel: string): string;
  * only then. Apart from one empty delta announcing this instance (so a view
  * left over from a previous worker resyncs), nothing is pushed until a view
  * has pulled a snapshot: a plugin whose panel was never opened sends no deltas.
- * Once one has, deltas are broadcast for the rest of the collection's life,
- * even after every view has closed, because nothing tells a worker that a
- * broadcast has no subscriber; the host dropping such a push before IPC is
- * the fix, and belongs on the host side.
+ * Once one has, deltas are sent only while the host reports a listener on the
+ * channel (`host.hasListeners`, where the host has it): with every view closed
+ * the changes are dropped unsent, and a view that opens again pulls a fresh
+ * snapshot, which carries them. On a host without `hasListeners`, deltas are
+ * sent for the rest of the collection's life.
  */
 declare function createSyncedCollection<T>(host: SyncedCollectionHost, channel: string, options: SyncedCollectionOptions<T>): Promise<SyncedCollection<T>>;
 
-export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type SyncedCollection, type SyncedCollectionDelta, type SyncedCollectionHost, type SyncedCollectionOptions, type SyncedCollectionSnapshot, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };
+export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWalkEntry, type PluginFsWalkOptions, type PluginFsWalkResult, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type SyncedCollection, type SyncedCollectionDelta, type SyncedCollectionHost, type SyncedCollectionOptions, type SyncedCollectionSnapshot, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };

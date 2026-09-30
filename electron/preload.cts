@@ -1144,6 +1144,48 @@ function _attachPluginPushBatchListener(): void {
   });
 }
 
+// Main skips a plugin push for this renderer when nothing here would receive it
+// (#plugin-perf). What it needs is which `(fullChannel, panelId)` buckets have a
+// subscriber, so that set is reported whole whenever a bucket appears or
+// empties — coalesced to one message per microtask, and never for a second
+// listener joining a bucket that already has one. A whole-set report is
+// idempotent: a lost or reordered one cannot leave main's view drifting.
+//
+// The first report goes out at preload load, empty, so a renderer that never
+// shows a plugin view stops receiving plugin broadcasts at all. Until it lands
+// main delivers everything, as before.
+let _pluginListenersDirty = false;
+let _pluginListenersQueued = false;
+function _markPluginListenersChanged(): void {
+  _pluginListenersDirty = true;
+  if (_pluginListenersQueued) return;
+  _pluginListenersQueued = true;
+  queueMicrotask(_flushPluginListenerReport);
+}
+function _flushPluginListenerReport(): void {
+  _pluginListenersQueued = false;
+  if (!_pluginListenersDirty) return;
+  _pluginListenersDirty = false;
+  const listeners: Array<[string, string | null]> = [];
+  for (const [fullChannel, entry] of _pluginPushChannels) {
+    for (const panelId of entry.subscribers.keys()) listeners.push([fullChannel, panelId]);
+  }
+  try {
+    ipcRenderer.send(CHANNELS.PLUGIN_REPORT_PUSH_LISTENERS, listeners);
+  } catch {
+    // A page tearing down; its successor reports afresh.
+  }
+}
+_markPluginListenersChanged();
+
+// A plugin invoke from this renderer — a view pulling its snapshot right after
+// subscribing — must not reach main ahead of the subscription it follows, or
+// the worker could answer and push before main knows anyone is listening.
+function _pluginInvoke(channel: string, ...args: unknown[]): Promise<unknown> {
+  _flushPluginListenerReport();
+  return _unwrappingInvoke(channel, ...args);
+}
+
 // One main-side subscription per preload, however many listeners the page adds.
 const _perfSnapshotListeners = new Set<(snapshots: PluginPerfSnapshot[]) => void>();
 let _perfSnapshotDetach: (() => void) | null = null;
@@ -1212,6 +1254,7 @@ function _pluginPushOn(
   if (!set) {
     set = new Set();
     entry.subscribers.set(panelId, set);
+    _markPluginListenersChanged();
   }
   // Fresh wrapper per subscription so the same callback can subscribe twice and
   // each cleanup removes only its own registration.
@@ -1223,7 +1266,10 @@ function _pluginPushOn(
     const currentSet = current.subscribers.get(panelId);
     if (currentSet) {
       currentSet.delete(wrapped);
-      if (currentSet.size === 0) current.subscribers.delete(panelId);
+      if (currentSet.size === 0) {
+        current.subscribers.delete(panelId);
+        _markPluginListenersChanged();
+      }
     }
     // Tear down the physical listener once every panelId bucket is empty, so an
     // unmounted view doesn't leak its channel listener.
@@ -3394,7 +3440,7 @@ function buildElectronApi(): ElectronAPI {
     },
 
     plugin: {
-      ...buildPluginPreloadBindings(_unwrappingInvoke),
+      ...buildPluginPreloadBindings(_pluginInvoke),
       ...buildPluginMetricsPreloadBindings(_unwrappingInvoke),
 
       // Fire-and-forget: renderer-side view cost observations, drained in batches.
@@ -3423,7 +3469,7 @@ function buildElectronApi(): ElectronAPI {
       // plugin:invoke uses raw ipcMain.handle with variadic args — its signature
       // can't be expressed through IpcInvokeMap, so it stays inline.
       invoke: (pluginId: string, channel: string, ...args: unknown[]) =>
-        _unwrappingInvoke(CHANNELS.PLUGIN_INVOKE, pluginId, channel, ...args),
+        _pluginInvoke(CHANNELS.PLUGIN_INVOKE, pluginId, channel, ...args),
 
       // Broadcast subscription: receives `host.postToPanel(channel, payload)`
       // and `host.broadcastToRenderer` pushes (envelope `panelId: null`) for

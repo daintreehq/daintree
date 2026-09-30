@@ -82,6 +82,9 @@ import { PLUGIN_PUSH_MAX_PAYLOAD_BYTES } from "../../../shared/config/pluginBudg
 import { assertPayloadWithinLimit, snapshotPayload } from "./pluginPayloadLimits.js";
 import { resolveInvokeTimeoutMs, runWithInvokeDeadline } from "./pluginInvokeDeadline.js";
 import { flushPluginPushes, routePluginPush, withPushFlushBarrier } from "./pluginPushBatcher.js";
+import { getPluginPushListenerRegistry } from "./pluginPushListenerRegistry.js";
+import { runWalk, validateWalkCall } from "./pluginFsWalk.js";
+import { checkIgnoredPaths, hasTrackedIgnoredPaths } from "../../utils/gitCheckIgnore.js";
 import { isAppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -732,6 +735,16 @@ export function createHost(
     });
   };
 
+  /** Validate a push channel name and return its `plugin:{pluginId}:{channel}` transport. */
+  const pushListenerChannel = (method: string, channel: unknown): string => {
+    if (typeof channel !== "string" || channel.length === 0 || channel.includes(":")) {
+      throw new Error(
+        `Plugin "${pluginId}" ${method}: channel must be a non-empty string without colons: ${String(channel)}`
+      );
+    }
+    return `plugin:${pluginId}:${channel}`;
+  };
+
   /**
    * Wrap a channel handler in its invoke deadline. The wrapper keeps the
    * handler's declared arity, which the dispatch-time signature hint reads.
@@ -1182,6 +1195,37 @@ export function createHost(
         return Promise.reject(err);
       }
       return Promise.resolve();
+    },
+    // Neither is revoke-guarded: a plugin reads them from its own timers and
+    // subscription callbacks, like postToPanel. Liveness is membership.
+    hasListeners: (channel) => {
+      const transport = pushListenerChannel("hasListeners", channel);
+      if (!isBound()) return false;
+      return getPluginPushListenerRegistry().hasListeners(boundProjectId, transport);
+    },
+    onDidChangeListeners: (channel, callback) => {
+      const transport = pushListenerChannel("onDidChangeListeners", channel);
+      if (typeof callback !== "function") {
+        throw new Error(`Plugin "${pluginId}" onDidChangeListeners: callback must be a function`);
+      }
+      if (!isBound()) return () => {};
+      const failures = createListenerFailureState();
+      const unwatch = getPluginPushListenerRegistry().watch(
+        boundProjectId,
+        transport,
+        (hasListeners) => {
+          if (!isBound()) return;
+          invokeTrackedListener(
+            failures,
+            pluginId,
+            "onDidChangeListeners",
+            () => callback(hasListeners),
+            () => dispose()
+          );
+        }
+      );
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, unwatch);
+      return dispose;
     },
     getActiveWorktree: async () => {
       const result = await getWorktreesResult();
@@ -3534,6 +3578,41 @@ function buildFsApi(
         isFile: e.isFile(),
         isSymbolicLink: e.isSymbolicLink(),
       }));
+    },
+    walk: async (root, options) => {
+      options?.signal?.throwIfAborted();
+      requireLoaded("walk");
+      requireAnyReadCap("walk");
+      const call = validateWalkCall(pluginId, root, options);
+      // The same gate readdir applies, once, on the root: every path the walk
+      // then reads is beneath the realpath containment resolved, reached
+      // without following a link (see runWalk).
+      const { resolved, rootClass } = await containWithClass(root);
+      call.signal?.throwIfAborted();
+      requireLoaded("walk");
+      requireReadCapForClass("walk", rootClass);
+      return runWalk(
+        resolved,
+        call,
+        {
+          readdir: (dir) => fs.readdir(dir, { withFileTypes: true }),
+          realpath: (dir) => fs.realpath(dir),
+          fileSize: (file) =>
+            fs.lstat(file).then(
+              (stats) => (stats.isFile() ? stats.size : undefined),
+              () => undefined
+            ),
+          checkIgnored: (cwd, paths, signal) =>
+            checkIgnoredPaths(cwd, paths, { signal, timeoutMs: 10_000 }),
+          // Only where git's case-sensitive index lookup can disagree with the
+          // filesystem about a tracked file's spelling (see gitCheckIgnore).
+          ...((process.platform === "darwin" || process.platform === "win32") && {
+            hasTrackedIgnored: (cwd: string, signal: AbortSignal | undefined) =>
+              hasTrackedIgnoredPaths(cwd, { signal, timeoutMs: 10_000 }),
+          }),
+        },
+        () => requireLoaded("walk")
+      );
     },
     stat: async (targetPath, options) => {
       options?.signal?.throwIfAborted();

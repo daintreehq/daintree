@@ -119,6 +119,13 @@ export interface SyncedCollection<T> {
 export interface SyncedCollectionHost {
   registerHandler(channel: string, handler: (...args: unknown[]) => unknown): Promise<void>;
   postToPanel(channel: string, payload: unknown): Promise<void>;
+  /**
+   * Optional: whether any view may be listening on a channel. When the host
+   * provides it (Daintree hosts that know which renderers subscribe), deltas
+   * are not built or sent while it answers `false`. Older hosts omit it and
+   * every delta is sent, as before.
+   */
+  hasListeners?(channel: string): boolean;
 }
 
 /** The invoke channel a synced collection's snapshot is served on. */
@@ -156,10 +163,11 @@ function newEpoch(): string {
  * only then. Apart from one empty delta announcing this instance (so a view
  * left over from a previous worker resyncs), nothing is pushed until a view
  * has pulled a snapshot: a plugin whose panel was never opened sends no deltas.
- * Once one has, deltas are broadcast for the rest of the collection's life,
- * even after every view has closed, because nothing tells a worker that a
- * broadcast has no subscriber; the host dropping such a push before IPC is
- * the fix, and belongs on the host side.
+ * Once one has, deltas are sent only while the host reports a listener on the
+ * channel (`host.hasListeners`, where the host has it): with every view closed
+ * the changes are dropped unsent, and a view that opens again pulls a fresh
+ * snapshot, which carries them. On a host without `hasListeners`, deltas are
+ * sent for the rest of the collection's life.
  */
 export async function createSyncedCollection<T>(
   host: SyncedCollectionHost,
@@ -184,6 +192,18 @@ export async function createSyncedCollection<T>(
   let timer: ReturnType<typeof setTimeout> | null = null;
   let lastPost: Promise<void> = Promise.resolve();
   let warned = false;
+
+  const listening = (): boolean => {
+    if (typeof host.hasListeners !== "function") return true;
+    try {
+      return host.hasListeners(channel) !== false;
+    } catch {
+      return true;
+    }
+  };
+  // Read once now so a worker host starts tracking the channel before the
+  // first flush needs the answer.
+  listening();
 
   const dirty = (): boolean => pendingReset || pendingRemoves.size > 0 || pendingUpserts.size > 0;
   const clearPending = (): void => {
@@ -243,8 +263,10 @@ export async function createSyncedCollection<T>(
     if (!dirty()) return lastPost;
     // Before the first pull no view can be holding a snapshot to apply this
     // to: a view subscribes, then pulls, and drops every delta at or below the
-    // revision it pulled. The revision still advances.
-    if (!pulled || disposed) {
+    // revision it pulled. The revision still advances. The same holds while no
+    // view is subscribed at all: the next one to subscribe pulls first, and a
+    // view that somehow kept its snapshot sees the revision gap and resyncs.
+    if (!pulled || disposed || !listening()) {
       revision++;
       clearPending();
       return lastPost;

@@ -61,6 +61,7 @@ import type {
   UnregisterMcpToolsParams,
   FsPathParams,
   FsReadFilesParams,
+  FsWalkParams,
   PluginWorkerWorktreesEvent,
   FsWriteFileParams,
   FsAppendFileParams,
@@ -928,6 +929,19 @@ export class PluginDevWorkerMainBridge {
         const p = params as FsPathParams;
         return this.host.fs.readdir(p.path, { signal, ...(p.detail === true && { detail: true }) });
       }
+      case "fs.walk": {
+        const p = params as FsWalkParams;
+        const fsApi = this.host.fs;
+        if (!fsApi.walk) throw new Error("fs.walk is not available on this host");
+        // Options forwarded as sent so the host validates exactly what the
+        // worker passed; only the bridge's own signal is added.
+        const options: unknown = p.options;
+        if (options === undefined) return fsApi.walk(p.root, { signal });
+        if (options === null || typeof options !== "object") {
+          return fsApi.walk(p.root, options as never);
+        }
+        return fsApi.walk(p.root, { ...options, signal });
+      }
       case "fs.stat":
         return this.host.fs.stat((params as FsPathParams).path, { signal });
       case "fs.watch": {
@@ -1415,6 +1429,21 @@ export class PluginDevWorkerMainBridge {
         dispose = await this.host.onDidChangePanelLifecycle((event) => push(event));
       } else if (kind === "system-wake") {
         dispose = await this.host.onDidWake((event) => push(event));
+      } else if (kind === "push-listeners") {
+        const channel = msg.key;
+        if (!channel) {
+          logger.warn(`[${this.pluginId}] push-listeners subscribe missing key`);
+          return;
+        }
+        const { hasListeners, onDidChangeListeners } = this.host;
+        if (!hasListeners || !onDidChangeListeners) {
+          push(true);
+          return;
+        }
+        // Watch first, then send the current value, so no change can fall
+        // between the two. The worker ignores a value it already holds.
+        dispose = onDidChangeListeners.call(this.host, channel, (has) => push(has));
+        push(hasListeners.call(this.host, channel));
       } else if (kind === "process-exit" || kind === "process-crash" || kind === "process-data") {
         if (!msg.processId) {
           logger.warn(`[${this.pluginId}] ${kind} subscribe missing processId`);
