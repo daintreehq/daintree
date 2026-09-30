@@ -101,10 +101,10 @@ describe("ResizeHandle", () => {
   });
 
   // A grip is a UI component under WCAG 1.4.11: at rest it owes 3:1 against every
-  // surface a splitter sits on, in the dark and the light reference theme, and each
-  // state after rest has to read as a step up from it. Measured on the themes'
-  // real values so a retuned token trips this rather than the eye.
-  const GRIP_THEMES = ["daintree", "svalbard"] as const;
+  // surface a splitter sits on, and each state after rest has to read as a step up
+  // from it, on every built-in theme. Measured on the themes' real values so a
+  // retuned token trips this rather than the eye.
+  const GRIP_THEMES = BUILT_IN_APP_SCHEMES.map((scheme) => scheme.id);
   const SPLITTER_SURFACES = [
     "surface-canvas",
     "surface-sidebar",
@@ -112,6 +112,19 @@ describe("ResizeHandle", () => {
     "surface-panel",
     "surface-panel-elevated",
   ] as const;
+  type SplitterSurface = (typeof SPLITTER_SURFACES)[number];
+  // Where `selection-outline` falls short of 3:1 on a splitter surface. The theme
+  // contract holds it to 3:1 on palette surfaces (the sidebar on dark, the elevated
+  // panel on light), and these misses are on other surfaces. Exact, so a retuned
+  // theme that closes a gap has to drop its entry and a new gap fails.
+  const REST_GAPS_UNDER_3: Record<string, SplitterSurface[]> = {
+    arashiyama: ["surface-panel-elevated"],
+    highlands: ["surface-panel-elevated"],
+    hokkaido: ["surface-grid"],
+  };
+  // The surfaces `getPaletteSelectionWarnings` holds `selection-outline` to 3:1 on.
+  const promisedSurface = (type: string): SplitterSurface =>
+    type === "light" ? "surface-panel-elevated" : "surface-sidebar";
   const gripInk = (grip: Element, prefix: string) => {
     const token = tokens(grip).find(
       (x) => x.startsWith(`${prefix}bg-`) && !x.slice(prefix.length).includes(":")
@@ -119,17 +132,14 @@ describe("ResizeHandle", () => {
     if (!token) throw new Error(`no ${prefix || "rest"} ink`);
     return token.slice(prefix.length + "bg-".length);
   };
-  const worstContrast = (schemeId: string, ink: string) => {
-    const scheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === schemeId)!;
+  const schemeOf = (schemeId: string) => BUILT_IN_APP_SCHEMES.find((s) => s.id === schemeId)!;
+  const contrastOn = (schemeId: string, ink: string, surface: SplitterSurface) => {
+    const scheme = schemeOf(schemeId);
     const value = (scheme.tokens as Record<string, string>)[ink];
     if (!value) throw new Error(`${ink} is not a ${schemeId} theme token`);
-    return Math.min(
-      ...SPLITTER_SURFACES.map((surface) => {
-        const bg = scheme.tokens[surface];
-        const alpha = parseRgba(value);
-        return contrastRatio(alpha ? blendOverBackground(alpha.hex, bg, alpha.opacity) : value, bg);
-      })
-    );
+    const bg = scheme.tokens[surface];
+    const alpha = parseRgba(value);
+    return contrastRatio(alpha ? blendOverBackground(alpha.hex, bg, alpha.opacity) : value, bg);
   };
 
   it.each(cases)("draws the grip in theme tokens, never slash-alpha ink (%s)", (_, placement) => {
@@ -143,6 +153,11 @@ describe("ResizeHandle", () => {
     }
   });
 
+  it("covers every built-in theme", () => {
+    expect(GRIP_THEMES.length).toBeGreaterThanOrEqual(15);
+    for (const theme of Object.keys(REST_GAPS_UNDER_3)) expect(GRIP_THEMES).toContain(theme);
+  });
+
   it.each(cases)("rests at 3:1 and steps up to hover then focus (%s)", (_, placement) => {
     const { grip } = renderHandle(placement);
     const rest = gripInk(grip, "");
@@ -151,14 +166,26 @@ describe("ResizeHandle", () => {
     cleanup();
     const drag = gripInk(renderHandle(placement, { isResizing: true }).grip, "");
     for (const theme of GRIP_THEMES) {
-      const r = worstContrast(theme, rest);
-      const h = worstContrast(theme, hover);
-      const f = worstContrast(theme, focus);
-      const d = worstContrast(theme, drag);
-      expect(r, `${theme} resting grip ${rest}`).toBeGreaterThanOrEqual(3);
-      expect(h, `${theme} hover ${hover} over rest ${rest}`).toBeGreaterThan(r);
-      expect(f, `${theme} focus ${focus} over hover ${hover}`).toBeGreaterThan(h);
-      expect(d, `${theme} drag ${drag} over rest ${rest}`).toBeGreaterThan(r);
+      const under3: SplitterSurface[] = [];
+      for (const surface of SPLITTER_SURFACES) {
+        const at = `${theme} on ${surface}`;
+        const r = contrastOn(theme, rest, surface);
+        const h = contrastOn(theme, hover, surface);
+        const f = contrastOn(theme, focus, surface);
+        const d = contrastOn(theme, drag, surface);
+        if (r < 3) under3.push(surface);
+        expect(h, `${at}: hover ${hover} over rest ${rest}`).toBeGreaterThan(r);
+        expect(f, `${at}: focus ${focus} over hover ${hover}`).toBeGreaterThan(h);
+        expect(d, `${at}: drag ${drag} over rest ${rest}`).toBeGreaterThan(r);
+      }
+      const type = schemeOf(theme).type;
+      expect(
+        contrastOn(theme, rest, promisedSurface(type)),
+        `${theme} resting grip ${rest} on its palette surface`
+      ).toBeGreaterThanOrEqual(3);
+      expect(under3, `${theme} surfaces where the resting grip ${rest} is under 3:1`).toEqual(
+        REST_GAPS_UNDER_3[theme] ?? []
+      );
     }
   });
 
