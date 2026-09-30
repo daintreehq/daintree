@@ -7,6 +7,7 @@ import { isValidElement, type ComponentType, type ReactNode } from "react";
 import type {
   PluginAvatarProps,
   PluginBadgeProps,
+  PluginBarChartProps,
   PluginButtonProps,
   PluginCalloutProps,
   PluginCheckboxProps,
@@ -15,6 +16,7 @@ import type {
   PluginDataTableProps,
   PluginDialogProps,
   PluginDismissButtonProps,
+  PluginDonutChartProps,
   PluginDropdownMenuProps,
   PluginEmptyStateProps,
   PluginFileTreeProps,
@@ -25,6 +27,7 @@ import type {
   PluginInputProps,
   PluginKbdChordProps,
   PluginKbdProps,
+  PluginLineChartProps,
   PluginListRowProps,
   PluginLogViewProps,
   PluginPaneHeaderProps,
@@ -260,6 +263,21 @@ export const FormFieldGroup: ComponentType<PluginFormFieldGroupProps> = fromKit(
   (kit) => kit.FormFieldGroup
 );
 
+// Charts.
+
+export const BarChart: ComponentType<PluginBarChartProps> = fromKit(
+  "BarChart",
+  (kit) => kit.BarChart
+);
+export const LineChart: ComponentType<PluginLineChartProps> = fromKit(
+  "LineChart",
+  (kit) => kit.LineChart
+);
+export const DonutChart: ComponentType<PluginDonutChartProps> = fromKit(
+  "DonutChart",
+  (kit) => kit.DonutChart
+);
+
 export type {
   PluginMarkdownProps as MarkdownProps,
   PluginButtonProps as ButtonProps,
@@ -340,4 +358,10 @@ export type {
   PluginStatCardProps as StatCardProps,
   PluginSparklineProps as SparklineProps,
   PluginFormFieldGroupProps as FormFieldGroupProps,
+  PluginChartColor as ChartColor,
+  PluginChartSeries as ChartSeries,
+  PluginChartBaseProps as ChartBaseProps,
+  PluginBarChartProps as BarChartProps,
+  PluginLineChartProps as LineChartProps,
+  PluginDonutChartProps as DonutChartProps,
 } from "@shared/types/plugin-sdk-react";

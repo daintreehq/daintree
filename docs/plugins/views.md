@@ -313,6 +313,7 @@ export default function Notes({ pluginId, disposeSignal }) {
 | Forms | `Input` (text, search, email, url, password, number, tel, date, time, datetime-local), `Textarea`, `Select` (an `options` array; `value={null}` shows the placeholder again), `Checkbox`, `Switch`, `SegmentedControl`, `SearchField`, `FormField` (label, description and error wired to the control), `FormFieldGroup` (one label over a set of controls) |
 | Lists and tables | `VirtualList`, `DataTable`, `LogView`, `ListRow` with `useListNavigation`, `ScrollShadow`, `FileTree` |
 | Figures | `StatCard` (a labelled figure with an optional change), `Sparkline` |
+| Charts | `BarChart` (grouped or stacked, upright or across), `LineChart` (numeric or time x, optional area), `DonutChart` (parts of a whole) — all with a tooltip anchored to the point under the pointer or the arrow keys |
 | Pane chrome | `PaneHeader`, `Toolbar`, `ToolbarButton`, `Tabs` |
 | States and status | `PaneState` (a whole pane's `loading`, `empty` or `error`), `EmptyState`, `Callout` (an inline message; `severity="error"` with a Retry `action` is the error banner, `variant="strip"` the pane-wide band), `Badge`, `Spinner`, `SpinningIcon`, `ProgressBar`, `Skeleton`, `SkeletonBone`, `SkeletonText`, `SkeletonHint`, `SeverityIcon` |
 | Overlays | `Dialog`, `ConfirmDialog` (including the destructive typed-name gate), `Popover`, `PopoverSearchField`, `Tooltip`, `TruncatedTooltip` |
@@ -321,7 +322,7 @@ export default function Notes({ pluginId, disposeSignal }) {
 
 One status vocabulary runs through `Badge` `tone`, `Callout` `severity` and `SeverityIcon`: `error` (the same colour as `danger`, which `Badge` also accepts), `warning`, `success`, `info` and `neutral`.
 
-Not in the kit yet, so draw them with tokens: charts beyond a sparkline, and a tooltip anchored to a point rather than an element.
+Not in the kit, so draw them with tokens: other chart forms (a scatter, a heatmap, a graph of nodes), and a point tooltip on a canvas of your own; the kit charts carry theirs. Read the series colours from the `category-*` tokens with a fallback, in the kit charts' order (`blue`, `amber`, `indigo`, `orange`, `violet`, `teal`), so your chart and theirs agree.
 
 **Never `window.confirm`, `alert` or `prompt` in a view.** A native dialog ignores the theme, blocks the whole window and takes focus from every other panel. `ConfirmDialog` is the view-side confirm; `host.showConfirm` is the worker's.
 

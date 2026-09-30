@@ -58,6 +58,12 @@ declare module "@daintreehq/plugin-ui" {
     PluginDropdownMenuRadioItem,
     PluginEmptyStateProps,
     PluginFormFieldControlProps,
+    PluginBarChartProps,
+    PluginChartBaseProps,
+    PluginChartColor,
+    PluginChartSeries,
+    PluginDonutChartProps,
+    PluginLineChartProps,
     PluginFileTreeEntry,
     PluginFileTreeItem,
     PluginFileTreeNode,
@@ -199,6 +205,12 @@ declare module "@daintreehq/plugin-ui" {
   export type StatCardProps = PluginStatCardProps;
   export type SparklineProps = PluginSparklineProps;
   export type FormFieldGroupProps = PluginFormFieldGroupProps;
+  export type ChartColor = PluginChartColor;
+  export type ChartSeries = PluginChartSeries;
+  export type ChartBaseProps = PluginChartBaseProps;
+  export type BarChartProps = PluginBarChartProps;
+  export type LineChartProps = PluginLineChartProps;
+  export type DonutChartProps = PluginDonutChartProps;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -348,6 +360,12 @@ declare module "@daintreehq/plugin-ui" {
   export const Sparkline: ComponentType<SparklineProps>;
   /** One label, at a field label's size, over a set of controls such as checkboxes. */
   export const FormFieldGroup: ComponentType<FormFieldGroupProps>;
+  /** Categories as columns or bars, grouped or stacked, with a point tooltip and a hidden data table. */
+  export const BarChart: ComponentType<BarChartProps>;
+  /** Series over a numeric or time axis, optionally filled or smoothed, with a crosshair tooltip. */
+  export const LineChart: ComponentType<LineChartProps>;
+  /** Parts of a whole around a centre figure, with a legend of every value and share. */
+  export const DonutChart: ComponentType<DonutChartProps>;
 
   /**
    * The keyboard model of a list: one tab stop, Up/Down/Home/End move the

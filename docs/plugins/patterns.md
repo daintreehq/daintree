@@ -441,7 +441,7 @@ Use the one-second clock only where seconds matter; every component on it re-ren
 
 ## Draw on a canvas
 
-A chart, a graph, a simulation. Two things go wrong in a hand-rolled canvas view: its `requestAnimationFrame` loop keeps running at full rate in a backgrounded project (the DOM cannot tell it the project was switched away), and the colours it read once from `getComputedStyle` stay wrong after a theme switch — the lab's canvas kept painting a dark background under a light theme.
+A bar, line or donut chart is the kit's `BarChart`, `LineChart` or `DonutChart`, themed and keyboard-complete with nothing to draw. For anything else — a scatter, a graph of nodes, a simulation — two things go wrong in a hand-rolled canvas view: its `requestAnimationFrame` loop keeps running at full rate in a backgrounded project (the DOM cannot tell it the project was switched away), and the colours it read once from `getComputedStyle` stay wrong after a theme switch — the lab's canvas kept painting a dark background under a light theme.
 
 - **`useAnimationFrame((dt, time) => …, { signal: disposeSignal })`** runs the loop once per frame and pauses while the document is hidden or the project view is cached. `dt` is 0 on the first frame after a resume, so a simulation never jumps by the time it spent paused.
 - **`useDaintreeTheme()`** from `@daintreehq/plugin-ui` returns `{ colorMode, themeId, tokens }`, with every token resolved to a concrete sRGB colour (`#rrggbb`, or `rgba(…)` when translucent), and re-renders on a theme change. Outside React, `getDaintreeTheme()` reads it and `onDidChangeDaintreeTheme(listener)` subscribes, returning the unsubscribe. Token keys are the `--theme-*` names without the prefix (`surface-panel`, `text-primary`, `category-blue`, …).
