@@ -939,10 +939,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       }
 
       case "conversation.item.input_audio_transcription.failed": {
-        // Terminal for the item: no transcript is coming, so count the commit
-        // rather than making the stop wait out DRAIN_TIMEOUT_MS. Without an
-        // item id we can't tell which commit failed, so leave the backstop in
-        // charge. The error payload may echo user content — log its code only.
+        // Terminal for the item: no transcript is coming, so settle it as empty
+        // — releasing its commit-order slot and counting the commit — rather
+        // than making the stop wait out DRAIN_TIMEOUT_MS. Without an item id we
+        // can't tell which commit failed, so leave the hold and drain backstops
+        // in charge. The error payload may echo user content — log its code only.
         const itemId = typeof payload.item_id === "string" ? payload.item_id : undefined;
         const failure = payload.error as { code?: string; type?: string } | undefined;
         logWarn(`${P} ← transcription.failed`, {
