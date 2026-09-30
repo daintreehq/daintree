@@ -99,6 +99,8 @@ export interface SearchablePaletteProps<T> {
    * scoped menu or a global command surface rather than inheriting one.
    */
   tier: PaletteSurfaceTier;
+  /** The stacking layer, forwarded to `AppPaletteDialog`. */
+  zIndex?: "modal" | "nested";
   /** Placeholder text for search input */
   searchPlaceholder?: string;
   /** ARIA label for the search input */
@@ -233,6 +235,7 @@ export function SearchablePalette<T>({
   shortcut,
   ariaLabel,
   tier,
+  zIndex,
   searchPlaceholder = "Search",
   searchAriaLabel,
   searchAriaDescribedBy,
@@ -532,7 +535,13 @@ export function SearchablePalette<T>({
   const resolvedEmptyContent = emptyContent ?? autoEmptyChip;
 
   return (
-    <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel={ariaLabel} tier={tier}>
+    <AppPaletteDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      ariaLabel={ariaLabel}
+      tier={tier}
+      zIndex={zIndex}
+    >
       <AppPaletteDialog.Header
         label={label}
         shortcut={shortcut}

@@ -78,6 +78,35 @@ describe("Card", () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a clickable card's own ARIA references, adding its description to them", () => {
+    render(
+      createElement(
+        "div",
+        null,
+        createElement("h2", { id: "outer-heading" }, "Recent project"),
+        createElement("p", { id: "outer-hint" }, "Opens in a new window"),
+        untyped("Card", {
+          description: "Pick a folder",
+          onClick: () => {},
+          "aria-labelledby": "outer-heading",
+          "aria-describedby": "outer-hint",
+        })
+      )
+    );
+    const button = screen.getByRole("button", { name: "Recent project" });
+    const refs = (button.getAttribute("aria-describedby") ?? "").split(" ");
+    expect(refs.map((id) => document.getElementById(id)?.textContent)).toEqual([
+      "Pick a folder",
+      "Opens in a new window",
+    ]);
+    cleanup();
+
+    render(untyped("Card", { title: "Open project", onClick: () => {}, "aria-label": "Open it" }));
+    const named = screen.getByRole("button", { name: "Open it" });
+    expect(named.hasAttribute("aria-labelledby")).toBe(false);
+    expect(named.hasAttribute("aria-describedby")).toBe(false);
+  });
+
   it("disables a clickable card", () => {
     const onClick = vi.fn();
     render(createElement(kit.Card, { title: "Retry", onClick, disabled: true }));
@@ -242,6 +271,33 @@ describe("ResizableSplit", () => {
     vi.restoreAllMocks();
   });
 
+  it("drags from the drawn size when the container caps the pane", () => {
+    const onSizeChange = vi.fn();
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    const { container } = render(
+      createElement(kit.ResizableSplit, {
+        first: "a",
+        second: "b",
+        "aria-label": "Resize",
+        defaultSize: 640,
+        onSizeChange,
+      })
+    );
+    vi.spyOn(sizedPane(container), "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ width: 394, height: 200 })
+    );
+    const handle = separator();
+    fireEvent.mouseDown(handle, { button: 0, clientX: 400, detail: 1 });
+    fireEvent.mouseMove(document, { clientX: 380, buttons: 1 });
+    expect(sizedPane(container).style.width).toBe("374px");
+    fireEvent.mouseUp(document);
+    expect(onSizeChange.mock.calls).toEqual([[374]]);
+    vi.restoreAllMocks();
+  });
+
   it("follows a controlled size and snaps back when the parent keeps it", () => {
     render(
       createElement(kit.ResizableSplit, {
@@ -349,6 +405,33 @@ describe("Accordion and Disclosure", () => {
     // Closing the open one leaves none open.
     fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
     expect(screen.queryAllByRole("region")).toHaveLength(0);
+  });
+
+  it("shows at most one open section in single mode, whatever it is handed", () => {
+    const onValueChange = vi.fn();
+    render(createElement(kit.Accordion, { items, defaultValue: ["zz", "b", "a"], onValueChange }));
+    expect(screen.getAllByRole("region").map((region) => region.textContent)).toEqual([
+      "Advanced body",
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    expect(onValueChange).toHaveBeenLastCalledWith(["a"]);
+    cleanup();
+
+    function Switching() {
+      const [type, setType] = useState<"single" | "multiple">("multiple");
+      return createElement(
+        "div",
+        null,
+        createElement("button", { type: "button", onClick: () => setType("single") }, "One"),
+        createElement(kit.Accordion, { items, type, defaultValue: ["a", "d"] })
+      );
+    }
+    render(createElement(Switching));
+    expect(screen.getAllByRole("region")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "One" }));
+    expect(screen.getAllByRole("region").map((region) => region.textContent)).toEqual([
+      "General body",
+    ]);
   });
 
   it("opens many in multiple mode and reports the open set", () => {

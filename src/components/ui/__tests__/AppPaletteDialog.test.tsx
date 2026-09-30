@@ -610,3 +610,28 @@ describe("AppPaletteDialog.Body results region (#11431)", () => {
     expect(onNavigationKeyDown).not.toHaveBeenCalled();
   });
 });
+
+describe("AppPaletteDialog layer", () => {
+  it("sits at the modal tier by default and above a nested dialog on request", () => {
+    const { rerender } = render(
+      <AppPaletteDialog isOpen onClose={() => {}} ariaLabel="Layered" tier="command">
+        <input />
+      </AppPaletteDialog>
+    );
+    const scrim = () => screen.getByRole("dialog", { name: "Layered" }).parentElement!;
+    expect(scrim().className).toContain("z-[var(--z-modal)]");
+    rerender(
+      <AppPaletteDialog
+        isOpen
+        onClose={() => {}}
+        ariaLabel="Layered"
+        tier="command"
+        zIndex="nested"
+      >
+        <input />
+      </AppPaletteDialog>
+    );
+    expect(scrim().className).toContain("z-[calc(var(--z-nested-dialog)+1)]");
+    expect(scrim().className).not.toContain("z-[var(--z-modal)]");
+  });
+});
