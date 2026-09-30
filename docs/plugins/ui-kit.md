@@ -76,7 +76,7 @@ The host's view load path closes that gap for panel views: it starts loading the
 
 Tooltip bodies, menus, select lists, popovers and dialogs open in host overlays that portal to the document body, outside the view's style root. Two consequences:
 
-- **The overlay's own chrome takes no `className`.** Those props do not exist on `DropdownMenu`, `ContextMenu`, `Dialog`, `ConfirmDialog`, `Sheet`, `CommandPalette`, `Popover`, `Tooltip` or `Select`'s list: the chrome is the host's. `Select`'s `className` styles its trigger only.
+- **The overlay's own chrome takes no `className`.** Those props do not exist on `DropdownMenu`, `ContextMenu`, `Dialog`, `ConfirmDialog`, `Sheet`, `CommandPalette`, `Popover`, `EmojiPicker`, `Tooltip`, or the lists and calendars that `Select`, `Combobox`, `MultiSelect`, `DatePicker` and `DateRangePicker` open: the chrome is the host's. On those fields, `className` styles the trigger only.
 - **What you put inside an overlay is still yours.** Content you pass into a tooltip, popover or dialog body is re-marked as a plugin style root and tagged with your plugin, so your view's Tailwind classes apply there too and diagnostics (the Styles check, long-frame attribution) know whose it is. A portal you open yourself with `createPortal` must mark its container with the `PLUGIN_STYLE_ROOT_ATTRIBUTE` attribute from `@daintreehq/plugin-sdk`, or your classes will not reach it ([Views](./views.md)).
 
 Overlays stack at the popover tier. A dialog opened from inside another modal surface — Settings, another dialog — passes `layer="nested"`, and kit overlays opened inside that dialog lift themselves above it.
