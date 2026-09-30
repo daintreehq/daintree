@@ -43,6 +43,7 @@ import type {
   PluginDragDropProviderProps,
   PluginDragEvent,
   PluginDragId,
+  PluginDropdownMenuEntry,
   PluginKanbanColumn,
   PluginKanbanProps,
   PluginSortableListProps,
@@ -57,9 +58,11 @@ import { DROP_INDICATOR_LINE, DROP_TARGET_FRAME } from "@/components/DragDrop/dr
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import {
   DRAG_GHOST_OPACITY,
+  DRAG_OVERLAY_ENTRY_OPACITY,
+  DRAG_OVERLAY_ENTRY_SCALE,
+  DRAG_OVERLAY_SPRING_VISUAL_DURATION,
   EASE_SNAPPY,
   getUiAnimationDuration,
-  UI_ANIMATION_DURATION,
 } from "@/lib/animationUtils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { pluralize } from "@/lib/pluralize";
@@ -77,6 +80,7 @@ import {
   useKitOwnerAttributes,
 } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
+import { pluginKitNavigation } from "./PluginKitNavigation";
 import { isDragId, KitDragScopeContext } from "@/pluginUi/dnd";
 
 // Kit drags run on the host's own @dnd-kit, in a DndContext per kit component,
@@ -280,21 +284,92 @@ function boundaryElement(id: string): HTMLElement | null {
   return null;
 }
 
-// The lift's slight scale, as a keyframe: the copy mounts already lifted, so a
-// transition would never run. Skipped outright under reduced motion.
-const LIFT_SCALE = 1.02;
-
+// The host's pickup: the copy settles in from a touch smaller and fainter, as
+// DndProvider's ghost does. A keyframe, since the copy mounts already lifted
+// and a transition would never run. None at all under reduced motion.
 function liftOnMount(element: HTMLElement | null, skipMotion: boolean) {
-  if (!element) return;
-  if (skipMotion || typeof element.animate !== "function") {
-    element.style.scale = String(LIFT_SCALE);
-    return;
+  if (!element || skipMotion || typeof element.animate !== "function") return;
+  element.animate(
+    [
+      { scale: String(DRAG_OVERLAY_ENTRY_SCALE), opacity: DRAG_OVERLAY_ENTRY_OPACITY },
+      { scale: "1", opacity: 1 },
+    ],
+    { duration: DRAG_OVERLAY_SPRING_VISUAL_DURATION * 1000, easing: EASE_SNAPPY }
+  );
+}
+
+// The lifted copy of a reorder item rides beside the pointer, the way the
+// host's worktree ghost does, so it never sits on the drop line the pointer is
+// aiming at; it flips to the pointer's other side where the view runs out.
+const CURSOR_GAP_PX = 8;
+
+export function besideCursor(
+  cursor: { x: number; y: number } | null,
+  rect: { left: number; top: number; width: number; height: number } | null,
+  boundary: HTMLElement | null
+): { x: number; y: number } | null {
+  if (!cursor || !rect) return null;
+  const box = boundary?.getBoundingClientRect();
+  let left = cursor.x + CURSOR_GAP_PX;
+  if (box && left + rect.width > box.right && cursor.x - CURSOR_GAP_PX - rect.width >= box.left) {
+    left = cursor.x - CURSOR_GAP_PX - rect.width;
   }
-  element.animate([{ scale: "1" }, { scale: String(LIFT_SCALE) }], {
-    duration: UI_ANIMATION_DURATION,
-    easing: EASE_SNAPPY,
-    fill: "forwards",
-  });
+  let top = cursor.y - rect.height / 2;
+  if (box && box.width > 0) {
+    left = Math.max(box.left, Math.min(left, box.right - rect.width));
+    top = Math.max(box.top, Math.min(top, box.bottom - rect.height));
+  }
+  return { x: left - rect.left, y: top - rect.top };
+}
+
+// Auto-scroll for the reorder components: the scroller under the pointer
+// scrolls while the pointer holds within this band of its edge, and only then.
+// dnd-kit's own band is a fraction of each scroller, which on a narrow column
+// fired in the middle of the board and slid it sideways.
+const EDGE_BAND_PX = 40;
+const EDGE_STEP_PX = 14;
+
+export function edgeScroll(point: { x: number; y: number }, slow: boolean) {
+  if (typeof document.elementsFromPoint !== "function") return;
+  const hit = document
+    .elementsFromPoint(point.x, point.y)
+    .find((element) => element.closest("[data-kit-drag-overlay]") === null);
+  let scrolledX = false;
+  let scrolledY = false;
+  const step = (depth: number) => {
+    const size = Math.max(1, Math.round(EDGE_STEP_PX * Math.min(1, depth / EDGE_BAND_PX)));
+    return slow ? Math.max(1, Math.round(size / 2)) : size;
+  };
+  for (let element = hit ?? null; element; element = element.parentElement) {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    if (!scrolledY && /auto|scroll/.test(style.overflowY)) {
+      const up = rect.top + EDGE_BAND_PX - point.y;
+      const down = point.y - (rect.bottom - EDGE_BAND_PX);
+      const max = element.scrollHeight - element.clientHeight;
+      if (up > 0 && element.scrollTop > 0) {
+        element.scrollTop -= step(up);
+        scrolledY = true;
+      } else if (down > 0 && element.scrollTop < max) {
+        element.scrollTop += step(down);
+        scrolledY = true;
+      }
+    }
+    if (!scrolledX && /auto|scroll/.test(style.overflowX)) {
+      const back = rect.left + EDGE_BAND_PX - point.x;
+      const ahead = point.x - (rect.right - EDGE_BAND_PX);
+      const max = element.scrollWidth - element.clientWidth;
+      if (back > 0 && element.scrollLeft > 0) {
+        element.scrollLeft -= step(back);
+        scrolledX = true;
+      } else if (ahead > 0 && element.scrollLeft < max) {
+        element.scrollLeft += step(ahead);
+        scrolledX = true;
+      }
+    }
+    // Never past the view: the host's own scrollers are not the plugin's.
+    if (element.hasAttribute(PLUGIN_STYLE_ROOT_ATTRIBUTE)) break;
+  }
 }
 
 /**
@@ -699,6 +774,82 @@ function useReorderEngine({
     };
   }, [pointerHeld]);
 
+  const skipMotion = useShouldSkipMotion();
+  useEffect(() => {
+    if (!pointerHeld) return;
+    let frame = 0;
+    const tick = () => {
+      const point = pointRef.current;
+      if (point) edgeScroll(point, skipMotion);
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [pointerHeld, skipMotion]);
+
+  const overlayModifiers = useMemo<Modifier[]>(
+    () => [
+      ({ transform, overlayNodeRect }) => {
+        const lane = laneEls.current.values().next().value;
+        const view =
+          lane?.closest<HTMLElement>(`[${PLUGIN_STYLE_ROOT_ATTRIBUTE}]`) ?? document.body;
+        const offset = besideCursor(pointRef.current, overlayNodeRect, view);
+        return offset ? { ...transform, ...offset } : transform;
+      },
+    ],
+    []
+  );
+
+  /** The non-drag route to the same moves (WCAG 2.5.7): a menu command commits at once. */
+  const moveNow = (key: DragKey, to: Spot) => {
+    if (heldRef.current) return;
+    const from = spotOf(lanesRef.current, key);
+    if (!from || sameSpot(from, to)) return;
+    const label = labelOf(key);
+    refocusRef.current = key;
+    setMessage(`Moved ${label} to ${describeSpot(key, to)}.`);
+    onCommit({ key, label, mode: "keyboard", from, to });
+  };
+
+  const moveEntries = (key: DragKey): PluginDropdownMenuEntry[] => {
+    const spot = spotOf(lanes, key);
+    const lane = spot ? lanes.find((l) => l.id === spot.lane) : undefined;
+    if (!spot || !lane) return [];
+    const last = lane.keys.length - 1;
+    const x = lane.axis === "x";
+    const at = (index: number) => () => moveNow(key, { lane: lane.id, index });
+    const entries: PluginDropdownMenuEntry[] = [
+      {
+        label: x ? "Move left" : "Move up",
+        icon: x ? "arrow-left" : "arrow-up",
+        disabled: spot.index === 0,
+        onSelect: at(spot.index - 1),
+      },
+      {
+        label: x ? "Move right" : "Move down",
+        icon: x ? "arrow-right" : "arrow-down",
+        disabled: spot.index === last,
+        onSelect: at(spot.index + 1),
+      },
+      { label: x ? "Move to start" : "Move to top", disabled: spot.index === 0, onSelect: at(0) },
+      {
+        label: x ? "Move to end" : "Move to bottom",
+        disabled: spot.index === last,
+        onSelect: at(last),
+      },
+    ];
+    const across = lanes.filter((l) => l.id !== lane.id);
+    if (across.length > 0) entries.push({ type: "separator" });
+    const here = lanes.indexOf(lane);
+    for (const other of across) {
+      entries.push({
+        label: `Move to ${other.name ?? other.id}`,
+        icon: lanes.indexOf(other) < here ? "arrow-left" : "arrow-right",
+        onSelect: () => moveNow(key, { lane: other.id, index: other.keys.length }),
+      });
+    }
+    return entries;
+  };
   // A keyboard move re-renders the item somewhere else, which blurs it; put
   // focus back and keep it in view. Only after a move or an explicit drop or
   // cancel, never on any other render: a user who clicked away keeps focus
@@ -883,6 +1034,8 @@ function useReorderEngine({
     onHandleBlur,
     displayKeys,
     indicatorFor,
+    overlayModifiers,
+    moveEntries,
   };
 }
 
@@ -897,7 +1050,10 @@ const GRIP_OFFSET = "-my-1 -ml-1.5";
 const HANDLE_FOCUS =
   "outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary";
 
-/** The 2px insertion line, centred in the gap before or after an item. */
+/**
+ * The host's insertion line (the sidebar's recipe): 2px, square, the item's
+ * full width, centred in the gap before or after it.
+ */
 function DropLine({ axis, edge, gap }: { axis: "x" | "y"; edge: "before" | "after"; gap: number }) {
   const offset = -(gap / 2) - 1;
   const style: CSSProperties =
@@ -913,11 +1069,7 @@ function DropLine({ axis, edge, gap }: { axis: "x" | "y"; edge: "before" | "afte
       aria-hidden="true"
       data-kit-drop-indicator={edge}
       style={style}
-      className={cn(
-        DROP_INDICATOR_LINE,
-        axis === "y" ? "inset-x-1 h-0.5" : "inset-y-1 w-0.5",
-        "rounded-full"
-      )}
+      className={cn(DROP_INDICATOR_LINE, axis === "y" ? "inset-x-0 h-0.5" : "inset-y-0 w-0.5")}
     />
   );
 }
@@ -939,6 +1091,8 @@ interface ItemShellProps {
   children: ReactNode;
 }
 
+const KitContextMenu = pluginKitNavigation.ContextMenu;
+
 function ItemShell({
   engine,
   itemKey,
@@ -953,7 +1107,6 @@ function ItemShell({
   gripVerb,
   children,
 }: ItemShellProps) {
-  const skipMotion = useShouldSkipMotion();
   const held = engine.held;
   const isHeld = held?.key === itemKey;
   const keyboardLifted = isHeld && held.mode === "keyboard";
@@ -980,6 +1133,34 @@ function ItemShell({
     onBlur: () => engine.onHandleBlur(itemKey),
   };
 
+  const surface = (
+    <div
+      {...(handle ? {} : handleProps)}
+      style={ghost ? { opacity: DRAG_GHOST_OPACITY } : undefined}
+      className={cn(
+        surfaceClass,
+        !handle && HANDLE_FOCUS,
+        !handle && !disabled && "cursor-grab",
+        keyboardLifted && [LIFTED_SURFACE, "z-10"]
+      )}
+    >
+      {handle && !disabled ? (
+        <span
+          {...handleProps}
+          aria-label={`${gripVerb} ${label}`}
+          className={cn(DRAG_GRIP_CLASS, GRIP_OFFSET)}
+        >
+          <GripVertical aria-hidden="true" className={DRAG_GRIP_ICON_CLASS} />
+        </span>
+      ) : handle ? (
+        // A row that can't move keeps the grip's slot but not the grip, so
+        // every row's content stays on one rail.
+        <span aria-hidden="true" className={cn("h-6 w-6 shrink-0", GRIP_OFFSET)} />
+      ) : null}
+      {children}
+    </div>
+  );
+
   return (
     <div
       ref={(element) => {
@@ -1001,32 +1182,17 @@ function ItemShell({
       }}
     >
       {indicator === "before" ? <DropLine axis={axis} edge="before" gap={gap} /> : null}
-      <div
-        {...(handle ? {} : handleProps)}
-        style={ghost ? { opacity: DRAG_GHOST_OPACITY } : undefined}
-        className={cn(
-          surfaceClass,
-          !handle && HANDLE_FOCUS,
-          !handle && !disabled && "cursor-grab",
-          keyboardLifted && [LIFTED_SURFACE, "z-10 scale-[1.02]"],
-          !skipMotion && "transition-[scale] duration-150 ease-out"
-        )}
+      {/* Right-click or Shift+F10: the same moves without a drag. */}
+      <KitContextMenu
+        items={engine.moveEntries(itemKey)}
+        aria-label={`Move ${label}`}
+        // Not switched off while a drag is held: that would remount the
+        // surface under the held item and drop its focus. moveNow refuses
+        // while anything is held instead.
+        disabled={disabled}
       >
-        {handle && !disabled ? (
-          <span
-            {...handleProps}
-            aria-label={`${gripVerb} ${label}`}
-            className={cn(DRAG_GRIP_CLASS, GRIP_OFFSET)}
-          >
-            <GripVertical aria-hidden="true" className={DRAG_GRIP_ICON_CLASS} />
-          </span>
-        ) : handle ? (
-          // A row that can't move keeps the grip's slot but not the grip, so
-          // every row's content stays on one rail.
-          <span aria-hidden="true" className={cn("h-6 w-6 shrink-0", GRIP_OFFSET)} />
-        ) : null}
-        {children}
-      </div>
+        {surface}
+      </KitContextMenu>
       {indicator === "after" ? <DropLine axis={axis} edge="after" gap={gap} /> : null}
     </div>
   );
@@ -1110,8 +1276,16 @@ function registerIn<K>(map: Map<K, HTMLElement>, key: K, element: HTMLElement | 
 }
 
 const LIST_GAP_PX = 2;
-const ROW_SURFACE =
-  "relative flex min-w-0 items-center gap-2 rounded-[var(--radius-md)] border border-transparent px-2 py-1.5 text-sm text-text-primary hover:bg-overlay-subtle";
+const ROW_LAYOUT =
+  "relative flex min-w-0 items-center gap-2 rounded-[var(--radius-md)] px-2 py-1.5 text-sm text-text-primary";
+const ROW_SURFACE = cn(ROW_LAYOUT, "border border-transparent hover:bg-overlay-subtle");
+
+// The lifted copy wears the host's drag-preview material (WorktreeDragPreview,
+// TerminalDragPreview): the panel surface, its default edge and the floating
+// shadow. Presentational only, and never with a hover state: the pointer is
+// always over it.
+const PREVIEW_SURFACE =
+  "pointer-events-none border border-border-default bg-surface-panel shadow-[var(--theme-shadow-floating)]";
 
 interface ListEntry<T> {
   item: T;
@@ -1181,16 +1355,16 @@ function KitSortableList<T>(props: PluginSortableListProps<T>) {
   });
   const instructions = useInstructions(false);
   const sensors = usePointerSensors();
-  const autoScroll = useAutoScroll(axis === "y" ? "y" : "xy");
 
-  const renderContent = (key: DragKey, overlay: boolean) => {
+  /** `index` is the item's position as drawn: where a keyboard-held item would land. */
+  const renderContent = (key: DragKey, overlay: boolean, index: number) => {
     const entry = byKey.get(key);
     if (!entry || !render) return null;
     return node(
       attempt(
         () =>
           render(entry.item, {
-            index: entry.index,
+            index,
             isDragging: engine.held?.key === key,
             isOverlay: overlay,
             disabled: isDisabled(key),
@@ -1205,7 +1379,7 @@ function KitSortableList<T>(props: PluginSortableListProps<T>) {
       <DndContext
         sensors={sensors}
         collisionDetection={pointerFirst}
-        autoScroll={autoScroll}
+        autoScroll={false}
         accessibility={SILENT_ACCESSIBILITY}
         onDragStart={engine.dndHandlers.onDragStart}
         onDragEnd={engine.dndHandlers.onDragEnd}
@@ -1254,14 +1428,9 @@ function SortableListFrame({
   instructionsId: string;
   labelOf(key: DragKey): string;
   isDisabled(key: DragKey): boolean;
-  renderContent(key: DragKey, overlay: boolean): ReactNode;
+  renderContent(key: DragKey, overlay: boolean, index: number): ReactNode;
 }) {
   const { setNodeRef } = useDroppable({ id: "kit-lane:list" });
-  const boundaryId = useId();
-  const modifiers = useMemo(
-    () => [clampToBoundary(() => boundaryElement(boundaryId))],
-    [boundaryId]
-  );
   const indicator = engine.indicatorFor(lane);
   const held = engine.held;
   const axis = lane.axis;
@@ -1272,14 +1441,13 @@ function SortableListFrame({
         setNodeRef(element);
         registerIn(engine.laneEls.current, lane.id, element);
       }}
-      {...{ [BOUNDARY_ATTRIBUTE]: boundaryId }}
       role="list"
       aria-label={ariaLabel}
       data-no-dnd=""
       data-orientation={axis === "y" ? "vertical" : "horizontal"}
       className={cn("flex min-w-0 gap-0.5", axis === "y" ? "flex-col" : "flex-row", className)}
     >
-      {engine.displayKeys(lane).map((key) => (
+      {engine.displayKeys(lane).map((key, index) => (
         <ItemShell
           key={reactKey(key)}
           engine={engine}
@@ -1296,14 +1464,14 @@ function SortableListFrame({
           instructionsId={instructionsId}
           gripVerb="Reorder"
         >
-          <div className="min-w-0 flex-1">{renderContent(key, false)}</div>
+          <div className="min-w-0 flex-1">{renderContent(key, false, index)}</div>
         </ItemShell>
       ))}
-      <KitDragOverlay modifiers={modifiers}>
+      <KitDragOverlay modifiers={engine.overlayModifiers}>
         {held?.mode === "pointer" ? (
-          <div className={cn(ROW_SURFACE, "h-full w-full hover:bg-transparent", LIFTED_SURFACE)}>
+          <div className={cn(ROW_LAYOUT, "h-full w-full", PREVIEW_SURFACE)}>
             {handle ? <OverlayGrip /> : null}
-            <div className="min-w-0 flex-1">{renderContent(held.key, true)}</div>
+            <div className="min-w-0 flex-1">{renderContent(held.key, true, held.from.index)}</div>
           </div>
         ) : null}
       </KitDragOverlay>
@@ -1323,8 +1491,12 @@ const CARD_GAP_PX = 6;
 const COLUMN_WIDTH_DEFAULT = 272;
 const COLUMN_WIDTH_MIN = 200;
 const COLUMN_WIDTH_MAX = 480;
-const CARD_SURFACE =
-  "relative flex min-w-0 gap-2 rounded-[var(--radius-md)] border border-border-default bg-surface-panel px-3 py-2.5 text-left text-sm text-text-primary transition-[border-color] duration-150 ease-out hover:border-border-strong";
+const CARD_LAYOUT =
+  "relative flex min-w-0 gap-2 rounded-[var(--radius-md)] px-3 py-2.5 text-left text-sm text-text-primary";
+const CARD_SURFACE = cn(
+  CARD_LAYOUT,
+  "border border-border-default bg-surface-panel transition-[border-color] duration-150 ease-out hover:border-border-strong"
+);
 
 interface BoardCard<T> {
   card: T;
@@ -1437,7 +1609,7 @@ function KanbanColumnFrame({
   onToggleFold,
   actions,
   isOverTarget,
-  empty,
+  count,
   children,
 }: {
   engine: Engine;
@@ -1448,8 +1620,11 @@ function KanbanColumnFrame({
   onToggleFold(): void;
   actions: ReactNode;
   isOverTarget: boolean;
-  /** No card is drawn in it, counting a keyboard-held card moved in or out. */
-  empty: boolean;
+  /**
+   * Its cards as drawn, counting a keyboard-held card moved in or out, so the
+   * header's count and WIP warning preview the move.
+   */
+  count: number;
   children: ReactNode;
 }) {
   const titleId = `${useId()}title`;
@@ -1458,7 +1633,7 @@ function KanbanColumnFrame({
     setNodeRef(element);
     registerIn(engine.laneEls.current, column.id, element);
   };
-  const count = lane.keys.length;
+  const empty = count === 0;
 
   if (lane.folded) {
     return (
@@ -1467,6 +1642,7 @@ function KanbanColumnFrame({
         aria-labelledby={titleId}
         data-kit-kanban-column={column.id}
         data-state="collapsed"
+        data-drop-target={isOverTarget ? "true" : undefined}
         className={cn(
           "flex w-10 shrink-0 flex-col items-center gap-2 rounded-[var(--radius-lg)] border border-border-subtle bg-surface-inset py-2",
           isOverTarget && DROP_TARGET_FRAME
@@ -1489,8 +1665,14 @@ function KanbanColumnFrame({
       ref={register}
       aria-labelledby={titleId}
       data-kit-kanban-column={column.id}
+      data-drop-target={isOverTarget ? "true" : undefined}
       style={{ width }}
-      className="flex min-h-0 shrink-0 flex-col rounded-[var(--radius-lg)] border border-border-subtle bg-surface-inset"
+      className={cn(
+        "flex min-h-0 shrink-0 flex-col rounded-[var(--radius-lg)] border border-border-subtle bg-surface-inset",
+        // An empty column takes the drop whole, so it arms as a container,
+        // as the folded strip and the host's own drop targets do.
+        isOverTarget && DROP_TARGET_FRAME
+      )}
     >
       <header className="flex h-9 shrink-0 items-center gap-2 border-b border-border-subtle pr-1.5 pl-3">
         <h3 id={titleId} className={cn(SECTION_LABEL_CLASS, "min-w-0 truncate")}>
@@ -1511,8 +1693,7 @@ function KanbanColumnFrame({
         {!empty ? (
           children
         ) : (
-          <div className="relative px-2 py-6 text-center text-xs text-text-secondary">
-            {isOverTarget ? <DropLine axis="y" edge="before" gap={0} /> : null}
+          <div className="px-2 py-6 text-center text-xs text-text-secondary">
             {hasContent(column.empty) ? node(column.empty) : "No cards"}
           </div>
         )}
@@ -1621,23 +1802,18 @@ function KitKanban<T>(props: PluginKanbanProps<T>) {
   });
   const instructions = useInstructions(true);
   const sensors = usePointerSensors();
-  const autoScroll = useAutoScroll("xy");
-  const boundaryId = useId();
-  const modifiers = useMemo(
-    () => [clampToBoundary(() => boundaryElement(boundaryId))],
-    [boundaryId]
-  );
   const held = engine.held;
 
-  const renderContent = (key: DragKey, overlay: boolean) => {
+  /** `columnId` and `index` are where the card is drawn: where a keyboard-held card would land. */
+  const renderContent = (key: DragKey, overlay: boolean, columnId: string, index: number) => {
     const found = byKey.get(key);
     if (!found || !render) return null;
     return node(
       attempt(
         () =>
           render(found.card, {
-            columnId: found.column,
-            index: found.index,
+            columnId,
+            index,
             isDragging: held?.key === key,
             isOverlay: overlay,
             disabled: isDisabled(key),
@@ -1650,7 +1826,6 @@ function KitKanban<T>(props: PluginKanbanProps<T>) {
   return (
     <div
       {...pickRootProps(rest)}
-      {...{ [BOUNDARY_ATTRIBUTE]: boundaryId }}
       role="group"
       aria-label={str(ariaLabel) ?? "Board"}
       data-no-dnd=""
@@ -1662,7 +1837,7 @@ function KitKanban<T>(props: PluginKanbanProps<T>) {
       <DndContext
         sensors={sensors}
         collisionDetection={pointerFirst}
-        autoScroll={autoScroll}
+        autoScroll={false}
         accessibility={SILENT_ACCESSIBILITY}
         onDragStart={engine.dndHandlers.onDragStart}
         onDragEnd={engine.dndHandlers.onDragEnd}
@@ -1686,9 +1861,9 @@ function KitKanban<T>(props: PluginKanbanProps<T>) {
               onToggleFold={() => toggleFold(column.id)}
               actions={actionsOf ? node(attempt(() => actionsOf(column), null)) : null}
               isOverTarget={isOverTarget}
-              empty={shown.length === 0}
+              count={shown.length}
             >
-              {shown.map((key) => (
+              {shown.map((key, index) => (
                 <ItemShell
                   key={reactKey(key)}
                   engine={engine}
@@ -1705,17 +1880,19 @@ function KitKanban<T>(props: PluginKanbanProps<T>) {
                   instructionsId={instructions.id}
                   gripVerb="Move"
                 >
-                  <div className="min-w-0 flex-1">{renderContent(key, false)}</div>
+                  <div className="min-w-0 flex-1">{renderContent(key, false, lane.id, index)}</div>
                 </ItemShell>
               ))}
             </KanbanColumnFrame>
           );
         })}
-        <KitDragOverlay modifiers={modifiers}>
+        <KitDragOverlay modifiers={engine.overlayModifiers}>
           {held?.mode === "pointer" ? (
-            <div className={cn(CARD_SURFACE, "h-full w-full", LIFTED_SURFACE)}>
+            <div className={cn(CARD_LAYOUT, "h-full w-full", PREVIEW_SURFACE)}>
               {useHandle ? <OverlayGrip /> : null}
-              <div className="min-w-0 flex-1">{renderContent(held.key, true)}</div>
+              <div className="min-w-0 flex-1">
+                {renderContent(held.key, true, held.from.lane, held.from.index)}
+              </div>
             </div>
           ) : null}
         </KitDragOverlay>
