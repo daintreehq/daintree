@@ -75,7 +75,8 @@ interface InFlight {
  */
 export const HOST_CHANNEL_CACHE_LIMIT = 50;
 
-const EMPTY: CacheState = Object.freeze({
+// Marked pure so a view that never calls the hook tree-shakes it away.
+const EMPTY: CacheState = /* @__PURE__ */ Object.freeze({
   data: undefined,
   error: null,
   validating: false,
