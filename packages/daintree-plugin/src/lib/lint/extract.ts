@@ -60,16 +60,70 @@ export function extractClassContexts(scanned: ScannedSource): ClassToken[][] {
     .filter((tokens) => tokens.length > 0);
 }
 
-const ELEMENT_CALL = /\b(?:_?jsxs?|jsxDEV|createElement)\d*\s*\(\s*/g;
+const ELEMENT_FACTORIES = "_?jsxs?\\d*|jsxDEV\\d*|createElement";
+const IDENTIFIER = "[A-Za-z_$][\\w$]*";
+
+const ELEMENT_SOURCE = /^(?:react|preact(?:\/compat)?)$/;
 
 /**
- * Every element creation: esbuild's `jsx("tag", {…})` and a zero-build view's
- * `createElement("tag", {…})` look the same once scanned.
+ * Local names bound to an element factory, so a zero-build view's
+ * `import { createElement as h } from "react"`, `const h = React.createElement`,
+ * `const { createElement: e } = React` or Preact's `h` is read like JSX.
+ * Matched on the masked text, so a string that mentions one binds nothing.
+ * Not scope-aware: an alias shadowed by a parameter of the same name is still
+ * read as the factory, which only matters when that call's first argument is
+ * a lowercase tag string.
+ */
+function factoryAliases(scanned: ScannedSource): string[] {
+  const { code, masked } = scanned;
+  const names = new Set<string>();
+  // The source string is blanked in `masked`; read it from `code` at the same offsets.
+  for (const match of masked.matchAll(/\bimport\s*(?:[\w$]+\s*,\s*)?\{([^}]*)\}\s*from\s*/g)) {
+    const at = match.index + match[0].length;
+    const source = /^(["'])([^"']*)\1/.exec(code.slice(at, at + 64))?.[2] ?? "";
+    if (!ELEMENT_SOURCE.test(source)) continue;
+    for (const part of match[1]!.split(",")) {
+      const binding = /^\s*(createElement|h)(?:\s+as\s+([A-Za-z_$][\w$]*))?\s*$/.exec(part);
+      if (!binding) continue;
+      // `h` is Preact's factory; React has no export by that name.
+      if (binding[1] === "h" && source === "react") continue;
+      names.add(binding[2] ?? binding[1]!);
+    }
+  }
+  const assigned = new RegExp(
+    `\\b(?:const|let|var)\\s+(${IDENTIFIER})\\s*=\\s*((?:${IDENTIFIER}\\s*\\.\\s*)*)createElement\\b(?!\\s*\\()`,
+    "g"
+  );
+  for (const match of masked.matchAll(assigned)) {
+    if (DOM_RECEIVER.test(match[2]!)) continue;
+    names.add(match[1]!);
+  }
+  for (const match of masked.matchAll(
+    new RegExp(`[{,]\\s*createElement\\s*:\\s*(${IDENTIFIER})\\s*(?=[,}])`, "g")
+  )) {
+    names.add(match[1]!);
+  }
+  names.delete("createElement");
+  return [...names];
+}
+
+/** `document.createElement("button")` builds DOM, not a React element. */
+const DOM_RECEIVER = /\b(?:document|ownerDocument|doc)\s*\.\s*$/;
+
+/**
+ * Every element creation: esbuild's `jsx("tag", {…})`, a zero-build view's
+ * `createElement("tag", {…})` or `React.createElement(…)`, and the same called
+ * through a local alias such as `h` — they all look the same once scanned.
  */
 export function extractElements(scanned: ScannedSource): JsxElement[] {
+  const aliases = factoryAliases(scanned).map((name) => name.replace(/\$/g, "\\$"));
+  // An alias is a bare local, so `obj.h(` is someone else's method.
+  const aliased = aliases.length > 0 ? `|(?<![\\w$.])(?:${aliases.join("|")})` : "";
+  const call = new RegExp(`(?:(?<![\\w$])(?:${ELEMENT_FACTORIES})${aliased})\\s*\\(\\s*`, "g");
   const { code, masked } = scanned;
   const elements: JsxElement[] = [];
-  for (const match of masked.matchAll(ELEMENT_CALL)) {
+  for (const match of masked.matchAll(call)) {
+    if (DOM_RECEIVER.test(masked.slice(Math.max(0, match.index - 32), match.index))) continue;
     const open = masked.lastIndexOf("(", match.index + match[0].length);
     const args = splitArgs(masked, open);
     const first = args[0];

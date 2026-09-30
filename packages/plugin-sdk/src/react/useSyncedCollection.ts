@@ -60,13 +60,56 @@ function toError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err));
 }
 
-function scheduleFrame(run: () => void): () => void {
-  if (typeof requestAnimationFrame === "function") {
-    const id = requestAnimationFrame(run);
-    return () => cancelAnimationFrame(id);
-  }
-  const id = setTimeout(run, 16);
-  return () => clearTimeout(id);
+/** Shortest gap between two commits during a burst of deltas: about one frame. */
+const MIN_COMMIT_GAP_MS = 16;
+
+function clockMs(): number {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
+function microtask(run: () => void): void {
+  if (typeof queueMicrotask === "function") queueMicrotask(run);
+  else void Promise.resolve().then(run);
+}
+
+/**
+ * Leading-edge throttle for the state commit. The first change after a quiet
+ * spell commits on the next microtask, which still gathers every delta the
+ * host delivered in the same batch; changes within `MIN_COMMIT_GAP_MS` of the
+ * last commit wait out the rest of the gap on a timer.
+ *
+ * Deliberately not `requestAnimationFrame`: Chromium throttles frames in a
+ * window that is covered or in the background while leaving it "visible", and
+ * a lab run with that throttling (13 fps, gaps up to 169 ms) put 100–130 ms
+ * between a synced edit arriving and the view showing it.
+ */
+function createCommitScheduler(run: () => void): { schedule: () => void; cancel: () => void } {
+  let pending = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let last = -Infinity;
+  const fire = (): void => {
+    if (!pending) return;
+    pending = false;
+    timer = null;
+    last = clockMs();
+    run();
+  };
+  return {
+    schedule() {
+      if (pending) return;
+      pending = true;
+      const wait = last + MIN_COMMIT_GAP_MS - clockMs();
+      if (wait <= 0) microtask(fire);
+      else timer = setTimeout(fire, wait);
+    },
+    cancel() {
+      pending = false;
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+    },
+  };
 }
 
 /**
@@ -80,7 +123,12 @@ function scheduleFrame(run: () => void): () => void {
  * are held, and once the snapshot lands every delta at or below its revision
  * is dropped as already included. A revision that skips a number, or a delta
  * from a different worker epoch (the worker restarted), means something was
- * missed, and the hook pulls again. State commits at most once per frame.
+ * missed, and the hook pulls again.
+ *
+ * A change commits to state on the microtask after it arrives, so a single
+ * edit shows as soon as React renders it; a burst commits at most once per
+ * 16 ms. The commit is not tied to `requestAnimationFrame`, which a covered or
+ * background window throttles.
  *
  * ```tsx
  * const { items: calls, loading } = useSyncedCollection<Call>(pluginId, "calls", {
@@ -115,10 +163,8 @@ export function useSyncedCollection<T>(
     let pullSeq = 0;
     let held: SyncedCollectionDelta<T>[] = [];
     let lastError: Error | null = null;
-    let cancelCommit: (() => void) | null = null;
 
     const commit = (): void => {
-      cancelCommit = null;
       if (!live) return;
       const m = mirror;
       setState({
@@ -128,9 +174,8 @@ export function useSyncedCollection<T>(
         error: failed ? lastError : null,
       });
     };
-    const scheduleCommit = (): void => {
-      if (!cancelCommit) cancelCommit = scheduleFrame(commit);
-    };
+    const commits = createCommitScheduler(commit);
+    const scheduleCommit = commits.schedule;
 
     const apply = (delta: SyncedCollectionDelta<T>): void => {
       const m = mirror;
@@ -172,7 +217,9 @@ export function useSyncedCollection<T>(
       if (pulling) return;
       pulling = true;
       const seq = ++pullSeq;
-      scheduleCommit();
+      // Before the first snapshot the view already shows `loading`; committing
+      // it again would only spend the throttle's gap the snapshot is about to need.
+      if (mirror !== null || failed) scheduleCommit();
       Promise.resolve()
         .then(() =>
           getPluginHostBridge().invoke(pluginId, syncedCollectionSnapshotChannel(channel))
@@ -236,7 +283,7 @@ export function useSyncedCollection<T>(
       scheduleCommit();
       return () => {
         live = false;
-        cancelCommit?.();
+        commits.cancel();
       };
     }
 
@@ -254,7 +301,7 @@ export function useSyncedCollection<T>(
       if (!live) return;
       live = false;
       off?.();
-      cancelCommit?.();
+      commits.cancel();
       resyncRef.current = () => {};
       signal?.removeEventListener("abort", stop);
     };

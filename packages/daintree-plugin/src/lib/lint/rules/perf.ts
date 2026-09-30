@@ -4,14 +4,66 @@ import type { LintFile, LintRule, RuleHit } from "../types.js";
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** At or above this an interval re-renders a clock rather than polls: "5m ago" moves once a minute. */
+const CLOCK_INTERVAL_MS = 30_000;
+
+/** A delay written as a number, a product of numbers (`60 * 1000`), or a `const` holding one. */
+function literalDelay(file: LintFile, text: string, depth = 0): number | null {
+  const trimmed = text.trim();
+  if (/^[\d._eE+*\s]+$/.test(trimmed)) {
+    const factors = trimmed.split("*").map((part) => Number(part.trim().replace(/_/g, "")));
+    if (factors.length === 0 || factors.some((n) => !Number.isFinite(n))) return null;
+    return factors.reduce((a, b) => a * b, 1);
+  }
+  if (depth > 2 || !/^[A-Za-z_$][\w$]*$/.test(trimmed)) return null;
+  // Not scope-aware: when the name is declared more than once, the shortest
+  // delay stands, so a local fast poll is never excused by a slow one elsewhere.
+  const declared = [
+    ...file.code.matchAll(new RegExp(`\\bconst\\s+${escape(trimmed)}\\s*=\\s*([^;,\\n]+)`, "g")),
+  ].map((match) => literalDelay(file, match[1]!, depth + 1));
+  if (declared.length === 0 || declared.some((value) => value === null)) return null;
+  return Math.min(...(declared as number[]));
+}
+
+/** A callback that visibly asks the worker or the network for data: polling at any rate. */
+const FETCHES = /\b(?:invoke|fetch)\s*\(|\bXMLHttpRequest\b/;
+
+/**
+ * A callback that only moves a clock: it stores the time, or bumps a counter
+ * named like a clock (`setTick((t) => t + 1)`) whose only job is to
+ * re-render, and does nothing else.
+ */
+const STORES_TIME =
+  /^\(\s*\)\s*=>\s*\{?\s*(?:set[A-Z][\w$]*\s*\(|[\w$]+\.current\s*=)\s*(?:Date\.now\(\s*\)|new\s+Date\(\s*\)|performance\.now\(\s*\))\s*\)?\s*;?\s*\}?$/;
+const BUMPS_CLOCK =
+  /^\(\s*\)\s*=>\s*\{?\s*set[\w$]*(?:Tick|Now|Time|Clock|Minute|Second|Epoch|Render|Refresh)[\w$]*\s*\(\s*\(?\s*[\w$]+\s*\)?\s*=>\s*[\w$]+\s*\+\s*1\s*\)\s*;?\s*\}?$/;
+
 const intervalPollingInView: LintRule = {
   id: "interval-polling-in-view",
   severity: "warn",
   appliesTo: "view",
   message: "setInterval in view code polls from the renderer",
-  hint: "poll in the worker and push with host.postToPanel; in the view, subscribe first and then pull the current state — pushes arrive batched per macrotask with no ordering against invoke results, so tag both with a revision number and keep the newest (createSyncedCollection + useSyncedCollection from the SDK do exactly this for a keyed list); for an animation loop use useAnimationFrame, which pauses while the view is hidden or cached",
+  hint: 'poll in the worker and push with host.postToPanel; in the view, subscribe first and then pull the current state — pushes arrive batched per macrotask with no ordering against invoke results, so tag both with a revision number and keep the newest (createSyncedCollection + useSyncedCollection from the SDK do exactly this for a keyed list); for an animation loop use useAnimationFrame, which pauses while the view is hidden or cached; for text that changes as time passes ("5m ago") use useNow from @daintreehq/plugin-sdk/react, one shared timer that pauses the same way',
   check(file) {
-    return [...file.masked.matchAll(/\bsetInterval\s*\(/g)].map((m) => ({ offset: m.index }));
+    const hits: RuleHit[] = [];
+    for (const m of file.masked.matchAll(/\bsetInterval\s*\(/g)) {
+      const args = splitArgs(file.masked, m.index + m[0].length - 1);
+      const delay = args[1] ? literalDelay(file, file.code.slice(args[1][0], args[1][1])) : null;
+      const callback = args[0] ? file.code.slice(args[0][0], args[0][1]).trim() : "";
+      // A slow tick re-renders a clock; it cannot hammer anything. One that
+      // visibly fetches is still polling, however slowly.
+      if (delay !== null && delay >= CLOCK_INTERVAL_MS && !FETCHES.test(callback)) continue;
+      if (STORES_TIME.test(callback) || BUMPS_CLOCK.test(callback)) {
+        hits.push({
+          offset: m.index,
+          message:
+            "setInterval ticks a clock in the view; useNow from @daintreehq/plugin-sdk/react shares one timer across every component and pauses while the view is hidden or cached",
+        });
+        continue;
+      }
+      hits.push({ offset: m.index });
+    }
+    return hits;
   },
 };
 

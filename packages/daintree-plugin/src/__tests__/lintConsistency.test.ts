@@ -300,3 +300,93 @@ export default function Panel() {
     expect(clean).toEqual([]);
   });
 });
+
+describe("zero-build views written with createElement", () => {
+  const MANIFEST = {
+    name: "acme.zero",
+    version: "1.0.0",
+    main: "dist/index.mjs",
+    engines: { daintree: ">=0.11.0" },
+    contributes: { views: [{ id: "main", componentPath: "dist/panel.js", location: "panel" }] },
+  };
+  const panel = (head: string, body: string) => ({
+    "dist/panel.js": `${head}\nexport default function Panel({ go }) {\n  return ${body};\n}\n`,
+  });
+  const ELEMENT_CASES: Record<string, [string, string]> = {
+    "raw-button": [
+      `h("button", { className: "px-2", onClick: go }, "Go")`,
+      `h(Button, { onClick: go }, "Go")`,
+    ],
+    "raw-form-control": [
+      `h("input", { value: "", placeholder: "Search" })`,
+      `h("input", { type: "date" })`,
+    ],
+    "native-title-tooltip": [
+      `h("span", { title: "Full path" }, "x")`,
+      `h(Tooltip, { content: "Full path" }, "x")`,
+    ],
+    "inline-svg-icon": [
+      `h("svg", { viewBox: "0 0 24 24", fill: "none" }, h("path", { d: "m9 18 6-6-6-6" }))`,
+      `h("svg", { viewBox: "0 0 100 40" })`,
+    ],
+    "stock-palette-colour": [
+      `h("div", { className: "bg-blue-500" })`,
+      `h("div", { className: "bg-surface-panel" })`,
+    ],
+    "hand-rolled-spinner": [`h("div", { className: "animate-spin" })`, `h(Spinner, null)`],
+  };
+
+  const HEADS: Record<string, string> = {
+    "import alias": `import { createElement as h, useState } from "react";`,
+    "const alias of React.createElement": `import React from "react";\nconst h = React.createElement;`,
+    "destructured alias": `import * as React from "react";\nconst { createElement: h } = React;`,
+    "preact h": `import { h } from "preact";`,
+  };
+
+  for (const [form, head] of Object.entries(HEADS)) {
+    for (const [ruleId, [bad, good]] of Object.entries(ELEMENT_CASES)) {
+      it(`${ruleId} via ${form}`, async () => {
+        const flagged = await lintFor(ruleId, panel(head, bad), MANIFEST);
+        expect(flagged.length).toBeGreaterThan(0);
+        expect(flagged[0]).toMatchObject({
+          file: "dist/panel.js",
+          line: head.split("\n").length + 2,
+        });
+        expect(await lintFor(ruleId, panel(head, good), MANIFEST)).toEqual([]);
+      });
+    }
+  }
+
+  it("reads React.createElement and createElement called directly", async () => {
+    const head = `import React, { createElement } from "react";`;
+    for (const call of ["React.createElement", "createElement"]) {
+      const flagged = await lintFor(
+        "raw-button",
+        panel(head, `${call}("button", { onClick: go }, "Go")`),
+        MANIFEST
+      );
+      expect(flagged, call).toHaveLength(1);
+    }
+  });
+
+  it("leaves document.createElement, an unbound h and someone else's .h() alone", async () => {
+    const cases = [
+      [`import React from "react";`, `(document.createElement("button"), null)`],
+      [`import { hash as h } from "./hash";`, `(h("button", { title: "x" }), null)`],
+      [`import { createElement as h } from "./dom";`, `(h("button", { title: "x" }), null)`],
+      [`const h = document.createElement.bind(document);`, `(h("button"), null)`],
+      [
+        `const note = "import { createElement as h } from 'react'";`,
+        `(h("button", { title: "x" }), null)`,
+      ],
+      [`import { createElement as h } from "react";`, `(api.h("button", { title: "x" }), null)`],
+    ];
+    for (const [head, body] of cases) {
+      for (const ruleId of ["raw-button", "native-title-tooltip"]) {
+        expect(await lintFor(ruleId, panel(head!, body!), MANIFEST), `${ruleId}: ${body}`).toEqual(
+          []
+        );
+      }
+    }
+  });
+});

@@ -1692,6 +1692,43 @@ type AnimationFrameCallback = (dt: number, time: number) => void;
  */
 declare function useAnimationFrame(callback: AnimationFrameCallback, options?: AnimationFrameOptions): void;
 
+interface NowOptions {
+    /**
+     * How often the value moves on, in ms. Default 60 000, which suits "5m ago".
+     * Values below 1000 (and non-finite ones) are treated as 1000; for anything
+     * that moves every frame use `useAnimationFrame`.
+     */
+    intervalMs?: number;
+    /**
+     * Tick on multiples of `intervalMs` since the epoch (whole minutes for the
+     * default) rather than `intervalMs` after the first subscriber mounted, so
+     * every "5m ago" on screen turns over together and in step with the wall
+     * clock. Default true.
+     */
+    align?: boolean;
+}
+/**
+ * The current time (`Date.now()`), re-rendering the component when it moves
+ * on by `intervalMs` — the hook for "5m ago", "due in 2h" and other text that
+ * changes only as time passes, where a `setInterval` in the view would poll.
+ *
+ * Every component asking for the same `intervalMs` and `align` shares one
+ * timer and one value, so they all turn over in the same commit. The timer
+ * stops while the document is hidden or the project view is cached, and when
+ * the view comes back the value catches up at once. It stops entirely when
+ * the last subscriber unmounts.
+ *
+ * ```tsx
+ * // formatTimeAgo is the kit's, from @daintreehq/plugin-ui
+ * const now = useNow();
+ * return <span>{formatTimeAgo(entry.createdAt, now)}</span>;
+ * ```
+ *
+ * On the server, and in a render before the first subscription, it reads the
+ * clock once and returns that.
+ */
+declare function useNow(options?: NowOptions): number;
+
 interface StreamBufferOptions {
     /**
      * How many items to keep. Beyond it the oldest are dropped and counted in
@@ -1767,7 +1804,12 @@ interface SyncedCollectionViewResult<T> {
  * are held, and once the snapshot lands every delta at or below its revision
  * is dropped as already included. A revision that skips a number, or a delta
  * from a different worker epoch (the worker restarted), means something was
- * missed, and the hook pulls again. State commits at most once per frame.
+ * missed, and the hook pulls again.
+ *
+ * A change commits to state on the microtask after it arrives, so a single
+ * edit shows as soon as React renders it; a burst commits at most once per
+ * 16 ms. The commit is not tied to `requestAnimationFrame`, which a covered or
+ * background window throttles.
  *
  * ```tsx
  * const { items: calls, loading } = useSyncedCollection<Call>(pluginId, "calls", {
@@ -1795,4 +1837,4 @@ interface PluginHostBridge {
     onPanel(pluginId: string, channel: string, panelId: string, callback: (payload: unknown) => void): () => void;
 }
 
-export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type PluginAlign, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginButtonProps, type PluginButtonVariant, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCheckboxProps, type PluginConfirmDialogProps, type PluginCopyButtonProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableSort, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDismissButtonProps, type PluginDocumentPackage, type PluginDomProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFormFieldControlProps, type PluginFormFieldProps, type PluginHostBridge, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginInputProps, type PluginKbdChordProps, type PluginKbdProps, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginPaneHeaderProps, type PluginPaneStateProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginProgressBarProps, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginSwitchProps, type PluginTabItem, type PluginTabsProps, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTruncatedTooltipProps, type PluginVirtualListProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseHostChannelResult, type UseListNavigationOptions, type UseListNavigationResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };
+export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAlign, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginButtonProps, type PluginButtonVariant, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCheckboxProps, type PluginConfirmDialogProps, type PluginCopyButtonProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableSort, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDismissButtonProps, type PluginDocumentPackage, type PluginDomProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFormFieldControlProps, type PluginFormFieldProps, type PluginHostBridge, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginInputProps, type PluginKbdChordProps, type PluginKbdProps, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginPaneHeaderProps, type PluginPaneStateProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginProgressBarProps, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginSwitchProps, type PluginTabItem, type PluginTabsProps, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTruncatedTooltipProps, type PluginVirtualListProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseHostChannelResult, type UseListNavigationOptions, type UseListNavigationResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };

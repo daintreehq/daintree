@@ -46,6 +46,86 @@ export default function Panel() {
   });
 });
 
+describe("interval-polling-in-view: clocks", () => {
+  const withInterval = (call: string, head = "") => ({
+    "src/panel.tsx": `import { useEffect, useState } from "react";
+${head}export default function Panel() {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = ${call};
+    return () => clearInterval(t);
+  }, []);
+  return <div />;
+}
+`,
+  });
+
+  it("exempts a tick of 30 s or more, however the delay is written", async () => {
+    for (const delay of ["60_000", "60000", "60 * 1000", "30_000", "MINUTE"]) {
+      const findings = await lintFor(
+        "interval-polling-in-view",
+        withInterval(`setInterval(() => refresh(), ${delay})`, "const MINUTE = 60 * 1000;\n")
+      );
+      expect(findings, delay).toEqual([]);
+    }
+  });
+
+  it("still flags a fast poll, and a delay it cannot read", async () => {
+    for (const delay of ["29_999", "5000", "delayMs"]) {
+      const findings = await lintFor(
+        "interval-polling-in-view",
+        withInterval(`setInterval(() => refresh(), ${delay})`)
+      );
+      expect(findings, delay).toHaveLength(1);
+      expect(findings[0]!.message).toBe("setInterval in view code polls from the renderer");
+    }
+  });
+
+  it("still flags a slow interval that visibly fetches, and a local fast delay shadowing a slow one", async () => {
+    const slowFetch = await lintFor(
+      "interval-polling-in-view",
+      withInterval(`setInterval(() => window.electron.plugin.invoke("acme", "stats"), 60_000)`)
+    );
+    expect(slowFetch).toHaveLength(1);
+    const shadowed = await lintFor(
+      "interval-polling-in-view",
+      // esbuild renames the inner DELAY, so the call reads the 1 s one it means.
+      withInterval(
+        `(() => { const DELAY = 1000; return setInterval(() => refresh(), DELAY); })()`,
+        "const DELAY = 60_000;\n"
+      )
+    );
+    expect(shadowed).toHaveLength(1);
+  });
+
+  it("keeps the polling message for a counter that is not named like a clock", async () => {
+    const [finding] = await lintFor(
+      "interval-polling-in-view",
+      withInterval("setInterval(() => setCount((n) => n + 1), 1000)")
+    );
+    expect(finding!.message).toBe("setInterval in view code polls from the renderer");
+  });
+
+  it("points a short clock tick at useNow instead of worker polling", async () => {
+    for (const callback of ["() => setTick((t) => t + 1)", "() => setNow(Date.now())"]) {
+      const findings = await lintFor(
+        "interval-polling-in-view",
+        withInterval(`setInterval(${callback}, 1000)`)
+      );
+      expect(findings, callback).toHaveLength(1);
+      expect(findings[0]!.message).toMatch(/ticks a clock.*useNow/);
+    }
+  });
+
+  it("names useNow in the hint", async () => {
+    const [finding] = await lintFor(
+      "interval-polling-in-view",
+      withInterval("setInterval(() => refresh(), 1000)")
+    );
+    expect(finding!.hint).toMatch(/useNow/);
+  });
+});
+
 describe("undebounced-worktree-subscription", () => {
   it("leaves onDidChangeWorktrees alone, since the host coalesces it by default", async () => {
     const findings = await lintFor("undebounced-worktree-subscription", {
