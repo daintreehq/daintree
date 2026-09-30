@@ -8,6 +8,7 @@ import type {
   PluginActionManifestEntry,
 } from "../../../shared/types/actions.js";
 import type { PluginAgentPane } from "../../../shared/types/plugin.js";
+import { maskTerminalInOtherProject } from "../../../shared/utils/terminalInOtherProject.js";
 import { z } from "zod";
 
 /** More panes than any grid holds; a longer answer is truncated, not trusted. */
@@ -290,7 +291,12 @@ export class PluginRendererDispatcher {
       };
 
       this.pendingPluginDispatches.set(requestId, {
-        resolve,
+        // A project-bound plugin gets the uniform miss for a terminal in
+        // another project, as a bound MCP session does (#13120).
+        resolve:
+          projectId != null
+            ? (result: ActionDispatchResult) => resolve(maskTerminalInOtherProject(result))
+            : resolve,
         timer,
         webContentsId,
         destroyedCleanup,

@@ -526,6 +526,15 @@ export type ActionErrorCode =
    * `EXECUTION_ERROR` and is refused (#11909).
    */
   | "PARTIAL_SUCCESS"
+  /**
+   * `run()` threw a `TerminalInOtherProjectError`: the named terminal is not in
+   * the view that received the call, but is running in another project's
+   * (#13120). `details` carries `{ terminalId, projectId, viewResident }`;
+   * `viewResident: false` means that project's view was evicted, so a switch
+   * is needed before anything can act on it. Callers bound to one view never
+   * see this code — main collapses it into the ordinary miss for them.
+   */
+  | "TERMINAL_IN_OTHER_PROJECT"
   | "INVALID_URL";
 
 export interface ActionError {

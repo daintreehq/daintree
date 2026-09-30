@@ -1932,6 +1932,10 @@ export interface GeneratedIpcInvokeMap {
     args: [id: string];
     result: void;
   };
+  "terminal:locate": {
+    args: [id: string];
+    result: import("./terminal.js").TerminalLocation;
+  };
   "terminal:reconnect": {
     args: [terminalId: string];
     result: import("./terminal.js").TerminalReconnectResult;

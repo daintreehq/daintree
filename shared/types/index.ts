@@ -133,6 +133,7 @@ export type {
   BackendTerminalInfo,
   TerminalReconnectResult,
   TerminalInfoPayload,
+  TerminalLocation,
   SemanticSearchMatch,
   // CopyTree IPC types
   CopyTreeOptions,

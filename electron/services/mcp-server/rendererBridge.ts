@@ -15,6 +15,7 @@ import type {
   McpSessionOrigin,
 } from "../../../shared/types/ipc/mcpServer.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { maskTerminalInOtherProject } from "../../../shared/utils/terminalInOtherProject.js";
 import type {
   PendingRequest,
   DispatchEnvelope,
@@ -688,7 +689,12 @@ export function createRendererBridge(
       const releaseLease = route ? (viewLeases?.acquire(webContentsId) ?? null) : null;
 
       pendingDispatches.set(requestId, {
-        resolve,
+        // A routed session is bound to one view, so a terminal in another
+        // project reads as the ordinary miss, as for a bound plugin (#13120).
+        resolve: route
+          ? (envelope: DispatchEnvelope) =>
+              resolve({ ...envelope, result: maskTerminalInOtherProject(envelope.result) })
+          : resolve,
         reject,
         timer,
         webContentsId,

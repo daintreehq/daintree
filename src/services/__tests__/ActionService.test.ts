@@ -35,6 +35,7 @@ import { ActionService } from "../ActionService";
 import { useUIStore } from "@/store/uiStore";
 import type { ActionDefinition, ActionId } from "@shared/types/actions";
 import { ConfirmationStagedError } from "../actions/confirmationStaged";
+import { TerminalInOtherProjectError } from "@shared/utils/terminalInOtherProject";
 
 describe("ActionService", () => {
   let service: ActionService;
@@ -1036,6 +1037,39 @@ describe("ActionService", () => {
           expect(result.error.code).toBe("CONFIRMATION_REQUIRED");
           expect(result.error.message).toContain("did not happen");
         }
+      });
+    });
+
+    it("maps TerminalInOtherProjectError to TERMINAL_IN_OTHER_PROJECT with plain details (#13120)", async () => {
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description: "A test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockRejectedValue(
+          new TerminalInOtherProjectError("terminal.close", {
+            terminalId: "t1",
+            projectId: "proj-b",
+            viewResident: false,
+          })
+        ),
+      });
+
+      const result = await service.dispatch("actions.list", undefined, { source: "plugin" });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe("TERMINAL_IN_OTHER_PROJECT");
+      expect(result.error.message).toContain('"proj-b"');
+      // Plain, so the fields survive the structured clone to a plugin.
+      expect(structuredClone(result.error.details)).toEqual({
+        actionId: "terminal.close",
+        terminalId: "t1",
+        projectId: "proj-b",
+        viewResident: false,
       });
     });
 

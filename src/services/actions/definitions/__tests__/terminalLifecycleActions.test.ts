@@ -12,7 +12,9 @@ const terminalInstanceServiceMock = vi.hoisted(() => ({
 const terminalClientMock = vi.hoisted(() => ({
   killTerminal: vi.fn().mockResolvedValue(undefined),
   forceResume: vi.fn().mockResolvedValue(undefined),
+  locate: vi.fn(),
 }));
+const viewWorkspaceIdMock = vi.hoisted(() => ({ getViewWorkspaceId: vi.fn() }));
 const fireWatchNotificationMock = vi.hoisted(() => vi.fn());
 const pendingDestructiveStoreMock = vi.hoisted(() => {
   let pending: unknown = null;
@@ -39,6 +41,7 @@ vi.mock("@/services/terminal/TerminalInstanceService", () => ({
   terminalInstanceService: terminalInstanceServiceMock,
 }));
 vi.mock("@/clients", () => ({ terminalClient: terminalClientMock }));
+vi.mock("@/store/viewWorkspaceId", () => viewWorkspaceIdMock);
 vi.mock("@/lib/watchNotification", () => ({
   fireWatchNotification: fireWatchNotificationMock,
 }));
@@ -59,6 +62,7 @@ vi.mock("@/services/terminal/optimisticPanelClose", () => optimisticPanelCloseMo
 import { registerTerminalLifecycleActions } from "../terminalLifecycleActions";
 import type { TerminalPendingDestructiveActionSnapshot } from "@/store/terminalPendingDestructiveActionStore";
 import { MAX_KILL_BATCH_TERMINALS } from "@shared/types/terminalKillBatch";
+import { TerminalInOtherProjectError } from "@shared/utils/terminalInOtherProject";
 
 type MockPanel = {
   id: string;
@@ -112,6 +116,8 @@ function setupActions(callbacks: Partial<ActionCallbacks> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   pendingDestructiveStoreMock.reset();
+  terminalClientMock.locate.mockResolvedValue({ found: false });
+  viewWorkspaceIdMock.getViewWorkspaceId.mockReturnValue("proj-a");
 });
 
 // terminal.close routes through the optimistic-close coordinator (mocked here
@@ -276,6 +282,110 @@ describe("terminal.close result contract (#11805)", () => {
       expect(optimisticPanelCloseMock.flushOptimisticCloses).not.toHaveBeenCalled();
     }
   );
+});
+
+describe("terminal.close on a terminal outside this view (#13120)", () => {
+  const MISS = 'terminal.close: no panel with id "t1" — pass an `id` from the terminal listing.';
+
+  async function closeError(): Promise<Error> {
+    const outcome: unknown = await setupActions()("terminal.close", { terminalId: "t1" }).then(
+      () => new Error("expected terminal.close to reject"),
+      (err: unknown) => err
+    );
+    if (!(outcome instanceof Error)) throw new Error("terminal.close rejected with a non-Error");
+    return outcome;
+  }
+
+  it.each([true, false])(
+    "fails with TerminalInOtherProjectError when running in another project (viewResident %s)",
+    async (viewResident) => {
+      const { trashPanel } = setPanelState({ panels: [{ id: "p1", location: "grid" }] });
+      terminalClientMock.locate.mockResolvedValue({
+        found: true,
+        projectId: "proj-b",
+        viewResident,
+      });
+
+      const err = await closeError();
+
+      if (!(err instanceof TerminalInOtherProjectError)) throw err;
+      expect(err.toDetails()).toEqual({
+        actionId: "terminal.close",
+        terminalId: "t1",
+        projectId: "proj-b",
+        viewResident,
+      });
+      expect(terminalClientMock.locate).toHaveBeenCalledWith("t1");
+      expect(trashPanel).not.toHaveBeenCalled();
+      expect(optimisticPanelCloseMock.requestPanelClose).not.toHaveBeenCalled();
+      expect(optimisticPanelCloseMock.flushOptimisticCloses).not.toHaveBeenCalled();
+    }
+  );
+
+  it("keeps the ordinary miss when nothing live is found", async () => {
+    setPanelState({ panels: [] });
+
+    const err = await closeError();
+
+    expect(err).not.toBeInstanceOf(TerminalInOtherProjectError);
+    expect(err.message).toBe(MISS);
+  });
+
+  it("keeps the ordinary miss when the terminal belongs to this workspace", async () => {
+    setPanelState({ panels: [] });
+    terminalClientMock.locate.mockResolvedValue({
+      found: true,
+      projectId: "proj-a",
+      viewResident: true,
+    });
+
+    const err = await closeError();
+
+    expect(err).not.toBeInstanceOf(TerminalInOtherProjectError);
+    expect(err.message).toBe(MISS);
+  });
+
+  it("keeps the ordinary miss, without a lookup, when this view's workspace is unknown", async () => {
+    setPanelState({ panels: [] });
+    viewWorkspaceIdMock.getViewWorkspaceId.mockReturnValue(null);
+    terminalClientMock.locate.mockResolvedValue({
+      found: true,
+      projectId: "proj-b",
+      viewResident: true,
+    });
+
+    const err = await closeError();
+
+    expect(err.message).toBe(MISS);
+    expect(terminalClientMock.locate).not.toHaveBeenCalled();
+  });
+
+  it("keeps the ordinary miss when the lookup itself fails", async () => {
+    setPanelState({ panels: [] });
+    terminalClientMock.locate.mockRejectedValue(new Error("ipc down"));
+
+    const err = await closeError();
+
+    expect(err.message).toBe(MISS);
+  });
+
+  it("never looks up a panel this view holds", async () => {
+    setPanelState({ focusedId: "p1", panels: [{ id: "p1", location: "grid" }] });
+
+    await expect(setupActions()("terminal.close", { terminalId: "p1" })).resolves.toEqual({
+      closedIds: ["p1"],
+    });
+    expect(terminalClientMock.locate).not.toHaveBeenCalled();
+  });
+
+  it("treats a prototype key as a miss, not a panel", async () => {
+    const { trashPanel } = setPanelState({ panels: [] });
+
+    await expect(setupActions()("terminal.close", { terminalId: "constructor" })).rejects.toThrow(
+      /no panel with id "constructor"/
+    );
+    expect(trashPanel).not.toHaveBeenCalled();
+  });
 });
 
 describe("terminal.closeAll result contract (#11805)", () => {
