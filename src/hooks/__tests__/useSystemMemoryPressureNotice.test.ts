@@ -8,13 +8,6 @@ vi.mock("@/lib/notify", () => ({
   notify: (...args: unknown[]) => notifyMock(...args),
 }));
 
-const removeNotificationMock = vi.fn();
-vi.mock("@/store/notificationStore", () => ({
-  useNotificationStore: {
-    getState: () => ({ removeNotification: removeNotificationMock }),
-  },
-}));
-
 let mac = true;
 vi.mock("@/lib/platform", () => ({
   isMac: () => mac,
@@ -96,6 +89,11 @@ async function mountAndCapture() {
   const mod = await load();
   renderHook(() => mod.useSystemMemoryPressureNotice());
   return mod;
+}
+
+/** The same singleton the freshly imported hook writes, after `vi.resetModules`. */
+async function noticeStore() {
+  return (await import("@/store/systemMemoryNoticeStore")).useSystemMemoryNoticeStore;
 }
 
 describe("formatSystemMemoryPressureMessage", () => {
@@ -193,7 +191,6 @@ describe("useSystemMemoryPressureNotice", () => {
     vi.resetModules();
     notifyMock.mockReset();
     notifyMock.mockReturnValue("notice-1");
-    removeNotificationMock.mockReset();
     eventsOnMock.mockReset();
     dispatchMock.mockReset();
     dispatchMock.mockResolvedValue({ ok: true, result: { launched: true } });
@@ -230,35 +227,55 @@ describe("useSystemMemoryPressureNotice", () => {
     expect(eventsOnMock).toHaveBeenCalledWith("system:memory-pressure", expect.any(Function));
   });
 
-  it("raises one quiet, dismissible grid-bar warning with no action outside a workspace", async () => {
+  it("shows the reading as a sidebar row and never raises a grid bar (#13101)", async () => {
     await mountAndCapture();
+    const store = await noticeStore();
 
     act(() => captured!(DEGRADED));
 
+    expect(store.getState().notice).toEqual({
+      reading: "Swap is 91% full and the fseventsd process is using 36 GB of memory.",
+      detail:
+        "Swap is 91% full and the fseventsd process is using 36 GB of memory. Restarting your Mac clears this.",
+      action: null,
+    });
     expect(notifyMock).toHaveBeenCalledTimes(1);
     const payload = notifyMock.mock.calls[0]![0];
+    // Inbox only, uncounted: low priority with no placement never toasts or bars.
     expect(payload).toMatchObject({
       type: "warning",
       priority: "low",
       urgent: false,
-      placement: "grid-bar",
-      duration: 0,
+      countable: false,
+      title: "High system memory use",
       context: { eventKind: "host" },
     });
+    expect(payload.placement).toBeUndefined();
+    expect(payload.duration).toBeUndefined();
     expect(payload.supersedeKey).toEqual(expect.any(String));
     expect(payload.message).toContain("Swap is 91% full");
     expect(payload.action).toBeUndefined();
     expect(payload.actions).toBeUndefined();
   });
 
+  it("raises nothing when no reading was over threshold", async () => {
+    await mountAndCapture();
+    const store = await noticeStore();
+
+    act(() => captured!({ ...NORMAL, status: "degraded" }));
+
+    expect(store.getState().notice).toBeNull();
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
   it("offers one agent diagnosis in a project view without changing the notice copy", async () => {
     setEligible();
     await mountAndCapture();
+    const store = await noticeStore();
 
     act(() => captured!(DEGRADED));
 
     const payload = notifyMock.mock.calls[0]![0];
-    expect(payload.title).toBe("High system memory use");
     expect(payload.message).toBe(
       "Swap is 91% full and the fseventsd process is using 36 GB of memory. Restarting your Mac clears this."
     );
@@ -275,6 +292,8 @@ describe("useSystemMemoryPressureNotice", () => {
     });
     expect(action.actionArgs.prompt).toContain("Swap is 91% full");
     expect(Object.keys(action.actionArgs).sort()).toEqual(["agentId", "name", "prompt"]);
+    // The row offers the same launch the inbox record does.
+    expect(store.getState().notice?.action).toBe(action);
     // Offered, never launched on its own.
     expect(dispatchMock).not.toHaveBeenCalled();
   });
@@ -310,23 +329,27 @@ describe("useSystemMemoryPressureNotice", () => {
       "CLI availability has not been probed yet",
       () => (cliState = { availability: { claude: "ready" }, hasRealData: false }),
     ],
-  ])("hides the action but still warns when %s", async (_label, arrange) => {
+  ])("hides the action but still shows the reading when %s", async (_label, arrange) => {
     setEligible();
     arrange();
     await mountAndCapture();
+    const store = await noticeStore();
 
     act(() => captured!(DEGRADED));
 
     const payload = notifyMock.mock.calls[0]![0];
     expect(payload.type).toBe("warning");
     expect(payload.actions).toBeUndefined();
+    expect(store.getState().notice?.action).toBeNull();
+    expect(store.getState().notice?.reading).toContain("Swap is 91% full");
   });
 
-  it("launches once on click and clears the live bar only after a successful launch", async () => {
+  it("launches once on click and clears the row only after a successful launch", async () => {
     setEligible();
     await mountAndCapture();
+    const store = await noticeStore();
     act(() => captured!(DEGRADED));
-    const [action] = notifyMock.mock.calls[0]![0].actions;
+    const action = store.getState().notice!.action!;
 
     await act(async () => {
       await Promise.all([action.onClick(), action.onClick()]);
@@ -336,111 +359,124 @@ describe("useSystemMemoryPressureNotice", () => {
     expect(dispatchMock).toHaveBeenCalledWith("agent.launch", action.actionArgs, {
       source: "user",
     });
-    expect(removeNotificationMock).toHaveBeenCalledWith("notice-1");
+    expect(store.getState().notice).toBeNull();
   });
 
   it.each([
     ["the dispatch is refused", { ok: false, error: { code: "EXECUTION_ERROR", message: "x" } }],
     ["the launcher declines", { ok: true, result: { launched: false } }],
-  ])("keeps the bar when %s", async (_label, result) => {
+  ])("keeps the row when %s", async (_label, result) => {
     setEligible();
     dispatchMock.mockResolvedValue(result);
     await mountAndCapture();
+    const store = await noticeStore();
     act(() => captured!(DEGRADED));
-    const [action] = notifyMock.mock.calls[0]![0].actions;
+    const notice = store.getState().notice!;
 
     await act(async () => {
-      await action.onClick();
+      await notice.action!.onClick();
     });
 
-    expect(removeNotificationMock).not.toHaveBeenCalled();
+    expect(store.getState().notice).toBe(notice);
   });
 
-  it("never removes a later episode's bar when a launch outlives its own", async () => {
+  it("never clears a later episode's row when a launch outlives its own", async () => {
     setEligible();
     let resolveLaunch!: (value: unknown) => void;
     dispatchMock.mockReturnValueOnce(new Promise((resolve) => (resolveLaunch = resolve)));
-    notifyMock
-      .mockReturnValueOnce("notice-1")
-      .mockReturnValueOnce("")
-      .mockReturnValueOnce("notice-2");
     await mountAndCapture();
+    const store = await noticeStore();
     act(() => captured!(DEGRADED));
-    const [action] = notifyMock.mock.calls[0]![0].actions;
+    const action = store.getState().notice!.action!;
 
-    let pending!: Promise<void>;
+    let pending!: void | Promise<void>;
     act(() => {
       pending = action.onClick();
     });
     act(() => captured!(NORMAL));
     act(() => captured!(DEGRADED));
-    removeNotificationMock.mockClear();
+    const second = store.getState().notice;
     await act(async () => {
       resolveLaunch({ ok: true, result: { launched: true } });
       await pending;
     });
 
-    expect(removeNotificationMock).not.toHaveBeenCalled();
-    // The second episode still owns its bar, so its recovery clears it.
+    expect(second).not.toBeNull();
+    expect(store.getState().notice).toBe(second);
+    // The second episode still owns its row, so its recovery clears it.
     act(() => captured!(NORMAL));
-    expect(removeNotificationMock).toHaveBeenCalledWith("notice-2");
+    expect(store.getState().notice).toBeNull();
+  });
+
+  it("does not re-raise the row within an episode after a launch cleared it", async () => {
+    setEligible();
+    await mountAndCapture();
+    const store = await noticeStore();
+    act(() => captured!(DEGRADED));
+
+    await act(async () => {
+      await store.getState().notice!.action!.onClick();
+    });
+    act(() => captured!(DEGRADED));
+
+    expect(store.getState().notice).toBeNull();
+    expect(notifyMock).toHaveBeenCalledTimes(1);
   });
 
   it("ignores a repeated degraded edge for the same episode", async () => {
     await mountAndCapture();
+    const store = await noticeStore();
 
     act(() => captured!(DEGRADED));
+    const first = store.getState().notice;
     act(() => captured!(DEGRADED));
 
     expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(store.getState().notice).toBe(first);
   });
 
-  it("clears its own notice on recovery and leaves a low-priority resolution row", async () => {
+  it("clears its own row on recovery and leaves a quiet resolution row", async () => {
     await mountAndCapture();
+    const store = await noticeStore();
 
     act(() => captured!(DEGRADED));
     act(() => captured!(NORMAL));
 
-    expect(removeNotificationMock).toHaveBeenCalledWith("notice-1");
+    expect(store.getState().notice).toBeNull();
     expect(notifyMock).toHaveBeenCalledTimes(2);
     const warning = notifyMock.mock.calls[0]![0];
     const resolution = notifyMock.mock.calls[1]![0];
     expect(resolution).toMatchObject({
       type: "success",
       priority: "low",
+      urgent: false,
+      countable: false,
       context: { eventKind: "host" },
     });
+    expect(resolution.placement).toBeUndefined();
     // Same key, so the resolution row archives the warning's inbox row.
     expect(resolution.supersedeKey).toBe(warning.supersedeKey);
   });
 
   it("does nothing on recovery in a view that never raised the notice", async () => {
     await mountAndCapture();
+    const store = await noticeStore();
 
     act(() => captured!(NORMAL));
 
     expect(notifyMock).not.toHaveBeenCalled();
-    expect(removeNotificationMock).not.toHaveBeenCalled();
-  });
-
-  it("still resolves the inbox row when quiet hours kept the bar from showing", async () => {
-    notifyMock.mockReturnValueOnce("");
-    await mountAndCapture();
-
-    act(() => captured!(DEGRADED));
-    act(() => captured!(NORMAL));
-
-    expect(removeNotificationMock).not.toHaveBeenCalled();
-    expect(notifyMock).toHaveBeenLastCalledWith(expect.objectContaining({ type: "success" }));
+    expect(store.getState().notice).toBeNull();
   });
 
   it("raises the notice again for a new episode after recovery", async () => {
     await mountAndCapture();
+    const store = await noticeStore();
 
     act(() => captured!(DEGRADED));
     act(() => captured!(NORMAL));
     act(() => captured!(DEGRADED));
 
     expect(notifyMock.mock.calls.map(([p]) => p.type)).toEqual(["warning", "success", "warning"]);
+    expect(store.getState().notice).not.toBeNull();
   });
 });
