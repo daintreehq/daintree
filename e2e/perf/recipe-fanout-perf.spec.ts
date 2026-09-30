@@ -169,7 +169,7 @@ interface BrowserMeasurement {
     failedCount: number;
     failedTerminals: Array<{ index: number; reason: string }>;
   }> | null;
-  worktreeResult: DispatchResult<string> | null;
+  worktreeResult: DispatchResult<{ worktreeId: string; branch: string }> | null;
   worktreeId: string | null;
   beforeTerminalIds: string[];
   afterTerminals: ListedTerminal[];
@@ -704,7 +704,9 @@ async function measureInBrowser(
       let worktreeCreateActionMs = -1;
       let worktreeCardVisibleMs = -1;
       let worktreeSelectionMs = -1;
-      let worktreeResult: DispatchResult<string> | null = null;
+      // Assigned inside the dispatch callback, which control-flow narrowing
+      // can't see; the cast keeps the union instead of narrowing to null.
+      let worktreeResult = null as DispatchResult<{ worktreeId: string; branch: string }> | null;
       let targetWorktreeId = mainWorktreeId;
 
       if (mode === "new-worktree") {
@@ -712,19 +714,22 @@ async function measureInBrowser(
           errors.push("new-worktree sample has no branch name");
         } else {
           let createSettled = false;
-          const createPromise = safeDispatch<string>("worktree.create", {
-            rootPath,
-            options: {
-              baseBranch: "main",
-              newBranch: branch,
-              path: targetWorktreePath,
-            },
-          }).then((result) => {
+          const createPromise = safeDispatch<{ worktreeId: string; branch: string }>(
+            "worktree.create",
+            {
+              rootPath,
+              options: {
+                baseBranch: "main",
+                newBranch: branch,
+                path: targetWorktreePath,
+              },
+            }
+          ).then((result) => {
             worktreeResult = result;
             worktreeCreateActionMs = performance.now() - overallStart;
             createSettled = true;
-            if (result.ok && typeof result.result === "string") {
-              targetWorktreeId = result.result;
+            if (result.ok && typeof result.result?.worktreeId === "string") {
+              targetWorktreeId = result.result.worktreeId;
             }
             return result;
           });
@@ -799,7 +804,7 @@ async function measureInBrowser(
       let allPanelsCommittedMs = -1;
       let firstXtermAttachedMs = -1;
       let allXtermsAttachedMs = -1;
-      let recipeResult: BrowserMeasurement["recipeResult"] = null;
+      let recipeResult = null as BrowserMeasurement["recipeResult"];
       let recipeSettled = false;
       let newDomPanelIds: string[] = [];
 
@@ -894,7 +899,9 @@ async function measureInBrowser(
                 : count + countOccurrences(text, candidate.token),
             0
           );
-          const paintCounts = paintedHashCounts.get(state.panelId) ?? new Map<string, number>();
+          const paintCounts =
+            (state.panelId ? paintedHashCounts.get(state.panelId) : undefined) ??
+            new Map<string, number>();
           state.paintHashOccurrences = paintCounts.get(slot.paintHash) ?? 0;
           state.foreignPaintHashOccurrences = slots.reduce(
             (count, candidate) =>

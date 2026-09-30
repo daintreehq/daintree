@@ -38,13 +38,6 @@ interface ResponsivenessMetrics {
   rendererJsHeapKb: number;
 }
 
-function percentile(values: number[], percent: number): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.ceil((percent / 100) * sorted.length) - 1);
-  return sorted[Math.max(0, index)]!;
-}
-
 async function startResponsivenessProbe(ctx: AppContext): Promise<void> {
   await ctx.window.evaluate(() => {
     const state = {

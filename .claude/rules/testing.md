@@ -32,14 +32,15 @@ Integration tests have their own config: `npm run test:integration`.
 
 E2E runs against the **built** app — `npm run build:e2e` first. A failed build leaves the previous bundle in place and the suite happily tests code you did not write.
 
-Twelve Playwright projects:
+Eleven Playwright projects in `playwright.config.ts`:
 
 - `core` — release smoke.
 - `full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `full-plugins` — the seven feature buckets, auto-sharded 4× in CI.
 - `online` — real-API agent tests; gates releases.
 - `nightly` — memory-leak detection.
 - `screenshots` — design-review and theme-tour capture (`npm run theme:tour`).
-- `demo` — demo-video recording.
+
+Opt-in configs, never part of a bare run: `playwright.demo.config.ts` (demo-video recording, `npm run test:e2e:demo`), `playwright.perf.config.ts` (perf harnesses in `e2e/perf/`, normally driven by `npm run perf`), plus the mechanism, assistant and plugins configs.
 
 Run one: `npx playwright test <spec>` or `npm run test:e2e:full-terminal`. Remotely: `gh workflow run "E2E Tests" --ref develop -f platform=linux -f suite=full-terminal -f test_file=<spec>`, or `e2e-single.yml` for a single test.
 

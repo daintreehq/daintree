@@ -165,6 +165,7 @@ perfDescribe("Perf: agent-terminal launch latency", () => {
               dispatchResolvedMs: -1,
               panelMs: -1,
               xtermMs: -1,
+              firstTextMs: -1,
               outputMs: -1,
               panelId: null,
               error: "__daintreeDispatchAction missing",

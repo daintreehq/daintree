@@ -1,6 +1,6 @@
 {
   "totals": {
-    "waitForTimeout": 505,
+    "waitForTimeout": 410,
     "isVisibleTimeout": 86
   },
   "files": {
@@ -11,7 +11,7 @@
       "waitForTimeout": 1
     },
     "e2e/core/core-terminal-agent-promotion.spec.ts": {
-      "waitForTimeout": 4
+      "waitForTimeout": 3
     },
     "e2e/full/panels/core-action-palette-commands.spec.ts": {
       "waitForTimeout": 9,
@@ -69,9 +69,6 @@
     },
     "e2e/full/panels/pane-header-controls-stability.spec.ts": {
       "waitForTimeout": 3
-    },
-    "e2e/full/panels/store-fanout-perf.spec.ts": {
-      "waitForTimeout": 29
     },
     "e2e/full/platform/core-accessibility.spec.ts": {
       "waitForTimeout": 3
@@ -201,9 +198,6 @@
     "e2e/full/resilience/core-ipc-error-propagation.spec.ts": {
       "waitForTimeout": 1
     },
-    "e2e/full/resilience/core-perf-list-mount-budget.spec.ts": {
-      "waitForTimeout": 2
-    },
     "e2e/full/resilience/core-process-cleanup.spec.ts": {
       "waitForTimeout": 2
     },
@@ -214,27 +208,6 @@
       "waitForTimeout": 2
     },
     "e2e/full/resilience/core-sab-fallback.spec.ts": {
-      "waitForTimeout": 2
-    },
-    "e2e/full/resilience/interaction-latency-perf.spec.ts": {
-      "waitForTimeout": 22
-    },
-    "e2e/full/resilience/memory-growth-perf.spec.ts": {
-      "waitForTimeout": 2
-    },
-    "e2e/full/resilience/memory-kitchen-sink.spec.ts": {
-      "waitForTimeout": 2
-    },
-    "e2e/full/resilience/memory-pressure-responsiveness-perf.spec.ts": {
-      "waitForTimeout": 2
-    },
-    "e2e/full/resilience/project-switch-perf.spec.ts": {
-      "waitForTimeout": 2
-    },
-    "e2e/full/resilience/project-switch-stress.spec.ts": {
-      "waitForTimeout": 2
-    },
-    "e2e/full/terminal/agent-launch-perf.spec.ts": {
       "waitForTimeout": 2
     },
     "e2e/full/terminal/core-fleet-broadcast.spec.ts": {
@@ -266,7 +239,7 @@
       "waitForTimeout": 8
     },
     "e2e/full/terminal/core-terminal-lifecycle-advanced.spec.ts": {
-      "waitForTimeout": 5
+      "waitForTimeout": 1
     },
     "e2e/full/terminal/core-terminal-links.spec.ts": {
       "waitForTimeout": 1
@@ -300,14 +273,8 @@
     "e2e/full/terminal/font-preload.spec.ts": {
       "waitForTimeout": 1
     },
-    "e2e/full/terminal/interactivity-perf.spec.ts": {
-      "waitForTimeout": 3
-    },
-    "e2e/full/terminal/scroll-perf.spec.ts": {
-      "waitForTimeout": 11
-    },
     "e2e/full/terminal/terminal-agent-state-latency.spec.ts": {
-      "waitForTimeout": 8
+      "waitForTimeout": 3
     },
     "e2e/full/terminal/terminal-agent-state-status.spec.ts": {
       "waitForTimeout": 1
@@ -354,14 +321,8 @@
     "e2e/full/worktree/new-worktree-dialog.spec.ts": {
       "isVisibleTimeout": 1
     },
-    "e2e/full/worktree/recipe-fanout-perf.spec.ts": {
-      "waitForTimeout": 3
-    },
     "e2e/full/worktree/startup-agent-worktree-restore.spec.ts": {
       "waitForTimeout": 2
-    },
-    "e2e/full/worktree/worktree-agent-ready-perf.spec.ts": {
-      "waitForTimeout": 3
     },
     "e2e/helpers/claudeAuth.ts": {
       "waitForTimeout": 1
@@ -416,5 +377,5 @@
       "waitForTimeout": 5
     }
   },
-  "updatedAt": "2026-09-30T05:20:21.957Z"
+  "updatedAt": "2026-09-30T05:46:35.758Z"
 }

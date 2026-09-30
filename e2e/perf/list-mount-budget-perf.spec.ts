@@ -145,7 +145,12 @@ perfDescribe("Perf: ReviewHub list mount budget", () => {
               win.__daintreeE2ePerfEntries!.push(entry.toJSON());
             }
           });
-          obs.observe({ type: "long-animation-frame", durationThreshold: 100 });
+          // durationThreshold is valid for long-animation-frame but absent from
+          // the DOM lib's PerformanceObserverInit.
+          obs.observe({
+            type: "long-animation-frame",
+            durationThreshold: 100,
+          } as PerformanceObserverInit);
           win.__daintreeE2ePerfObserver = obs;
         } catch {
           return false;

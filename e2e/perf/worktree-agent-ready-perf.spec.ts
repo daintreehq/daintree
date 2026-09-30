@@ -242,7 +242,7 @@ async function measureCreate(round: number, branch: string): Promise<CreateSampl
       ).then(
         (r: any) => {
           createResolvedMs = performance.now() - t0;
-          worktreeId = r?.ok ? (r.result as string) : null;
+          worktreeId = r?.ok ? ((r.result as { worktreeId?: string })?.worktreeId ?? null) : null;
           if (!r?.ok) error = `create failed: ${r?.error?.message ?? "unknown"}`;
         },
         (e: unknown) => {
@@ -267,7 +267,7 @@ async function measureCreate(round: number, branch: string): Promise<CreateSampl
   return { round, ...sample };
 }
 
-async function measureAgent(branch: string, worktreeId: string): Promise<AgentSample> {
+async function measureAgent(_branch: string, worktreeId: string): Promise<AgentSample> {
   const page = ctx.window;
   // Switch to the new worktree first (the dialog flow does the same); the
   // switch itself is covered by the worktree-switch marks/benchmarks, so
@@ -706,7 +706,8 @@ perfDescribe("Perf: worktree create → agent-ready → delete", () => {
                 ).then(
                   (r: any) => {
                     resolved[k] = performance.now() - t0;
-                    if (r?.ok) ids[k] = r.result as string;
+                    if (r?.ok && (r.result as { worktreeId?: string })?.worktreeId)
+                      ids[k] = (r.result as { worktreeId: string }).worktreeId;
                     else errors.push(`create ${branch}: ${r?.error?.message ?? "unknown"}`);
                   },
                   (e: unknown) => errors.push(`create ${branch} rejected: ${String(e)}`)

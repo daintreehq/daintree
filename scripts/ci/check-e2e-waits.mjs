@@ -39,7 +39,7 @@ export const RULES = ["waitForTimeout", "isVisibleTimeout"];
 
 // Top-level e2e/ directories outside the ratchet: opt-in harnesses with their
 // own Playwright configs, plus screenshot and demo recording tooling.
-export const EXCLUDED_DIRS = ["assistant", "demo", "mechanism", "plugins", "screenshots"];
+export const EXCLUDED_DIRS = ["assistant", "demo", "mechanism", "perf", "plugins", "screenshots"];
 
 const TIMER_COMMENT = /^\/\/\s*timer:\s*\S/;
 
