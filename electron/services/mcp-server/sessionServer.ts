@@ -72,6 +72,7 @@ import {
   MCP_DEDUP_TTL_MS,
   MCP_DEDUP_MAX_ENTRIES_PER_SESSION,
   MCP_DEDUP_KEY_COLLISION_CODE,
+  MCP_SSE_IDLE_TIMEOUT_MS,
   minimumPermittingTier,
   EXECUTION_ERROR_CODE,
   SESSION_BINDING_GONE,
@@ -246,6 +247,19 @@ const HAND_OVER_HINT =
   "If the user started that terminal, they can right-click it, choose 'Hand to orchestrator', " +
   "and select this agent's pane.";
 const HAND_OVER_GRANT_PATH = "context-menu:hand-to-orchestrator";
+
+/**
+ * Told to a caller no pane or help bearer bound (#12987) — an api-key client —
+ * on an ownership refusal and alongside what it creates, since its records die
+ * with its MCP session and nothing else would say so. Fixed text, for the same
+ * reason as {@link HAND_OVER_HINT}.
+ */
+const SESSION_OWNERSHIP_NOTE =
+  "This credential only owns what it creates in the current MCP session: a new session does not " +
+  `inherit it, and ${MCP_SSE_IDLE_TIMEOUT_MS / 60_000} minutes without MCP calls ends one. To keep ` +
+  "ownership across reconnects, turn on Agent integrations for the project and launch the " +
+  "orchestrator from Daintree; its credential owns what it creates until that pane exits or is " +
+  "relaunched.";
 
 type OwnedResourceTool = {
   // `resourceKind`, not `kind`: this repo uses a bare `kind` for panel kinds
@@ -1422,6 +1436,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // completes after the transport dropped still lands with the principal the
     // call was authorized under, where the pane's next session finds it.
     const ownershipOwner = sessionStore.resourceOwnership.ownerOf(sessionId);
+    // An api-key client (#12987): no bearer bound it, so its records are held
+    // by the session and die with it. Asked of the owner, not the origin — a
+    // pane's session has an `external` origin too.
+    const sessionScopedOwner = !sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner);
     const boundWorkspaceId = sessionStore.sessionWorkspaceMap.get(sessionId);
     /**
      * The record that gives this call authority over a resource it created,
@@ -2594,6 +2612,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               !readsByPinnedView &&
               !rendererOwnedOrigin &&
               sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner);
+            const sessionOwnershipNote = sessionScopedOwner && !readsByPinnedView;
             const refusal = readsByPinnedView
               ? `No agent ${ownedResource.resourceKind} with id '${resourceId}' is in the project this ` +
                 `assistant is open in, so '${actionId}' will not read it. Take the id from ` +
@@ -2612,7 +2631,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   message: `${refusal} ${HAND_OVER_HINT}`,
                   details: { grantPath: HAND_OVER_GRANT_PATH },
                 }
-              : { code: RESOURCE_NOT_OWNED_CODE, message: refusal };
+              : {
+                  code: RESOURCE_NOT_OWNED_CODE,
+                  message: sessionOwnershipNote ? `${refusal} ${SESSION_OWNERSHIP_NOTE}` : refusal,
+                };
             outcome = { kind: "result", value: { ok: false, error } };
             return buildToolError(error);
           }
@@ -3760,12 +3782,35 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
 
     // A waited call's answer is the dispatch plus its reply, so that is what a
     // duplicate shares and what the cache keeps: never a bare receipt.
-    const answerPromise: Promise<CallToolResultLike> =
+    const repliedPromise: Promise<CallToolResultLike> =
       replyWait === undefined
         ? dispatchPromise
         : dispatchPromise.then((result) =>
             attachReply(result as CallToolResult, replyWait!, releaseNotice)
           );
+    // An api-key client learns its ownership is session-scoped from what it
+    // creates, before a refusal tells it (#12987). A trailing text block, so
+    // the declared result and `content[0]` are untouched; added after the
+    // reply, which rebuilds the result, and before the cache keeps it, so a
+    // duplicate reads it too.
+    const notesOwnership =
+      sessionScopedOwner &&
+      (actionId === AGENT_LAUNCH_TOOL ||
+        actionId === "agent.launchMany" ||
+        (actionId === "terminal.list" && ownedOnly));
+    const answerPromise: Promise<CallToolResultLike> = notesOwnership
+      ? repliedPromise.then((result) =>
+          result.isError === true || outcome?.kind !== "result" || !outcome.value.ok
+            ? result
+            : {
+                ...result,
+                content: [
+                  ...result.content,
+                  { type: "text" as const, text: SESSION_OWNERSHIP_NOTE },
+                ],
+              }
+        )
+      : repliedPromise;
 
     if (dedupKey !== undefined) {
       let inFlight = sessionStore.dedupInFlight.get(sessionId);
