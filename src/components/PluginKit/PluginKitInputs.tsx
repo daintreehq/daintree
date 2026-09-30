@@ -544,7 +544,7 @@ const SLIDER_KEYS = new Set([
 // primary ink, so it stands apart from the fill it sits on and from the empty
 // track, in either theme. No accent: the focus ring is the one on it.
 const SLIDER_TRACK_CLASS =
-  "[&::-webkit-slider-runnable-track]:h-1 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-[linear-gradient(to_right,var(--color-text-primary)_calc(0.5rem_+_(100%_-_1rem)_*_var(--kit-slider-fill,0)),var(--color-border-input)_0)]";
+  "[&::-webkit-slider-runnable-track]:h-1 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-[linear-gradient(to_right,var(--color-text-primary)_calc(0.5rem_+_(100%_-_1rem)_*_var(--kit-slider-fill,0)),var(--color-selection-outline)_0)]";
 const SLIDER_THUMB_CLASS =
   "[&::-webkit-slider-thumb]:-mt-1.5 [&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:box-border [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-solid [&::-webkit-slider-thumb]:border-text-primary [&::-webkit-slider-thumb]:bg-surface-input";
 const SLIDER_CLASS = [
@@ -1505,10 +1505,10 @@ function KitFileDropzone({
       }}
       className={cn(
         "flex flex-col items-center justify-center gap-2 rounded-[var(--radius-md)] border border-dashed px-4 py-6 text-center transition-colors duration-150 ease-out",
-        // `border-default` all but vanishes on a dialog's surface in dark, so
-        // the zone rests on the strong edge; a drag lifts it to the chip-edge
-        // ink and a fill, a step the eye can see without the accent.
-        over ? "border-text-secondary bg-overlay-soft" : "border-border-strong",
+        // The zone's edge is its only boundary, so it rests on the theme's 3:1
+        // control-edge ink; a drag lifts it to the secondary ink and a fill, a
+        // step the eye can see without the accent.
+        over ? "border-text-secondary bg-overlay-soft" : "border-selection-outline",
         inert ? "cursor-not-allowed opacity-50" : "cursor-pointer",
         str(className)
       )}

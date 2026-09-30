@@ -557,6 +557,8 @@ describe("Slider", () => {
     const trackFill = track.find((c) => /:bg-\[/.test(c))!;
     expect(trackFill).toContain("var(--color-text-primary)");
     expect(trackFill).toContain("var(--kit-slider-fill");
+    // The empty part of the track is a control edge, on the theme's 3:1 ink.
+    expect(trackFill).toContain("var(--color-selection-outline)");
     expect(trackFill).not.toContain(thumbFill!.split(":bg-")[1]!);
     // Neutral throughout: the focus ring is the only accent on it.
     expect(slider.className.replace(/focus-visible:outline-accent-primary/g, "")).not.toMatch(
@@ -1161,8 +1163,9 @@ describe("FileDropzone", () => {
     const zone = screen.getByTestId("zone");
     const files = [file("a.md"), file("b.png"), file("c.md")];
     const dataTransfer = { types: ["Files"], files, dropEffect: "none" };
-    // A visible edge at rest, and a stronger edge plus a fill under a drag.
-    expect(zone.className).toContain("border-border-strong");
+    // At rest the edge is the theme's 3:1 control-edge ink; a drag steps it up
+    // and adds a fill.
+    expect(zone.className).toContain("border-selection-outline");
     fireEvent.dragEnter(zone, { dataTransfer });
     expect(zone.hasAttribute("data-drag-over")).toBe(true);
     expect(zone.className).toContain("border-text-secondary");
@@ -1170,7 +1173,7 @@ describe("FileDropzone", () => {
     expect(zone.className).not.toContain("accent");
     fireEvent.drop(zone, { dataTransfer });
     expect(zone.hasAttribute("data-drag-over")).toBe(false);
-    expect(zone.className).toContain("border-border-strong");
+    expect(zone.className).toContain("border-selection-outline");
     expect(onFiles.mock.calls[0]![0].map((f: File) => f.name)).toEqual(["a.md", "c.md"]);
     expect(onReject.mock.calls[0]![0].map((f: File) => f.name)).toEqual(["b.png"]);
   });
