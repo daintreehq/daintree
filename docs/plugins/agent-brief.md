@@ -254,6 +254,8 @@ What the no-build path costs, and what it doesn't: the worker cannot import npm 
 | A headline number, a trend | `StatCard`, `Sparkline` |
 | Usage against a limit | `Meter` (with `thresholds`), not `ProgressBar` |
 | Lines added and removed | `DiffStat` |
+| A date, a date range, a calendar | `DatePicker`, `DateRangePicker` (with `presets`), `Calendar`; values are ISO `"YYYY-MM-DD"` strings, never `Date` objects |
+| An age that stays current ("5m ago") | `TimeAgo` |
 | Pane chrome | `PaneHeader`, `Toolbar` with `ToolbarButton`, `Tabs` |
 | Loading, empty, error | `PaneState` for the whole pane, `EmptyState`, `Callout` (`severity="error"` with a Retry `action` is the error banner), `Skeleton`, `Spinner`, `ProgressBar` |
 | A status chip | `Badge` |
@@ -261,7 +263,7 @@ What the no-build path costs, and what it doesn't: the worker cannot import npm 
 | People on something | `Avatar`, `AvatarGroup` for several |
 | An icon | `Icon` by name (`git-branch`, `folder-open`, `alert-triangle`, `worktree`, …) |
 | Rendered Markdown | `Markdown` |
-| Relative times, sizes, durations | `formatTimeAgo`, `formatBytes`, `formatDuration`, `formatCount` |
+| Relative times in text, sizes, durations | `formatTimeAgo`, `formatBytes`, `formatDuration`, `formatCount` |
 | Colours for a canvas or WebGL | `useDaintreeTheme()` / `onDidChangeDaintreeTheme` |
 
 A settings view builds from `SettingsSection`, `SettingsGroup` and `SettingsRow`. The full list with props is [views.md → Host UI components](./views.md#host-ui-components), and `plugin-ui.d.ts` in `@daintreehq/plugin-sdk` is the authoritative one. Nothing is locked down: for anything the kit has no component for — a chart beyond a sparkline, say — use the token vocabulary below.
@@ -272,7 +274,7 @@ Things the lab watched agents get wrong, each of which the kit or the host alrea
 - **`window.confirm` in a view.** It ignores the theme and blocks the whole window. Use `ConfirmDialog`.
 - **A second setup banner.** A panel of a plugin with an unset `required` setting already shows the host's "needs setup" strip; render an empty state, not your own warning.
 - **A modal with a stock-palette scrim** (`bg-black/40`), which compiles to nothing, so the dialog floats with no dimming. Use `Dialog`.
-- **Native `<select>`, checkboxes and date inputs** beside host-styled text fields. Use `Select`, `Checkbox`, `Input type="date"`.
+- **Native `<select>`, checkboxes and date inputs** beside host-styled text fields. Use `Select`, `Checkbox`, `DatePicker`.
 - **A `PaneHeader` that repeats the panel's name.** The host's panel chrome already shows the panel's title and icon above your view, so `title="Review queue"` under a "Review Queue" tab says it twice. Give `PaneHeader` view-specific context — the filter in effect, the selected item, a count ("4,096 of 5,000") — or leave it out and put the actions in a `Toolbar variant="bar"`. `title` is required, so there is no header that is only actions.
 - **A filled button as a status.** A green "✓ Approved" primary button where Approve used to be reads as a control that does something. Show the state with a `Badge` or a `SeverityIcon` beside the title, and keep the button for the action (disabled, or swapped for the next one, such as "Undo").
 

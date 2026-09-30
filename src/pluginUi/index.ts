@@ -9,11 +9,14 @@ import type {
   PluginAvatarProps,
   PluginBadgeProps,
   PluginButtonProps,
+  PluginCalendarProps,
   PluginCalloutProps,
   PluginCheckboxProps,
   PluginConfirmDialogProps,
   PluginCopyButtonProps,
   PluginDataTableProps,
+  PluginDatePickerProps,
+  PluginDateRangePickerProps,
   PluginDialogProps,
   PluginDiffStatProps,
   PluginDismissButtonProps,
@@ -59,6 +62,7 @@ import type {
   PluginTextareaProps,
   PluginTimelineItem,
   PluginTimelineProps,
+  PluginTimeAgoProps,
   PluginToolbarButtonProps,
   PluginToolbarProps,
   PluginTooltipProps,
@@ -289,6 +293,21 @@ export const Meter: ComponentType<PluginMeterProps> = fromKit("Meter", (kit) => 
 // Generic over the entry type in the public types, like the list components.
 export const Timeline: <T extends PluginTimelineItem>(props: PluginTimelineProps<T>) => ReactNode =
   fromKit("Timeline", (kit) => kit.Timeline);
+// Calendars, date fields and live ages.
+
+export const Calendar: ComponentType<PluginCalendarProps> = fromKit(
+  "Calendar",
+  (kit) => kit.Calendar
+);
+export const DatePicker: ComponentType<PluginDatePickerProps> = fromKit(
+  "DatePicker",
+  (kit) => kit.DatePicker
+);
+export const DateRangePicker: ComponentType<PluginDateRangePickerProps> = fromKit(
+  "DateRangePicker",
+  (kit) => kit.DateRangePicker
+);
+export const TimeAgo: ComponentType<PluginTimeAgoProps> = fromKit("TimeAgo", (kit) => kit.TimeAgo);
 
 export type {
   PluginMarkdownProps as MarkdownProps,
@@ -380,4 +399,15 @@ export type {
   PluginTimelineProps as TimelineProps,
   PluginTimelineItem as TimelineItem,
   PluginTimelineActor as TimelineActor,
+  PluginIsoDate as IsoDate,
+  PluginDateRange as DateRange,
+  PluginCalendarProps as CalendarProps,
+  PluginCalendarBaseProps as CalendarBaseProps,
+  PluginCalendarSingleProps as CalendarSingleProps,
+  PluginCalendarRangeProps as CalendarRangeProps,
+  PluginDateFieldBaseProps as DateFieldBaseProps,
+  PluginDatePickerProps as DatePickerProps,
+  PluginDateRangePickerProps as DateRangePickerProps,
+  PluginDateRangePreset as DateRangePreset,
+  PluginTimeAgoProps as TimeAgoProps,
 } from "@shared/types/plugin-sdk-react";

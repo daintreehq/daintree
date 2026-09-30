@@ -1730,6 +1730,164 @@ export interface PluginTimelineProps<
 }
 
 /**
+ * A calendar day as an ISO date string, `"YYYY-MM-DD"`. A day, not an
+ * instant: it carries no time or zone, so `"2026-09-30"` is the 30th for
+ * every user whatever their offset or daylight saving. Never round-trip one
+ * through `new Date("2026-09-30")`, which reads it as UTC midnight and lands
+ * on the 29th west of Greenwich.
+ */
+export type PluginIsoDate = string;
+
+/** An inclusive run of days. `start` is never after `end`; a one-day range has them equal. */
+export interface PluginDateRange {
+  start: PluginIsoDate;
+  end: PluginIsoDate;
+}
+
+export interface PluginCalendarBaseProps extends PluginRootAttributes {
+  /** The earliest day that can be chosen, inclusive. */
+  min?: PluginIsoDate;
+  /** The latest day that can be chosen, inclusive. */
+  max?: PluginIsoDate;
+  /** Days that cannot be chosen (weekends, holidays). They can still take keyboard focus. */
+  isDateDisabled?: (date: PluginIsoDate) => boolean;
+  /** The first month shown, `"YYYY-MM"`, controlled. */
+  month?: string;
+  /** The first month shown at mount. Defaults to the selection's month, else this month. */
+  defaultMonth?: string;
+  /** The first month shown changed: a header arrow, or the keyboard moving past its edge. */
+  onMonthChange?: (month: string) => void;
+  /** Months side by side. Defaults to 1. */
+  numberOfMonths?: 1 | 2;
+  /** 0 is Sunday, 1 Monday, … 6 Saturday. Defaults to the user's locale. */
+  weekStartsOn?: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+  /** Names the calendar when nothing around it does. */
+  "aria-label"?: string;
+  className?: string;
+}
+
+/** Props of `Calendar` choosing one day. */
+export interface PluginCalendarSingleProps extends PluginCalendarBaseProps {
+  mode?: "single";
+  /** The chosen day, controlled. `null` shows none. Passing the prop at all makes it controlled. */
+  value?: PluginIsoDate | null;
+  defaultValue?: PluginIsoDate | null;
+  onValueChange?: (value: PluginIsoDate) => void;
+}
+
+/** Props of `Calendar` choosing a run of days. */
+export interface PluginCalendarRangeProps extends PluginCalendarBaseProps {
+  mode: "range";
+  /** The chosen range, controlled. Passing the prop at all makes it controlled. */
+  value?: PluginDateRange | null;
+  defaultValue?: PluginDateRange | null;
+  /**
+   * Called once both ends are picked: the first press sets one end and the
+   * second the other, in either order. Between the two the range is only
+   * previewed.
+   */
+  onValueChange?: (value: PluginDateRange) => void;
+}
+
+/**
+ * Props of `Calendar`: an inline month grid. One tab stop; arrow keys move by
+ * day and week, PageUp/PageDown by month (with Shift, by year), Home/End to
+ * the week's ends, Enter or Space chooses. Today is marked, selection is
+ * neutral, and the month name and weekdays follow the user's locale.
+ */
+export type PluginCalendarProps = PluginCalendarSingleProps | PluginCalendarRangeProps;
+
+export interface PluginDateFieldBaseProps extends PluginAriaRootAttributes {
+  min?: PluginIsoDate;
+  max?: PluginIsoDate;
+  /** Days that cannot be chosen, in the calendar or by typing. */
+  isDateDisabled?: (date: PluginIsoDate) => boolean;
+  /** 0 is Sunday, 1 Monday, … 6 Saturday. Defaults to the user's locale. */
+  weekStartsOn?: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+  /** Shown while the field is empty. */
+  placeholder?: string;
+  /** Draws a clear button while there is a value. Default true. */
+  clearable?: boolean;
+  disabled?: boolean;
+  /** Also pass `required` to the enclosing `FormField`. Stops the field clearing. */
+  required?: boolean;
+  /** Marks the field invalid, beside the field's own check of what was typed. */
+  invalid?: boolean;
+  /** Submits the ISO value in a native form under this name. */
+  name?: string;
+  /** The calendar popover, controlled. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** `compact` (28px) for filter bars. */
+  density?: "default" | "compact";
+  id?: string;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  /** Classes for the field. */
+  className?: string;
+}
+
+/**
+ * Props of `DatePicker`: a field that takes a typed date or opens a calendar.
+ * Typing is lenient (`2026-09-30`, `2026/9/30`, `Sep 30 2026`, `30 September`,
+ * or the locale's numeric order) and is checked on Enter or blur: text that
+ * is not a date, or a day outside `min`/`max`, marks the field invalid and
+ * leaves the value alone. Escape puts the text back. Joins a `FormField` on
+ * its own.
+ */
+export interface PluginDatePickerProps extends PluginDateFieldBaseProps {
+  /** The day, controlled. `null` is empty. Passing the prop at all makes it controlled. */
+  value?: PluginIsoDate | null;
+  defaultValue?: PluginIsoDate | null;
+  /** The new day, or `null` when the field was cleared. */
+  onValueChange?: (value: PluginIsoDate | null) => void;
+}
+
+/** A shortcut in a `DateRangePicker`'s popover. Work the range out when you render. */
+export interface PluginDateRangePreset {
+  label: string;
+  range: PluginDateRange;
+}
+
+/**
+ * Props of `DateRangePicker`: `DatePicker` for a run of days. The popover
+ * shows two months where the window has room, and `presets` beside them. The
+ * field takes typed ranges too: two dates with `–`, ` - ` or `to` between.
+ */
+export interface PluginDateRangePickerProps extends PluginDateFieldBaseProps {
+  /** The range, controlled. `null` is empty. Passing the prop at all makes it controlled. */
+  value?: PluginDateRange | null;
+  defaultValue?: PluginDateRange | null;
+  /** The new range, or `null` when the field was cleared. */
+  onValueChange?: (value: PluginDateRange | null) => void;
+  /** Shortcuts such as "Last 7 days", listed beside the calendar. */
+  presets?: readonly PluginDateRangePreset[];
+}
+
+/**
+ * Props of `TimeAgo`: an age that keeps itself current ("5m ago"), in a
+ * `<time>` with the full date and time one hover away. Every `TimeAgo` shares
+ * one timer, ticking less often as the time recedes and not at all while the
+ * view is hidden.
+ */
+export interface PluginTimeAgoProps extends PluginRootAttributes {
+  /** Epoch ms, an ISO string or a `Date`. Anything else reads "Unknown". */
+  value: number | string | Date;
+  /** `formatRelativeTime` wording ("5 minutes ago", "in 3 hours") instead of `formatTimeAgo`'s "5m ago". */
+  verbose?: boolean;
+  /** Words that belong inside the label, before the age: `"Updated "`. */
+  prefix?: string;
+  /**
+   * The full date in a tooltip (the default). `false` puts it in a native
+   * `title` instead: for an age inside a button, option or other control,
+   * where a tooltip trigger would fight the control's own pointer and focus.
+   */
+  tooltip?: boolean;
+  className?: string;
+}
+
+/**
  * Keys of {@link PluginThemeTokens}: Daintree's semantic theme tokens, the
  * same names as the `--theme-*` CSS variables without the prefix. The surface,
  * text, border, accent, `focus-ring` and status keys are core and stable within
