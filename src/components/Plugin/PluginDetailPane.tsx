@@ -208,7 +208,8 @@ function ProjectTargetingSwitch({ pluginId }: { pluginId: string }) {
         </div>
         {errorText && (
           <div id={errorId} className="flex items-center gap-2 mt-0.5">
-            <span className="text-2xs text-status-danger">{errorText}</span>
+            <XCircle className="w-3 h-3 shrink-0 text-status-error" aria-hidden="true" />
+            <span className="text-2xs text-text-secondary">{errorText}</span>
             <Button
               variant="ghost"
               size="xs"

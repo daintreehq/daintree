@@ -204,6 +204,11 @@ const devWorkerMock = vi.hoisted(() => {
   }
   return { instances, bridges, MockPluginDevWorkerHost, MockPluginDevWorkerMainBridge };
 });
+// Every dispatch thaws its target before sending (#13119); the fakes have no
+// debugger, so the thaw resolves at once and each send is one drain away.
+vi.mock("../../utils/webContentsLifecycle.js", () => ({
+  unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("../plugin/PluginDevWorkerHost.js", () => ({
   PluginDevWorkerHost: devWorkerMock.MockPluginDevWorkerHost,
   CRASH_WINDOW_MS: 30 * 60 * 1000,
@@ -304,6 +309,11 @@ function setActiveWebContents(wc: FakeWebContents | null): void {
 }
 
 /** Read the request payload from the most recent dispatch `webContents.send`. */
+/** Let a dispatch's awaited thaw settle so its send has run. */
+async function flushThaw(): Promise<void> {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+}
+
 function lastDispatchRequest(wc: FakeWebContents): {
   requestId: string;
   actionId: string;
@@ -372,6 +382,7 @@ describe("createHost — dispatch", () => {
     );
 
     const pending = host.dispatch("acme.dispatch-ok.doThing", { count: 3 });
+    await flushThaw();
 
     const req = lastDispatchRequest(wc);
     expect(req.actionId).toBe("acme.dispatch-ok.doThing");
@@ -400,6 +411,7 @@ describe("createHost — dispatch", () => {
     );
 
     const pending = host.dispatch("acme.dispatch-guard.go");
+    await flushThaw();
     const req = lastDispatchRequest(wc);
 
     // Ignore any warnings emitted during plugin load/init; only count the guard.
@@ -518,6 +530,7 @@ describe("createHost — dispatch", () => {
     vi.useFakeTimers();
     try {
       const pending = host.dispatch("acme.dispatch-timeout.go");
+      await flushThaw();
       const req = lastDispatchRequest(wc);
 
       await vi.advanceTimersByTimeAsync(30_000);
