@@ -24,7 +24,7 @@ import {
 const PROJECT_COUNT = 6;
 // Pin below PROJECT_COUNT so each sweep guarantees eviction + cold-start churn,
 // and disable the low-memory override so residency is deterministic regardless
-// of host memory pressure (mirrors nightly-evicted-view-leak.spec.ts).
+// of host memory pressure.
 const CACHE_LIMIT = 2;
 const WARMUP_SWEEPS = 2;
 const MEASURED_SWEEPS = 5;
@@ -80,6 +80,29 @@ async function readPvm(app: AppContext["app"]): Promise<PvmState | null> {
       wcIds: views
         .filter((v) => !v.view.webContents.isDestroyed())
         .map((v) => v.view.webContents.id),
+    };
+  });
+}
+
+async function readPvmViews(app: AppContext["app"]): Promise<{
+  activeProjectId: string | null;
+  views: Array<{ projectId: string; wcId: number }>;
+} | null> {
+  return app.evaluate(() => {
+    const g = globalThis as Record<string, unknown>;
+    const pvm = (g.__daintreeGetPvm as (() => unknown) | undefined)?.() as
+      | {
+          getAllViews: () => Array<{ view: { webContents: { id: number } }; projectId: string }>;
+          getActiveProjectId: () => string | null;
+        }
+      | null
+      | undefined;
+    if (!pvm) return null;
+    return {
+      activeProjectId: pvm.getActiveProjectId(),
+      views: pvm
+        .getAllViews()
+        .map((v) => ({ projectId: v.projectId, wcId: v.view.webContents.id })),
     };
   });
 }
@@ -228,7 +251,7 @@ test.describe.serial("Nightly: Multi-project switching memory leak", () => {
 
     // webContents.close() is async, so a just-evicted renderer may still report
     // alive immediately after the PVM map is trimmed. Poll until the destroyed
-    // renderers actually die (mirrors nightly-evicted-view-leak.spec.ts).
+    // renderers actually die.
     await expect
       .poll(async () => countAliveRenderers(app, Array.from(seenProjectWcIds)), {
         timeout: 15_000,
@@ -288,5 +311,67 @@ test.describe.serial("Nightly: Multi-project switching memory leak", () => {
     );
     expect(basePvmCount).toBeGreaterThan(0);
     expect(finalPvmCount).toBe(basePvmCount);
+  });
+
+  // Residency at its most direct: with a cached view resident, dropping the
+  // cap evicts it — its webContents is destroyed and the active view survives.
+  test("evicted project view is destroyed and removed from PVM cache", async () => {
+    test.setTimeout(180_000);
+    const { app } = ctx;
+
+    // Assigned inside the poll callback, so declare it without a narrowing initializer.
+    let initial = null as Awaited<ReturnType<typeof readPvmViews>>;
+    await expect
+      .poll(
+        async () => {
+          initial = await readPvmViews(app);
+          return initial?.views.length ?? 0;
+        },
+        {
+          message: "precondition: an active and a cached project view",
+          timeout: 15_000,
+          intervals: [200, 400, 800, 1600],
+        }
+      )
+      .toBeGreaterThanOrEqual(2);
+
+    const activeId = initial!.activeProjectId;
+    expect(activeId).not.toBeNull();
+    const activeView = initial!.views.find((v) => v.projectId === activeId);
+    const cachedView = initial!.views.find((v) => v.projectId !== activeId);
+    expect(activeView).toBeDefined();
+    expect(cachedView).toBeDefined();
+    const evictedWcId = cachedView!.wcId;
+
+    await app.evaluate(() => {
+      const g = globalThis as Record<string, unknown>;
+      const pvm = (g.__daintreeGetPvm as (() => unknown) | undefined)?.() as
+        { setCachedViewLimit: (n: number) => void } | null | undefined;
+      pvm?.setCachedViewLimit(1);
+    });
+
+    const readEvictionState = () =>
+      app.evaluate(({ webContents }, wcId) => {
+        const g = globalThis as Record<string, unknown>;
+        const pvm = (g.__daintreeGetPvm as (() => unknown) | undefined)?.() as
+          { getAllViews: () => Array<{ projectId: string }> } | null | undefined;
+        const evicted = webContents.fromId(wcId);
+        return {
+          viewCount: pvm?.getAllViews().length ?? -1,
+          viewProjectIds: pvm?.getAllViews().map((v) => v.projectId) ?? [],
+          evictedIsNullOrDestroyed: !evicted || evicted.isDestroyed(),
+        };
+      }, evictedWcId);
+
+    // webContents.close() is async; poll rather than read once.
+    await expect
+      .poll(readEvictionState, { timeout: 10_000, intervals: [200, 400, 800, 1600] })
+      .toMatchObject({ viewCount: 1, evictedIsNullOrDestroyed: true });
+
+    const afterEviction = await readEvictionState();
+    expect(afterEviction.viewProjectIds).toContain(activeId);
+    // The survivor must be the live active view, not just a map entry.
+    expect((await readPvmViews(app))?.activeProjectId).toBe(activeId);
+    expect(await countAliveRenderers(app, [activeView!.wcId])).toBe(1);
   });
 });

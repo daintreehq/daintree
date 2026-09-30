@@ -25,6 +25,8 @@ export default defineConfig({
   // flake to be retried away.
   retries: 0,
   reporter: [["list"]],
+  globalSetup: "./e2e/global-setup.ts",
+  globalTeardown: "./e2e/global-teardown.ts",
   outputDir: "./test-results-mechanism",
   use: { trace: "retain-on-failure" },
 });

@@ -43,10 +43,12 @@ import {
   FIXTURES,
   FIXTURE_NAMES,
   type FixtureName,
+  type PanelHeaderFixture,
 } from "../../src/components/Panel/__preview__/fixtures";
 import {
   GRID_SCENES,
   GRID_SCENE_NAMES,
+  type GridScene,
   type GridSceneName,
 } from "../../src/components/Panel/__preview__/gridScenes";
 
@@ -241,7 +243,7 @@ function paintedTitle(title: string): string {
  * fails loudly here — which is the right sensitivity for a design harness.
  */
 async function proveState(page: Page, name: FixtureName, header: Locator): Promise<void> {
-  const fixture = FIXTURES[name];
+  const fixture: PanelHeaderFixture = FIXTURES[name];
   const timeout = 10_000;
   switch (name) {
     case "tabs":
@@ -363,7 +365,7 @@ async function open(
  * the agent panes' state glyph box is the last thing in its header.
  */
 async function openScene(page: Page, name: GridSceneName, theme: string): Promise<Locator> {
-  const def = GRID_SCENES[name];
+  const def: GridScene = GRID_SCENES[name];
   await page.setViewportSize({ width: def.width + 40, height: def.height + 40 });
   await page.goto(`${baseURL}/panel-header-preview.html?theme=${theme}&scene=${name}`);
   const grid = page.locator(`[data-preview-grid="${name}"]`);

@@ -12,7 +12,7 @@ Electron IDE for orchestrating AI coding agents — many agent terminals running
 npm run dev            # Main + Renderer (Vite)
 npm test               # vitest (CI runs this in 4 shards)
 npm test -- <path>     # narrowest useful test while iterating
-npm run check          # typecheck + 12 codegen/guard checks + lint ratchet + format:check
+npm run check          # typecheck + codegen/guard checks + lint and e2e-wait ratchets + format:check
 npm run fix            # prettier --write + eslint --fix
 npm run build          # production build
 npm run rebuild        # rebuild native modules after an install failure
@@ -51,9 +51,9 @@ Plugins are manifest-driven, activate out-of-process in unsandboxed `utilityProc
 | drizzle migrations               | `npm run db:generate`                                 |
 | help prompts                     | `npm run build:help`                                  |
 
-Nine ratchet baselines live in `scripts/baselines/` — **regenerate the baseline, never hand-edit the JSON**: `lint:ratchet` (eslint warnings), `compiler-budget` (React Compiler bailouts), `import-budget`, `renderer-import-budget`, `renderer-bundle-budget`, `first-render-chunk-budget`, `test-ratio`, `check:ipc-handwritten`, `theme:text-ramp`. Six have matching `*:check`/`*:update` scripts; three do not — update `lint:ratchet` with `-- --update`, `check:ipc-handwritten` via `ipc-handwritten:update`, and `theme:text-ramp` with `-- --check` / `-- --plan` (`--plan` rewrites the manifest).
+Ten ratchet baselines live in `scripts/baselines/` — **regenerate the baseline, never hand-edit the JSON**: `lint:ratchet` (eslint warnings), `e2e-waits` (unannotated `waitForTimeout` / `isVisible({ timeout })` in E2E specs), `compiler-budget` (React Compiler bailouts), `import-budget`, `renderer-import-budget`, `renderer-bundle-budget`, `first-render-chunk-budget`, `test-ratio`, `check:ipc-handwritten`, `theme:text-ramp`. Seven have matching `*:check`/`*:update` scripts; three do not — update `lint:ratchet` with `-- --update`, `check:ipc-handwritten` via `ipc-handwritten:update`, and `theme:text-ramp` with `-- --check` / `-- --plan` (`--plan` rewrites the manifest).
 
-Only `lint:ratchet` and `check:ipc-handwritten` run inside `npm run check`; the budget scripts are deliberately out of CI pre-1.0. The lint ratchet gates **per-rule as well as in total**, and a rule vanishing from live output is a hard failure — so you cannot silence a rule in config to get under the gate.
+Only `lint:ratchet`, `e2e-waits:check` and `check:ipc-handwritten` run inside `npm run check`; the budget scripts are deliberately out of CI pre-1.0. The lint ratchet gates **per-rule as well as in total**, and a rule vanishing from live output is a hard failure — so you cannot silence a rule in config to get under the gate.
 
 React Compiler is enabled (`babel-plugin-react-compiler`, `target: "19"`). A bailout is silent at runtime but reddens `compiler-budget`; `docs/development.md` has the diagnosis tooling.
 

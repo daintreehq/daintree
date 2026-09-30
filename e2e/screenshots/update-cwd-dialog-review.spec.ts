@@ -76,10 +76,10 @@ interface StateSpec {
   name: string;
   query: string;
   /** Drives the dialog into the state; returns what must be visible before the frame is taken. */
-  act?: (page: Page, card: Locator) => Promise<string | null>;
+  act?: (card: Locator) => Promise<string | null>;
 }
 
-async function submitTyped(page: Page, card: Locator, value: string) {
+async function submitTyped(card: Locator, value: string) {
   const field = card.locator('input[type="text"]').first();
   await field.fill(value);
   await field.press("Enter");
@@ -95,32 +95,32 @@ const STATES: StateSpec[] = [
   {
     name: "missing",
     query: "cwd=short",
-    act: async (page, card) => {
-      await submitTyped(page, card, TYPO_PATH);
+    act: async (card) => {
+      await submitTyped(card, TYPO_PATH);
       return INVALID;
     },
   },
   {
     name: "empty",
     query: "cwd=short",
-    act: async (page, card) => {
-      await submitTyped(page, card, "");
+    act: async (card) => {
+      await submitTyped(card, "");
       return INVALID;
     },
   },
   {
     name: "check-failed",
     query: "cwd=short&check=error",
-    act: async (page, card) => {
-      await submitTyped(page, card, SLOW_PATH);
+    act: async (card) => {
+      await submitTyped(card, SLOW_PATH);
       return INVALID;
     },
   },
   {
     name: "validating",
     query: "cwd=short&check=hang",
-    act: async (page, card) => {
-      await submitTyped(page, card, SLOW_PATH);
+    act: async (card) => {
+      await submitTyped(card, SLOW_PATH);
       // Past the Doherty gate, so the frame shows what a slow check shows.
       return 'button[aria-busy="true"]';
     },
@@ -128,8 +128,8 @@ const STATES: StateSpec[] = [
   {
     name: "restart-failed",
     query: "cwd=short&restart=fail",
-    act: async (page, card) => {
-      await submitTyped(page, card, "/Users/greg/Projects/daintree");
+    act: async (card) => {
+      await submitTyped(card, "/Users/greg/Projects/daintree");
       return "text=Couldn't restart the terminal";
     },
   },
@@ -210,7 +210,7 @@ async function openState(page: Page, state: StateSpec, theme: string, width = WI
   const title = (await card.locator("h2").first().textContent())?.trim() ?? "";
   if (!title) throw new Error(`state "${state.name}" rendered an empty title`);
   if (state.act) {
-    const mustSee = await state.act(page, card);
+    const mustSee = await state.act(card);
     if (mustSee) {
       await expect(
         card.locator(mustSee).first(),

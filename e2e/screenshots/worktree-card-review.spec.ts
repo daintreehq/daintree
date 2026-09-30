@@ -742,7 +742,7 @@ test("sidebar worktree card review — states and themes", async () => {
         content: "[data-worktree-row-drag-handle] { opacity: 1 !important; }",
       });
       await snap(page, "75-card-collapsed-grip", plain);
-      await revealGrip.evaluate((node) => node.remove());
+      await revealGrip.evaluate((node) => (node as ChildNode).remove());
       // The defect this shot exists for was a 4px offset between the grip and
       // the line it sits beside, which is small enough to survive a glance at
       // the PNG — so the harness measures it rather than trusting the reader.

@@ -20,6 +20,7 @@ import type { DetectionCallback } from "./types.js";
 import type { DetectionEvidenceSource } from "./types.js";
 import { isChromiumChildProcess, redactArgv } from "./commandParser.js";
 import { buildDetectedCandidate, selectPreferredCandidate } from "./candidateHelpers.js";
+import { parseE2ETimerOverrideMs } from "../../../shared/config/e2eTimerOverrides.js";
 
 export { type DetectionResult } from "./types.js";
 
@@ -39,6 +40,46 @@ const MAX_PROCESS_TREE_NODES = 128;
 // tree. Depth 2 is exactly what the pre-BFS scan probed. #8790
 const MAX_IMAGE_PATH_PROBE_DEPTH = 2;
 
+// Asymmetric TTLs for shell-command evidence. Sticky window suppresses the
+// off-streak — a fresh shell-command commit anchors the detector through
+// blind `ps` cycles and short-lived subprocess thrash without waiting for
+// the next process-tree poll to re-confirm. Absolute upper bound prevents
+// a synthetic shell identity from holding `agent` forever if the process
+// never actually started. #5809
+export const SHELL_COMMAND_STICKY_MS = 12_000;
+export const SHELL_COMMAND_EXPIRY_MS = 30_000;
+
+export interface ShellCommandTimers {
+  stickyMs: number;
+  expiryMs: number;
+  /** True only when an E2E run shortened the expiry. */
+  overridden: boolean;
+}
+
+/**
+ * E2E specs that guard behaviour across the expiry would otherwise sleep 30 s+
+ * per check. The override only applies to an unpackaged E2E launch (main
+ * forwards `app.isPackaged` to the pty-host as DAINTREE_IS_PACKAGED), and the
+ * sticky window is clamped so it can never outlive the expiry it precedes.
+ */
+export function resolveShellCommandTimers(): ShellCommandTimers {
+  if (process.env.DAINTREE_E2E_MODE === "1" && process.env.DAINTREE_IS_PACKAGED === "0") {
+    const expiryMs = parseE2ETimerOverrideMs(process.env.DAINTREE_E2E_SHELL_COMMAND_EXPIRY_MS);
+    if (expiryMs !== null) {
+      return {
+        stickyMs: Math.min(SHELL_COMMAND_STICKY_MS, expiryMs),
+        expiryMs,
+        overridden: true,
+      };
+    }
+  }
+  return {
+    stickyMs: SHELL_COMMAND_STICKY_MS,
+    expiryMs: SHELL_COMMAND_EXPIRY_MS,
+    overridden: false,
+  };
+}
+
 export class ProcessDetector {
   // Require N consecutive polls agreeing on a new agent/icon state before
   // committing it. At the 1500 ms base poll interval that is ~3 s of confirmation,
@@ -46,14 +87,7 @@ export class ProcessDetector {
   // that would otherwise cause the detector to thrash between on/off.
   private static readonly HYSTERESIS_THRESHOLD = 2;
 
-  // Asymmetric TTLs for shell-command evidence. Sticky window suppresses the
-  // off-streak — a fresh shell-command commit anchors the detector through
-  // blind `ps` cycles and short-lived subprocess thrash without waiting for
-  // the next process-tree poll to re-confirm. Absolute upper bound prevents
-  // a synthetic shell identity from holding `agent` forever if the process
-  // never actually started. #5809
-  private static readonly SHELL_COMMAND_STICKY_MS = 12_000;
-  private static readonly SHELL_COMMAND_EXPIRY_MS = 30_000;
+  private readonly shellCommandTimers: ShellCommandTimers = resolveShellCommandTimers();
 
   private terminalId: string;
   private spawnedAt: number;
@@ -87,6 +121,7 @@ export class ProcessDetector {
   private shellCommandText: string | undefined;
   private shellCommandStickyUntil: number = 0;
   private shellCommandExpiresAt: number = 0;
+  private e2eExpiryReported = false;
 
   // When false, the no-shell-evidence "agent-requires-explicit-exit" demote
   // hold at the gating path is bypassed for runtime-promoted plain terminals:
@@ -140,8 +175,9 @@ export class ProcessDetector {
   ): void {
     this.shellCommandIdentity = identity;
     this.shellCommandText = commandText;
-    this.shellCommandStickyUntil = observedAt + ProcessDetector.SHELL_COMMAND_STICKY_MS;
-    this.shellCommandExpiresAt = observedAt + ProcessDetector.SHELL_COMMAND_EXPIRY_MS;
+    this.shellCommandStickyUntil = observedAt + this.shellCommandTimers.stickyMs;
+    this.shellCommandExpiresAt = observedAt + this.shellCommandTimers.expiryMs;
+    this.e2eExpiryReported = false;
 
     logIdentityDebug(
       `[IdentityDebug] shell-evidence term=${this.terminalId.slice(-8)} ` +
@@ -318,6 +354,7 @@ export class ProcessDetector {
         Date.now() > this.shellCommandExpiresAt
       ) {
         const childCount = this.getPtyChildCount();
+        this.reportE2EShellEvidenceExpiry(this.shellCommandIdentity);
         if (this.shellCommandIdentity.agentType) {
           const signature = `${this.shellCommandIdentity.agentType}|${childCount}`;
           if (signature !== this.lastShellEvidenceRetentionSignature) {
@@ -933,6 +970,21 @@ export class ProcessDetector {
 
   getLastDetected(): BuiltInAgentId | null {
     return this.lastDetected;
+  }
+
+  /**
+   * Stdout marker (forwarded into the main log) that lets an E2E spec prove
+   * the shortened expiry actually elapsed before it asserts what the expiry
+   * must not do. Silent unless the E2E override is active.
+   */
+  private reportE2EShellEvidenceExpiry(identity: CommandIdentity): void {
+    if (!this.shellCommandTimers.overridden || this.e2eExpiryReported) return;
+    this.e2eExpiryReported = true;
+    console.log(
+      `[E2E] shell-evidence-expired term=${this.terminalId} ` +
+        `agent=${identity.agentType ?? "<none>"} ` +
+        `action=${identity.agentType ? "retain" : "clear"}`
+    );
   }
 
   private getPtyChildCount(): number {

@@ -199,7 +199,24 @@ test.describe.serial("Core: Diagnostics & Notifications", () => {
     test("empty state hides Clear all", async () => {
       const { window } = ctx;
 
-      await expect(window.locator(SEL.notifications.clearAllButton)).not.toBeVisible();
+      // "Clear all…" lives in the overflow menu, so the menu has to be open for
+      // its absence to mean anything. Its sibling item proves the menu rendered.
+      const moreActions = window.getByRole("button", { name: "More notification actions" });
+      await moreActions.click();
+      const menu = window.getByRole("menu");
+      await expect(menu.getByRole("menuitem", { name: "Notification settings" })).toBeVisible({
+        timeout: T_SHORT,
+      });
+      await expect(menu.locator(SEL.notifications.clearAllButton)).toHaveCount(0);
+
+      // Escape dismisses the menu and the popover together; reopen the popover
+      // for the dismissal tests that follow.
+      await window.keyboard.press("Escape");
+      await expect(menu).toHaveCount(0, { timeout: T_SHORT });
+      const bell = window.locator(SEL.notifications.bellButton);
+      await expect(bell).toHaveAttribute("aria-expanded", "false", { timeout: T_SHORT });
+      await bell.click();
+      await expect(window.locator(SEL.notifications.emptyState)).toBeVisible({ timeout: T_MEDIUM });
     });
 
     test("closes via Escape", async () => {

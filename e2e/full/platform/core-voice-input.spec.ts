@@ -243,133 +243,10 @@ function seedVoiceConfig(
 }
 
 // ===========================================================================
-// Section 1 — Settings UI
+// Section 1 — settings migration on cold start
 // ===========================================================================
 
-test.describe.serial("E2E: Voice Input — Settings UI", () => {
-  let ctx: AppContext;
-
-  test.beforeAll(async () => {
-    ctx = await launchApp();
-  });
-
-  test.afterAll(async () => {
-    if (ctx?.app) await closeApp(ctx.app);
-  });
-
-  test.afterEach(async () => {
-    // Reset to disabled so each test starts from a clean slate.
-    await ipcSetSettings(ctx.window, { enabled: false, openaiApiKey: "" });
-    if (
-      await ctx.window
-        .locator(SEL.settings.heading)
-        .isVisible()
-        .catch(() => false)
-    ) {
-      await ctx.window.keyboard.press("Escape");
-    }
-  });
-
-  test("voice settings tab renders Speech-to-Text section with disabled defaults", async () => {
-    const { window } = ctx;
-    await openSettings(window);
-    await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
-
-    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Voice Input" }).click();
-    await expect(window.locator("h3", { hasText: "Voice Input" })).toBeVisible({
-      timeout: T_SHORT,
-    });
-
-    const toggle = window.getByRole("switch", { name: "Dictation", exact: true });
-    await expect(toggle).toBeVisible({ timeout: T_SHORT });
-    await expect(toggle).toHaveAttribute("aria-checked", "false");
-
-    await expect(window.getByText("Speech-to-text", { exact: true })).toBeVisible();
-    await expect(
-      window.getByText("Real-time transcription with your own provider API key.", { exact: true })
-    ).toBeVisible();
-
-    // While disabled, the API key field is not rendered. Pin the placeholder's
-    // presence once enabled (next test) so this zero-count can't pass vacuously.
-    await expect(window.getByPlaceholder("Paste an OpenAI API key", { exact: true })).toHaveCount(
-      0
-    );
-    await expect(window.getByText("OpenAI API key", { exact: true })).toHaveCount(0);
-  });
-
-  test("enabling voice input reveals API key, language, paragraphing, and dictionary controls", async () => {
-    const { window } = ctx;
-    await openSettings(window);
-    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Voice Input" }).click();
-
-    const toggle = window.getByRole("switch", { name: "Dictation", exact: true });
-    await toggle.click();
-    await expect(toggle).toHaveAttribute("aria-checked", "true", { timeout: T_SHORT });
-
-    await expect(window.getByPlaceholder("Paste an OpenAI API key", { exact: true })).toBeVisible({
-      timeout: T_SHORT,
-    });
-    await expect(window.getByText("Language", { exact: true })).toBeVisible();
-    await expect(window.getByText("Paragraph breaks", { exact: true }).first()).toBeVisible();
-    await expect(window.getByText("Custom dictionary", { exact: true })).toBeVisible();
-  });
-
-  test("API key persists across settings dialog reopen and Remove key reverts the indicator", async () => {
-    const { window } = ctx;
-    // Pre-seed via IPC — avoids the validation/HTTP path the Save button triggers.
-    await ipcSetSettings(window, { enabled: true, openaiApiKey: PRE_SEEDED_KEY });
-    // The Settings dialog keeps visited tabs mounted between closes. Reload so
-    // this assertion reads the pre-seeded value through the tab's mount path.
-    await window.reload({ waitUntil: "domcontentloaded" });
-    await window.locator(SEL.toolbar.toggleSidebar).waitFor({ state: "visible", timeout: T_LONG });
-    ctx.window = window;
-
-    await openSettings(window);
-    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Voice Input" }).click();
-
-    // Configured-state indicators: the replace placeholder, the masked "Saved ·"
-    // accessory, and the Remove key button.
-    const keyInput = window.getByPlaceholder("Paste a new key to replace the saved one", {
-      exact: true,
-    });
-    await expect(keyInput).toBeVisible({ timeout: T_SHORT });
-    await expect(window.getByText(/^Saved · /)).toBeVisible();
-    const removeButton = window.getByRole("button", { name: "Remove key", exact: true });
-    await expect(removeButton).toBeVisible();
-
-    // Close + reopen — key must still be configured.
-    await window.keyboard.press("Escape");
-    await openSettings(window);
-    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Voice Input" }).click();
-
-    await expect(keyInput).toBeVisible({ timeout: T_SHORT });
-    await expect(removeButton).toBeVisible();
-
-    // Remove key reverts to unconfigured (placeholder returns to the empty-state copy).
-    await removeButton.click();
-    await window
-      .getByRole("alertdialog", { name: "Remove the OpenAI API key?" })
-      .getByRole("button", { name: "Remove key" })
-      .click();
-    await expect(window.getByPlaceholder("Paste an OpenAI API key", { exact: true })).toBeVisible({
-      timeout: T_SHORT,
-    });
-    await expect(window.getByText("Key removed", { exact: true })).toBeVisible();
-    await expect(window.getByText("Not set", { exact: true })).toBeVisible();
-    await expect(removeButton).not.toBeVisible({ timeout: T_SHORT });
-    await expect(keyInput).toHaveCount(0);
-
-    // And the underlying store now reflects the empty key.
-    const settings = await ipcGetSettings(window);
-    expect(settings.openaiApiKey).toBe("");
-  });
-});
-
-// ===========================================================================
-// Section 2 — `correctionApiKey` → `openaiApiKey` migration on cold start
-// ===========================================================================
-
-test.describe.serial("E2E: Voice Input — Settings Migration", () => {
+test.describe.serial("E2E: Voice Input — Settings migration on cold start", () => {
   let activeUserDataDir: string | null = null;
   let activeCtx: AppContext | null = null;
 
@@ -420,54 +297,24 @@ test.describe.serial("E2E: Voice Input — Settings Migration", () => {
     return { migrated, onDisk };
   }
 
-  test("legacy correctionApiKey migrates into openaiApiKey on first read after upgrade", async () => {
-    const { migrated, onDisk } = await runMigration({
-      enabled: false,
-      correctionApiKey: "sk-legacy-correction-key",
-      language: "en",
-      customDictionary: [],
-      transcriptionModel: "nova-3",
-      correctionEnabled: false,
-      correctionModel: "gpt-5-mini",
-      correctionCustomInstructions: "",
-      paragraphingStrategy: "spoken-command",
-      resolveFileLinks: true,
-    });
-
-    expect(migrated.openaiApiKey).toBe("sk-legacy-correction-key");
-    expect(migrated.transcriptionModel).toBe("gpt-live-transcribe");
-    expect(migrated.correctionApiKey).toBeUndefined();
-    // The retired gpt-5-mini correction model migrates to gpt-5.6-luna (#11365).
-    expect(migrated.correctionModel).toBe("gpt-5.6-luna");
-
-    expect(onDisk.voiceInput.openaiApiKey).toBe("sk-legacy-correction-key");
-    expect(onDisk.voiceInput.correctionApiKey).toBeUndefined();
-    expect(onDisk.voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
-    expect(onDisk.voiceInput.correctionModel).toBe("gpt-5.6-luna");
-  });
-
-  test("a schema-26 install on the retired model comes back upgraded and intact", async () => {
-    // Backdated to 26 so the numbered migrations actually run — session 1 stamps
-    // the CURRENT version, and a store already marked current skips every one.
-    //
-    // Scope note: this is an integration smoke, NOT proof that migration 027's
-    // body works. `runMigration` reads settings over IPC, which runs the
-    // read-time normalizer in `getVoiceSettings`, so a no-op migration would
-    // still surface the new model here. The migration body is proven by the
-    // full-barrel test in StoreMigrations.test.ts, where nothing masks it. What
-    // this test uniquely covers is the real Electron boot path: the runner
-    // advances the schema and nothing else in voiceInput is destroyed en route.
+  // One backdated boot covers the real Electron path: the numbered migrations
+  // run, the read-time normalizer folds the legacy key in, and nothing else in
+  // voiceInput is lost. The per-branch migration rules are unit-tested
+  // (voiceInput.paragraph.test.ts, StoreMigrations.test.ts).
+  test("a schema-26 install with a legacy key and retired models comes back upgraded and intact", async () => {
+    // Backdated to 26 — session 1 stamps the CURRENT version, and a store
+    // already marked current skips every numbered migration.
     const { migrated, onDisk } = await runMigration(
       {
         enabled: true,
-        openaiApiKey: "sk-existing",
+        correctionApiKey: "sk-legacy-correction-key",
         language: "en",
         customDictionary: ["Daintree"],
         transcriptionProvider: "deepgram",
         deepgramApiKey: "dg-existing",
         transcriptionModel: "gpt-realtime-whisper",
         correctionEnabled: false,
-        correctionModel: "gpt-5.6-luna",
+        correctionModel: "gpt-5-mini",
         correctionCustomInstructions: "",
         paragraphingStrategy: "spoken-command",
         resolveFileLinks: true,
@@ -475,46 +322,34 @@ test.describe.serial("E2E: Voice Input — Settings Migration", () => {
       26
     );
 
+    expect(migrated.openaiApiKey).toBe("sk-legacy-correction-key");
+    expect(migrated.correctionApiKey).toBeUndefined();
     expect(migrated.transcriptionModel).toBe("gpt-live-transcribe");
+    // The retired gpt-5-mini correction model migrates to gpt-5.6-luna (#11365).
+    expect(migrated.correctionModel).toBe("gpt-5.6-luna");
+
+    expect(onDisk.voiceInput.openaiApiKey).toBe("sk-legacy-correction-key");
+    expect(onDisk.voiceInput.correctionApiKey).toBeUndefined();
     expect(onDisk.voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
-    // Advancement, not a hard-coded latest — the exact number is the migration
-    // registry's business and moves with every future migration.
+    expect(onDisk.voiceInput.correctionModel).toBe("gpt-5.6-luna");
+    // Advancement, not a hard-coded latest — the exact number moves with every
+    // future migration.
     expect(onDisk._schemaVersion).toBeGreaterThan(26);
+
     // The provider — not the model — selects the backend, so a Deepgram user's
     // choice must survive the model upgrade untouched (#9175).
     expect(migrated.transcriptionProvider).toBe("deepgram");
     expect(migrated.deepgramApiKey).toBe("dg-existing");
     expect(migrated.customDictionary).toEqual(["Daintree"]);
   });
-
-  test("legacy apiKey field migrates into openaiApiKey when no correctionApiKey is present", async () => {
-    // Covers the second branch in voiceInput.ts: when correctionApiKey is absent
-    // but the older top-level `apiKey` exists, the migration falls through to it.
-    const { migrated, onDisk } = await runMigration({
-      enabled: false,
-      apiKey: "sk-original-key",
-      language: "en",
-      customDictionary: [],
-      transcriptionModel: "gpt-live-transcribe",
-      correctionEnabled: false,
-      correctionModel: "gpt-5-mini",
-      correctionCustomInstructions: "",
-      paragraphingStrategy: "spoken-command",
-      resolveFileLinks: true,
-    });
-
-    expect(migrated.openaiApiKey).toBe("sk-original-key");
-    expect(migrated.apiKey).toBeUndefined();
-    expect(onDisk.voiceInput.openaiApiKey).toBe("sk-original-key");
-    expect(onDisk.voiceInput.apiKey).toBeUndefined();
-  });
 });
 
 // ===========================================================================
-// Section 3 — OpenAI Realtime IPC lifecycle (mock WebSocket backend)
+// Section 2 — OpenAI Realtime IPC lifecycle (mock WebSocket backend) and the
+// Settings UI, on one launch
 // ===========================================================================
 
-test.describe.serial("E2E: Voice Input — OpenAI Realtime IPC Lifecycle", () => {
+test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => {
   let ctx: AppContext;
   let mockServer: WebSocketServer;
   let mockState: MockState;
@@ -581,202 +416,323 @@ test.describe.serial("E2E: Voice Input — OpenAI Realtime IPC Lifecycle", () =>
     removePathSync(userDataDir);
   });
 
-  test.beforeEach(async () => {
-    resetMockState(mockState);
-    await clearCapturedEvents(ctx.window);
-    // Restore defaults so a failed/aborted prior test cannot leak settings state
-    // (e.g. the "manual paragraphing" test below switching to manual mid-run).
-    await ipcSetSettings(ctx.window, { paragraphingStrategy: "spoken-command" });
+  test.describe.serial("IPC lifecycle", () => {
+    test.beforeEach(async () => {
+      resetMockState(mockState);
+      await clearCapturedEvents(ctx.window);
+      // Restore defaults so a failed/aborted prior test cannot leak settings state
+      // (e.g. the "manual paragraphing" test below switching to manual mid-run).
+      await ipcSetSettings(ctx.window, { paragraphingStrategy: "spoken-command" });
+    });
+
+    test("start → session.updated → status 'recording'; stop → commit → completed transcript", async () => {
+      mockState.scenario = {
+        onSessionUpdate: (ws) => send(ws, { type: "session.updated" }),
+        onCommit: (ws) => sendTranscript(ws, "hello world"),
+      };
+
+      const startResult = await ipcStart(ctx.window);
+      expect(startResult).toEqual({ ok: true });
+
+      await expect
+        .poll(async () => (await getCapturedEvents(ctx.window)).statuses, { timeout: T_MEDIUM })
+        .toContain("recording");
+
+      await ipcSendAudio(ctx.window);
+      await ipcStop(ctx.window);
+
+      await expect
+        .poll(async () => (await getCapturedEvents(ctx.window)).completes.map((c) => c.text), {
+          timeout: T_MEDIUM,
+        })
+        .toContain("hello world");
+
+      // Protocol-level proof: session.update arrived before commit.
+      const types = mockState.received.map((m) => m.type);
+      expect(types).toContain("session.update");
+      expect(types).toContain("input_audio_buffer.commit");
+      expect(types.indexOf("session.update")).toBeLessThan(
+        types.indexOf("input_audio_buffer.commit")
+      );
+
+      // session.update payload must carry the realtime contract the server expects.
+      // Catches silent regressions if VoiceTranscriptionService drops a required field.
+      const sessionUpdate = mockState.received.find((m) => m.type === "session.update");
+      expect(sessionUpdate).toBeDefined();
+      const session = (sessionUpdate!.raw as { session: Record<string, unknown> }).session;
+      expect(session.type).toBe("transcription");
+      const audio = session.audio as { input: Record<string, unknown> };
+      const transcription = audio.input.transcription as Record<string, unknown>;
+      expect(transcription.model).toBe("gpt-live-transcribe");
+      expect(transcription.languages).toEqual(["en"]);
+      // Presence and validity are the contract; the exact tier is tuning.
+      expect(["minimal", "low", "medium", "high", "xhigh"]).toContain(transcription.delay);
+      // `languages` (array) supersedes the deprecated singular `language`; the two
+      // are mutually exclusive on the wire and must never both be sent.
+      expect(transcription).not.toHaveProperty("language");
+      // `turn_detection` must be EXPLICITLY null — omitting it makes the server
+      // apply a default VAD and silently emit no transcription. Segmentation is
+      // driven client-side by the Silero VAD worker (commit at end-of-speech,
+      // with an 8s max-segment backstop).
+      expect(audio.input.turn_detection).toBeNull();
+
+      const captured = await getCapturedEvents(ctx.window);
+      expect(captured.completes).toEqual([{ text: "hello world", willCorrect: false }]);
+    });
+
+    test("delta events surface to renderer as onTranscriptionDelta in order", async () => {
+      mockState.scenario = {
+        onSessionUpdate: (ws) => {
+          send(ws, { type: "session.updated" });
+          send(ws, {
+            type: "conversation.item.input_audio_transcription.delta",
+            delta: "hello ",
+          });
+          send(ws, {
+            type: "conversation.item.input_audio_transcription.delta",
+            delta: "world",
+          });
+        },
+        onCommit: (ws) => sendTranscript(ws, "hello world"),
+      };
+
+      await ipcStart(ctx.window);
+
+      await expect
+        .poll(async () => (await getCapturedEvents(ctx.window)).deltas, { timeout: T_MEDIUM })
+        .toEqual(["hello ", "world"]);
+
+      await ipcSendAudio(ctx.window);
+      await ipcStop(ctx.window);
+
+      await expect
+        .poll(async () => (await getCapturedEvents(ctx.window)).completes.length, {
+          timeout: T_MEDIUM,
+        })
+        .toBe(1);
+    });
+
+    test("spoken-command paragraphing strips a trailing 'new paragraph' command", async () => {
+      mockState.scenario = {
+        onSessionUpdate: (ws) => send(ws, { type: "session.updated" }),
+        onCommit: (ws) => sendTranscript(ws, "hello new paragraph"),
+      };
+
+      await ipcStart(ctx.window);
+      await ipcSendAudio(ctx.window);
+      await ipcStop(ctx.window);
+
+      // The IPC handler applies applyDictationCommands → "hello\n\n", then
+      // split + filter(Boolean) drops the trailing empty paragraph.
+      await expect
+        .poll(async () => (await getCapturedEvents(ctx.window)).completes.map((c) => c.text), {
+          timeout: T_MEDIUM,
+        })
+        .toEqual(["hello"]);
+
+      const captured = await getCapturedEvents(ctx.window);
+      expect(captured.paragraphBoundaries).toEqual([]);
+    });
+
+    test("paragraphing 'manual' strategy passes spoken commands through as literal text", async () => {
+      await ipcSetSettings(ctx.window, { paragraphingStrategy: "manual" });
+
+      mockState.scenario = {
+        onSessionUpdate: (ws) => send(ws, { type: "session.updated" }),
+        onCommit: (ws) => sendTranscript(ws, "hello new paragraph world"),
+      };
+
+      await ipcStart(ctx.window);
+      await ipcSendAudio(ctx.window);
+      await ipcStop(ctx.window);
+
+      await expect
+        .poll(async () => (await getCapturedEvents(ctx.window)).completes.map((c) => c.text), {
+          timeout: T_MEDIUM,
+        })
+        .toEqual(["hello new paragraph world"]);
+      // No inline restore — `beforeEach` resets paragraphingStrategy to "spoken-command".
+    });
+
+    test("graceful drain: stop awaits server completed before resolving", async () => {
+      let commitArrivedAt = 0;
+      let completeSentAt = 0;
+
+      mockState.scenario = {
+        onSessionUpdate: (ws) => send(ws, { type: "session.updated" }),
+        onCommit: (ws) => {
+          commitArrivedAt = Date.now();
+          setTimeout(() => {
+            completeSentAt = Date.now();
+            sendTranscript(ws, "drained transcript");
+          }, 300);
+        },
+      };
+
+      await ipcStart(ctx.window);
+      await ipcSendAudio(ctx.window);
+
+      const stopStartedAt = Date.now();
+      await ipcStop(ctx.window);
+      const stopReturnedAt = Date.now();
+
+      // The commit and the delayed completed must both be observed before stop() returns.
+      expect(commitArrivedAt).toBeGreaterThan(0);
+      expect(completeSentAt).toBeGreaterThan(commitArrivedAt);
+      expect(stopReturnedAt).toBeGreaterThanOrEqual(completeSentAt);
+      expect(stopReturnedAt - stopStartedAt).toBeGreaterThanOrEqual(250);
+
+      await expect
+        .poll(async () => (await getCapturedEvents(ctx.window)).completes.map((c) => c.text), {
+          timeout: T_MEDIUM,
+        })
+        .toContain("drained transcript");
+    });
+
+    test("server 'error' event surfaces as onError; stop afterwards is idempotent", async () => {
+      mockState.scenario = {
+        onSessionUpdate: (ws) => {
+          send(ws, { type: "session.updated" });
+          send(ws, {
+            type: "error",
+            error: { message: "Invalid auth token", type: "invalid_request_error" },
+          });
+        },
+      };
+
+      await ipcStart(ctx.window);
+
+      await expect
+        .poll(
+          async () =>
+            (await getCapturedEvents(ctx.window)).errors.map((error) =>
+              typeof error === "string" ? error : (error.message ?? "")
+            ),
+          { timeout: T_LONG }
+        )
+        .toContain("Invalid auth token");
+
+      // No throw — handler tolerates stop() on an already-cleaned session.
+      await ipcStop(ctx.window);
+    });
   });
 
-  test("start → session.updated → status 'recording'; stop → commit → completed transcript", async () => {
-    mockState.scenario = {
-      onSessionUpdate: (ws) => send(ws, { type: "session.updated" }),
-      onCommit: (ws) => sendTranscript(ws, "hello world"),
-    };
+  // Runs after the IPC lifecycle on the same launch: the seeded key and the
+  // enabled flag are reset here, and a renderer reload in the key test would
+  // drop the IPC event capture the lifecycle tests rely on.
+  test.describe.serial("Settings UI", () => {
+    test.beforeAll(async () => {
+      await ipcSetSettings(ctx.window, { enabled: false, openaiApiKey: "" });
+    });
 
-    const startResult = await ipcStart(ctx.window);
-    expect(startResult).toEqual({ ok: true });
-
-    await expect
-      .poll(async () => (await getCapturedEvents(ctx.window)).statuses, { timeout: T_MEDIUM })
-      .toContain("recording");
-
-    await ipcSendAudio(ctx.window);
-    await ipcStop(ctx.window);
-
-    await expect
-      .poll(async () => (await getCapturedEvents(ctx.window)).completes.map((c) => c.text), {
-        timeout: T_MEDIUM,
-      })
-      .toContain("hello world");
-
-    // Protocol-level proof: session.update arrived before commit.
-    const types = mockState.received.map((m) => m.type);
-    expect(types).toContain("session.update");
-    expect(types).toContain("input_audio_buffer.commit");
-    expect(types.indexOf("session.update")).toBeLessThan(
-      types.indexOf("input_audio_buffer.commit")
-    );
-
-    // session.update payload must carry the realtime contract the server expects.
-    // Catches silent regressions if VoiceTranscriptionService drops a required field.
-    const sessionUpdate = mockState.received.find((m) => m.type === "session.update");
-    expect(sessionUpdate).toBeDefined();
-    const session = (sessionUpdate!.raw as { session: Record<string, unknown> }).session;
-    expect(session.type).toBe("transcription");
-    const audio = session.audio as { input: Record<string, unknown> };
-    const transcription = audio.input.transcription as Record<string, unknown>;
-    expect(transcription.model).toBe("gpt-live-transcribe");
-    expect(transcription.languages).toEqual(["en"]);
-    // Presence and validity are the contract; the exact tier is tuning.
-    expect(["minimal", "low", "medium", "high", "xhigh"]).toContain(transcription.delay);
-    // `languages` (array) supersedes the deprecated singular `language`; the two
-    // are mutually exclusive on the wire and must never both be sent.
-    expect(transcription).not.toHaveProperty("language");
-    // `turn_detection` must be EXPLICITLY null — omitting it makes the server
-    // apply a default VAD and silently emit no transcription. Segmentation is
-    // driven client-side by the Silero VAD worker (commit at end-of-speech,
-    // with an 8s max-segment backstop).
-    expect(audio.input.turn_detection).toBeNull();
-
-    const captured = await getCapturedEvents(ctx.window);
-    expect(captured.completes).toEqual([{ text: "hello world", willCorrect: false }]);
-  });
-
-  test("delta events surface to renderer as onTranscriptionDelta in order", async () => {
-    mockState.scenario = {
-      onSessionUpdate: (ws) => {
-        send(ws, { type: "session.updated" });
-        send(ws, {
-          type: "conversation.item.input_audio_transcription.delta",
-          delta: "hello ",
+    test.afterEach(async () => {
+      await ipcSetSettings(ctx.window, { enabled: false, openaiApiKey: "" });
+      if (await ctx.window.locator(SEL.settings.heading).isVisible()) {
+        await ctx.window.keyboard.press("Escape");
+        await expect(ctx.window.locator(SEL.settings.heading)).not.toBeVisible({
+          timeout: T_SHORT,
         });
-        send(ws, {
-          type: "conversation.item.input_audio_transcription.delta",
-          delta: "world",
-        });
-      },
-      onCommit: (ws) => sendTranscript(ws, "hello world"),
-    };
+      }
+    });
 
-    await ipcStart(ctx.window);
+    test("voice settings tab renders Speech-to-Text section with disabled defaults", async () => {
+      const { window } = ctx;
+      await openSettings(window);
+      await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
-    await expect
-      .poll(async () => (await getCapturedEvents(ctx.window)).deltas, { timeout: T_MEDIUM })
-      .toEqual(["hello ", "world"]);
+      await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Voice Input" }).click();
+      await expect(window.locator("h3", { hasText: "Voice Input" })).toBeVisible({
+        timeout: T_SHORT,
+      });
 
-    await ipcSendAudio(ctx.window);
-    await ipcStop(ctx.window);
+      const toggle = window.getByRole("switch", { name: "Dictation", exact: true });
+      await expect(toggle).toBeVisible({ timeout: T_SHORT });
+      await expect(toggle).toHaveAttribute("aria-checked", "false");
 
-    await expect
-      .poll(async () => (await getCapturedEvents(ctx.window)).completes.length, {
-        timeout: T_MEDIUM,
-      })
-      .toBe(1);
-  });
+      await expect(window.getByText("Speech-to-text", { exact: true })).toBeVisible();
+      await expect(
+        window.getByText("Real-time transcription with your own provider API key.", { exact: true })
+      ).toBeVisible();
 
-  test("spoken-command paragraphing strips a trailing 'new paragraph' command", async () => {
-    mockState.scenario = {
-      onSessionUpdate: (ws) => send(ws, { type: "session.updated" }),
-      onCommit: (ws) => sendTranscript(ws, "hello new paragraph"),
-    };
+      // While disabled, the API key field is not rendered. Pin the placeholder's
+      // presence once enabled (next test) so this zero-count can't pass vacuously.
+      await expect(window.getByPlaceholder("Paste an OpenAI API key", { exact: true })).toHaveCount(
+        0
+      );
+      await expect(window.getByText("OpenAI API key", { exact: true })).toHaveCount(0);
+    });
 
-    await ipcStart(ctx.window);
-    await ipcSendAudio(ctx.window);
-    await ipcStop(ctx.window);
+    test("enabling voice input reveals API key, language, paragraphing, and dictionary controls", async () => {
+      const { window } = ctx;
+      await openSettings(window);
+      await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Voice Input" }).click();
 
-    // The IPC handler applies applyDictationCommands → "hello\n\n", then
-    // split + filter(Boolean) drops the trailing empty paragraph.
-    await expect
-      .poll(async () => (await getCapturedEvents(ctx.window)).completes.map((c) => c.text), {
-        timeout: T_MEDIUM,
-      })
-      .toEqual(["hello"]);
+      const toggle = window.getByRole("switch", { name: "Dictation", exact: true });
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-checked", "true", { timeout: T_SHORT });
 
-    const captured = await getCapturedEvents(ctx.window);
-    expect(captured.paragraphBoundaries).toEqual([]);
-  });
+      await expect(window.getByPlaceholder("Paste an OpenAI API key", { exact: true })).toBeVisible(
+        {
+          timeout: T_SHORT,
+        }
+      );
+      await expect(window.getByText("Language", { exact: true })).toBeVisible();
+      await expect(window.getByText("Paragraph breaks", { exact: true }).first()).toBeVisible();
+      await expect(window.getByText("Custom dictionary", { exact: true })).toBeVisible();
+    });
 
-  test("paragraphing 'manual' strategy passes spoken commands through as literal text", async () => {
-    await ipcSetSettings(ctx.window, { paragraphingStrategy: "manual" });
+    test("API key persists across settings dialog reopen and Remove key reverts the indicator", async () => {
+      const { window } = ctx;
+      // Pre-seed via IPC — avoids the validation/HTTP path the Save button triggers.
+      await ipcSetSettings(window, { enabled: true, openaiApiKey: PRE_SEEDED_KEY });
+      // The Settings dialog keeps visited tabs mounted between closes. Reload so
+      // this assertion reads the pre-seeded value through the tab's mount path.
+      await window.reload({ waitUntil: "domcontentloaded" });
+      await window
+        .locator(SEL.toolbar.toggleSidebar)
+        .waitFor({ state: "visible", timeout: T_LONG });
+      ctx.window = window;
 
-    mockState.scenario = {
-      onSessionUpdate: (ws) => send(ws, { type: "session.updated" }),
-      onCommit: (ws) => sendTranscript(ws, "hello new paragraph world"),
-    };
+      await openSettings(window);
+      await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Voice Input" }).click();
 
-    await ipcStart(ctx.window);
-    await ipcSendAudio(ctx.window);
-    await ipcStop(ctx.window);
+      // Configured-state indicators: the replace placeholder, the masked "Saved ·"
+      // accessory, and the Remove key button.
+      const keyInput = window.getByPlaceholder("Paste a new key to replace the saved one", {
+        exact: true,
+      });
+      await expect(keyInput).toBeVisible({ timeout: T_SHORT });
+      await expect(window.getByText(/^Saved · /)).toBeVisible();
+      const removeButton = window.getByRole("button", { name: "Remove key", exact: true });
+      await expect(removeButton).toBeVisible();
 
-    await expect
-      .poll(async () => (await getCapturedEvents(ctx.window)).completes.map((c) => c.text), {
-        timeout: T_MEDIUM,
-      })
-      .toEqual(["hello new paragraph world"]);
-    // No inline restore — `beforeEach` resets paragraphingStrategy to "spoken-command".
-  });
+      // Close + reopen — key must still be configured.
+      await window.keyboard.press("Escape");
+      await openSettings(window);
+      await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Voice Input" }).click();
 
-  test("graceful drain: stop awaits server completed before resolving", async () => {
-    let commitArrivedAt = 0;
-    let completeSentAt = 0;
+      await expect(keyInput).toBeVisible({ timeout: T_SHORT });
+      await expect(removeButton).toBeVisible();
 
-    mockState.scenario = {
-      onSessionUpdate: (ws) => send(ws, { type: "session.updated" }),
-      onCommit: (ws) => {
-        commitArrivedAt = Date.now();
-        setTimeout(() => {
-          completeSentAt = Date.now();
-          sendTranscript(ws, "drained transcript");
-        }, 300);
-      },
-    };
+      // Remove key reverts to unconfigured (placeholder returns to the empty-state copy).
+      await removeButton.click();
+      await window
+        .getByRole("alertdialog", { name: "Remove the OpenAI API key?" })
+        .getByRole("button", { name: "Remove key" })
+        .click();
+      await expect(window.getByPlaceholder("Paste an OpenAI API key", { exact: true })).toBeVisible(
+        {
+          timeout: T_SHORT,
+        }
+      );
+      await expect(window.getByText("Key removed", { exact: true })).toBeVisible();
+      await expect(window.getByText("Not set", { exact: true })).toBeVisible();
+      await expect(removeButton).not.toBeVisible({ timeout: T_SHORT });
+      await expect(keyInput).toHaveCount(0);
 
-    await ipcStart(ctx.window);
-    await ipcSendAudio(ctx.window);
-
-    const stopStartedAt = Date.now();
-    await ipcStop(ctx.window);
-    const stopReturnedAt = Date.now();
-
-    // The commit and the delayed completed must both be observed before stop() returns.
-    expect(commitArrivedAt).toBeGreaterThan(0);
-    expect(completeSentAt).toBeGreaterThan(commitArrivedAt);
-    expect(stopReturnedAt).toBeGreaterThanOrEqual(completeSentAt);
-    expect(stopReturnedAt - stopStartedAt).toBeGreaterThanOrEqual(250);
-
-    await expect
-      .poll(async () => (await getCapturedEvents(ctx.window)).completes.map((c) => c.text), {
-        timeout: T_MEDIUM,
-      })
-      .toContain("drained transcript");
-  });
-
-  test("server 'error' event surfaces as onError; stop afterwards is idempotent", async () => {
-    mockState.scenario = {
-      onSessionUpdate: (ws) => {
-        send(ws, { type: "session.updated" });
-        send(ws, {
-          type: "error",
-          error: { message: "Invalid auth token", type: "invalid_request_error" },
-        });
-      },
-    };
-
-    await ipcStart(ctx.window);
-
-    await expect
-      .poll(
-        async () =>
-          (await getCapturedEvents(ctx.window)).errors.map((error) =>
-            typeof error === "string" ? error : (error.message ?? "")
-          ),
-        { timeout: T_LONG }
-      )
-      .toContain("Invalid auth token");
-
-    // No throw — handler tolerates stop() on an already-cleaned session.
-    await ipcStop(ctx.window);
+      // And the underlying store now reflects the empty key.
+      const settings = await ipcGetSettings(window);
+      expect(settings.openaiApiKey).toBe("");
+    });
   });
 });

@@ -161,10 +161,6 @@ test.describe.serial("Core: Worktree Port Rebinding", () => {
     expect(snap.activeProjectId).toBe(projectIdA);
     expect(snap.viewProjectIds).toContain(projectIdC);
 
-    // Pause so the monitor's self-trigger cooldown (GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS
-    // = 1000ms) expires before the external mutation.
-    await ctx.window.waitForTimeout(1500);
-
     writeFileSync(path.join(repoC, "rebind-cached-c1.txt"), "c1\n");
     execSync('git add -A && git commit -m "external-commit-c1"', {
       cwd: repoC,
@@ -187,7 +183,6 @@ test.describe.serial("Core: Worktree Port Rebinding", () => {
 
     // Second external change WITHOUT another switch — proves the rebound port
     // is durable, not a one-shot wake.
-    await ctx.window.waitForTimeout(1500);
     writeFileSync(path.join(repoC, "rebind-cached-c2.txt"), "c2\n");
 
     await expect
@@ -214,9 +209,6 @@ test.describe.serial("Core: Worktree Port Rebinding", () => {
       })
       .toBe(1);
 
-    // Settle the monitor's cooldown window before the external mutation.
-    await ctx.window.waitForTimeout(1500);
-
     writeFileSync(path.join(repoB, "rebind-evicted-b1.txt"), "b1\n");
     execSync('git add -A && git commit -m "external-commit-b1"', {
       cwd: repoB,
@@ -240,7 +232,6 @@ test.describe.serial("Core: Worktree Port Rebinding", () => {
 
     // Second external change WITHOUT another switch — proves the cold-load
     // port is durable too, not just a startup snapshot.
-    await ctx.window.waitForTimeout(1500);
     writeFileSync(path.join(repoB, "rebind-evicted-b2.txt"), "b2\n");
 
     await expect
@@ -265,7 +256,6 @@ test.describe.serial("Core: Worktree Port Rebinding", () => {
     // it externally so B's card returns to a clean state showing the latest
     // commit message — the WorktreeCard text swaps to file-count + relative
     // time while dirty, so `toContainText(commit)` only works on a clean card.
-    await ctx.window.waitForTimeout(1500);
     execSync('git add -A && git commit -m "external-commit-b2"', {
       cwd: repoB,
       stdio: "ignore",
@@ -280,7 +270,6 @@ test.describe.serial("Core: Worktree Port Rebinding", () => {
     // Switch to A, externally commit on A, then return to B and confirm B's
     // card never picked up A's change.
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
-    await ctx.window.waitForTimeout(1500);
 
     writeFileSync(path.join(repoA, "rebind-isolation-a1.txt"), "a1\n");
     execSync('git add -A && git commit -m "external-commit-a1"', {
@@ -307,7 +296,6 @@ test.describe.serial("Core: Worktree Port Rebinding", () => {
     // and assert B's card flips to dirty. This proves B's rebound live port
     // delivers B-specific events post-round-trip — not just that the static
     // snapshot is correct.
-    await ctx.window.waitForTimeout(1500);
     writeFileSync(path.join(repoB, "rebind-isolation-b3.txt"), "b3\n");
 
     await expect

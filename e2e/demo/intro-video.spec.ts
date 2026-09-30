@@ -5,6 +5,10 @@
  *   INTRO_SCENES=A,B,C   subset to run (default: all)
  *   INTRO_RECORD=0       dry run (no capture)
  *   INTRO_SHOTS=1        screenshot after every beat
+ *
+ * Opt-in via DAINTREE_DEMO_INTRO=1: this is a production script with no
+ * assertions, and by default it drives the real Claude, Codex, Grok and
+ * Antigravity CLIs.
  */
 import { test } from "@playwright/test";
 import { mkdirSync, rmSync, writeFileSync } from "fs";
@@ -24,6 +28,11 @@ import { sceneReview, scenePlugins, sceneOutro } from "./intro/scenesC";
 const WANT = new Set((process.env.INTRO_SCENES ?? "A,B,C,D,E,F,G,H,I").split(","));
 
 test("intro video", async () => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "opt-in: records the intro video with real agent CLIs",
+  });
+  test.skip(process.env.DAINTREE_DEMO_INTRO !== "1", "set DAINTREE_DEMO_INTRO=1 to record");
   test.setTimeout(3_600_000);
   mkdirSync(path.join(OUT_DIR, "shots"), { recursive: true });
   rmSync(path.join(OUT_DIR, "log.txt"), { force: true });

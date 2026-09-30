@@ -35,7 +35,6 @@ import { openAndOnboardProject } from "../helpers/project";
 import { dismissBlockingPalette } from "../helpers/overlays";
 import { setAppTheme } from "../helpers/theme";
 import { SEL } from "../helpers/selectors";
-import { T_LONG } from "../helpers/timeouts";
 
 const THEME = process.env.DAINTREE_SHOT_THEME ?? "";
 const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "2";

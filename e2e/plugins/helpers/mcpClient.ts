@@ -99,3 +99,31 @@ export class McpHttpClient {
     return JSON.parse(text) as T;
   }
 }
+
+/**
+ * The HTTP status an MCP endpoint answers a bearer with, the way the agent
+ * would first reach it: a legacy `/sse` URL opens its event stream (dropped as
+ * soon as the status is in), anything else is a Streamable HTTP `initialize`.
+ */
+export async function mcpEndpointStatus(url: string, bearer: string): Promise<number> {
+  if (new URL(url).pathname === "/sse") {
+    const abort = new AbortController();
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { Accept: "text/event-stream", Authorization: `Bearer ${bearer}` },
+        signal: abort.signal,
+      });
+      return response.status;
+    } finally {
+      abort.abort();
+    }
+  }
+  return new McpHttpClient(url, bearer).initialize().then(
+    () => 200,
+    (err: unknown) => {
+      if (err instanceof McpHttpError) return err.status;
+      throw err;
+    }
+  );
+}

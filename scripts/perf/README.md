@@ -140,11 +140,13 @@ This closed a real hole rather than a theoretical one. Before it existed, vitest
 
 Every benchmark runs through one dispatcher, `scripts/perf/index.ts`, exposed as the `perf` npm script. `npm run perf list` prints the full command table with each command's class; each command spawns its benchmark in its own process, so behavior matches invoking the underlying script directly. Add a benchmark by adding one entry to the `REGISTRY` in `registry.ts` — nothing else changes. (The table lives in `registry.ts` rather than `index.ts` so a test can read it without `main()` dispatching a command as a side effect of the import.)
 
-**Every performance spec must be reachable from here, and a test enforces it.** Any spec under `e2e/` whose name ends `-perf.spec.ts` or marks it as a memory harness has to be either a registry command or an explicit entry in `UNREGISTERED_PERF_SPECS` with a reason. Four working benchmarks — project switch, store fan-out, agent launch, worktree-agent-ready — sat outside the dispatcher for months, so the only way to find one was to already know it existed. A benchmark nobody can find is a benchmark nobody compares, which is how a spec ends up measuring a path the product no longer takes. `__tests__/perfRegistry.test.ts` also checks that each command's env gate is a string the spec actually reads: a mismatched gate runs the spec with every test skipped and exits 0, which is a benchmark that reported nothing and looks like it passed.
+**Every performance spec must be reachable from here, and a test enforces it.** Playwright-hosted benchmarks live in `e2e/perf/` and run through `playwright.perf.config.ts` (one worker, no retries), a config a bare `npx playwright test` never loads, so no correctness bucket imports them; each command passes `--config=playwright.perf.config.ts --project=perf`. Every spec in `e2e/perf/`, and any spec elsewhere under `e2e/` whose name ends `-perf.spec.ts` or marks it as a memory harness, has to be either a registry command or an explicit entry in `UNREGISTERED_PERF_SPECS` with a reason. Four working benchmarks — project switch, store fan-out, agent launch, worktree-agent-ready — sat outside the dispatcher for months, so the only way to find one was to already know it existed. A benchmark nobody can find is a benchmark nobody compares, which is how a spec ends up measuring a path the product no longer takes. `__tests__/perfRegistry.test.ts` also checks that each command's env gate is a string the spec actually reads: a mismatched gate runs the spec with every test skipped and exits 0, which is a benchmark that reported nothing and looks like it passed.
 
 ```bash
 npm run perf list
 ```
+
+Four of those commands have no section of their own: `background-energy` (hidden-worktree streaming cost and retained output on reveal; knobs in the spec header and `docs/performance/2026-09-20-energy.md`), `list-mount` (DOM-node delta and long-animation-frame count for ReviewHub mounting 1000 files — the functional half of that journey stays in `full-resilience`), `agent-state-latency` (hidden-pane working↔waiting latency against the 8 s quiet window), and `project-switch-stress` (`STRESS_PROJECTS`, `STRESS_ROUNDS`).
 
 ## One scenario at a time
 
@@ -523,7 +525,7 @@ npm run perf scroll
 
 ## Cold recipe fanout (`perf recipe-fanout`)
 
-`npm run perf recipe-fanout` rebuilds the E2E benchmark bundle, launches the `full-worktree` Playwright project with one worker, and measures cold PTY fanout at N=1, 5, and 10 for both an existing worktree (PERF-180) and a newly created real worktree (PERF-181). The default fixture is a hermetic `claude` executable placed on a temporary `PATH`; it crosses the normal recipe, panel, PTY host, process, MessagePort, xterm, and DOM-paint paths without using user agent configuration or network access.
+`npm run perf recipe-fanout` rebuilds the E2E benchmark bundle, runs `e2e/perf/recipe-fanout-perf.spec.ts` through the perf Playwright config with one worker, and measures cold PTY fanout at N=1, 5, and 10 for both an existing worktree (PERF-180) and a newly created real worktree (PERF-181). The default fixture is a hermetic `claude` executable placed on a temporary `PATH`; it crosses the normal recipe, panel, PTY host, process, MessagePort, xterm, and DOM-paint paths without using user agent configuration or network access.
 
 ```bash
 npm run perf recipe-fanout

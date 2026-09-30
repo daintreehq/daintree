@@ -1,5 +1,11 @@
 import { test, expect } from "@playwright/test";
-import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
+import {
+  launchApp,
+  closeApp,
+  openSecondWindow,
+  getWindowPage,
+  type AppContext,
+} from "../../helpers/launch";
 import { createFixtureRepos } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
@@ -12,9 +18,12 @@ import { T_LONG, T_SHORT } from "../../helpers/timeouts";
 // The banner (`WatchdogDisabledBanner`, role="status") then drives the real
 // `watchdog.restart` action, which broadcasts `watchdog:active` and resets the
 // once-per-cycle `disabledNotified` guard so a second cap-hit can re-fire.
+// The signal is app-wide: it reaches every window through the EVENTS_PUSH
+// fan-out, so a second window must show the banner too.
 
 let ctx: AppContext;
 let fixtureCleanups: Array<() => void> = [];
+let secondRepoDir = "";
 
 async function simulateWatchdogDisabled(app: AppContext["app"]): Promise<void> {
   await app.evaluate(() => {
@@ -28,8 +37,9 @@ async function simulateWatchdogDisabled(app: AppContext["app"]): Promise<void> {
 test.describe.serial("Resilience: watchdog disabled banner + restart", () => {
   test.beforeAll(async () => {
     test.setTimeout(180_000);
-    const [repo] = createFixtureRepos(1);
-    fixtureCleanups = [repo.cleanup];
+    const [repo, secondRepo] = createFixtureRepos(2);
+    fixtureCleanups = [repo.cleanup, secondRepo.cleanup];
+    secondRepoDir = secondRepo.dir;
     ctx = await launchApp({ env: { DAINTREE_E2E_FAULT_MODE: "1" } });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, repo.dir, "watchdog-project");
   });
@@ -77,5 +87,30 @@ test.describe.serial("Resilience: watchdog disabled banner + restart", () => {
     await expect(ctx.window.locator(SEL.recovery.watchdogRestartButton)).toBeVisible({
       timeout: T_SHORT,
     });
+  });
+
+  test("disabled signal is broadcast to every window", async () => {
+    const bannerA = ctx.window.locator(SEL.recovery.watchdogDisabledBanner);
+
+    // Arm (a no-op if the previous test left it armed), then restart to clear
+    // the banner and reset the once-per-cycle guard, so the signal below is a
+    // fresh cap-hit.
+    await simulateWatchdogDisabled(ctx.app);
+    await expect(bannerA).toBeVisible({ timeout: T_LONG });
+    await ctx.window.locator(SEL.recovery.watchdogRestartButton).click();
+    await expect(bannerA).toBeHidden({ timeout: T_LONG });
+
+    const handle = await openSecondWindow(ctx.app, ctx.window, { projectPath: secondRepoDir });
+    const pageB = await getWindowPage(ctx.app, handle.windowId);
+    await expect(pageB.getByRole("toolbar", { name: "Main toolbar" })).toBeVisible({
+      timeout: T_LONG,
+    });
+    const bannerB = pageB.locator(SEL.recovery.watchdogDisabledBanner);
+    await expect(bannerB).toBeHidden({ timeout: T_SHORT });
+
+    await simulateWatchdogDisabled(ctx.app);
+
+    await expect(bannerA).toBeVisible({ timeout: T_LONG });
+    await expect(bannerB).toBeVisible({ timeout: T_LONG });
   });
 });

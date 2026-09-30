@@ -23,6 +23,7 @@ const coreTimeout = isWindowsCI
 // asks for a restart), so the per-test budget has to clear two cold starts at
 // the platform's ready-state deadline — see waitForOpenCodeReady.
 const onlineTimeout = isWindowsCI ? 480_000 : isCI ? 420_000 : 300_000;
+export const expectTimeout = isWindowsCI ? 15_000 : isCI ? 10_000 : 5_000;
 
 // Blob reporter is opted into by the cross-platform stabilize sweep and the
 // release E2E matrix, so per-leg outputs can be merged into a single unified
@@ -45,7 +46,8 @@ const jsonOutputFile =
   (process.env.PLAYWRIGHT_JSON_REPORT === "1" ? "playwright-results.json" : "");
 const useJsonReporter = jsonOutputFile.length > 0;
 const useBlobReporter = process.env.PLAYWRIGHT_BLOB_REPORT === "1";
-const reporter: ReporterDescription[] | undefined =
+// Exported so playwright.demo.config.ts reports through the same CI paths.
+export const reporter: ReporterDescription[] | undefined =
   useBlobReporter || useJsonReporter
     ? [
         ["github"] as ReporterDescription,
@@ -64,7 +66,9 @@ export default defineConfig({
   // FAIL_ON_FLAKY_TESTS so only release-gating suites (core, online) enable
   // it in CI. full-* buckets keep retries without a flake gate for PR velocity.
   failOnFlakyTests: process.env.FAIL_ON_FLAKY_TESTS === "true",
-  expect: { timeout: isWindowsCI ? 15_000 : isCI ? 10_000 : 5_000 },
+  expect: { timeout: expectTimeout },
+  globalSetup: "./e2e/global-setup.ts",
+  globalTeardown: "./e2e/global-teardown.ts",
   outputDir: "./test-results",
   ...(reporter ? { reporter } : {}),
   use: {
@@ -122,8 +126,8 @@ export default defineConfig({
       // making specs fail at launch with empty logs — not plugin defects.
       // workers:1 is baked into the project (not a CLI flag) so the bucket
       // stays serialized even under CI's e2eWorkers:2 and for a bare local
-      // `npx playwright test --project=full-plugins`. Mirrors the `demo`
-      // bucket's mitigation for the same crashpad exhaustion.
+      // `npx playwright test --project=full-plugins`. playwright.demo.config.ts
+      // serializes its specs for the same crashpad exhaustion.
       name: "full-plugins",
       testDir: "./e2e/full/plugins",
       timeout: coreTimeout,
@@ -156,26 +160,6 @@ export default defineConfig({
       name: "screenshots",
       testDir: "./e2e/screenshots",
       timeout: 1_800_000,
-      retries: 0,
-    },
-    {
-      // Demo-engine pipeline — exercises the in-app demo automation API
-      // (window.electron.demo) to record screencasts and drive scripted
-      // terminal input. Runs on demand via the `demo` suite in
-      // .github/workflows/e2e.yml; not a release gate.
-      //
-      // workers:1 is mandatory and baked into the project (not a CLI flag):
-      // these specs cold-launch Electron and record at 4K, so parallel
-      // workers contend on the crashpad Mach port and the shared demo repo
-      // fixtures. Keeping it here guarantees serialization even for a bare
-      // local `npx playwright test --project=demo`.
-      //
-      // 1800s (30 min) — demo recording choreography plus Electron cold
-      // launch on Windows justifies the same budget as `screenshots`.
-      name: "demo",
-      testDir: "./e2e/demo",
-      timeout: 1_800_000,
-      workers: 1,
       retries: 0,
     },
   ],

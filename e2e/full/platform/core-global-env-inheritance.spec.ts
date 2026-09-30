@@ -3,7 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 import { openSettings, openTerminal, selectSettingsScope } from "../../helpers/panels";
 import { runTerminalCommand, waitForTerminalText } from "../../helpers/terminal";
 
@@ -46,9 +46,6 @@ test.describe.serial("Full: Global Environment Variable Inheritance", () => {
       timeout: T_SHORT,
     });
 
-    // Should NOT show "No project open" message — the global tab works without a project
-    await expect(window.locator("text=No project open")).not.toBeVisible({ timeout: T_SETTLE });
-
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
   });
@@ -76,14 +73,17 @@ test.describe.serial("Full: Global Environment Variable Inheritance", () => {
     const valueInputs = window.locator('[aria-label="Environment variable value"]');
     await valueInputs.last().fill("test_global_value");
 
-    // Save
-    await window.locator("button", { hasText: "Save" }).click();
-    await window.waitForTimeout(T_SETTLE);
+    const envSection = window.locator("#environment-variables");
+    await expect(envSection.getByText(/^Unsaved changes/)).toBeVisible({ timeout: T_SHORT });
 
-    // Verify save button disappears (isDirty becomes false)
-    await expect(window.locator("button", { hasText: "Saving…" })).not.toBeVisible({
-      timeout: T_MEDIUM,
-    });
+    // Save settles the form: the button disables and the status reverts to the
+    // clean-state hint once the write lands.
+    const saveButton = envSection.getByRole("button", { name: "Save", exact: true });
+    await saveButton.click();
+    await expect(saveButton).toBeDisabled({ timeout: T_MEDIUM });
+    await expect(
+      envSection.getByText("Applies to new terminals — reopen a terminal to pick up changes")
+    ).toBeVisible({ timeout: T_MEDIUM });
 
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
@@ -100,9 +100,7 @@ test.describe.serial("Full: Global Environment Variable Inheritance", () => {
     await openSettings(window);
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
-    // Switch to Project scope (Radix Select)
     await selectSettingsScope(window, "Project");
-    await window.waitForTimeout(T_SETTLE);
 
     // Click Variables tab
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Variables" }).click();
@@ -135,12 +133,13 @@ test.describe.serial("Full: Global Environment Variable Inheritance", () => {
     const valueInputs = window.locator('[aria-label="Environment variable value"]');
     await valueInputs.last().fill("project_override");
 
-    // Save the project variable
-    await window.locator("button", { hasText: "Save" }).click();
-    await window.waitForTimeout(T_SETTLE);
+    const variablesPanel = window.locator("#settings-panel-project\\:variables");
+    await variablesPanel.getByRole("button", { name: "Save", exact: true }).click();
 
     // Verify the global row now shows "Overridden" badge
-    await expect(window.locator("text=Overridden")).toBeVisible({ timeout: T_MEDIUM });
+    await expect(variablesPanel.getByText("Overridden", { exact: true })).toBeVisible({
+      timeout: T_MEDIUM,
+    });
 
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });

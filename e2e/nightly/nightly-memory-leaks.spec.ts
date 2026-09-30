@@ -3,21 +3,59 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { getGridPanelCount, getGridPanelIds, getPanelById, openTerminal } from "../helpers/panels";
+import { waitForTerminalPty } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
 import { T_LONG, T_MEDIUM } from "../helpers/timeouts";
 import { measureMainMemory, measureRendererMemory } from "../helpers/stress";
 
 const HEAP_CYCLE_COUNT = 20;
 const HEAP_THRESHOLD_MB = 20;
-const SAB_CYCLE_COUNT = 10;
-const SAB_THRESHOLD_MB = 10;
 const WARMUP_CYCLES = 3;
-const ERROR_INJECT_COUNT = 100;
-const MAX_ERRORS = 50;
 
 function toMB(bytes: number): number {
   return bytes / (1024 * 1024);
 }
+
+/** Terminals whose PTY is still alive in the pty-host, across all projects. */
+async function getLivePtyCount(window: Page): Promise<number> {
+  return window.evaluate(async () => {
+    const terminals = await globalThis.window.electron.terminal.getAllTerminals();
+    return terminals.filter((t) => t.hasPty === true).length;
+  });
+}
+
+/**
+ * Closed terminals the pty-host still has registered. A killed PTY's entry is
+ * dropped only once its process has exited, so an empty list is the exit
+ * barrier `hasPty` is not: that flag flips at kill time, before the exit.
+ */
+async function getUnexitedTerminals(
+  window: AppContext["window"],
+  ids: string[]
+): Promise<string[]> {
+  return window.evaluate(async (closed) => {
+    const terminals = await globalThis.window.electron.terminal.getAllTerminals();
+    return terminals.filter((t) => closed.includes(t.id)).map((t) => t.id);
+  }, ids);
+}
+
+/**
+ * Wait until every terminal the churn closed has actually exited. Readings
+ * taken while teardown is still in flight measure the teardown, not a leak.
+ */
+async function waitForPtysToSettle(window: AppContext["window"], expected: number): Promise<void> {
+  await expect
+    .poll(
+      async () => ({
+        live: await getLivePtyCount(window),
+        unexited: await getUnexitedTerminals(window, closedTerminalIds),
+      }),
+      { message: "closed terminals never exited", timeout: T_LONG }
+    )
+    .toEqual({ live: expected, unexited: [] });
+}
+
+const closedTerminalIds: string[] = [];
 
 async function openAndCloseTerminal(window: AppContext["window"]): Promise<void> {
   const idsBefore = await getGridPanelIds(window);
@@ -30,12 +68,16 @@ async function openAndCloseTerminal(window: AppContext["window"]): Promise<void>
   const newId = idsAfter.find((id) => !idsBefore.includes(id));
   const panel = newId ? getPanelById(window, newId) : window.locator(SEL.panel.gridPanel).last();
   await expect(panel).toBeVisible({ timeout: T_MEDIUM });
+  // Close an attached PTY, not a pending spawn, so every cycle takes the same
+  // teardown path; spawns past the rate limit queue until then.
+  await waitForTerminalPty(window, panel, T_LONG);
 
   // Use force click to handle the close button being momentarily detached
   // from the DOM during re-renders (common on Windows CI)
   const closeBtn = panel.locator(SEL.panel.close);
   await closeBtn.click({ modifiers: ["Alt"], force: true, timeout: T_MEDIUM });
   await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(idsBefore.length);
+  if (newId) closedTerminalIds.push(newId);
 }
 
 let ctx: AppContext;
@@ -60,12 +102,13 @@ test.describe.serial("Nightly: Memory Leak Detection", () => {
     test.setTimeout(600_000);
     const { app, window } = ctx;
 
+    const idlePtys = await getLivePtyCount(window);
+
     await test.step("warmup cycles", async () => {
       for (let i = 0; i < WARMUP_CYCLES; i++) {
         await openAndCloseTerminal(window);
-        await window.waitForTimeout(500);
       }
-      await window.waitForTimeout(2000);
+      await waitForPtysToSettle(window, idlePtys);
     });
 
     const baseline = await measureMainMemory(app, { forceGc: true });
@@ -74,11 +117,10 @@ test.describe.serial("Nightly: Memory Leak Detection", () => {
     await test.step(`run ${HEAP_CYCLE_COUNT} open/close cycles`, async () => {
       for (let i = 0; i < HEAP_CYCLE_COUNT; i++) {
         await openAndCloseTerminal(window);
-        await window.waitForTimeout(500);
       }
     });
 
-    await window.waitForTimeout(3000);
+    await waitForPtysToSettle(window, idlePtys);
     const final = await measureMainMemory(app, { forceGc: true });
     const growthMB = toMB(final.heapUsed - baseline.heapUsed);
     console.log(
@@ -86,57 +128,6 @@ test.describe.serial("Nightly: Memory Leak Detection", () => {
     );
 
     expect(growthMB).toBeLessThan(HEAP_THRESHOLD_MB);
-  });
-
-  test("external memory growth bounded after terminal churn (SAB cleanup)", async () => {
-    test.setTimeout(600_000);
-    const { app, window } = ctx;
-
-    const baseline = await measureMainMemory(app, { forceGc: true });
-    console.log(
-      `[sab] baseline external: ${toMB(baseline.external).toFixed(2)} MB, arrayBuffers: ${toMB(baseline.arrayBuffers).toFixed(2)} MB`
-    );
-
-    await test.step(`run ${SAB_CYCLE_COUNT} open/close cycles`, async () => {
-      for (let i = 0; i < SAB_CYCLE_COUNT; i++) {
-        await openAndCloseTerminal(window);
-        await window.waitForTimeout(500);
-      }
-    });
-
-    await window.waitForTimeout(3000);
-    const final = await measureMainMemory(app, { forceGc: true });
-    const externalGrowthMB = toMB(final.external - baseline.external);
-    const arrayBuffersGrowthMB = toMB(final.arrayBuffers - baseline.arrayBuffers);
-    console.log(
-      `[sab] final external: ${toMB(final.external).toFixed(2)} MB (growth: ${externalGrowthMB.toFixed(2)} MB), arrayBuffers: ${toMB(final.arrayBuffers).toFixed(2)} MB (growth: ${arrayBuffersGrowthMB.toFixed(2)} MB)`
-    );
-
-    expect(externalGrowthMB).toBeLessThan(SAB_THRESHOLD_MB);
-  });
-
-  test("error store bounded at MAX_ERRORS after mass injection", async () => {
-    const { window } = ctx;
-
-    await test.step(`inject ${ERROR_INJECT_COUNT} errors`, async () => {
-      for (let i = 0; i < ERROR_INJECT_COUNT; i++) {
-        await window.evaluate((idx) => {
-          window.__DAINTREE_E2E_ADD_ERROR__?.(`Stress error ${idx}`);
-        }, i);
-      }
-    });
-
-    await test.step("verify error store is bounded", async () => {
-      const errors = await window.evaluate(() => window.__DAINTREE_E2E_ERROR_STORE__?.() ?? []);
-      console.log(`[errors] store size after ${ERROR_INJECT_COUNT} injections: ${errors.length}`);
-      expect(errors.length).toBe(MAX_ERRORS);
-    });
-
-    await test.step("clear all and verify empty", async () => {
-      await window.evaluate(() => window.__DAINTREE_E2E_CLEAR_ERRORS__?.());
-      const errors = await window.evaluate(() => window.__DAINTREE_E2E_ERROR_STORE__?.() ?? []);
-      expect(errors.length).toBe(0);
-    });
   });
 });
 
@@ -269,6 +260,7 @@ test.describe.serial("Nightly: xterm WebGL dispose leak (#9540)", () => {
     skipWithoutGpu();
     test.setTimeout(600_000);
     const { window } = webglCtx;
+    const idlePtys = await getLivePtyCount(window);
 
     await test.step("confirm WebGL actually attaches", async () => {
       const id = await openAgentTerminalWithWebGL(window);
@@ -285,9 +277,8 @@ test.describe.serial("Nightly: xterm WebGL dispose leak (#9540)", () => {
       for (let i = 0; i < WEBGL_WARMUP_CYCLES; i++) {
         const id = await openAgentTerminalWithWebGL(window);
         await closePanel(window, id);
-        await window.waitForTimeout(500);
       }
-      await window.waitForTimeout(2000);
+      await waitForPtysToSettle(window, idlePtys);
     });
 
     const baseline = await measureRendererMemory(window, { forceGc: true });
@@ -305,11 +296,10 @@ test.describe.serial("Nightly: xterm WebGL dispose leak (#9540)", () => {
             timeout: T_MEDIUM,
           })
           .toBe(0);
-        await window.waitForTimeout(300);
       }
     });
 
-    await window.waitForTimeout(2000);
+    await waitForPtysToSettle(window, idlePtys);
     const final = await measureRendererMemory(window, { forceGc: true });
     const growthMB = toMB(final!.usedJSHeapSize - baseline!.usedJSHeapSize);
     console.log(

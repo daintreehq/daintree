@@ -1,7 +1,7 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
-import { dismissTelemetryConsent, openAndOnboardProject } from "../helpers/project";
+import { openAndOnboardProject } from "../helpers/project";
 import { getTerminalText, writeTerminalInput } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
 import {
@@ -10,6 +10,7 @@ import {
   isClaudeTrustRejectionSelected,
   quitClaudeAgentSession,
 } from "../helpers/claudeAuth";
+import { containsChallengeAnswer, createNonceChallenge } from "./nonceChallenge";
 
 let ctx: AppContext;
 let fixtureDir: string;
@@ -117,7 +118,7 @@ test.describe("Claude Online Flow", () => {
     test.skip(!hasClaudeApiKey(), "ANTHROPIC_API_KEY is required for Claude online flow");
 
     await test.step("launch app", async () => {
-      ctx = await launchApp();
+      ctx = await launchApp({ isolateHome: false });
     });
 
     await test.step("open folder", async () => {
@@ -157,7 +158,6 @@ test.describe("Claude Online Flow", () => {
 
       while (Date.now() < deadline && !reachedReadyState) {
         // Dismiss telemetry consent if it appeared after agent launch
-        await dismissTelemetryConsent(window);
 
         const text = await getTerminalText(agentPanel);
         const lower = text.toLowerCase();
@@ -182,27 +182,26 @@ test.describe("Claude Online Flow", () => {
       expect(reachedReadyState).toBe(true);
     });
 
-    await test.step("send hello world command", async () => {
-      const { window } = ctx;
+    const challenge = createNonceChallenge();
 
-      const agentPanel = claudeAgentPanel;
-      await sendAgentInput(window, agentPanel, "Please say hello world", { submit: true });
+    await test.step("send the nonce challenge", async () => {
+      const { window } = ctx;
+      await sendAgentInput(window, claudeAgentPanel, challenge.prompt, { submit: true });
     });
 
-    await test.step("verify response contains hello", async () => {
-      const { window } = ctx;
-
-      const agentPanel = claudeAgentPanel;
-
+    await test.step("verify the model answered the challenge", async () => {
+      // The echoed prompt carries only the lowercase token; the upper-cased
+      // reversal can only come from the model.
       await expect
         .poll(
-          async () => {
-            const text = await getTerminalText(agentPanel);
-            return text.toLowerCase().split("hello").length - 1;
-          },
-          { timeout: 60_000, intervals: [1_000] }
+          async () => containsChallengeAnswer(await getTerminalText(claudeAgentPanel), challenge),
+          {
+            message: `no "${challenge.answer}" reply to the "${challenge.token}" challenge`,
+            timeout: 60_000,
+            intervals: [1_000],
+          }
         )
-        .toBeGreaterThanOrEqual(1);
+        .toBe(true);
     });
 
     await test.step("quit Claude agent", async () => {

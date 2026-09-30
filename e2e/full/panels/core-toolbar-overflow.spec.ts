@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { T_SHORT, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 function toolbarButton(page: AppContext["window"], name: string) {
   return page.getByRole("toolbar", { name: "Main toolbar" }).getByRole("button", {
@@ -71,50 +71,102 @@ async function expectToolbarActionReachable(page: AppContext["window"], name: st
     name: new RegExp(`^${escapeRegExp(overflowLabel)}(?:\\s|$)`, "i"),
   });
 
-  for (let attempt = 0; attempt < 8; attempt++) {
-    if (await directButton.isVisible({ timeout: T_SETTLE }).catch(() => false)) {
-      return;
-    }
+  // Reachable means either a direct button or an item in one of the overflow
+  // menus. The overflow button's accessible name no longer enumerates its
+  // items (#8159), so open each visible one and look for the target item.
+  await expect(async () => {
+    if (await directButton.isVisible()) return;
 
     const overflowButtons = toolbar.getByRole("button", { name: /more/i });
     const count = await overflowButtons.count();
-
     for (let index = 0; index < count; index++) {
       const overflowButton = overflowButtons.nth(index);
-      // The overflow button's accessible name no longer enumerates its
-      // items (issue #8159) — it's a stable "More toolbar items — N
-      // hidden". Don't pre-filter by item name; open each visible
-      // overflow button and check whether the target menuitem appears.
-      if (!(await overflowButton.isVisible({ timeout: T_SETTLE }).catch(() => false))) {
-        continue;
-      }
-
-      try {
-        await overflowButton.click({ timeout: T_SHORT });
-      } catch {
-        if (await menuItem.isVisible({ timeout: T_SETTLE }).catch(() => false)) {
-          await page.keyboard.press("Escape");
-          return;
-        }
-        continue;
-      }
-
-      if (await menuItem.isVisible({ timeout: T_SHORT }).catch(() => false)) {
-        await page.keyboard.press("Escape");
-        return;
-      }
-
-      await page.keyboard.press("Escape").catch(() => undefined);
+      if (!(await overflowButton.isVisible())) continue;
+      await overflowButton.click({ timeout: T_SHORT });
+      const found = await expect(menuItem)
+        .toBeVisible({ timeout: T_SHORT })
+        .then(() => true)
+        .catch(() => false);
+      await page.keyboard.press("Escape");
+      if (found) return;
     }
+    throw new Error(`"${name}" is neither a visible toolbar button nor an overflow menu item`);
+  }).toPass({ timeout: T_LONG });
+}
 
-    await page.waitForTimeout(T_SETTLE);
-  }
+/**
+ * Record every change to the right overflow trigger's accessible name (which
+ * carries the hidden count) until the returned stop function is called. A
+ * poll-to-equal after each tick would miss a transient flip; this sees them.
+ */
+async function recordOverflowLabelChanges(
+  page: AppContext["window"]
+): Promise<() => Promise<string[]>> {
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      __overflowLabelLog?: string[];
+      __overflowObserver?: MutationObserver;
+    };
+    const toolbar = document.querySelector('[role="toolbar"][aria-label="Main toolbar"]');
+    if (!toolbar) throw new Error("Main toolbar missing");
+    const read = () => {
+      const trigger = toolbar.querySelector(
+        '[data-toolbar-overflow-trigger][data-toolbar-overflow-side="right"]'
+      );
+      return trigger
+        ? `${trigger.getAttribute("data-visible")}|${trigger.getAttribute("aria-label")}`
+        : "absent";
+    };
+    const log: string[] = [];
+    let last = read();
+    const observer = new MutationObserver(() => {
+      const next = read();
+      if (next !== last) {
+        log.push(`${last} -> ${next}`);
+        last = next;
+      }
+    });
+    observer.observe(toolbar, { subtree: true, childList: true, attributes: true });
+    w.__overflowLabelLog = log;
+    w.__overflowObserver = observer;
+  });
+  return () =>
+    page.evaluate(() => {
+      const w = window as unknown as {
+        __overflowLabelLog?: string[];
+        __overflowObserver?: MutationObserver;
+      };
+      w.__overflowObserver?.disconnect();
+      return w.__overflowLabelLog ?? [];
+    });
+}
 
-  await expect(directButton).toBeVisible({ timeout: T_SHORT });
+/**
+ * Resolve once the renderer's viewport has moved by the same delta as the
+ * window, and three more frames have run (ResizeObserver → rAF recalculate →
+ * React commit).
+ */
+async function waitForRendererWidth(
+  page: AppContext["window"],
+  baseInnerWidth: number,
+  deltaFromBase: number
+) {
+  await expect
+    .poll(() => page.evaluate(() => window.innerWidth), { timeout: T_SHORT })
+    .toBe(baseInnerWidth + deltaFromBase);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        )
+      )
+  );
 }
 
 test.describe.serial("Core: Toolbar Overflow", () => {
   let ctx: AppContext;
+  let narrowHiddenCount: number | null = null;
   let fixtureCleanup: (() => void) | undefined;
 
   test.beforeAll(async () => {
@@ -203,15 +255,18 @@ test.describe.serial("Core: Toolbar Overflow", () => {
     });
 
     // Oscillate around the settled width. Each tick lets the ResizeObserver
-    // run and re-measure; the hysteresis guard must hold the same set.
+    // run and re-measure; the hysteresis guard must hold the same set, and
+    // the recorder catches a flip that recovers before the next read.
+    const baseInnerWidth = await window.evaluate(() => globalThis.innerWidth);
+    const stopRecording = await recordOverflowLabelChanges(window);
     for (let i = 0; i < 8; i++) {
       const width = baseWidth + (i % 2 === 0 ? 1 : 0);
       await setWindowSize(app, width, baseHeight);
-      await window.waitForTimeout(T_SETTLE);
-      await expect
-        .poll(() => rightOverflowHiddenCount(window), { timeout: T_SHORT })
-        .toBe(baseline);
+      await waitForRendererWidth(window, baseInnerWidth, width - baseWidth);
+      expect(await rightOverflowHiddenCount(window)).toBe(baseline);
     }
+    expect(await stopRecording()).toEqual([]);
+    narrowHiddenCount = baseline;
 
     // Restore the anchor width so afterstate is deterministic.
     await setWindowSize(app, baseWidth, baseHeight);
@@ -246,5 +301,12 @@ test.describe.serial("Core: Toolbar Overflow", () => {
     // reachable, either directly or through overflow.
     await expectToolbarActionReachable(window, "Open settings");
     await expectToolbarActionReachable(window, "Open terminal");
+
+    // Reachability alone also passes through overflow, so prove the toolbar
+    // actually re-expanded: fewer items hidden than at the narrow width.
+    expect(narrowHiddenCount).toBeGreaterThan(0);
+    await expect
+      .poll(async () => (await rightOverflowHiddenCount(window)) ?? 0, { timeout: T_MEDIUM })
+      .toBeLessThan(narrowHiddenCount!);
   });
 });

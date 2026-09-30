@@ -14,7 +14,9 @@ run-name: ${{ inputs.suite || 'core' }} · ${{ inputs.platform || 'all' }}${{ in
 #
 # Internally, `suite` is passed to Playwright as `--project=<suite>` because
 # that's Playwright's term for the same concept (an entry in the `projects:`
-# array of playwright.config.ts).
+# array of playwright.config.ts). `demo` is the exception: it lives in its own
+# playwright.demo.config.ts so a bare `npx playwright test` never records
+# screencasts, and is selected with `--config` instead.
 #
 # Callers that pass `suite: online` MUST use `secrets: inherit` so
 # ANTHROPIC_API_KEY is reachable inside the called workflow.
@@ -458,12 +460,14 @@ jobs:
           # Single-bucket / single-test runs use one --project flag instead.
           if [ "$SUITE" = "full" ]; then
             PROJECT_ARGS="--project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=full-plugins"
+          elif [ "$SUITE" = "demo" ]; then
+            PROJECT_ARGS="--config=playwright.demo.config.ts"
           else
             PROJECT_ARGS="--project=$SUITE"
           fi
           # The `nightly` suite's leak heuristic depends on serialized
-          # launches; --workers=1 is mandatory. The `demo` project already bakes
-          # workers:1 into its config, but we pass the flag too as a guard.
+          # launches; --workers=1 is mandatory. playwright.demo.config.ts already
+          # bakes workers:1 in, but we pass the flag too as a guard.
           EXTRA=""
           if [ "$SUITE" = "nightly" ] || [ "$SUITE" = "demo" ]; then
             EXTRA="--workers=1"

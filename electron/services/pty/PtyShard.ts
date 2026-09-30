@@ -164,6 +164,12 @@ export class PtyShard {
     return this.lifecycle.isRunning();
   }
 
+  /** OS pid of this shard's live host process, or null when none is forked. */
+  getHostPid(): number | null {
+    const pid = this.lifecycle.child?.pid;
+    return typeof pid === "number" && pid > 0 ? pid : null;
+  }
+
   waitForReady(): Promise<void> {
     return this.lifecycle.waitForReady();
   }

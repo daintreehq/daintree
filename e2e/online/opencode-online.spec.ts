@@ -1,9 +1,10 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
-import { dismissTelemetryConsent, openAndOnboardProject } from "../helpers/project";
+import { openAndOnboardProject } from "../helpers/project";
 import { getTerminalText } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
+import { containsChallengeAnswer, createNonceChallenge } from "./nonceChallenge";
 import {
   STABILIZATION_POLL_MS,
   areOpenCodeOutputsEquivalent,
@@ -92,8 +93,6 @@ async function waitForOpenCodeReady(agentPanel: Locator): Promise<"ready" | "nee
   let lastKind: OpenCodeOutputKind = "pending";
 
   while (Date.now() < deadline) {
-    await dismissTelemetryConsent(window);
-
     lastText = await getTerminalText(agentPanel);
     const classification = classifyOpenCodeOutput(lastText);
     lastKind = classification.kind;
@@ -198,7 +197,7 @@ async function launchOpenCodeReady(): Promise<Locator> {
     // to restart before the new CLI process will accept input. CI pins the CLI
     // and sets OPENCODE_DISABLE_AUTOUPDATE, so this path is for local runs.
     await closeApp(ctx.app);
-    ctx = await launchApp();
+    ctx = await launchApp({ isolateHome: false });
     await openFixtureProject();
   }
 
@@ -229,7 +228,7 @@ test.describe("OpenCode Online Flow", () => {
     );
 
     await test.step("launch app", async () => {
-      ctx = await launchApp();
+      ctx = await launchApp({ isolateHome: false });
     });
 
     await test.step("open folder", async () => {
@@ -240,31 +239,36 @@ test.describe("OpenCode Online Flow", () => {
       await launchOpenCodeReady();
     });
 
-    await test.step("send hello world command", async () => {
+    const challenge = createNonceChallenge();
+
+    await test.step("send the nonce challenge", async () => {
       const { window } = ctx;
 
       const agentPanel = window.locator(SEL.opencodeAgent.panel);
       await focusHybridEditor(window, agentPanel);
-      await window.waitForTimeout(500);
-      await window.keyboard.type("Please say hello world", { delay: 30 });
-      await window.waitForTimeout(200);
+      await window.keyboard.type(challenge.prompt, { delay: 30 });
+      // Typing fills the hybrid input's draft; nothing reaches the PTY until
+      // Enter submits it, so confirm the draft before submitting.
+      await expect(agentPanel.locator(SEL.terminal.cmEditor)).toContainText(challenge.token, {
+        timeout: 10_000,
+      });
       await window.keyboard.press("Enter");
     });
 
-    await test.step("verify response contains hello", async () => {
+    await test.step("verify the model answered the challenge", async () => {
       const { window } = ctx;
 
       const agentPanel = window.locator(SEL.opencodeAgent.panel);
 
+      // The echoed prompt carries only the lowercase token; the upper-cased
+      // reversal can only come from the model.
       await expect
-        .poll(
-          async () => {
-            const text = await getTerminalText(agentPanel);
-            return text.toLowerCase().split("hello").length - 1;
-          },
-          { timeout: 60_000, intervals: [1_000] }
-        )
-        .toBeGreaterThanOrEqual(1);
+        .poll(async () => containsChallengeAnswer(await getTerminalText(agentPanel), challenge), {
+          message: `no "${challenge.answer}" reply to the "${challenge.token}" challenge`,
+          timeout: 60_000,
+          intervals: [1_000],
+        })
+        .toBe(true);
     });
   });
 });

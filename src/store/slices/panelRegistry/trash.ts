@@ -1,4 +1,18 @@
+import { TRASH_TTL_MS } from "@shared/config/trash";
 import type { PanelRegistryStoreApi } from "./types";
+
+/**
+ * Renderer-side trash TTL. An unpackaged E2E launch can shorten it; the preload
+ * exposes the validated override because the sandboxed renderer cannot read
+ * `process.env`. The pty-host applies the same override to its own timer.
+ */
+export function getTrashTtlMs(): number {
+  if (typeof window === "undefined") return TRASH_TTL_MS;
+  const override: unknown = Reflect.get(window, "__DAINTREE_E2E_TRASH_TTL_MS__");
+  return typeof override === "number" && Number.isFinite(override) && override > 0
+    ? override
+    : TRASH_TTL_MS;
+}
 
 export interface TrashExpiryHelpers {
   clearTrashExpiryTimer: (id: string) => void;

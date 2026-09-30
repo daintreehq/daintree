@@ -249,18 +249,21 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
 
   test("enabling the built-in registers its command", async () => {
     const { window } = ctx;
-    await window.evaluate((id) => window.electron.plugin.setEnabled(id, true), PLUGIN_ID);
+    await window.evaluate(
+      (id) => globalThis.window.electron.plugin.setEnabled(id, true),
+      PLUGIN_ID
+    );
     await expect
       .poll(
         async () =>
-          (await window.evaluate(() => window.electron.plugin.getActions())).map(
+          (await window.evaluate(() => globalThis.window.electron.plugin.getActions())).map(
             (action) => action.id
           ),
         { timeout: PLUGIN_TIMEOUT }
       )
       .toContain(TOGGLE_ACTION);
     // It lives in the dev preview now, not in a panel of its own.
-    const kinds = await window.evaluate(() => window.electron.plugin.getPanelKinds());
+    const kinds = await window.evaluate(() => globalThis.window.electron.plugin.getPanelKinds());
     expect(kinds.map((kind) => kind.id).filter((id) => id.startsWith(PLUGIN_ID))).toEqual([]);
   });
 

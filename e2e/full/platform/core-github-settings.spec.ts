@@ -42,10 +42,7 @@ async function openGitHubSettings(window: Page): Promise<void> {
     .click();
   await expect(window.locator("h3", { hasText: "Code Forge" })).toBeVisible({ timeout: T_SHORT });
   await selectGitHubSettingsProvider(window);
-  await expect(window.locator("text=Loading GitHub settings...")).not.toBeVisible({
-    timeout: T_MEDIUM,
-  });
-  await expect(window.locator(SEL.github.tokenBlock)).toBeVisible({ timeout: T_SHORT });
+  await expect(window.locator(SEL.github.tokenBlock)).toBeVisible({ timeout: T_MEDIUM });
 }
 
 test.describe.serial("Core: GitHub settings token flow", () => {

@@ -10,7 +10,8 @@ import {
 import { getFirstGridPanel, openTerminal } from "../../helpers/panels";
 import { runTerminalCommand, waitForTerminalText, getTerminalText } from "../../helpers/terminal";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
+import { fakeAgentEnv, installFakeAgent } from "../../helpers/fakeAgent";
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 
@@ -36,13 +37,15 @@ test.describe.serial("Core: Concurrent terminal output during UI interactions", 
     const { dir, cleanup } = createFixtureRepo({ name: "concurrent-ops" });
     fixtureDir = dir;
     fixtureCleanup = cleanup;
-    ctx = await launchApp();
+    // A fake `claude` on PATH makes the agent pair below deterministic: the
+    // Start Claude button exists on every machine and no real CLI is launched.
+    const fakeBinDir = installFakeAgent(fixtureDir);
+    ctx = await launchApp({ env: fakeAgentEnv(fakeBinDir) });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Concurrent Ops");
 
     await openTerminal(ctx.window);
     terminalPanel = getFirstGridPanel(ctx.window);
     await expect(terminalPanel).toBeVisible({ timeout: T_LONG });
-    await ctx.window.waitForTimeout(T_SETTLE);
   });
 
   test.afterAll(async () => {
@@ -77,7 +80,6 @@ test.describe.serial("Core: Concurrent terminal output during UI interactions", 
 
     // Type a search query while output continues
     await searchInput.fill("toggle sidebar");
-    await window.waitForTimeout(T_SETTLE);
 
     await expect(searchInput).toHaveValue("toggle sidebar");
 
@@ -103,11 +105,19 @@ test.describe.serial("Core: Concurrent terminal output during UI interactions", 
     // into the terminal's PTY input as a stray ESC sitting at the prompt.
     // When we then type "node ...", zsh's emacs/vi keymaps treat ESC as Meta,
     // which makes ESC+n a keymap binding (history navigation in zsh) — that
-    // swallows "n" and "o". Send Ctrl-C first to flush the line buffer to a
-    // clean prompt before typing the next streaming command.
-    await window.waitForTimeout(T_SETTLE);
-    await window.keyboard.press("Control+c");
-    await window.waitForTimeout(150);
+    // swallows "n" and "o". Send Ctrl-C to flush the line buffer, and prove the
+    // prompt is clean with a probe whose marker is only assembled at runtime,
+    // so it appears only if every typed key reached the shell intact.
+    let probe = 0;
+    await expect(async () => {
+      probe += 1;
+      await window.keyboard.press("Control+c");
+      await window.keyboard.type(`node -e "console.log('CONC_B_READY_'+${probe * 7})"`, {
+        delay: 30,
+      });
+      await window.keyboard.press("Enter");
+      await waitForTerminalText(terminalPanel, `CONC_B_READY_${probe * 7}`, T_SHORT);
+    }).toPass({ timeout: T_LONG });
 
     const cmd = streamingCommand("CONC_B");
     await window.keyboard.type(cmd, { delay: 30 });
@@ -147,16 +157,7 @@ test.describe.serial("Core: Concurrent terminal output during UI interactions", 
       const { window } = ctx;
 
       const startBtn = window.locator(SEL.agent.startButton);
-      if (!(await startBtn.isVisible().catch(() => false))) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Agent start button not visible in this launch state",
-        });
-
-        test.skip();
-        return;
-      }
-
+      await expect(startBtn).toBeVisible({ timeout: T_LONG });
       await startBtn.click();
       agentPanel = window.locator(SEL.agent.panel);
       await expect(agentPanel).toBeVisible({ timeout: T_LONG });
@@ -167,15 +168,7 @@ test.describe.serial("Core: Concurrent terminal output during UI interactions", 
     });
 
     test("typing in HybridInputBar is not disrupted by concurrent terminal output", async () => {
-      if (!agentAvailable) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Required element or state not available in this launch",
-        });
-
-        test.skip();
-        return;
-      }
+      expect(agentAvailable, "setup agent panel must have opened the agent").toBe(true);
 
       const { window } = ctx;
 
@@ -187,7 +180,7 @@ test.describe.serial("Core: Concurrent terminal output during UI interactions", 
         .first();
       if (await terminalTab.isVisible().catch(() => false)) {
         await terminalTab.click();
-        await window.waitForTimeout(T_SETTLE);
+        await expect(terminalTab).toHaveAttribute("aria-selected", "true", { timeout: T_SHORT });
       }
       await terminalPanel.locator(SEL.terminal.xtermRows).click();
       await expectTerminalFocused(terminalPanel);
@@ -203,7 +196,7 @@ test.describe.serial("Core: Concurrent terminal output during UI interactions", 
         .first();
       if (await agentTab.isVisible().catch(() => false)) {
         await agentTab.click();
-        await window.waitForTimeout(T_SETTLE);
+        await expect(agentTab).toHaveAttribute("aria-selected", "true", { timeout: T_SHORT });
       } else {
         await cmEditor.click();
       }
@@ -219,7 +212,7 @@ test.describe.serial("Core: Concurrent terminal output during UI interactions", 
       // Switch back to terminal tab to verify streaming was active
       if (await terminalTab.isVisible().catch(() => false)) {
         await terminalTab.click();
-        await window.waitForTimeout(T_SETTLE);
+        await expect(terminalTab).toHaveAttribute("aria-selected", "true", { timeout: T_SHORT });
       }
       const lines = await countStreamLines(terminalPanel, "CONC_C");
       expect(lines).toBeGreaterThan(5);
@@ -227,7 +220,7 @@ test.describe.serial("Core: Concurrent terminal output during UI interactions", 
       // Clean up: switch to agent tab and clear editor
       if (await agentTab.isVisible().catch(() => false)) {
         await agentTab.click();
-        await window.waitForTimeout(T_SETTLE);
+        await expect(agentTab).toHaveAttribute("aria-selected", "true", { timeout: T_SHORT });
       }
       await cmEditor.click();
       await window.keyboard.press(`${mod}+A`);

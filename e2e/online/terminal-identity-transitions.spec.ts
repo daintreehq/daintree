@@ -8,7 +8,7 @@ import {
 } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
-import { dismissTelemetryConsent, openAndOnboardProject } from "../helpers/project";
+import { openAndOnboardProject } from "../helpers/project";
 import { getTerminalText, runTerminalCommand } from "../helpers/terminal";
 import { getGridPanelIds, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
@@ -147,7 +147,6 @@ async function waitForClaudeInteractivePrompt(
   const deadline = Date.now() + timeoutMs;
   let lastText = "";
   while (Date.now() < deadline) {
-    await dismissTelemetryConsent(page);
     const text = (await getTerminalText(panel)).toLowerCase();
     lastText = text;
 
@@ -505,7 +504,7 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
     test.setTimeout(process.platform === "win32" ? 600_000 : 300_000);
 
     await test.step("launch app + open project", async () => {
-      ctx = await launchApp({ env: { DAINTREE_IDENTITY_DEBUG_PASS: "1" } });
+      ctx = await launchApp({ env: { DAINTREE_IDENTITY_DEBUG_PASS: "1" }, isolateHome: false });
       diagnostics = createIdentityDiagnostics(ctx);
       ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir);
     });

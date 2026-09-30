@@ -6,7 +6,7 @@ import { getGridPanelCount, getFirstGridPanel, openTerminal } from "../../helper
 import { ensureWindowFocused, expectTerminalFocused } from "../../helpers/focus";
 import { escapeTerminalFocus } from "../../helpers/keyboard-audit";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 
@@ -34,7 +34,7 @@ async function openQuickSwitcher(window: Page): Promise<void> {
  */
 async function openNewTerminalPalette(window: Page): Promise<void> {
   await window.evaluate(() =>
-    window.dispatchEvent(new CustomEvent("daintree:open-new-terminal-palette"))
+    globalThis.window.dispatchEvent(new CustomEvent("daintree:open-new-terminal-palette"))
   );
 }
 
@@ -48,17 +48,20 @@ async function openPanelPalette(window: Page): Promise<void> {
   );
 }
 
-/** Close any open palette and return keyboard focus to the main content. */
+/**
+ * Close any open palette and return keyboard focus to the main content. Two-step
+ * palettes need one Escape per step, so keep pressing until no dialog is left.
+ */
 async function resetToApp(window: Page): Promise<void> {
-  for (let i = 0; i < 3; i++) {
-    await window.keyboard.press("Escape").catch(() => undefined);
-    await window.waitForTimeout(120);
-  }
+  const openDialogs = window.locator('[role="dialog"]:visible');
+  await expect(async () => {
+    if ((await openDialogs.count()) > 0) await window.keyboard.press("Escape");
+    await expect(openDialogs).toHaveCount(0, { timeout: 500 });
+  }).toPass({ timeout: T_MEDIUM });
   await window
     .locator("main")
     .click({ force: true })
     .catch(() => undefined);
-  await window.waitForTimeout(150);
 }
 
 test.describe.serial("Core: Specialized Command Palettes", () => {
@@ -262,7 +265,6 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
 
     // Two-step chord: leader (Cmd/Ctrl+K) then Cmd/Ctrl+T.
     await window.keyboard.press(`${mod}+K`);
-    await window.waitForTimeout(120);
     await window.keyboard.press(`${mod}+t`);
 
     const dialog = window.locator(SEL.themePalette.dialog);
@@ -285,8 +287,7 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
     await test.step("Filtering narrows the result set", async () => {
       const unfiltered = await options.count();
       await searchInput.fill("zzzznomatch");
-      await window.waitForTimeout(T_SETTLE);
-      expect(await options.count()).toBeLessThan(unfiltered);
+      await expect.poll(() => options.count(), { timeout: T_MEDIUM }).toBeLessThan(unfiltered);
     });
   });
 
@@ -301,9 +302,8 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
       const actionInput = window.locator(SEL.actionPalette.searchInput);
       await expect(actionInput).toBeFocused({ timeout: T_MEDIUM });
       await actionInput.fill("Set Log Level");
-      await window.waitForTimeout(T_SETTLE);
       const actionOptions = window.locator(SEL.palettePrefix.actionEnabledOptions);
-      await expect(actionOptions.first()).toBeVisible({ timeout: T_MEDIUM });
+      await expect(actionOptions.first()).toContainText(/log level/i, { timeout: T_MEDIUM });
       await actionOptions.first().press("Enter");
     });
 
@@ -335,9 +335,8 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
       const actionInput = window.locator(SEL.actionPalette.searchInput);
       await expect(actionInput).toBeFocused({ timeout: T_MEDIUM });
       await actionInput.fill("Set Log Level");
-      await window.waitForTimeout(T_SETTLE);
       const actionOptions = window.locator(SEL.palettePrefix.actionEnabledOptions);
-      await expect(actionOptions.first()).toBeVisible({ timeout: T_MEDIUM });
+      await expect(actionOptions.first()).toContainText(/log level/i, { timeout: T_MEDIUM });
       await actionOptions.first().press("Enter");
       await expect(window.locator(SEL.logLevelPalette.step1Dialog)).toBeVisible({
         timeout: T_MEDIUM,

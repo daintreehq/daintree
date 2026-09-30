@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { spawn, type ChildProcess } from "child_process";
 import {
   launchApp,
@@ -9,13 +9,9 @@ import {
 } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import {
-  runTerminalCommand,
-  waitForTerminalText,
-  writeTerminalInput,
-} from "../../helpers/terminal";
-import { getFirstGridPanel, openTerminal } from "../../helpers/panels";
-import { T_LONG, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
+import { waitForTerminalText, writeTerminalInput } from "../../helpers/terminal";
+import { getGridPanelIds, getPanelById, openTerminal } from "../../helpers/panels";
+import { T_LONG } from "../../helpers/timeouts";
 import {
   getPtyPid,
   getProcessInfo,
@@ -28,26 +24,46 @@ import { mkdtempSync, writeFileSync, existsSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 
-async function runPtyCommand(panel: ReturnType<typeof getFirstGridPanel>, command: string) {
-  await writeTerminalInput(panel.page(), panel, `${command}\r`);
-}
-
-async function runPtyCommandAndWait(
-  panel: ReturnType<typeof getFirstGridPanel>,
-  command: string,
-  marker: string
-) {
+async function runPtyCommandAndWait(panel: Locator, command: string, marker: string) {
   for (let attempt = 1; attempt <= 3; attempt++) {
-    await runPtyCommand(panel, command);
+    await writeTerminalInput(panel.page(), panel, `${command}\r`);
     try {
       await waitForTerminalText(panel, marker, T_LONG);
       return;
     } catch (error) {
       if (attempt === 3) throw error;
       await writeTerminalInput(panel.page(), panel, "\u0003");
-      await panel.page().waitForTimeout(250);
     }
   }
+}
+
+async function openNewTerminal(page: Page): Promise<Locator> {
+  const before = new Set(await getGridPanelIds(page));
+  await openTerminal(page);
+  let newId = "";
+  await expect
+    .poll(
+      async () => {
+        newId = (await getGridPanelIds(page)).find((id) => !before.has(id)) ?? "";
+        return newId;
+      },
+      { timeout: T_LONG }
+    )
+    .not.toBe("");
+  const panel = getPanelById(page, newId);
+  await expect(panel).toBeVisible({ timeout: T_LONG });
+  return panel;
+}
+
+// Records a terminal's PTY pid and waits for its long-lived child to appear.
+async function recordPtyTree(page: Page, panel: Locator): Promise<number[]> {
+  const ptyPid = await getPtyPid(page, panel);
+  expect(ptyPid).toBeGreaterThan(0);
+  await expect
+    .poll(() => getDescendantPids(ptyPid).length, { timeout: T_LONG, intervals: [300] })
+    .toBeGreaterThan(0);
+  expect(isPidAlive(ptyPid)).toBe(true);
+  return [ptyPid, ...getDescendantPids(ptyPid)];
 }
 
 test.describe("Core: Process Cleanup", () => {
@@ -59,77 +75,83 @@ test.describe("Core: Process Cleanup", () => {
     test.skip(process.platform === "win32", "Process cleanup tests are Unix-only");
   });
 
-  test("clean exit kills PTY process tree", async () => {
+  test("graceful shutdown kills every PTY process tree within the time limit", async () => {
     test.setTimeout(240_000);
 
     const { dir: fixtureDir, cleanup: fixtureCleanup } = createFixtureRepo({
       name: "process-cleanup",
     });
-    const userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-cleanup-"));
-    let ptyPid = 0;
-    let descendants: number[] = [];
+    let ctx: AppContext | null = null;
+    let trackedPids: number[] = [];
 
     try {
-      const ctx = await launchApp({ userDataDir });
+      ctx = await launchApp();
       ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Process Cleanup");
+      const { app, window } = ctx;
 
-      // Open terminal and wait for shell readiness via an explicit echo
-      await openTerminal(ctx.window);
-      const panel = getFirstGridPanel(ctx.window);
-      await expect(panel).toBeVisible({ timeout: T_LONG });
-      await runPtyCommandAndWait(panel, "echo SHELL_READY_MARKER", "SHELL_READY_MARKER");
+      // An ordinary long-lived child.
+      const sleepPanel = await openNewTerminal(window);
+      // Markers are split with empty quotes so only the shell's output, not the
+      // echoed input line, can satisfy the wait.
+      await runPtyCommandAndWait(sleepPanel, 'echo SHELL_READY_""MARKER', "SHELL_READY_MARKER");
+      await runPtyCommandAndWait(
+        sleepPanel,
+        "sh -c 'echo SLEEP_STAR\"\"TED; sleep 9999'",
+        "SLEEP_STARTED"
+      );
+      const sleepTree = await recordPtyTree(window, sleepPanel);
 
-      // Spawn a long-lived child process and wait for it to appear
-      await runPtyCommandAndWait(panel, "sh -c 'echo SLEEP_STARTED; sleep 9999'", "SLEEP_STARTED");
+      // A child that ignores SIGTERM, to stress the escalation path.
+      const tailPanel = await openNewTerminal(window);
+      await runPtyCommandAndWait(tailPanel, 'echo DAINTREE_""READY', "DAINTREE_READY");
+      await runPtyCommandAndWait(
+        tailPanel,
+        "sh -c \"trap '' TERM; echo TAIL_STAR''TED; exec tail -f /dev/null\"",
+        "TAIL_STARTED"
+      );
+      const tailTree = await recordPtyTree(window, tailPanel);
 
-      // Collect PTY PID and poll for descendants until sleep is visible
-      ptyPid = await getPtyPid(ctx.window, panel);
-      expect(ptyPid).toBeGreaterThan(0);
-      await expect
-        .poll(() => getDescendantPids(ptyPid).length, { timeout: T_LONG, intervals: [500] })
-        .toBeGreaterThan(0);
-      descendants = getDescendantPids(ptyPid);
-      expect(descendants.length).toBeGreaterThan(0);
+      trackedPids = [...sleepTree, ...tailTree];
+      const electronPid = app.process().pid!;
 
-      const electronPid = ctx.app.process().pid!;
-
-      // Close app via graceful shutdown (NOT closeApp which force-kills descendants)
-      // Race with a timeout to avoid hanging if Electron doesn't respond to close
-      await Promise.race([
-        ctx.app.close(),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("app.close() timeout")), 30_000)
-        ),
-      ]).catch(() => {
-        // If close timed out, force-kill
-        try {
-          process.kill(electronPid, "SIGTERM");
-        } catch {
-          /* already dead */
-        }
-      });
-      await waitForProcessExit(electronPid, 45_000);
-
-      // Verify PTY process is dead
-      await waitForProcessDeath(ptyPid, T_LONG);
-
-      // Verify descendants are dead
-      for (const desc of descendants) {
-        await waitForProcessDeath(desc, T_MEDIUM);
-        expect(getProcessInfo(desc)).toBeNull();
+      // Quit through the app's own shutdown path. closeApp() is not used here:
+      // it force-kills every descendant itself, which would hide a broken
+      // shutdown. A close that hangs fails the test rather than being rescued.
+      const startTime = Date.now();
+      let closeTimer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          app.close(),
+          new Promise((_, reject) => {
+            closeTimer = setTimeout(
+              () => reject(new Error("app.close() did not finish within 25s")),
+              25_000
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(closeTimer);
       }
+      await waitForProcessExit(electronPid, T_LONG);
+      ctx = null;
+
+      // One deadline covers the quit and every recorded process dying. The
+      // graceful path (PTY kill timeout + service disposal) should finish well
+      // inside it; the margin absorbs CI scheduling jitter.
+      for (const pid of trackedPids) {
+        await waitForProcessDeath(pid, Math.max(1_000, 25_000 - (Date.now() - startTime)));
+        expect(getProcessInfo(pid)).toBeNull();
+      }
+      expect(Date.now() - startTime).toBeLessThan(25_000);
     } finally {
-      // Failsafe: kill any surviving processes
-      for (const pid of [ptyPid, ...descendants]) {
-        if (pid > 0) {
-          try {
-            process.kill(pid, "SIGKILL");
-          } catch {
-            // already dead
-          }
+      for (const pid of trackedPids) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // already dead
         }
       }
-      rmSync(userDataDir, { recursive: true, force: true });
+      if (ctx?.app) await closeApp(ctx.app).catch(() => undefined);
       fixtureCleanup();
     }
   });
@@ -149,10 +171,8 @@ test.describe("Core: Process Cleanup", () => {
       const ctx = await launchApp({ userDataDir });
       ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Unclean Exit");
 
-      await openTerminal(ctx.window);
-      const panel = getFirstGridPanel(ctx.window);
-      await expect(panel).toBeVisible({ timeout: T_LONG });
-      await runPtyCommandAndWait(panel, "echo SHELL_READY_MARKER", "SHELL_READY_MARKER");
+      const panel = await openNewTerminal(ctx.window);
+      await runPtyCommandAndWait(panel, 'echo SHELL_READY_""MARKER', "SHELL_READY_MARKER");
 
       // TrashedPidTracker only needs a live PID/start-time entry from a previous
       // session. Use a test-owned detached process so this assertion is not
@@ -222,110 +242,6 @@ test.describe("Core: Process Cleanup", () => {
       }
       rmSync(userDataDir, { recursive: true, force: true });
       fixtureCleanup();
-    }
-  });
-});
-
-test.describe.serial("Core: Process Cleanup on Shutdown", () => {
-  let ctx: AppContext;
-  let fixtureDir: string;
-  let fixtureCleanup: (() => void) | undefined;
-  let trackedPids: number[] = [];
-
-  test.beforeAll(async () => {
-    test.info().annotations.push({
-      type: "platform-skip",
-      description: "Unix-only: uses pgrep for process tree verification",
-    });
-
-    test.skip(process.platform === "win32", "Unix-only: uses pgrep for process tree verification");
-
-    ({ dir: fixtureDir, cleanup: fixtureCleanup } = createFixtureRepo({ name: "process-cleanup" }));
-    ctx = await launchApp();
-    ctx.window = await openAndOnboardProject(
-      ctx.app,
-      ctx.window,
-      fixtureDir,
-      "Process Cleanup Test"
-    );
-  });
-
-  test.afterAll(async () => {
-    // Safety net: force-kill any tracked PIDs still alive (prevents test process leaks)
-    for (const pid of trackedPids) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        // Already dead
-      }
-    }
-    // If the app is somehow still alive (test failed before close), clean it up
-    if (ctx?.app) {
-      try {
-        await closeApp(ctx.app);
-      } catch {
-        // Best-effort
-      }
-    }
-    fixtureCleanup?.();
-  });
-
-  test("graceful shutdown kills PTY processes within time limit", async () => {
-    test.setTimeout(60_000);
-    const { app, window } = ctx;
-
-    // Open a terminal
-    await openTerminal(window);
-    const panel = getFirstGridPanel(window);
-    await expect(panel).toBeVisible({ timeout: T_LONG });
-
-    // Wait for shell ready using sentinel
-    await runTerminalCommand(window, panel, "echo DAINTREE_READY");
-    await waitForTerminalText(panel, "DAINTREE_READY", T_LONG);
-
-    // Run a SIGTERM-resistant blocking command to stress the shutdown path
-    await window.waitForTimeout(T_SETTLE);
-    await runTerminalCommand(window, panel, "sh -c \"trap '' TERM; exec tail -f /dev/null\"");
-
-    // Capture PTY PID and poll until the descendant (tail) has spawned
-    const ptyPid = await getPtyPid(window, panel);
-    expect(ptyPid).toBeGreaterThan(0);
-    await expect
-      .poll(() => getDescendantPids(ptyPid).length, { timeout: T_LONG, intervals: [300] })
-      .toBeGreaterThan(0);
-    const descendants = getDescendantPids(ptyPid);
-    trackedPids = [ptyPid, ...descendants];
-
-    // Verify the hung process spawned at least one descendant (the tail process)
-    expect(descendants.length).toBeGreaterThan(0);
-
-    // Verify the PTY process is alive before shutdown
-    expect(isPidAlive(ptyPid)).toBe(true);
-
-    // Close the app — triggers before-quit → shutdown handler → graceful PTY kill.
-    // closeApp() has a 10s timeout on app.close() with force-kill fallback,
-    // then kills any lingering descendants as a safety net.
-    // We measure time to verify the graceful shutdown path completed without
-    // needing the 10s force-kill fallback.
-    const startTime = Date.now();
-    await closeApp(app);
-    const elapsed = Date.now() - startTime;
-
-    // Mark app as closed so afterAll doesn't try to close it again
-    ctx = undefined as unknown as AppContext;
-
-    // If closeApp() needed the force-kill fallback (10s timeout), elapsed > 10s.
-    // The graceful shutdown (4s PTY kill timeout + service disposal) should
-    // complete well under this. Use 25s as the threshold to absorb CI scheduling
-    // jitter while still catching cases where the graceful path stalls entirely.
-    expect(elapsed).toBeLessThan(25_000);
-
-    // Verify all tracked PIDs are dead after shutdown
-    for (const pid of trackedPids) {
-      await waitForProcessExit(pid, 5_000).catch(() => {
-        // waitForProcessExit timeout — process is still alive, will fail below
-      });
-      expect(isPidAlive(pid)).toBe(false);
     }
   });
 });

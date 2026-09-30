@@ -47,7 +47,14 @@ const SWEEP = list(
 );
 
 type State =
-  "header" | "chip-focus" | "chip-hover" | "open" | "expanded" | "row-focus" | "refreshing";
+  | "header"
+  | "chip-focus"
+  | "chip-hover"
+  | "open"
+  | "expanded"
+  | "row-focus"
+  | "refreshing"
+  | "refresh-failed";
 
 /** Which states each fixture is photographed in. Mirrors `FIXTURES` in the preview. */
 const PLAN: Record<string, State[]> = {

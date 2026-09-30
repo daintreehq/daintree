@@ -10,7 +10,7 @@
  *
  * Run locally:
  *   npm run build:e2e
- *   npx playwright test e2e/demo/demo-terminal-input.spec.ts --project=demo
+ *   npx playwright test --config=playwright.demo.config.ts e2e/demo/demo-terminal-input.spec.ts
  */
 
 import { test, expect } from "@playwright/test";
@@ -51,7 +51,9 @@ test.describe.serial("Demo mode — terminal typing and keys", () => {
     const { window } = ctx;
 
     // The demo bridge must be exposed (proves --demo-mode took effect).
-    await window.waitForFunction(() => !!window.electron?.demo, undefined, { timeout: T_LONG });
+    await window.waitForFunction(() => !!globalThis.window.electron?.demo, undefined, {
+      timeout: T_LONG,
+    });
 
     await openTerminal(window);
     const panel = getFirstGridPanel(window);
@@ -68,7 +70,7 @@ test.describe.serial("Demo mode — terminal typing and keys", () => {
     // 1. Type `echo hi` and press Enter — the shell echoes the keystrokes and
     //    then prints `hi` on its own line.
     await window.evaluate(async (sel) => {
-      const d = window.electron.demo!;
+      const d = globalThis.window.electron.demo!;
       await d.typeInTerminal(sel, "echo hi", 1000);
       await d.sendKeyToTerminal(sel, "enter");
     }, selector);
@@ -78,7 +80,7 @@ test.describe.serial("Demo mode — terminal typing and keys", () => {
     //    appears a second time at the fresh prompt.
     const before = countOccurrences(await getTerminalText(panel), "echo hi");
     await window.evaluate(async (sel) => {
-      await window.electron.demo!.sendKeyToTerminal(sel, "up");
+      await globalThis.window.electron.demo!.sendKeyToTerminal(sel, "up");
     }, selector);
     await expect
       .poll(async () => countOccurrences(await getTerminalText(panel), "echo hi"), {
@@ -95,7 +97,7 @@ test.describe.serial("Demo mode — terminal typing and keys", () => {
     const sentinel = `DAINTREE_DEMO_KEYS_OK_${Date.now()}`;
     await window.evaluate(
       async ({ sel, token }) => {
-        const d = window.electron.demo!;
+        const d = globalThis.window.electron.demo!;
         await d.sendKeyToTerminal(sel, "ctrl-c");
         await d.typeInTerminal(sel, `echo ${token}`, 1000);
         await d.sendKeyToTerminal(sel, "enter");

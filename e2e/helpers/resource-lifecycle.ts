@@ -105,6 +105,9 @@ export function writeResourceConfig(repoDir: string) {
  * once approved (#12408); these specs exercise what happens after that
  * decision, so they make it directly. Call it again after rewriting a config —
  * any change to the commands needs a fresh approval.
+ *
+ * Setup only: this bypasses the approval dialog entirely, so it proves nothing
+ * about that consent UI. A test of the dialog itself must click through it.
  */
 export async function approveWorktreeCommands(window: Page, branch: string) {
   await expect
@@ -182,13 +185,9 @@ export async function waitForWorktreeCardRemoval(window: Page, branch: string) {
 
   await expect
     .poll(
-      async () => {
-        const count = await card.count();
-        if (count === 0) return 0;
-
-        await window.evaluate(() => (window as any).electron.worktree.refresh());
-        return card.count();
-      },
+      // Poll only. Forcing a refresh here would hide a broken topology watcher —
+      // the path a real deletion relies on to take the card away.
+      async () => card.count(),
       {
         timeout: T_LONG,
         message: `Worktree card ${branch} should disappear after delete`,

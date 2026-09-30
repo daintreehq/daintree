@@ -238,7 +238,7 @@ describe("observeOpenCodeOutput", () => {
     // via the max-wait fallback instead.
     const frames = ["⠋", "⠙", "⠹", "⠸"];
     let state = initialStabilizationState();
-    let last;
+    let last: ReturnType<typeof observeOpenCodeOutput> | undefined;
     frames.forEach((frame, i) => {
       last = observeOpenCodeOutput(
         state,
@@ -249,7 +249,7 @@ describe("observeOpenCodeOutput", () => {
     });
 
     // Reached via the sample streak, well inside TEST_POLICY.maxWaitMs.
-    expect(last.decision).toBe("act");
+    expect(last?.decision).toBe("act");
     expect(state.sampleCount).toBeGreaterThanOrEqual(TEST_POLICY.requiredSamples);
   });
 

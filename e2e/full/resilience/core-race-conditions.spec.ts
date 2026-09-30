@@ -4,7 +4,8 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
-import { T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_LONG } from "../../helpers/timeouts";
+import { isPidAlive } from "../../helpers/stress";
 import { openSettings } from "../../helpers/panels";
 import path from "path";
 import crypto from "crypto";
@@ -280,6 +281,22 @@ test.describe.serial("Core: Race Conditions from Concurrent IPC", () => {
     // Cleanup — kill all successfully spawned terminals.
     // This is best-effort; the main process may be under heavy load from PTY allocations.
     const spawnedIds = results.filter((r) => r.status === "fulfilled").map((r) => r.value!);
+    // Record the OS pids before killing, so the cleanup wait below checks the
+    // processes themselves rather than the host's (fail-soft) terminal list.
+    let ptyPids: number[] = [];
+    await expect
+      .poll(
+        async () => {
+          ptyPids = await window.evaluate(async (ids: string[]) => {
+            const api = (window as any).electron.terminal;
+            const infos = await Promise.all(ids.map((id) => api.getInfo(id).catch(() => null)));
+            return infos.map((info: any) => info?.ptyPid).filter((pid: unknown) => !!pid);
+          }, spawnedIds);
+          return ptyPids.length;
+        },
+        { timeout: T_LONG }
+      )
+      .toBe(spawnedIds.length);
     try {
       await window.evaluate(async (ids: string[]) => {
         const api = (window as any).electron.terminal;
@@ -295,8 +312,10 @@ test.describe.serial("Core: Race Conditions from Concurrent IPC", () => {
       // Process may be overwhelmed — best effort cleanup
     }
 
-    // Let the PTY cleanup cycle run before the next test
-    await window.waitForTimeout(T_SETTLE);
+    // Let the kills land before the next test, rather than sleeping a guess.
+    await expect
+      .poll(() => ptyPids.filter((pid) => isPidAlive(pid)).length, { timeout: T_LONG })
+      .toBe(0);
   });
 
   test("main process alive after all concurrent operations", async () => {

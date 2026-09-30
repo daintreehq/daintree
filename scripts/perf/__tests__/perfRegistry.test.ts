@@ -2,7 +2,12 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { REGISTRY, UNREGISTERED_PERF_SPECS } from "../registry";
+import {
+  PERF_PLAYWRIGHT_CONFIG,
+  PERF_SPEC_DIR,
+  REGISTRY,
+  UNREGISTERED_PERF_SPECS,
+} from "../registry";
 
 /**
  * Is every performance benchmark in this repository reachable from
@@ -15,19 +20,24 @@ import { REGISTRY, UNREGISTERED_PERF_SPECS } from "../registry";
  * makes it a benchmark nobody maintains, which is how a spec ends up measuring
  * a path the product no longer takes.
  *
- * The rule is therefore mechanical: any spec under `e2e/` whose name marks it as
- * a performance or memory harness must be either a registry command or an
- * explicit entry in `UNREGISTERED_PERF_SPECS` with a reason. Adding a new one and
- * forgetting the registry fails here.
+ * The rule is therefore mechanical: every spec under `e2e/perf/`, and any spec
+ * elsewhere under `e2e/` whose name marks it as a performance or memory harness,
+ * must be either a registry command or an explicit entry in
+ * `UNREGISTERED_PERF_SPECS` with a reason. Adding a new one and forgetting the
+ * registry fails here.
  */
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "../../..");
 const E2E_ROOT = path.join(REPO_ROOT, "e2e");
 
-/** Specs that measure rather than assert: the `-perf` suffix, or a memory harness. */
-function isBenchmarkSpec(file: string): boolean {
-  const name = path.basename(file);
+/**
+ * Specs that measure rather than assert: anything in the perf directory, and
+ * elsewhere the `-perf` suffix or a memory harness.
+ */
+function isBenchmarkSpec(relPath: string): boolean {
+  if (relPath.startsWith(`${PERF_SPEC_DIR}/`)) return true;
+  const name = path.basename(relPath);
   return /-perf\.spec\.ts$/.test(name) || /memory.*\.spec\.ts$/.test(name);
 }
 
@@ -39,8 +49,8 @@ function collectSpecs(dir: string, out: string[]): void {
       continue;
     }
     if (!entry.isFile() || !entry.name.endsWith(".spec.ts")) continue;
-    if (!isBenchmarkSpec(entry.name)) continue;
-    out.push(path.relative(REPO_ROOT, full).split(path.sep).join("/"));
+    const rel = path.relative(REPO_ROOT, full).split(path.sep).join("/");
+    if (isBenchmarkSpec(rel)) out.push(rel);
   }
 }
 
@@ -61,8 +71,27 @@ describe("perf registry coverage", () => {
     // vacuously, which is the one failure mode a coverage test cannot afford.
     const specs = benchmarkSpecs();
     expect(specs.length).toBeGreaterThanOrEqual(12);
-    expect(specs).toContain("e2e/full/terminal/interactivity-perf.spec.ts");
-    expect(specs).toContain("e2e/full/resilience/project-switch-perf.spec.ts");
+    expect(specs).toContain(`${PERF_SPEC_DIR}/interactivity-perf.spec.ts`);
+    expect(specs).toContain(`${PERF_SPEC_DIR}/project-switch-perf.spec.ts`);
+    // Named by neither convention, so only the directory rule can find it.
+    expect(specs).toContain(`${PERF_SPEC_DIR}/project-switch-stress.spec.ts`);
+  });
+
+  it("keeps every registered spec in the perf directory", () => {
+    // The perf config only loads that directory, so a spec registered from
+    // anywhere else would run as nothing — and would still be imported by
+    // whichever correctness bucket owns its folder.
+    const stray = [...registeredSpecs.keys()].filter(
+      (spec) => !spec.startsWith(`${PERF_SPEC_DIR}/`)
+    );
+    expect(stray).toEqual([]);
+  });
+
+  it("keeps the perf directory out of the main Playwright config", () => {
+    const main = readFileSync(path.join(REPO_ROOT, "playwright.config.ts"), "utf-8");
+    expect(main).not.toMatch(/e2e\/perf/);
+    const perf = readFileSync(path.join(REPO_ROOT, PERF_PLAYWRIGHT_CONFIG), "utf-8");
+    expect(perf).toContain(`./${PERF_SPEC_DIR}`);
   });
 
   it("registers or explicitly excludes every benchmark spec", () => {
