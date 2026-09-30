@@ -1,8 +1,52 @@
 // @vitest-environment jsdom
-import { createElement, useState, type ComponentType, type ReactNode } from "react";
+import {
+  createElement,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+  type Ref,
+} from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { VirtuosoMockContext } from "react-virtuoso";
+import { VirtuosoMockContext, type VirtuosoHandle } from "react-virtuoso";
+
+// jsdom lays nothing out, so a Virtuoso never scrolls there; the palette's
+// requests to its list are recorded instead, passing through unchanged.
+const listScrolls = vi.hoisted((): { method: string; index: number }[] => []);
+
+vi.mock("react-virtuoso", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-virtuoso")>();
+  const indexOf = (location: unknown): number => {
+    const index =
+      typeof location === "object" && location !== null ? Reflect.get(location, "index") : location;
+    return typeof index === "number" ? index : -1;
+  };
+  function RecordingVirtuoso(props: Record<string, unknown> & { ref?: Ref<VirtuosoHandle> }) {
+    const { ref, ...rest } = props;
+    const inner = useRef<VirtuosoHandle>(null);
+    useImperativeHandle(ref, () => ({
+      scrollToIndex: (location) => {
+        listScrolls.push({ method: "scrollToIndex", index: indexOf(location) });
+        inner.current?.scrollToIndex(location);
+      },
+      scrollIntoView: (location) => {
+        listScrolls.push({ method: "scrollIntoView", index: indexOf(location) });
+        inner.current?.scrollIntoView(location);
+      },
+      scrollTo: (location) => inner.current?.scrollTo(location),
+      scrollBy: (location) => inner.current?.scrollBy(location),
+      getState: (callback) => inner.current?.getState(callback),
+      autoscrollToBottom: () => inner.current?.autoscrollToBottom(),
+    }));
+    return createElement(actual.Virtuoso as ComponentType<Record<string, unknown>>, {
+      ...rest,
+      ref: inner,
+    });
+  }
+  return { ...actual, Virtuoso: RecordingVirtuoso };
+});
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn(() => Promise.resolve()) },
@@ -247,6 +291,81 @@ describe("CommandPalette", () => {
     );
     await screen.findByRole("combobox");
     expect(screen.queryByText("No issues yet")).toBeNull();
+  });
+
+  it("stacks above the nested dialog it opens from", async () => {
+    render(
+      inViewport(
+        createElement(kit.Sheet, {
+          open: true,
+          onOpenChange: () => {},
+          title: "Settings",
+          layer: "nested",
+          children: createElement(Harness),
+        })
+      )
+    );
+    const palette = await screen.findByRole("dialog", { name: "Go to" });
+    expect(palette.parentElement?.className).toContain("z-[calc(var(--z-nested-dialog)+1)]");
+    cleanup();
+    render(inViewport(createElement(Harness)));
+    const plain = await screen.findByRole("dialog", { name: "Go to" });
+    expect(plain.parentElement?.className).toContain("z-[var(--z-modal)]");
+  });
+
+  it("brings the active row into view after a search", async () => {
+    const many = Array.from({ length: 400 }, (_, index) => ({
+      id: `file-${index}`,
+      label: `report-${String(index).padStart(3, "0")}.md`,
+      group: index < 200 ? "Recent" : "Older",
+    }));
+    render(inViewport(createElement(Harness, { items: many })));
+    const input = await screen.findByRole("combobox");
+    listScrolls.length = 0;
+    fireEvent.keyDown(input, { key: "End" });
+    expect(listScrolls).toEqual([{ method: "scrollIntoView", index: 401 }]);
+    listScrolls.length = 0;
+    // Every row still matches, so the list would keep its scroll at the end
+    // while the cursor went back to the first row.
+    fireEvent.change(input, { target: { value: "report" } });
+    await tick();
+    await tick();
+    expect(listScrolls.at(-1)).toEqual({ method: "scrollToIndex", index: 0 });
+  });
+
+  it("tells the plugin the search is empty when closed from outside, once", async () => {
+    const onQueryChange = vi.fn();
+    function Outside() {
+      const [open, setOpen] = useState(true);
+      return createElement(
+        "div",
+        null,
+        createElement("button", { type: "button", onClick: () => setOpen(false) }, "Hide"),
+        createElement(kit.CommandPalette, {
+          open,
+          onOpenChange: setOpen,
+          items,
+          onSelect: () => {},
+          title: "Go to",
+          filter: false,
+          onQueryChange,
+        })
+      );
+    }
+    render(inViewport(createElement(Outside)));
+    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "foo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Hide", hidden: true }));
+    await tick();
+    expect(onQueryChange.mock.calls).toEqual([["foo"], [""]]);
+    cleanup();
+
+    onQueryChange.mockClear();
+    render(inViewport(createElement(Harness, { onQueryChange })));
+    const input = await screen.findByRole("combobox");
+    fireEvent.change(input, { target: { value: "beta" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await tick();
+    expect(onQueryChange.mock.calls).toEqual([["beta"], [""]]);
   });
 
   it("drops malformed and duplicate items without throwing", async () => {
