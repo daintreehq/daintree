@@ -247,13 +247,11 @@ test.describe("OpenCode Online Flow", () => {
       const agentPanel = window.locator(SEL.opencodeAgent.panel);
       await focusHybridEditor(window, agentPanel);
       await window.keyboard.type(challenge.prompt, { delay: 30 });
-      await expect
-        .poll(async () => (await getTerminalText(agentPanel)).includes(challenge.token), {
-          message: "the typed challenge never reached the OpenCode input",
-          timeout: 10_000,
-          intervals: [200, 500],
-        })
-        .toBe(true);
+      // Typing fills the hybrid input's draft; nothing reaches the PTY until
+      // Enter submits it, so confirm the draft before submitting.
+      await expect(agentPanel.locator(SEL.terminal.cmEditor)).toContainText(challenge.token, {
+        timeout: 10_000,
+      });
       await window.keyboard.press("Enter");
     });
 

@@ -1,17 +1,11 @@
 {
   "totals": {
-    "waitForTimeout": 245,
-    "isVisibleTimeout": 50
+    "waitForTimeout": 41,
+    "isVisibleTimeout": 17
   },
   "files": {
-    "e2e/core/core-first-run-onboarding.spec.ts": {
-      "waitForTimeout": 1
-    },
-    "e2e/core/core-persistence.spec.ts": {
-      "waitForTimeout": 1
-    },
     "e2e/core/core-terminal-agent-promotion.spec.ts": {
-      "waitForTimeout": 3
+      "waitForTimeout": 1
     },
     "e2e/full/panels/core-palette-specialized.spec.ts": {
       "isVisibleTimeout": 1
@@ -19,145 +13,12 @@
     "e2e/full/panels/notification-toasts.spec.ts": {
       "waitForTimeout": 1
     },
-    "e2e/full/platform/core-accessibility.spec.ts": {
-      "waitForTimeout": 3
-    },
-    "e2e/full/platform/core-advanced.spec.ts": {
-      "waitForTimeout": 1
-    },
-    "e2e/full/platform/core-focus-management.spec.ts": {
-      "waitForTimeout": 4,
-      "isVisibleTimeout": 1
-    },
-    "e2e/full/platform/core-global-env-inheritance.spec.ts": {
-      "waitForTimeout": 3
-    },
-    "e2e/full/platform/core-hybrid-input-bar.spec.ts": {
-      "waitForTimeout": 2
-    },
-    "e2e/full/platform/core-keyboard-navigation-advanced.spec.ts": {
-      "waitForTimeout": 15
-    },
-    "e2e/full/platform/core-keyboard-shortcuts.spec.ts": {
-      "waitForTimeout": 4
-    },
-    "e2e/full/platform/core-multi-window.spec.ts": {
-      "waitForTimeout": 3
-    },
-    "e2e/full/platform/core-palette-accessibility.spec.ts": {
-      "waitForTimeout": 6
-    },
     "e2e/full/platform/core-persistence-advanced.spec.ts": {
-      "waitForTimeout": 7
-    },
-    "e2e/full/platform/core-plugin-host-contract.spec.ts": {
-      "isVisibleTimeout": 1
+      "waitForTimeout": 1
     },
     "e2e/full/platform/core-resource-settings-persistence.spec.ts": {
       "waitForTimeout": 6,
       "isVisibleTimeout": 1
-    },
-    "e2e/full/platform/core-settings-advanced.spec.ts": {
-      "waitForTimeout": 13,
-      "isVisibleTimeout": 1
-    },
-    "e2e/full/platform/core-settings-load.spec.ts": {
-      "waitForTimeout": 2
-    },
-    "e2e/full/platform/core-settings-tabs.spec.ts": {
-      "waitForTimeout": 13
-    },
-    "e2e/full/platform/core-shell-settings.spec.ts": {
-      "waitForTimeout": 3
-    },
-    "e2e/full/platform/core-v030-features.spec.ts": {
-      "waitForTimeout": 6
-    },
-    "e2e/full/platform/oauth-loopback-flow.spec.ts": {
-      "waitForTimeout": 2,
-      "isVisibleTimeout": 3
-    },
-    "e2e/full/plugins/core-plugin-contributions.spec.ts": {
-      "waitForTimeout": 1,
-      "isVisibleTimeout": 4
-    },
-    "e2e/full/presets/preset-context-menu.spec.ts": {
-      "waitForTimeout": 5
-    },
-    "e2e/full/presets/preset-custom-add.spec.ts": {
-      "waitForTimeout": 2
-    },
-    "e2e/full/presets/preset-custom-delete.spec.ts": {
-      "waitForTimeout": 15,
-      "isVisibleTimeout": 2
-    },
-    "e2e/full/presets/preset-custom-duplicate.spec.ts": {
-      "waitForTimeout": 5,
-      "isVisibleTimeout": 1
-    },
-    "e2e/full/presets/preset-custom-edit.spec.ts": {
-      "waitForTimeout": 8,
-      "isVisibleTimeout": 4
-    },
-    "e2e/full/presets/preset-default-selection.spec.ts": {
-      "isVisibleTimeout": 1
-    },
-    "e2e/full/presets/preset-edge-cases.spec.ts": {
-      "waitForTimeout": 2,
-      "isVisibleTimeout": 1
-    },
-    "e2e/full/presets/preset-launcher-default.spec.ts": {
-      "waitForTimeout": 6,
-      "isVisibleTimeout": 1
-    },
-    "e2e/full/presets/preset-onboarding-wizard.spec.ts": {
-      "waitForTimeout": 4,
-      "isVisibleTimeout": 10
-    },
-    "e2e/full/presets/preset-stale-handling.spec.ts": {
-      "waitForTimeout": 9
-    },
-    "e2e/full/presets/recipe-e2e-coverage.spec.ts": {
-      "waitForTimeout": 5
-    },
-    "e2e/full/resilience/adversarial-system.spec.ts": {
-      "isVisibleTimeout": 3
-    },
-    "e2e/full/resilience/agent-lifecycle-ledger.spec.ts": {
-      "waitForTimeout": 1
-    },
-    "e2e/full/resilience/background-terminal-bulk-output.spec.ts": {
-      "waitForTimeout": 5
-    },
-    "e2e/full/resilience/core-boot-ipc-overlap.spec.ts": {
-      "waitForTimeout": 1
-    },
-    "e2e/full/resilience/core-concurrent-operations.spec.ts": {
-      "waitForTimeout": 8
-    },
-    "e2e/full/resilience/core-error-buffering.spec.ts": {
-      "waitForTimeout": 1
-    },
-    "e2e/full/resilience/core-error-recovery.spec.ts": {
-      "waitForTimeout": 1
-    },
-    "e2e/full/resilience/core-ipc-cleanup.spec.ts": {
-      "waitForTimeout": 6
-    },
-    "e2e/full/resilience/core-ipc-error-propagation.spec.ts": {
-      "waitForTimeout": 1
-    },
-    "e2e/full/resilience/core-process-cleanup.spec.ts": {
-      "waitForTimeout": 2
-    },
-    "e2e/full/resilience/core-race-conditions.spec.ts": {
-      "waitForTimeout": 1
-    },
-    "e2e/full/resilience/core-rate-limiting.spec.ts": {
-      "waitForTimeout": 2
-    },
-    "e2e/full/resilience/core-sab-fallback.spec.ts": {
-      "waitForTimeout": 2
     },
     "e2e/full/terminal/terminal-agent-state-latency.spec.ts": {
       "waitForTimeout": 2
@@ -198,24 +59,15 @@
       "waitForTimeout": 3,
       "isVisibleTimeout": 1
     },
-    "e2e/nightly/nightly-memory-leaks.spec.ts": {
-      "waitForTimeout": 10
-    },
-    "e2e/nightly/nightly-pty-process-leak.spec.ts": {
-      "waitForTimeout": 4
-    },
-    "e2e/nightly/nightly-worker-governance-memory.spec.ts": {
-      "waitForTimeout": 5
-    },
     "e2e/online/claude-online.spec.ts": {
       "waitForTimeout": 4
     },
     "e2e/online/opencode-online.spec.ts": {
-      "waitForTimeout": 5
+      "waitForTimeout": 3
     },
     "e2e/online/terminal-identity-transitions.spec.ts": {
       "waitForTimeout": 5
     }
   },
-  "updatedAt": "2026-09-30T09:22:58.469Z"
+  "updatedAt": "2026-09-30T10:46:31.252Z"
 }

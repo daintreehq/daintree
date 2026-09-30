@@ -461,8 +461,11 @@ test.describe.serial("Core: Error surfaces", () => {
 
   test("successful retry clears error from problems panel", async () => {
     const msg = `Transient failure test ${Date.now()}`;
-    // "worktree" exercises a real main-process action (worktreeService.refresh),
-    // unlike "terminal" which guard-returns without retryArgs and never runs.
+    // "worktree" routes the retry through a main-process action
+    // (worktreeService.refresh) that resolves successfully; "terminal" would
+    // guard-return without retryArgs. No project is open yet, so the refresh has
+    // nothing to reconcile: this covers the problems panel's retry-to-cleared
+    // flow, not the refresh itself.
     await emitError(ctx.app, {
       type: "git",
       message: msg,

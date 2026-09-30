@@ -125,7 +125,9 @@ export async function selectExistingProject(window: Page, projectName: string): 
       let selected = false;
       for (let attempt = 0; attempt < 3 && !selected; attempt++) {
         const option = palette.getByRole("option").filter({ hasText: projectName }).first();
-        await expect(option).toBeVisible({ timeout: T_MEDIUM });
+        // The project list loads asynchronously after the palette opens; under
+        // load that alone can exceed T_MEDIUM.
+        await expect(option).toBeVisible({ timeout: T_LONG });
         try {
           await option.click({ force: true, noWaitAfter: true, timeout: T_SHORT });
           selected = true;

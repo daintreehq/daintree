@@ -141,10 +141,28 @@ test.describe.serial("Core: Keyboard Navigation", () => {
       const [onlyId] = panelIds;
       await focusTerminal(window, onlyId);
 
-      // Each press is followed by typing: the keystroke has to land in the same
-      // terminal, which a focus hop (even a transient one) would break.
+      // Sample the focused panel every frame for a dwell after each press, so a
+      // transient hop away and back fails the test instead of settling unseen.
       for (const key of [FOCUS_NEXT, FOCUS_PREVIOUS]) {
+        const samples = window.evaluate(
+          () =>
+            new Promise<Array<string | null>>((resolve) => {
+              const seen: Array<string | null> = [];
+              const end = performance.now() + 600;
+              const tick = () => {
+                seen.push(
+                  document.activeElement
+                    ?.closest("[data-panel-id]")
+                    ?.getAttribute("data-panel-id") ?? null
+                );
+                if (performance.now() < end) requestAnimationFrame(tick);
+                else resolve(seen);
+              };
+              requestAnimationFrame(tick);
+            })
+        );
         await window.keyboard.press(key);
+        expect(new Set(await samples)).toEqual(new Set([onlyId]));
         await expectTerminalFocused(gridPanel(window, onlyId));
         expect(await domFocusedPanelId(window)).toBe(onlyId);
       }

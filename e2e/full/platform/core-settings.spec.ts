@@ -552,8 +552,18 @@ test.describe("Core: Settings", () => {
       const newValue = (await fontSizeInput.inputValue()) === "16" ? "18" : "16";
       await fontSizeInput.fill(newValue);
       await fontSizeInput.blur();
-      // Commits on a debounced blur.
-      await expect(fontSizeInput).toHaveValue(newValue, { timeout: T_MEDIUM });
+      // The input shows its draft immediately, so read the committed value back
+      // from main: only a real save (debounced on blur) changes it.
+      await expect
+        .poll(
+          () =>
+            window.evaluate(async () => {
+              const config = await globalThis.window.electron.terminalConfig.get();
+              return config?.fontSize;
+            }),
+          { timeout: T_MEDIUM }
+        )
+        .toBe(Number(newValue));
       await closeSettingsWithEscape(window);
     });
 
