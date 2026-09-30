@@ -8,7 +8,7 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 import * as kit from "@daintreehq/plugin-ui";
-import { timeAgoTick } from "@/components/PluginKit/PluginKitDates";
+import { rangePanelLayout, timeAgoTick } from "@/components/PluginKit/PluginKitDates";
 import {
   addDays,
   addMonths,
@@ -683,6 +683,143 @@ describe("DateRangePicker", () => {
     });
     await screen.findByRole("dialog", { name: "Choose dates" });
     expect(captions()).toEqual(["August 2026", "September 2026"]);
+  });
+});
+
+describe("DateRangePicker layout", () => {
+  // Two grids of seven 32px days, and the 112px preset rail, before any padding.
+  const MONTH = 7 * 32;
+  const RAIL = 112;
+
+  it("fits two months only with the presets beside them, else one, and stacks presets last", () => {
+    let previous = rangePanelLayout(0, true);
+    for (let width = 0; width <= 1600; width += 4) {
+      const layout = rangePanelLayout(width, true);
+      // Two months never share a panel with stacked presets.
+      if (layout.months === 2) expect(layout.presets).toBe("beside");
+      // More room never gives a smaller panel: months only grow, presets only move beside.
+      expect(layout.months).toBeGreaterThanOrEqual(previous.months);
+      if (previous.presets === "beside") expect(layout.presets).toBe("beside");
+      previous = layout;
+    }
+    expect(rangePanelLayout(1600, true)).toEqual({ months: 2, presets: "beside" });
+    expect(rangePanelLayout(MONTH, true)).toEqual({ months: 1, presets: "above" });
+    // No room is claimed that the content cannot fill.
+    expect(rangePanelLayout(2 * MONTH + RAIL, true).months).toBe(1);
+    expect(rangePanelLayout(MONTH + RAIL, true).presets).toBe("above");
+    expect(rangePanelLayout(2 * MONTH, false).months).toBe(1);
+  });
+
+  it("gives the room the presets would take to a second month when there are none", () => {
+    for (let width = 0; width <= 1600; width += 4) {
+      const withPresets = rangePanelLayout(width, true);
+      const without = rangePanelLayout(width, false);
+      expect(without.presets).toBe("beside");
+      expect(without.months).toBeGreaterThanOrEqual(withPresets.months);
+    }
+    const firstTwo = (presets: boolean) => {
+      let width = 0;
+      while (rangePanelLayout(width, presets).months < 2) width += 1;
+      return width;
+    };
+    expect(firstTwo(true) - firstTwo(false)).toBeGreaterThanOrEqual(RAIL);
+  });
+
+  function roomOf(width: number) {
+    const real = HTMLElement.prototype.getBoundingClientRect;
+    const spy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.dataset.portalBoundary === "true") return new DOMRect(0, 0, width, 800);
+        return real.call(this);
+      });
+    onTestFinished(() => spy.mockRestore());
+    return spy;
+  }
+
+  async function openPicker() {
+    renderLoose(kit.DateRangePicker, {
+      defaultValue: { start: "2026-09-17", end: "2026-09-30" },
+      "aria-label": "Period",
+      presets: [
+        { label: "Last 7 days", range: { start: "2026-09-24", end: "2026-09-30" } },
+        { label: "Last 30 days", range: { start: "2026-09-01", end: "2026-09-30" } },
+      ],
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Choose dates" }));
+    });
+    await screen.findByRole("dialog", { name: "Choose dates" });
+  }
+
+  function presetsPlacement() {
+    return document.querySelector("[data-presets]")?.getAttribute("data-presets");
+  }
+
+  it("lays out for the room the popover has, not the window's width", async () => {
+    const innerWidth = window.innerWidth;
+    window.innerWidth = 1600;
+    onTestFinished(() => {
+      window.innerWidth = innerWidth;
+    });
+    roomOf(560);
+    await openPicker();
+    expect(captions()).toHaveLength(1);
+    expect(presetsPlacement()).toBe("beside");
+  });
+
+  it("shows two months beside the presets where they fit", async () => {
+    roomOf(1200);
+    await openPicker();
+    expect(captions()).toHaveLength(2);
+    expect(presetsPlacement()).toBe("beside");
+  });
+
+  it("wraps the presets above one month where the rail does not fit beside it", async () => {
+    const onValueChange = vi.fn();
+    roomOf(320);
+    renderLoose(kit.DateRangePicker, {
+      defaultValue: null,
+      onValueChange,
+      "aria-label": "Period",
+      presets: [{ label: "Last 7 days", range: { start: "2026-09-24", end: "2026-09-30" } }],
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Choose dates" }));
+    });
+    await screen.findByRole("dialog", { name: "Choose dates" });
+    expect(captions()).toHaveLength(1);
+    expect(presetsPlacement()).toBe("above");
+    const group = screen.getByRole("group", { name: "Presets" });
+    // As wide as the month under it, so the buttons wrap instead of widening the panel.
+    expect(group.className.split(" ")).toEqual(
+      expect.arrayContaining(["flex-wrap", "w-0", "min-w-full"])
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Last 7 days" }));
+    });
+    expect(onValueChange).toHaveBeenLastCalledWith({ start: "2026-09-24", end: "2026-09-30" });
+  });
+
+  it("measures again as the window resizes while open", async () => {
+    const spy = roomOf(1200);
+    await openPicker();
+    expect(captions()).toHaveLength(2);
+    spy.mockRestore();
+    roomOf(320);
+    await act(async () => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(captions()).toHaveLength(1);
+    expect(presetsPlacement()).toBe("above");
+  });
+
+  it("caps the panel at the popover's available width, not the viewport's", async () => {
+    roomOf(1200);
+    await openPicker();
+    const dialog = screen.getByRole("dialog", { name: "Choose dates" });
+    expect(dialog.className).toContain("max-w-[var(--radix-popover-content-available-width)]");
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
   });
 });
 

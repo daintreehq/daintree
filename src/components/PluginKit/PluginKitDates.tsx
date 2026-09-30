@@ -8,7 +8,13 @@ import type {
 } from "@shared/types/plugin-sdk-react";
 import { Button } from "@/components/ui/button";
 import { useFieldControl } from "@/components/ui/field";
-import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  getPopoverAvailableWidth,
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useWallClock } from "@/hooks/useWallClock";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
@@ -454,8 +460,31 @@ interface DateFieldProps {
   props: PluginDatePickerProps | PluginDateRangePickerProps;
 }
 
-function hasWideWindow(): boolean {
-  return typeof window === "undefined" || window.innerWidth >= 640;
+// The panel's widths, from the classes that draw it: a month is seven `w-8`
+// days, months sit `gap-4` apart, the panel pads `p-3` inside a 1px border,
+// and the preset rail is `min-w-28` plus its `pr-3`, rule and `gap-3`.
+const MONTH_WIDTH = 7 * 32;
+const MONTH_GAP = 16;
+const PANEL_CHROME = 2 * 12 + 2;
+const PRESET_RAIL = 112 + 12 + 1 + 12;
+
+export interface RangePanelLayout {
+  months: 1 | 2;
+  /** Where the presets go: a rail beside the months, or wrapped above one. */
+  presets: "beside" | "above";
+}
+
+/**
+ * How a range picker's panel fits `availableWidth`: two months only when
+ * they fit in a row with the preset rail, else one; and when even the rail
+ * and one month do not fit, the presets wrap above the month instead.
+ */
+export function rangePanelLayout(availableWidth: number, hasPresets: boolean): RangePanelLayout {
+  const rail = hasPresets ? PRESET_RAIL : 0;
+  const twoMonths = PANEL_CHROME + rail + 2 * MONTH_WIDTH + MONTH_GAP;
+  if (availableWidth >= twoMonths) return { months: 2, presets: "beside" };
+  const oneMonth = PANEL_CHROME + rail + MONTH_WIDTH;
+  return { months: 1, presets: !hasPresets || availableWidth >= oneMonth ? "beside" : "above" };
 }
 
 type FieldValue = string | DateRange | null;
@@ -522,7 +551,15 @@ function DateField({ mode, props }: DateFieldProps) {
   const controlledOpen = typeof open === "boolean" ? open : undefined;
   const [ownOpen, setOwnOpen] = useState(false);
   const isOpen = controlledOpen ?? ownOpen;
-  const [wide, setWide] = useState(hasWideWindow);
+  // The room the panel has, measured as it opens (however it was opened,
+  // before it mounts) and again as the window resizes under it.
+  const [roomWidth, setRoomWidth] = useState(Number.POSITIVE_INFINITY);
+  const [measuredOpen, setMeasuredOpen] = useState(false);
+  if (isOpen !== measuredOpen) {
+    setMeasuredOpen(isOpen);
+    if (isOpen) setRoomWidth(getPopoverAvailableWidth());
+  }
+  const layout = rangePanelLayout(roomWidth, presets.length > 0);
   const handleOpen = fn(onOpenChange);
   const handleValue = reporter(props.onValueChange);
 
@@ -540,7 +577,6 @@ function DateField({ mode, props }: DateFieldProps) {
 
   const setOpen = (next: boolean, fromInput = false) => {
     if (next) {
-      setWide(hasWideWindow());
       openedFromInput.current = fromInput;
       pressedInside.current = false;
     }
@@ -577,6 +613,13 @@ function DateField({ mode, props }: DateFieldProps) {
     }
     change(parsed);
   };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const measure = () => setRoomWidth(getPopoverAvailableWidth());
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [isOpen]);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.nativeEvent.isComposing) return;
@@ -635,7 +678,7 @@ function DateField({ mode, props }: DateFieldProps) {
       initialMonth={
         selected !== null ? monthOf(selected) : range !== null ? monthOf(range.start) : null
       }
-      numberOfMonths={mode === "range" && wide ? 2 : 1}
+      numberOfMonths={mode === "range" ? layout.months : 1}
       weekStart={readWeekStart(weekStartsOn)}
     />
   );
@@ -717,7 +760,7 @@ function DateField({ mode, props }: DateFieldProps) {
         aria-label={`Choose ${noun}`}
         // Radix traps focus and hides the page but leaves the role unqualified.
         aria-modal="true"
-        className={cn("w-auto max-w-[calc(100vw-2rem)] p-3", overlayZ)}
+        className={cn("w-auto max-w-[var(--radix-popover-content-available-width)] p-3", overlayZ)}
         onPointerDownCapture={() => {
           pressedInside.current = true;
         }}
@@ -748,11 +791,19 @@ function DateField({ mode, props }: DateFieldProps) {
         }}
       >
         {presets.length > 0 ? (
-          <div className="flex gap-3">
+          <div
+            data-presets={layout.presets}
+            className={layout.presets === "beside" ? "flex gap-3" : "inline-flex flex-col gap-3"}
+          >
             <div
               role="group"
               aria-label="Presets"
-              className="flex min-w-28 flex-col gap-0.5 border-r border-border-subtle pr-3"
+              className={
+                layout.presets === "beside"
+                  ? "flex min-w-28 flex-col gap-0.5 border-r border-border-subtle pr-3"
+                  : // As wide as the month below, not the row of buttons: they wrap.
+                    "flex w-0 min-w-full flex-wrap gap-1 border-b border-border-subtle pb-3"
+              }
             >
               {presets.map((preset) => (
                 <Button
@@ -761,7 +812,7 @@ function DateField({ mode, props }: DateFieldProps) {
                   size="sm"
                   pressed={preset === pickedPreset}
                   disabled={!presetAllowed(preset.range)}
-                  className="justify-start font-normal"
+                  className={cn("font-normal", layout.presets === "beside" && "justify-start")}
                   onClick={() => {
                     change(preset.range);
                     setOpen(false);
