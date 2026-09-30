@@ -774,16 +774,26 @@ function DescriptionRow({
       {...root}
       className={cn(
         inline
-          ? "col-span-2 grid grid-cols-subgrid items-baseline"
+          ? "col-span-3 grid grid-cols-subgrid items-baseline"
           : "flex min-w-0 flex-col gap-0.5",
         className
       )}
     >
-      <dt className={cn("min-w-0 break-words text-text-secondary", inline ? "text-sm" : "text-xs")}>
+      <dt
+        className={cn(
+          "min-w-0 break-words text-text-secondary",
+          inline ? "pr-6 text-sm" : "text-xs"
+        )}
+      >
         {node(label)}
       </dt>
-      <dd className="m-0 flex min-w-0 items-start gap-1.5">
-        <div className="min-w-0 flex-1">
+      <dd
+        className={cn(
+          "m-0 min-w-0 items-start",
+          inline ? "col-span-2 grid grid-cols-subgrid" : "flex gap-1.5"
+        )}
+      >
+        <div className={cn("min-w-0", !inline && "flex-1")}>
           <div className="break-words text-sm text-text-primary select-text">
             {hasContent(item.value) ? (
               node(item.value)
@@ -805,7 +815,7 @@ function DescriptionRow({
             text={copyText}
             size="icon-xs"
             aria-label={typeof label === "string" && label !== "" ? `Copy ${label}` : "Copy value"}
-            className="-my-0.5 shrink-0"
+            className={cn("-my-0.5 shrink-0", inline && "ml-1.5")}
           />
         ) : null}
       </dd>
@@ -822,6 +832,14 @@ function readDescriptionItem(entry: unknown): PluginDescriptionItem | null {
     copyText: str(field(entry, "copyText")),
   };
 }
+
+// Label, value, copy and a trailing filler: the value column is as wide as the
+// longest value up to the room there is, so each copy button sits just after
+// the values while the buttons still line up with each other; a long value
+// wraps inside what is left beside the label. No column gap, so an empty copy
+// column costs nothing: the label and button carry their own spacing.
+const DESCRIPTION_LIST_INLINE_GRID =
+  "grid grid-cols-[fit-content(40%)_minmax(0,max-content)_auto_minmax(0,1fr)] gap-y-2.5";
 
 function KitDescriptionList({
   items,
@@ -844,9 +862,7 @@ function KitDescriptionList({
         {...pickRootProps(rest)}
         className={cn(
           "m-0 min-w-0",
-          settings.layout === "inline"
-            ? "grid grid-cols-[fit-content(40%)_minmax(0,1fr)] gap-x-6 gap-y-2.5"
-            : "flex flex-col gap-3",
+          settings.layout === "inline" ? DESCRIPTION_LIST_INLINE_GRID : "flex flex-col gap-3",
           str(className)
         )}
       >
