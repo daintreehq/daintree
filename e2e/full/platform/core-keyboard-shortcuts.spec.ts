@@ -4,15 +4,17 @@ import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { getGridPanelCount } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
+import { expectTerminalFocused } from "../../helpers/focus";
 
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 
+// Wait for the HUD between strokes so the second key lands in the pending chord.
 async function pressChord(page: Page, first: string, second: string) {
   await page.keyboard.press(first);
-  await page.waitForTimeout(100);
+  await expect(page.locator("[data-command-hud]")).toBeVisible({ timeout: T_MEDIUM });
   await page.keyboard.press(second);
 }
 
@@ -51,11 +53,13 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
       await expect(dialog).not.toBeVisible({ timeout: T_SHORT });
     });
 
-    test("Cmd+Alt+T opens a new terminal", async () => {
+    test("Cmd+Alt+T opens a new terminal each press", async () => {
       const { window } = ctx;
-      const before = await getGridPanelCount(window);
-      await window.keyboard.press(`${mod}+Alt+t`);
-      await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
+      for (let press = 0; press < 2; press++) {
+        const before = await getGridPanelCount(window);
+        await window.keyboard.press(`${mod}+Alt+t`);
+        await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
+      }
     });
 
     test("Cmd+, opens settings", async () => {
@@ -72,7 +76,7 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
 
     test("Cmd+B toggles sidebar off and on", async () => {
       const { window } = ctx;
-      const aside = window.locator('aside[aria-label="Sidebar"]');
+      const aside = window.locator(SEL.sidebar.aside);
       await expect(aside).toHaveAttribute("aria-hidden", "false", { timeout: T_SHORT });
 
       await window.locator(SEL.toolbar.projectSwitcherTrigger).focus();
@@ -83,23 +87,44 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
       await expect(aside).toHaveAttribute("aria-hidden", "false", { timeout: T_SHORT });
     });
 
-    test("Cmd+W closes focused panel", async () => {
+    test("toolbar button toggles sidebar off and on", async () => {
       const { window } = ctx;
-      let before = await getGridPanelCount(window);
+      const aside = window.locator(SEL.sidebar.aside);
+      await expect(aside).toHaveAttribute("aria-hidden", "false", { timeout: T_MEDIUM });
 
-      if (before < 2) {
+      await window.locator(SEL.toolbar.toggleSidebar).click();
+      await expect(aside).toHaveAttribute("aria-hidden", "true", { timeout: T_SHORT });
+
+      await window.locator(SEL.toolbar.toggleSidebar).click();
+      await expect(aside).toHaveAttribute("aria-hidden", "false", { timeout: T_SHORT });
+    });
+
+    test("Cmd+W closes the focused panel, down to the last one", async () => {
+      const { window } = ctx;
+      // Keep a second panel around so Cmd+W never closes the last one (which quits).
+      if ((await getGridPanelCount(window)) < 3) {
+        const before = await getGridPanelCount(window);
         await window.keyboard.press(`${mod}+Alt+t`);
         await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
-        before = before + 1;
       }
 
-      const panel = window.locator(SEL.panel.gridPanel).first();
-      await panel.click();
-      await window.waitForTimeout(T_SETTLE);
-      await panel.locator(SEL.panel.close).first().focus();
+      for (let close = 0; close < 2; close++) {
+        const before = await getGridPanelCount(window);
+        expect(before).toBeGreaterThanOrEqual(2);
+        const panel = window.locator(SEL.panel.gridPanel).first();
+        const closeButton = panel.locator(SEL.panel.close).first();
+        await panel.click();
+        // The click hands focus to the terminal on a later frame; park focus on
+        // the panel's close button (so Cmd/Ctrl+W can't reach the PTY) once
+        // that handoff has happened.
+        await expect(async () => {
+          await closeButton.focus();
+          await expect(closeButton).toBeFocused({ timeout: 500 });
+        }).toPass({ timeout: T_MEDIUM });
 
-      await window.keyboard.press(`${mod}+w`);
-      await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(before - 1);
+        await window.keyboard.press(`${mod}+w`);
+        await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(before - 1);
+      }
     });
   });
 
@@ -141,9 +166,6 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
       const palette = window.locator('[role="dialog"][aria-label="Worktree palette"]');
       await expect(palette).toBeVisible({ timeout: T_MEDIUM });
 
-      // First Escape may be consumed by an inner input; second ensures dismissal.
-      await window.keyboard.press("Escape");
-      await window.waitForTimeout(T_SETTLE);
       await window.keyboard.press("Escape");
       await expect(palette).not.toBeVisible({ timeout: T_SHORT });
     });
@@ -172,10 +194,12 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
         await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBeGreaterThan(0);
       }
 
-      // Click on the terminal area to ensure focus
-      const xtermScreen = window.locator(SEL.terminal.xtermRows).first();
-      await xtermScreen.click();
-      await window.waitForTimeout(T_SETTLE);
+      const panel = window
+        .locator(SEL.panel.gridPanel)
+        .filter({ has: window.locator(SEL.terminal.xtermRows) })
+        .first();
+      await panel.locator(SEL.terminal.xtermRows).click();
+      await expectTerminalFocused(panel);
 
       await window.keyboard.press(`${mod}+f`);
       const searchInput = window.locator(SEL.terminal.searchInput);

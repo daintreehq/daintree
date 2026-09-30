@@ -200,7 +200,7 @@ test.describe.serial("Multi-window isolation", () => {
       .poll(() => main2.getAttribute("aria-label"), { timeout: T_LONG })
       .not.toContain("has uncommitted changes");
 
-    // Cooldown for GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS (1000ms).
+    // timer: GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS (1000ms) — a write inside it is swallowed.
     await window1Page.waitForTimeout(1500);
 
     // External file change in fixture A only — fixture B must remain clean.
@@ -219,6 +219,7 @@ test.describe.serial("Multi-window isolation", () => {
     // main2 starts clean), so a cross-routed event arriving 300–500ms
     // later would escape. Sustain the window with an explicit wait, then
     // snapshot-assert after the dwell.
+    // timer: negative-assertion dwell for a cross-routed watcher event
     await window2Page.waitForTimeout(T_MEDIUM);
     expect(await main2.getAttribute("aria-label")).not.toContain("has uncommitted changes");
   });
@@ -258,7 +259,8 @@ test.describe.serial("Multi-window isolation", () => {
     // only verify cached React state, not that new worktree events flow.
     const main2 = window2Page.locator(SEL.worktree.mainCard);
     await expect(main2).toBeVisible({ timeout: T_LONG });
-    await window2Page.waitForTimeout(1500); // GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS
+    // timer: GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS (1000ms)
+    await window2Page.waitForTimeout(1500);
     writeFileSync(path.join(fixtures[1].dir, "post-close-marker.txt"), "alive\n");
     await expect
       .poll(() => main2.getAttribute("aria-label"), {

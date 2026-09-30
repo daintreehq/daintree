@@ -5,6 +5,7 @@ import { openAndOnboardProject } from "../../helpers/project";
 import { getGridPanelCount, openTerminal } from "../../helpers/panels";
 import { ensureWindowFocused, expectPaletteFocused } from "../../helpers/focus";
 import { SEL } from "../../helpers/selectors";
+import { installFakeAgent, fakeAgentEnv } from "../../helpers/fakeAgent";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
@@ -18,7 +19,10 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
     const { dir, cleanup } = createFixtureRepo({ name: "palettes-test", withMultipleFiles: true });
     fixtureDir = dir;
     fixtureCleanup = cleanup;
-    ctx = await launchApp();
+    // A fake Claude CLI on PATH, so the agent panel (and its command picker)
+    // exists whether or not the real CLI is installed.
+    const fakeBinDir = installFakeAgent(fixtureDir);
+    ctx = await launchApp({ env: fakeAgentEnv(fakeBinDir) });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Palette Test");
   });
 
@@ -205,8 +209,6 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
   // ── Command Picker (2 tests) ──────────────────────────────
 
   test.describe.serial("Command Picker", () => {
-    let commandPickerAvailable = false;
-
     test.afterAll(async () => {
       try {
         await ctx.window.keyboard.press("Escape");
@@ -230,66 +232,26 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
     test("opens via button click on agent panel", async () => {
       const { window } = ctx;
 
-      const startBtn = window.locator(SEL.agent.startButton);
-      const skipped =
-        await test.step("Start an agent panel (skip if CLI is unavailable)", async () => {
-          // Agent panel requires CLI availability — skip if not present
-          if (!(await startBtn.isVisible().catch(() => false))) {
-            return true;
-          }
-
-          await startBtn.click();
-          return false;
-        });
-      if (skipped) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Required element or state not available in this launch",
-        });
-
-        test.skip();
-        return;
-      }
+      await test.step("Start an agent panel", async () => {
+        const startBtn = window.locator(SEL.agent.startButton);
+        await expect(startBtn).toBeVisible({ timeout: T_LONG });
+        await startBtn.click();
+      });
 
       const openPickerBtn = window.locator(SEL.commandPicker.openButton);
-      const pickerMissing =
-        await test.step("Wait for command picker open button to appear", async () => {
-          // HybridInputBar's command picker button only renders on agent panels
-          return !(await openPickerBtn
-            .waitFor({ state: "visible", timeout: T_LONG })
-            .then(() => true)
-            .catch(() => false));
-        });
-      if (pickerMissing) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Command picker button not visible in this launch state",
-        });
-
-        test.skip();
-        return;
-      }
+      await test.step("Wait for command picker open button to appear", async () => {
+        // HybridInputBar's command picker button only renders on agent panels
+        await expect(openPickerBtn).toBeVisible({ timeout: T_LONG });
+      });
 
       await test.step("Open command picker dialog and verify visibility", async () => {
         await openPickerBtn.click();
-
         const dialog = window.locator(SEL.commandPicker.dialog);
         await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
-        commandPickerAvailable = true;
       });
     });
 
     test("search filters commands and Escape closes", async () => {
-      if (!commandPickerAvailable) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Required element or state not available in this launch",
-        });
-
-        test.skip();
-        return;
-      }
-
       const { window } = ctx;
       const searchInput = window.locator(SEL.commandPicker.searchInput);
       const options = window.locator(SEL.commandPicker.options);
