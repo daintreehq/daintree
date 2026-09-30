@@ -6,6 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { FOOTER_ITEM_CLASS } from "@/components/HelpPanel/footerItem";
 import { terminalClient } from "@/clients";
 import { cn } from "@/lib/utils";
+import { pluralize } from "@/lib/pluralize";
 import {
   HEADER_CHIP_CLASS,
   HEADER_CHIP_FOCUS_CLASS,
@@ -105,10 +106,6 @@ function describeDelivery(delivery: TerminalNotifyDelivery): { text: string; ton
   }
 }
 
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 /**
  * Visible on a pane whose agent asked to be told when other terminals stop
  * working: Daintree may type one line into this pane's prompt. Self-gating,
@@ -151,7 +148,8 @@ export function TerminalNotifyChip({
   const { text, tone } = describeDelivery(state.delivery);
   const pending = state.pendingCount;
   const count = pending > 0 ? pending : state.readyCount;
-  const counted = pending > 0 ? plural(pending, "terminal") : plural(state.readyCount, "notice");
+  const counted =
+    pending > 0 ? pluralize(pending, "terminal") : pluralize(state.readyCount, "notice");
   const heading = pending > 0 ? `Waiting on ${counted}` : `${counted} waiting to be delivered`;
   const footer = variant === "footer";
 
