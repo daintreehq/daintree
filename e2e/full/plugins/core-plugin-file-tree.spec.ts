@@ -6,7 +6,7 @@ import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { FILE_TREE_PLUGIN_ID, SAMPLE_PLUGINS_DIR, activateE2EPlugin } from "../../helpers/plugins";
 import { T_LONG, T_MEDIUM } from "../../helpers/timeouts";
-import type { ActionDispatchResult } from "../../../shared/types/actions";
+import { dispatchAction } from "../../helpers/actions";
 
 /**
  * The file-listing surface, exercised the way a plugin author reaches it.
@@ -35,48 +35,42 @@ function row(page: Page, path: string) {
   return page.getByTestId(`file-tree-row-${path}`);
 }
 
-async function dispatchAction<Result = unknown>(
-  page: Page,
-  actionId: string,
-  args?: unknown
-): Promise<ActionDispatchResult<Result>> {
-  return page.evaluate(
-    async (payload) => {
-      const dispatch = (
-        window as unknown as {
-          __daintreeDispatchAction?: (
-            id: string,
-            a?: unknown,
-            opts?: { source: string }
-          ) => Promise<ActionDispatchResult<Result>>;
-        }
-      ).__daintreeDispatchAction;
-      if (typeof dispatch !== "function") {
-        throw new Error("__daintreeDispatchAction is not available");
-      }
-      return dispatch(payload.actionId, payload.args, { source: "menu" });
-    },
-    { actionId, args }
+/**
+ * Open a fresh explorer panel and wait for the root listing to paint. Always a
+ * new panel: the tests share one launch, and a reused panel would carry the
+ * previous test's expansion and filter state into the next.
+ */
+async function openExplorer(page: Page): Promise<string> {
+  const result = await dispatchAction<{ panelId: string }>(
+    page,
+    "panel.openPluginPanel",
+    { kind: `${FILE_TREE_PLUGIN_ID}.explorer`, reuseExisting: false },
+    { source: "menu" }
   );
-}
-
-/** Open the sample's panel and wait for the root listing to paint. */
-async function openExplorer(page: Page): Promise<void> {
-  const result = await dispatchAction(page, "panel.openPluginPanel", {
-    kind: `${FILE_TREE_PLUGIN_ID}.explorer`,
-  });
-  expect(result.ok, JSON.stringify(result)).toBe(true);
+  if (!result.ok) throw new Error(`openPluginPanel failed: ${JSON.stringify(result)}`);
   await expect(page.getByTestId("file-tree-view")).toBeVisible({ timeout: T_LONG });
   // A named entry, not "any row": the root listing has genuinely arrived only
   // once something the fixture is known to contain is on screen.
   await expect(row(page, ROOT_FILE)).toBeVisible({ timeout: T_LONG });
+  return result.result.panelId;
+}
+
+/** The expanded set main holds for a panel — what a remount restores from. */
+async function persistedExpanded(page: Page, panelId: string): Promise<unknown> {
+  return page.evaluate(async (id) => {
+    const project = await window.electron.project.getCurrent();
+    if (!project) return null;
+    const terminals = await window.electron.project.getTerminals(project.id);
+    return terminals.find((terminal) => terminal.id === id)?.extensionState?.expanded ?? null;
+  }, panelId);
 }
 
 test.describe("plugin file-tree sample", () => {
   let ctx: AppContext;
   let cleanupRepo: () => void;
+  let openPanelId: string | null = null;
 
-  test.beforeEach(async () => {
+  test.beforeAll(async () => {
     // Its own launch rather than `launchWithSamplePlugin`, which builds a
     // bare fixture: these assertions need the known `src/` subtree and a
     // committed dotfile.
@@ -91,14 +85,22 @@ test.describe("plugin file-tree sample", () => {
     await activateE2EPlugin(ctx.app, FILE_TREE_PLUGIN_ID);
   });
 
-  test.afterEach(async () => {
-    await closeApp(ctx.app);
-    cleanupRepo();
+  test.afterAll(async () => {
+    if (ctx?.app) await closeApp(ctx.app);
+    cleanupRepo?.();
+  });
+
+  test.beforeEach(async () => {
+    if (openPanelId === null) return;
+    const closed = await dispatchAction(ctx.window, "terminal.close", { terminalId: openPanelId });
+    expect(closed.ok, JSON.stringify(closed)).toBe(true);
+    openPanelId = null;
+    await expect(ctx.window.getByTestId("file-tree-view")).toHaveCount(0, { timeout: T_MEDIUM });
   });
 
   test("lists a real directory through host.fs.readdir with detail", async () => {
     const page = ctx.window;
-    await openExplorer(page);
+    openPanelId = await openExplorer(page);
 
     // Both a file and a directory from the fixture, so the detailed listing
     // survived the worker round trip with its kind flags intact.
@@ -115,7 +117,7 @@ test.describe("plugin file-tree sample", () => {
 
   test("expands a directory lazily and restores it on remount", async () => {
     const page = ctx.window;
-    await openExplorer(page);
+    openPanelId = await openExplorer(page);
 
     // Absent first: the model only asks for children on expansion, so this is
     // what makes the appearance below mean something.
@@ -131,8 +133,23 @@ test.describe("plugin file-tree sample", () => {
     // record exists for. A reload destroys all React state and the default
     // expanded set is empty, so the directory coming back open can only have
     // come from `persistState` → `initialArgs`.
+    //
+    // A reload is not a save point: panel records reach main through a
+    // debounced autosave, and nothing flushes it on reload. Wait for main to
+    // hold the expansion first, or the reload races the save and brings back a
+    // collapsed tree, or no panel at all.
+    const panelId = openPanelId!;
+    await expect
+      .poll(() => persistedExpanded(page, panelId), {
+        message: "expanded set never reached the main-process panel record",
+        timeout: T_LONG,
+        intervals: [100, 250, 500],
+      })
+      .toEqual([ROOT_DIR]);
     await page.reload();
-    await expect(page.getByTestId("file-tree-view")).toBeVisible({ timeout: T_LONG });
+    const panel = page.locator(`[data-panel-id="${panelId}"]`);
+    await expect(panel).toBeVisible({ timeout: T_LONG });
+    await expect(panel.getByTestId("file-tree-view")).toBeVisible({ timeout: T_LONG });
     await expect(row(page, ROOT_DIR)).toHaveAttribute("aria-expanded", "true", {
       timeout: T_LONG,
     });
@@ -143,13 +160,16 @@ test.describe("plugin file-tree sample", () => {
 
   test("moves the selection with the arrow keys", async () => {
     const page = ctx.window;
-    await openExplorer(page);
+    openPanelId = await openExplorer(page);
 
     // Start from a known selection rather than from nothing: with a null cursor
     // the first ArrowDown selects the top row, which would look like movement
     // whether or not the key resolution works.
     await row(page, ROOT_DIR).click();
     await expect(row(page, ROOT_DIR)).toHaveAttribute("aria-selected", "true");
+    // Clicking a directory also expands it; wait for the children so the row
+    // below `src` is settled before the key moves onto it.
+    await expect(row(page, NESTED_FILE)).toBeVisible({ timeout: T_MEDIUM });
 
     await page.getByRole("tree").focus();
     await page.keyboard.press("ArrowDown");
@@ -159,6 +179,7 @@ test.describe("plugin file-tree sample", () => {
     await expect(row(page, ROOT_DIR)).toHaveAttribute("aria-selected", "false", {
       timeout: T_MEDIUM,
     });
+    await expect(row(page, NESTED_FILE)).toHaveAttribute("aria-selected", "true");
     await expect(page.locator('[data-testid^="file-tree-row-"][aria-selected="true"]')).toHaveCount(
       1
     );
@@ -166,7 +187,7 @@ test.describe("plugin file-tree sample", () => {
 
   test("reveals dotfiles without revealing always-hidden entries", async () => {
     const page = ctx.window;
-    await openExplorer(page);
+    openPanelId = await openExplorer(page);
 
     // A specific dotfile, so "revealed" is a presence assertion on a known
     // name rather than a row count that could move for any reason.

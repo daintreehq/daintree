@@ -6,7 +6,7 @@ import { getGridPanelCount, getGridPanelIds, getPanelById, openTerminal } from "
 import { waitForTerminalPty } from "../helpers/terminal";
 import { addAndSwitchToProject } from "../helpers/workflows";
 import { SEL } from "../helpers/selectors";
-import { T_LONG, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
+import { T_LONG, T_MEDIUM } from "../helpers/timeouts";
 
 // Counts live PTY entries, not panels: a leaked PTY (e.g. node-pty's master
 // /dev/ptmx fd never released on kill — see #9544) leaves a registry entry alive
@@ -61,6 +61,24 @@ async function openAndCloseTerminal(window: AppContext["window"]): Promise<void>
   const closeBtn = panel.locator(SEL.panel.close);
   await closeBtn.click({ modifiers: ["Alt"], force: true, timeout: T_MEDIUM });
   await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(idsBefore.length);
+  if (newId) closedTerminalIds.push(newId);
+}
+
+const closedTerminalIds: string[] = [];
+
+/**
+ * Closed terminals the pty-host still has registered. A killed PTY's entry is
+ * dropped only once its process has exited, so an empty list is the exit
+ * barrier `hasPty` is not: that flag flips at kill time, before the exit.
+ */
+async function getUnexitedTerminals(
+  window: AppContext["window"],
+  ids: string[]
+): Promise<string[]> {
+  return window.evaluate(async (closed) => {
+    const terminals = await globalThis.window.electron.terminal.getAllTerminals();
+    return terminals.filter((t) => closed.includes(t.id)).map((t) => t.id);
+  }, ids);
 }
 
 // Live PTY count = terminals with hasPty === true, optionally scoped to one
@@ -104,30 +122,42 @@ test.describe.serial("Nightly: PTY process leak — terminal churn", () => {
     test.setTimeout(600_000);
     const { window } = ctx;
 
-    await test.step("warmup cycles", async () => {
-      for (let i = 0; i < WARMUP_CYCLES; i++) {
-        await openAndCloseTerminal(window);
-        await window.waitForTimeout(T_SETTLE);
-      }
-      await window.waitForTimeout(T_SETTLE);
-    });
-
+    // Read before any churn: nothing has been opened yet, so no exit is still
+    // in flight and this is the count every close must return to.
     const baseline = await getLivePtyCount(window);
     console.log(`[pty-leak] baseline live PTYs: ${baseline}`);
 
+    await test.step("warmup cycles", async () => {
+      for (let i = 0; i < WARMUP_CYCLES; i++) {
+        await openAndCloseTerminal(window);
+      }
+      await expect
+        .poll(
+          async () => ({
+            live: await getLivePtyCount(window),
+            unexited: await getUnexitedTerminals(window, closedTerminalIds),
+          }),
+          { message: "warmup PTYs never exited", timeout: T_LONG }
+        )
+        .toEqual({ live: baseline, unexited: [] });
+    });
+
+    // Each cycle waits for its own PTY to attach and its panel to close; spawns
+    // beyond the terminal-spawn rate limit queue rather than fail.
     await test.step(`run ${CHURN_COUNT} open/close cycles`, async () => {
       for (let i = 0; i < CHURN_COUNT; i++) {
         await openAndCloseTerminal(window);
-        await window.waitForTimeout(T_SETTLE);
       }
     });
 
     // hasPty flips false synchronously on kill, but the registry entry is only
-    // dropped once the process exits — poll across the IPC round-trip rather
-    // than a single fixed-wait read, which flakes on loaded CI. T_LONG gives
-    // queued exit handshakes headroom on slow Windows runners.
-    await window.waitForTimeout(T_SETTLE);
+    // dropped once the process exits — poll across the IPC round-trip. T_LONG
+    // gives queued exit handshakes headroom on slow Windows runners.
     await expect.poll(() => getLivePtyCount(window), { timeout: T_LONG }).toBe(baseline);
+    // `hasPty` flips on kill; every churned process must also have exited.
+    await expect
+      .poll(() => getUnexitedTerminals(window, closedTerminalIds), { timeout: T_LONG })
+      .toEqual([]);
   });
 });
 

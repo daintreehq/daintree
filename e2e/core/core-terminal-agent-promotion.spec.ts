@@ -86,10 +86,143 @@ async function expectAgentHeldThroughDwell(panel: Locator, terminalId: string): 
       { detected, chrome },
       `${terminalId} demoted after shell-command evidence expired`
     ).toEqual({ detected: "claude", chrome: "claude" });
-    // timer: SHELL_COMMAND_EXPIRY_MS (E2E override) — sampling interval of the
-    // post-expiry dwell.
+    // Sampling interval of the post-expiry dwell.
+    // timer: SHELL_COMMAND_EXPIRY_MS (E2E override)
     await panel.page().waitForTimeout(250);
   }
+}
+
+interface IdentityEvent {
+  panelId: string;
+  attr: "present" | "data-detected-agent-id" | "data-chrome-agent-id";
+  value: string | null;
+}
+
+/**
+ * Record every value the panes' agent-identity attributes pass through, from
+ * inside the page. Built from the MutationRecords themselves (with old values)
+ * rather than from the DOM at delivery time, so a demotion that is undone
+ * before the observer runs — or before the next poll — is still in the log.
+ * Started before the agent launches, which puts the whole shell-evidence
+ * expiry window, whenever the shortened timer fires, inside the recording.
+ */
+async function startIdentityRecorder(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const ATTRS = ["data-detected-agent-id", "data-chrome-agent-id"] as const;
+    const w = window as unknown as {
+      __e2eIdentityEvents?: IdentityEvent[];
+      __e2eIdentityObserver?: MutationObserver;
+    };
+    w.__e2eIdentityObserver?.disconnect();
+    const events: IdentityEvent[] = [];
+    w.__e2eIdentityEvents = events;
+
+    const panelsIn = (node: Node): Element[] => {
+      if (!(node instanceof Element)) return [];
+      const found = [...node.querySelectorAll("[data-panel-id]")];
+      return node.hasAttribute("data-panel-id") ? [node, ...found] : found;
+    };
+    const snapshot = (el: Element) => {
+      const panelId = el.getAttribute("data-panel-id")!;
+      events.push({ panelId, attr: "present", value: "true" });
+      for (const attr of ATTRS) events.push({ panelId, attr, value: el.getAttribute(attr) });
+    };
+
+    const observer = new MutationObserver((records) => {
+      // Per element+attribute, the value after record i is record i+1's
+      // oldValue; after the last record it is the live value.
+      const olds = new Map<string, Array<string | null>>();
+      const keyOf = (el: Element, attr: string) => `${el.getAttribute("data-panel-id")}|${attr}`;
+      for (const record of records) {
+        if (record.type !== "attributes" || !(record.target instanceof Element)) continue;
+        const key = keyOf(record.target, record.attributeName!);
+        const list = olds.get(key) ?? [];
+        list.push(record.oldValue);
+        olds.set(key, list);
+      }
+      const seen = new Map<string, number>();
+      for (const record of records) {
+        if (record.type === "childList") {
+          for (const node of record.removedNodes) {
+            for (const el of panelsIn(node)) {
+              const panelId = el.getAttribute("data-panel-id")!;
+              events.push({ panelId, attr: "present", value: "false" });
+            }
+          }
+          for (const node of record.addedNodes) panelsIn(node).forEach(snapshot);
+          continue;
+        }
+        if (!(record.target instanceof Element)) continue;
+        const el = record.target;
+        const panelId = el.getAttribute("data-panel-id");
+        const attr = record.attributeName as (typeof ATTRS)[number];
+        if (!panelId || !ATTRS.includes(attr)) continue;
+        const key = keyOf(el, attr);
+        const index = seen.get(key) ?? 0;
+        seen.set(key, index + 1);
+        const list = olds.get(key)!;
+        const value = index + 1 < list.length ? list[index + 1] : el.getAttribute(attr);
+        events.push({ panelId, attr, value });
+      }
+    });
+    document.querySelectorAll("[data-panel-id]").forEach(snapshot);
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeOldValue: true,
+      attributeFilter: [...ATTRS],
+    });
+    w.__e2eIdentityObserver = observer;
+  });
+}
+
+async function stopIdentityRecorder(page: Page): Promise<IdentityEvent[]> {
+  return page.evaluate(() => {
+    const w = window as unknown as {
+      __e2eIdentityEvents?: IdentityEvent[];
+      __e2eIdentityObserver?: MutationObserver;
+    };
+    w.__e2eIdentityObserver?.disconnect();
+    delete w.__e2eIdentityObserver;
+    return w.__e2eIdentityEvents ?? [];
+  });
+}
+
+/**
+ * Once the pane first reads as Claude on both attributes, it must never read as
+ * anything else — nor leave the DOM — until the recorder stops: across
+ * promotion, the expiry and the post-expiry dwell alike.
+ */
+async function expectNoDemotionSincePromotion(page: Page, terminalId: string): Promise<void> {
+  const events = (await stopIdentityRecorder(page)).filter((e) => e.panelId === terminalId);
+  const state: Record<IdentityEvent["attr"], string | null> = {
+    present: null,
+    "data-detected-agent-id": null,
+    "data-chrome-agent-id": null,
+  };
+  const isClaude = () =>
+    state.present === "true" &&
+    state["data-detected-agent-id"] === "claude" &&
+    state["data-chrome-agent-id"] === "claude";
+  let promotedAt = -1;
+  const departures: Array<{ at: number; state: typeof state }> = [];
+  events.forEach((event, index) => {
+    state[event.attr] = event.value;
+    if (promotedAt === -1) {
+      if (isClaude()) promotedAt = index;
+    } else if (!isClaude()) {
+      departures.push({ at: index, state: { ...state } });
+    }
+  });
+  expect(
+    promotedAt,
+    `${terminalId} never recorded as promoted: ${JSON.stringify(events)}`
+  ).not.toBe(-1);
+  expect(
+    departures,
+    `${terminalId} left the Claude identity after promotion: ${JSON.stringify(events)}`
+  ).toEqual([]);
 }
 
 function panelHeaderIcon(panel: Locator): Locator {
@@ -133,25 +266,25 @@ async function expectPanelHeaderIcon(panel: Locator, iconId: string): Promise<vo
 }
 
 async function confirmClaudeWorkspaceTrustIfPrompted(page: Page, panel: Locator): Promise<void> {
-  const deadline = Date.now() + 15_000;
-
-  while (Date.now() < deadline) {
-    const text = await getTerminalText(panel);
-    const lower = text.toLowerCase();
-
-    if (lower.includes("fake_claude_ready")) return;
-
-    if (
-      lower.includes("accessing workspace") ||
-      lower.includes("yes, i trust this folder") ||
-      lower.includes("enter to confirm")
-    ) {
-      await writeTerminalInput(page, panel, "\r");
-      return;
-    }
-
-    await page.waitForTimeout(250);
-  }
+  let screen = "waiting" as "ready" | "trust" | "waiting";
+  await expect
+    .poll(
+      async () => {
+        const lower = (await getTerminalText(panel)).toLowerCase();
+        if (lower.includes("fake_claude_ready")) screen = "ready";
+        else if (
+          lower.includes("accessing workspace") ||
+          lower.includes("yes, i trust this folder") ||
+          lower.includes("enter to confirm")
+        ) {
+          screen = "trust";
+        }
+        return screen;
+      },
+      { message: "fake claude never showed its trust prompt", timeout: 15_000, intervals: [250] }
+    )
+    .not.toBe("waiting");
+  if (screen === "trust") await writeTerminalInput(page, panel, "\r");
 }
 
 async function expectRuntimeKind(panel: Locator, runtimeKind: string): Promise<void> {
@@ -411,6 +544,7 @@ test.describe.serial("Core: terminal runtime agent promotion", () => {
     await test.step("toolbar-launched Claude promotes through live detection", async () => {
       const beforeIds = new Set(await getGridPanelIds(window));
       await dismissBlockingPalette(window);
+      await startIdentityRecorder(window);
       await window.locator(SEL.agent.trayButton).click();
       await window.locator(SEL.agent.launcherRow("Claude")).first().click();
 
@@ -442,6 +576,7 @@ test.describe.serial("Core: terminal runtime agent promotion", () => {
       // terminal when that timer elapses.
       await waitForShellEvidenceExpiry(toolbarPanelId);
       await expectAgentHeldThroughDwell(panel, toolbarPanelId);
+      await expectNoDemotionSincePromotion(window, toolbarPanelId);
       await expect(panel).toHaveAttribute("data-detected-agent-id", "claude");
       await expect(panel).toHaveAttribute("data-chrome-agent-id", "claude");
       await expectRuntimeKind(panel, "agent");
@@ -499,6 +634,7 @@ test.describe.serial("Core: terminal runtime agent promotion", () => {
       // Do not wait for the process badge to clear before starting Claude. This
       // exercises the stale process → fresh agent promotion path that regressed.
       await window.waitForTimeout(500);
+      await startIdentityRecorder(window);
       await runTerminalCommand(window, panel, "claude");
       await confirmClaudeWorkspaceTrustIfPrompted(window, panel);
       await waitForTerminalText(panel, "FAKE_CLAUDE_READY", T_LONG);
@@ -522,6 +658,7 @@ test.describe.serial("Core: terminal runtime agent promotion", () => {
 
       await waitForShellEvidenceExpiry(plainPanelId);
       await expectAgentHeldThroughDwell(panel, plainPanelId);
+      await expectNoDemotionSincePromotion(window, plainPanelId);
       await expect(panel).toHaveAttribute("data-detected-agent-id", "claude");
       await expect(panel).toHaveAttribute("data-chrome-agent-id", "claude");
       await expectRuntimeKind(panel, "agent");
@@ -545,5 +682,39 @@ test.describe.serial("Core: terminal runtime agent promotion", () => {
     // shortcut. This catches tests that accidentally pass without touching PTY.
     const allText = await getTerminalText(window.locator(SEL.panel.gridPanel).last());
     expect(allText).toContain("FAKE_CLAUDE_READY");
+
+    // #5813: a recognised non-agent process badges a plain terminal through
+    // `agent:detected` events carrying `processIconId` without `agentType`, and
+    // the badge clears again once that process exits on its own.
+    await test.step("node process badge appears on a plain terminal and clears on exit", async () => {
+      const beforeIds = new Set(await getGridPanelIds(window));
+      await openTerminal(window);
+      const badgePanelId = await newestPanelId(window, beforeIds);
+      const panel = window.locator(`[data-panel-id="${badgePanelId}"]`);
+      await expect(panel).toBeVisible({ timeout: T_LONG });
+
+      await runTerminalCommand(
+        window,
+        panel,
+        `node -e "console.log('SENTINEL_READY'); setTimeout(()=>{}, 8000)"`
+      );
+      await waitForTerminalText(panel, "SENTINEL_READY", T_LONG);
+
+      // Process-tree detection or the shell-command fallback commits "node"
+      // within the 1.5 s-poll x 2 hysteresis window.
+      await expect
+        .poll(() => panel.getAttribute("data-detected-process-id"), {
+          timeout: T_LONG,
+          intervals: [500],
+        })
+        .toBe("node");
+
+      await expect
+        .poll(() => panel.getAttribute("data-detected-process-id"), {
+          timeout: T_LONG * 2,
+          intervals: [500],
+        })
+        .toBeNull();
+    });
   });
 });
