@@ -16,15 +16,24 @@
  *   "Commit & Push" (#7880), commit-message history, the push confirm
  *   preview, the push-rejection banner, and its pull-rebase / force-push
  *   dialogs. No real network.
+ * - A successful push to an in-sync local bare remote, then the hub promoted
+ *   to a grid panel that survives a switch to another project and back.
+ *
+ * Every commit or push is checked against git on disk, not only the UI.
  */
 
+import { execFileSync, spawnSync } from "child_process";
 import { writeFileSync } from "fs";
 import path from "path";
 import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
-import { createDivergedRemoteFixture, createFixtureRepo } from "../../helpers/fixtures";
+import {
+  createCleanRemoteFixture,
+  createDivergedRemoteFixture,
+  createFixtureRepo,
+} from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { addAndSwitchToProject } from "../../helpers/workflows";
+import { addAndSwitchToProject, selectExistingProjectAndRefresh } from "../../helpers/workflows";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
@@ -32,6 +41,30 @@ const selectAllShortcut = process.platform === "darwin" ? "Meta+A" : "Control+A"
 
 let ctx: AppContext;
 const fixtureCleanups: Array<() => void> = [];
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function stagedDiffIsEmpty(cwd: string): boolean {
+  return spawnSync("git", ["diff", "--cached", "--quiet"], { cwd }).status === 0;
+}
+
+// Polled because the commit lands in main after the UI has already begun to
+// settle; the subject is what the user typed, and nothing is left staged.
+async function expectCommittedOnDisk(cwd: string, subject: string, files: string[]) {
+  await expect
+    .poll(() => git(cwd, "log", "-1", "--format=%s"), {
+      timeout: T_LONG,
+      message: "HEAD should be the commit made through the Review Hub",
+    })
+    .toBe(subject);
+  expect(stagedDiffIsEmpty(cwd)).toBe(true);
+  expect(git(cwd, "status", "--porcelain")).toBe("");
+  expect(git(cwd, "show", "--name-only", "--format=", "HEAD").split("\n").sort()).toEqual(
+    [...files].sort()
+  );
+}
 
 // Git read/preview channels are rate limited per channel app-wide (10 per
 // 10 s), so a group's hub traffic must not eat into the next group's budget.
@@ -91,12 +124,15 @@ test.describe("Core: Review Hub Workflow", () => {
   });
 
   test.describe.serial("Commit lifecycle", () => {
+    let dir: string;
+
     test.beforeAll(async () => {
       const fixture = createFixtureRepo({
         name: "review-hub-workflow",
         withUncommittedChanges: true,
       });
       fixtureCleanups.push(fixture.cleanup);
+      dir = fixture.dir;
       ctx.window = await openFixtureProject(fixture.dir, "Review Hub Test");
     });
 
@@ -204,6 +240,9 @@ test.describe("Core: Review Hub Workflow", () => {
 
       // CommitPanel should unmount (textarea gone)
       await expect(hub.locator(SEL.reviewHub.commitMessageInput)).toBeHidden({ timeout: T_SHORT });
+
+      await expectCommittedOnDisk(dir, "test: add uncommitted file", ["uncommitted.txt"]);
+      expect(git(dir, "show", "HEAD:uncommitted.txt")).toBe("This file is not committed.");
     });
 
     test("diff mode toggle disables base-branch view on a main-only repo", async () => {
@@ -244,12 +283,15 @@ test.describe("Core: Review Hub Workflow", () => {
   });
 
   test.describe.serial("Staging edge cases", () => {
+    let dir: string;
+
     test.beforeAll(async () => {
       const fixture = createFixtureRepo({
         name: "review-hub-staging",
         withUncommittedChanges: true,
       });
       fixtureCleanups.push(fixture.cleanup);
+      dir = fixture.dir;
       writeFileSync(path.join(fixture.dir, "extra-a.txt"), "Extra file A\n");
       writeFileSync(path.join(fixture.dir, "extra-b.txt"), "Extra file B\n");
       ctx.window = await openFixtureProject(fixture.dir, "Staging Test");
@@ -459,6 +501,14 @@ test.describe("Core: Review Hub Workflow", () => {
       await expect(hub.locator(SEL.reviewHub.commitMessageInput)).toBeHidden({
         timeout: T_SHORT,
       });
+
+      await expectCommittedOnDisk(dir, "test: staging edge cases", [
+        "uncommitted.txt",
+        "extra-a.txt",
+        "extra-b.txt",
+      ]);
+      expect(git(dir, "show", "HEAD:extra-a.txt")).toBe("Extra file A");
+      expect(git(dir, "show", "HEAD:extra-b.txt")).toBe("Extra file B");
     });
 
     test("worktree card no longer shows uncommitted changes", async () => {
@@ -482,9 +532,12 @@ test.describe("Core: Review Hub Workflow", () => {
   });
 
   test.describe.serial("Git confirm dialogs", () => {
+    let dialogsDir: string;
+
     test.beforeAll(async () => {
       const fixture = createDivergedRemoteFixture();
       fixtureCleanups.push(fixture.cleanup);
+      dialogsDir = fixture.dir;
       ctx.window = await openFixtureProject(fixture.dir, "Dialogs Test");
 
       // The card-launched flow auto-stages the single uncommitted file, so
@@ -638,6 +691,14 @@ test.describe("Core: Review Hub Workflow", () => {
         timeout: T_SHORT,
       });
 
+      await expectCommittedOnDisk(dialogsDir, "test: review hub push confirm flow", [
+        "local-change.txt",
+      ]);
+      // The rejection left the remote exactly where the other clone put it.
+      const remoteMain = git(dialogsDir, "ls-remote", `${dialogsDir}-bare`, "refs/heads/main");
+      expect(remoteMain.split(/\s+/)[0]).toBe(git(dialogsDir, "rev-parse", "origin/main"));
+      expect(remoteMain.split(/\s+/)[0]).not.toBe(git(dialogsDir, "rev-parse", "HEAD"));
+
       await expect(hub.locator(SEL.reviewHub.pushErrorCta)).toHaveAttribute(
         "data-cta-kind",
         "pull-rebase",
@@ -686,6 +747,98 @@ test.describe("Core: Review Hub Workflow", () => {
       // Cancel — assert the safeguard preview without rewriting the remote.
       await window.locator(SEL.confirmDialog.cancel).click();
       await expect(rows.first()).toBeHidden({ timeout: T_SHORT });
+    });
+  });
+
+  test.describe.serial("Successful push and grid panel survival", () => {
+    let dir: string;
+    let bareDir: string;
+    let otherDir: string;
+
+    test.beforeAll(async () => {
+      // A second project of this group's own to switch away to, so the group
+      // does not depend on an earlier group having run in this worker.
+      const other = createFixtureRepo({ name: "review-hub-switch-away" });
+      fixtureCleanups.push(other.cleanup);
+      otherDir = other.dir;
+      ctx.window = await openFixtureProject(other.dir, "Switch Away");
+
+      const fixture = createCleanRemoteFixture();
+      fixtureCleanups.push(fixture.cleanup);
+      dir = fixture.dir;
+      bareDir = fixture.bareDir;
+      ctx.window = await openFixtureProject(fixture.dir, "Push Test");
+    });
+
+    test("Commit & push lands the commit on the bare remote", async () => {
+      const { window } = ctx;
+      const message = "test: push to an in-sync remote";
+      const remoteBefore = git(bareDir, "rev-parse", "refs/heads/main");
+
+      // The card-launched flow auto-stages the single uncommitted file.
+      const hub = await openReviewHubFromCard();
+      const pushBtn = hub.locator(SEL.reviewHub.commitAndPushButton(1));
+      await expect(pushBtn).toBeVisible({ timeout: T_MEDIUM });
+      await hub.locator(SEL.reviewHub.commitMessageInput).fill(message);
+      await expect(pushBtn).not.toHaveAttribute("aria-disabled", "true", { timeout: T_SHORT });
+      await pushBtn.click();
+
+      await expect(window.locator(SEL.reviewHub.pushConfirmMessage)).toContainText(message, {
+        timeout: T_MEDIUM,
+      });
+      await window.locator(SEL.confirmDialog.confirm).click();
+
+      await expectCommittedOnDisk(dir, message, ["local-change.txt"]);
+      expect(git(dir, "show", "HEAD:local-change.txt")).toBe("ready to push");
+      const localHead = git(dir, "rev-parse", "HEAD");
+      expect(localHead).not.toBe(remoteBefore);
+      await expect
+        .poll(() => git(dir, "ls-remote", bareDir, "refs/heads/main").split(/\s+/)[0], {
+          timeout: T_LONG,
+          message: "the bare remote's main should match local HEAD after the push",
+        })
+        .toBe(localHead);
+
+      await expect(hub.locator(SEL.reviewHub.cleanState)).toBeVisible({ timeout: T_MEDIUM });
+      await expect(hub.locator(SEL.reviewHub.pushError)).toBeHidden();
+    });
+
+    test("a review promoted to a grid panel survives a project round trip", async () => {
+      const { window } = ctx;
+      const gridReview = (page: typeof window) =>
+        page.locator(`${SEL.panel.gridPanel}:has([data-testid="review-hub-content"])`);
+      const changeRow = '[data-testid="file-stage-row-panel-change.txt"]';
+
+      await window.locator(SEL.reviewHub.close).click();
+      await expect(window.locator(SEL.reviewHub.container)).toBeHidden({ timeout: T_SHORT });
+      writeFileSync(path.join(dir, "panel-change.txt"), "reviewed from a grid panel\n");
+
+      const hub = await openReviewHubFromCard();
+      await expect(hub.locator(changeRow)).toBeVisible({ timeout: T_MEDIUM });
+      await hub.locator(SEL.fileViewer.openAsPanel).click();
+      await expect(hub).toBeHidden({ timeout: T_MEDIUM });
+
+      const panel = gridReview(window);
+      await expect(panel).toHaveCount(1, { timeout: T_LONG });
+      await expect(panel.locator(changeRow)).toBeVisible({ timeout: T_LONG });
+      const panelId = await panel.getAttribute("data-panel-id");
+      expect(panelId).toBeTruthy();
+
+      await resetRateLimits();
+      ctx.window = await selectExistingProjectAndRefresh(
+        ctx.app,
+        ctx.window,
+        path.basename(otherDir)
+      );
+      await expect(gridReview(ctx.window)).toHaveCount(0, { timeout: T_LONG });
+
+      await resetRateLimits();
+      ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, path.basename(dir));
+      const restored = gridReview(ctx.window);
+      await expect(restored).toHaveCount(1, { timeout: T_LONG });
+      await expect(restored).toHaveAttribute("data-panel-id", panelId!, { timeout: T_SHORT });
+      await expect(restored.locator(changeRow)).toBeVisible({ timeout: T_LONG });
+      expect(git(dir, "status", "--porcelain")).toContain("panel-change.txt");
     });
   });
 });

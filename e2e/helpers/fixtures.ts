@@ -238,18 +238,59 @@ export function createDivergedRemoteFixture(name = "review-hub-diverged"): Fixtu
 }
 
 /**
+ * Repo whose `origin` is a local bare remote already in sync with `main`
+ * (upstream tracking set), plus an uncommitted `local-change.txt`. Pushing a
+ * new local commit fast-forwards cleanly, so the remote ref can be compared
+ * with local HEAD afterwards. `bareDir` is exposed for `git ls-remote`.
+ */
+export function createCleanRemoteFixture(
+  name = "review-hub-clean-remote"
+): FixtureRepo & { bareDir: string } {
+  const dir = mkdtempSync(path.join(tmpdir(), `daintree-e2e-${name}-`));
+  const bareDir = `${dir}-bare`;
+
+  git("init -b main", dir);
+  git('config user.email "test@daintree.dev"', dir);
+  git('config user.name "Daintree Test"', dir);
+  git("config commit.gpgsign false", dir);
+
+  writeFileSync(path.join(dir, "README.md"), `# ${name}\n`);
+  git("add -A", dir);
+  git('commit -m "initial commit"', dir);
+
+  // Plain local path rather than `file://` for the same Windows reason as
+  // createDivergedRemoteFixture.
+  git(`init --bare -b main "${bareDir}"`, dir);
+  git(`remote add origin "${bareDir}"`, dir);
+  git("push -u origin main", dir);
+
+  writeFileSync(path.join(dir, "local-change.txt"), "ready to push\n");
+
+  const cleanup = () => {
+    if (existsSync(bareDir)) removePathSync(bareDir);
+    makeFixtureCleanup(dir)();
+  };
+
+  return { dir, bareDir, cleanup };
+}
+
+/**
  * Repo left mid-conflict so the Review Hub renders the `ConflictPanel`.
  *
  * `mode: "merge"` leaves `main` in a MERGING state (a `git merge feature` that
  * hit a conflict). `mode: "rebase"` leaves `feature` in a REBASING state (a
  * `git rebase main` that hit a conflict), which also drives the rebase
- * progress chip and sequence rail. Both edit the same line of `conflict.txt`
- * on two branches so the conflict is deterministic.
+ * progress chip and sequence rail. Both edit the same line of every file in
+ * `conflictFiles` (default: just `conflict.txt`) on two branches so each
+ * conflict is deterministic: the base reads "shared base line", `main` reads
+ * "main edit" and `feature` reads "feature edit".
  */
 export function createConflictFixtureRepo(
   mode: "merge" | "rebase",
-  name = "review-hub-conflict"
+  name = "review-hub-conflict",
+  options: { conflictFiles?: string[] } = {}
 ): FixtureRepo {
+  const { conflictFiles = ["conflict.txt"] } = options;
   const dir = mkdtempSync(path.join(tmpdir(), `daintree-e2e-${name}-${mode}-`));
 
   git("init -b main", dir);
@@ -258,19 +299,25 @@ export function createConflictFixtureRepo(
   git("config commit.gpgsign false", dir);
 
   writeFileSync(path.join(dir, "README.md"), `# ${name}\n`);
-  writeFileSync(path.join(dir, "conflict.txt"), "line one\nshared base line\nline three\n");
+  for (const file of conflictFiles) {
+    writeFileSync(path.join(dir, file), "line one\nshared base line\nline three\n");
+  }
   git("add -A", dir);
   git('commit -m "initial commit"', dir);
 
   git("branch feature", dir);
 
   git("checkout feature", dir);
-  writeFileSync(path.join(dir, "conflict.txt"), "line one\nfeature edit\nline three\n");
+  for (const file of conflictFiles) {
+    writeFileSync(path.join(dir, file), "line one\nfeature edit\nline three\n");
+  }
   git("add -A", dir);
   git('commit -m "feature: edit shared line"', dir);
 
   git("checkout main", dir);
-  writeFileSync(path.join(dir, "conflict.txt"), "line one\nmain edit\nline three\n");
+  for (const file of conflictFiles) {
+    writeFileSync(path.join(dir, file), "line one\nmain edit\nline three\n");
+  }
   git("add -A", dir);
   git('commit -m "main: edit shared line"', dir);
 
