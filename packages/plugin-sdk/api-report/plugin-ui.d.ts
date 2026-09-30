@@ -41,53 +41,102 @@
 declare module "@daintreehq/plugin-ui" {
   import type { ComponentType, ReactNode } from "react";
   import type {
+    PluginAccordionItem,
+    PluginAccordionProps,
+    PluginAvatarGroupItem,
+    PluginAvatarGroupProps,
     PluginAvatarProps,
     PluginBadgeProps,
+    PluginBarChartProps,
+    PluginBreadcrumbItem,
+    PluginBreadcrumbsProps,
     PluginButtonProps,
+    PluginCalendarBaseProps,
+    PluginCalendarProps,
+    PluginCalendarRangeProps,
+    PluginCalendarSingleProps,
     PluginCalloutProps,
+    PluginCardProps,
+    PluginChartBaseProps,
+    PluginChartColor,
+    PluginChartSeries,
     PluginCheckboxProps,
+    PluginComboboxProps,
+    PluginCommandPaletteItem,
+    PluginCommandPaletteProps,
     PluginConfirmDialogProps,
+    PluginContextMenuProps,
     PluginCopyButtonProps,
     PluginDaintreeTheme,
     PluginDataTableColumn,
     PluginDataTableProps,
     PluginDataTableRowKey,
     PluginDataTableSort,
+    PluginDateFieldBaseProps,
+    PluginDatePickerProps,
+    PluginDateRange,
+    PluginDateRangePickerProps,
+    PluginDateRangePreset,
+    PluginDescriptionItem,
+    PluginDescriptionListItemProps,
+    PluginDescriptionListProps,
     PluginDialogAction,
     PluginDialogLayer,
     PluginDialogProps,
+    PluginDiffStatProps,
+    PluginDisclosureProps,
     PluginDismissButtonProps,
+    PluginDividerProps,
+    PluginDonutChartProps,
     PluginDropdownMenuEntry,
     PluginDropdownMenuProps,
     PluginDropdownMenuRadioItem,
+    PluginEmojiPickerProps,
     PluginEmptyStateProps,
-    PluginFormFieldControlProps,
+    PluginFileDropzoneProps,
     PluginFileTreeEntry,
     PluginFileTreeItem,
     PluginFileTreeNode,
     PluginFileTreeProps,
+    PluginFilterChipProps,
+    PluginFormFieldControlProps,
     PluginFormFieldGroupProps,
     PluginFormFieldProps,
+    PluginHighlightedTextProps,
     PluginIconButtonProps,
     PluginIconName,
     PluginIconProps,
     PluginIconSource,
     PluginInputProps,
+    PluginIsoDate,
     PluginKbdChordProps,
     PluginKbdProps,
+    PluginLineChartProps,
     PluginListNavigationContainerProps,
     PluginListNavigationRowProps,
     PluginListRowProps,
     PluginLogEntry,
     PluginLogViewProps,
     PluginMarkdownProps,
+    PluginMeterProps,
+    PluginMeterThresholds,
+    PluginMultiSelectProps,
+    PluginNavListItem,
+    PluginNavListProps,
+    PluginNavListSection,
+    PluginNumberInputProps,
     PluginPaneHeaderProps,
     PluginPaneStateProps,
+    PluginPickerBaseProps,
     PluginPopoverProps,
     PluginPopoverSearchFieldProps,
     PluginProgressBarProps,
+    PluginRadioGroupProps,
+    PluginRadioOption,
+    PluginResizableSplitProps,
     PluginScrollShadowProps,
     PluginSearchFieldProps,
+    PluginSectionLabelProps,
     PluginSegmentedControlProps,
     PluginSegmentedOption,
     PluginSelectOption,
@@ -100,20 +149,30 @@ declare module "@daintreehq/plugin-ui" {
     PluginSettingsSectionProps,
     PluginSeverity,
     PluginSeverityIconProps,
+    PluginSheetProps,
     PluginSkeletonBoneProps,
     PluginSkeletonHintProps,
     PluginSkeletonProps,
     PluginSkeletonTextProps,
+    PluginSliderProps,
     PluginSparklineProps,
     PluginSpinnerProps,
-    PluginStatCardProps,
     PluginSpinningIconProps,
+    PluginStatCardProps,
+    PluginStepState,
+    PluginStepperProps,
+    PluginStepperStep,
     PluginSwitchProps,
     PluginTabItem,
     PluginTabsProps,
+    PluginTagInputProps,
     PluginTextareaProps,
     PluginThemeTokenKey,
     PluginThemeTokens,
+    PluginTimeAgoProps,
+    PluginTimelineActor,
+    PluginTimelineItem,
+    PluginTimelineProps,
     PluginToolbarButtonProps,
     PluginToolbarProps,
     PluginTooltipProps,
@@ -203,6 +262,65 @@ declare module "@daintreehq/plugin-ui" {
   export type StatCardProps = PluginStatCardProps;
   export type SparklineProps = PluginSparklineProps;
   export type FormFieldGroupProps = PluginFormFieldGroupProps;
+  export type FilterChipProps = PluginFilterChipProps;
+  export type HighlightedTextProps = PluginHighlightedTextProps;
+  export type DiffStatProps = PluginDiffStatProps;
+  export type AvatarGroupProps = PluginAvatarGroupProps;
+  export type AvatarGroupItem = PluginAvatarGroupItem;
+  export type MeterProps = PluginMeterProps;
+  export type MeterThresholds = PluginMeterThresholds;
+  export type TimelineProps<T extends TimelineItem = TimelineItem> = PluginTimelineProps<T>;
+  export type TimelineItem = PluginTimelineItem;
+  export type TimelineActor = PluginTimelineActor;
+  export type IsoDate = PluginIsoDate;
+  export type DateRange = PluginDateRange;
+  export type CalendarProps = PluginCalendarProps;
+  export type CalendarBaseProps = PluginCalendarBaseProps;
+  export type CalendarSingleProps = PluginCalendarSingleProps;
+  export type CalendarRangeProps = PluginCalendarRangeProps;
+  export type DateFieldBaseProps = PluginDateFieldBaseProps;
+  export type DatePickerProps = PluginDatePickerProps;
+  export type DateRangePickerProps = PluginDateRangePickerProps;
+  export type DateRangePreset = PluginDateRangePreset;
+  export type TimeAgoProps = PluginTimeAgoProps;
+  export type ContextMenuProps = PluginContextMenuProps;
+  export type SheetProps = PluginSheetProps;
+  export type CommandPaletteProps = PluginCommandPaletteProps;
+  export type CommandPaletteItem = PluginCommandPaletteItem;
+  export type BreadcrumbsProps = PluginBreadcrumbsProps;
+  export type BreadcrumbItem = PluginBreadcrumbItem;
+  export type NavListProps = PluginNavListProps;
+  export type NavListItem = PluginNavListItem;
+  export type NavListSection = PluginNavListSection;
+  export type StepperProps = PluginStepperProps;
+  export type StepperStep = PluginStepperStep;
+  export type StepState = PluginStepState;
+  export type CardProps = PluginCardProps;
+  export type DividerProps = PluginDividerProps;
+  export type SectionLabelProps = PluginSectionLabelProps;
+  export type ResizableSplitProps = PluginResizableSplitProps;
+  export type AccordionProps = PluginAccordionProps;
+  export type AccordionItem = PluginAccordionItem;
+  export type DisclosureProps = PluginDisclosureProps;
+  export type DescriptionListProps = PluginDescriptionListProps;
+  export type DescriptionListItemProps = PluginDescriptionListItemProps;
+  export type DescriptionItem = PluginDescriptionItem;
+  export type RadioGroupProps = PluginRadioGroupProps;
+  export type RadioOption = PluginRadioOption;
+  export type NumberInputProps = PluginNumberInputProps;
+  export type SliderProps = PluginSliderProps;
+  export type PickerBaseProps = PluginPickerBaseProps;
+  export type ComboboxProps = PluginComboboxProps;
+  export type MultiSelectProps = PluginMultiSelectProps;
+  export type TagInputProps = PluginTagInputProps;
+  export type FileDropzoneProps = PluginFileDropzoneProps;
+  export type EmojiPickerProps = PluginEmojiPickerProps;
+  export type ChartColor = PluginChartColor;
+  export type ChartSeries = PluginChartSeries;
+  export type ChartBaseProps = PluginChartBaseProps;
+  export type BarChartProps = PluginBarChartProps;
+  export type LineChartProps = PluginLineChartProps;
+  export type DonutChartProps = PluginDonutChartProps;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -352,6 +470,94 @@ declare module "@daintreehq/plugin-ui" {
   export const Sparkline: ComponentType<SparklineProps>;
   /** One label, at a field label's size, over a set of controls such as checkboxes. */
   export const FormFieldGroup: ComponentType<FormFieldGroupProps>;
+  /**
+   * An inline month grid choosing one day or, with `mode="range"`, a run of
+   * days, with the grid keyboard model, locale month and weekday names and a
+   * today mark. Days are ISO `"YYYY-MM-DD"` strings, which name the same day
+   * in every timezone.
+   */
+  export const Calendar: ComponentType<CalendarProps>;
+  /** A date field that takes typed dates leniently or opens a `Calendar`; the value is ISO or `null`. */
+  export const DatePicker: ComponentType<DatePickerProps>;
+  /** `DatePicker` for a `{ start, end }` range, with two months where there is room and optional presets. */
+  export const DateRangePicker: ComponentType<DateRangePickerProps>;
+  /** A `<time>` reading "5m ago" that keeps itself current on one shared timer, with the full date on hover. */
+  export const TimeAgo: ComponentType<TimeAgoProps>;
+
+  /** One value in a filter bar: a pressed toggle, or with `onRemove` an applied filter with a ×. */
+  export const FilterChip: ComponentType<FilterChipProps>;
+  /** Text with its search matches on a neutral band, from a `query` or your own `ranges`. */
+  export const HighlightedText: ComponentType<HighlightedTextProps>;
+  /** Line churn in Daintree's one spelling: "+12 -3". */
+  export const DiffStat: ComponentType<DiffStatProps>;
+  /** Overlapping avatars with a "+N" whose tooltip lists the rest. */
+  export const AvatarGroup: ComponentType<AvatarGroupProps>;
+  /** How much of a limit is used: neutral below its thresholds, then warning or danger. */
+  export const Meter: ComponentType<MeterProps>;
+  /**
+   * An activity feed or audit log on a connecting rail, virtualised with
+   * measured rows. As tall as its entries up to its container, then it scrolls.
+   */
+  export const Timeline: <T extends TimelineItem>(props: TimelineProps<T>) => ReactNode;
+
+  /** The right-click menu of `children`, from `DropdownMenu`'s rows; Shift+F10 and the Menu key open it too. */
+  export const ContextMenu: ComponentType<ContextMenuProps>;
+  /** A full-height panel against the window's edge, with a `Dialog`'s title bar, body and footer. */
+  export const Sheet: ComponentType<SheetProps>;
+  /** A searchable, virtualised palette for a quick switcher or "jump to…"; selecting an item closes it. */
+  export const CommandPalette: ComponentType<CommandPaletteProps>;
+  /** The path to the current page, with the middle crumbs folded into a menu when it runs long. */
+  export const Breadcrumbs: ComponentType<BreadcrumbsProps>;
+  /** An app's left-rail navigation: sections of destinations, one selected, one tab stop. */
+  export const NavList: ComponentType<NavListProps>;
+  /** A wizard's progress: one marker per step, complete, current, upcoming or in error. */
+  export const Stepper: ComponentType<StepperProps>;
+
+  /**
+   * The app's card surface: a hairline frame with an optional header, body and
+   * footer. With `onClick` the whole card is one button.
+   */
+  export const Card: ComponentType<CardProps>;
+  /** A hairline between groups, horizontal or vertical, with an optional centred label. */
+  export const Divider: ComponentType<DividerProps>;
+  /** The small quiet uppercase heading above a group of content. */
+  export const SectionLabel: ComponentType<SectionLabelProps>;
+  /**
+   * Two panes with a draggable, keyboard-resizable divider; one pane holds a
+   * size in px, optionally collapsible. It fills its container.
+   */
+  export const ResizableSplit: ComponentType<ResizableSplitProps>;
+  /** Stacked sections that show or hide their content, one or many open at a time. */
+  export const Accordion: ComponentType<AccordionProps>;
+  /** One heading button that shows or hides the content under it. */
+  export const Disclosure: ComponentType<DisclosureProps>;
+  /** The label and value rows of a record's detail page, inline or stacked. */
+  export const DescriptionList: ComponentType<DescriptionListProps>;
+  /** One row of a `DescriptionList`, for building the rows as children. */
+  export const DescriptionListItem: ComponentType<DescriptionListItemProps>;
+
+  /** Exactly one of a few options, as bordered cards or plain radios, with native radio keys. */
+  export const RadioGroup: ComponentType<RadioGroupProps>;
+  /** A number field with a unit, steppers, arrow-key steps, clamping and rounding; commits on blur or Enter. */
+  export const NumberInput: ComponentType<NumberInputProps>;
+  /** One value on a neutral track, with `aria-valuetext` from `formatValue`. */
+  export const Slider: ComponentType<SliderProps>;
+  /** A searchable single choice: a `Select`-style trigger over a virtualised, filterable list. */
+  export const Combobox: ComponentType<ComboboxProps>;
+  /** Any number of choices from a searchable, virtualised list, shown as chips on the trigger. */
+  export const MultiSelect: ComponentType<MultiSelectProps>;
+  /** Free-text tags: Enter or a comma adds, Backspace removes the last, duplicates are skipped. */
+  export const TagInput: ComponentType<TagInputProps>;
+  /** A drop target and a button for the system file dialog, handing you `File` objects. */
+  export const FileDropzone: ComponentType<FileDropzoneProps>;
+  /** Daintree's emoji picker in a popover opened from `trigger`. The trigger shows while the kit loads. */
+  export const EmojiPicker: ComponentType<EmojiPickerProps>;
+  /** Categories as columns or bars, grouped or stacked, with a point tooltip and a hidden data table. */
+  export const BarChart: ComponentType<BarChartProps>;
+  /** Series over a numeric or time axis, optionally filled or smoothed, with a crosshair tooltip. */
+  export const LineChart: ComponentType<LineChartProps>;
+  /** Parts of a whole around a centre figure, with a legend of every value and share. */
+  export const DonutChart: ComponentType<DonutChartProps>;
 
   /**
    * The keyboard model of a list: one tab stop, Up/Down/Home/End move the
