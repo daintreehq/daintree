@@ -1209,7 +1209,8 @@ export default tseslint.config(
   // class, TooltipProvider, SkeletonBone with its `immediate`). Host modules a
   // builtin still needs for a recorded kit gap (button's `pill`, CopyButton's
   // `announcement`, TruncatedTooltip's `isTruncated`, select's item markup,
-  // the dialogs' `nested` layer) are deliberately absent. The ignored file is
+  // the dialogs' `nested` layer, ScrollShadow's DOM props and virtualised
+  // overlay) are deliberately absent. The ignored file is
   // in its plugin's eager entry graph, which must not reach the kit (the build
   // fails if startup code statically imports it). Tests and preview harnesses
   // are not the plugin's runtime.
@@ -1235,7 +1236,6 @@ export default tseslint.config(
             ["@/components/ui/Kbd", ["Kbd", "KbdChord"]],
             ["@/components/ui/PaneState", ["PaneState"]],
             ["@/components/ui/ProgressBar", ["ProgressBar"]],
-            ["@/components/ui/ScrollShadow", ["ScrollShadow"]],
             ["@/components/ui/SearchField", ["SearchField"]],
             ["@/components/ui/SegmentedRadioGroup", ["SegmentedRadioGroup"]],
             ["@/components/ui/Skeleton", ["Skeleton", "SkeletonText"]],

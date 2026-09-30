@@ -81,6 +81,9 @@ const BRANCHES = [
 // real plugin.
 const BENCH_PLUGIN = "acme.ilatview";
 const BENCH_PLUGIN_ROOT = '[data-testid="ilat-plugin-root"]';
+// The root paints before the lazily loaded kit controls do, so "painted" means
+// a kit control is on screen too.
+const BENCH_PLUGIN_READY = `${BENCH_PLUGIN_ROOT} [data-testid="ilat-plugin-button"]`;
 const BENCH_PLUGIN_VIEW = String.raw`
 import { createElement as h } from "react";
 import { Button, Icon, useDaintreeTheme } from "@daintreehq/plugin-ui";
@@ -89,7 +92,7 @@ export default function View() {
   return h(
     "div",
     { "data-testid": "ilat-plugin-root", "data-color-mode": theme.colorMode, className: "flex gap-2 p-3" },
-    h(Button, { icon: "check" }, "Run"),
+    h(Button, { icon: "check", "data-testid": "ilat-plugin-button" }, "Run"),
     h(Icon, { name: "activity", "aria-label": "Activity" })
   );
 }
@@ -1300,7 +1303,7 @@ function scenarios(): Scenario[] {
         await waitVisible(pluginOption());
       },
       trigger: () => hoverClick(pluginOption()),
-      cond: () => ({ kind: "newPanel", inner: BENCH_PLUGIN_ROOT }),
+      cond: () => ({ kind: "newPanel", inner: BENCH_PLUGIN_READY }),
       after: async () => {
         await escapeUntilGone('[role="dialog"][aria-label="Panel palette"]');
         await killNewPanels();
@@ -1336,7 +1339,7 @@ function scenarios(): Scenario[] {
       trigger: () => hoverClick(`[data-dock-item-id="${pluginDockPanel}"] [data-dock-item]`),
       cond: () => ({
         kind: "visible",
-        selector: `[data-dock-portal-target="${pluginDockPanel}"] ${BENCH_PLUGIN_ROOT}`,
+        selector: `[data-dock-portal-target="${pluginDockPanel}"] ${BENCH_PLUGIN_READY}`,
       }),
       after: async () => {
         await page.waitForTimeout(600);

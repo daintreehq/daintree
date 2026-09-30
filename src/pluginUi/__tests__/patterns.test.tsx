@@ -98,6 +98,10 @@ describe("@daintreehq/plugin-ui 1.1 lists", () => {
     render(inViewport(createElement(Picker)));
     const listbox = screen.getByRole("listbox", { name: "Pick a row" });
     expect(listbox.getAttribute("tabindex")).toBe("0");
+    // The keyboard lives on the viewport-sized scroller, so the global focus
+    // ring frames what is visible instead of the full, clipped row stack.
+    expect(listbox.hasAttribute("data-virtuoso-scroller")).toBe(true);
+    expect(listbox.className).toContain("focus-visible:-outline-offset-2");
     const first = screen.getAllByRole("option")[0]!;
     expect(listbox.getAttribute("aria-activedescendant")).toBe(first.id);
     expect(first.getAttribute("aria-selected")).toBe("true");
@@ -253,6 +257,10 @@ describe("@daintreehq/plugin-ui 1.1 lists", () => {
     const rows = screen.getAllByRole("row");
     // Header row first; the cursor starts on the first body row.
     expect(grid.getAttribute("aria-activedescendant")).toBe(rows[1]!.id);
+    // The cursor row is the grid's focus indicator, owned by the grid's own
+    // :focus-visible so it shows only while the keyboard is there.
+    expect(rows[1]!.getAttribute("data-active")).toBe("true");
+    expect(grid.className).toContain("focus-visible:[&_tr[data-active=true]]:outline-2");
     fireEvent.keyDown(grid, { key: "ArrowDown" });
     fireEvent.keyDown(grid, { key: "Enter" });
     expect(onRowClick).toHaveBeenCalledWith(TEN_THOUSAND[1], 1);

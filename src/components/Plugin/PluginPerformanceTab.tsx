@@ -6,8 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { TimeAgo } from "@/components/ui/TimeAgo";
+import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { formatBytes } from "@/lib/formatBytes";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { pluralize } from "@/lib/pluralize";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
@@ -16,13 +17,8 @@ import { usePluginStyleReport } from "@/hooks/usePluginStyleReport";
 /** Read once at module scope: a member expression in a default parameter bails React Compiler. */
 const DEVELOPMENT_BUILD = import.meta.env.DEV;
 
-/** Short duration: one decimal under 10 ms, whole milliseconds under a second, then seconds. */
-export function formatDurationMs(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return "—";
-  if (ms >= 1000) return `${(ms / 1000).toFixed(1)} s`;
-  if (ms < 10) return `${ms.toFixed(1)} ms`;
-  return `${Math.round(ms)} ms`;
-}
+/** Measurements are milliseconds long, so they keep the shared formatter's sub-second precision. */
+const measured = (ms: number): string => formatElapsedDuration(ms, { subSecond: true });
 
 function formatRate(perSecond: number): string {
   return perSecond < 10 ? perSecond.toFixed(1) : String(Math.round(perSecond));
@@ -115,8 +111,8 @@ export function PluginPerformanceSection({
   return (
     <div className="space-y-3">
       <p className="text-xs text-text-secondary">
-        Measured since {formatRelativeTime(snapshot.since)}, in this session only. These are
-        observations, not a verdict: a plugin that was active during a slow frame didn&rsquo;t
+        Measured since <TimeAgo timestamp={snapshot.since} verbose />, in this session only. These
+        are observations, not a verdict: a plugin that was active during a slow frame didn&rsquo;t
         necessarily cause it. Budgets are guides, and Daintree never slows or stops a plugin for
         going over one.
       </p>
@@ -124,38 +120,38 @@ export function PluginPerformanceSection({
       <dl className="divide-y divide-border-subtle">
         <MetricRow
           label="Activation"
-          value={activation ? formatDurationMs(activation.lastMs) : "Not activated yet"}
+          value={activation ? measured(activation.lastMs) : "Not activated yet"}
           detail={
             activation && activation.count > 1
               ? `Last of ${pluralize(activation.count, "activation")}`
               : undefined
           }
-          budget={`Budget ${formatDurationMs(budgets.activationMs)}`}
+          budget={`Budget ${measured(budgets.activationMs)}`}
           aboveBudget={over(snapshot, "activationMs")}
         />
 
         <MetricRow
           label="Last view load"
-          value={latestLoad ? formatDurationMs(viewLoadMsOf(latestLoad)) : "No view opened yet"}
+          value={latestLoad ? measured(viewLoadMsOf(latestLoad)) : "No view opened yet"}
           detail={
             latestLoad
-              ? `Activate ${formatDurationMs(latestLoad.activateMs)} · import ${formatDurationMs(
+              ? `Activate ${measured(latestLoad.activateMs)} · import ${measured(
                   latestLoad.importMs
-                )} · styles ${formatDurationMs(latestLoad.stylesMs)}${
+                )} · styles ${measured(latestLoad.stylesMs)}${
                   latestLoad.retry ? " · after a retry" : ""
                 }`
               : undefined
           }
-          budget={`Budget ${formatDurationMs(budgets.viewLoadMs)}`}
+          budget={`Budget ${measured(budgets.viewLoadMs)}`}
           aboveBudget={over(snapshot, "viewLoadMs")}
         />
 
         {latestLoad && (
           <MetricRow
             label="Last view first paint"
-            value={formatDurationMs(latestLoad.firstPaintMs)}
+            value={measured(latestLoad.firstPaintMs)}
             detail="From opening the view to its first painted frame"
-            budget={`Budget ${formatDurationMs(budgets.viewFirstPaintMs)}`}
+            budget={`Budget ${measured(budgets.viewFirstPaintMs)}`}
             aboveBudget={over(snapshot, "viewFirstPaintMs")}
           />
         )}
@@ -164,38 +160,38 @@ export function PluginPerformanceSection({
           label="View render time"
           value={
             viewCommits
-              ? `p95 ${formatDurationMs(viewCommits.p95Ms)}`
+              ? `p95 ${measured(viewCommits.p95Ms)}`
               : developmentBuild
                 ? "None observed yet"
                 : "Not measured"
           }
           detail={
             viewCommits
-              ? `${pluralize(viewCommits.count, "commit")} · p50 ${formatDurationMs(
+              ? `${pluralize(viewCommits.count, "commit")} · p50 ${measured(
                   viewCommits.p50Ms
-                )} · max ${formatDurationMs(viewCommits.maxMs)}`
+                )} · max ${measured(viewCommits.maxMs)}`
               : developmentBuild
                 ? undefined
                 : "Only measured in development builds"
           }
-          budget={`Budget p95 ${formatDurationMs(budgets.viewCommitP95Ms)}`}
+          budget={`Budget p95 ${measured(budgets.viewCommitP95Ms)}`}
           aboveBudget={over(snapshot, "viewCommitP95Ms")}
         />
 
         <MetricRow
           label="Calls to the plugin"
-          value={invokes.count > 0 ? `p95 ${formatDurationMs(invokes.p95Ms)}` : "None yet"}
+          value={invokes.count > 0 ? `p95 ${measured(invokes.p95Ms)}` : "None yet"}
           detail={
             invokes.count > 0
               ? [
                   pluralize(invokes.count, "call"),
-                  `p50 ${formatDurationMs(invokes.p50Ms)}`,
-                  `max ${formatDurationMs(invokes.maxMs)}`,
+                  `p50 ${measured(invokes.p50Ms)}`,
+                  `max ${measured(invokes.maxMs)}`,
                   ...invokeExtras,
                 ].join(" · ")
               : undefined
           }
-          budget={`Budget p95 ${formatDurationMs(budgets.invokeP95Ms)}`}
+          budget={`Budget p95 ${measured(budgets.invokeP95Ms)}`}
           aboveBudget={over(snapshot, "invokeP95Ms")}
         />
 
@@ -228,13 +224,20 @@ export function PluginPerformanceSection({
           label="Long frames with plugin activity"
           value={longFrames.count > 0 ? pluralize(longFrames.count, "frame") : "None observed"}
           detail={
-            longFrames.count > 0
-              ? `${formatDurationMs(longFrames.totalBlockingMs)} blocking in total${
-                  longFrames.lastAt !== null
-                    ? ` · last ${formatRelativeTime(longFrames.lastAt)}`
-                    : ""
-                } · the plugin was active during these frames`
-              : "Slow frames during which this plugin's view rendered or its code ran"
+            longFrames.count > 0 ? (
+              <>
+                {measured(longFrames.totalBlockingMs)} blocking in total
+                {longFrames.lastAt !== null && (
+                  <>
+                    {" · last "}
+                    <TimeAgo timestamp={longFrames.lastAt} verbose />
+                  </>
+                )}
+                {" · the plugin was active during these frames"}
+              </>
+            ) : (
+              "Slow frames during which this plugin's view rendered or its code ran"
+            )
           }
         />
 
@@ -247,9 +250,9 @@ export function PluginPerformanceSection({
                 : "Not sampled yet"
             }
             detail={
-              snapshot.workerMemory
-                ? `Sampled ${formatRelativeTime(snapshot.workerMemory.at)}`
-                : undefined
+              snapshot.workerMemory ? (
+                <TimeAgo timestamp={snapshot.workerMemory.at} verbose prefix="Sampled " />
+              ) : undefined
             }
             budget={`Budget ${formatBytes(budgets.workerRssBytes)}`}
             aboveBudget={over(snapshot, "workerRssBytes")}
@@ -323,7 +326,7 @@ export function PluginStylesSection({ pluginId }: { pluginId: string }) {
     body =
       state.report.notGenerated.length === 0 ? (
         <p className="text-xs text-text-secondary">
-          Every class in this plugin&rsquo;s open panels produced CSS (
+          Every class in this plugin&rsquo;s open panels matches a Daintree plugin utility (
           {pluralize(total, "class", "classes")} checked).
         </p>
       ) : (
