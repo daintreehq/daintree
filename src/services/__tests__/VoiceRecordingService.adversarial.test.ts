@@ -757,7 +757,7 @@ describe("VoiceRecordingService adversarial", () => {
         expect.stringContaining("Dictation started")
       );
 
-      emitChunk(0, 100);
+      emitChunk(0, 10);
       expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
       expect(runtime.voiceState.micSignal).toBe("live");
       expect(runtime.voiceFns.announce).toHaveBeenCalledWith(
@@ -781,7 +781,8 @@ describe("VoiceRecordingService adversarial", () => {
         expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
       });
 
-      emitChunk(1, 100);
+      // Room tone only: live, though below the diagnostic signal floor.
+      emitChunk(1, 10);
       expect(runtime.voiceFns.setMicSignal).not.toHaveBeenCalled();
 
       drain.resolve();
@@ -1008,7 +1009,7 @@ describe("VoiceRecordingService adversarial", () => {
     expect(runtime.voiceInput.sendAudioChunk).toHaveBeenCalledTimes(2);
 
     const speech = new Int16Array(2400);
-    speech[100] = -66;
+    speech[100] = -4;
     handler?.(pcmEvent(speech));
     handler?.(pcmEvent(speech.slice()));
 
@@ -1018,6 +1019,26 @@ describe("VoiceRecordingService adversarial", () => {
       runtime.voiceFns.announce.mock.calls.filter(([text]) => text.startsWith("Dictation started"))
     ).toHaveLength(1);
     expect(runtime.voiceInput.sendAudioChunk).toHaveBeenCalledTimes(4);
+  });
+
+  it("MIC_NOISE_FLOOR_CLAIMS_LISTENING_BEFORE_SPEECH", async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+    const handler = runtime.createdWorkletNodes[0]?.port.onmessage;
+
+    // A quiet room after noise suppression: well under the diagnostic
+    // speech-level floor, but plainly not digital silence.
+    const roomTone = new Int16Array(2400);
+    roomTone[5] = 10;
+    roomTone[50] = -9;
+    roomTone[500] = 6;
+    handler?.(pcmEvent(roomTone));
+
+    expect(runtime.voiceFns.setMicSignal).toHaveBeenCalledTimes(1);
+    expect(runtime.voiceFns.setMicSignal).toHaveBeenCalledWith("live");
+    expect(runtime.voiceFns.announce).toHaveBeenCalledWith(
+      expect.stringContaining("Dictation started")
+    );
   });
 
   it("MIC_SILENT_AFTER_GRACE_WINDOW_THEN_RECOVERS", async () => {

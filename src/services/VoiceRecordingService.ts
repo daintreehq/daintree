@@ -21,6 +21,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   OPENING_CHUNK_WINDOW,
   hasRealSignal,
+  isMicLive,
   measurePcm16Chunk,
   summarizeOpeningChunks,
   type PcmChunkStats,
@@ -117,10 +118,11 @@ class VoiceRecordingService {
   private static readonly PAUSE_AUTO_STOP_MS = 60_000;
   // An open stream is not proof of capture: a Bluetooth mic switching to HFP
   // hands Web Audio zeros for a while (#13105). The UI only claims it is
-  // listening once a chunk clears the same floor the start diagnostics use
-  // (`hasRealSignal`), and flags the mic as silent if nothing does within the
-  // grace window of unpaused capture. Neither gates PCM forwarding — the
-  // leading audio is still captured and held or sent either way.
+  // listening once a chunk clears the mic-liveness floor (`isMicLive`, not the
+  // diagnostics' speech-level `hasRealSignal`), and flags the mic as silent if
+  // nothing does within the grace window of unpaused capture. Neither gates PCM
+  // forwarding — the leading audio is still captured and held or sent either
+  // way.
   private static readonly MIC_SILENCE_GRACE_MS = 3_000;
   private micSilenceTimeoutId: ReturnType<typeof setTimeout> | null = null;
   // Owner of the silence countdown, so resume can re-arm it for the same
@@ -924,6 +926,7 @@ class VoiceRecordingService {
     let arrivedChunks = 0;
     let firstNonZeroChunk = 0;
     let firstSignalChunk = 0;
+    let firstLiveChunk = 0;
     const observeArrivingChunk = (data: ArrayBuffer): PcmChunkStats | null => {
       try {
         arrivedChunks++;
@@ -948,6 +951,7 @@ class VoiceRecordingService {
             peak: Number(stats.peak.toFixed(4)),
           });
         }
+        if (!firstLiveChunk && isMicLive(stats)) firstLiveChunk = arrivedChunks;
         if (!openingAudio.logged) {
           openingAudio.chunks.push(stats);
           if (openingAudio.chunks.length >= OPENING_CHUNK_WINDOW) {
@@ -979,7 +983,7 @@ class VoiceRecordingService {
         // is connected, and the cue should follow the mic, not the socket.
         if (
           stats &&
-          hasRealSignal(stats) &&
+          isMicLive(stats) &&
           !this.isStartRequestStale(startRequestId) &&
           isVoiceMicPending(useVoiceRecordingStore.getState())
         ) {
@@ -1063,8 +1067,8 @@ class VoiceRecordingService {
     this.startElapsedTimer();
     this.micCaptureAttachedAt = captureAttachedAt;
     // Real audio that arrived while a previous session drained already counts.
-    if (firstSignalChunk) {
-      this.markMicLive(target, firstSignalChunk);
+    if (firstLiveChunk) {
+      this.markMicLive(target, firstLiveChunk);
     } else {
       this.startMicSilenceTimer(generation, startRequestId, micSilenceGraceMs);
     }
