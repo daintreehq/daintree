@@ -4179,7 +4179,7 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
   };
 
   // Test-only: hand the live xterm Terminal instance to the interactivity perf
-  // probe (e2e/full/terminal/interactivity-perf.spec.ts) so it can hook
+  // probe (e2e/perf/interactivity-perf.spec.ts) so it can hook
   // onData/onWriteParsed/onRender and read the buffer without a bridge per
   // event. Same-realm only — the instance never crosses a serialization
   // boundary. Object.assign keeps it off the type-assertion lint ratchet.

@@ -4,18 +4,18 @@ import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
-import { createFixtureRepo, removePathSync } from "../../helpers/fixtures";
-import { openAndOnboardProject } from "../../helpers/project";
-import { addAndSwitchToProject } from "../../helpers/workflows";
-import { connectGitHub, makeFixtureIssue, stubRepoStats } from "../../helpers/githubHelpers";
-import { seedNotificationHistory } from "../../helpers/notifications";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
+import { createFixtureRepo, removePathSync } from "../helpers/fixtures";
+import { openAndOnboardProject } from "../helpers/project";
+import { addAndSwitchToProject } from "../helpers/workflows";
+import { connectGitHub, makeFixtureIssue, stubRepoStats } from "../helpers/githubHelpers";
+import { seedNotificationHistory } from "../helpers/notifications";
 import {
   armProbe,
   installProbe,
   probeResult,
   type DoneCondition,
-} from "../../helpers/interactionProbe";
+} from "../helpers/interactionProbe";
 
 // Everyday-interaction latency benchmark. Each scenario drives one thing a
 // user does many times a day — open a dropdown, switch a worktree, type into a
@@ -27,8 +27,8 @@ import {
 //
 // Opt-in only, never a CI gate:
 //   npm run build:e2e
-//   RUN_PERF_INTERACTIONS=1 npx playwright test --project=full-resilience \
-//     e2e/full/resilience/interaction-latency-perf.spec.ts
+//   RUN_PERF_INTERACTIONS=1 npx playwright test --config=playwright.perf.config.ts \
+//     e2e/perf/interaction-latency-perf.spec.ts
 // Env: PERF_INTERACTIONS_REPS (default 8), PERF_INTERACTIONS_ONLY (comma ids),
 // PERF_INTERACTIONS_OUT (JSON path), PERF_INTERACTIONS_LABEL.
 

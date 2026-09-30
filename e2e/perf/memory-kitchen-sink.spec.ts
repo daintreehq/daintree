@@ -3,16 +3,12 @@ import { test, expect } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../../helpers/launch";
-import { createFixtureRepos } from "../../helpers/fixtures";
-import { openAndOnboardProject } from "../../helpers/project";
-import { openTerminal, getGridPanelIds, getPanelById } from "../../helpers/panels";
-import {
-  runTerminalCommand,
-  waitForTerminalText,
-  waitForTerminalPty,
-} from "../../helpers/terminal";
-import { measureMainMemory } from "../../helpers/stress";
+import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../helpers/launch";
+import { createFixtureRepos } from "../helpers/fixtures";
+import { openAndOnboardProject } from "../helpers/project";
+import { openTerminal, getGridPanelIds, getPanelById } from "../helpers/panels";
+import { runTerminalCommand, waitForTerminalText, waitForTerminalPty } from "../helpers/terminal";
+import { measureMainMemory } from "../helpers/stress";
 
 // Kitchen-sink memory benchmark. Unlike the nightly leak specs (which assert
 // growth deltas across churn cycles), this harness measures the absolute
@@ -349,7 +345,7 @@ const iterationResults: IterationResult[] = [];
 
 // Opt-in only — a measurement harness for local A/B runs, not a CI gate.
 //   RUN_PERF_MEMORY=1 MEM_BENCH_LABEL=baseline npx playwright test \
-//     --project=full-resilience e2e/full/resilience/memory-kitchen-sink.spec.ts
+//     --config=playwright.perf.config.ts e2e/perf/memory-kitchen-sink.spec.ts
 const perfDescribe = process.env.RUN_PERF_MEMORY ? test.describe.serial : test.describe.skip;
 
 perfDescribe("Resilience: kitchen-sink memory benchmark", () => {

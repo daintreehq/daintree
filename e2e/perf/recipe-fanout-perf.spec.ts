@@ -20,17 +20,17 @@ import path from "node:path";
 import { hashPerfLine } from "@shared/perf/marks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeRecipeFilename } from "@shared/utils/recipeFilename";
-import { closeApp, launchApp, type AppContext } from "../../helpers/launch";
-import { createFixtureRepo, removePathSync } from "../../helpers/fixtures";
-import { openAndOnboardProject } from "../../helpers/project";
-import { SEL } from "../../helpers/selectors";
-import { T_LONG } from "../../helpers/timeouts";
+import { closeApp, launchApp, type AppContext } from "../helpers/launch";
+import { createFixtureRepo, removePathSync } from "../helpers/fixtures";
+import { openAndOnboardProject } from "../helpers/project";
+import { SEL } from "../helpers/selectors";
+import { T_LONG } from "../helpers/timeouts";
 
 type BenchmarkMode = "existing-worktree" | "new-worktree";
 type AgentMode = "fixture" | "vendor";
 type PoolOutcome = "hit" | "miss" | "not-applicable" | "unknown";
 
-const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
+const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const DEFAULT_OUTPUT = path.join(REPO_ROOT, ".tmp", "perf-results", "recipe-fanout.json");
 const SAMPLE_TIMEOUT_MS = 10 * 60_000;
 const WHOLE_RUN_TIMEOUT_MS = 45 * 60_000;

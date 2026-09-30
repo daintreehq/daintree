@@ -2,17 +2,13 @@
 import { expect, test } from "@playwright/test";
 import { mkdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { closeApp, launchApp, type AppContext } from "../../helpers/launch";
-import { createFixtureRepo } from "../../helpers/fixtures";
-import { openAndOnboardProject } from "../../helpers/project";
-import { getGridPanelIds, getPanelById, openTerminal } from "../../helpers/panels";
-import {
-  runTerminalCommand,
-  waitForTerminalPty,
-  waitForTerminalText,
-} from "../../helpers/terminal";
+import { closeApp, launchApp, type AppContext } from "../helpers/launch";
+import { createFixtureRepo } from "../helpers/fixtures";
+import { openAndOnboardProject } from "../helpers/project";
+import { getGridPanelIds, getPanelById, openTerminal } from "../helpers/panels";
+import { runTerminalCommand, waitForTerminalPty, waitForTerminalText } from "../helpers/terminal";
 
-const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
+const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const DEFAULT_OUTPUT = path.join(
   REPO_ROOT,
   ".tmp",

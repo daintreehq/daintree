@@ -2,10 +2,10 @@
 import { test, expect } from "@playwright/test";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
-import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../../helpers/launch";
-import { createFixtureRepos } from "../../helpers/fixtures";
-import { openAndOnboardProject } from "../../helpers/project";
-import { openTerminal } from "../../helpers/panels";
+import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../helpers/launch";
+import { createFixtureRepos } from "../helpers/fixtures";
+import { openAndOnboardProject } from "../helpers/project";
+import { openTerminal } from "../helpers/panels";
 
 // Heavy by design: open many projects, put terminals in several, then switch
 // relentlessly and measure that the main process never freezes (event-loop
@@ -98,7 +98,7 @@ function pct(arr: number[], p: number): number {
 // unrelated to the change under test. So it's SKIPPED everywhere by default and
 // run on demand for A/B perf checks:
 //   RUN_PERF_STRESS=1 STRESS_PROJECTS=5 STRESS_ROUNDS=8 \
-//     npx playwright test --project=full-resilience e2e/full/resilience/project-switch-stress.spec.ts
+//     npx playwright test --config=playwright.perf.config.ts e2e/perf/project-switch-stress.spec.ts
 // Skipping at the describe level keeps the heavy beforeAll (app launch + repo
 // fixtures) from running in CI too.
 const stressDescribe = process.env.RUN_PERF_STRESS ? test.describe.serial : test.describe.skip;

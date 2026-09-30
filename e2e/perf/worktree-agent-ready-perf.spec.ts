@@ -3,11 +3,11 @@ import { test, expect } from "@playwright/test";
 import { chmodSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "fs";
 import { execSync } from "child_process";
 import path from "path";
-import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
-import { createFixtureRepo, removePathSync } from "../../helpers/fixtures";
-import { openAndOnboardProject } from "../../helpers/project";
-import { SEL } from "../../helpers/selectors";
-import { T_LONG } from "../../helpers/timeouts";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
+import { createFixtureRepo, removePathSync } from "../helpers/fixtures";
+import { openAndOnboardProject } from "../helpers/project";
+import { SEL } from "../helpers/selectors";
+import { T_LONG } from "../helpers/timeouts";
 
 // Latency harness for the core product loop: create a git worktree, switch to
 // it, and launch an agent in it — then tear the worktree down again. Three
@@ -30,8 +30,8 @@ import { T_LONG } from "../../helpers/timeouts";
 // variance so the numbers isolate app overhead.
 //
 // Opt-in only — a measurement harness for local A/B runs, not a CI gate.
-//   RUN_PERF_WORKTREE_AGENT_READY=1 npx playwright test --project=full-worktree \
-//     e2e/full/worktree/worktree-agent-ready-perf.spec.ts
+//   RUN_PERF_WORKTREE_AGENT_READY=1 npx playwright test --config=playwright.perf.config.ts \
+//     e2e/perf/worktree-agent-ready-perf.spec.ts
 const ROUNDS = Math.max(1, Math.floor(Number(process.env.PERF_WORKTREE_ROUNDS) || 10));
 const ATTRIB_ROUNDS = 3;
 const BURST_SIZES = (process.env.PERF_WORKTREE_BURST_SIZES ?? "5,20")

@@ -3,11 +3,11 @@ import { test, expect } from "@playwright/test";
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from "fs";
 import path from "path";
 import { tmpdir } from "os";
-import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
-import { createFixtureRepo, type FixtureRepo } from "../../helpers/fixtures";
-import { openAndOnboardProject } from "../../helpers/project";
-import { openTerminal, getGridPanelIds } from "../../helpers/panels";
-import { runTerminalCommand, waitForTerminalReady } from "../../helpers/terminal";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
+import { createFixtureRepo, type FixtureRepo } from "../helpers/fixtures";
+import { openAndOnboardProject } from "../helpers/project";
+import { openTerminal, getGridPanelIds } from "../helpers/panels";
+import { runTerminalCommand, waitForTerminalReady } from "../helpers/terminal";
 
 // PERF-120..122 — keystroke-to-paint interactivity benchmark (the integrated
 // analogue of PERF-034's headless echo scenario). Measures what a user feels:
@@ -35,8 +35,8 @@ import { runTerminalCommand, waitForTerminalReady } from "../../helpers/terminal
 //
 // Opt-in only (multi-minute run, never a CI gate):
 //   npm run build:e2e   # or build:e2e:bench
-//   RUN_PERF_INTERACTIVITY=1 npx playwright test --project=full-terminal \
-//     e2e/full/terminal/interactivity-perf.spec.ts
+//   RUN_PERF_INTERACTIVITY=1 npx playwright test --config=playwright.perf.config.ts \
+//     e2e/perf/interactivity-perf.spec.ts
 //
 // Machines running PARALLEL e2e sessions: launchApp reaps stray e2e Electrons
 // machine-wide (see store-fanout-perf.spec.ts for the ELECTRON_OVERRIDE_DIST_PATH

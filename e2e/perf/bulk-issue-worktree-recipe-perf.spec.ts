@@ -11,19 +11,20 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { closeApp, launchApp, type AppContext } from "../../helpers/launch";
-import { createFixtureRepo, removePathSync } from "../../helpers/fixtures";
-import { openAndOnboardProject } from "../../helpers/project";
+import { closeApp, launchApp, type AppContext } from "../helpers/launch";
+import { createFixtureRepo, removePathSync } from "../helpers/fixtures";
+import { openAndOnboardProject } from "../helpers/project";
 import {
   connectGitHub,
   makeFixtureIssue,
   stubListIssues,
   stubRepoStats,
-} from "../../helpers/githubHelpers";
-import { SEL } from "../../helpers/selectors";
-import { T_LONG, T_MEDIUM } from "../../helpers/timeouts";
+} from "../helpers/githubHelpers";
+import { SEL } from "../helpers/selectors";
+import { T_LONG, T_MEDIUM } from "../helpers/timeouts";
+import type { WorktreeCreateResult } from "../../shared/types/worktree";
 
-const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
+const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const DEFAULT_OUTPUT = path.join(REPO_ROOT, ".tmp", "perf-results", "bulk-issue-worktrees.json");
 const RECIPE_NAME = "Bulk issue benchmark layout";
 const READY_TIMEOUT_MS = 90_000;
@@ -293,7 +294,14 @@ async function installHermeticHandlers(app: ElectronApplication): Promise<void> 
         await new Promise((resolve) => setTimeout(resolve, 1));
         entry.resolvedAt = Date.now();
         entry.id = `fake-worktree-${metrics.worktrees.length}-${payload.options.newBranch}`;
-        return entry.id;
+        // The dialog reads `worktreeId` and the landed `branch` off the result;
+        // a bare id string fails every item with "no ID returned".
+        const result: WorktreeCreateResult = {
+          worktreeId: entry.id,
+          branch: payload.options.newBranch,
+          setupState: "unknown",
+        };
+        return result;
       });
       replace("worktree:set-active", async () => undefined);
       replace("terminal:spawn", async (event, payload) => {

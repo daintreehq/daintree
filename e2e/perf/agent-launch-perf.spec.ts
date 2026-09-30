@@ -3,11 +3,11 @@ import { test, expect } from "@playwright/test";
 import { chmodSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "fs";
 import { execSync } from "child_process";
 import path from "path";
-import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
-import { createFixtureRepo } from "../../helpers/fixtures";
-import { openAndOnboardProject } from "../../helpers/project";
-import { SEL } from "../../helpers/selectors";
-import { T_LONG } from "../../helpers/timeouts";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
+import { createFixtureRepo } from "../helpers/fixtures";
+import { openAndOnboardProject } from "../helpers/project";
+import { SEL } from "../helpers/selectors";
+import { T_LONG } from "../helpers/timeouts";
 
 // A/B latency harness for agent-terminal launch. Measures, inside the
 // renderer, the time from dispatching `agent.launch` (the exact path the
@@ -20,8 +20,8 @@ import { T_LONG } from "../../helpers/timeouts";
 // (first terminal pays lazy imports / pty-pool miss); later rounds as warm.
 //
 // Opt-in only — a measurement harness for local A/B runs, not a CI gate.
-//   RUN_PERF_AGENT_LAUNCH=1 npx playwright test --project=full-terminal \
-//     e2e/full/terminal/agent-launch-perf.spec.ts
+//   RUN_PERF_AGENT_LAUNCH=1 npx playwright test --config=playwright.perf.config.ts \
+//     e2e/perf/agent-launch-perf.spec.ts
 const ROUNDS = Math.max(1, Math.floor(Number(process.env.PERF_AGENT_LAUNCH_ROUNDS) || 12));
 // Idle gap between measured rounds so teardown of one sample (panel close,
 // persist flushes, pool re-warm) can't bleed into the next.

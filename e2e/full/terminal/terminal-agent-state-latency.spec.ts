@@ -124,7 +124,13 @@ function report(name: string, ms: number): void {
   test.info().annotations.push({ type: "latency", description: `${name}=${ms}ms` });
 }
 
-async function establishWorking(page: Page): Promise<void> {
+/**
+ * Puts the agent in `working` with its stream advancing. `settled` is for a
+ * test that times the next working → waiting against the quiet-window floor:
+ * the temperature model needs a run of advancing output before a stop reads
+ * as a real one rather than a heartbeat over a static screen.
+ */
+async function establishWorking(page: Page, { settled = false } = {}): Promise<void> {
   const started = await sendFakeAgentCommand(fakeBinDir, "work");
   // The launch-time state is hydrated, not announced, so until the first
   // transition the rendered pane is the only evidence there is.
@@ -132,11 +138,17 @@ async function establishWorking(page: Page): Promise<void> {
     (await observed(page, "state", 0)).at(-1)?.value ??
     (await agentPanel.getAttribute("data-agent-state"));
   await expect.poll(latestState, { timeout: T_LONG, intervals: [100] }).toBe("working");
-  // A heartbeat over a static screen is demoted early by the temperature model;
-  // a settled working agent is one whose visible output is still advancing.
-  await page.waitForTimeout(STREAM_WARMUP_MS);
-  const later = await sendFakeAgentCommand(fakeBinDir, "stream-on");
-  expect(later.streamSeq).toBeGreaterThan(started.streamSeq);
+  if (settled) {
+    // timer: AgentActivityTemperature half-life (DEFAULT_HALF_LIFE_MS, 4.5s)
+    await page.waitForTimeout(STREAM_WARMUP_MS);
+  }
+  // Agent-side truth that output is advancing, not a heartbeat alone.
+  await expect
+    .poll(async () => (await sendFakeAgentCommand(fakeBinDir, "stream-on")).streamSeq, {
+      timeout: T_MEDIUM,
+      intervals: [100],
+    })
+    .toBeGreaterThan(started.streamSeq);
   expect(await latestState()).toBe("working");
 }
 
@@ -171,6 +183,8 @@ async function measureWorkingToWaiting(page: Page, label: string, mounted = true
 }
 
 async function measureWaitingToWorking(page: Page, label: string, mounted = true): Promise<void> {
+  // timer: FSM_IDLE_BACKOFF_SETTLE_MS (3s) — the wake must come from the
+  // backed-off idle poll a real waiting agent sits on, which nothing renders.
   await page.waitForTimeout(BACKOFF_SETTLE_MS);
   const started = await sendFakeAgentCommand(fakeBinDir, "work");
   const ms = await measureTransition(
@@ -245,7 +259,7 @@ async function launchAgent(page: Page): Promise<void> {
   await expect(agentPanel).toHaveAttribute("data-agent-state", "working", { timeout: T_LONG });
 }
 
-test.describe("Full: agent-state transition latency and hidden-pane delivery", () => {
+test.describe("Full: agent-state transitions and hidden-pane delivery", () => {
   test.beforeAll(async () => {
     const { dir, cleanup } = createFixtureRepo({
       name: "terminal-agent-state-latency",
@@ -285,7 +299,7 @@ test.describe("Full: agent-state transition latency and hidden-pane delivery", (
     test.setTimeout(180_000);
     const { window } = ctx;
 
-    await establishWorking(window);
+    await establishWorking(window, { settled: true });
     await measureWorkingToWaiting(window, "visible.cycle1");
     await expect(agentPanel.locator(SEL.terminal.agentStateChip)).toHaveAttribute(
       "aria-label",
@@ -295,22 +309,26 @@ test.describe("Full: agent-state transition latency and hidden-pane delivery", (
     await expect(agentPanel).toHaveAttribute("data-agent-state", "working", { timeout: T_SHORT });
 
     // A resumed agent must get the same window as a freshly launched one.
+    // timer: AgentActivityTemperature half-life (DEFAULT_HALF_LIFE_MS, 4.5s)
     await window.waitForTimeout(STREAM_WARMUP_MS);
     await measureWorkingToWaiting(window, "visible.cycle2");
     await measureWaitingToWorking(window, "visible.cycle2");
   });
 
-  test("hidden pane: transitions reach the view at the same speed", async () => {
+  // Untimed: the hidden-pane latency bounds are a benchmark
+  // (e2e/perf/agent-state-latency-perf.spec.ts); delivery itself is not.
+  test("hidden pane: state transitions reach the view while it is hidden", async () => {
     test.setTimeout(180_000);
     const { window } = ctx;
 
     await establishWorking(window);
     await switchWorktree(window, FEATURE_BRANCH);
     await expect(agentPanel).toBeHidden({ timeout: T_LONG });
-    await window.waitForTimeout(STREAM_WARMUP_MS);
 
-    await measureWorkingToWaiting(window, "hidden", false);
-    await measureWaitingToWorking(window, "hidden", false);
+    const stopped = await sendFakeAgentCommand(fakeBinDir, "idle");
+    await waitForObserved(window, "state", "waiting", stopped.at, T_LONG * 3);
+    const started = await sendFakeAgentCommand(fakeBinDir, "work");
+    await waitForObserved(window, "state", "working", started.at, T_LONG * 3);
 
     await switchWorktree(window, "main");
     await expect(agentPanel).toBeVisible({ timeout: T_LONG });
@@ -326,7 +344,12 @@ test.describe("Full: agent-state transition latency and hidden-pane delivery", (
     await expect(agentPanel).toBeHidden({ timeout: T_LONG });
     // Everything from here to the marker is written while the pane is hidden.
     const hiddenFrom = await sendFakeAgentCommand(fakeBinDir, "stream-on");
-    await window.waitForTimeout(2_000);
+    await expect
+      .poll(async () => (await sendFakeAgentCommand(fakeBinDir, "stream-on")).streamSeq, {
+        timeout: T_MEDIUM,
+        intervals: [100],
+      })
+      .toBeGreaterThan(hiddenFrom.streamSeq + 60);
     await sendFakeAgentCommand(fakeBinDir, "stream-off");
     const marked = await sendFakeAgentCommand(fakeBinDir, "mark");
     expect(marked.streamSeq).toBeGreaterThan(hiddenFrom.streamSeq + 50);
@@ -370,10 +393,15 @@ test.describe("Full: agent-state transition latency and hidden-pane delivery", (
         ({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isFocused() ?? false
       );
 
-    await establishWorking(window);
+    await establishWorking(window, { settled: true });
     await setWindowFocus(true);
-    await window.waitForTimeout(1_000);
-    const hadFocus = await isFocused();
+    const hadFocus = await expect
+      .poll(isFocused, { timeout: T_SHORT, intervals: [100] })
+      .toBe(true)
+      .then(
+        () => true,
+        () => false
+      );
     // Native focus is the OS's to give; without it a blur changes nothing.
     const noFocusReason = "the OS did not give the window native focus";
     test.info().annotations.push({ type: "conditional-skip", description: noFocusReason });
@@ -502,6 +530,8 @@ test.describe("Full: agent-state transition latency and hidden-pane delivery", (
       })
       .toBe(true);
     // Directing is entered synchronously from onData and held for seconds.
+    // timer: negative-assertion dwell over DIRECTING_DEBOUNCE_SHORT_MS (1.5s), so
+    // a wrongly entered directing has rendered before the log is read.
     await window.waitForTimeout(2_000);
 
     const rendered = (await observed(window, "dom", selectAt)).map((e) => e.value);

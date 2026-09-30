@@ -3,24 +3,15 @@ import { test, expect, type ElectronApplication, type Page } from "@playwright/t
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
-import { createFixtureRepos } from "../../helpers/fixtures";
-import { openAndOnboardProject } from "../../helpers/project";
-import { addAndSwitchToProject, selectExistingProjectAndRefresh } from "../../helpers/workflows";
-import {
-  getGridPanelCount,
-  getGridPanelIds,
-  getPanelById,
-  openTerminal,
-} from "../../helpers/panels";
-import {
-  runTerminalCommand,
-  waitForTerminalPty,
-  waitForTerminalText,
-} from "../../helpers/terminal";
-import { SEL } from "../../helpers/selectors";
-import { T_LONG, T_MEDIUM } from "../../helpers/timeouts";
-import { measureMainMemory, startFrameProbe, stopFrameProbe } from "../../helpers/stress";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
+import { createFixtureRepos } from "../helpers/fixtures";
+import { openAndOnboardProject } from "../helpers/project";
+import { addAndSwitchToProject, selectExistingProjectAndRefresh } from "../helpers/workflows";
+import { getGridPanelCount, getGridPanelIds, getPanelById, openTerminal } from "../helpers/panels";
+import { runTerminalCommand, waitForTerminalPty, waitForTerminalText } from "../helpers/terminal";
+import { SEL } from "../helpers/selectors";
+import { T_LONG, T_MEDIUM } from "../helpers/timeouts";
+import { measureMainMemory, startFrameProbe, stopFrameProbe } from "../helpers/stress";
 
 const PROJECT_COUNT = Number(process.env.MEM_GROWTH_PROJECTS ?? 2);
 const TERMINALS_PER_PROJECT = Number(process.env.MEM_GROWTH_TERMINALS ?? 2);

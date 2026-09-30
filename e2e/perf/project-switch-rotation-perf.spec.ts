@@ -10,17 +10,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../../helpers/launch";
-import { openAndOnboardProject } from "../../helpers/project";
-import { addAndSwitchToProject } from "../../helpers/workflows";
+import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../helpers/launch";
+import { openAndOnboardProject } from "../helpers/project";
+import { addAndSwitchToProject } from "../helpers/workflows";
 import {
   createSwitchFixture,
   seedProjectWorkload,
   type SeededWorkload,
   type SwitchFixture,
-} from "../../helpers/switchFixture";
-import { getDescendantPids } from "../../helpers/stress";
-import { SEL } from "../../helpers/selectors";
+} from "../helpers/switchFixture";
+import { getDescendantPids } from "../helpers/stress";
+import { SEL } from "../helpers/selectors";
 import {
   aggregate,
   DEFAULT_DEPTH_WEIGHTS,
@@ -42,7 +42,7 @@ import {
   type RotationSample,
   type SampleTimings,
   type SwitchTraceStep,
-} from "../../helpers/switchRotation";
+} from "../helpers/switchRotation";
 
 // Real-UI project-switch rotation benchmark. Every isolated sample drives the
 // shortcut, palette or toolbar the user would, waits for the target view to
@@ -52,8 +52,8 @@ import {
 // switches are predicted before they happen and the app is held to the
 // prediction. Latency, lag and memory are reported and written, never gated;
 // the assertions are apparatus invariants only.
-//   RUN_PERF_SWITCH_ROTATION=1 npx playwright test --project=full-resilience \
-//     e2e/full/resilience/project-switch-rotation-perf.spec.ts
+//   RUN_PERF_SWITCH_ROTATION=1 npx playwright test --config=playwright.perf.config.ts \
+//     e2e/perf/project-switch-rotation-perf.spec.ts
 const CAP = Number(process.env.PERF_SWITCH_CAP ?? 3);
 const LABEL = process.env.PERF_SWITCH_LABEL ?? `cap${CAP}`;
 const OUTPUT_PATH =

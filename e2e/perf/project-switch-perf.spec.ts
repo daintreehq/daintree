@@ -3,10 +3,10 @@ import { test, expect } from "@playwright/test";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import path from "node:path";
-import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../../helpers/launch";
-import { createFixtureRepos } from "../../helpers/fixtures";
-import { openAndOnboardProject } from "../../helpers/project";
-import { openTerminal } from "../../helpers/panels";
+import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../helpers/launch";
+import { createFixtureRepos } from "../helpers/fixtures";
+import { openAndOnboardProject } from "../helpers/project";
+import { openTerminal } from "../helpers/panels";
 
 // A/B latency harness for project switching. Unlike the stress spec (which
 // hammers switches to prove the app never wedges), this one measures two
@@ -131,8 +131,8 @@ function summary(arr: number[]) {
 // Opt-in only — a measurement harness for local A/B runs, not a CI gate.
 // Latency numbers are machine-dependent, so asserting budgets here would
 // flake across runners; the assertions below are reliability invariants only.
-//   RUN_PERF_SWITCH=1 npx playwright test --project=full-resilience \
-//     e2e/full/resilience/project-switch-perf.spec.ts
+//   RUN_PERF_SWITCH=1 npx playwright test --config=playwright.perf.config.ts \
+//     e2e/perf/project-switch-perf.spec.ts
 const perfDescribe =
   process.env.RUN_PERF_SWITCH || process.env.RUN_PERF_STRESS
     ? test.describe.serial

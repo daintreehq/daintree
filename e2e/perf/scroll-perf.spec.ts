@@ -3,11 +3,11 @@ import { test, expect } from "@playwright/test";
 import { writeFileSync, mkdirSync } from "fs";
 import path from "path";
 import { tmpdir } from "os";
-import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
-import { createFixtureRepo, type FixtureRepo } from "../../helpers/fixtures";
-import { openAndOnboardProject } from "../../helpers/project";
-import { openTerminal, getGridPanelIds } from "../../helpers/panels";
-import { runTerminalCommand, waitForTerminalReady } from "../../helpers/terminal";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
+import { createFixtureRepo, type FixtureRepo } from "../helpers/fixtures";
+import { openAndOnboardProject } from "../helpers/project";
+import { openTerminal, getGridPanelIds } from "../helpers/panels";
+import { runTerminalCommand, waitForTerminalReady } from "../helpers/terminal";
 
 // PERF-125..127 — TUI-scroll-under-load benchmark (the wheel analogue of the
 // PERF-120..122 keystroke benchmark). Measures what a user feels scrolling a
@@ -60,8 +60,8 @@ import { runTerminalCommand, waitForTerminalReady } from "../../helpers/terminal
 //
 // Opt-in only (multi-minute run, never a CI gate):
 //   npm run build:e2e
-//   RUN_PERF_SCROLL=1 npx playwright test --project=full-terminal \
-//     e2e/full/terminal/scroll-perf.spec.ts
+//   RUN_PERF_SCROLL=1 npx playwright test --config=playwright.perf.config.ts \
+//     e2e/perf/scroll-perf.spec.ts
 
 const CYCLES = Math.max(1, Math.floor(Number(process.env.PERF_SCROLL_CYCLES) || 3));
 const NOTCHES = Math.max(5, Math.floor(Number(process.env.PERF_SCROLL_NOTCHES) || 30));
