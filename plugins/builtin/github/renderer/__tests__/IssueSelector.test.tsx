@@ -2,6 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { primePluginKit } from "./primePluginKit";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { IssueSelector } from "../components/IssueSelector";
@@ -54,6 +55,8 @@ beforeAll(() => {
     })),
   });
 });
+
+beforeAll(primePluginKit, 30_000);
 
 describe("IssueSelector", () => {
   beforeEach(() => {

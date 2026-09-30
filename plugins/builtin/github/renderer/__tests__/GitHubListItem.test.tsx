@@ -1,7 +1,8 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { primePluginKit } from "./primePluginKit";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import { Activity, type ReactNode } from "react";
 import { GitHubListItem } from "../components/GitHubListItem";
@@ -39,6 +40,22 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
+
+// The row's tooltips come through the plugin kit, whose body sits inside a
+// style-scope wrapper. Rendered inline like the host stub above: trigger, then
+// the tooltip's own text, with no element of its own to join the rail.
+vi.mock("@daintreehq/plugin-ui", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@daintreehq/plugin-ui")>();
+  return {
+    ...actual,
+    Tooltip: ({ children, content }: { children: ReactNode; content: ReactNode }) => (
+      <>
+        {children}
+        {content}
+      </>
+    ),
+  };
+});
 
 const baseIssue: Issue = {
   number: 42,
@@ -80,6 +97,8 @@ const makeWorktree = (overrides: Partial<Worktree>): Worktree => ({
   isCurrent: false,
   ...overrides,
 });
+
+beforeAll(primePluginKit, 30_000);
 
 beforeEach(() => {
   // The dispatch mock lives in a module factory, so `restoreAllMocks` never

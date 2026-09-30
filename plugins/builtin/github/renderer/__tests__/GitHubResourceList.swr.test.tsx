@@ -2,7 +2,8 @@ import { UI_SPIN_CYCLE_MS } from "@/lib/animationUtils";
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { primePluginKit } from "./primePluginKit";
 import { render, screen, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 import React, { Activity, type ReactNode } from "react";
 import type { Issue, ListOptions, Page } from "@shared/types/forge";
@@ -276,6 +277,8 @@ const setRateLimit = (
     resetAt,
   });
 };
+
+beforeAll(primePluginKit, 30_000);
 
 beforeEach(() => {
   _resetForTests();
