@@ -719,10 +719,10 @@ function useReorderEngine({
     const current = heldRef.current;
     if (!current || sameSpot(current.to, to)) return;
     update({ ...current, to });
-    if (current.mode === "keyboard") {
-      refocusRef.current = current.key;
-      setMessage(`${current.label}, ${describeSpot(current.key, to)}.`);
-    }
+    // Every change of landing spot is spoken, pointer or keyboard; the guard
+    // above keeps a still pointer from repeating it.
+    setMessage(`${current.label}, ${describeSpot(current.key, to)}.`);
+    if (current.mode === "keyboard") refocusRef.current = current.key;
   };
 
   const pointerTarget = (x: number, y: number, key: DragKey): Spot | null => {

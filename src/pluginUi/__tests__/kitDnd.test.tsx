@@ -417,6 +417,7 @@ describe("SortableList pointer drag", () => {
     expect(line?.getAttribute("data-kit-drop-indicator")).toBe("after");
     expect(line?.closest("[role=listitem]")?.textContent).toBe("Charlie");
     expect(document.querySelector("[data-kit-drag-overlay]")?.textContent).toBe("Alpha");
+    expect(liveText()).toContain("Alpha, position 3 of 3.");
     act(() => {
       fireEvent.mouseUp(document, { clientX: 10, clientY: 55 });
     });
