@@ -90,6 +90,8 @@ interface RadioChoiceRowProps {
   /** What the user ends up with. Announced as a description, not part of the name. */
   description?: string;
   disabled?: boolean;
+  /** Native `required`, so an empty group fails form validation. */
+  required?: boolean;
   /** Lands on the `<input>`, never on the shell — clicking a wrapper misses the control. */
   testId?: string;
   /**
@@ -109,6 +111,7 @@ export function RadioChoiceRow({
   label,
   description,
   disabled,
+  required,
   testId,
   bare,
   className,
@@ -135,6 +138,7 @@ export function RadioChoiceRow({
         checked={checked}
         onChange={onChange}
         disabled={disabled}
+        required={required}
         data-testid={testId}
         aria-labelledby={labelId}
         aria-describedby={description ? descriptionId : undefined}
