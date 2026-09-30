@@ -1501,7 +1501,7 @@ describe("OpenAITranscriptionProvider", () => {
     expect(completes).toEqual(["alpha", "beta"]);
   });
 
-  it("an empty .completed is terminal: counts its commit without emitting and dedupes a later done", async () => {
+  it("an empty .completed is terminal: counts its commit without a transcript and dedupes a later done", async () => {
     const service = new OpenAITranscriptionProvider();
     const completes: string[] = [];
     service.onEvent((e) => {
@@ -1531,14 +1531,16 @@ describe("OpenAITranscriptionProvider", () => {
     });
     await Promise.resolve();
     expect(settled).toBe(false);
-    expect(completes).toEqual([]);
+    // An identified item settles with an empty completion so the renderer
+    // retires its interim preview (#13109) — no transcript text is emitted.
+    expect(completes).toEqual([""]);
 
     socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
       item_id: "item-B",
       transcript: "beta",
     });
     await drainPromise;
-    expect(completes).toEqual(["beta"]);
+    expect(completes).toEqual(["", "beta"]);
   });
 
   it("a text-bearing conversation.item.done counts, and the item's later .completed is deduped", async () => {
@@ -1579,7 +1581,7 @@ describe("OpenAITranscriptionProvider", () => {
     expect(completes).toEqual(["alpha", "beta"]);
   });
 
-  it("treats transcription.failed as terminal for its item without emitting", async () => {
+  it("treats transcription.failed as terminal for its item without a transcript", async () => {
     const service = new OpenAITranscriptionProvider();
     const completes: string[] = [];
     service.onEvent((e) => {
@@ -1621,7 +1623,8 @@ describe("OpenAITranscriptionProvider", () => {
       transcript: "beta",
     });
     await drainPromise;
-    expect(completes).toEqual(["beta"]);
+    // item-A retires with one empty completion (#13109); the repeat is deduped.
+    expect(completes).toEqual(["", "beta"]);
     expect(loggedText()).not.toContain("secret dictated words");
   });
 
@@ -2661,7 +2664,13 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
     socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
     socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
     socket.simulateMessage("conversation.item.done", done("item-B", "second"));
-    socket.simulateMessage("conversation.item.done", done("item-A", "   "));
+    // An empty `done` is only a placeholder; `.completed` with no text is the
+    // server's terminal verdict of silence.
+    socket.simulateMessage("conversation.item.done", done("item-A", ""));
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-A",
+      transcript: "   ",
+    });
 
     expect(completions(events)).toEqual([
       { text: "", itemId: "item-A" },
