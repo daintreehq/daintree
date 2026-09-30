@@ -79,8 +79,13 @@ function fromDayNumber(value: number): string {
   return `${pad(date.getUTCFullYear(), 4)}-${pad(date.getUTCMonth() + 1, 2)}-${pad(date.getUTCDate(), 2)}`;
 }
 
+export const FIRST_ISO = "0001-01-01";
+export const LAST_ISO = "9999-12-31";
+
+/** `days` away, held inside the years a `YYYY-MM-DD` string can name. */
 export function addDays(iso: string, days: number): string {
-  return fromDayNumber(dayNumber(iso) + days);
+  const next = dayNumber(iso) + days;
+  return fromDayNumber(Math.min(dayNumber(LAST_ISO), Math.max(dayNumber(FIRST_ISO), next)));
 }
 
 /** Same day number in the month `months` away, clamped to that month's length. */
@@ -221,10 +226,18 @@ export function localeWeekStart(): number {
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
+// Gregorian years and ASCII digits whatever the locale's defaults, because that
+// is what the parser reads back: a Buddhist-calendar locale would otherwise
+// show 2026 as 2569, and typing the shown year would pick a different day.
 function formatter(key: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
   let cached = formatters.get(key);
   if (!cached) {
-    cached = new Intl.DateTimeFormat(undefined, { ...options, timeZone: "UTC" });
+    cached = new Intl.DateTimeFormat(undefined, {
+      ...options,
+      calendar: "gregory",
+      numberingSystem: "latn",
+      timeZone: "UTC",
+    });
     formatters.set(key, cached);
   }
   return cached;
@@ -371,7 +384,10 @@ export function parseDateText(text: string, today: string): string | null {
     return isoFromParts(fullYear(values.year), Number(values.month), Number(values.day));
   }
 
-  const tokens = trimmed.toLocaleLowerCase().match(/[\p{L}]+\.?|\d+/gu) ?? [];
+  // Words keep their combining marks (Thai and Devanagari vowels) and inner
+  // dots, so an abbreviation such as Thai "ก.ย." stays one month name.
+  const tokens =
+    trimmed.toLocaleLowerCase().match(/[\p{L}\p{M}]+(?:\.[\p{L}\p{M}]+)*\.?|\d+/gu) ?? [];
   const names = monthNames();
   let month: number | undefined;
   let day: number | undefined;

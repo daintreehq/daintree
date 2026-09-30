@@ -157,6 +157,17 @@ export function niceTicks(low: number, high: number, count: number): number[] {
   const step = tickStep(lo, hi, count);
   const start = Math.floor(lo / step);
   const end = Math.ceil(hi / step);
+  // A span too narrow for a double to step through (it underflows to zero) or
+  // too wide to measure (it overflows) has no round ticks: its ends stand in.
+  if (
+    !(step > 0) ||
+    !Number.isFinite(step) ||
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    end - start > 1000
+  ) {
+    return [lo, hi];
+  }
   const ticks: number[] = [];
   for (let i = start; i <= end; i++) ticks.push(clean(i * step));
   return ticks;
@@ -274,7 +285,12 @@ function userFormat<T>(user: Format<T> | undefined, fallback: Format<T>): Format
   const format = fn(user);
   if (!format) return fallback;
   return (value) => {
-    const out: unknown = format(value);
+    let out: unknown;
+    try {
+      out = format(value);
+    } catch {
+      return fallback(value);
+    }
     return typeof out === "string" ? out : fallback(value);
   };
 }
@@ -1069,6 +1085,34 @@ function KitBarChart({
     };
   }, [rows, resolved, values, categories, formats, stacked, across, width, px]);
 
+  // Built from the data alone, so moving the cursor never rescans it.
+  const table = useMemo<TableModel>(
+    () => ({
+      xLabel: str(xLabel) ?? "Category",
+      series: resolved,
+      rows:
+        rows.length > MAX_TABLE_ROWS
+          ? null
+          : rows.map((_, index) => ({
+              key: String(index),
+              x: categories[index] ?? "",
+              values: cellTexts(values, index, formats.full),
+            })),
+      summary:
+        rows.length > MAX_TABLE_ROWS
+          ? summarise(
+              rows.length,
+              categories[0] ?? "",
+              categories[categories.length - 1] ?? "",
+              resolved,
+              values,
+              formats.full
+            )
+          : "",
+    }),
+    [xLabel, resolved, rows, categories, values, formats]
+  );
+
   if (loading === true) return <ChartLoading height={px} className={classes} root={root} />;
   if (
     rows.length === 0 ||
@@ -1089,30 +1133,6 @@ function KitBarChart({
           clear: across ? 0 : geometry.groupSpan / 2,
         }
       : null;
-
-  const table: TableModel = {
-    xLabel: str(xLabel) ?? "Category",
-    series: resolved,
-    rows:
-      rows.length > MAX_TABLE_ROWS
-        ? null
-        : rows.map((_, index) => ({
-            key: String(index),
-            x: categories[index] ?? "",
-            values: cellTexts(values, index, formats.full),
-          })),
-    summary:
-      rows.length > MAX_TABLE_ROWS
-        ? summarise(
-            rows.length,
-            categories[0] ?? "",
-            categories[categories.length - 1] ?? "",
-            resolved,
-            values,
-            formats.full
-          )
-        : "",
-  };
 
   return (
     <AxisChartFrame
@@ -1194,11 +1214,20 @@ function KitBarChart({
   );
 }
 
+// The widest instant a `Date` can hold, either side of the epoch.
+const MAX_DATE_MS = 8.64e15;
+
 function toX(value: unknown, time: boolean): number | null {
-  if (value instanceof Date) return finite(value.getTime());
-  if (typeof value === "number") return finite(value);
-  if (time && typeof value === "string") return finite(Date.parse(value));
-  return null;
+  const at =
+    value instanceof Date
+      ? finite(value.getTime())
+      : typeof value === "number"
+        ? finite(value)
+        : time && typeof value === "string"
+          ? finite(Date.parse(value))
+          : null;
+  // A time x outside what a `Date` can hold cannot be formatted, only dropped.
+  return at !== null && time && Math.abs(at) > MAX_DATE_MS ? null : at;
 }
 
 /** Index of the point nearest `target` in an ascending list. */
@@ -1265,13 +1294,17 @@ function KitLineChart({
   const { time, xs, values } = model;
   const cursor = useCursor(xs.length);
 
-  const formatPoint = userFormat<number>(formatX, (value) =>
-    time
-      ? (xs.length > 1 && xs[xs.length - 1]! - xs[0]! < 2 * DAY
-          ? TIME_POINT_FORMAT
-          : DATE_POINT_FORMAT
-        ).format(value)
-      : FULL.format(value)
+  const formatPoint = useMemo(
+    () =>
+      userFormat<number>(formatX, (value) =>
+        time
+          ? (xs.length > 1 && xs[xs.length - 1]! - xs[0]! < 2 * DAY
+              ? TIME_POINT_FORMAT
+              : DATE_POINT_FORMAT
+            ).format(value)
+          : FULL.format(value)
+      ),
+    [formatX, time, xs]
   );
 
   const geometry = useMemo(() => {
@@ -1356,6 +1389,34 @@ function KitLineChart({
     return { ticks, sy, left, top, plotW, plotH, pixels, xTicks, lines };
   }, [time, xs, values, resolved, formats, width, px, filled, smooth, formatX]);
 
+  // Built from the data alone, so moving the cursor never rescans it.
+  const table = useMemo<TableModel>(
+    () => ({
+      xLabel: str(xLabel) ?? (time ? "Time" : "X"),
+      series: resolved,
+      rows:
+        xs.length > MAX_TABLE_ROWS
+          ? null
+          : xs.map((value, index) => ({
+              key: String(index),
+              x: formatPoint(value),
+              values: cellTexts(values, index, formats.full),
+            })),
+      summary:
+        xs.length > MAX_TABLE_ROWS
+          ? summarise(
+              xs.length,
+              formatPoint(xs[0] ?? 0),
+              formatPoint(xs[xs.length - 1] ?? 0),
+              resolved,
+              values,
+              formats.full
+            )
+          : "",
+    }),
+    [xLabel, time, resolved, xs, values, formats, formatPoint]
+  );
+
   if (loading === true) return <ChartLoading height={px} className={classes} root={root} />;
   if (xs.length === 0 || resolved.length === 0 || values.every((c) => c.every((v) => v === null))) {
     return <ChartEmpty label={label} height={px} empty={empty} className={classes} root={root} />;
@@ -1379,30 +1440,6 @@ function KitLineChart({
         dots.length > 0 ? Math.min(...dots.map((dot) => dot.y)) : geometry.top + geometry.plotH / 2,
     };
   }
-
-  const table: TableModel = {
-    xLabel: str(xLabel) ?? (time ? "Time" : "X"),
-    series: resolved,
-    rows:
-      xs.length > MAX_TABLE_ROWS
-        ? null
-        : xs.map((value, index) => ({
-            key: String(index),
-            x: formatPoint(value),
-            values: cellTexts(values, index, formats.full),
-          })),
-    summary:
-      xs.length > MAX_TABLE_ROWS
-        ? summarise(
-            xs.length,
-            formatPoint(xs[0] ?? 0),
-            formatPoint(xs[xs.length - 1] ?? 0),
-            resolved,
-            values,
-            formats.full
-          )
-        : "",
-  };
 
   return (
     <AxisChartFrame

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { createElement, type ComponentType, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn(() => Promise.resolve()) },
@@ -10,6 +10,7 @@ vi.mock("@/services/ActionService", () => ({
 import * as kit from "@daintreehq/plugin-ui";
 import { timeAgoTick } from "@/components/PluginKit/PluginKitDates";
 import {
+  addDays,
   addMonths,
   monthWeeks,
   parseDateText,
@@ -75,6 +76,40 @@ describe("date math", () => {
     expect(addMonths("2026-11-15", 12)).toBe("2027-11-15");
     expect(weekday("2026-09-30")).toBe(3);
     expect(weekday("2026-03-29")).toBe(0);
+  });
+
+  it("keeps day arithmetic inside the years an ISO date can name", () => {
+    expect(addDays("9999-12-31", 1)).toBe("9999-12-31");
+    expect(addDays("9999-12-30", 7)).toBe("9999-12-31");
+    expect(addDays("0001-01-01", -1)).toBe("0001-01-01");
+    expect(addDays("2026-09-30", 1)).toBe("2026-10-01");
+  });
+
+  it("displays dates in the calendar and digits the parser reads back", async () => {
+    // A Thai locale defaults to the Buddhist calendar (2026 is 2569) and,
+    // with this extension, Thai digits; neither can be typed back.
+    const Native = Intl.DateTimeFormat;
+    class ThaiDefault extends Native {
+      constructor(locales?: string | string[], options?: Intl.DateTimeFormatOptions) {
+        super(locales ?? "th-TH-u-nu-thai", options);
+      }
+    }
+    const intl: typeof Intl = Object.create(Intl);
+    Object.defineProperty(intl, "DateTimeFormat", { value: ThaiDefault });
+    vi.stubGlobal("Intl", intl);
+    vi.resetModules();
+    try {
+      const math = await import("@/components/PluginKit/kitDateMath");
+      const shown = math.formatFieldDate("2026-09-30");
+      expect(shown).toContain("2026");
+      expect(shown).not.toContain("2569");
+      expect(math.formatDayNumber("2026-09-30")).toBe("30");
+      expect(math.parseDateText(shown, "2026-01-01")).toBe("2026-09-30");
+      expect(math.parseDateText("30 กันยายน 2026", "2026-01-01")).toBe("2026-09-30");
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
   });
 
   it("lays a month out in six weeks from the given week start", () => {
@@ -158,6 +193,17 @@ describe("Calendar", () => {
     fireEvent.keyDown(document.activeElement!, { key: "PageUp", shiftKey: true });
     expect(document.activeElement).toBe(day("2025-10-27"));
     expect(captions()).toEqual(["October 2025"]);
+  });
+
+  it("stops the keyboard and the month arrows at the last ISO day", () => {
+    renderLoose(kit.Calendar, { defaultValue: "9999-12-31" });
+    const last = day("9999-12-31");
+    last.focus();
+    fireEvent.keyDown(last, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(day("9999-12-31"));
+    expect(captions()).toEqual(["December 9999"]);
+    const next = screen.getByRole("button", { name: "Next month" }) as HTMLButtonElement;
+    expect(next.disabled).toBe(true);
   });
 
   it("chooses a day on click and reports it as ISO", () => {
@@ -335,6 +381,23 @@ describe("DatePicker", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("hands focus back to the input when Alt+Down opened the calendar", async () => {
+    renderLoose(kit.DatePicker, { defaultValue: "2026-09-30", "aria-label": "Due date" });
+    const input = screen.getByRole("textbox", { name: "Due date" });
+    input.focus();
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
+    });
+    await screen.findByRole("dialog", { name: "Choose date" });
+    expect(document.activeElement).toBe(day("2026-09-30"));
+    await act(async () => {
+      fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    });
+    // Radix hands focus back a task after the panel unmounts.
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("degrades bad props instead of throwing", () => {
     expect(() =>
       renderLoose(kit.DatePicker, {
@@ -381,6 +444,40 @@ describe("DateRangePicker", () => {
     });
     expect(onValueChange).toHaveBeenLastCalledWith({ start: "2026-09-01", end: "2026-09-07" });
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("disables a preset whose range min, max or isDateDisabled forbids", async () => {
+    const onValueChange = vi.fn();
+    renderLoose(kit.DateRangePicker, {
+      defaultValue: null,
+      onValueChange,
+      "aria-label": "Period",
+      min: "2026-09-05",
+      isDateDisabled: (date: string) => date === "2026-09-20",
+      presets: [
+        { label: "Too early", range: { start: "2026-09-01", end: "2026-09-07" } },
+        { label: "Ends on a blocked day", range: { start: "2026-09-14", end: "2026-09-20" } },
+        { label: "Allowed", range: { start: "2026-09-07", end: "2026-09-13" } },
+      ],
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Choose dates" }));
+    });
+    await screen.findByRole("dialog", { name: "Choose dates" });
+    const early = screen.getByRole("button", { name: "Too early" }) as HTMLButtonElement;
+    const blocked = screen.getByRole("button", {
+      name: "Ends on a blocked day",
+    }) as HTMLButtonElement;
+    expect(early.disabled).toBe(true);
+    expect(blocked.disabled).toBe(true);
+    await act(async () => {
+      fireEvent.click(early);
+    });
+    expect(onValueChange).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Allowed" }));
+    });
+    expect(onValueChange).toHaveBeenLastCalledWith({ start: "2026-09-07", end: "2026-09-13" });
   });
 });
 

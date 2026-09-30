@@ -21,12 +21,14 @@ import {
   addDays,
   addMonths,
   clampIso,
+  FIRST_ISO,
   firstOfMonth,
   formatDayNumber,
   formatFieldDate,
   formatFieldRange,
   formatFullDate,
   formatMonthLabel,
+  LAST_ISO,
   localeWeekStart,
   monthOf,
   monthWeeks,
@@ -222,8 +224,8 @@ function CalendarView({
 
   const names = weekdayNames(weekStart);
   const months = Array.from({ length: numberOfMonths }, (_, index) => shiftMonth(month, index));
-  const canGoBack = min === null || monthOf(min) < month;
-  const canGoForward = max === null || monthOf(max) > lastMonth;
+  const canGoBack = month > monthOf(FIRST_ISO) && (min === null || monthOf(min) < month);
+  const canGoForward = lastMonth < monthOf(LAST_ISO) && (max === null || monthOf(max) > lastMonth);
 
   return (
     <div
@@ -486,6 +488,10 @@ function DateField({ mode, props }: DateFieldProps) {
   const overlayZ = useKitOverlayZClass();
   const owner = useKitOwnerAttributes();
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // Alt+Down opens the calendar from the input, not the trigger, so the close
+  // hands focus back there; a press inside the panel makes that ringless.
+  const openedFromInput = useRef(false);
+  const pressedInside = useRef(false);
   const controlled = Object.hasOwn(props, "value");
   const [ownValue, setOwnValue] = useState<FieldValue>(() => readValue(mode, props.defaultValue));
   const value = controlled ? readValue(mode, props.value) : ownValue;
@@ -510,8 +516,12 @@ function DateField({ mode, props }: DateFieldProps) {
     !(maxIso !== null && iso > maxIso) &&
     !callDisabled(disabledCheck, iso);
 
-  const setOpen = (next: boolean) => {
-    if (next) setWide(hasWideWindow());
+  const setOpen = (next: boolean, fromInput = false) => {
+    if (next) {
+      setWide(hasWideWindow());
+      openedFromInput.current = fromInput;
+      pressedInside.current = false;
+    }
     if (controlledOpen === undefined) setOwnOpen(next);
     handleOpen?.(next);
   };
@@ -562,7 +572,7 @@ function DateField({ mode, props }: DateFieldProps) {
     } else if (event.key === "ArrowDown" && event.altKey) {
       event.preventDefault();
       commitText();
-      setOpen(true);
+      setOpen(true, true);
     }
   };
 
@@ -581,6 +591,8 @@ function DateField({ mode, props }: DateFieldProps) {
   const selected = typeof value === "string" ? value : null;
   const range = value !== null && typeof value !== "string" ? value : null;
   const pickedPreset = presets.find((preset) => sameRange(preset.range, range));
+  // A preset is held to the same rules as a typed range: both ends allowed.
+  const presetAllowed = (preset: DateRange) => allowed(preset.start) && allowed(preset.end);
 
   const calendar = (
     <CalendarView
@@ -607,7 +619,7 @@ function DateField({ mode, props }: DateFieldProps) {
   );
 
   return (
-    <Popover open={isOpen} onOpenChange={setOpen}>
+    <Popover open={isOpen} onOpenChange={(next) => setOpen(next)}>
       <PopoverAnchor asChild>
         <div
           {...rootAttributes}
@@ -675,6 +687,21 @@ function DateField({ mode, props }: DateFieldProps) {
         align="start"
         aria-label={`Choose ${noun}`}
         className={cn("w-auto max-w-[calc(100vw-2rem)] p-3", overlayZ)}
+        onPointerDownCapture={() => {
+          pressedInside.current = true;
+        }}
+        onKeyDownCapture={() => {
+          pressedInside.current = false;
+        }}
+        onCloseAutoFocus={(event) => {
+          if (!openedFromInput.current) return;
+          openedFromInput.current = false;
+          event.preventDefault();
+          // A click away that gave focus to something else keeps it there.
+          const active = document.activeElement;
+          if (active !== null && active !== document.body) return;
+          inputRef.current?.focus({ preventScroll: true, focusVisible: !pressedInside.current });
+        }}
         onOpenAutoFocus={(event) => {
           // Straight to the grid's tab stop, as the grid pattern expects,
           // rather than the first focusable thing (the previous-month arrow).
@@ -702,6 +729,7 @@ function DateField({ mode, props }: DateFieldProps) {
                   variant="ghost"
                   size="sm"
                   pressed={preset === pickedPreset}
+                  disabled={!presetAllowed(preset.range)}
                   className="justify-start font-normal"
                   onClick={() => {
                     change(preset.range);
