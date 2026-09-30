@@ -536,7 +536,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // and `agentLaunchFlags` say they are per launch and show Codex's effort
   // flag, and the preset listing says a launch sets both without a preset.
   // Without them an empty preset list read as "no per-launch control".
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 53_400;
+  // 53_400 → 53_450 for #13130, measured at 53_431 B: the undescribed
+  // `cwdOutsideWorktree` field on `agent.launch`'s result, which tells a caller
+  // its cwd sits outside the worktree the pane was filed under.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 53_450;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -696,7 +699,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // preset prose as the external ceiling above.
   // 114_200 → 114_250 for #13070, measured at 114_205 B: the undescribed
   // `mergeState` field on the forge PR and linked-PR results.
-  const MAX_COHORT_PAYLOAD_BYTES = 114_250;
+  // 114_250 → 114_300 for #13130, measured at 114_275 B: the same
+  // `cwdOutsideWorktree` field as the external ceiling above.
+  const MAX_COHORT_PAYLOAD_BYTES = 114_300;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

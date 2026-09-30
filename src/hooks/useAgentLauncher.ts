@@ -15,6 +15,8 @@ import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { logError, logWarn } from "@/utils/logger";
 import { markRendererPerformance } from "@/utils/performance";
 import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
+import { isMac, isWindows } from "@/lib/platform";
+import { isPathInside, pathComparisonKey } from "@shared/utils/path";
 import { readViewDevServerCommand } from "@/utils/devServerCommand";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
@@ -245,6 +247,12 @@ export interface LaunchAgentIdentity {
   branch: string | null;
   /** Directory the panel was created with; null when none resolved. */
   cwd: string | null;
+  /**
+   * Whether `cwd` sits outside `worktreePath` — the pane is filed under a
+   * worktree its process does not run in (#13130). Null when either path is
+   * unknown, so there is nothing to compare. Lexical, like `isPathInside`.
+   */
+  cwdOutsideWorktree: boolean | null;
 }
 
 /**
@@ -261,17 +269,31 @@ export interface LaunchAgentIdentity {
  * initialized yet, so the id could not be looked up) because that is the id the
  * panel is actually created with — the path and branch stay null since neither
  * is known.
+ *
+ * `cwd` never selects the worktree, so an explicit cwd in another repo still
+ * files under the active one. `cwdOutsideWorktree` reports that disagreement
+ * instead of leaving the caller to compare paths itself (#13130).
  */
 export function buildLaunchIdentity(
   targetWorktreeId: string | null | undefined,
   targetWorktree: { path?: string; branch?: string } | null,
-  cwd: string
+  cwd: string,
+  options: { caseInsensitive: boolean }
 ): LaunchAgentIdentity {
+  const worktreePath = targetWorktree?.path || null;
+  const reportedCwd = cwd || null;
   return {
     worktreeId: targetWorktreeId || null,
-    worktreePath: targetWorktree?.path ?? null,
+    worktreePath,
     branch: targetWorktree?.branch ?? null,
-    cwd: cwd || null,
+    cwd: reportedCwd,
+    cwdOutsideWorktree:
+      worktreePath && reportedCwd
+        ? !isPathInside(
+            pathComparisonKey(reportedCwd, options),
+            pathComparisonKey(worktreePath, options)
+          )
+        : null,
   };
 }
 
@@ -403,7 +425,9 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
 
         // Resolved once, spread into every success return so a caller learns
         // where the launch landed without re-deriving it.
-        const launchIdentity = buildLaunchIdentity(effectiveWorktreeId, targetWorktree, cwd);
+        const launchIdentity = buildLaunchIdentity(effectiveWorktreeId, targetWorktree, cwd, {
+          caseInsensitive: isMac() || isWindows(),
+        });
 
         // Handle browser pane specially
         if (agentId === "browser") {
