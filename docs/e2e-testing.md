@@ -81,11 +81,11 @@ Current launch call sites (`launchApp` / `launchWithSamplePlugin`) per gated buc
 | Project         | Spec files | Launch call sites |
 | --------------- | ---------- | ----------------- |
 | core            | 3          | 5                 |
-| full-terminal   | 10         | 10                |
+| full-terminal   | 11         | 12                |
 | full-worktree   | 14         | 18                |
 | full-presets    | 5          | 7                 |
 | full-platform   | 12         | 16                |
-| full-panels     | 20         | 23                |
+| full-panels     | 21         | 24                |
 | full-resilience | 19         | 27                |
 | full-plugins    | 4          | 4                 |
 | online          | 3          | 4                 |
@@ -93,7 +93,7 @@ Current launch call sites (`launchApp` / `launchWithSamplePlugin`) per gated buc
 
 A local macOS run of the gated suite (core plus the seven `full-*` buckets, workers=1) takes about 32 minutes. `npm run e2e-durations -- <report.json>...` (`scripts/ci/e2e-durations.mjs`) turns Playwright JSON reports (`PLAYWRIGHT_JSON_REPORT=1` or `PLAYWRIGHT_JSON_OUTPUT_FILE`) into per-spec and per-project durations, merging shards or platforms; launch time in `beforeAll` is attributed to no test, so its figures are lower bounds.
 
-Scenario specs worth reading before writing a new one: `core-restart-persistence` (a journey across three real relaunches), `core-pty-host-crash` (SIGKILLs the real pty-host by pid and crashes the project renderer), `mcp-consent-tiers` (a real Streamable HTTP client, consent dialogs, outcomes read from git), `core-launch-mcp` (every wired agent's launch, checked on the command line, on disk and over HTTP), `mcp-terminal-notify` (an agent pane orchestrating its own workers over MCP), `core-terminal-pane` (typed terminal I/O), `core-review-hub-workflow` (every commit and push checked against git on disk), `preset-launch-outcome` (what the agent was actually launched with) and `core-file-edit` (edit, save, close guard and disk conflict).
+Scenario specs worth reading before writing a new one: `core-restart-persistence` (a journey across three real relaunches), `core-pty-host-crash` (SIGKILLs the real pty-host by pid and crashes the project renderer), `mcp-consent-tiers` (a real Streamable HTTP client, consent dialogs, outcomes read from git), `core-launch-mcp` (every wired agent's launch, checked on the command line, on disk and over HTTP), `mcp-terminal-notify` (an agent pane orchestrating its own workers over MCP), `core-terminal-pane` (typed terminal I/O), `core-review-hub-workflow` (every commit and push checked against git on disk), `preset-launch-outcome` (what the agent was actually launched with), `core-diff-panel` (worktree card to rendered hunks, image diff, stale refresh and a review note delivered as bracketed-paste bytes), `core-codex-agent` (a non-Claude agent detected, driven and resumed through the registry) and `core-file-edit` (edit, save, close guard and disk conflict; quarantined while the built Markdown editor fails to load).
 
 ## Configuration
 

@@ -468,7 +468,8 @@ test.describe.serial("MCP: consent dialogs and project tiers, end to end", () =>
   test("tier off launches an agent pane with no Daintree bearer", async () => {
     await setProjectTier("off");
     const launch = await launchPane("tier-off");
-    expect(launch.mcpToken).toBeNull();
+    // Compare a boolean so a failure can never print a leaked bearer.
+    expect(launch.mcpToken !== null, "tier off must mint no pane bearer").toBe(false);
     expect(launch.argv).not.toContain("--mcp-config");
     const record = readFakeAgentLaunchLog(binDir).find((entry) => entry.paneId === launch.paneId);
     expect(record?.present?.DAINTREE_MCP_TOKEN, JSON.stringify(record?.present)).toBe(false);

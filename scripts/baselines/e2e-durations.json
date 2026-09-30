@@ -1,0 +1,1462 @@
+{
+  "platforms": ["darwin"],
+  "projects": [
+    {
+      "platform": "darwin",
+      "project": "core",
+      "specs": 3,
+      "tests": 9,
+      "durationMs": 57369,
+      "durationWithRetriesMs": 57369,
+      "retries": 0,
+      "status": {
+        "passed": 9,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "specs": 21,
+      "tests": 230,
+      "durationMs": 117063,
+      "durationWithRetriesMs": 117063,
+      "retries": 0,
+      "status": {
+        "passed": 226,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 4
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-platform",
+      "specs": 12,
+      "tests": 118,
+      "durationMs": 123428,
+      "durationWithRetriesMs": 123428,
+      "retries": 0,
+      "status": {
+        "passed": 118,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-plugins",
+      "specs": 4,
+      "tests": 46,
+      "durationMs": 54248,
+      "durationWithRetriesMs": 54248,
+      "retries": 0,
+      "status": {
+        "passed": 46,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-presets",
+      "specs": 5,
+      "tests": 109,
+      "durationMs": 166257,
+      "durationWithRetriesMs": 166257,
+      "retries": 0,
+      "status": {
+        "passed": 107,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 2
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "specs": 19,
+      "tests": 97,
+      "durationMs": 320805,
+      "durationWithRetriesMs": 320805,
+      "retries": 0,
+      "status": {
+        "passed": 96,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 1
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-terminal",
+      "specs": 11,
+      "tests": 94,
+      "durationMs": 352260,
+      "durationWithRetriesMs": 352260,
+      "retries": 0,
+      "status": {
+        "passed": 94,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-worktree",
+      "specs": 14,
+      "tests": 88,
+      "durationMs": 173562,
+      "durationWithRetriesMs": 173562,
+      "retries": 0,
+      "status": {
+        "passed": 87,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 1
+      }
+    }
+  ],
+  "specs": [
+    {
+      "platform": "darwin",
+      "project": "core",
+      "file": "e2e/core/core-restart-persistence.spec.ts",
+      "tests": 3,
+      "durationMs": 9461,
+      "durationWithRetriesMs": 9461,
+      "retries": 0,
+      "status": {
+        "passed": 3,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "core",
+      "file": "e2e/core/core-terminal-agent-promotion.spec.ts",
+      "tests": 1,
+      "durationMs": 45717,
+      "durationWithRetriesMs": 45717,
+      "retries": 0,
+      "status": {
+        "passed": 1,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "core",
+      "file": "e2e/core/core-worktree-lifecycle.spec.ts",
+      "tests": 5,
+      "durationMs": 2191,
+      "durationWithRetriesMs": 2191,
+      "retries": 0,
+      "status": {
+        "passed": 5,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-action-palette-commands.spec.ts",
+      "tests": 9,
+      "durationMs": 1029,
+      "durationWithRetriesMs": 1029,
+      "retries": 0,
+      "status": {
+        "passed": 9,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-browser-panel.spec.ts",
+      "tests": 15,
+      "durationMs": 3985,
+      "durationWithRetriesMs": 3985,
+      "retries": 0,
+      "status": {
+        "passed": 14,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 1
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-dev-preview.spec.ts",
+      "tests": 21,
+      "durationMs": 6674,
+      "durationWithRetriesMs": 6674,
+      "retries": 0,
+      "status": {
+        "passed": 21,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-diff-panel.spec.ts",
+      "tests": 5,
+      "durationMs": 5494,
+      "durationWithRetriesMs": 5494,
+      "retries": 0,
+      "status": {
+        "passed": 5,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-dock-launcher-search.spec.ts",
+      "tests": 14,
+      "durationMs": 3647,
+      "durationWithRetriesMs": 3647,
+      "retries": 0,
+      "status": {
+        "passed": 14,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-dock.spec.ts",
+      "tests": 9,
+      "durationMs": 8070,
+      "durationWithRetriesMs": 8070,
+      "retries": 0,
+      "status": {
+        "passed": 9,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-event-inspector.spec.ts",
+      "tests": 5,
+      "durationMs": 2623,
+      "durationWithRetriesMs": 2623,
+      "retries": 0,
+      "status": {
+        "passed": 5,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-file-edit.spec.ts",
+      "tests": 3,
+      "durationMs": 0,
+      "durationWithRetriesMs": 0,
+      "retries": 0,
+      "status": {
+        "passed": 0,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 3
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-file-surfaces.spec.ts",
+      "tests": 20,
+      "durationMs": 3800,
+      "durationWithRetriesMs": 3800,
+      "retries": 0,
+      "status": {
+        "passed": 20,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-forge-stats-lifecycle.spec.ts",
+      "tests": 11,
+      "durationMs": 10704,
+      "durationWithRetriesMs": 10704,
+      "retries": 0,
+      "status": {
+        "passed": 11,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-palette-specialized.spec.ts",
+      "tests": 15,
+      "durationMs": 6727,
+      "durationWithRetriesMs": 6727,
+      "retries": 0,
+      "status": {
+        "passed": 15,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-panel-tab-groups.spec.ts",
+      "tests": 14,
+      "durationMs": 4461,
+      "durationWithRetriesMs": 4461,
+      "retries": 0,
+      "status": {
+        "passed": 14,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-portal.spec.ts",
+      "tests": 11,
+      "durationMs": 3288,
+      "durationWithRetriesMs": 3288,
+      "retries": 0,
+      "status": {
+        "passed": 11,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-pulse.spec.ts",
+      "tests": 10,
+      "durationMs": 6278,
+      "durationWithRetriesMs": 6278,
+      "retries": 0,
+      "status": {
+        "passed": 10,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-review-hub-conflicts.spec.ts",
+      "tests": 10,
+      "durationMs": 4925,
+      "durationWithRetriesMs": 4925,
+      "retries": 0,
+      "status": {
+        "passed": 10,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-review-hub-workflow.spec.ts",
+      "tests": 27,
+      "durationMs": 10137,
+      "durationWithRetriesMs": 10137,
+      "retries": 0,
+      "status": {
+        "passed": 27,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/core-toolbar-overflow.spec.ts",
+      "tests": 4,
+      "durationMs": 3836,
+      "durationWithRetriesMs": 3836,
+      "retries": 0,
+      "status": {
+        "passed": 4,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/notification-center.spec.ts",
+      "tests": 5,
+      "durationMs": 2301,
+      "durationWithRetriesMs": 2301,
+      "retries": 0,
+      "status": {
+        "passed": 5,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/notification-grid-banners.spec.ts",
+      "tests": 8,
+      "durationMs": 821,
+      "durationWithRetriesMs": 821,
+      "retries": 0,
+      "status": {
+        "passed": 8,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/notification-toasts.spec.ts",
+      "tests": 9,
+      "durationMs": 6402,
+      "durationWithRetriesMs": 6402,
+      "retries": 0,
+      "status": {
+        "passed": 9,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-panels",
+      "file": "e2e/full/panels/pane-header-controls-stability.spec.ts",
+      "tests": 5,
+      "durationMs": 21861,
+      "durationWithRetriesMs": 21861,
+      "retries": 0,
+      "status": {
+        "passed": 5,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-platform",
+      "file": "e2e/full/platform/core-accessibility.spec.ts",
+      "tests": 33,
+      "durationMs": 9428,
+      "durationWithRetriesMs": 9428,
+      "retries": 0,
+      "status": {
+        "passed": 33,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-platform",
+      "file": "e2e/full/platform/core-github-settings.spec.ts",
+      "tests": 4,
+      "durationMs": 2248,
+      "durationWithRetriesMs": 2248,
+      "retries": 0,
+      "status": {
+        "passed": 4,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-platform",
+      "file": "e2e/full/platform/core-global-env-inheritance.spec.ts",
+      "tests": 5,
+      "durationMs": 4159,
+      "durationWithRetriesMs": 4159,
+      "retries": 0,
+      "status": {
+        "passed": 5,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-platform",
+      "file": "e2e/full/platform/core-hybrid-input-bar.spec.ts",
+      "tests": 8,
+      "durationMs": 4463,
+      "durationWithRetriesMs": 4463,
+      "retries": 0,
+      "status": {
+        "passed": 8,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-platform",
+      "file": "e2e/full/platform/core-keyboard-navigation-advanced.spec.ts",
+      "tests": 6,
+      "durationMs": 2759,
+      "durationWithRetriesMs": 2759,
+      "retries": 0,
+      "status": {
+        "passed": 6,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-platform",
+      "file": "e2e/full/platform/core-keyboard-shortcuts.spec.ts",
+      "tests": 11,
+      "durationMs": 31464,
+      "durationWithRetriesMs": 31464,
+      "retries": 0,
+      "status": {
+        "passed": 11,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-platform",
+      "file": "e2e/full/platform/core-multi-window.spec.ts",
+      "tests": 4,
+      "durationMs": 9566,
+      "durationWithRetriesMs": 9566,
+      "retries": 0,
+      "status": {
+        "passed": 4,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-platform",
+      "file": "e2e/full/platform/core-persistence-advanced.spec.ts",
+      "tests": 2,
+      "durationMs": 12201,
+      "durationWithRetriesMs": 12201,
+      "retries": 0,
+      "status": {
+        "passed": 2,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-platform",
+      "file": "e2e/full/platform/core-plugin-host-contract.spec.ts",
+      "tests": 3,
+      "durationMs": 1160,
+      "durationWithRetriesMs": 1160,
+      "retries": 0,
+      "status": {
+        "passed": 3,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-platform",
+      "file": "e2e/full/platform/core-resource-settings-persistence.spec.ts",
+      "tests": 4,
+      "durationMs": 12511,
+      "durationWithRetriesMs": 12511,
+      "retries": 0,
+      "status": {
+        "passed": 4,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-platform",
+      "file": "e2e/full/platform/core-settings.spec.ts",
+      "tests": 28,
+      "durationMs": 25273,
+      "durationWithRetriesMs": 25273,
+      "retries": 0,
+      "status": {
+        "passed": 28,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-platform",
+      "file": "e2e/full/platform/core-voice-input.spec.ts",
+      "tests": 10,
+      "durationMs": 8196,
+      "durationWithRetriesMs": 8196,
+      "retries": 0,
+      "status": {
+        "passed": 10,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-plugins",
+      "file": "e2e/full/plugins/core-launch-mcp.spec.ts",
+      "tests": 10,
+      "durationMs": 31210,
+      "durationWithRetriesMs": 31210,
+      "retries": 0,
+      "status": {
+        "passed": 10,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-plugins",
+      "file": "e2e/full/plugins/core-plugin-file-tree.spec.ts",
+      "tests": 4,
+      "durationMs": 3314,
+      "durationWithRetriesMs": 3314,
+      "retries": 0,
+      "status": {
+        "passed": 4,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-plugins",
+      "file": "e2e/full/plugins/core-plugin-sample-host.spec.ts",
+      "tests": 31,
+      "durationMs": 12856,
+      "durationWithRetriesMs": 12856,
+      "retries": 0,
+      "status": {
+        "passed": 31,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-plugins",
+      "file": "e2e/full/plugins/plugin-custom-element-reload.spec.ts",
+      "tests": 1,
+      "durationMs": 6868,
+      "durationWithRetriesMs": 6868,
+      "retries": 0,
+      "status": {
+        "passed": 1,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-presets",
+      "file": "e2e/full/presets/preset-ccr.spec.ts",
+      "tests": 24,
+      "durationMs": 22575,
+      "durationWithRetriesMs": 22575,
+      "retries": 0,
+      "status": {
+        "passed": 24,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-presets",
+      "file": "e2e/full/presets/preset-custom-crud.spec.ts",
+      "tests": 53,
+      "durationMs": 119215,
+      "durationWithRetriesMs": 119215,
+      "retries": 0,
+      "status": {
+        "passed": 53,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-presets",
+      "file": "e2e/full/presets/preset-launch-outcome.spec.ts",
+      "tests": 7,
+      "durationMs": 10567,
+      "durationWithRetriesMs": 10567,
+      "retries": 0,
+      "status": {
+        "passed": 5,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 2
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-presets",
+      "file": "e2e/full/presets/preset-launch-surfaces.spec.ts",
+      "tests": 14,
+      "durationMs": 6654,
+      "durationWithRetriesMs": 6654,
+      "retries": 0,
+      "status": {
+        "passed": 14,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-presets",
+      "file": "e2e/full/presets/recipe-e2e-coverage.spec.ts",
+      "tests": 11,
+      "durationMs": 7246,
+      "durationWithRetriesMs": 7246,
+      "retries": 0,
+      "status": {
+        "passed": 11,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/adversarial-system.spec.ts",
+      "tests": 2,
+      "durationMs": 5873,
+      "durationWithRetriesMs": 5873,
+      "retries": 0,
+      "status": {
+        "passed": 2,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/agent-lifecycle-ledger.spec.ts",
+      "tests": 6,
+      "durationMs": 97980,
+      "durationWithRetriesMs": 97980,
+      "retries": 0,
+      "status": {
+        "passed": 6,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/background-terminal-bulk-output.spec.ts",
+      "tests": 2,
+      "durationMs": 3408,
+      "durationWithRetriesMs": 3408,
+      "retries": 0,
+      "status": {
+        "passed": 2,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/core-concurrent-operations.spec.ts",
+      "tests": 4,
+      "durationMs": 19043,
+      "durationWithRetriesMs": 19043,
+      "retries": 0,
+      "status": {
+        "passed": 4,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/core-crash-recovery.spec.ts",
+      "tests": 15,
+      "durationMs": 9391,
+      "durationWithRetriesMs": 9391,
+      "retries": 0,
+      "status": {
+        "passed": 15,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/core-diagnostics-notifications.spec.ts",
+      "tests": 11,
+      "durationMs": 2497,
+      "durationWithRetriesMs": 2497,
+      "retries": 0,
+      "status": {
+        "passed": 11,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/core-error-boundaries.spec.ts",
+      "tests": 3,
+      "durationMs": 94,
+      "durationWithRetriesMs": 94,
+      "retries": 0,
+      "status": {
+        "passed": 3,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/core-error-recovery.spec.ts",
+      "tests": 4,
+      "durationMs": 5414,
+      "durationWithRetriesMs": 5414,
+      "retries": 0,
+      "status": {
+        "passed": 4,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/core-ipc-error-propagation.spec.ts",
+      "tests": 14,
+      "durationMs": 12673,
+      "durationWithRetriesMs": 12673,
+      "retries": 0,
+      "status": {
+        "passed": 14,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/core-perf-list-mount-budget.spec.ts",
+      "tests": 1,
+      "durationMs": 1654,
+      "durationWithRetriesMs": 1654,
+      "retries": 0,
+      "status": {
+        "passed": 1,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/core-plugin-lifecycle-across-views.spec.ts",
+      "tests": 2,
+      "durationMs": 43039,
+      "durationWithRetriesMs": 43039,
+      "retries": 0,
+      "status": {
+        "passed": 2,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/core-process-cleanup.spec.ts",
+      "tests": 2,
+      "durationMs": 9542,
+      "durationWithRetriesMs": 9542,
+      "retries": 0,
+      "status": {
+        "passed": 2,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/core-pty-host-crash.spec.ts",
+      "tests": 4,
+      "durationMs": 31649,
+      "durationWithRetriesMs": 31649,
+      "retries": 0,
+      "status": {
+        "passed": 3,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 1
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/core-race-conditions.spec.ts",
+      "tests": 6,
+      "durationMs": 51338,
+      "durationWithRetriesMs": 51338,
+      "retries": 0,
+      "status": {
+        "passed": 6,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/mcp-bound-view-eviction.spec.ts",
+      "tests": 2,
+      "durationMs": 8262,
+      "durationWithRetriesMs": 8262,
+      "retries": 0,
+      "status": {
+        "passed": 2,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/mcp-consent-tiers.spec.ts",
+      "tests": 5,
+      "durationMs": 9898,
+      "durationWithRetriesMs": 9898,
+      "retries": 0,
+      "status": {
+        "passed": 5,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/mcp-workspace-binding.spec.ts",
+      "tests": 9,
+      "durationMs": 1442,
+      "durationWithRetriesMs": 1442,
+      "retries": 0,
+      "status": {
+        "passed": 9,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/watchdog-disabled-restart.spec.ts",
+      "tests": 3,
+      "durationMs": 847,
+      "durationWithRetriesMs": 847,
+      "retries": 0,
+      "status": {
+        "passed": 3,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-resilience",
+      "file": "e2e/full/resilience/worktree-portbroker-recovery.spec.ts",
+      "tests": 2,
+      "durationMs": 6761,
+      "durationWithRetriesMs": 6761,
+      "retries": 0,
+      "status": {
+        "passed": 2,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-terminal",
+      "file": "e2e/full/terminal/core-codex-agent.spec.ts",
+      "tests": 1,
+      "durationMs": 25237,
+      "durationWithRetriesMs": 25237,
+      "retries": 0,
+      "status": {
+        "passed": 1,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-terminal",
+      "file": "e2e/full/terminal/core-fleet-broadcast.spec.ts",
+      "tests": 13,
+      "durationMs": 43477,
+      "durationWithRetriesMs": 43477,
+      "retries": 0,
+      "status": {
+        "passed": 13,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-terminal",
+      "file": "e2e/full/terminal/core-pty-stress.spec.ts",
+      "tests": 5,
+      "durationMs": 27377,
+      "durationWithRetriesMs": 27377,
+      "retries": 0,
+      "status": {
+        "passed": 5,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-terminal",
+      "file": "e2e/full/terminal/core-terminal-layout-operations.spec.ts",
+      "tests": 15,
+      "durationMs": 11641,
+      "durationWithRetriesMs": 11641,
+      "retries": 0,
+      "status": {
+        "passed": 15,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-terminal",
+      "file": "e2e/full/terminal/core-terminal-lifecycle-advanced.spec.ts",
+      "tests": 4,
+      "durationMs": 9232,
+      "durationWithRetriesMs": 9232,
+      "retries": 0,
+      "status": {
+        "passed": 4,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-terminal",
+      "file": "e2e/full/terminal/core-terminal-pane.spec.ts",
+      "tests": 28,
+      "durationMs": 28447,
+      "durationWithRetriesMs": 28447,
+      "retries": 0,
+      "status": {
+        "passed": 28,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-terminal",
+      "file": "e2e/full/terminal/core-terminal-recipes.spec.ts",
+      "tests": 5,
+      "durationMs": 8225,
+      "durationWithRetriesMs": 8225,
+      "retries": 0,
+      "status": {
+        "passed": 5,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-terminal",
+      "file": "e2e/full/terminal/core-terminal-scroll.spec.ts",
+      "tests": 7,
+      "durationMs": 12863,
+      "durationWithRetriesMs": 12863,
+      "retries": 0,
+      "status": {
+        "passed": 7,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-terminal",
+      "file": "e2e/full/terminal/font-preload.spec.ts",
+      "tests": 2,
+      "durationMs": 567,
+      "durationWithRetriesMs": 567,
+      "retries": 0,
+      "status": {
+        "passed": 2,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-terminal",
+      "file": "e2e/full/terminal/mcp-terminal-notify.spec.ts",
+      "tests": 5,
+      "durationMs": 87509,
+      "durationWithRetriesMs": 87509,
+      "retries": 0,
+      "status": {
+        "passed": 5,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-terminal",
+      "file": "e2e/full/terminal/terminal-agent-state-latency.spec.ts",
+      "tests": 9,
+      "durationMs": 97685,
+      "durationWithRetriesMs": 97685,
+      "retries": 0,
+      "status": {
+        "passed": 9,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-worktree",
+      "file": "e2e/full/worktree/core-cross-project-workflows.spec.ts",
+      "tests": 5,
+      "durationMs": 24879,
+      "durationWithRetriesMs": 24879,
+      "retries": 0,
+      "status": {
+        "passed": 5,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-worktree",
+      "file": "e2e/full/worktree/core-project-deletion-cleanup.spec.ts",
+      "tests": 8,
+      "durationMs": 5198,
+      "durationWithRetriesMs": 5198,
+      "retries": 0,
+      "status": {
+        "passed": 8,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-worktree",
+      "file": "e2e/full/worktree/core-project-lifecycle.spec.ts",
+      "tests": 6,
+      "durationMs": 30170,
+      "durationWithRetriesMs": 30170,
+      "retries": 0,
+      "status": {
+        "passed": 6,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-worktree",
+      "file": "e2e/full/worktree/core-project-switch-race.spec.ts",
+      "tests": 4,
+      "durationMs": 50745,
+      "durationWithRetriesMs": 50745,
+      "retries": 0,
+      "status": {
+        "passed": 4,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-worktree",
+      "file": "e2e/full/worktree/core-worktree-cards.spec.ts",
+      "tests": 13,
+      "durationMs": 4042,
+      "durationWithRetriesMs": 4042,
+      "retries": 0,
+      "status": {
+        "passed": 13,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-worktree",
+      "file": "e2e/full/worktree/core-worktree-cross-boundary.spec.ts",
+      "tests": 5,
+      "durationMs": 3328,
+      "durationWithRetriesMs": 3328,
+      "retries": 0,
+      "status": {
+        "passed": 5,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-worktree",
+      "file": "e2e/full/worktree/core-worktree-external.spec.ts",
+      "tests": 7,
+      "durationMs": 4066,
+      "durationWithRetriesMs": 4066,
+      "retries": 0,
+      "status": {
+        "passed": 7,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-worktree",
+      "file": "e2e/full/worktree/core-worktree-port-rebind.spec.ts",
+      "tests": 3,
+      "durationMs": 8059,
+      "durationWithRetriesMs": 8059,
+      "retries": 0,
+      "status": {
+        "passed": 3,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-worktree",
+      "file": "e2e/full/worktree/core-worktree-resources.spec.ts",
+      "tests": 13,
+      "durationMs": 7957,
+      "durationWithRetriesMs": 7957,
+      "retries": 0,
+      "status": {
+        "passed": 13,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-worktree",
+      "file": "e2e/full/worktree/core-worktree-sidebar-search.spec.ts",
+      "tests": 1,
+      "durationMs": 359,
+      "durationWithRetriesMs": 359,
+      "retries": 0,
+      "status": {
+        "passed": 1,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-worktree",
+      "file": "e2e/full/worktree/dialog-body-spacing.spec.ts",
+      "tests": 3,
+      "durationMs": 888,
+      "durationWithRetriesMs": 888,
+      "retries": 0,
+      "status": {
+        "passed": 3,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-worktree",
+      "file": "e2e/full/worktree/new-worktree-dialog.spec.ts",
+      "tests": 12,
+      "durationMs": 7955,
+      "durationWithRetriesMs": 7955,
+      "retries": 0,
+      "status": {
+        "passed": 12,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-worktree",
+      "file": "e2e/full/worktree/startup-agent-worktree-restore.spec.ts",
+      "tests": 2,
+      "durationMs": 23120,
+      "durationWithRetriesMs": 23120,
+      "retries": 0,
+      "status": {
+        "passed": 1,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 1
+      }
+    },
+    {
+      "platform": "darwin",
+      "project": "full-worktree",
+      "file": "e2e/full/worktree/worktree-dashboard-cards.spec.ts",
+      "tests": 6,
+      "durationMs": 2796,
+      "durationWithRetriesMs": 2796,
+      "retries": 0,
+      "status": {
+        "passed": 6,
+        "failed": 0,
+        "flaky": 0,
+        "skipped": 0
+      }
+    }
+  ]
+}

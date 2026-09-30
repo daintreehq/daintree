@@ -211,7 +211,8 @@ function daintreeFromDialect(
     }
     case "amp-mcp-config": {
       const { file, config } = readFileArg(launch, "--mcp-config");
-      expect(config.mcpServers, "Amp takes a bare server map").toBeUndefined();
+      // Boolean, so a wrongly wrapped map (which carries the bearer) is never printed.
+      expect(config.mcpServers !== undefined, "Amp takes a bare server map").toBe(false);
       const entry = config[DAINTREE_KEY] as ServerEntry | undefined;
       expect(withoutHeaders(entry)).toMatchObject({ url: mcpUrl });
       return { url: entry!.url!, bearer: bearerOf(entry), file };

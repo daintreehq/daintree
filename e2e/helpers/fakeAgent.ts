@@ -229,9 +229,12 @@ function fakeAgentProgram(
   // Which pane this is and the Daintree MCP bearer it was launched with, so a
   // spec can find a pane Daintree opened on its own (an assistant lane) and
   // call Daintree as that pane. The bearer never goes in the shared log above.
+  // Written to a temp name and renamed, so a spec polling for it never reads a
+  // half-written record.
   if (config.perPane) {
+    const launchFile = named(config.files.launch);
     fs.writeFileSync(
-      named(config.files.launch),
+      `${launchFile}.tmp`,
       JSON.stringify({
         paneId: process.env.DAINTREE_PANE_ID || null,
         mcpToken: process.env.DAINTREE_MCP_TOKEN || null,
@@ -239,6 +242,7 @@ function fakeAgentProgram(
         at: Date.now(),
       })
     );
+    fs.renameSync(`${launchFile}.tmp`, launchFile);
   }
 
   const write = (text: string) => process.stdout.write(text);

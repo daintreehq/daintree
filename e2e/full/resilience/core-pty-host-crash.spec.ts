@@ -27,8 +27,9 @@ import { T_LONG, T_MEDIUM } from "../../helpers/timeouts";
 const FIXTURE_NAME = "pty-host-crash";
 const RECONNECTED_LINE = "Terminal backend reconnected";
 const RECOVERING_BANNER = "Terminal service restarting";
-// Longer than PtyHostLifecycle's third-attempt restart ceiling (4 s) plus fork time.
-const CAP_DWELL_MS = 6_000;
+// Restart backoff is capped at 1 s × 2^n; after two prior crashes a wrongly
+// scheduled third restart could wait up to 8 s, so watch well past that.
+const CAP_DWELL_MS = 10_000;
 
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
@@ -43,6 +44,7 @@ interface Pane {
 }
 
 const panes: Pane[] = [];
+const capturedShells: Array<{ pid: number; identity: ProcessIdentity | null }> = [];
 
 async function readWindowId(): Promise<number> {
   const id = await ctx.app.evaluate(({ BrowserWindow }) => {
@@ -151,7 +153,9 @@ async function captureLivePane(page: Page, id: string): Promise<Pane> {
   if (process.platform !== "win32") {
     expect(typedPid, `typed command in ${id} ran in its pty`).toBe(pid);
   }
-  return { id, pid, identity: getProcessInfo(pid) };
+  const identity = getProcessInfo(pid);
+  capturedShells.push({ pid, identity });
+  return { id, pid, identity };
 }
 
 async function viewEval<T>(wcId: number, js: string): Promise<T> {
@@ -249,6 +253,12 @@ async function viewTypedShellPid(wcId: number, panelId: string): Promise<number>
 }
 
 async function killHostAndAwaitReplacement(oldHostPid: number): Promise<number> {
+  // Never signal an unverified pid: 0 or a stale value would hit the runner's
+  // own process group or an unrelated process.
+  expect(oldHostPid, "pty-host pid from the fault-mode hook").toBeGreaterThan(0);
+  expect(await ptyHostPidsFromMetrics(), "hook pid must be the live pty-host").toContain(
+    oldHostPid
+  );
   const oldIdentity = getProcessInfo(oldHostPid);
   process.kill(oldHostPid, "SIGKILL");
 
@@ -292,6 +302,18 @@ test.describe.serial("Resilience: real pty-host death and renderer crash", () =>
 
   test.afterAll(async () => {
     if (ctx?.app) await closeApp(ctx.app);
+    // A shell orphaned by a killed host is reparented away from the app, so
+    // closeApp's descendant sweep can't find it; reap any that survived.
+    for (const { pid, identity } of capturedShells) {
+      if (identity !== null && verifyProcessIdentity(pid, identity)) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+    capturedShells.length = 0;
     fixtureCleanup?.();
   });
 
