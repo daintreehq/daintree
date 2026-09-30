@@ -35,7 +35,7 @@ function renderLoose<P extends object>(component: ComponentType<P>, looseProps: 
 
 describe("@daintreehq/plugin-ui kit", () => {
   it("declares its contract version", () => {
-    expect(kit.PLUGIN_UI_VERSION).toBe("1.1.0");
+    expect(kit.PLUGIN_UI_VERSION).toBe("1.2.0");
   });
 
   it("renders a themed host Button and narrows what a view passes", () => {

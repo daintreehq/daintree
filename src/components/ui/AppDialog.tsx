@@ -774,6 +774,8 @@ export interface DialogAction {
   disabled?: boolean;
   loading?: boolean;
   intent?: "default" | "destructive";
+  /** A leading glyph, sized by the button like any other icon child. */
+  icon?: React.ReactNode;
 }
 
 interface AppDialogFooterProps {
@@ -845,6 +847,7 @@ AppDialog.Footer = function AppDialogFooter({
           className={cn("shrink-0", leadingAction.disabled && ARIA_DISABLED_CLASSES)}
           data-confirm-role="leading"
         >
+          {leadingAction.icon}
           {leadingAction.label}
         </Button>
       )}
@@ -885,6 +888,7 @@ AppDialog.Footer = function AppDialogFooter({
               )}
               data-confirm-role="cancel"
             >
+              {secondaryAction.icon}
               {secondaryAction.label}
             </Button>
           )}
@@ -905,6 +909,7 @@ AppDialog.Footer = function AppDialogFooter({
               className={primaryAction.disabled ? ARIA_DISABLED_CLASSES : undefined}
               data-confirm-role="confirm"
             >
+              {primaryAction.icon}
               {primaryAction.label}
             </Button>
           )}

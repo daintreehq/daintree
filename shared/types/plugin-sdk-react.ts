@@ -132,6 +132,7 @@ export type PluginIconName =
   | "chevron-left"
   | "chevron-right"
   | "chevron-up"
+  | "chevrons-up-down"
   | "circle-check"
   | "circle-dashed"
   | "circle-dot"
@@ -154,12 +155,16 @@ export type PluginIconName =
   | "file-diff"
   | "file-plus"
   | "file-text"
+  | "file-warning"
   | "filter"
   | "flame"
   | "flask"
   | "folder"
+  | "folder-code"
   | "folder-open"
+  | "folder-search"
   | "folder-tree"
+  | "folder-x"
   | "gauge"
   | "git-branch"
   | "git-branch-plus"
@@ -179,6 +184,7 @@ export type PluginIconName =
   | "home"
   | "hourglass"
   | "image"
+  | "import"
   | "inbox"
   | "info"
   | "key"
@@ -202,10 +208,13 @@ export type PluginIconName =
   | "monitor-play"
   | "more-horizontal"
   | "more-vertical"
+  | "mouse-pointer"
   | "notebook"
   | "package"
   | "panel-left"
   | "panel-right"
+  | "panel-right-close"
+  | "panel-right-open"
   | "paperclip"
   | "pause"
   | "pencil"
@@ -219,6 +228,7 @@ export type PluginIconName =
   | "refresh"
   | "rocket"
   | "rotate-ccw"
+  | "rotate-cw"
   | "save"
   | "search"
   | "send"
@@ -230,6 +240,7 @@ export type PluginIconName =
   | "sort"
   | "sparkles"
   | "square"
+  | "square-dashed-mouse-pointer"
   | "star"
   | "sticky-note"
   | "table"
@@ -240,9 +251,12 @@ export type PluginIconName =
   | "undo"
   | "unlink"
   | "unlock"
+  | "unplug"
   | "upload"
   | "user"
+  | "user-plus"
   | "users"
+  | "wifi-off"
   | "workflow"
   | "worktree"
   | "wrench"
@@ -274,7 +288,9 @@ export type PluginButtonVariant =
   | "contrast"
   | "destructive"
   | "ghost-danger"
-  | "link";
+  | "link"
+  /** A rounded, quiet chip-shaped button: a floating toolbar or a status strip's control. Added in 1.2. */
+  | "pill";
 
 /** Props of `Button`. */
 export interface PluginButtonProps extends PluginDomProps<HTMLButtonElement> {
@@ -343,6 +359,12 @@ export interface PluginTruncatedTooltipProps {
    * so the text does not become a second tab stop. Defaults to true.
    */
   focusable?: boolean;
+  /**
+   * Overrides the overflow check, for text your code shortens itself (a
+   * middle-elided path): `true` always offers the tooltip, `false` never does.
+   * Added in 1.2.
+   */
+  isTruncated?: boolean;
 }
 
 export type PluginSpinnerSize = "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
@@ -399,7 +421,22 @@ export interface PluginCheckboxProps extends PluginDomProps<HTMLButtonElement> {
 
 /** Props of `Input`, a single-line text field. */
 export interface PluginInputProps extends PluginDomProps<HTMLInputElement> {
-  type?: "text" | "search" | "email" | "url" | "password" | "number" | "tel";
+  /**
+   * `date`, `time` and `datetime-local` (added in 1.2) use the platform's
+   * picker, drawn in the active theme's light or dark scheme; `value` is the
+   * ISO form (`"2026-09-30"`, `"14:05"`, `"2026-09-30T14:05"`).
+   */
+  type?:
+    | "text"
+    | "search"
+    | "email"
+    | "url"
+    | "password"
+    | "number"
+    | "tel"
+    | "date"
+    | "time"
+    | "datetime-local";
   value?: string | number;
   defaultValue?: string | number;
   /** The new text on every edit, beside the native `onChange` event. */
@@ -451,6 +488,8 @@ export interface PluginSelectOption {
   label: string;
   /** A second line under the label (`Select` only). */
   description?: string;
+  /** A leading glyph, shown in the list and on the trigger (`Select` only). Added in 1.2. */
+  icon?: PluginIconName;
   disabled?: boolean;
 }
 
@@ -463,7 +502,12 @@ export interface PluginSelectOptionGroup {
 /** Props of `Select`. The list opens in a host overlay, so only the trigger takes classes. */
 export interface PluginSelectProps {
   options: readonly (PluginSelectOption | PluginSelectOptionGroup)[];
-  value?: string;
+  /**
+   * The chosen value, controlled. Passing the prop at all makes the Select
+   * controlled: `""`, `null` or `undefined` then shows the `placeholder` again
+   * (a form reset). Leave it out entirely for an uncontrolled Select.
+   */
+  value?: string | null;
   defaultValue?: string;
   onValueChange?: (value: string) => void;
   /** Shown while nothing is chosen. */
@@ -509,6 +553,8 @@ export interface PluginSegmentedControlProps {
 /** Props of `Kbd`: one literal key cap. */
 export interface PluginKbdProps {
   children: ReactNode;
+  /** `compact` for a dense one-line row, the same box `KbdChord` draws. Added in 1.2. */
+  density?: "default" | "compact";
   className?: string;
 }
 
@@ -532,6 +578,8 @@ interface PluginCopyButtonBaseProps {
   onCopied?: () => void;
   /** Report the failure yourself; the button then stays quiet about it. */
   onCopyError?: (error: unknown) => void;
+  /** Spoken politely after a successful copy ("Path copied"). Defaults to "Copied". Added in 1.2. */
+  announcement?: string;
   disabled?: boolean;
   className?: string;
 }
@@ -565,13 +613,35 @@ export interface PluginDismissButtonProps {
 /** The shared status vocabulary; see `PluginBadgeTone` for how `error` and `danger` relate. */
 export type PluginCalloutSeverity = "error" | "warning" | "danger" | "success" | "info" | "neutral";
 
-/** Props of `Callout`, an inline message box. The glyph follows the severity. */
-export interface PluginCalloutProps {
+/**
+ * Props of `Callout`, an inline message box. The glyph follows the severity.
+ * DOM props (`id`, `role`, `aria-*`, `data-*`, handlers) land on its root; since
+ * 1.2 that includes `role="alert"` or `role="status"` for a message that should
+ * be announced.
+ */
+export interface PluginCalloutProps extends Omit<PluginDomProps<HTMLDivElement>, "title"> {
   severity: PluginCalloutSeverity;
   children?: ReactNode;
   title?: ReactNode;
   /** One trailing control, such as a Retry button. */
   action?: ReactNode;
+  /**
+   * `inline` (the default) puts `action` beside the message; `below` puts it
+   * under the text, for a long message or more than one control. Added in 1.2.
+   */
+  actionPlacement?: "inline" | "below";
+  /** Draws the dismiss X, which calls this. Added in 1.2. */
+  onDismiss?: () => void;
+  /** Names the dismiss X ("Dismiss warning"). Defaults to "Dismiss". Added in 1.2. */
+  dismissLabel?: string;
+  /**
+   * `box` (the default) sits among content. `strip` is the full-width band
+   * across the top of a pane or popover, Daintree's pane banner: `title` is its
+   * headline and `children` one line under it. A strip never stands green:
+   * `success` draws as a neutral strip with the check glyph. A strip forwards
+   * `role`, `aria-live` and `data-testid` only. Added in 1.2.
+   */
+  variant?: "box" | "strip";
   /** A domain glyph in place of the info mark, for `neutral` only. */
   icon?: PluginIconName;
   size?: "default" | "compact";
@@ -610,6 +680,8 @@ export interface PluginSkeletonBoneProps {
   /** Fixed height, so nothing shifts when the content arrives. */
   heightPx?: number;
   shimmer?: boolean;
+  /** Skip the anti-flicker delay: for a placeholder that replaces content already on screen. Added in 1.2. */
+  immediate?: boolean;
 }
 
 /** Props of `SkeletonText`, ragged placeholder lines. */
@@ -617,11 +689,40 @@ export interface PluginSkeletonTextProps {
   /** Defaults to 3. */
   lines?: number;
   shimmer?: boolean;
+  /** As on `SkeletonBone`. Added in 1.2. */
+  immediate?: boolean;
   className?: string;
 }
 
-/** Props of `ScrollShadow`: a vertical scroller with fades that show there is more. */
-export interface PluginScrollShadowProps {
+/**
+ * Props of `SkeletonHint`, the companion to a `Skeleton` for a long load: it
+ * stays invisible for 8 seconds, then says "Still working…", escalates, and
+ * offers Cancel and later Retry when you pass them. Place it beside the
+ * `Skeleton`, never inside it (both are live regions). Added in 1.2.
+ */
+export interface PluginSkeletonHintProps {
+  /** Your own progress line ("Fetching 3 of 12 files…") in place of the generic copy. */
+  message?: string;
+  /** Surfaces Cancel with the first hint. */
+  onCancel?: () => void;
+  /** Surfaces Retry once the wait is long (20s by default). */
+  onRetry?: () => void;
+  /** ms before the first hint. Defaults to 8000. */
+  firstThreshold?: number;
+  /** ms before the copy escalates. Defaults to 13000. */
+  secondThreshold?: number;
+  /** ms before Retry appears. Defaults to 20000. */
+  actionThreshold?: number;
+  className?: string;
+}
+
+/**
+ * Props of `ScrollShadow`: a vertical scroller with fades that show there is
+ * more. Since 1.2 the DOM props (`id`, `role`, `tabIndex`, `aria-*`, `data-*`,
+ * handlers) land on the scrolling element, so it can be a listbox. For a
+ * windowed list, use `VirtualList` with `shadows` instead.
+ */
+export interface PluginScrollShadowProps extends Omit<PluginDomProps<HTMLDivElement>, "ref"> {
   children: ReactNode;
   /** Classes for the outer frame (size it here). */
   className?: string;
@@ -671,8 +772,25 @@ export type PluginDropdownMenuEntry =
       onCheckedChange: (checked: boolean) => void;
       disabled?: boolean;
     }
+  | {
+      /** One choice from several, each a radio row with a check on the chosen one. Added in 1.2. */
+      type: "radio-group";
+      value: string;
+      onValueChange: (value: string) => void;
+      items: readonly PluginDropdownMenuRadioItem[];
+      /** A heading over the group. */
+      label?: string;
+    }
   | { type: "label"; label: string }
   | { type: "separator" };
+
+/** One choice of a `radio-group` menu entry. */
+export interface PluginDropdownMenuRadioItem {
+  /** Non-empty and unique within the group. */
+  value: string;
+  label: string;
+  disabled?: boolean;
+}
 
 /** Props of `DropdownMenu`. The menu renders in a host overlay, so it takes no classes. */
 export interface PluginDropdownMenuProps {
@@ -684,23 +802,55 @@ export interface PluginDropdownMenuProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   "aria-label"?: string;
+  /**
+   * Runs as the menu closes, before focus returns to the trigger. Call
+   * `event.preventDefault()` to keep focus where your handler moved it.
+   * Added in 1.2.
+   */
+  onCloseAutoFocus?: (event: Event) => void;
+  /**
+   * Stops clicks, pointer and key events inside the menu from reaching the
+   * view's own handlers. React events travel up through the overlay to the
+   * trigger's ancestors, so a menu on a clickable row would otherwise also
+   * activate the row. Added in 1.2.
+   */
+  stopPropagation?: boolean;
 }
 
 /** A footer button of a `Dialog`. */
 export interface PluginDialogAction {
   label: string;
   onClick: () => void;
+  /** Stays focusable and announced unavailable (`aria-disabled`); clicks do nothing. */
   disabled?: boolean;
+  /**
+   * `primaryAction` only: why it is unavailable. Shown as the footer's hint
+   * while `disabled` (when the dialog has no `hint` of its own) and read with
+   * the button. Added in 1.2.
+   */
+  disabledReason?: ReactNode;
   loading?: boolean;
   intent?: "default" | "destructive";
+  /** A leading glyph. Added in 1.2. */
+  icon?: PluginIconSource;
 }
+
+/**
+ * Where a dialog stacks. `nested` is for a dialog opened from inside another
+ * modal surface (Settings, another dialog), so it paints above it.
+ */
+export type PluginDialogLayer = "default" | "nested";
 
 /** Props of `Dialog`, a modal with a title bar, a scrolling body and a footer. */
 export interface PluginDialogProps {
   open: boolean;
   onClose: () => void;
   title: ReactNode;
-  icon?: PluginIconName;
+  /**
+   * The title's glyph: a name, or your own element (a kit `Spinner` while it
+   * works, a status-coloured `Icon` when it is done). An element since 1.2.
+   */
+  icon?: PluginIconSource;
   description?: ReactNode;
   children?: ReactNode;
   size?: "sm" | "md" | "lg";
@@ -708,8 +858,18 @@ export interface PluginDialogProps {
   secondaryAction?: PluginDialogAction;
   /** A subdued line beside the actions: why the primary is unavailable, say. */
   hint?: ReactNode;
+  /**
+   * Your own footer controls in place of `primaryAction`/`secondaryAction`,
+   * right-aligned after the `hint`: kit `Button`s, the primary last and
+   * `contrast`. Added in 1.2.
+   */
+  footer?: ReactNode;
   /** False blocks Escape, the backdrop and the close button. Defaults to true. */
   dismissible?: boolean;
+  /** Added in 1.2. */
+  layer?: PluginDialogLayer;
+  /** On the dialog's root, for tests. Added in 1.2. */
+  "data-testid"?: string;
 }
 
 /** Props of `ConfirmDialog`, the one confirm-or-cancel shape. */
@@ -724,12 +884,17 @@ export interface PluginConfirmDialogProps {
   confirmLabel: string;
   cancelLabel?: string;
   variant?: "default" | "destructive" | "info";
-  icon?: PluginIconName;
+  /** A name, or your own element since 1.2. */
+  icon?: PluginIconSource;
   /** The confirm is running: spinner on the button, dialog locked. */
   loading?: boolean;
   confirmDisabled?: boolean;
   /** `destructive` only: the user must type this exact text to enable the confirm. */
   typedNameTarget?: string;
+  /** A subdued line beside the buttons: why the confirm is unavailable, say. Added in 1.2. */
+  hint?: ReactNode;
+  /** Added in 1.2. */
+  layer?: PluginDialogLayer;
 }
 
 // Kit 1.1: lists, pane chrome, forms, settings grammar and severity.
@@ -761,6 +926,12 @@ export interface PluginVirtualListProps<T = unknown> extends PluginDomProps<HTML
   onEndReached?: (lastIndex: number) => void;
   /** Keeps this row in view as it changes: the keyboard cursor from `useListNavigation`. */
   activeIndex?: number;
+  /**
+   * Edge fades that show there is more above or below, as `ScrollShadow`
+   * draws. The list then sits in a positioned wrapper that fills its
+   * container. Added in 1.2.
+   */
+  shadows?: boolean;
   /** Required: names the list for assistive tech. */
   "aria-label": string;
   /** Classes for the scrolling element. */
@@ -1164,6 +1335,70 @@ export interface PluginSeverityIconProps {
   size?: number;
   "aria-label"?: string;
   className?: string;
+}
+
+// Kit 1.2: avatars, popovers and the gaps the builtin plugins hit.
+
+/**
+ * Props of `Avatar`: a person's or bot's picture, falling back to their
+ * initials when there is no `src` or it fails to load.
+ */
+export interface PluginAvatarProps {
+  /** The picture's URL. Empty or omitted draws the initials. */
+  src?: string;
+  /** Who it is. The accessible name, and where the initials come from. */
+  name: string;
+  /** `xs` 16px, `sm` 20px (the default), `md` 24px, `lg` 32px. */
+  size?: "xs" | "sm" | "md" | "lg";
+  /** `square` says "bot or app, not a person". */
+  shape?: "circle" | "square";
+  /** Hover text, usually the name or handle. */
+  tooltip?: string;
+  /** True beside the name in text: hidden from assistive tech. */
+  decorative?: boolean;
+  className?: string;
+}
+
+/**
+ * Props of `Popover`: a floating panel opened from `trigger`, for a filter, a
+ * picker or a detail card. Focus moves in when it opens and back to the
+ * trigger when it closes; Escape and a click outside close it. The panel
+ * renders in a host overlay, so it takes no classes: style your own content.
+ */
+export interface PluginPopoverProps {
+  /** The element that opens it; it must accept a ref and DOM props (a kit `Button` does). */
+  trigger: ReactElement;
+  /** The panel's content. */
+  children?: ReactNode;
+  side?: PluginSide;
+  align?: PluginAlign;
+  open?: boolean;
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** `sm` 14rem, `md` 18rem (the default), `lg` 24rem, `trigger` as wide as the trigger, `auto` the content's own width. */
+  width?: "sm" | "md" | "lg" | "trigger" | "auto";
+  /** `default` pads the panel; `none` for a list or a `PopoverSearchField` that runs edge to edge. */
+  padding?: "default" | "none";
+  "aria-label"?: string;
+  /** As on `DropdownMenu`. */
+  onCloseAutoFocus?: (event: Event) => void;
+}
+
+/**
+ * Props of `PopoverSearchField`: the full-width search strip at the top of a
+ * filtering `Popover` (with `padding="none"`). Controlled only. Anywhere else,
+ * use `SearchField`.
+ */
+export interface PluginPopoverSearchFieldProps extends PluginDomProps<HTMLInputElement> {
+  value: string;
+  onValueChange?: (value: string) => void;
+  /** Shows the clear button while there is text. */
+  onClear?: () => void;
+  placeholder?: string;
+  "aria-label"?: string;
+  clearLabel?: string;
+  autoFocus?: boolean;
+  disabled?: boolean;
 }
 
 /**

@@ -26,6 +26,7 @@ import type {
   PluginVirtualListProps,
 } from "@shared/types/plugin-sdk-react";
 import { LIST_ROW_HOVER_CLASS, PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { cn } from "@/lib/utils";
 import { field, fn, node, nonEmpty, oneOf, pickDomProps, positive, str } from "./kitProps";
 import { severityGlyph } from "./PluginKitPatterns";
@@ -119,6 +120,7 @@ function KitVirtualList(props: PluginVirtualListProps) {
     overscan,
     onEndReached,
     activeIndex,
+    shadows,
     className,
     ...rest
   } = props;
@@ -153,9 +155,16 @@ function KitVirtualList(props: PluginVirtualListProps) {
     if (target >= 0) handle.current?.scrollIntoView({ index: target });
   }, [target]);
 
-  return (
+  // Called either way (hooks), but only wired to the scroller when asked for.
+  const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays();
+  const withShadows = shadows === true;
+
+  const list = (
     <Virtuoso
       ref={handle}
+      scrollerRef={
+        withShadows ? (el) => shadowRef(el instanceof HTMLElement ? el : null) : undefined
+      }
       className={cn(SCROLLER_RING_INSET, str(className))}
       style={{ height: "100%" }}
       context={context}
@@ -168,6 +177,14 @@ function KitVirtualList(props: PluginVirtualListProps) {
       endReached={endReached ? (index) => endReached(index) : undefined}
       rangeChanged={setRange}
     />
+  );
+  if (!withShadows) return list;
+  return (
+    <div className="relative h-full min-h-0">
+      {topShadow}
+      {bottomShadow}
+      {list}
+    </div>
   );
 }
 

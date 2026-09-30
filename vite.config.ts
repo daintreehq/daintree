@@ -581,6 +581,7 @@ const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly string[
     "useMockKit",
   ],
   "@daintreehq/plugin-ui": [
+    "Avatar",
     "Badge",
     "Button",
     "Callout",
@@ -604,6 +605,8 @@ const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly string[
     "PLUGIN_UI_VERSION",
     "PaneHeader",
     "PaneState",
+    "Popover",
+    "PopoverSearchField",
     "ProgressBar",
     "ScrollShadow",
     "SearchField",
@@ -616,6 +619,7 @@ const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly string[
     "SeverityIcon",
     "Skeleton",
     "SkeletonBone",
+    "SkeletonHint",
     "SkeletonText",
     "Spinner",
     "SpinningIcon",
@@ -634,8 +638,10 @@ const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly string[
     "formatTimeAgo",
     "getDaintreeTheme",
     "onDidChangeDaintreeTheme",
+    "preloadPluginUi",
     "useDaintreeTheme",
     "useListNavigation",
+    "whenPluginUiReady",
   ],
 };
 

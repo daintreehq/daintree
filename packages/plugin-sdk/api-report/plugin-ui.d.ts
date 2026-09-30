@@ -41,6 +41,7 @@
 declare module "@daintreehq/plugin-ui" {
   import type { ComponentType, ReactNode } from "react";
   import type {
+    PluginAvatarProps,
     PluginBadgeProps,
     PluginButtonProps,
     PluginCalloutProps,
@@ -53,16 +54,19 @@ declare module "@daintreehq/plugin-ui" {
     PluginDataTableRowKey,
     PluginDataTableSort,
     PluginDialogAction,
+    PluginDialogLayer,
     PluginDialogProps,
     PluginDismissButtonProps,
     PluginDropdownMenuEntry,
     PluginDropdownMenuProps,
+    PluginDropdownMenuRadioItem,
     PluginEmptyStateProps,
     PluginFormFieldControlProps,
     PluginFormFieldProps,
     PluginIconButtonProps,
     PluginIconName,
     PluginIconProps,
+    PluginIconSource,
     PluginInputProps,
     PluginKbdChordProps,
     PluginKbdProps,
@@ -74,6 +78,8 @@ declare module "@daintreehq/plugin-ui" {
     PluginMarkdownProps,
     PluginPaneHeaderProps,
     PluginPaneStateProps,
+    PluginPopoverProps,
+    PluginPopoverSearchFieldProps,
     PluginProgressBarProps,
     PluginScrollShadowProps,
     PluginSearchFieldProps,
@@ -90,6 +96,7 @@ declare module "@daintreehq/plugin-ui" {
     PluginSeverity,
     PluginSeverityIconProps,
     PluginSkeletonBoneProps,
+    PluginSkeletonHintProps,
     PluginSkeletonProps,
     PluginSkeletonTextProps,
     PluginSpinnerProps,
@@ -175,9 +182,29 @@ declare module "@daintreehq/plugin-ui" {
   export type ListNavigationRowProps = PluginListNavigationRowProps;
   export type Severity = PluginSeverity;
   export type SeverityIconProps = PluginSeverityIconProps;
+  export type AvatarProps = PluginAvatarProps;
+  export type PopoverProps = PluginPopoverProps;
+  export type PopoverSearchFieldProps = PluginPopoverSearchFieldProps;
+  export type SkeletonHintProps = PluginSkeletonHintProps;
+  export type DropdownMenuRadioItem = PluginDropdownMenuRadioItem;
+  export type DialogLayer = PluginDialogLayer;
+  export type IconSource = PluginIconSource;
 
-  /** The kit's contract version (semver): `"1.1.0"` for this release. */
+  /** The kit's contract version (semver): `"1.2.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
+
+  /**
+   * Resolves once the kit has loaded and every component renders on its first
+   * frame, with no placeholder. Await it before measuring kit output, in tests
+   * and in code that must not paint a frame late. Rejects when the kit fails to
+   * load; calling it again retries. Added in 1.2.0.
+   */
+  export function whenPluginUiReady(): Promise<void>;
+  /**
+   * Starts loading the kit without waiting for it: call it when a view is
+   * about to open. Every call shares one request. Added in 1.2.0.
+   */
+  export function preloadPluginUi(): void;
 
   /**
    * Daintree's own Markdown renderer: GFM, highlighted code fences, the app's
@@ -287,6 +314,17 @@ declare module "@daintreehq/plugin-ui" {
   export const ListRow: ComponentType<ListRowProps>;
   /** The one glyph for each severity. */
   export const SeverityIcon: ComponentType<SeverityIconProps>;
+
+  // Added in 1.2.0.
+
+  /** A person's or bot's picture, with their initials when there is none. */
+  export const Avatar: ComponentType<AvatarProps>;
+  /** A floating panel opened from `trigger`. The trigger shows while the kit loads. */
+  export const Popover: ComponentType<PopoverProps>;
+  /** The full-width search strip at the top of a filtering `Popover`. */
+  export const PopoverSearchField: ComponentType<PopoverSearchFieldProps>;
+  /** The "Still working…" line beside a `Skeleton` once a load runs long. */
+  export const SkeletonHint: ComponentType<SkeletonHintProps>;
 
   /**
    * The keyboard model of a list: one tab stop, Up/Down/Home/End move the

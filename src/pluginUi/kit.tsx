@@ -21,9 +21,28 @@ function loadKit(): Promise<PluginKit> {
   return pending;
 }
 
+/**
+ * Starts loading the kit without waiting on it. Safe to call any number of
+ * times: every call shares the one request.
+ */
+export function preloadPluginUi(): void {
+  loadKit().catch(() => {});
+}
+
+/**
+ * Resolves once every kit component renders synchronously, with no Suspense
+ * frame. Rejects when the kit chunk fails to load; calling again retries.
+ */
+export function whenPluginUiReady(): Promise<void> {
+  // The same chunk loadKit resolved, so this import costs nothing more.
+  return loadKit()
+    .then(() => import("@/components/PluginKit/PluginKit"))
+    .then((module) => module.preparePluginKit());
+}
+
 // Started as soon as a view imports the kit, so the chunk is usually in by the
 // time the view first renders and nothing waits.
-loadKit().catch(() => {});
+preloadPluginUi();
 
 /**
  * A kit component that renders the host adapter `pick` selects once the kit
