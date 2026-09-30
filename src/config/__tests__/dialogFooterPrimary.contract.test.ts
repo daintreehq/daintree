@@ -39,6 +39,11 @@ const SCAN_ROOTS = [
 const APP_DIALOG_MODULE = "/AppDialog";
 const DEFAULT_DIALOG_BINDING = "AppDialog";
 const FOOTER_MEMBER = "Footer";
+// A builtin plugin's kit `Dialog` renders `AppDialog.Footer` around its `footer`
+// prop, so the buttons handed in there answer to the same contract.
+const KIT_MODULE = "@daintreehq/plugin-ui";
+const KIT_DIALOG_EXPORT = "Dialog";
+const KIT_FOOTER_PROP = "footer";
 const BUTTON_TAG = "Button";
 // Every Button variant that paints the accent fill (`bg-primary`, per button.tsx).
 // `default` is cva's own fallback, so naming it explicitly and omitting the prop are the
@@ -89,6 +94,22 @@ function dialogBinding(source: ts.SourceFile): string {
     }
   }
   return DEFAULT_DIALOG_BINDING;
+}
+
+/** The local name the kit's `Dialog` is bound to in this file, or null when it isn't imported. */
+function kitDialogBinding(source: ts.SourceFile): string | null {
+  for (const statement of source.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    const specifier = statement.moduleSpecifier;
+    if (!ts.isStringLiteral(specifier) || specifier.text !== KIT_MODULE) continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+    for (const element of bindings.elements) {
+      const imported = element.propertyName?.text ?? element.name.text;
+      if (imported === KIT_DIALOG_EXPORT) return element.name.text;
+    }
+  }
+  return null;
 }
 
 /**
@@ -172,6 +193,7 @@ function scan(filePath: string): ScanResult {
     ts.ScriptKind.TSX
   );
   const footerTag = `${dialogBinding(source)}.${FOOTER_MEMBER}`;
+  const kitDialogTag = kitDialogBinding(source);
   const result: ScanResult = { violations: [], footers: 0, buttons: 0 };
   const relative = path.relative(REPO_ROOT, filePath).split(path.sep).join("/");
 
@@ -224,6 +246,18 @@ function scan(filePath: string): ScanResult {
     } else if (ts.isJsxSelfClosingElement(node) && node.tagName.getText() === footerTag) {
       result.footers += 1;
       inspectButtons(node.attributes);
+    } else if (
+      kitDialogTag !== null &&
+      (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) &&
+      node.tagName.getText() === kitDialogTag
+    ) {
+      const footer = node.attributes.properties.find(
+        (attribute) => ts.isJsxAttribute(attribute) && attribute.name.getText() === KIT_FOOTER_PROP
+      );
+      if (footer) {
+        result.footers += 1;
+        inspectButtons(footer);
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -234,7 +268,10 @@ function scan(filePath: string): ScanResult {
 
 describe("dialog footers never inherit the accent CTA (#11963) and keep the default size", () => {
   const results = SCAN_ROOTS.flatMap((root) => tsxFiles(root))
-    .filter((file) => fs.readFileSync(file, "utf8").includes(`.${FOOTER_MEMBER}`))
+    .filter((file) => {
+      const text = fs.readFileSync(file, "utf8");
+      return text.includes(`.${FOOTER_MEMBER}`) || text.includes(`${KIT_FOOTER_PROP}=`);
+    })
     .map((file) => scan(file));
 
   const footers = results.reduce((total, r) => total + r.footers, 0);

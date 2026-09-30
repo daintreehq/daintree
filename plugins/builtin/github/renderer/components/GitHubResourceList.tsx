@@ -9,7 +9,6 @@ import {
 } from "react";
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import { WifiOff } from "lucide-react";
 import { GitHubIcon } from "@/components/icons/brands";
 import { isTokenRelatedError, isTransientNetworkError } from "@/lib/forgeErrors";
 import {
@@ -19,19 +18,11 @@ import {
   IconButton,
   SearchField,
   SegmentedControl,
+  SkeletonHint,
   Spinner,
   SpinningIcon,
   type SegmentedOption,
 } from "@daintreehq/plugin-ui";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
@@ -62,6 +53,20 @@ import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { LiveRateLimitCountdown } from "@/components/Layout/RateLimitDetails";
 import { useGitHubResourceListSWR } from "../hooks/useGitHubResourceListSWR";
 import { forgeClient } from "@/clients/forgeClient";
+// The host menus: both size their panel (`w-48`, `w-56`), and the kit
+// DropdownMenu takes no width.
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+// The host overlays, because the rows are a Virtuoso list the grid drives
+// through its scroller ref and imperative handle; the kit VirtualList (whose
+// `shadows` would replace these) exposes neither.
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { FixedDropdownVisibleContext } from "@/components/ui/fixed-dropdown";
 import { FORGE_DROPDOWN_PANEL_SIZE } from "@/components/Layout/forgeStatsDropdownContract";
@@ -71,7 +76,6 @@ import {
   UI_SKELETON_FLOOR_MS,
   UI_STILL_WORKING_MS,
 } from "@/lib/animationUtils";
-import { SkeletonHint } from "@/components/ui/Skeleton";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 
 type StateFilter = IssueStateFilter | PRStateFilter;
@@ -1457,7 +1461,7 @@ export function GitHubResourceList({
                 {isTokenError ? (
                   <Icon name="key" className="h-3.5 w-3.5 shrink-0" />
                 ) : isTransientNetworkError(error) ? (
-                  <WifiOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <Icon name="wifi-off" className="h-3.5 w-3.5 shrink-0" />
                 ) : (
                   <Icon name="circle-x" className="h-3.5 w-3.5 shrink-0" />
                 )}
@@ -1555,7 +1559,7 @@ export function GitHubResourceList({
             <EmptyState
               variant="zero-data"
               scale="canvas"
-              icon={isTransientNetworkError(error) ? <WifiOff /> : "circle-x"}
+              icon={isTransientNetworkError(error) ? "wifi-off" : "circle-x"}
               title={
                 isTransientNetworkError(error)
                   ? "Couldn't reach GitHub"

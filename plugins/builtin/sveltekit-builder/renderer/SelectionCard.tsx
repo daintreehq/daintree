@@ -1,10 +1,5 @@
 import { ExternalLink } from "lucide-react";
-import { Badge, IconButton, TruncatedTooltip } from "@daintreehq/plugin-ui";
-// Host controls where the kit's lack a prop this block depends on: CopyButton
-// has no custom `announcement`, and TruncatedTooltip no `isTruncated` for text
-// shortened in JS rather than by CSS overflow.
-import { CopyButton } from "@/components/ui/CopyButton";
-import { TruncatedTooltip as HostTruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { Badge, CopyButton, IconButton, TruncatedTooltip } from "@daintreehq/plugin-ui";
 import { actionService } from "@/services/ActionService";
 import { cn } from "@/lib/utils";
 import type { SelectedNode } from "../shared/model.js";
@@ -102,7 +97,7 @@ export function SelectionIdentity({
           <>
             <SourcePath file={file} line={line} className="min-w-0 flex-1" />
             <CopyButton
-              size="icon-xs"
+              size="xs"
               text={source}
               aria-label="Copy path"
               announcement="Path copied"
@@ -210,9 +205,9 @@ export function SourcePath({
     >
       {dir ? (
         // Only the directories ever shorten, so they carry the disclosure.
-        <HostTruncatedTooltip content={full} isTruncated={shownDir !== dir || undefined}>
+        <TruncatedTooltip content={full} isTruncated={shownDir !== dir || undefined}>
           <span className="min-w-0 shrink truncate">{shownDir}</span>
-        </HostTruncatedTooltip>
+        </TruncatedTooltip>
       ) : null}
       <span className="shrink-0">
         {name}

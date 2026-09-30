@@ -38,7 +38,7 @@ import { usePanelStore } from "@/store/panelStore";
 // The plugin renders inside the app's TooltipProvider (App.tsx); its segmented
 // controls carry Radix tooltips, so the harness supplies the same ancestor.
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { kitReady } from "./kitReady";
+import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 import {
   FILE,
   OBSERVATION,
@@ -133,7 +133,7 @@ function text(): string {
   return document.body.textContent ?? "";
 }
 
-beforeAll(kitReady);
+beforeAll(() => whenPluginUiReady(), 30_000);
 
 beforeEach(() => {
   context.current = { projectId: "p1", worktreeId: "wt-1", worktreePath: "/repo" };

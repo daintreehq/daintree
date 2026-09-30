@@ -1,7 +1,4 @@
-import { Skeleton } from "@daintreehq/plugin-ui";
-// The host bone: it takes `immediate`, which the kit's does not, and this block
-// only mounts once the wait has already passed the anti-flicker gate.
-import { SkeletonBone } from "@/components/ui/Skeleton";
+import { Skeleton, SkeletonBone } from "@daintreehq/plugin-ui";
 
 /**
  * The identity block's shape, held while its source is being resolved.

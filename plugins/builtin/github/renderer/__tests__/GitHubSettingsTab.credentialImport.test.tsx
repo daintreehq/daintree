@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
-import { primePluginKit } from "./primePluginKit";
+import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 import type { ReactNode } from "react";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { create } from "zustand";
@@ -131,7 +131,7 @@ async function openPreview(preview: Record<string, unknown>) {
   fireEvent.click(await importButton());
 }
 
-beforeAll(primePluginKit, 30_000);
+beforeAll(() => whenPluginUiReady(), 30_000);
 
 beforeEach(() => {
   vi.clearAllMocks();

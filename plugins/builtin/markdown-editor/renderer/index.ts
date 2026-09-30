@@ -16,14 +16,14 @@ import { subscribeRecoverDrafts } from "./recoverDrafts.js";
 // imports this entry for exactly that side effect); the editor itself is a
 // lazy chunk so nothing new enters the first-render chunk — FilePane is a
 // first-render seed (#12323).
-// The kit chunk loads with it, so the editor's kit controls are there on its
-// first frame rather than one frame late.
+// The kit loads with it, so the editor's kit controls are there on its first
+// frame rather than one frame late. Dynamic, like the view: the kit must stay
+// off the startup path.
 const MarkdownEditorView = lazy(() =>
-  Promise.all([import("./MarkdownEditorView"), import("@/components/PluginKit/PluginKit")])
-    // One task, so the kit's own import callback has run and its components
-    // render synchronously; the kit exposes no ready promise to await instead.
-    .then(([m]) => new Promise<typeof m>((resolve) => setTimeout(resolve, 0, m)))
-    .then((m) => ({ default: m.MarkdownEditorView }))
+  Promise.all([
+    import("./MarkdownEditorView"),
+    import("@daintreehq/plugin-ui").then((kit) => kit.whenPluginUiReady()),
+  ]).then(([m]) => ({ default: m.MarkdownEditorView }))
 );
 
 // Literal ids on purpose: the `builtinViewRegistrations` drift test reads this

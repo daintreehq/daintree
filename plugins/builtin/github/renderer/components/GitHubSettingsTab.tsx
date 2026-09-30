@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
-import { Import } from "lucide-react";
 import {
   Button,
+  Callout,
+  ConfirmDialog,
   Icon,
   Input,
   SettingsActions,
@@ -19,8 +20,6 @@ import {
   describeImportFailure,
   useGitHubCliAvailable,
 } from "./GitHubCliImport";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
 import { logError } from "@/utils/logger";
@@ -278,7 +277,19 @@ export function GitHubSettingsTab() {
 
   return (
     <div className="space-y-8">
-      {loadError && <SettingsLoadErrorBanner message={loadError} onRetry={retryAction} />}
+      {loadError && (
+        <Callout
+          severity="error"
+          role="alert"
+          action={
+            <Button variant="outline" size="sm" onClick={retryAction}>
+              Retry
+            </Button>
+          }
+        >
+          <p className="select-text">{loadError}</p>
+        </Callout>
+      )}
 
       <SettingsSection
         id="github-token"
@@ -393,7 +404,7 @@ export function GitHubSettingsTab() {
                     loading={cliImportPhase === "previewing"}
                     variant="outline"
                     size="sm"
-                    icon={<Import aria-hidden="true" />}
+                    icon="import"
                   >
                     Import from GitHub CLI
                   </Button>
@@ -433,27 +444,28 @@ export function GitHubSettingsTab() {
         )}
       </SettingsSection>
 
+      {/* `nested`: this tab renders inside the Settings modal. */}
       <ConfirmDialog
-        isOpen={confirmingClear}
+        open={confirmingClear}
         variant="destructive"
         onConfirm={() => void handleClearToken()}
         onClose={() => setConfirmingClear(false)}
         title="Clear the GitHub token?"
         description="Daintree's copy is deleted. Issues, pull requests and repository stats stop until you add a token again."
         confirmLabel="Clear token"
-        zIndex="nested"
+        layer="nested"
       />
 
       <ConfirmDialog
-        isOpen={cliImportPhase === "confirming" || cliImportPhase === "committing"}
+        open={cliImportPhase === "confirming" || cliImportPhase === "committing"}
         onClose={() => setCliImportPhase("idle")}
         title={`Import token for @${cliImportPreview?.account ?? ""}?`}
         description="Daintree saves its own copy of the token the GitHub CLI holds for this account, stored in plain text in Daintree's settings."
         confirmLabel="Import token"
         onConfirm={handleConfirmCliImport}
-        isConfirmLoading={cliImportPhase === "committing"}
+        loading={cliImportPhase === "committing"}
         variant="default"
-        zIndex="nested"
+        layer="nested"
       >
         {cliImportPreview && (
           <GitHubCliImportDetails
