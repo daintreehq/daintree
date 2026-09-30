@@ -400,6 +400,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   const startSession = async (ctx: IpcContext, myNonce: number) => {
     const svc = await getService();
+    // The renderer went away during the import — nothing is left to record for.
+    if (ctx.event.sender.isDestroyed()) {
+      return { ok: false, error: "Voice session superseded" };
+    }
     // Snapshot transcription settings at session start (model, language, API key).
     // Correction settings are read live from store per-event so mid-session changes apply.
     const settings = getVoiceSettings();
@@ -552,6 +556,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       activeDestroyListener = null;
       unsubscribe();
       service?.stop();
+      // Supersede this start if it hasn't reached svc.start() yet, so the dead
+      // renderer's held audio is never flushed into an orphaned session.
+      if (voiceStartNonce === myNonce) voiceStartNonce++;
+      if (preStartAudio?.nonce === myNonce) preStartAudio = null;
     };
     ctx.event.sender.once("destroyed", onDestroyed);
     activeDestroyListener = { sender: ctx.event.sender, fn: onDestroyed };

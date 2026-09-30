@@ -28,6 +28,9 @@ const shared = vi.hoisted(() => ({
   calls: [] as string[],
   eventCallback: null as ((e: ServiceEvent) => void) | null,
   startResult: { ok: true } as { ok: boolean; error?: string },
+  /** When set, svc.start() returns this instead of resolving immediately. */
+  startPromise: null as null | Promise<{ ok: boolean; error?: string }>,
+  startError: null as null | Error,
   assembleKeyterms: null as null | (() => Promise<string[]>),
 }));
 
@@ -39,7 +42,8 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
     };
     this.start = function () {
       shared.calls.push("start");
-      return Promise.resolve(shared.startResult);
+      if (shared.startError) return Promise.reject(shared.startError);
+      return shared.startPromise ?? Promise.resolve(shared.startResult);
     };
     this.sendAudioChunk = function (chunk: ArrayBuffer) {
       shared.calls.push(`chunk:${new Uint8Array(chunk)[0]}`);
@@ -113,8 +117,19 @@ import {
 
 type StartResult = { ok: boolean; error?: string };
 
+const sender = vi.hoisted(() => ({
+  destroyed: false,
+  onDestroyed: null as null | (() => void),
+}));
+
 const fakeEvent = {
-  sender: { once: vi.fn(), removeListener: vi.fn(), isDestroyed: () => false },
+  sender: {
+    once: vi.fn((_event: string, fn: () => void) => {
+      sender.onDestroyed = fn;
+    }),
+    removeListener: vi.fn(),
+    isDestroyed: () => sender.destroyed,
+  },
 } as unknown as Electron.IpcMainInvokeEvent;
 
 function getHandler(channel: string) {
@@ -157,7 +172,11 @@ describe("voiceInput — audio sent before the provider starts", () => {
     shared.calls = [];
     shared.eventCallback = null;
     shared.startResult = { ok: true };
+    shared.startPromise = null;
+    shared.startError = null;
     shared.assembleKeyterms = null;
+    sender.destroyed = false;
+    sender.onDestroyed = null;
     sent = [];
     const win = {
       webContents: {
@@ -233,6 +252,62 @@ describe("voiceInput — audio sent before the provider starts", () => {
     expect(shared.calls).toEqual(["start", "chunk:2"]);
   });
 
+  it("flushes held audio before the provider finishes starting", async () => {
+    let resolveStart!: (r: { ok: boolean }) => void;
+    shared.startPromise = new Promise((r) => {
+      resolveStart = r;
+    });
+    const pending = start();
+    sendChunk(1);
+    sendChunk(2);
+    await vi.waitFor(() => expect(shared.calls).toContain("start"));
+
+    // The provider is still connecting, but already holds the audio — and new
+    // audio follows it directly rather than being buffered a second time.
+    expect(shared.calls).toEqual(["start", "chunk:1", "chunk:2"]);
+    sendChunk(3);
+    expect(shared.calls).toEqual(["start", "chunk:1", "chunk:2", "chunk:3"]);
+
+    resolveStart({ ok: true });
+    await expect(pending).resolves.toEqual({ ok: true });
+    expect(shared.calls).toEqual(["start", "chunk:1", "chunk:2", "chunk:3"]);
+  });
+
+  it("does not hold audio past a rejected provider start", async () => {
+    shared.startError = new Error("boom");
+    const pending = start();
+    sendChunk(1);
+    await expect(pending).rejects.toThrow("boom");
+
+    shared.startError = null;
+    sendChunk(2);
+    await start();
+    expect(shared.calls).toEqual(["start", "chunk:1", "chunk:2", "start"]);
+  });
+
+  it("discards held audio when the renderer is destroyed during keyterm assembly", async () => {
+    const resolveKeyterms = deferKeyterms();
+    const pending = start();
+    sendChunk(1);
+    await vi.waitFor(() => expect(sender.onDestroyed).not.toBeNull());
+
+    sender.destroyed = true;
+    sender.onDestroyed!();
+    resolveKeyterms([]);
+
+    await expect(pending).resolves.toEqual({ ok: false, error: "Voice session superseded" });
+    expect(shared.calls).toEqual([]);
+  });
+
+  it("does not start a session for a renderer destroyed during service load", async () => {
+    const pending = start();
+    sendChunk(1);
+    sender.destroyed = true;
+
+    await expect(pending).resolves.toEqual({ ok: false, error: "Voice session superseded" });
+    expect(shared.calls).toEqual([]);
+  });
+
   it("stops holding audio after a failed start", async () => {
     shared.startResult = { ok: false, error: "OpenAI API key not configured" };
     const pending = start();
@@ -271,6 +346,35 @@ describe("voiceInput — audio sent before the provider starts", () => {
     // Once the cap is hit, the rest of the pre-start window is dropped — never a
     // later chunk spliced in after a gap.
     expect(shared.calls).toEqual(["start"]);
+  });
+
+  it("counts bytes across chunks toward the cap", async () => {
+    const resolveKeyterms = deferKeyterms();
+    const pending = start();
+    const size = 40_000;
+    // 3 × 40KB fits under 150KB; the 4th would exceed it, and so would the 5th.
+    for (let i = 1; i <= 5; i++) sendChunk(i, size);
+    expect(overflowErrors()).toHaveLength(1);
+
+    resolveKeyterms([]);
+    await pending;
+    expect(shared.calls).toEqual(["start", "chunk:1", "chunk:2", "chunk:3"]);
+  });
+
+  it("reports overflow again in a later session", async () => {
+    let resolveKeyterms = deferKeyterms();
+    let pending = start();
+    sendChunk(1, AUDIO_BUFFER_MAX_BYTES + 1);
+    resolveKeyterms([]);
+    await pending;
+    await stop();
+
+    resolveKeyterms = deferKeyterms();
+    pending = start();
+    sendChunk(2, AUDIO_BUFFER_MAX_BYTES + 1);
+    resolveKeyterms([]);
+    await pending;
+    expect(overflowErrors()).toHaveLength(2);
   });
 
   it("does not report a provider-side overflow again in the same session", async () => {
