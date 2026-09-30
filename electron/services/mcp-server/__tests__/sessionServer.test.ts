@@ -3451,12 +3451,12 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     // pre-authorization silently do nothing here, exactly as it did for a
     // tier-permitted tool.
     const sessionStore = assistantSessionStore("core");
-    sessionStore.grantCache.issueGrant("s", "worktree.delete");
+    sessionStore.grantCache.issueGrant("s", "worktree.resource.teardown");
     const grant = sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
       actorType: "help-session",
-      allowedTools: ["worktree.delete"],
+      allowedTools: ["worktree.resource.teardown"],
       maxUses: 2,
     });
     const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
@@ -3464,9 +3464,13 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     const server = createSessionServer("s", deps);
     await server.connect(makeMockTransport());
 
-    await callTool(server, { name: "worktree.delete", arguments: {} });
+    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
 
-    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), true);
+    expect(dispatchAction).toHaveBeenCalledWith(
+      "worktree.resource.teardown",
+      expect.any(Object),
+      true
+    );
     expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(1);
     sessionStore.grantCache.dispose();
   });
@@ -3544,12 +3548,12 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     // this call would be refused as tier-denied even though a live grant
     // admitted it.
     const sessionStore = assistantSessionStore("core");
-    sessionStore.grantCache.issueGrant("s", "worktree.delete");
+    sessionStore.grantCache.issueGrant("s", "worktree.resource.teardown");
     const grant = sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
       actorType: "help-session",
-      allowedTools: ["worktree.delete"],
+      allowedTools: ["worktree.resource.teardown"],
       maxUses: 2,
     });
     const consumeSpy = vi
@@ -3561,13 +3565,17 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, {
-      name: "worktree.delete",
+      name: "worktree.resource.teardown",
       arguments: {},
     })) as { isError?: boolean };
 
-    expect(consumeSpy).toHaveBeenCalledWith(grant.id, "worktree.delete");
+    expect(consumeSpy).toHaveBeenCalledWith(grant.id, "worktree.resource.teardown");
     expect(result.isError).not.toBe(true);
-    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), false);
+    expect(dispatchAction).toHaveBeenCalledWith(
+      "worktree.resource.teardown",
+      expect.any(Object),
+      false
+    );
     sessionStore.grantCache.dispose();
   });
 
@@ -3746,7 +3754,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
       sessionId: "s",
       actorId: "help-1",
       actorType: "help-session",
-      allowedTools: ["worktree.delete"],
+      allowedTools: ["worktree.resource.teardown"],
       maxUses: 2,
     });
     const refreshSpy = vi.spyOn(sessionStore.grantCache, "refreshNativeGrant");
@@ -3756,14 +3764,18 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, {
-      name: "worktree.delete",
+      name: "worktree.resource.teardown",
       arguments: {},
     })) as { isError?: boolean };
 
     expect(result.isError).not.toBe(true);
     // dispatchConfirmed=true → the native grant bypasses the confirm modal,
     // unlike a per-tool grant which dispatches with `false`.
-    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), true);
+    expect(dispatchAction).toHaveBeenCalledWith(
+      "worktree.resource.teardown",
+      expect.any(Object),
+      true
+    );
     expect(refreshSpy).toHaveBeenCalledWith(grant.id);
     // One use consumed at authorization.
     expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(1);
@@ -3855,7 +3867,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
 
   it("failed dispatch through a grant does not refresh the TTL", async () => {
     const sessionStore = assistantSessionStore("core");
-    sessionStore.grantCache.issueGrant("s", "worktree.delete");
+    sessionStore.grantCache.issueGrant("s", "worktree.resource.teardown");
     const refreshSpy = vi.spyOn(sessionStore.grantCache, "refresh");
     const dispatchAction = vi.fn().mockResolvedValue({
       result: { ok: false, error: { code: "BOOM", message: "boom" } },
@@ -3864,7 +3876,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     const server = createSessionServer("s", deps);
     await server.connect(makeMockTransport());
 
-    await callTool(server, { name: "worktree.delete", arguments: {} });
+    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
 
     expect(dispatchAction).toHaveBeenCalled();
     expect(refreshSpy).not.toHaveBeenCalled();
@@ -11367,6 +11379,32 @@ describe("assistant skip preference (#12874)", () => {
     );
     help.sessionStore.grantCache.dispose();
   });
+
+  // The issue's own case (#13135): a core help session deleting a worktree an
+  // earlier session made. Skip runs it; ask raises the ordinary modal. Neither
+  // is refused, and nothing about it depends on the session having created it.
+  it.each([
+    { skipped: true, confirmed: true, authorization: "skip-preference" },
+    { skipped: false, confirmed: false, authorization: undefined },
+  ])(
+    "dispatches a core help session's unscoped delete (skipped: $skipped)",
+    async ({ skipped, confirmed, authorization }) => {
+      const help = skipServer({ origin: "help", skipped, tier: "core" });
+      await help.server.connect(makeMockTransport());
+
+      const result = await callTool(help.server, {
+        name: "worktree.delete",
+        arguments: { worktreeId: "wt-from-an-earlier-session" },
+      });
+
+      expect(result.isError).not.toBe(true);
+      const call = help.dispatchAction.mock.calls.at(-1)!;
+      expect(call[0]).toBe("worktree.delete");
+      expect(call[2]).toBe(confirmed);
+      expect(call[3]).toBe(authorization);
+      help.sessionStore.grantCache.dispose();
+    }
+  );
 
   it("keeps the dialog while the preference resolves to ask", async () => {
     const help = skipServer({ origin: "help", skipped: false });
