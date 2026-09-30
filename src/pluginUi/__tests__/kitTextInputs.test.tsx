@@ -316,6 +316,15 @@ describe("Composer", () => {
     expect(screen.getByRole("status").textContent).toBe("Working");
   });
 
+  it("stops on Escape from the Stop button itself", () => {
+    const onStop = vi.fn();
+    render(<kit.Composer aria-label="Prompt" value="go" busy onStop={onStop} />, {
+      wrapper: TooltipProvider,
+    });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Stop" }), { key: "Escape" });
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
   it("holds Send while empty", () => {
     const onSubmit = vi.fn();
     render(<Harness onSubmit={onSubmit} />, { wrapper: TooltipProvider });
@@ -823,6 +832,30 @@ describe("SecretInput", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Replace" }));
   });
 
+  it("ignores a save that lands after the user backed out and started again", async () => {
+    let resolve: () => void = () => {};
+    const onSubmit = vi.fn(
+      () =>
+        new Promise<void>((done) => {
+          resolve = done;
+        })
+    );
+    render(<kit.SecretInput aria-label="Token" stored onSubmit={onSubmit} />);
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    fireEvent.change(screen.getByLabelText("Token"), { target: { value: "first" } });
+    fireEvent.keyDown(screen.getByLabelText("Token"), { key: "Enter" });
+    fireEvent.keyDown(screen.getByLabelText("Token"), { key: "Enter" });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    fireEvent.change(screen.getByLabelText("Token"), { target: { value: "second" } });
+    await act(async () => {
+      resolve();
+      await Promise.resolve();
+    });
+    expect((screen.getByLabelText("Token") as HTMLInputElement).value).toBe("second");
+  });
+
   it("stays in the field when a replacement's save fails", async () => {
     render(
       <kit.SecretInput
@@ -957,14 +990,41 @@ describe("ShortcutRecorder", () => {
     expect(onValueChange).not.toHaveBeenCalled();
   });
 
-  it("hides the warnings about the shortcut being replaced while recording", () => {
-    vi.spyOn(keybindingService, "findConflicts").mockReturnValue([
-      { actionId: "a", combo: "Cmd+T", description: "New terminal", kind: "conflict" } as never,
-    ]);
-    render(<kit.ShortcutRecorder defaultValue="Cmd+T" />);
-    expect(screen.getByText(/New terminal/)).toBeTruthy();
+  it("warns about a new chord's first step, not the shortcut it replaces", () => {
+    vi.spyOn(keybindingService, "findConflicts").mockImplementation((combo: string) =>
+      combo === "Cmd+T"
+        ? [
+            {
+              actionId: "a",
+              combo: "Cmd+T",
+              description: "New terminal",
+              kind: "conflict",
+            } as never,
+          ]
+        : []
+    );
+    render(<kit.ShortcutRecorder defaultValue="Cmd+T" allowChords />);
     act(() => recorder().focus());
+    // Still in force until something new is pressed: no line that comes and goes on focus.
+    expect(screen.getByText(/New terminal/)).toBeTruthy();
+    fireEvent.keyDown(recorder(), { key: "k", code: "KeyK", ctrlKey: true });
     expect(screen.queryByText(/New terminal/)).toBeNull();
+  });
+
+  it("ends recording when the window loses focus, keeping the shortcut it had", () => {
+    vi.useFakeTimers();
+    const onValueChange = vi.fn();
+    render(<kit.ShortcutRecorder allowChords defaultValue="Cmd+J" onValueChange={onValueChange} />);
+    act(() => recorder().focus());
+    fireEvent.keyDown(recorder(), { key: "k", code: "KeyK", ctrlKey: true });
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    expect(keybindingService.isCapturingShortcut()).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(1100);
+    });
+    expect(onValueChange).not.toHaveBeenCalled();
   });
 
   it("puts a keyboard user back on the field after Clear", () => {
