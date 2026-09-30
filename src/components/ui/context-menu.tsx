@@ -10,6 +10,7 @@ import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { MenuActionSourceContext, useMenuActionSource } from "./menu-source";
 import { menuRowPointerMove } from "./menu-row-hover-focus";
+import { useLayerPressFocusGuard } from "./layer-press-focus-guard";
 import {
   OverlayFocusRestoreContext,
   useOverlayFocusRestore,
@@ -217,42 +218,71 @@ type ContextMenuSubContentProps = React.ComponentPropsWithoutRef<
 const ContextMenuSubContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitiveType.SubContent>,
   ContextMenuSubContentProps
->(({ className, sideOffset = 4, collisionPadding = 8, children, style, ...props }, ref) => {
-  const radix = useRadixPrimitives();
-  const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(ref);
-  const isDockPopoverChild = useIsDockPopoverChild();
-  if (!radix) return null;
-  const Portal = radix.ContextMenuPrimitive.Portal;
-  const SubContent = radix.ContextMenuPrimitive.SubContent;
-  return (
-    <Portal>
-      <BrandSurfaceReset>
-        <SubContent
-          ref={shadowRef}
-          sideOffset={sideOffset}
-          collisionPadding={collisionPadding}
-          style={{
-            transformOrigin: "var(--radix-context-menu-content-transform-origin)",
-            ...style,
-          }}
-          className={cn(
-            // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
-            "app-no-drag",
-            "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
-            OVERLAY_MOTION_CLASS,
-            className
-          )}
-          {...props}
-          data-dock-popover-child={isDockPopoverChild ? "" : undefined}
-        >
-          {topShadow}
-          {children}
-          {bottomShadow}
-        </SubContent>
-      </BrandSurfaceReset>
-    </Portal>
-  );
-});
+>(
+  (
+    {
+      className,
+      sideOffset = 4,
+      collisionPadding = 8,
+      children,
+      style,
+      onPointerDownCapture,
+      onFocusOutside,
+      ...props
+    },
+    ref
+  ) => {
+    const radix = useRadixPrimitives();
+    // See `layer-press-focus-guard.ts`: an ancestor pulling focus while an item
+    // is pressed would otherwise close the submenu before the item's click.
+    const pressGuard = useLayerPressFocusGuard(ref);
+    const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(pressGuard.ref);
+    const isDockPopoverChild = useIsDockPopoverChild();
+    const handlePointerDownCapture: React.PointerEventHandler<HTMLDivElement> = (event) => {
+      onPointerDownCapture?.(event);
+      pressGuard.onPointerDownCapture();
+    };
+    const handleFocusOutside: NonNullable<ContextMenuSubContentProps["onFocusOutside"]> = (
+      event
+    ) => {
+      onFocusOutside?.(event);
+      pressGuard.onFocusOutside(event);
+    };
+    if (!radix) return null;
+    const Portal = radix.ContextMenuPrimitive.Portal;
+    const SubContent = radix.ContextMenuPrimitive.SubContent;
+    return (
+      <Portal>
+        <BrandSurfaceReset>
+          <SubContent
+            ref={shadowRef}
+            sideOffset={sideOffset}
+            collisionPadding={collisionPadding}
+            style={{
+              transformOrigin: "var(--radix-context-menu-content-transform-origin)",
+              ...style,
+            }}
+            className={cn(
+              // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
+              "app-no-drag",
+              "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
+              OVERLAY_MOTION_CLASS,
+              className
+            )}
+            {...props}
+            onPointerDownCapture={handlePointerDownCapture}
+            onFocusOutside={handleFocusOutside}
+            data-dock-popover-child={isDockPopoverChild ? "" : undefined}
+          >
+            {topShadow}
+            {children}
+            {bottomShadow}
+          </SubContent>
+        </BrandSurfaceReset>
+      </Portal>
+    );
+  }
+);
 ContextMenuSubContent.displayName = "ContextMenuSubContent";
 
 type ContextMenuContentProps = React.ComponentPropsWithoutRef<
@@ -270,8 +300,10 @@ const ContextMenuContent = React.forwardRef<
       children,
       style,
       onPointerDown,
+      onPointerDownCapture,
       onPointerDownOutside,
       onInteractOutside,
+      onFocusOutside,
       onKeyDown,
       onClick,
       onCloseAutoFocus,
@@ -280,7 +312,8 @@ const ContextMenuContent = React.forwardRef<
     ref
   ) => {
     const radix = useRadixPrimitives();
-    const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(ref);
+    const pressGuard = useLayerPressFocusGuard(ref);
+    const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(pressGuard.ref);
     const isDockPopoverChild = useIsDockPopoverChild();
     const focusRestore = useOverlayFocusRestore();
 
@@ -300,6 +333,16 @@ const ContextMenuContent = React.forwardRef<
     ) => {
       onInteractOutside?.(event);
       focusRestore?.onContentInteractOutside(event);
+    };
+    // A modal menu already ignores focus leaving; a non-modal one would close
+    // mid-press (see `layer-press-focus-guard.ts`).
+    const handlePointerDownCapture: React.PointerEventHandler<HTMLDivElement> = (event) => {
+      onPointerDownCapture?.(event);
+      pressGuard.onPointerDownCapture();
+    };
+    const handleFocusOutside: NonNullable<ContextMenuContentProps["onFocusOutside"]> = (event) => {
+      onFocusOutside?.(event);
+      pressGuard.onFocusOutside(event);
     };
     const handleKeyDown: React.KeyboardEventHandler<HTMLDivElement> = (event) => {
       onKeyDown?.(event);
@@ -341,8 +384,10 @@ const ContextMenuContent = React.forwardRef<
             )}
             {...props}
             onPointerDown={handlePointerDown}
+            onPointerDownCapture={handlePointerDownCapture}
             onPointerDownOutside={handlePointerDownOutside}
             onInteractOutside={handleInteractOutside}
+            onFocusOutside={handleFocusOutside}
             onKeyDown={handleKeyDown}
             onClick={handleClick}
             onCloseAutoFocus={handleCloseAutoFocus}

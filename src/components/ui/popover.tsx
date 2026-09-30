@@ -10,6 +10,7 @@ import {
   useOverlayFocusRestore,
   useOverlayFocusRestoreValue,
 } from "./overlay-focus-restore";
+import { useLayerPressFocusGuard } from "./layer-press-focus-guard";
 
 let portalBoundary: HTMLDivElement | null = null;
 
@@ -247,8 +248,10 @@ const PopoverContent = React.forwardRef<
       collisionBoundary,
       style,
       onPointerDown,
+      onPointerDownCapture,
       onPointerDownOutside,
       onInteractOutside,
+      onFocusOutside,
       onKeyDown,
       onClick,
       onCloseAutoFocus,
@@ -265,6 +268,7 @@ const PopoverContent = React.forwardRef<
     // stale position. Observe the boundary and bump a tick to re-run Radix's positioning.
     const [repositionTick, setRepositionTick] = React.useState(0);
     const focusRestore = useOverlayFocusRestore();
+    const pressGuard = useLayerPressFocusGuard(ref);
 
     React.useEffect(() => {
       const element = getPortalBoundary();
@@ -298,6 +302,16 @@ const PopoverContent = React.forwardRef<
       onInteractOutside?.(event);
       focusRestore?.onContentInteractOutside(event);
     };
+    // A press inside the popover must not lose it to an ancestor that pulls
+    // focus on pointerdown (see `layer-press-focus-guard.ts`).
+    const handlePointerDownCapture: React.PointerEventHandler<HTMLDivElement> = (event) => {
+      onPointerDownCapture?.(event);
+      pressGuard.onPointerDownCapture();
+    };
+    const handleFocusOutside: NonNullable<PopoverContentProps["onFocusOutside"]> = (event) => {
+      onFocusOutside?.(event);
+      pressGuard.onFocusOutside(event);
+    };
     const handleKeyDown: React.KeyboardEventHandler<HTMLDivElement> = (event) => {
       onKeyDown?.(event);
       focusRestore?.onContentKeyDown();
@@ -321,7 +335,7 @@ const PopoverContent = React.forwardRef<
             marks against the toolbar's surface instead of this floating one. */}
         <BrandSurfaceReset>
           <Content
-            ref={ref}
+            ref={pressGuard.ref}
             align={align}
             sideOffset={sideOffset}
             collisionPadding={collisionPadding}
@@ -336,8 +350,10 @@ const PopoverContent = React.forwardRef<
             )}
             {...props}
             onPointerDown={handlePointerDown}
+            onPointerDownCapture={handlePointerDownCapture}
             onPointerDownOutside={handlePointerDownOutside}
             onInteractOutside={handleInteractOutside}
+            onFocusOutside={handleFocusOutside}
             onKeyDown={handleKeyDown}
             onClick={handleClick}
             onCloseAutoFocus={handleCloseAutoFocus}
