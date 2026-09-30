@@ -1,0 +1,153 @@
+import type { ComponentType, ReactNode, SyntheticEvent } from "react";
+import type { PluginDropdownMenuEntry } from "@shared/types/plugin-sdk-react";
+import { resolvePluginKitIcon } from "./PluginKitIcons";
+import { field, fn, nonEmpty, str } from "./kitProps";
+
+/**
+ * The host menu primitives a kit menu draws its rows with. `DropdownMenu` and
+ * `ContextMenu` share one entry model and one row renderer, and differ only in
+ * which Radix family the rows come from.
+ */
+export interface KitMenuParts {
+  Item: ComponentType<{
+    children?: ReactNode;
+    onSelect?: () => void;
+    disabled?: boolean;
+    destructive?: boolean;
+  }>;
+  CheckboxItem: ComponentType<{
+    children?: ReactNode;
+    checked?: boolean;
+    onCheckedChange?: (checked: boolean) => void;
+    disabled?: boolean;
+  }>;
+  RadioGroup: ComponentType<{
+    children?: ReactNode;
+    value?: string;
+    onValueChange?: (value: string) => void;
+    "aria-label"?: string;
+  }>;
+  RadioItem: ComponentType<{ children?: ReactNode; value: string; disabled?: boolean }>;
+  Label: ComponentType<{ children?: ReactNode }>;
+  Separator: ComponentType<object>;
+  Shortcut: ComponentType<{ shortcut: string | null | undefined }>;
+}
+
+function readRadioItems(items: unknown): { value: string; label: string; disabled: boolean }[] {
+  if (!Array.isArray(items)) return [];
+  const seen = new Set<string>();
+  const out: { value: string; label: string; disabled: boolean }[] = [];
+  for (const item of items) {
+    if (typeof item !== "object" || item === null) continue;
+    const value = nonEmpty(field(item, "value"));
+    const label = nonEmpty(field(item, "label"));
+    if (value === undefined || label === undefined || seen.has(value)) continue;
+    seen.add(value);
+    out.push({ value, label, disabled: field(item, "disabled") === true });
+  }
+  return out;
+}
+
+function renderMenuEntry(
+  parts: KitMenuParts,
+  typed: PluginDropdownMenuEntry,
+  index: number
+): ReactNode {
+  if (typeof typed !== "object" || typed === null) return null;
+  const key = `entry-${index}`;
+  switch (typed.type) {
+    case "radio-group": {
+      const choices = readRadioItems(typed.items);
+      if (choices.length === 0) return null;
+      const onValueChange = fn(typed.onValueChange);
+      const heading = nonEmpty(typed.label);
+      return (
+        <parts.RadioGroup
+          key={key}
+          value={str(typed.value) ?? ""}
+          onValueChange={(next) => onValueChange?.(next)}
+          aria-label={heading}
+        >
+          {heading ? <parts.Label>{heading}</parts.Label> : null}
+          {choices.map((choice) => (
+            <parts.RadioItem key={choice.value} value={choice.value} disabled={choice.disabled}>
+              {choice.label}
+            </parts.RadioItem>
+          ))}
+        </parts.RadioGroup>
+      );
+    }
+    case "separator":
+      return <parts.Separator key={key} />;
+    case "label": {
+      const label = str(typed.label);
+      return label ? <parts.Label key={key}>{label}</parts.Label> : null;
+    }
+    case "checkbox": {
+      const label = str(typed.label);
+      const onCheckedChange = fn(typed.onCheckedChange);
+      if (!label) return null;
+      return (
+        <parts.CheckboxItem
+          key={key}
+          checked={typed.checked === true}
+          onCheckedChange={(next) => onCheckedChange?.(next === true)}
+          disabled={typed.disabled === true}
+        >
+          {label}
+        </parts.CheckboxItem>
+      );
+    }
+    case undefined:
+    case "item": {
+      const label = str(typed.label);
+      const onSelect = fn(typed.onSelect);
+      if (!label) return null;
+      const Glyph = typed.icon === undefined ? undefined : resolvePluginKitIcon(typed.icon);
+      return (
+        <parts.Item
+          key={key}
+          onSelect={() => onSelect?.()}
+          disabled={typed.disabled === true}
+          destructive={typed.destructive === true}
+        >
+          {Glyph ? (
+            // `data-menu-icon` gives text-only rows in the same menu the matching gutter.
+            <span data-menu-icon="" aria-hidden="true" className="mr-2 inline-flex shrink-0">
+              <Glyph className="h-3.5 w-3.5" aria-hidden="true" />
+            </span>
+          ) : null}
+          {label}
+          <parts.Shortcut shortcut={str(typed.shortcut)} />
+        </parts.Item>
+      );
+    }
+    default:
+      return null;
+  }
+}
+
+/** A kit menu's `items`, as rows of the given host menu family. */
+export function renderMenuEntries(parts: KitMenuParts, items: unknown): ReactNode[] {
+  const entries: readonly PluginDropdownMenuEntry[] = Array.isArray(items) ? items : [];
+  return entries.map((entry, index) => renderMenuEntry(parts, entry, index));
+}
+
+/**
+ * Stops a React event reaching the view's handlers without stopping the native
+ * event. React's `stopPropagation()` also stops the native event where React
+ * listens, which is below `document`, so Radix's document `pointerdown`
+ * listener would never see a press inside the menu and never clear the flag
+ * that press set: the next click outside would read as inside and be ignored.
+ * Shadowing the native method for the call keeps the native event flowing.
+ */
+export function stopReactPropagation(event: SyntheticEvent) {
+  const native = event.nativeEvent;
+  const keep = () => {};
+  Object.defineProperty(native, "stopPropagation", { value: keep, configurable: true });
+  try {
+    event.stopPropagation();
+  } finally {
+    Reflect.deleteProperty(native, "stopPropagation");
+  }
+}

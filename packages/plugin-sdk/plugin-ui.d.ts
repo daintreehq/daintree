@@ -40,6 +40,18 @@ declare module "@daintreehq/plugin-ui" {
     PluginAvatarGroupItem,
     PluginAvatarGroupProps,
     PluginAvatarProps,
+    PluginBreadcrumbItem,
+    PluginBreadcrumbsProps,
+    PluginCommandPaletteItem,
+    PluginCommandPaletteProps,
+    PluginContextMenuProps,
+    PluginNavListItem,
+    PluginNavListProps,
+    PluginNavListSection,
+    PluginSheetProps,
+    PluginStepState,
+    PluginStepperProps,
+    PluginStepperStep,
     PluginBadgeProps,
     PluginButtonProps,
     PluginCalendarBaseProps,
@@ -241,6 +253,18 @@ declare module "@daintreehq/plugin-ui" {
   export type DateRangePickerProps = PluginDateRangePickerProps;
   export type DateRangePreset = PluginDateRangePreset;
   export type TimeAgoProps = PluginTimeAgoProps;
+  export type ContextMenuProps = PluginContextMenuProps;
+  export type SheetProps = PluginSheetProps;
+  export type CommandPaletteProps = PluginCommandPaletteProps;
+  export type CommandPaletteItem = PluginCommandPaletteItem;
+  export type BreadcrumbsProps = PluginBreadcrumbsProps;
+  export type BreadcrumbItem = PluginBreadcrumbItem;
+  export type NavListProps = PluginNavListProps;
+  export type NavListItem = PluginNavListItem;
+  export type NavListSection = PluginNavListSection;
+  export type StepperProps = PluginStepperProps;
+  export type StepperStep = PluginStepperStep;
+  export type StepState = PluginStepState;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -419,6 +443,19 @@ declare module "@daintreehq/plugin-ui" {
    * measured rows. As tall as its entries up to its container, then it scrolls.
    */
   export const Timeline: <T extends TimelineItem>(props: TimelineProps<T>) => ReactNode;
+
+  /** The right-click menu of `children`, from `DropdownMenu`'s rows; Shift+F10 and the Menu key open it too. */
+  export const ContextMenu: ComponentType<ContextMenuProps>;
+  /** A full-height panel against the window's edge, with a `Dialog`'s title bar, body and footer. */
+  export const Sheet: ComponentType<SheetProps>;
+  /** A searchable, virtualised palette for a quick switcher or "jump to…"; selecting an item closes it. */
+  export const CommandPalette: ComponentType<CommandPaletteProps>;
+  /** The path to the current page, with the middle crumbs folded into a menu when it runs long. */
+  export const Breadcrumbs: ComponentType<BreadcrumbsProps>;
+  /** An app's left-rail navigation: sections of destinations, one selected, one tab stop. */
+  export const NavList: ComponentType<NavListProps>;
+  /** A wizard's progress: one marker per step, complete, current, upcoming or in error. */
+  export const Stepper: ComponentType<StepperProps>;
 
   /**
    * The keyboard model of a list: one tab stop, Up/Down/Home/End move the

@@ -309,14 +309,15 @@ export default function Notes({ pluginId, disposeSignal }) {
 
 | For | Components |
 | --- | --- |
-| Actions | `Button` (variants `default` — the accent primary, and the default — `secondary`, `outline`, `ghost`, `subtle`, `contrast`, `destructive`, `ghost-danger`, `link`, `pill`), `IconButton`, `CopyButton`, `DismissButton`, `DropdownMenu` |
+| Actions | `Button` (variants `default` — the accent primary, and the default — `secondary`, `outline`, `ghost`, `subtle`, `contrast`, `destructive`, `ghost-danger`, `link`, `pill`), `IconButton`, `CopyButton`, `DismissButton`, `DropdownMenu`, `ContextMenu` (the same rows on a right-click or Shift+F10) |
 | Forms | `Input` (text, search, email, url, password, number, tel, date, time, datetime-local), `Textarea`, `Select` (an `options` array; `value={null}` shows the placeholder again), `Checkbox`, `Switch`, `SegmentedControl`, `SearchField`, `FilterChip` (a toggle or removable filter in a filter bar), `FormField` (label, description and error wired to the control), `FormFieldGroup` (one label over a set of controls) |
 | Lists and tables | `VirtualList`, `DataTable`, `LogView`, `ListRow` with `useListNavigation`, `ScrollShadow`, `FileTree`, `Timeline` (an activity feed or audit log), `HighlightedText` (search matches in a row) |
 | Figures | `StatCard` (a labelled figure with an optional change), `Sparkline`, `Meter` (usage against a limit, with warning and danger thresholds), `DiffStat` ("+12 -3") |
 | Dates | `Calendar` (an inline month grid, one day or a range), `DatePicker` and `DateRangePicker` (typed or picked ISO `"YYYY-MM-DD"` days, range presets), `TimeAgo` (an age that keeps itself current) |
 | Pane chrome | `PaneHeader`, `Toolbar`, `ToolbarButton`, `Tabs` |
+| Navigation | `NavList` (an app's left rail), `Breadcrumbs`, `Stepper` (a wizard's progress), `CommandPalette` (a quick switcher or "jump to…") |
 | States and status | `PaneState` (a whole pane's `loading`, `empty` or `error`), `EmptyState`, `Callout` (an inline message; `severity="error"` with a Retry `action` is the error banner, `variant="strip"` the pane-wide band), `Badge`, `Spinner`, `SpinningIcon`, `ProgressBar`, `Skeleton`, `SkeletonBone`, `SkeletonText`, `SkeletonHint`, `SeverityIcon` |
-| Overlays | `Dialog`, `ConfirmDialog` (including the destructive typed-name gate), `Popover`, `PopoverSearchField`, `Tooltip`, `TruncatedTooltip` |
+| Overlays | `Dialog`, `ConfirmDialog` (including the destructive typed-name gate), `Sheet` (a record's detail or edit form against the window's edge), `Popover`, `PopoverSearchField`, `Tooltip`, `TruncatedTooltip` |
 | Settings views | `SettingsSection`, `SettingsGroup`, `SettingsRow`, `SettingsActions` — the host's section → group → row grammar |
 | Everything else | `Markdown`, `Icon`, `Avatar`, `AvatarGroup`, `Kbd`, `KbdChord`; formatters `formatTimeAgo`, `formatRelativeTime`, `formatDuration`, `formatBytes`, `formatCount`; the theme API below |
 
@@ -328,7 +329,7 @@ Not in the kit yet, so draw them with tokens: charts beyond a sparkline, and a t
 
 ### Loading and the first frame
 
-Nothing of the kit loads at startup. Importing `@daintreehq/plugin-ui` costs a few hundred bytes and starts fetching the kit's one chunk; each component renders nothing (or, for `Tooltip` and `Popover`, just its trigger) until that chunk is in, so the first kit view in a session can paint one frame late. It is a local chunk, requested at import, and normally in before your view first renders. Two calls control it:
+Nothing of the kit loads at startup. Importing `@daintreehq/plugin-ui` costs a few hundred bytes and starts fetching the kit's one chunk; each component renders nothing (or, for `Tooltip`, `Popover` and `ContextMenu`, just its trigger) until that chunk is in, so the first kit view in a session can paint one frame late. It is a local chunk, requested at import, and normally in before your view first renders. Two calls control it:
 
 - `preloadPluginUi()` starts loading without waiting — for code that knows a view is about to open.
 - `whenPluginUiReady()` resolves once every component renders on its first frame, and rejects if the chunk fails to load (calling again retries). Await it in tests, or before measuring kit output.
