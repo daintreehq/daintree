@@ -113,6 +113,73 @@ function PluginCapabilityList({
           />
         ))}
       </ul>
+      {plugin.origin === "global" && granted.includes("project:dispatch") && (
+        <ProjectTargetingSwitch pluginId={plugin.instanceId} label={pluginLabel(plugin)} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The "Allow project targeting" switch (#13119). Declaring `project:dispatch`
+ * only lets a plugin ask; this is the grant, off until the user turns it on.
+ * Deliberately not a first-use prompt: the plugins that want it orchestrate
+ * agents unattended, and a dialog at 3am would stall every launch behind it.
+ * Only for app-wide plugins — a project plugin can only ever reach its own
+ * project, so there is nothing to grant.
+ */
+function ProjectTargetingSwitch({ pluginId, label }: { pluginId: string; label: string }) {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setEnabled(null);
+    setError(null);
+    window.electron.pluginCapability
+      .getProjectTargeting({ pluginId })
+      .then((value) => {
+        if (!cancelled) setEnabled(value);
+      })
+      .catch(() => {
+        if (!cancelled) setError("Couldn't read this setting.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pluginId]);
+
+  const handleChange = (next: boolean) => {
+    setSaving(true);
+    setError(null);
+    window.electron.pluginCapability
+      .setProjectTargeting({ pluginId, enabled: next })
+      .then((persisted) => setEnabled(persisted))
+      .catch(() => setError("Couldn't save this setting. Try again."))
+      .finally(() => setSaving(false));
+  };
+
+  return (
+    <div className="flex items-start justify-between gap-3 pt-2 border-t border-daintree-border">
+      <div className="min-w-0">
+        <div className="text-xs text-text-primary">
+          Allow project targeting
+        </div>
+        <div className="text-2xs text-text-secondary">
+          Lets this plugin run actions in any open project, not just the one in front. Each
+          targeted action is recorded in the plugin audit log.
+        </div>
+        {error && <div className="text-2xs text-status-danger mt-0.5">{error}</div>}
+      </div>
+      <SettingsSwitch
+        checked={enabled === true}
+        onCheckedChange={handleChange}
+        disabled={enabled === null || saving}
+        aria-label={`Allow ${label} to target projects`}
+        aria-invalid={error !== null}
+        data-testid="plugin-project-targeting-switch"
+      />
     </div>
   );
 }

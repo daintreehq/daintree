@@ -916,7 +916,11 @@ export class PluginDevWorkerHostProxy {
           type: options?.type,
           durationMs: options?.durationMs,
         }),
-      dispatch: (actionId, args) => this.call<ActionDispatchResult>("dispatch", { actionId, args }),
+      dispatch: (actionId, args, options) =>
+        this.call<ActionDispatchResult>(
+          "dispatch",
+          options === undefined ? { actionId, args } : { actionId, args, options }
+        ),
       // Relayed like dispatch; the real host validates, authorizes against its
       // own binding, and routes. Only `panelId` crosses — the worker cannot
       // name whose panel it is (#12610). Degrades to "unavailable" on unload,

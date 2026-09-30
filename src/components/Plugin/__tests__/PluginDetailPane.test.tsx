@@ -38,7 +38,20 @@ const pluginMcpListMock = vi.hoisted(() => vi.fn(() => Promise.resolve([])));
 const getDiagnosticsSnapshotMock = vi.hoisted(() =>
   vi.fn(() => Promise.resolve({ plugins: [] as unknown[] }))
 );
+const projectTargetingMock = vi.hoisted(() => ({
+  getProjectTargeting: vi.fn((_input: { pluginId: string }) => Promise.resolve(false)),
+  setProjectTargeting: vi.fn((input: { pluginId: string; enabled: boolean }) =>
+    Promise.resolve(input.enabled)
+  ),
+}));
+
 beforeEach(() => {
+  projectTargetingMock.getProjectTargeting.mockReset();
+  projectTargetingMock.getProjectTargeting.mockResolvedValue(false);
+  projectTargetingMock.setProjectTargeting.mockReset();
+  projectTargetingMock.setProjectTargeting.mockImplementation((input) =>
+    Promise.resolve(input.enabled)
+  );
   pluginMcpListMock.mockClear();
   getDiagnosticsSnapshotMock.mockClear();
   getDiagnosticsSnapshotMock.mockResolvedValue({ plugins: [] });
@@ -59,6 +72,7 @@ beforeEach(() => {
       pathExists: vi.fn(() => Promise.resolve(true)),
       getDiagnosticsSnapshot: getDiagnosticsSnapshotMock,
     },
+    pluginCapability: projectTargetingMock,
   } as unknown as Window["electron"];
 });
 
@@ -157,6 +171,53 @@ function withAuthors(
   const base = makePlugin();
   return { ...base, manifest: { ...base.manifest, authors } };
 }
+
+describe("PluginDetailPane project targeting switch (#13119)", () => {
+  function targetingSwitch(): HTMLElement {
+    return screen.getByTestId("plugin-project-targeting-switch");
+  }
+
+  it("is off by default and turns the grant on for this plugin", async () => {
+    renderPane(withCapabilities(["project:dispatch"]));
+    expect(screen.getByText("Run actions in other projects")).toBeTruthy();
+    await vi.waitFor(() => expect(targetingSwitch().hasAttribute("disabled")).toBe(false));
+    expect(targetingSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(projectTargetingMock.getProjectTargeting).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+    });
+
+    fireEvent.click(targetingSwitch());
+    await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(projectTargetingMock.setProjectTargeting).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+      enabled: true,
+    });
+  });
+
+  it("shows the persisted state and reports a failed save on the row", async () => {
+    projectTargetingMock.getProjectTargeting.mockResolvedValue(true);
+    projectTargetingMock.setProjectTargeting.mockRejectedValue(new Error("disk full"));
+    renderPane(withCapabilities(["project:dispatch"]));
+    await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
+
+    fireEvent.click(targetingSwitch());
+    await vi.waitFor(() => expect(screen.getByText(/Couldn't save this setting/)).toBeTruthy());
+    expect(targetingSwitch().getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("is absent when the plugin does not declare project:dispatch", () => {
+    renderPane(withCapabilities(["fs:project-read"]));
+    expect(screen.queryByTestId("plugin-project-targeting-switch")).toBeNull();
+    expect(projectTargetingMock.getProjectTargeting).not.toHaveBeenCalled();
+  });
+
+  it("is absent for a project plugin, which can only reach its own project", () => {
+    renderPane(
+      withCapabilities(["project:dispatch"], { origin: "project", projectId: "project-a" })
+    );
+    expect(screen.queryByTestId("plugin-project-targeting-switch")).toBeNull();
+  });
+});
 
 describe("PluginDetailPane capabilities", () => {
   it("renders a labelled row for each declared capability", () => {

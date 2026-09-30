@@ -34,8 +34,12 @@ vi.mock("../../fileDecorationRegistry.js", () => ({
 vi.mock("../../PluginActionAuditService.js", () => ({
   getPluginActionAuditService: vi.fn(() => ({ append: vi.fn(), getRecords: vi.fn(() => []) })),
 }));
+const projectTargeting = vi.hoisted(() => ({
+  hasGrant: vi.fn((_identity: unknown): boolean => false),
+}));
 vi.mock("../../plugin-capability/instances.js", () => ({
   getPluginCapabilityConsentService: vi.fn(() => ({ ensureAllowed: vi.fn(async () => undefined) })),
+  getPluginCapabilityConsentStore: vi.fn(() => projectTargeting),
 }));
 vi.mock("../../forge/forgeCredentialUtils.js", () => ({
   buildStoredCredentials: vi.fn(() => null),
@@ -668,6 +672,136 @@ describe("createHost dispatch, catalog and prompts", () => {
     await expect(host.dispatch("terminal.focus")).rejects.toMatchObject({
       code: "PROJECT_VIEW_UNAVAILABLE",
     });
+  });
+});
+
+describe("createHost dispatch with an explicit project (#13119)", () => {
+  function unboundWithTargeting(h: Harness, granted: boolean) {
+    h.deps.declaredCapabilities = () => new Set(["project:dispatch"]);
+    projectTargeting.hasGrant.mockReturnValue(granted);
+    return createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING).host;
+  }
+
+  beforeEach(() => {
+    projectTargeting.hasGrant.mockReset();
+    projectTargeting.hasGrant.mockReturnValue(false);
+  });
+
+  it("routes a granted unbound dispatch to the named project and audits it", async () => {
+    const h = makeHarness();
+    const host = unboundWithTargeting(h, true);
+
+    await expect(
+      host.dispatch("agent.launch", { agentId: "claude" }, { projectId: PROJECT_A })
+    ).resolves.toEqual({ ok: true, data: undefined });
+
+    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith(
+      "agent.launch",
+      { agentId: "claude" },
+      PROJECT_A
+    );
+    expect(projectTargeting.hasGrant).toHaveBeenCalledWith({
+      pluginId: PLUGIN_ID,
+      capability: "project:dispatch",
+      scopeKey: "global",
+    });
+    expect(h.deps.safeAppendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: PLUGIN_ID,
+        actionId: `dispatch:${PROJECT_A}:agent.launch`,
+        channel: "plugin:dispatch-targeted",
+        result: "success",
+      })
+    );
+  });
+
+  it("audits a refused action and a missing view as failures", async () => {
+    const h = makeHarness();
+    const host = unboundWithTargeting(h, true);
+
+    h.sendDispatchToRenderer.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "RESTRICTED", message: "no" },
+    });
+    await host.dispatch("app.quit", undefined, { projectId: PROJECT_A });
+    h.sendDispatchToRenderer.mockRejectedValueOnce(
+      new AppError({ code: "PROJECT_VIEW_UNAVAILABLE", message: "no live renderer" })
+    );
+    await expect(
+      host.dispatch("terminal.focus", undefined, { projectId: PROJECT_A })
+    ).rejects.toMatchObject({ code: "PROJECT_VIEW_UNAVAILABLE" });
+
+    const records = vi.mocked(h.deps.safeAppendAudit).mock.calls.map((c) => c[0]);
+    expect(records).toEqual([
+      expect.objectContaining({ result: "error", errorMessage: "RESTRICTED" }),
+      expect.objectContaining({ result: "error", errorMessage: "PROJECT_VIEW_UNAVAILABLE" }),
+    ]);
+  });
+
+  it("refuses without the switch, before any round-trip and without an audit", async () => {
+    const h = makeHarness();
+    const host = unboundWithTargeting(h, false);
+
+    await expect(
+      host.dispatch("terminal.focus", undefined, { projectId: PROJECT_A })
+    ).rejects.toThrow(/PERMISSION_REQUIRED: .*"Allow project targeting"/);
+    expect(h.sendDispatchToRenderer).not.toHaveBeenCalled();
+    expect(h.deps.safeAppendAudit).not.toHaveBeenCalled();
+  });
+
+  it("keeps ambient routing, with no grant lookup, when options carry no project", async () => {
+    const h = makeHarness();
+    const host = unboundWithTargeting(h, false);
+
+    await host.dispatch("terminal.focus", undefined, {});
+    await host.dispatch("terminal.focus", undefined, undefined);
+
+    expect(h.sendDispatchToRenderer).toHaveBeenNthCalledWith(1, "terminal.focus", undefined, null);
+    expect(h.sendDispatchToRenderer).toHaveBeenNthCalledWith(2, "terminal.focus", undefined, null);
+    expect(projectTargeting.hasGrant).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed options instead of falling back to the focused project", async () => {
+    const h = makeHarness();
+    const host = unboundWithTargeting(h, true);
+    const dispatch = host.dispatch as (a: string, b: unknown, c: unknown) => Promise<unknown>;
+
+    await expect(dispatch("terminal.focus", undefined, "project-a")).rejects.toThrow(
+      /options must be an object/
+    );
+    await expect(dispatch("terminal.focus", undefined, { projectId: 42 })).rejects.toThrow(
+      /options\.projectId must be a non-empty string/
+    );
+    await expect(dispatch("terminal.focus", undefined, { projectId: "  " })).rejects.toThrow(
+      /options\.projectId must be a non-empty string/
+    );
+    expect(h.sendDispatchToRenderer).not.toHaveBeenCalled();
+  });
+
+  it("lets a bound host name its own project and refuses any other before the grant", async () => {
+    const h = makeHarness();
+    projectTargeting.hasGrant.mockReturnValue(true);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.dispatch("terminal.focus", undefined, { projectId: PROJECT_A });
+    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith("terminal.focus", undefined, PROJECT_A);
+
+    await expect(
+      host.dispatch("terminal.focus", undefined, { projectId: "project-other" })
+    ).rejects.toThrow(/PERMISSION_REQUIRED: .*bound to its own project/);
+    expect(h.sendDispatchToRenderer).toHaveBeenCalledTimes(1);
+    expect(projectTargeting.hasGrant).not.toHaveBeenCalled();
+  });
+
+  it("returns PLUGIN_UNLOADED before validating options once the plugin is gone", async () => {
+    const h = makeHarness();
+    const host = unboundWithTargeting(h, true);
+    h.plugins.delete(PLUGIN_ID);
+
+    await expect(
+      host.dispatch("terminal.focus", undefined, { projectId: PROJECT_A })
+    ).resolves.toMatchObject({ ok: false, error: { code: "PLUGIN_UNLOADED" } });
+    expect(h.sendDispatchToRenderer).not.toHaveBeenCalled();
   });
 });
 

@@ -190,6 +190,12 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   // listener. Declaring it exposes nothing by itself: each endpoint stays dark
   // until the user enables it for a specific project.
   "mcp:expose",
+  // Name a target project on `host.dispatch(actionId, args, { projectId })`
+  // (#13119). Declaring it enables nothing: targeting stays off until the user
+  // turns on "Allow project targeting" for this plugin in the Plugin Manager.
+  // Not confirm-triggering — it changes where a dispatch lands, not which
+  // actions a plugin can reach.
+  "project:dispatch",
 ] as const;
 
 export type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
@@ -208,6 +214,16 @@ export function isBuiltInPluginCapability(value: unknown): value is BuiltInPlugi
 }
 
 export type PluginCapability = BuiltInPluginCapability;
+
+/** Third argument to {@link PluginHostApi.dispatch} (#13119). */
+export interface PluginDispatchOptions {
+  /**
+   * Run the action in this project's view rather than the focused one. Needs
+   * the `project:dispatch` capability and the user's per-plugin switch. Ids
+   * come from `host.dispatch("project.getAll")`.
+   */
+  projectId?: string;
+}
 
 export interface MenuItemContribution {
   label: string;
@@ -4221,8 +4237,19 @@ export interface PluginHostApi extends PluginActivationApi {
    * and timers. Once the plugin is unloaded it returns
    * `{ ok: false, error: { code: "PLUGIN_UNLOADED" } }` without attempting a
    * dispatch.
+   *
+   * `options.projectId` sends the dispatch to that project's view instead of
+   * the focused one (#13119). An installed plugin must declare
+   * `project:dispatch` and the user must turn on "Allow project targeting" for
+   * it, or the call rejects with `PERMISSION_REQUIRED`. A project-bound plugin
+   * may only name its own project. A project with no live view rejects with
+   * `PROJECT_VIEW_UNAVAILABLE` — nothing opens or wakes a closed project.
    */
-  dispatch(actionId: ActionId, args?: unknown): Promise<ActionDispatchResult>;
+  dispatch(
+    actionId: ActionId,
+    args?: unknown,
+    options?: PluginDispatchOptions
+  ): Promise<ActionDispatchResult>;
   /**
    * Built-in action catalog: discover what `dispatch()` accepts (ids, arg
    * schemas, danger) and pre-flight a dispatch. Projects the app's

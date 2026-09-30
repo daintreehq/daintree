@@ -114,6 +114,11 @@ export const CAPABILITY_META = {
     description: "Offer tools to agents in projects where you turn it on",
     severity: "warning",
   },
+  "project:dispatch": {
+    label: "Run actions in other projects",
+    description: "Send actions to a project you're not looking at, once you turn it on",
+    severity: "warning",
+  },
 } satisfies Record<BuiltInPluginCapability, CapabilityMeta>;
 
 export const SEVERITY_TEXT_CLASS: Record<CapabilitySeverity, string> = {

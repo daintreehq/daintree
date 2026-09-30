@@ -151,7 +151,7 @@ interface PluginHostApi {
   reloadPanel(panelId: string): Promise<PanelReloadResult>;
 
   // Action dispatch + catalog
-  dispatch(actionId: ActionId, args?: unknown): Promise<ActionDispatchResult>;
+  dispatch(actionId: ActionId, args?: unknown, options?: PluginDispatchOptions): Promise<ActionDispatchResult>;
   readonly actions: PluginHostActionsApi;
 
   // Agent input — gated on the `agent:input` capability
@@ -297,6 +297,7 @@ A capability is declared in `manifest.capabilities` and checked on every call �
 | `clipboard:read` | `clipboard.readText` | — |
 | `clipboard:write` | `clipboard.writeText`, `writeImage` | — |
 | `mcp:expose` | `mcp.registerTools` and `contributes.agentMcp` | — (the user sets the plugin's agent access per project) |
+| `project:dispatch` | `dispatch` with `options.projectId` from an installed plugin | — (the user turns on **Allow project targeting** in the plugin's Permissions; there is no prompt) |
 
 No capability: `settings`, `storage`, a `"local"` database, `logger`, `showToast`, the prompts, `postToPanel`, `setPanelBadge`, `reloadPanel`, `onDidChangePanelLifecycle`, `onDidWake`, the worktree reads and subscriptions, `dispatch` (the action's own `danger` still applies) and `actions`. How capabilities raise an action's effective danger is in the [trust model](./trust-model.md).
 
@@ -831,6 +832,18 @@ if (!result.ok) {
 ```
 
 Args are validated against the action's `argsSchema` by `ActionService`; the host does not re-validate. Actions classified `danger: "restricted"` reject with `RESTRICTED`; `danger: "confirm"` actions return `CONFIRMATION_REQUIRED` — plugins cannot bypass confirm-gating (there is no `confirmed` flag). `dispatch` is NOT revoke-guarded; once the plugin is unloaded it returns `{ ok: false, error: { code: "PLUGIN_UNLOADED" } }` without dispatching.
+
+### Targeting a project
+
+By default an installed plugin's dispatch runs in whichever project is in front. An installed plugin that serves several projects can name one instead with `options.projectId` — ids come from `host.dispatch("project.getAll")`:
+
+```ts
+await host.dispatch("agent.launch", { agentId: "claude", cwd, focusPolicy: "preserve" }, { projectId });
+```
+
+The plugin must declare `project:dispatch`, and the user must turn on **Allow project targeting** in the plugin's Permissions tab. It is off by default and never prompts, so an unattended plugin fails fast: without the declaration or the switch the call rejects with `PERMISSION_REQUIRED` naming what is missing, and nothing is dispatched. With both, the action runs in that project's view without switching to it, and each targeted dispatch is recorded in the plugin audit log (target and action id, with an args hash, never the args). A backgrounded project still counts, and its view is woken for the call if it was frozen; a project with no open view rejects with `PROJECT_VIEW_UNAVAILABLE` — nothing opens it for you, so `project.switch` first if you need one. An empty or non-string `projectId` is refused rather than read as "no target". A project plugin may pass only its own project's id; any other is refused whatever the user has granted. The switch changes where an action runs, not which actions a plugin can dispatch.
+
+A dispatch that times out is not cancelled: the action can still run after `dispatch` resolved with the timeout, so don't blindly retry a launch.
 
 ## `actions` — built-in action catalog
 

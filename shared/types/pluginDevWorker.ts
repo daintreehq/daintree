@@ -496,6 +496,8 @@ export interface ReloadPanelParams {
 export interface DispatchParams {
   actionId: string;
   args?: unknown;
+  /** Relayed as-is; the real host validates and authorizes it (#13119). */
+  options?: unknown;
 }
 
 /**

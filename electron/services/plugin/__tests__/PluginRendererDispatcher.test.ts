@@ -42,7 +42,20 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
   isCachedViewWebContents: registryMock.isCachedViewWebContents,
 }));
 
+// The dispatcher thaws a (possibly CDP-frozen) view before sending (#13119).
+// The fakes have no debugger, so the thaw is mocked; each test that inspects a
+// dispatch send drains it first.
+vi.mock("../../../utils/webContentsLifecycle.js", () => ({
+  unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { PluginRendererDispatcher, projectAgentPanes } from "../PluginRendererDispatcher.js";
+import { unfreezeWebContents } from "../../../utils/webContentsLifecycle.js";
+
+/** Let a dispatch's awaited thaw settle so its send has run. */
+async function flushThaw(): Promise<void> {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+}
 import { isAppError } from "../../../utils/errorTypes.js";
 
 /** Assert a promise rejected with the frozen `PROJECT_VIEW_UNAVAILABLE` AppError. */
@@ -128,6 +141,7 @@ describe("PluginRendererDispatcher", () => {
       const d = new PluginRendererDispatcher({ isDisposed: () => false });
 
       const promise = d.sendDispatchToRenderer("action.run", { a: 1 });
+      await flushThaw();
       expect(wc.send).toHaveBeenCalledWith(
         CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST,
         expect.objectContaining({ actionId: "action.run", args: { a: 1 } })
@@ -184,6 +198,7 @@ describe("PluginRendererDispatcher", () => {
       const d = new PluginRendererDispatcher({ isDisposed: () => false });
 
       const promise = d.sendDispatchToRenderer("action.run", null, "A");
+      await flushThaw();
       expect(wcA.send).toHaveBeenCalledWith(
         CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST,
         expect.objectContaining({ actionId: "action.run" })
@@ -248,6 +263,7 @@ describe("PluginRendererDispatcher", () => {
       const d = new PluginRendererDispatcher({ isDisposed: () => false });
 
       void d.sendDispatchToRenderer("action.run", null, "A");
+      await flushThaw();
       expect(visible.send).toHaveBeenCalled();
       expect(cached.send).not.toHaveBeenCalled();
       d.dispose();
@@ -272,6 +288,7 @@ describe("PluginRendererDispatcher", () => {
       const d = new PluginRendererDispatcher({ isDisposed: () => false });
 
       void d.sendDispatchToRenderer("action.run", null, "A");
+      await flushThaw();
       expect(cached.send).toHaveBeenCalled();
       d.dispose();
     });
@@ -298,6 +315,7 @@ describe("PluginRendererDispatcher", () => {
       const d = new PluginRendererDispatcher({ isDisposed: () => false });
 
       const promise = d.sendDispatchToRenderer("terminal.close", { terminalId: "t1" });
+      await flushThaw();
       const requestId = lastRequestId(wc, CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST);
       ipcMainMock._emit(
         CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE,
@@ -314,6 +332,7 @@ describe("PluginRendererDispatcher", () => {
       const d = new PluginRendererDispatcher({ isDisposed: () => false });
 
       const promise = d.sendDispatchToRenderer("terminal.close", { terminalId: "t1" }, "A");
+      await flushThaw();
       const requestId = lastRequestId(wcA, CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST);
       ipcMainMock._emit(
         CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE,
@@ -329,6 +348,118 @@ describe("PluginRendererDispatcher", () => {
         'terminal.close: no panel with id "t1" — pass an `id` from the terminal listing.'
       );
       expect(JSON.stringify(result)).not.toContain('"B"');
+    });
+  });
+
+  describe("thaw before send (#13119)", () => {
+    beforeEach(() => {
+      vi.mocked(unfreezeWebContents).mockReset();
+      vi.mocked(unfreezeWebContents).mockResolvedValue(undefined);
+    });
+
+    it("thaws the target view and sends only once the thaw settles", async () => {
+      const cached = makeWebContents(31);
+      setFocusedWebContents(null);
+      setProjectViews({ A: [cached] }, [31]);
+      let finishThaw!: () => void;
+      vi.mocked(unfreezeWebContents).mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          finishThaw = resolve;
+        })
+      );
+      const d = new PluginRendererDispatcher({ isDisposed: () => false });
+
+      const promise = d.sendDispatchToRenderer("agent.launch", { a: 1 }, "A");
+      await flushThaw();
+      expect(unfreezeWebContents).toHaveBeenCalledWith(cached);
+      expect(cached.send).not.toHaveBeenCalled();
+
+      finishThaw();
+      await flushThaw();
+      expect(cached.send).toHaveBeenCalledWith(
+        CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST,
+        expect.objectContaining({ actionId: "agent.launch", args: { a: 1 } })
+      );
+      const requestId = lastRequestId(cached, CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST);
+      ipcMainMock._emit(
+        CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE,
+        { sender: { id: 31 } },
+        { requestId, result: { ok: true, result: "launched" } }
+      );
+      await expect(promise).resolves.toEqual({ ok: true, result: "launched" });
+    });
+
+    it("thaws the focused view for an unbound dispatch too", async () => {
+      const wc = makeWebContents(7);
+      setFocusedWebContents(wc);
+      const d = new PluginRendererDispatcher({ isDisposed: () => false });
+
+      void d.sendDispatchToRenderer("action.run", null);
+      await flushThaw();
+      expect(unfreezeWebContents).toHaveBeenCalledWith(wc);
+      expect(wc.send).toHaveBeenCalled();
+      d.dispose();
+    });
+
+    it("still sends when the thaw itself fails", async () => {
+      const wc = makeWebContents(7);
+      setFocusedWebContents(wc);
+      vi.mocked(unfreezeWebContents).mockRejectedValueOnce(new Error("cdp gone"));
+      const d = new PluginRendererDispatcher({ isDisposed: () => false });
+
+      void d.sendDispatchToRenderer("action.run", null);
+      await flushThaw();
+      expect(wc.send).toHaveBeenCalled();
+      d.dispose();
+    });
+
+    it("never sends a request that timed out while the thaw was outstanding", async () => {
+      vi.useFakeTimers();
+      try {
+        const cached = makeWebContents(31);
+        setFocusedWebContents(null);
+        setProjectViews({ A: [cached] }, [31]);
+        let finishThaw!: () => void;
+        vi.mocked(unfreezeWebContents).mockReturnValueOnce(
+          new Promise<void>((resolve) => {
+            finishThaw = resolve;
+          })
+        );
+        const d = new PluginRendererDispatcher({ isDisposed: () => false });
+
+        const promise = d.sendDispatchToRenderer("agent.launch", null, "A");
+        vi.advanceTimersByTime(30_000);
+        await expect(promise).resolves.toEqual({
+          ok: false,
+          error: { code: "EXECUTION_ERROR", message: expect.stringContaining("timed out") },
+        });
+
+        finishThaw();
+        await flushThaw();
+        expect(cached.send).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("never sends a request torn down by dispose while the thaw was outstanding", async () => {
+      const wc = makeWebContents(7);
+      setFocusedWebContents(wc);
+      let finishThaw!: () => void;
+      vi.mocked(unfreezeWebContents).mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          finishThaw = resolve;
+        })
+      );
+      const d = new PluginRendererDispatcher({ isDisposed: () => false });
+
+      const promise = d.sendDispatchToRenderer("action.run", null);
+      d.dispose();
+      await expect(promise).resolves.toMatchObject({ ok: false });
+
+      finishThaw();
+      await flushThaw();
+      expect(wc.send).not.toHaveBeenCalled();
     });
   });
 

@@ -43,6 +43,7 @@ import type {
   PluginConfirmOptions,
   PluginDatabaseLocation,
   PluginHostApi,
+  PluginDispatchOptions,
   PluginIdentity,
   PluginInputBoxOptions,
   PluginIpcHandler,
@@ -119,6 +120,8 @@ export interface SpawnRecord {
 export interface DispatchedActionRecord {
   actionId: ActionId;
   args: unknown;
+  /** The third `dispatch` argument, when the call passed one. */
+  options?: PluginDispatchOptions;
 }
 
 /** Captured `host.sendToActiveAgent(text, options)` calls. */
@@ -402,7 +405,11 @@ export interface CreateMockHostOptions {
    * matching `registerAction` handler, returning `NOT_FOUND` otherwise — which
    * mirrors `ActionService.dispatch` closely enough for activation-time tests.
    */
-  dispatch?: (actionId: ActionId, args?: unknown) => Promise<ActionDispatchResult>;
+  dispatch?: (
+    actionId: ActionId,
+    args?: unknown,
+    options?: PluginDispatchOptions
+  ) => Promise<ActionDispatchResult>;
   /**
    * Custom resolver for `host.reloadPanel` (#12610). The default answers from
    * the phases pushed through `simulatePanelLifecycleChange`, like the real
@@ -1574,11 +1581,15 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         durationMs: opts.durationMs,
       });
     },
-    async dispatch(actionId, args) {
-      dispatchedActions.push({ actionId, args });
+    async dispatch(actionId, args, dispatchOptions) {
+      dispatchedActions.push(
+        dispatchOptions === undefined
+          ? { actionId, args }
+          : { actionId, args, options: dispatchOptions }
+      );
       const override = dispatchOverrides.get(actionId);
       if (override) return override;
-      if (options.dispatch) return options.dispatch(actionId, args);
+      if (options.dispatch) return options.dispatch(actionId, args, dispatchOptions);
       // Match the real host's contract: dispatch ids are always fully
       // namespaced as `{pluginId}.{descriptor.id}`. Looking up by the full
       // form means a plugin calling `host.dispatch("greet")` against a

@@ -1597,8 +1597,17 @@ type PluginPanelBadge = {
     color?: PluginPanelBadgeColor;
     tooltip?: string;
 };
-declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose"];
+declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch"];
 type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
+/** Third argument to {@link PluginHostApi.dispatch} (#13119). */
+interface PluginDispatchOptions {
+    /**
+     * Run the action in this project's view rather than the focused one. Needs
+     * the `project:dispatch` capability and the user's per-plugin switch. Ids
+     * come from `host.dispatch("project.getAll")`.
+     */
+    projectId?: string;
+}
 /**
  * What just happened to one plugin panel instance (#11301). The renderer owns
  * the transitions; the worker observes them through
@@ -3917,8 +3926,15 @@ interface PluginHostApi extends PluginActivationApi {
      * and timers. Once the plugin is unloaded it returns
      * `{ ok: false, error: { code: "PLUGIN_UNLOADED" } }` without attempting a
      * dispatch.
+     *
+     * `options.projectId` sends the dispatch to that project's view instead of
+     * the focused one (#13119). An installed plugin must declare
+     * `project:dispatch` and the user must turn on "Allow project targeting" for
+     * it, or the call rejects with `PERMISSION_REQUIRED`. A project-bound plugin
+     * may only name its own project. A project with no live view rejects with
+     * `PROJECT_VIEW_UNAVAILABLE` — nothing opens or wakes a closed project.
      */
-    dispatch(actionId: ActionId, args?: unknown): Promise<ActionDispatchResult>;
+    dispatch(actionId: ActionId, args?: unknown, options?: PluginDispatchOptions): Promise<ActionDispatchResult>;
     /**
      * Built-in action catalog: discover what `dispatch()` accepts (ids, arg
      * schemas, danger) and pre-flight a dispatch. Projects the app's
@@ -4175,6 +4191,8 @@ interface SpawnRecord {
 interface DispatchedActionRecord {
     actionId: ActionId;
     args: unknown;
+    /** The third `dispatch` argument, when the call passed one. */
+    options?: PluginDispatchOptions;
 }
 /** Captured `host.sendToActiveAgent(text, options)` calls. */
 interface SentToActiveAgentRecord {
@@ -4436,7 +4454,7 @@ interface CreateMockHostOptions {
      * matching `registerAction` handler, returning `NOT_FOUND` otherwise — which
      * mirrors `ActionService.dispatch` closely enough for activation-time tests.
      */
-    dispatch?: (actionId: ActionId, args?: unknown) => Promise<ActionDispatchResult>;
+    dispatch?: (actionId: ActionId, args?: unknown, options?: PluginDispatchOptions) => Promise<ActionDispatchResult>;
     /**
      * Custom resolver for `host.reloadPanel` (#12610). The default answers from
      * the phases pushed through `simulatePanelLifecycleChange`, like the real

@@ -1144,9 +1144,17 @@ export interface GeneratedIpcInvokeMap {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityAcknowledgeConsentInput];
     result: void;
   };
+  "plugin-capability:get-project-targeting": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginProjectTargetingQuery];
+    result: boolean;
+  };
   "plugin-capability:resolve-consent": {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityResolveConsentInput];
     result: void;
+  };
+  "plugin-capability:set-project-targeting": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginProjectTargetingUpdate];
+    result: boolean;
   };
   "plugin-mcp:call-tool": {
     args: [input: import("./pluginMcp.js").PluginMcpCallToolInput];

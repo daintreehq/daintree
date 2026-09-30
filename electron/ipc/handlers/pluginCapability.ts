@@ -4,7 +4,10 @@ import { defineIpcNamespace, op } from "../define.js";
 import type { IpcContext } from "../types.js";
 import { CHANNELS } from "../channels.js";
 import { PLUGIN_CAPABILITY_METHOD_CHANNELS } from "./pluginCapability.preload.js";
-import { getPluginCapabilityConsentService } from "../../services/plugin-capability/instances.js";
+import {
+  getPluginCapabilityConsentService,
+  getPluginCapabilityConsentStore,
+} from "../../services/plugin-capability/instances.js";
 import type {
   PluginCapabilityConsentBridge,
   PluginCapabilityConsentRequest,
@@ -18,6 +21,8 @@ import {
   type PluginCapabilityAcknowledgeConsentInput,
   type PluginCapabilityConsentOutcome,
   type PluginCapabilityResolveConsentInput,
+  type PluginProjectTargetingQuery,
+  type PluginProjectTargetingUpdate,
 } from "../../../shared/types/pluginCapabilityConsent.js";
 
 // --- Consent bridge (main → renderer prompt, renderer → main decision) --------
@@ -260,6 +265,40 @@ export async function handleResolveConsent(
   settleConsent(input.requestId, input.decision);
 }
 
+function projectTargetingIdentity(pluginId: unknown) {
+  if (typeof pluginId !== "string" || pluginId.length === 0) {
+    throw new Error("pluginId must be a non-empty string");
+  }
+  // Always the app-wide scope: a project-bound plugin can never target another
+  // project, so there is nothing for a project-scoped switch to grant.
+  return { pluginId, capability: "project:dispatch", scopeKey: "global" } as const;
+}
+
+/** Read an app-wide plugin's "Allow project targeting" switch (#13119). */
+export async function handleGetProjectTargeting(
+  input: PluginProjectTargetingQuery
+): Promise<boolean> {
+  return getPluginCapabilityConsentStore().hasGrant(projectTargetingIdentity(input?.pluginId));
+}
+
+/**
+ * Flip an app-wide plugin's "Allow project targeting" switch (#13119) and
+ * return the persisted state. Off revokes the grant outright; uninstall purges
+ * it with the plugin's other grants, so a reinstall starts off.
+ */
+export async function handleSetProjectTargeting(
+  input: PluginProjectTargetingUpdate
+): Promise<boolean> {
+  const identity = projectTargetingIdentity(input?.pluginId);
+  if (typeof input.enabled !== "boolean") {
+    throw new Error("enabled must be a boolean");
+  }
+  const store = getPluginCapabilityConsentStore();
+  if (input.enabled) store.grant(identity);
+  else store.revoke(identity);
+  return store.hasGrant(identity);
+}
+
 export const pluginCapabilityNamespace = defineIpcNamespace({
   name: "pluginCapability",
   ops: {
@@ -270,6 +309,14 @@ export const pluginCapabilityNamespace = defineIpcNamespace({
       PLUGIN_CAPABILITY_METHOD_CHANNELS.acknowledgeConsent,
       handleAcknowledgeConsent,
       { withContext: true }
+    ),
+    getProjectTargeting: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.getProjectTargeting,
+      handleGetProjectTargeting
+    ),
+    setProjectTargeting: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.setProjectTargeting,
+      handleSetProjectTargeting
     ),
   },
 });
