@@ -602,6 +602,35 @@ describe("InlineEdit", () => {
     expect([...display.classList].filter((name) => /^-m[xlrse]?-/.test(name))).toEqual([]);
   });
 
+  it("leaves focus where the user moved it while an async rename saved", async () => {
+    let resolve: () => void = () => {};
+    render(
+      <>
+        <kit.InlineEdit
+          aria-label="Name"
+          value="a"
+          onCommit={() =>
+            new Promise<void>((done) => {
+              resolve = done;
+            })
+          }
+        />
+        <button type="button">Next</button>
+      </>
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Name: a" }));
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "b" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    const next = screen.getByRole("button", { name: "Next" });
+    next.focus();
+    await act(async () => {
+      resolve();
+      await Promise.resolve();
+    });
+    expect(document.activeElement).toBe(next);
+  });
+
   it("commits nothing for an unchanged value, and honours doubleClick activation", () => {
     const onCommit = vi.fn();
     render(
@@ -854,6 +883,59 @@ describe("SecretInput", () => {
       await Promise.resolve();
     });
     expect((screen.getByLabelText("Token") as HTMLInputElement).value).toBe("second");
+  });
+
+  it("holds the field read-only while a replacement saves, and closes only on that save", async () => {
+    let resolve: () => void = () => {};
+    render(
+      <kit.SecretInput
+        aria-label="Token"
+        stored
+        onSubmit={() =>
+          new Promise<void>((done) => {
+            resolve = done;
+          })
+        }
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    const input = screen.getByLabelText("Token") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "first" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input.readOnly).toBe(true);
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+    await act(async () => {
+      resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: "Replace" })).toBeTruthy();
+  });
+
+  it("keeps a newer save's pending state when an older save settles", async () => {
+    const resolvers: (() => void)[] = [];
+    render(
+      <kit.SecretInput
+        aria-label="Token"
+        stored
+        onSubmit={() =>
+          new Promise<void>((done) => {
+            resolvers.push(done);
+          })
+        }
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    fireEvent.change(screen.getByLabelText("Token"), { target: { value: "first" } });
+    fireEvent.keyDown(screen.getByLabelText("Token"), { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    fireEvent.change(screen.getByLabelText("Token"), { target: { value: "second" } });
+    fireEvent.keyDown(screen.getByLabelText("Token"), { key: "Enter" });
+    await act(async () => {
+      resolvers[0]!();
+      await Promise.resolve();
+    });
+    expect((screen.getByLabelText("Token") as HTMLInputElement).readOnly).toBe(true);
   });
 
   it("stays in the field when a replacement's save fails", async () => {
