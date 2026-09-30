@@ -1654,6 +1654,299 @@ describe("OpenAITranscriptionProvider", () => {
     expect(statuses).toEqual(["idle"]);
   });
 
+  // ── Graceful stop while connecting (#13108) ──────────────────────────────
+
+  describe("stopGracefully before the session is ready", () => {
+    function appendedBytes(socket: MockWebSocket): number {
+      return socket
+        .sentJson()
+        .filter((p) => p.type === "input_audio_buffer.append")
+        .reduce((sum, p) => sum + Buffer.from(p.audio as string, "base64").byteLength, 0);
+    }
+
+    function commitCount(socket: MockWebSocket): number {
+      return socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit").length;
+    }
+
+    it.each([
+      ["before the socket opens", false],
+      ["after open but before session.updated", true],
+    ])(
+      "flushes, commits and transcribes buffered audio when stopped %s",
+      async (_label, openFirst) => {
+        const service = new OpenAITranscriptionProvider();
+        const statuses: string[] = [];
+        const completes: string[] = [];
+        service.onEvent((e) => {
+          if (e.type === "status") statuses.push(e.status);
+          if (e.type === "complete") completes.push(e.text);
+        });
+
+        const startPromise = service.start(BASE_SETTINGS);
+        await Promise.resolve();
+        const socket = latestInstance();
+        if (openFirst) socket.simulateOpen();
+        service.sendAudioChunk(new Uint8Array(2_400).buffer);
+        service.sendAudioChunk(new Uint8Array(2_400).buffer);
+
+        const stopPromise = service.stopGracefully();
+        expect(statuses.at(-1)).toBe("finishing");
+        expect(socket.closeCalls).toBe(0);
+
+        // Audio after the stop (mic already released) must not be kept.
+        service.sendAudioChunk(new Uint8Array(2_400).buffer);
+
+        if (!openFirst) socket.simulateOpen();
+        socket.simulateMessage("session.updated");
+        await expect(startPromise).resolves.toEqual({ ok: true });
+
+        expect(appendedBytes(socket)).toBe(4_800);
+        expect(socket.sentJson().map((p) => p.type)).toEqual([
+          "session.update",
+          "input_audio_buffer.append",
+          "input_audio_buffer.append",
+          "input_audio_buffer.commit",
+        ]);
+        expect(statuses).not.toContain("recording");
+        expect(vadWorkers).toHaveLength(0);
+
+        socket.simulateMessage("conversation.item.done", {
+          item: { id: "item-1", content: [{ type: "input_audio", transcript: "yes do that" }] },
+        });
+        await stopPromise;
+
+        expect(completes).toEqual(["yes do that"]);
+        expect(statuses.at(-1)).toBe("idle");
+        expect(socket.closeCalls).toBe(1);
+      }
+    );
+
+    it("stops immediately when the buffered audio is below the commit floor", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      service.sendAudioChunk(new Uint8Array(4_798).buffer);
+
+      await service.stopGracefully();
+      expect(statuses).toEqual(["connecting", "idle"]);
+      expect(socket.closeCalls).toBe(1);
+      expect(commitCount(socket)).toBe(0);
+    });
+
+    it("gives up after the connect wait if the session never becomes ready", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      const startPromise = service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      vi.advanceTimersByTime(2_999);
+      expect(socket.closeCalls).toBe(0);
+      vi.advanceTimersByTime(1);
+      await stopPromise;
+
+      expect(statuses.at(-1)).toBe("idle");
+      expect(socket.closeCalls).toBe(1);
+      await expect(startPromise).resolves.toMatchObject({ ok: false });
+
+      // A late session.updated on the abandoned socket does nothing.
+      socket.simulateOpen();
+      socket.simulateMessage("session.updated");
+      expect(commitCount(socket)).toBe(0);
+    });
+
+    it("bounds the transcript wait with the drain timeout once ready", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      vi.advanceTimersByTime(2_500);
+      socket.simulateOpen();
+      socket.simulateMessage("session.updated");
+      expect(commitCount(socket)).toBe(1);
+
+      // The connect-wait deadline no longer applies; the drain backstop does.
+      vi.advanceTimersByTime(2_999);
+      expect(statuses.at(-1)).toBe("finishing");
+      vi.advanceTimersByTime(1);
+      await stopPromise;
+      expect(statuses.at(-1)).toBe("idle");
+    });
+
+    it("stop() while waiting discards the buffered audio", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      service.stop();
+      await stopPromise;
+      expect(statuses.filter((s) => s === "idle")).toHaveLength(1);
+
+      socket.simulateOpen();
+      socket.simulateMessage("session.updated");
+      expect(appendedBytes(socket)).toBe(0);
+      expect(commitCount(socket)).toBe(0);
+    });
+
+    it("repeated stops while waiting join the same stop", async () => {
+      const service = new OpenAITranscriptionProvider();
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      feedCommittableAudio(service);
+
+      const first = service.stopGracefully();
+      const second = service.stopGracefully();
+      socket.simulateOpen();
+      socket.simulateMessage("session.updated");
+      expect(commitCount(socket)).toBe(1);
+
+      socket.simulateMessage("conversation.item.done", {
+        item: { id: "item-1", content: [{ type: "input_audio", transcript: "ok" }] },
+      });
+      await Promise.all([first, second]);
+    });
+
+    it("a transport error and trailing close while waiting settle the stop once", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      socket.simulateError(new Error("ECONNREFUSED"));
+      socket.simulateClose(1006);
+      await stopPromise;
+      expect(statuses.at(-1)).toBe("idle");
+      expect(statuses.filter((s) => s === "idle")).toHaveLength(1);
+      vi.advanceTimersByTime(10_000);
+      expect(instances).toHaveLength(1);
+    });
+
+    it("a server error before session.updated settles the stop", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      socket.simulateOpen();
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      socket.simulateMessage("error", {
+        error: { type: "invalid_request_error", code: "invalid_api_key", message: "bad key" },
+      });
+      await stopPromise;
+      expect(statuses.at(-1)).toBe("idle");
+      expect(commitCount(socket)).toBe(0);
+    });
+
+    it("the original connect timeout firing during the wait settles the stop", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      const startPromise = service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      vi.advanceTimersByTime(8_000);
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      vi.advanceTimersByTime(2_000);
+      await stopPromise;
+      expect(statuses.at(-1)).toBe("idle");
+      await expect(startPromise).resolves.toMatchObject({ ok: false });
+    });
+
+    it("start() while waiting does not tear down the new session", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      feedCommittableAudio(service);
+      const stopPromise = service.stopGracefully();
+
+      const { socket: secondSocket, result } = await bringSessionReady(service);
+      await stopPromise;
+
+      expect(result).toEqual({ ok: true });
+      expect(secondSocket.closeCalls).toBe(0);
+      expect(statuses.at(-1)).toBe("recording");
+      service.stop();
+    });
+
+    it("flushes buffered audio from a reconnect window when stopped during backoff", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const completes: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "complete") completes.push(e.text);
+      });
+
+      const { socket } = await bringSessionReady(service);
+      socket.simulateClose(1006);
+      // Reconnect is scheduled; audio captured in the gap is buffered.
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      vi.advanceTimersByTime(1_000);
+      const reconnectSocket = latestInstance();
+      expect(reconnectSocket).not.toBe(socket);
+      reconnectSocket.simulateOpen();
+      reconnectSocket.simulateMessage("session.updated");
+      expect(commitCount(reconnectSocket)).toBe(1);
+
+      reconnectSocket.simulateMessage("conversation.item.done", {
+        item: { id: "item-1", content: [{ type: "input_audio", transcript: "after drop" }] },
+      });
+      await stopPromise;
+      expect(completes).toEqual(["after drop"]);
+    });
+  });
+
   it("start() during an in-flight drain resolves the old drain and reaches recording", async () => {
     const service = new OpenAITranscriptionProvider();
     const statuses: string[] = [];

@@ -68,6 +68,10 @@ const CONNECT_TIMEOUT_MS = 10_000;
 // result (server error, dropped frame, or only an empty `conversation.item.done`),
 // force-close after this long rather than hanging the stop.
 const DRAIN_TIMEOUT_MS = 3_000;
+// How long a graceful stop that lands before `session.updated` waits for the
+// session to become ready so the buffered audio can still be transcribed.
+// Connecting normally takes ~1.5-2s; past this the audio is discarded.
+const STOP_CONNECT_TIMEOUT_MS = 3_000;
 // Client-side ping/pong heartbeat. The OpenAI Realtime server sends its own
 // pings (auto-ponged by `ws`), but a half-open TCP connection on our side —
 // server alive, our socket silently dead — is only detectable by us pinging
@@ -262,6 +266,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private drainTimeout: ReturnType<typeof setTimeout> | null = null;
   private drainPromise: Promise<void> | null = null;
   private isDraining = false;
+  // A graceful stop arrived before the session was ready; the drain is waiting
+  // on `session.updated` to flush and commit the buffered audio (#13108).
+  private stopPendingReady = false;
 
   // VAD side-chain. A utility process runs Silero v5 and reports
   // speech-start/speech-end events that drive commits. Its handlers are tagged
@@ -406,7 +413,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     } catch (err) {
       const message = formatErrorMessage(err, "Failed to open WebSocket");
       logError(`${P} ${message}`);
-      if (this.isReconnecting) {
+      if (this.isDraining) {
+        this.settleDrain("connect-failed");
+      } else if (this.isReconnecting) {
         this.scheduleReconnect(mySessionId, settings);
       } else {
         this.emitError({ severity: "fatal", code: "ws_construct_failed", message });
@@ -455,6 +464,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       });
       this.emit({ type: "status", status: "error" });
       this.settlePendingStart(mySessionId, { ok: false, error: "Connection timed out" });
+      this.settleDrain("connection-timeout");
     }, CONNECT_TIMEOUT_MS);
 
     connection.on("pong", () => {
@@ -815,6 +825,13 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         this.isReconnecting = false;
         this.lastReconnectError = null;
         this.isReady = true;
+        if (this.isDraining) {
+          // Stopped while connecting: the mic is already released, so skip the
+          // VAD and "recording" — just commit what was flushed and drain.
+          this.settlePendingStart(mySessionId, { ok: true });
+          if (this.stopPendingReady) this.commitAfterLateReady();
+          return;
+        }
         this.startVadWorker(mySessionId);
         this.emit({ type: "status", status: "recording" });
         this.settlePendingStart(mySessionId, { ok: true });
@@ -1157,6 +1174,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.isExpectedClose = false;
     this.isAlive = false;
     this.isDraining = false;
+    this.stopPendingReady = false;
     this.liveText = "";
     if (this.drainResolve) {
       this.drainResolve();
@@ -1367,6 +1385,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private settleDrain(reason: string): void {
     this.clearDrainTimeout();
     this.isDraining = false;
+    this.stopPendingReady = false;
     this.drainPromise = null;
     if (this.drainResolve) {
       logInfo(`${P} Drain completed`, { reason });
@@ -1389,9 +1408,20 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       return this.drainPromise;
     }
 
-    // A graceful stop is an expected close — cancel any pending reconnect and
-    // stop the close handler from retrying.
+    // Audio captured while (re)connecting sits in the pre-connect buffer until
+    // `session.updated`. If a live connection attempt — or an already scheduled
+    // reconnect — could still deliver it, wait for it rather than discarding.
+    const canFlushBufferedAudio =
+      !this.isReady &&
+      this.preConnectBufferBytes >= MIN_COMMIT_BYTES &&
+      (this.connection !== null || this.reconnectTimer !== null);
+
+    // A graceful stop is an expected close — stop the close handler from
+    // retrying, and cancel any pending reconnect we aren't waiting on.
     this.isExpectedClose = true;
+    if (canFlushBufferedAudio) {
+      return this.stopAfterConnect();
+    }
     this.isReconnecting = false;
     this.clearReconnectTimer();
 
@@ -1460,6 +1490,79 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       this.cleanupPreviousSession();
       this.emit({ type: "status", status: "idle" });
     }
+  }
+
+  /**
+   * Graceful stop before the session is ready. The drain promise first waits
+   * (bounded by STOP_CONNECT_TIMEOUT_MS) for `session.updated`, which flushes
+   * the buffer and calls `commitAfterLateReady()`; from there it's the normal
+   * commit-and-drain. Connect failures settle the drain via the close/fatal
+   * paths. Audio arriving meanwhile is dropped by `sendAudioChunk`.
+   */
+  private async stopAfterConnect(): Promise<void> {
+    logInfo(`${P} Stop before session ready — waiting to flush buffered audio`, {
+      bufferedChunks: this.preConnectBuffer.length,
+      bufferedBytes: this.preConnectBufferBytes,
+      hasConnection: !!this.connection,
+      isReconnecting: this.isReconnecting,
+    });
+    this.isDraining = true;
+    this.stopPendingReady = true;
+    this.emit({ type: "status", status: "finishing" });
+
+    const sessionIdBeforeDrain = this.sessionId;
+    this.drainPromise = new Promise<void>((resolve) => {
+      this.drainResolve = resolve;
+      this.drainTimeout = setTimeout(() => {
+        logWarn(
+          `${P} Session not ready ${STOP_CONNECT_TIMEOUT_MS}ms after stop — discarding buffered audio`,
+          { bufferedBytes: this.preConnectBufferBytes }
+        );
+        this.settleDrain("connect-timeout");
+      }, STOP_CONNECT_TIMEOUT_MS);
+    });
+    await this.drainPromise;
+
+    if (this.sessionId === sessionIdBeforeDrain) {
+      this.cleanupPreviousSession();
+      this.emit({ type: "status", status: "idle" });
+    }
+  }
+
+  /**
+   * Second half of `stopAfterConnect()`, run from `session.updated` once the
+   * buffered audio has been flushed: send the final commit and re-arm the drain
+   * backstop for its transcript, or settle now if too little audio made it.
+   */
+  private commitAfterLateReady(): void {
+    this.stopPendingReady = false;
+    this.clearDrainTimeout();
+    if (!this.connection || this.bytesSinceCommit < MIN_COMMIT_BYTES) {
+      logInfo(`${P} Late-ready stop with sub-threshold buffer — no final commit`, {
+        bytesSinceCommit: this.bytesSinceCommit,
+      });
+      this.settleDrain("nothing-to-commit");
+      return;
+    }
+    try {
+      this.connection.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+    } catch {
+      logWarn(`${P} Failed to send final commit after late ready`);
+      this.settleDrain("final-commit-failed");
+      return;
+    }
+    this.pendingCommits++;
+    logInfo(`${P} → input_audio_buffer.commit (final, after late ready)`, {
+      bytes: this.bytesSinceCommit,
+      pendingCommits: this.pendingCommits,
+    });
+    this.bytesSinceCommit = 0;
+    this.drainTimeout = setTimeout(() => {
+      logWarn(`${P} Drain timed out after ${DRAIN_TIMEOUT_MS}ms, force closing`, {
+        pendingCommits: this.pendingCommits,
+      });
+      this.settleDrain("timeout");
+    }, DRAIN_TIMEOUT_MS);
   }
 
   stop(): void {
