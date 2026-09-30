@@ -149,9 +149,12 @@
    CANNOT be switched off further down — `text-decoration: none` on the <pre>
    would be silently ignored. The :has() exclusion drops the line from a
    container holding a fence or table (a list item wrapping a code block), where
-   the block fill and the bar still carry the state. */
+   the block fill and the bar still carry the state. A rendered Mermaid
+   diagram counts as a fence here. */
 .rendered-markdown-diff__block--removed[data-whole="true"]
-  :where(p, h1, h2, h3, h4, h5, h6, li, blockquote, dt, dd):not(:has(pre, table)) {
+  :where(p, h1, h2, h3, h4, h5, h6, li, blockquote, dt, dd):not(
+    :has(pre, table, .markdown-mermaid)
+  ) {
   text-decoration: line-through;
   text-decoration-color: color-mix(in oklab, var(--color-text-primary) 45%, transparent);
   text-decoration-thickness: 1px;
@@ -245,7 +248,9 @@
   }
 
   .rendered-markdown-diff__block--removed[data-whole="true"]
-    :where(p, h1, h2, h3, h4, h5, h6, li, blockquote, dt, dd):not(:has(pre, table)) {
+    :where(p, h1, h2, h3, h4, h5, h6, li, blockquote, dt, dd):not(
+      :has(pre, table, .markdown-mermaid)
+    ) {
     text-decoration-color: var(--color-text-primary);
   }
 
