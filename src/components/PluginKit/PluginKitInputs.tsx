@@ -225,11 +225,12 @@ export function parseNumberText(text: string, unit?: string): number | null | un
 }
 
 // The frame round the value, unit and buttons paints the field's one ring via
-// has-[input:focus-visible]. The text keeps room for six digits before the
-// unit (a min-width floor set per density): it gives way last.
+// has-[input:focus-visible]. When room runs out the unit gives way first (it
+// ellipsises), the buttons never do, and the text keeps a floor of four digits,
+// so nothing is ever drawn past the frame's edge.
 const NUMBER_VALUE_CLASS =
   // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the frame draws the ring; a second one inside it would double it
-  "w-0 flex-1 bg-transparent tabular-nums text-text-primary outline-hidden placeholder:text-text-placeholder disabled:cursor-not-allowed";
+  "w-0 flex-1 text-ellipsis bg-transparent tabular-nums text-text-primary outline-hidden placeholder:text-text-placeholder disabled:cursor-not-allowed";
 
 function KitNumberInput(props: PluginNumberInputProps) {
   const {
@@ -398,7 +399,7 @@ function KitNumberInput(props: PluginNumberInputProps) {
       data-number-field=""
       className={cn(
         inputVariants({ density: compact ? "compact" : "default", invalid: shownInvalid }),
-        "flex min-w-0 items-center px-0 py-0",
+        "flex min-w-0 items-center overflow-hidden px-0 py-0",
         "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
         disabled === true ? "cursor-not-allowed opacity-50" : "cursor-text",
         showStepper && "pr-1",
@@ -438,7 +439,7 @@ function KitNumberInput(props: PluginNumberInputProps) {
         data-number-value=""
         className={cn(
           NUMBER_VALUE_CLASS,
-          compact ? "min-w-[calc(6ch+0.75rem)] py-1 pl-2" : "min-w-[calc(6ch+1rem)] py-1.5 pl-3",
+          compact ? "min-w-[calc(4ch+0.75rem)] py-1 pl-2" : "min-w-[calc(4ch+1rem)] py-1.5 pl-3",
           suffix !== undefined || showStepper ? "pr-1" : compact ? "pr-2" : "pr-3"
         )}
       />
@@ -447,7 +448,7 @@ function KitNumberInput(props: PluginNumberInputProps) {
           aria-hidden="true"
           data-number-unit=""
           className={cn(
-            "shrink-0 select-none whitespace-nowrap text-text-secondary",
+            "min-w-0 shrink select-none truncate text-text-secondary",
             showStepper ? "pr-1" : compact ? "pr-2" : "pr-3"
           )}
         >
