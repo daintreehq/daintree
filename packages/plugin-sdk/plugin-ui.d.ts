@@ -40,6 +40,10 @@ declare module "@daintreehq/plugin-ui" {
     PluginAvatarProps,
     PluginBadgeProps,
     PluginButtonProps,
+    PluginCalendarBaseProps,
+    PluginCalendarProps,
+    PluginCalendarRangeProps,
+    PluginCalendarSingleProps,
     PluginCalloutProps,
     PluginCheckboxProps,
     PluginConfirmDialogProps,
@@ -49,6 +53,11 @@ declare module "@daintreehq/plugin-ui" {
     PluginDataTableProps,
     PluginDataTableRowKey,
     PluginDataTableSort,
+    PluginDateFieldBaseProps,
+    PluginDatePickerProps,
+    PluginDateRange,
+    PluginDateRangePickerProps,
+    PluginDateRangePreset,
     PluginDialogAction,
     PluginDialogLayer,
     PluginDialogProps,
@@ -69,6 +78,7 @@ declare module "@daintreehq/plugin-ui" {
     PluginIconProps,
     PluginIconSource,
     PluginInputProps,
+    PluginIsoDate,
     PluginKbdChordProps,
     PluginKbdProps,
     PluginListNavigationContainerProps,
@@ -110,6 +120,7 @@ declare module "@daintreehq/plugin-ui" {
     PluginTextareaProps,
     PluginThemeTokenKey,
     PluginThemeTokens,
+    PluginTimeAgoProps,
     PluginToolbarButtonProps,
     PluginToolbarProps,
     PluginTooltipProps,
@@ -199,6 +210,17 @@ declare module "@daintreehq/plugin-ui" {
   export type StatCardProps = PluginStatCardProps;
   export type SparklineProps = PluginSparklineProps;
   export type FormFieldGroupProps = PluginFormFieldGroupProps;
+  export type IsoDate = PluginIsoDate;
+  export type DateRange = PluginDateRange;
+  export type CalendarProps = PluginCalendarProps;
+  export type CalendarBaseProps = PluginCalendarBaseProps;
+  export type CalendarSingleProps = PluginCalendarSingleProps;
+  export type CalendarRangeProps = PluginCalendarRangeProps;
+  export type DateFieldBaseProps = PluginDateFieldBaseProps;
+  export type DatePickerProps = PluginDatePickerProps;
+  export type DateRangePickerProps = PluginDateRangePickerProps;
+  export type DateRangePreset = PluginDateRangePreset;
+  export type TimeAgoProps = PluginTimeAgoProps;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -348,6 +370,19 @@ declare module "@daintreehq/plugin-ui" {
   export const Sparkline: ComponentType<SparklineProps>;
   /** One label, at a field label's size, over a set of controls such as checkboxes. */
   export const FormFieldGroup: ComponentType<FormFieldGroupProps>;
+  /**
+   * An inline month grid choosing one day or, with `mode="range"`, a run of
+   * days, with the grid keyboard model, locale month and weekday names and a
+   * today mark. Days are ISO `"YYYY-MM-DD"` strings, which name the same day
+   * in every timezone.
+   */
+  export const Calendar: ComponentType<CalendarProps>;
+  /** A date field that takes typed dates leniently or opens a `Calendar`; the value is ISO or `null`. */
+  export const DatePicker: ComponentType<DatePickerProps>;
+  /** `DatePicker` for a `{ start, end }` range, with two months where there is room and optional presets. */
+  export const DateRangePicker: ComponentType<DateRangePickerProps>;
+  /** A `<time>` reading "5m ago" that keeps itself current on one shared timer, with the full date on hover. */
+  export const TimeAgo: ComponentType<TimeAgoProps>;
 
   /**
    * The keyboard model of a list: one tab stop, Up/Down/Home/End move the
