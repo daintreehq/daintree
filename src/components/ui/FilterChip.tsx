@@ -86,7 +86,7 @@ export const FilterChip = React.forwardRef<HTMLButtonElement, FilterChipProps>(
           selected
             ? "border-text-secondary bg-filter-selected-bg-strong font-medium text-text-primary"
             : unavailable
-              ? "border-border-default bg-transparent text-text-secondary hover:text-text-primary"
+              ? "border-selection-outline bg-transparent text-text-secondary hover:text-text-primary"
               : "border-text-secondary bg-overlay-soft text-text-secondary hover:bg-overlay-medium hover:text-text-primary",
           className
         )}

@@ -37,6 +37,8 @@ describe("FilterChip", () => {
     expect(classes(false, 0)).not.toBe(available);
     expect(classes(false)).toBe(available);
     expect(classes(true, 0)).toBe(classes(true, 2));
+    // Still a control: its edge stays on the theme's 3:1 control-edge ink.
+    expect(classes(false, 0).split(" ")).toContain("border-selection-outline");
   });
 
   it("gives way only at its label when the row runs out of room", () => {
