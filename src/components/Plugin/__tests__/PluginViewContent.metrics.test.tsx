@@ -10,6 +10,7 @@ vi.mock("@/components/ui/Skeleton", () => ({
 vi.mock("@/components/ui/ContentFadeIn", () => ({
   ContentFadeIn: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
+vi.mock("@/pluginUi", () => ({ whenPluginUiReady: () => Promise.resolve() }));
 vi.mock("@/components/Plugin/PluginViewRuntimeStatus", () => ({
   PluginViewRuntimeStatus: () => null,
 }));
@@ -96,45 +97,37 @@ beforeEach(() => {
 afterEach(async () => {
   cleanup();
   await vi.dynamicImportSettled();
-  vi.doUnmock("react");
   vi.resetModules();
   vi.unstubAllGlobals();
 });
 
+const STUB_MODULE = "plugin://acme/__dtv-1/dashboard.js";
+
 /**
- * Captures each attempt's real `lazy()` factory while rendering a stub, so the
- * test decides when a load resolves — the paint reporter must not record until
- * that has happened for real.
+ * Stands a stub view in for {@link STUB_MODULE}, loaded through the content's
+ * real load path (activation, import, styles).
  */
-function captureLazyFactories(): Array<() => Promise<unknown>> {
-  const factories: Array<() => Promise<unknown>> = [];
-  vi.doMock("react", async () => {
-    const actual = await vi.importActual<typeof import("react")>("react");
-    return {
-      ...actual,
-      lazy: (factory: () => Promise<unknown>) => {
-        factories.push(factory);
-        return function StubView() {
-          return <div data-testid="plugin-view" />;
-        };
-      },
-    };
-  });
-  return factories;
+function mockStubView(): void {
+  vi.doMock(STUB_MODULE, () => ({
+    default: function StubView() {
+      return <div data-testid="plugin-view" />;
+    },
+  }));
 }
 
 describe("PluginViewContent load metrics", () => {
+  afterEach(() => {
+    vi.doUnmock(STUB_MODULE);
+  });
+
   it("records one view-load sample per open, after first paint, flagged cold", async () => {
-    const factories = captureLazyFactories();
+    mockStubView();
     const { makePluginViewContent } = await import("../PluginViewContent");
     const { pluginViewMetrics } = await import("@/services/plugin/pluginViewMetrics");
-    const Content = makePluginViewContent(makeContentConfig());
+    const Content = makePluginViewContent(makeContentConfig(STUB_MODULE));
 
     render(<Content panelId="panel-1" />);
     await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
-    await act(async () => {
-      await factories.at(-1)!();
-    });
 
     await waitFor(() =>
       expect(pluginViewMetrics.getLocalSnapshot("acme")?.viewLoads).toHaveLength(1)
@@ -151,16 +144,16 @@ describe("PluginViewContent load metrics", () => {
   });
 
   it("puts the load on the user-timing track under one entry per phase", async () => {
-    const factories = captureLazyFactories();
+    mockStubView();
     const { makePluginViewContent } = await import("../PluginViewContent");
-    const Content = makePluginViewContent(makeContentConfig());
+    const Content = makePluginViewContent(makeContentConfig(STUB_MODULE));
 
+    // One after the other: two concurrent first imports of one `vi.doMock`ed
+    // specifier race inside Vitest's mocker, and the loser bypasses the mock.
     render(<Content panelId="panel-a" />);
+    await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
     render(<Content panelId="panel-b" />);
-    await waitFor(() => expect(factories.length).toBeGreaterThanOrEqual(2));
-    await act(async () => {
-      await Promise.all(factories.map((factory) => factory()));
-    });
+    await waitFor(() => expect(screen.getAllByTestId("plugin-view")).toHaveLength(2));
 
     for (const phase of ["activate", "import", "styles", "view-load"]) {
       expect(performance.getEntriesByName(`daintree:plugin:acme:${phase}`, "measure")).toHaveLength(
@@ -170,20 +163,15 @@ describe("PluginViewContent load metrics", () => {
   });
 
   it("flags the attempt that replaces a failed view as a retry", async () => {
-    const factories = captureLazyFactories();
+    mockStubView();
     const { makePluginViewContent } = await import("../PluginViewContent");
     const { pluginViewMetrics } = await import("@/services/plugin/pluginViewMetrics");
-    const Content = makePluginViewContent(makeContentConfig());
+    const Content = makePluginViewContent(makeContentConfig(STUB_MODULE));
 
     render(<Content panelId="panel-retry" />);
-    await waitFor(() => expect(factories).not.toHaveLength(0));
-    const countBeforeRetry = factories.length;
+    await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
     act(() => boundaryProps.last!.onError!(new Error("view exploded"), { componentStack: "" }));
     act(() => boundaryProps.last!.onReset!());
-    await waitFor(() => expect(factories.length).toBeGreaterThan(countBeforeRetry));
-    await act(async () => {
-      await factories.at(-1)!();
-    });
 
     await waitFor(() =>
       expect(pluginViewMetrics.getLocalSnapshot("acme")?.viewLoads.some((s) => s.retry)).toBe(true)
@@ -191,22 +179,37 @@ describe("PluginViewContent load metrics", () => {
   });
 
   it("does not record a sample for a view that never resolved", async () => {
-    captureLazyFactories();
+    mockStubView();
+    const activation = deferred<undefined>();
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: {
+        plugin: {
+          onPanelKindsChanged: () => () => {},
+          activateForView: () => activation.promise,
+        },
+      },
+    });
     const { makePluginViewContent } = await import("../PluginViewContent");
     const { pluginViewMetrics } = await import("@/services/plugin/pluginViewMetrics");
-    const Content = makePluginViewContent(makeContentConfig());
+    const Content = makePluginViewContent(makeContentConfig(STUB_MODULE));
 
     const { unmount } = render(<Content panelId="panel-closed" />);
     unmount();
-    await new Promise((resolve) => setTimeout(resolve, FRAME_SETTLE_MS));
+    // A load that lands after its panel closed must not paint or record.
+    await act(async () => {
+      activation.resolve(undefined);
+    });
+    await settleFrames();
     expect(pluginViewMetrics.getLocalSnapshot("acme")?.viewLoads ?? []).toHaveLength(0);
   });
 
   it("records the view's React commits through a Profiler", async () => {
-    captureLazyFactories();
+    mockStubView();
     const { makePluginViewContent } = await import("../PluginViewContent");
     const { pluginViewMetrics } = await import("@/services/plugin/pluginViewMetrics");
-    const Content = makePluginViewContent(makeContentConfig());
+    const Content = makePluginViewContent(makeContentConfig(STUB_MODULE));
 
     render(<Content panelId="panel-commits" />);
     await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
@@ -217,7 +220,7 @@ describe("PluginViewContent load metrics", () => {
     expect(report?.commitDurationsMs.length).toBeGreaterThanOrEqual(1);
   });
 
-  describe("with the real lazy and Suspense", () => {
+  describe("with real view modules", () => {
     it("waits for the view to resolve before recording its first paint", async () => {
       const activation = deferred<undefined>();
       Object.defineProperty(window, "electron", {
@@ -236,7 +239,9 @@ describe("PluginViewContent load metrics", () => {
 
       render(<Content panelId="panel-real" />);
       await settleFrames();
-      expect(screen.getByTestId("skeleton")).toBeTruthy();
+      // Still loading, and well inside the skeleton gate: nothing is painted
+      // yet, so there is nothing to record.
+      expect(screen.queryByTestId("skeleton")).toBeNull();
       expect(pluginViewMetrics.getLocalSnapshot("acme")?.viewLoads ?? []).toHaveLength(0);
 
       await act(async () => {

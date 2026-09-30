@@ -5,8 +5,14 @@ import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 
 // Stub presentational deps — the skeleton and fade-in are incidental here. The
 // host's contract is panel adaptation: mapping panel props onto ContentPanel and
-// mounting the content component inside it. The lazy import and AbortController
+// mounting the content component inside it. The view import and AbortController
 // wiring moved to PluginViewContent and are covered by its own suite (#11240).
+vi.mock("@/pluginUi", () => ({ whenPluginUiReady: () => Promise.resolve() }));
+vi.mock("@/services/plugin/pluginStyleContract", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/plugin/pluginStyleContract")>()),
+  preparePluginStyles: () => Promise.resolve(),
+  registerPluginStyleRoot: () => () => {},
+}));
 vi.mock("@/components/ui/Skeleton", () => ({
   Skeleton: ({ label }: { label?: string }) => <div data-testid="skeleton">{label}</div>,
   SkeletonHint: () => null,
@@ -157,6 +163,9 @@ vi.mock("@/components/ErrorBoundary", async () => {
   return { ErrorBoundary: FakeBoundary };
 });
 
+/** The view module the host's content imports; tests `vi.doMock` a view in for it. */
+const VIEW_MODULE = "plugin://acme/dashboard.js";
+
 function makeConfig(overrides: Partial<PanelKindConfig> = {}): PanelKindConfig {
   return {
     id: "acme.dashboard",
@@ -167,12 +176,29 @@ function makeConfig(overrides: Partial<PanelKindConfig> = {}): PanelKindConfig {
     canRestart: false,
     canConvert: false,
     extensionId: "acme",
-    componentPath: "plugin://acme/dashboard.js",
+    componentPath: VIEW_MODULE,
     ...overrides,
   };
 }
 
 const onPanelKindsChangedMock = vi.fn();
+
+/**
+ * Keep the view loading past the skeleton gate with an activation that never
+ * answers, for tests that need the loading state on screen.
+ */
+function holdViewLoading(): void {
+  Object.defineProperty(window, "electron", {
+    configurable: true,
+    writable: true,
+    value: {
+      plugin: {
+        onPanelKindsChanged: onPanelKindsChangedMock,
+        activateForView: () => new Promise<never>(() => {}),
+      },
+    },
+  });
+}
 
 beforeEach(() => {
   boundaryProps.last = null;
@@ -309,22 +335,17 @@ describe("makePluginViewHost", () => {
 
   it("passes the panel's extensionState to the mounted view as initialArgs", async () => {
     const capturedProps: Array<Record<string, unknown>> = [];
-    // Replace React.lazy so the plugin view renders synchronously (the real
-    // `plugin://` dynamic import rejects in jsdom — unsupported URL scheme —
-    // so the real view could never mount here). The stub renders a
+    // Stand a view in for the `plugin://` module (the real dynamic import
+    // rejects in jsdom — unsupported URL scheme — so the real view could never
+    // mount here). The stub renders a
     // capturing component that records the props the host hands it — proving the
     // spawn-time `extensionState` reaches the view as `initialArgs`.
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: () =>
-          function CapturingView(props: Record<string, unknown>) {
-            capturedProps.push(props);
-            return <div data-testid="plugin-view" />;
-          },
-      };
-    });
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CapturingView(props: Record<string, unknown>) {
+        capturedProps.push(props);
+        return <div data-testid="plugin-view" />;
+      },
+    }));
 
     try {
       const { makePluginViewHost } = await import("../PluginViewHost");
@@ -350,9 +371,9 @@ describe("makePluginViewHost", () => {
       expect(props.initialArgs).toBe(initialArgs);
     } finally {
       // Unmock in `finally`: a failed assertion above would otherwise leak the
-      // capturing `lazy` into every later test in this file (`vi.resetModules`
+      // capturing view into every later test in this file (`vi.resetModules`
       // clears the module cache but not the registered mock).
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 
@@ -363,7 +384,7 @@ describe("makePluginViewHost", () => {
     // opened with — the reader is what closes that gap, and it has to read at
     // call time rather than capture at render time.
     //
-    // The content layer is stubbed rather than the lazy view: `readRecoveryState`
+    // The content layer is stubbed rather than the view: `readRecoveryState`
     // is a prop the host hands the CONTENT, and the content never forwards it to
     // the plugin's own view (a plugin has no business reading panel persistence).
     // Typed at the capture site rather than asserted off an `unknown` bag, so
@@ -424,17 +445,12 @@ describe("makePluginViewHost", () => {
 
   it("passes the panel's own worktreeId to the mounted view (#11297)", async () => {
     const capturedProps: Array<Record<string, unknown>> = [];
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: () =>
-          function CapturingView(props: Record<string, unknown>) {
-            capturedProps.push(props);
-            return <div data-testid="plugin-view" />;
-          },
-      };
-    });
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CapturingView(props: Record<string, unknown>) {
+        capturedProps.push(props);
+        return <div data-testid="plugin-view" />;
+      },
+    }));
 
     try {
       const { makePluginViewHost } = await import("../PluginViewHost");
@@ -457,23 +473,18 @@ describe("makePluginViewHost", () => {
       // Panel palette with no way to know which worktree it belonged to.
       expect(capturedProps[capturedProps.length - 1]!.worktreeId).toBe("wt-owning");
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 
   it("offers the mounted view requestReload, since it presents a real panel (#12609)", async () => {
     const capturedProps: Array<Record<string, unknown>> = [];
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: () =>
-          function CapturingView(props: Record<string, unknown>) {
-            capturedProps.push(props);
-            return <div data-testid="plugin-view" />;
-          },
-      };
-    });
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CapturingView(props: Record<string, unknown>) {
+        capturedProps.push(props);
+        return <div data-testid="plugin-view" />;
+      },
+    }));
 
     try {
       const { makePluginViewHost } = await import("../PluginViewHost");
@@ -494,7 +505,7 @@ describe("makePluginViewHost", () => {
       // dialog panels all render through this host, so all of them get it.
       expect(typeof capturedProps[capturedProps.length - 1]!.requestReload).toBe("function");
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 
@@ -506,21 +517,16 @@ describe("makePluginViewHost", () => {
     // A's view still holds could rebuild the slot with A's state.
     const captured: Array<{ panelId: string; initialArgs?: unknown; disposeSignal: AbortSignal }> =
       [];
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: () =>
-          function CapturingView(props: {
-            panelId: string;
-            initialArgs?: unknown;
-            disposeSignal: AbortSignal;
-          }) {
-            captured.push(props);
-            return <div data-testid="plugin-view" />;
-          },
-      };
-    });
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CapturingView(props: {
+        panelId: string;
+        initialArgs?: unknown;
+        disposeSignal: AbortSignal;
+      }) {
+        captured.push(props);
+        return <div data-testid="plugin-view" />;
+      },
+    }));
 
     try {
       const { makePluginViewHost } = await import("../PluginViewHost");
@@ -550,7 +556,7 @@ describe("makePluginViewHost", () => {
       expect(first.disposeSignal.aborted).toBe(true);
       expect(second.disposeSignal.aborted).toBe(false);
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 
@@ -565,17 +571,12 @@ describe("makePluginViewHost", () => {
     // outside the component entirely.) The signal identity is the observable:
     // a remount would hand the view a fresh, distinct controller.
     const signals: AbortSignal[] = [];
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: () =>
-          function CapturingView(props: { disposeSignal: AbortSignal }) {
-            signals.push(props.disposeSignal);
-            return <div data-testid="plugin-view" />;
-          },
-      };
-    });
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CapturingView(props: { disposeSignal: AbortSignal }) {
+        signals.push(props.disposeSignal);
+        return <div data-testid="plugin-view" />;
+      },
+    }));
 
     try {
       const { makePluginViewHost } = await import("../PluginViewHost");
@@ -611,7 +612,7 @@ describe("makePluginViewHost", () => {
       expect(signals[signals.length - 1]).toBe(first);
       expect(first.aborted).toBe(false);
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 });
@@ -745,6 +746,7 @@ describe("PluginViewHost panel integration (#11228)", () => {
   };
 
   it("selects the panel when a click bubbles out of the plugin's content", async () => {
+    holdViewLoading();
     const { makePluginViewHost } = await import("../PluginViewHost");
     const Host = makePluginViewHost(makeConfig());
     const onFocus = vi.fn<() => void>();
@@ -761,6 +763,7 @@ describe("PluginViewHost panel integration (#11228)", () => {
   });
 
   it("keeps the pane chrome mounted and closable while the plugin view is still loading", async () => {
+    holdViewLoading();
     const { makePluginViewHost } = await import("../PluginViewHost");
     const Host = makePluginViewHost(makeConfig());
     const onClose = vi.fn<() => void>();
@@ -781,16 +784,11 @@ describe("PluginViewHost panel integration (#11228)", () => {
     // boundary, so a thrown plugin view swaps only the content slot for the
     // boundary fallback while the header and close control stay live. Without
     // that, a crashed plugin view would be stranded open (#11228).
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: () =>
-          function CrashingView(): never {
-            throw new Error("plugin view exploded on render");
-          },
-      };
-    });
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CrashingView(): never {
+        throw new Error("plugin view exploded on render");
+      },
+    }));
 
     try {
       const { makePluginViewHost } = await import("../PluginViewHost");
@@ -808,9 +806,9 @@ describe("PluginViewHost panel integration (#11228)", () => {
       act(() => screen.getByTestId("panel-close").click());
       expect(onClose).toHaveBeenCalled();
     } finally {
-      // A failed assertion above would otherwise leak the crashing `lazy` into
+      // A failed assertion above would otherwise leak the crashing view into
       // every later test in this file.
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 
@@ -834,6 +832,7 @@ describe("PluginViewHost panel integration (#11228)", () => {
       canConvert: false,
       extensionId: "acme",
     });
+    holdViewLoading();
     try {
       const { makePluginViewHost } = await import("../PluginViewHost");
       const Host = makePluginViewHost(makeConfig());

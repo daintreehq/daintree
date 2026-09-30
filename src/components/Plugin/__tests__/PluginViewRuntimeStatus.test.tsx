@@ -15,7 +15,7 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 /**
  * The real status layer, lazy banner chunk included. The content suites stub
- * this module to keep React's `lazy` free for the plugin view, so the gate that
+ * this module to mount the banner synchronously, so the gate that
  * decides whether a panel has anything to report is only exercised here.
  */
 
