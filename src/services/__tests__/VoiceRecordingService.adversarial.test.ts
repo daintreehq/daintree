@@ -503,24 +503,263 @@ describe("VoiceRecordingService adversarial", () => {
     const firstTarget: VoiceRecordingTarget = { panelId: "panel-1", panelTitle: "Panel One" };
     const secondTarget: VoiceRecordingTarget = { panelId: "panel-2", panelTitle: "Panel Two" };
 
+    // The first start opens its microphone but stalls on the worklet module,
+    // so it never reaches a session before the second start supersedes it.
     const firstStart = voiceRecordingService.start(firstTarget);
     await vi.waitFor(() => {
-      expect(runtime.voiceFns.beginSession).toHaveBeenCalledTimes(1);
+      expect(runtime.createdStreams).toHaveLength(1);
     });
 
     const secondStart = voiceRecordingService.start(secondTarget);
     await vi.waitFor(() => {
-      expect(runtime.voiceFns.beginSession).toHaveBeenCalledTimes(2);
+      expect(runtime.voiceFns.beginSession).toHaveBeenCalledTimes(1);
     });
 
     firstAddModule.resolve();
     await Promise.all([firstStart, secondStart]);
 
     expect(runtime.voiceState.activeTarget?.panelId).toBe("panel-2");
-    expect(runtime.voiceFns.finishSession).toHaveBeenCalledTimes(1);
+    expect(runtime.voiceFns.beginSession).toHaveBeenCalledTimes(1);
+    expect(runtime.voiceFns.finishSession).not.toHaveBeenCalled();
     expect(firstStream.track.stop).toHaveBeenCalled();
+    expect(runtime.createdAudioContexts[0]?.close).toHaveBeenCalled();
     expect(secondStream.track.stop).not.toHaveBeenCalled();
     expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+  });
+
+  describe("early capture (#13106)", () => {
+    const panelOne: VoiceRecordingTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+    const panelTwo: VoiceRecordingTarget = { panelId: "panel-2", panelTitle: "Panel Two" };
+
+    function emitChunk(nodeIndex: number, fill: number): ArrayBuffer {
+      const samples = new Int16Array(2400);
+      samples.fill(fill);
+      runtime.createdWorkletNodes[nodeIndex]?.port.onmessage?.(
+        new MessageEvent<ArrayBuffer>("message", { data: samples.buffer })
+      );
+      return samples.buffer;
+    }
+
+    it("loads the worklet while the microphone is still opening", async () => {
+      const microphone = deferred<MockStream>();
+      runtime.getUserMediaQueue.push(microphone.promise);
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const starting = voiceRecordingService.start(panelOne);
+
+      await vi.waitFor(() => {
+        expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalled();
+      });
+      expect(runtime.createdAudioContexts[0]?.audioWorklet.addModule).toHaveBeenCalledWith(
+        "/pcm-processor.js"
+      );
+
+      microphone.resolve(createStream());
+      await starting;
+      expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+    });
+
+    it("queues audio until the backend starts, then flushes it in order before live audio", async () => {
+      const backendStart = deferred<{ ok: boolean }>();
+      runtime.startQueue.push(backendStart.promise);
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const starting = voiceRecordingService.start(panelOne);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+      });
+
+      const first = emitChunk(0, 100);
+      const second = emitChunk(0, 200);
+      expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+
+      backendStart.resolve({ ok: true });
+      await starting;
+      const live = emitChunk(0, 300);
+
+      expect(runtime.voiceInput.sendAudioChunk.mock.calls.map(([chunk]) => chunk)).toEqual([
+        first,
+        second,
+        live,
+      ]);
+    });
+
+    it("discards queued audio when the start is cancelled before the backend is ready", async () => {
+      const backendStart = deferred<{ ok: boolean }>();
+      runtime.startQueue.push(backendStart.promise);
+      const stream = createStream();
+      runtime.getUserMediaQueue.push(stream);
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const starting = voiceRecordingService.start(panelOne);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+      });
+      emitChunk(0, 100);
+
+      await voiceRecordingService.stop("Dictation stopped.", { skipRemoteStop: true });
+      backendStart.resolve({ ok: true });
+      await starting;
+
+      expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+      expect(stream.track.stop).toHaveBeenCalled();
+    });
+
+    it("discards queued audio when the backend fails to start", async () => {
+      const backendStart = deferred<{ ok: boolean; error?: string }>();
+      runtime.startQueue.push(backendStart.promise);
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const starting = voiceRecordingService.start(panelOne);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+      });
+      expect(runtime.createdWorkletNodes[0]?.port.onmessage).toBeTypeOf("function");
+      emitChunk(0, 100);
+
+      backendStart.resolve({ ok: false, error: "boom" });
+      await starting;
+
+      expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+      expect(runtime.createdStreams[0]!.track.stop).toHaveBeenCalled();
+      expect(runtime.voiceFns.setLastError).toHaveBeenCalledWith(
+        expect.objectContaining({ code: "backend_start_failed" })
+      );
+    });
+
+    it("releases capture when the backend start IPC rejects", async () => {
+      const backendStart = deferred<{ ok: boolean }>();
+      runtime.startQueue.push(backendStart.promise);
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const starting = voiceRecordingService.start(panelOne);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+      });
+      emitChunk(0, 100);
+
+      backendStart.reject(new Error("service import failed"));
+      await expect(starting).resolves.toBeUndefined();
+
+      expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+      expect(runtime.createdStreams[0]!.track.stop).toHaveBeenCalled();
+      expect(runtime.createdAudioContexts[0]!.close).toHaveBeenCalled();
+      expect(runtime.voiceFns.finishSession).toHaveBeenCalledWith({ nextStatus: "error" });
+    });
+
+    it("caps the startup queue by dropping the oldest audio", async () => {
+      const backendStart = deferred<{ ok: boolean }>();
+      runtime.startQueue.push(backendStart.promise);
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const starting = voiceRecordingService.start(panelOne);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+      });
+      const chunks = Array.from({ length: 160 }, (_, i) => emitChunk(0, i));
+
+      backendStart.resolve({ ok: true });
+      await starting;
+
+      const sent = runtime.voiceInput.sendAudioChunk.mock.calls.map(([chunk]) => chunk);
+      expect(sent).toHaveLength(150);
+      expect(sent[0]).toBe(chunks[10]);
+      expect(sent[149]).toBe(chunks[159]);
+    });
+
+    it("releases the microphone when the worklet fails to load", async () => {
+      const failure = Promise.reject(new Error("module failed"));
+      failure.catch(() => {});
+      runtime.addModuleQueue.push(failure);
+      const stream = createStream();
+      runtime.getUserMediaQueue.push(stream);
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start(panelOne);
+
+      expect(stream.track.stop).toHaveBeenCalled();
+      expect(runtime.createdAudioContexts[0]?.close).toHaveBeenCalled();
+      expect(runtime.voiceFns.beginSession).not.toHaveBeenCalled();
+      expect(runtime.voiceFns.setLastError).toHaveBeenCalledWith(
+        expect.objectContaining({ code: "renderer_error", severity: "fatal" })
+      );
+      expect(runtime.voiceFns.finishSession).toHaveBeenCalledWith({ nextStatus: "error" });
+    });
+
+    it("attaches the new microphone during a retarget drain without leaking into the old session", async () => {
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start(panelOne);
+      runtime.voiceState.status = "recording";
+
+      const drain = deferred<void>();
+      runtime.stopQueue.push(drain.promise);
+      const retargeting = voiceRecordingService.start(panelTwo);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
+      });
+      expect(runtime.createdWorkletNodes).toHaveLength(2);
+
+      const early = emitChunk(1, 100);
+      expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+
+      drain.resolve();
+      await retargeting;
+
+      expect(runtime.voiceFns.beginSession).toHaveBeenLastCalledWith(panelTwo);
+      expect(runtime.voiceInput.sendAudioChunk.mock.calls.map(([chunk]) => chunk)).toEqual([early]);
+      expect(runtime.createdStreams[1]?.track.stop).not.toHaveBeenCalled();
+    });
+
+    it("releases the new microphone when a retarget is cancelled during the drain", async () => {
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start(panelOne);
+      runtime.voiceState.status = "recording";
+
+      const drain = deferred<void>();
+      runtime.stopQueue.push(drain.promise);
+      const retargeting = voiceRecordingService.start(panelTwo);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
+      });
+      const newStream = runtime.createdStreams[1]!;
+      expect(runtime.createdWorkletNodes).toHaveLength(2);
+      emitChunk(1, 100);
+
+      const cancelling = voiceRecordingService.stop("Dictation stopped.");
+      // Released while the previous session is still draining.
+      await vi.waitFor(() => {
+        expect(newStream.track.stop).toHaveBeenCalled();
+      });
+      expect(runtime.createdAudioContexts[1]!.close).toHaveBeenCalled();
+      expect(runtime.createdWorkletNodes[1]!.port.onmessage).toBeNull();
+
+      drain.resolve();
+      await Promise.all([retargeting, cancelling]);
+
+      expect(runtime.voiceFns.beginSession).toHaveBeenCalledTimes(1);
+      expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+      expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+    });
+
+    it("ends the previous session when a retarget fails to set up capture", async () => {
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start(panelOne);
+      runtime.voiceState.status = "recording";
+      const oldStream = runtime.createdStreams[0]!;
+
+      const failure = Promise.reject(new Error("module failed"));
+      failure.catch(() => {});
+      runtime.addModuleQueue.push(failure);
+      await voiceRecordingService.start(panelTwo);
+
+      expect(oldStream.track.stop).toHaveBeenCalled();
+      expect(runtime.createdStreams[1]!.track.stop).toHaveBeenCalled();
+      expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
+      expect(runtime.voiceFns.finishSession).toHaveBeenLastCalledWith(
+        expect.objectContaining({ nextStatus: "error" })
+      );
+      expect(runtime.voiceFns.beginSession).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("DOUBLE_STOP_SINGLE_REMOTE_STOP", async () => {
