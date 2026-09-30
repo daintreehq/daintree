@@ -456,7 +456,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
     file: "src/components/PluginKit/PluginKitDates.tsx",
     fragment:
-      "h-full min-w-0 flex-1 bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
+      "min-w-0 flex-1 truncate bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
     reason:
       "The kit DatePicker's text and its clear and calendar buttons are one compound field, like the project dialogs': the ring is painted once on the box via has-[input:focus-visible], switching to the error colour when invalid, so an element-owned ring would draw a second one inside it",
   },
@@ -584,6 +584,13 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     fragment: "h-6 min-w-24 flex-1 bg-transparent px-1 text-text-primary outline-hidden",
     reason:
       "Parent shows focus: the kit TagInput's box wraps the tags and this input as one field and paints the ring once via has-[input:focus-visible], as WorktreePathPicker does",
+  },
+  {
+    file: "src/components/PluginKit/PluginKitInputs.tsx",
+    fragment:
+      "w-0 flex-1 text-ellipsis bg-transparent tabular-nums text-text-primary outline-hidden",
+    reason:
+      "The kit NumberInput's value, unit and steppers are one compound field: the frame paints the ring once via has-[input:focus-visible], switching to the error colour when invalid, so an element-owned ring on the text would draw a second one inside it",
   },
   {
     file: "src/components/Project/QuickRun.tsx",
