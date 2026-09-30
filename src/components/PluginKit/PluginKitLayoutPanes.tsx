@@ -638,10 +638,15 @@ function KitSplitGroup({
     if (!pane) return;
     const growKey = splitGrowKey(horizontal, index < fillIndex);
     const folded = isCollapsed(pane);
-    const room = roomFor(index);
+    // From what is drawn, as a drag is: in a squeezed group the saved size is
+    // larger than the pane, and a step from it would move the wrong way.
+    const rect = document.getElementById(paneElementId(index))?.getBoundingClientRect();
+    const drawn = rect ? Math.round(horizontal ? rect.width : rect.height) : 0;
+    const current = drawn > 0 ? Math.min(drawn, sizeOf(pane)) : sizeOf(pane);
+    const room = Math.max(current, drawnRoomFor(index));
     const result = resolveSplitterKey(event, {
       growKey,
-      value: folded ? 0 : sizeOf(pane),
+      value: folded ? 0 : current,
       min: pane.min,
       max: room,
       step: SG_STEP_PX,
@@ -658,6 +663,8 @@ function KitSplitGroup({
         commit(pane, { size, collapsed: false });
         return;
       }
+      // Already at the limit the key asks for: nothing to commit.
+      if (result.value === current) return;
       commit(pane, { size: result.value, collapsed: false });
     } else if (pane.collapsible) {
       commit(pane, { size: Math.min(sizeOf(pane), room), collapsed: !folded });
@@ -673,7 +680,8 @@ function KitSplitGroup({
   useLayoutEffect(() => {
     if (!root) return;
     const next: Record<string, number> = {};
-    for (const el of root.querySelectorAll<HTMLElement>("[data-split-group-pane]")) {
+    // Own panes only: a nested SplitGroup's panes reuse the same ids.
+    for (const el of root.querySelectorAll<HTMLElement>(":scope > [data-split-group-pane]")) {
       const id = el.dataset.splitGroupPane;
       const rect = el.getBoundingClientRect();
       const extent = Math.round(horizontal ? rect.width : rect.height);
@@ -694,13 +702,13 @@ function KitSplitGroup({
     // Hiding an element does not move focus off it until the browser's
     // focus fixup runs, so focus still inside the folded pane counts as lost.
     const active = document.activeElement;
-    const pane = [...root.querySelectorAll<HTMLElement>("[data-split-group-pane]")].find(
+    const pane = [...root.querySelectorAll<HTMLElement>(":scope > [data-split-group-pane]")].find(
       (candidate) => candidate.dataset.splitGroupPane === id
     );
     const lost = active === null || active === document.body || (pane?.contains(active) ?? false);
     if (!lost) return;
     focusedPane.current = null;
-    const handle = [...root.querySelectorAll<HTMLElement>("[data-split-handle-for]")].find(
+    const handle = [...root.querySelectorAll<HTMLElement>(":scope > [data-split-handle-for]")].find(
       (candidate) => candidate.dataset.splitHandleFor === id
     );
     handle?.focus({ preventScroll: true });
@@ -2077,6 +2085,7 @@ function KitTaskList({
   const signature = entries.map((entry) => `${entry.id}:${entry.status}`).join("|");
 
   const listRef = useRef<HTMLUListElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
   const focusedTask = useRef<string | null>(null);
   const seen = useRef<Map<string, PluginTaskStatus> | null>(null);
   const [spoken, setSpoken] = useState("");
@@ -2085,14 +2094,18 @@ function KitTaskList({
   // Retry once it restarts): focus it held stays on that task's row.
   useLayoutEffect(() => {
     const id = focusedTask.current;
-    const list = listRef.current;
-    if (id === null || !list) return;
+    if (id === null) return;
     const active = document.activeElement;
     if (active !== null && active !== document.body) return;
-    const row = [...list.querySelectorAll<HTMLElement>("[data-task-id]")].find(
-      (candidate) => candidate.dataset.taskId === id
-    );
-    (row ?? list).focus({ preventScroll: true });
+    const list = listRef.current;
+    const row = list
+      ? [...list.querySelectorAll<HTMLElement>("[data-task-id]")].find(
+          (candidate) => candidate.dataset.taskId === id
+        )
+      : undefined;
+    // The last task gone takes the list with it: the section is what is left.
+    (row ?? list ?? sectionRef.current)?.focus({ preventScroll: true });
+    if (!list) focusedTask.current = null;
   }, [signature]);
 
   // Outcomes only: a task settling is news, its ticking time and progress are
@@ -2110,9 +2123,11 @@ function KitTaskList({
   return (
     <section
       {...pickRootProps(rest)}
+      ref={sectionRef}
+      tabIndex={-1}
       aria-label={nonEmpty(ariaLabel)}
       data-task-list=""
-      className={cn("flex min-w-0 flex-col", str(className))}
+      className={cn("flex min-w-0 flex-col", PROGRAMMATIC_FOCUS_RING, str(className))}
     >
       {hasHeader ? (
         <div className="flex h-7 shrink-0 items-center gap-2 pr-1.5 pl-3">
