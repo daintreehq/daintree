@@ -385,6 +385,8 @@ interface MenuPosition {
   left: number;
   top: number;
   height: number;
+  /** The menu's width: the host's 420px, or less in a narrower field. */
+  width: number;
   placement: "above" | "below";
 }
 
@@ -407,7 +409,11 @@ function menuPosition(
   const view = textarea.ownerDocument.defaultView;
   const viewWidth = view?.innerWidth ?? 1024;
   const viewHeight = view?.innerHeight ?? 768;
-  const width = Math.min(MENU_MAX_WIDTH, viewWidth - VIEWPORT_MARGIN * 2);
+  const width = Math.min(
+    MENU_MAX_WIDTH,
+    viewWidth - VIEWPORT_MARGIN * 2,
+    Math.max(240, bounds.width)
+  );
   const lineTop = Math.min(
     Math.max(rect.top + caret.top, rect.top),
     Math.max(rect.top, rect.bottom - caret.height)
@@ -426,6 +432,7 @@ function menuPosition(
     left,
     top,
     height,
+    width,
     placement: above >= MENU_ROOM || above >= below ? "above" : "below",
   };
 }
@@ -595,9 +602,14 @@ function MentionField(props: MentionFieldProps) {
     const place = () => setPosition(menuPosition(el, sessionStart, menuFrame?.current));
     view.addEventListener("resize", place);
     view.addEventListener("scroll", place, true);
+    // A pane resized while the menu is open narrows the field under it.
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => place());
+    observer?.observe(menuFrame?.current ?? el);
     return () => {
       view.removeEventListener("resize", place);
       view.removeEventListener("scroll", place, true);
+      observer?.disconnect();
     };
   }, [sessionStart, menuFrame]);
 
@@ -805,8 +817,14 @@ function MentionField(props: MentionFieldProps) {
                 }}
                 style={
                   position.placement === "below"
-                    ? { left: 0, top: "100%", bottom: "auto", marginTop: 4 }
-                    : { left: 0, marginBottom: 4 }
+                    ? {
+                        left: 0,
+                        top: "100%",
+                        bottom: "auto",
+                        marginTop: 4,
+                        width: position.width,
+                      }
+                    : { left: 0, marginBottom: 4, width: position.width }
                 }
                 listboxId={listboxId}
                 title={trigger?.title}
@@ -974,11 +992,6 @@ function KitComposer(props: PluginComposerProps) {
       }
       return;
     }
-    if (event.key === "Escape" && working && stop) {
-      event.preventDefault();
-      event.stopPropagation();
-      halt();
-    }
   };
 
   const remove = (id: string, index: number, button: HTMLButtonElement) => {
@@ -1009,6 +1022,15 @@ function KitComposer(props: PluginComposerProps) {
         inert ? "cursor-not-allowed opacity-50" : "cursor-text",
         str(className)
       )}
+      onKeyDown={(event) => {
+        // Escape stops from anywhere in the composer, Stop itself included.
+        // An open suggestion menu takes its own Escape first and stops it
+        // here.
+        if (event.key !== "Escape" || !working || !stop || event.defaultPrevented) return;
+        event.preventDefault();
+        event.stopPropagation();
+        halt();
+      }}
       onPointerDown={(event) => {
         // A press on the shell's padding puts the caret in the text.
         if (event.target !== event.currentTarget || inert) return;
@@ -1480,6 +1502,9 @@ function KitSecretInput(props: PluginSecretInputProps) {
   const [focusTarget, setFocusTarget] = useState<"field" | "replace" | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const replaceRef = useRef<HTMLButtonElement>(null);
+  // Each Replace is a session; a save still out when it ends is ignored.
+  const replaceSessionRef = useRef(0);
+  const savingRef = useRef(false);
   const handleValue = fn(onValueChange);
   const replace = fn(onReplace);
   const cancelReplace = fn(onCancelReplace);
@@ -1526,22 +1551,36 @@ function KitSecretInput(props: PluginSecretInputProps) {
   // returns, or once its promise resolves. A throw or a rejection keeps the
   // typed value in the field to try again.
   const submitDraft = () => {
+    // One save at a time: a second Enter while one is out does nothing.
+    if (savingRef.current) return;
     const outcome = attempt(() => submit?.(text));
     if (!outcome.ok) {
       logError("[plugin-ui] SecretInput onSubmit threw", outcome.error);
       return;
     }
     if (!replacing || stored !== true) return;
+    const session = replaceSessionRef.current;
     const done = () => {
+      savingRef.current = false;
+      // A save that lands after the user backed out, or started another
+      // replace, must not close or clear the field they are in now.
+      if (replaceSessionRef.current !== session) return;
       change("");
       setReplacing(false);
       setShown(false);
       setFocusTarget("replace");
     };
-    if (isThenable(outcome.value)) settleThenable(outcome.value).then(done, () => {});
-    else done();
+    if (!isThenable(outcome.value)) {
+      done();
+      return;
+    }
+    savingRef.current = true;
+    settleThenable(outcome.value).then(done, () => {
+      savingRef.current = false;
+    });
   };
   const backOut = () => {
+    replaceSessionRef.current++;
     change("");
     setReplacing(false);
     setShown(false);
@@ -1582,6 +1621,8 @@ function KitSecretInput(props: PluginSecretInputProps) {
           size={compact ? "xs" : "sm"}
           disabled={inert}
           onClick={() => {
+            replaceSessionRef.current++;
+            savingRef.current = false;
             change("");
             setReplacing(true);
             setShown(false);
@@ -1923,12 +1964,15 @@ function KitKeyValueEditor(props: PluginKeyValueEditorProps) {
               "min-w-0 font-mono"
             )}
           />
-          <div className="min-w-0">
+          {/* A flex cell, so the field inside sits on the row's centre line
+              rather than on a text baseline 2px below the key field. */}
+          <div className="flex min-w-0">
             {row.secret ? (
               <KitSecretInput
                 value={row.value}
                 onValueChange={(next) => patch(row.id, { value: next })}
                 density="compact"
+                className="w-full"
                 placeholder={nonEmpty(valuePlaceholder) ?? "Value"}
                 aria-label={`${nonEmpty(valueLabel) ?? "Value"} of ${name}`}
                 disabled={inert}
@@ -1975,11 +2019,7 @@ function KitKeyValueEditor(props: PluginKeyValueEditorProps) {
             </Button>
           </div>
         </div>
-        {error ? (
-          <InlineError id={errorId} className="pl-0.5">
-            {error}
-          </InlineError>
-        ) : null}
+        {error ? <InlineError id={errorId}>{error}</InlineError> : null}
       </div>
     );
   };
@@ -2196,11 +2236,7 @@ function KitListEditor(props: PluginListEditorProps) {
             <X aria-hidden="true" />
           </Button>
         </div>
-        {error ? (
-          <InlineError id={errorId} className="pl-0.5">
-            {error}
-          </InlineError>
-        ) : null}
+        {error ? <InlineError id={errorId}>{error}</InlineError> : null}
       </div>
     );
   };
@@ -2359,7 +2395,22 @@ function KitShortcutRecorder(props: PluginShortcutRecorderProps) {
     if (!recording) return;
     // The app's own shortcuts stand down while a combo is being recorded.
     const release = keybindingService.beginShortcutCapture();
-    return () => release();
+    // Held keys can't be seen once the window loses focus, and a chord
+    // window must not finish while another app is in front: recording ends,
+    // and the shortcut it had stays.
+    const view = fieldRef.current?.ownerDocument.defaultView;
+    const cancel = () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = null;
+      setFirstStep(null);
+      setHeld([]);
+      setRecording(false);
+    };
+    view?.addEventListener("blur", cancel);
+    return () => {
+      view?.removeEventListener("blur", cancel);
+      release();
+    };
   }, [recording]);
 
   useEffect(() => {
@@ -2467,9 +2518,11 @@ function KitShortcutRecorder(props: PluginShortcutRecorderProps) {
     finish([step]);
   };
 
-  // While a new shortcut is being pressed, the warnings about the one it
-  // would replace are beside the point.
-  const shownCombo = recording ? null : combo;
+  // The warnings follow what is in force until a new shortcut is under way,
+  // then its first step: never the shortcut it is replacing, and no line
+  // that comes and goes (moving the fields below) just because the field
+  // took focus.
+  const shownCombo = recording && firstStep !== null ? firstStep : combo;
   const hostWarning = shownCombo && checkHostConflicts !== false ? hostConflict(shownCombo) : null;
   const ownWarning = shownCombo ? verdict(conflictOf, shownCombo, null) : null;
   const warnings = [ownWarning, hostWarning].filter((line): line is string => line !== null);
