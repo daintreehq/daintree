@@ -212,6 +212,12 @@ describe("MentionTextarea", () => {
     expect(field.value).toBe("hi!");
   });
 
+  it("shows each row as the token it inserts", () => {
+    render(<Mentions />);
+    type(textarea(), "@car");
+    expect(screen.getByRole("option", { name: /@carol/ })).toBeTruthy();
+  });
+
   it("says when nothing matches", () => {
     render(<Mentions />);
     type(textarea(), "@zz");
@@ -292,6 +298,22 @@ describe("Composer", () => {
     expect(onSubmit).not.toHaveBeenCalled();
     fireEvent.keyDown(field, { key: "Enter" });
     expect(onSubmit).toHaveBeenCalledWith("go");
+  });
+
+  it("keeps one button through Send and Stop, so focus stays on it", () => {
+    const { rerender } = render(
+      <kit.Composer aria-label="Prompt" value="go" onSubmit={() => {}} onStop={() => {}} />,
+      { wrapper: TooltipProvider }
+    );
+    const send = screen.getByRole("button", { name: "Send" });
+    send.focus();
+    rerender(
+      <kit.Composer aria-label="Prompt" value="go" onSubmit={() => {}} onStop={() => {}} busy />
+    );
+    const stop = screen.getByRole("button", { name: "Stop" });
+    expect(stop).toBe(send);
+    expect(document.activeElement).toBe(stop);
+    expect(screen.getByRole("status").textContent).toBe("Working");
   });
 
   it("holds Send while empty", () => {
@@ -565,6 +587,12 @@ describe("InlineEdit", () => {
     expect(screen.getByText("That name is taken")).toBeTruthy();
   });
 
+  it("gives its text the width it takes, with no negative margin a truncating title would clip", () => {
+    render(<kit.InlineEdit aria-label="Name" value="Create issue" onCommit={() => {}} />);
+    const display = screen.getByRole("button");
+    expect([...display.classList].filter((name) => /^-m[xlrse]?-/.test(name))).toEqual([]);
+  });
+
   it("commits nothing for an unchanged value, and honours doubleClick activation", () => {
     const onCommit = vi.fn();
     render(
@@ -784,6 +812,33 @@ describe("SecretInput", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Replace" }));
   });
 
+  it("goes back to the saved state once a replacement is submitted", () => {
+    const onSubmit = vi.fn();
+    render(<kit.SecretInput aria-label="Token" stored onSubmit={onSubmit} />);
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    const input = screen.getByLabelText("Token");
+    fireEvent.change(input, { target: { value: "new-token" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSubmit).toHaveBeenCalledWith("new-token");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Replace" }));
+  });
+
+  it("stays in the field when a replacement's save fails", async () => {
+    render(
+      <kit.SecretInput
+        aria-label="Token"
+        stored
+        onSubmit={() => Promise.reject(new Error("keychain locked"))}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    const input = screen.getByLabelText("Token");
+    fireEvent.change(input, { target: { value: "new-token" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await flush();
+    expect((screen.getByLabelText("Token") as HTMLInputElement).value).toBe("new-token");
+  });
+
   it("submits on Enter", () => {
     const onSubmit = vi.fn();
     render(<kit.SecretInput aria-label="Key" defaultValue="s3cret" onSubmit={onSubmit} />);
@@ -900,6 +955,24 @@ describe("ShortcutRecorder", () => {
     });
     fireEvent.keyDown(recorder(), { key: "p", code: "KeyP", ctrlKey: true });
     expect(onValueChange).not.toHaveBeenCalled();
+  });
+
+  it("hides the warnings about the shortcut being replaced while recording", () => {
+    vi.spyOn(keybindingService, "findConflicts").mockReturnValue([
+      { actionId: "a", combo: "Cmd+T", description: "New terminal", kind: "conflict" } as never,
+    ]);
+    render(<kit.ShortcutRecorder defaultValue="Cmd+T" />);
+    expect(screen.getByText(/New terminal/)).toBeTruthy();
+    act(() => recorder().focus());
+    expect(screen.queryByText(/New terminal/)).toBeNull();
+  });
+
+  it("puts a keyboard user back on the field after Clear", () => {
+    render(<kit.ShortcutRecorder defaultValue="Cmd+J" checkHostConflicts={false} />);
+    const clear = screen.getByRole("button", { name: "Clear shortcut" });
+    clear.focus();
+    fireEvent.click(clear);
+    expect(document.activeElement).toBe(recorder());
   });
 
   it("keeps the caller's description beside its own", () => {
