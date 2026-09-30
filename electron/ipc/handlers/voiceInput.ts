@@ -11,13 +11,19 @@ import type {
   VoiceInputSettings,
   VoiceTranscriptionProvider,
 } from "../../../shared/types/ipc/api.js";
-import { logDebug } from "../../utils/logger.js";
+import { logDebug, logWarn } from "../../utils/logger.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { applyDictationCommands } from "../../services/voiceDictationCommands.js";
 import { VOICE_DICTATION_AI_MODEL } from "../../../shared/config/voiceCorrection.js";
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
 import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
+import {
+  AUDIO_BUFFER_MAX_BYTES,
+  AUDIO_BUFFER_MAX_CHUNKS,
+  AUDIO_BUFFER_OVERFLOW_CODE,
+  createAudioBufferOverflowError,
+} from "../../services/voice/TranscriptionProvider.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
 import { typedHandle, typedHandleValidated, typedHandleWithContext } from "../utils.js";
@@ -37,6 +43,19 @@ let sessionProjectInfo: { name?: string; path?: string } = {};
 // Bumped on every start so a slow keyterm-assembly await can detect that a
 // newer start (or a stop) has superseded it and bail before calling svc.start.
 let voiceStartNonce = 0;
+// The renderer streams audio as soon as capture is attached, before main has
+// loaded the service, assembled keyterms, and created a provider. Chunks for the
+// start in flight are held here and handed to the new provider exactly once;
+// without this they'd go to no provider, or to the previous session's stopped one.
+let preStartAudio: {
+  nonce: number;
+  chunks: ArrayBuffer[];
+  bytes: number;
+  overflowed: boolean;
+} | null = null;
+// Overflow can be hit both here and in the provider's own connect buffer — one
+// report per session is enough.
+let overflowReportedNonce: number | null = null;
 
 const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram"];
 
@@ -338,13 +357,53 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     }
   };
 
+  const reportAudioOverflow = (nonce: number) => {
+    if (overflowReportedNonce === nonce) return;
+    overflowReportedNonce = nonce;
+    const win = deps.mainWindow;
+    if (!win || win.isDestroyed()) return;
+    getAppWebContents(win).send(CHANNELS.VOICE_INPUT_ERROR, createAudioBufferOverflowError());
+  };
+
+  const flushPreStartAudio = (nonce: number, svc: VoiceTranscriptionService) => {
+    const pending = preStartAudio;
+    if (!pending || pending.nonce !== nonce) return;
+    preStartAudio = null;
+    if (pending.chunks.length > 0) {
+      logDebug("[VoiceInput] Flushing pre-start audio", {
+        chunks: pending.chunks.length,
+        bytes: pending.bytes,
+      });
+    }
+    for (const chunk of pending.chunks) {
+      svc.sendAudioChunk(chunk);
+    }
+  };
+
   const handleStart = async (ctx: IpcContext) => {
     // Bump the start nonce for EVERY start so a later start of any provider
     // (and the stop handler) supersedes a start still awaiting the service
     // import or keyterm assembly. Captured before the first await so a stop
-    // landing during the dynamic import still wins.
+    // landing during the dynamic import still wins — and the audio buffer is
+    // armed in the same synchronous prefix, before any chunk of this capture
+    // can arrive.
     const myNonce = ++voiceStartNonce;
+    preStartAudio = { nonce: myNonce, chunks: [], bytes: 0, overflowed: false };
+    try {
+      return await startSession(ctx, myNonce);
+    } finally {
+      // Superseded, failed, or threw before the handoff — the held audio
+      // belongs to no session.
+      if (preStartAudio?.nonce === myNonce) preStartAudio = null;
+    }
+  };
+
+  const startSession = async (ctx: IpcContext, myNonce: number) => {
     const svc = await getService();
+    // The renderer went away during the import — nothing is left to record for.
+    if (ctx.event.sender.isDestroyed()) {
+      return { ok: false, error: "Voice session superseded" };
+    }
     // Snapshot transcription settings at session start (model, language, API key).
     // Correction settings are read live from store per-event so mid-session changes apply.
     const settings = getVoiceSettings();
@@ -477,6 +536,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           rawText: null,
         });
       } else if (voiceEvent.type === "error") {
+        if (voiceEvent.error.code === AUDIO_BUFFER_OVERFLOW_CODE) {
+          if (overflowReportedNonce === myNonce) return;
+          overflowReportedNonce = myNonce;
+        }
         getAppWebContents(win).send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.error);
       } else if (voiceEvent.type === "status") {
         getAppWebContents(win).send(CHANNELS.VOICE_INPUT_STATUS, voiceEvent.status);
@@ -493,6 +556,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       activeDestroyListener = null;
       unsubscribe();
       service?.stop();
+      // Supersede this start if it hasn't reached svc.start() yet, so the dead
+      // renderer's held audio is never flushed into an orphaned session.
+      if (voiceStartNonce === myNonce) voiceStartNonce++;
+      if (preStartAudio?.nonce === myNonce) preStartAudio = null;
     };
     ctx.event.sender.once("destroyed", onDestroyed);
     activeDestroyListener = { sender: ctx.event.sender, fn: onDestroyed };
@@ -526,7 +593,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       }
       return { ok: false, error: "Voice session superseded" };
     }
-    const result = await svc.start({ ...settings, keyterms });
+    // Not awaited before the flush: start() installs the provider and enters its
+    // pending-start state synchronously, so the held audio lands in the
+    // provider's own connect buffer, ahead of any chunk that arrives next.
+    const startPromise = svc.start({ ...settings, keyterms });
+    flushPreStartAudio(myNonce, svc);
+    const result = await startPromise;
     if (!result.ok) {
       // Failed to start — clean up subscription immediately
       if (activeEventUnsubscribe === unsubscribe) {
@@ -548,6 +620,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Supersede any start still awaiting keyterm assembly so it bails instead of
     // bringing up a session we're trying to stop.
     voiceStartNonce++;
+    preStartAudio = null;
     // Snapshot the session controller so concurrent start/stop cannot cross-abort.
     const controller = sessionController;
 
@@ -578,7 +651,30 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   };
 
   const handleAudioChunk = (_event: Electron.IpcMainEvent, chunk: ArrayBuffer) => {
-    service?.sendAudioChunk(chunk);
+    const pending = preStartAudio;
+    if (!pending) {
+      service?.sendAudioChunk(chunk);
+      return;
+    }
+    // Drop-newest: the start of the utterance is what this buffer exists to keep.
+    // Once full, stay full — a later, smaller chunk must not be spliced in after a gap.
+    if (
+      pending.overflowed ||
+      pending.chunks.length >= AUDIO_BUFFER_MAX_CHUNKS ||
+      pending.bytes + chunk.byteLength > AUDIO_BUFFER_MAX_BYTES
+    ) {
+      if (!pending.overflowed) {
+        pending.overflowed = true;
+        logWarn("[VoiceInput] Pre-start audio buffer full, dropping audio", {
+          chunks: pending.chunks.length,
+          bytes: pending.bytes,
+        });
+        reportAudioOverflow(pending.nonce);
+      }
+      return;
+    }
+    pending.chunks.push(chunk);
+    pending.bytes += chunk.byteLength;
   };
 
   const handleCheckMicPermission = () => {
@@ -661,6 +757,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     for (const cleanup of cleanups) cleanup();
     ipcMain.removeListener(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, handleAudioChunk);
     cleanupActiveSubscription();
+    preStartAudio = null;
+    overflowReportedNonce = null;
     service?.destroy();
     service = null;
     servicePromise = null;

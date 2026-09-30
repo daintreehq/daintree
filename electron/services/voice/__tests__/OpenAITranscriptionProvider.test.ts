@@ -817,8 +817,10 @@ describe("OpenAITranscriptionProvider", () => {
     ]);
   });
 
-  it("caps the pre-connect buffer at 100 chunks and warns once on overflow", async () => {
+  it("caps the pre-connect buffer at 100 chunks and reports the overflow once", async () => {
     const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
     void service.start(BASE_SETTINGS);
     await Promise.resolve();
 
@@ -834,6 +836,11 @@ describe("OpenAITranscriptionProvider", () => {
       .sentJson()
       .filter((p) => p.type === "input_audio_buffer.append").length;
     expect(audioCount).toBe(100);
+    const overflows = events.filter(
+      (e) => e.type === "error" && e.error.code === "audio_buffer_overflow"
+    );
+    expect(overflows).toHaveLength(1);
+    expect(overflows[0]).toMatchObject({ error: { severity: "transient" } });
     service.stop();
   });
 
