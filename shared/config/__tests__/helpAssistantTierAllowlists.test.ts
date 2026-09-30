@@ -71,12 +71,20 @@ describe("tool set lists", () => {
     for (const [unscoped, owned] of Object.entries(OWNED_TWIN_TOOLS)) {
       expect(full.has(unscoped), unscoped).toBe(true);
       // The owned form is added for other origins; it is never listed beside
-      // the unscoped one, except the owned worktree delete, which core carries
-      // on its own merits.
+      // the unscoped one, except the owned worktree delete, which assistant
+      // runbooks already call by name.
       if (owned !== "worktree.deleteOwned") {
         expect(full.has(owned), owned).toBe(false);
       }
     }
+  });
+
+  // The assistant cleans up worktrees it did not create in this help session —
+  // an earlier session's, or its own from before a restart — without being
+  // moved to `full` (#13135). Confirmation, not the tool set, is what asks.
+  it("carries the unscoped worktree delete in core", () => {
+    expect(CORE_TIER_TOOLS as readonly string[]).toContain("worktree.delete");
+    expect(FULL_TIER_ADDONS as readonly string[]).not.toContain("worktree.delete");
   });
 
   it("only pins high-blast-radius tools that are on some tool set", () => {
@@ -100,8 +108,8 @@ describe("toNonRendererOwnedTools", () => {
     );
   });
 
-  // `full` carries both core's owned delete and the unscoped one; the swap must
-  // not leave the owned form listed twice.
+  // Core carries both the owned delete and the unscoped one; the swap must not
+  // leave the owned form listed twice.
   it("collapses a twin that is already present", () => {
     expect(
       toNonRendererOwnedTools(["worktree.deleteOwned", "worktree.list", "worktree.delete"])
@@ -120,5 +128,12 @@ describe("toNonRendererOwnedTools", () => {
         tier
       ).toEqual([]);
     }
+  });
+
+  it("gives other origins only the owned worktree delete at core", () => {
+    const projected = toNonRendererOwnedTools(HELP_TIER_CUMULATIVE.core);
+    expect(projected).toContain("worktree.deleteOwned");
+    expect(projected).not.toContain("worktree.delete");
+    expect(projected.filter((id) => id === "worktree.deleteOwned")).toHaveLength(1);
   });
 });

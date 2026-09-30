@@ -1833,7 +1833,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // session", so beyond widening the floor it also stands in for the
     // confirmation that approval replaced (#12692). That second job is why a
     // pane consults it even for a tool its tier already permits — the
-    // `full`-tier `worktree.delete` a user has allowed for the session.
+    // `worktree.deleteOwned` a user has allowed for the session.
     if (!tierPermitted || paneApproval) {
       const grant = sessionStore.grantCache.check(sessionId, actionId);
       if (grant.granted) {
@@ -1851,7 +1851,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // (#11878). It used to sit inside the tier-denied branch, behind the
     // per-tool check — which left the grant unreachable both for a tool the
     // tier already permitted (`worktree.delete` is `danger: "confirm"` and sits
-    // in `full`) and for one a per-tool grant had just
+    // in core) and for one a per-tool grant had just
     // admitted.
     // Either way the modal still fired on every call despite an explicit
     // Settings pre-authorisation.
@@ -2174,8 +2174,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // When the grant WAS the authorization, losing it fails closed. When the
     // floor or a per-tool grant already admitted it, the grant only bought a
     // confirmation bypass — so drop the bypass and let the normal modal
-    // decide. Refusing there would answer a `full`-tier `worktree.delete`
-    // with "not permitted for the 'full' tier", which is simply untrue.
+    // decide. Refusing there would answer a tier-permitted `worktree.delete`
+    // with "not permitted for the 'core' tier", which is simply untrue.
     //
     // Accounting note: a matching call spends a use even when the tool is not
     // confirm-gated, so the grant buys it nothing. Charging only where the

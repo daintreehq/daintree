@@ -63,9 +63,16 @@ export const CORE_TIER_TOOLS = [
   // Waits on the PR Daintree already detects, so a queue can start the next
   // agent once this one has opened its PR without polling the forge (#12717).
   "worktree.waitForPullRequest",
-  // The counterpart to creation, and only that: it deletes a worktree this
-  // session created and refuses everything else (#11909). Keeps
-  // `danger: "confirm"`, so a human still approves it.
+  // Reaches any eligible worktree in the project, not only ones this help
+  // session made, so cleanup survives a restart or a new help session
+  // (#13135). Swapped for `worktree.deleteOwned` outside the assistant.
+  // `danger: "confirm"`: it asks unless the user has skipped confirmations,
+  // and the main worktree, the submodule guard and the typed-name gate for a
+  // D3 force (#12115) refuse under any grant.
+  "worktree.delete",
+  // What every other session gets in the unscoped delete's place: it deletes
+  // a worktree the calling session created and refuses everything else
+  // (#11909).
   "worktree.deleteOwned",
   // `worktree.createWithRecipe` takes a recipe id, and nothing else says what
   // the ids are.
@@ -142,11 +149,6 @@ export const FULL_TIER_ADDONS = [
   ACTIONS_LIST_TOOL,
   "worktree.getCurrent",
   "worktree.setActive",
-  // The unscoped delete: it reaches any eligible worktree in the project, not
-  // only ones the session made, so it sits here while the owned form is core.
-  // `danger: "confirm"`, and a force whose target resolves to D3 still
-  // escalates to the typed-name gate (#12115) even under a grant.
-  "worktree.delete",
   "worktree.reviewReadiness",
   "worktree.resource.status",
   "worktree.resource.provision",
@@ -250,8 +252,8 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
 /**
  * The surface a session whose origin is not renderer-owned is admitted
  * against: each unscoped tool swapped for its owned twin, and the reserved
- * tools removed. Order-preserving and duplicate-free, so `full` — which carries
- * both `worktree.delete` and core's `worktree.deleteOwned` — collapses to one.
+ * tools removed. Order-preserving and duplicate-free, so core — which carries
+ * both `worktree.delete` and `worktree.deleteOwned` — collapses to one.
  */
 export function toNonRendererOwnedTools(ids: readonly string[]): string[] {
   const reserved = new Set<string>(RENDERER_OWNED_ORIGIN_ONLY_TOOLS);
