@@ -65,6 +65,7 @@ import {
 import { markRendererPerformance } from "@/utils/performance";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { PluginKitOwnerContext } from "@/components/PluginKit/kitScope";
+import { PluginKitViewHostContext } from "@/components/PluginKit/kitViewHost";
 
 /**
  * The resolved subset of `PanelKindConfig` a plugin view actually needs. Both
@@ -1112,6 +1113,17 @@ export function makePluginViewContent(
         unregister();
       };
     }, []);
+    // What the kit's hooks read about this view: the bag `usePersistentViewState`
+    // restores from and writes through, and the root view-scoped keys listen in.
+    const kitViewHost = useMemo(
+      () => ({
+        initialArgs: mountArgs,
+        persistState,
+        root: contentNodeRef,
+        keyEvents: new WeakSet<Event>(),
+      }),
+      [mountArgs, persistState]
+    );
     /** Focus lands here when the content it was inside goes inert. */
     const statusRef = useRef<HTMLDivElement | null>(null);
     /** Whether focus is currently somewhere inside the plugin's own content. */
@@ -1720,26 +1732,31 @@ export function makePluginViewContent(
                     }
                   }}
                   ref={styleRootRef}
+                  // Marks keys that reached this view through React, portals
+                  // included, for the kit's view-scoped hotkeys.
+                  onKeyDownCapture={(e) => kitViewHost.keyEvents.add(e.nativeEvent)}
                   {...styleRootProps}
                 >
                   <Profiler id={kindId} onRender={onViewCommit}>
                     {/* Kit overlays portal out of the root above; this is how
                           they still name the plugin that owns them. */}
                     <PluginKitOwnerContext.Provider value={pluginId}>
-                      <View
-                        panelId={panelId}
-                        pluginId={pluginId}
-                        disposeSignal={controller.signal}
-                        panelRemovedSignal={panelRemovedSignal}
-                        initialArgs={mountArgs}
-                        stateVersion={mountStateVersion}
-                        persistState={persistState}
-                        requestReload={requestReload}
-                        setHasUnsavedChanges={setHasUnsavedChanges}
-                        worktreeId={worktreeId}
-                        styleRootAttributes={styleRootProps}
-                        {...(settingsContext ? { settingsContext } : {})}
-                      />
+                      <PluginKitViewHostContext.Provider value={kitViewHost}>
+                        <View
+                          panelId={panelId}
+                          pluginId={pluginId}
+                          disposeSignal={controller.signal}
+                          panelRemovedSignal={panelRemovedSignal}
+                          initialArgs={mountArgs}
+                          stateVersion={mountStateVersion}
+                          persistState={persistState}
+                          requestReload={requestReload}
+                          setHasUnsavedChanges={setHasUnsavedChanges}
+                          worktreeId={worktreeId}
+                          styleRootAttributes={styleRootProps}
+                          {...(settingsContext ? { settingsContext } : {})}
+                        />
+                      </PluginKitViewHostContext.Provider>
                     </PluginKitOwnerContext.Provider>
                   </Profiler>
                   <PluginViewPaintReporter timing={attempt.timing} />

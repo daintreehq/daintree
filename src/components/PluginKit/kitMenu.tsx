@@ -8,9 +8,13 @@ import {
   ContextMenuRadioItem,
   ContextMenuSeparator,
   ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
 import { resolvePluginKitIcon } from "./PluginKitIcons";
-import { field, fn, nonEmpty, str } from "./kitProps";
+import { field, fn, nonEmpty, str, useKitOwnerAttributes } from "./kitProps";
+import { useKitOverlayZClass } from "./kitScope";
 
 /**
  * The host menu primitives a kit menu draws its rows with. `DropdownMenu` and
@@ -23,12 +27,14 @@ export interface KitMenuParts {
     onSelect?: () => void;
     disabled?: boolean;
     destructive?: boolean;
+    textValue?: string;
   }>;
   CheckboxItem: ComponentType<{
     children?: ReactNode;
     checked?: boolean;
     onCheckedChange?: (checked: boolean) => void;
     disabled?: boolean;
+    textValue?: string;
   }>;
   RadioGroup: ComponentType<{
     children?: ReactNode;
@@ -40,9 +46,19 @@ export interface KitMenuParts {
   Label: ComponentType<{ children?: ReactNode }>;
   Separator: ComponentType<object>;
   Shortcut: ComponentType<{ shortcut: string | null | undefined }>;
+  /**
+   * The family's native submenu. Optional so a parts table without one still
+   * renders every other row; a `submenu` entry then renders nothing.
+   */
+  Sub?: ComponentType<{ children?: ReactNode }>;
+  SubTrigger?: ComponentType<{ children?: ReactNode; disabled?: boolean; textValue?: string }>;
+  SubContent?: ComponentType<{ children?: ReactNode; className?: string }>;
 }
 
 export const CONTEXT_MENU_PARTS: KitMenuParts = {
+  Sub: ContextMenuSub,
+  SubTrigger: ContextMenuSubTrigger,
+  SubContent: ContextMenuSubContent,
   Item: ContextMenuItem,
   CheckboxItem: ContextMenuCheckboxItem,
   RadioGroup: ContextMenuRadioGroup,
@@ -75,10 +91,66 @@ function readRadioItems(items: unknown): { value: string; label: string; disable
   return out;
 }
 
+function MenuRowIcon({
+  Glyph,
+  top,
+}: {
+  Glyph: ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
+  top: boolean;
+}) {
+  return (
+    // `data-menu-icon` gives text-only rows in the same menu the matching gutter.
+    // Beside a two-line row it sits on the label's line, not between the two.
+    <span
+      data-menu-icon=""
+      aria-hidden="true"
+      className={top ? "mr-2 inline-flex shrink-0 self-start py-px" : "mr-2 inline-flex shrink-0"}
+    >
+      <Glyph className="h-3.5 w-3.5" aria-hidden="true" />
+    </span>
+  );
+}
+
+/**
+ * A row's label, and its description as a quieter second line — the shape
+ * the browser toolbar's history menu draws its title and address in.
+ */
+function MenuRowText({ label, description }: { label: string; description?: string }) {
+  if (description === undefined) return <>{label}</>;
+  return (
+    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <span className="truncate">{label}</span>
+      <span className="text-2xs text-text-secondary">{description}</span>
+    </span>
+  );
+}
+
+/** A submenu's panel, in the same layer and with the same owner as the menu it opens from. */
+function KitSubmenuContent({
+  SubContent,
+  children,
+}: {
+  SubContent: NonNullable<KitMenuParts["SubContent"]>;
+  children: ReactNode;
+}) {
+  const overlayZ = useKitOverlayZClass();
+  const owner = useKitOwnerAttributes();
+  return (
+    <SubContent {...owner} className={overlayZ}>
+      {children}
+    </SubContent>
+  );
+}
+
+// A plugin's items can nest (or, by mistake, contain themselves); past this
+// depth a submenu renders nothing rather than recursing without end.
+const MAX_SUBMENU_DEPTH = 6;
+
 function renderMenuEntry(
   parts: KitMenuParts,
   typed: PluginDropdownMenuEntry,
-  index: number
+  index: number,
+  depth: number
 ): ReactNode {
   if (typeof typed !== "object" || typed === null) return null;
   const key = `entry-${index}`;
@@ -120,9 +192,28 @@ function renderMenuEntry(
           checked={typed.checked === true}
           onCheckedChange={(next) => onCheckedChange?.(next === true)}
           disabled={typed.disabled === true}
+          textValue={label}
         >
-          {label}
+          <MenuRowText label={label} description={nonEmpty(typed.description)} />
         </parts.CheckboxItem>
+      );
+    }
+    case "submenu": {
+      const label = str(typed.label);
+      if (!label || !parts.Sub || !parts.SubTrigger || !parts.SubContent) return null;
+      if (depth >= MAX_SUBMENU_DEPTH) return null;
+      const rows = renderMenuEntries(parts, typed.items, depth + 1).filter((row) => row !== null);
+      if (rows.length === 0) return null;
+      const Glyph = typed.icon === undefined ? undefined : resolvePluginKitIcon(typed.icon);
+      const description = nonEmpty(typed.description);
+      return (
+        <parts.Sub key={key}>
+          <parts.SubTrigger disabled={typed.disabled === true} textValue={label}>
+            {Glyph ? <MenuRowIcon Glyph={Glyph} top={description !== undefined} /> : null}
+            <MenuRowText label={label} description={description} />
+          </parts.SubTrigger>
+          <KitSubmenuContent SubContent={parts.SubContent}>{rows}</KitSubmenuContent>
+        </parts.Sub>
       );
     }
     case undefined:
@@ -131,20 +222,21 @@ function renderMenuEntry(
       const onSelect = fn(typed.onSelect);
       if (!label) return null;
       const Glyph = typed.icon === undefined ? undefined : resolvePluginKitIcon(typed.icon);
+      const description = nonEmpty(typed.description);
       return (
         <parts.Item
           key={key}
           onSelect={() => onSelect?.()}
           disabled={typed.disabled === true}
           destructive={typed.destructive === true}
+          textValue={label}
         >
-          {Glyph ? (
-            // `data-menu-icon` gives text-only rows in the same menu the matching gutter.
-            <span data-menu-icon="" aria-hidden="true" className="mr-2 inline-flex shrink-0">
-              <Glyph className="h-3.5 w-3.5" aria-hidden="true" />
-            </span>
-          ) : null}
-          {label}
+          {Glyph ? <MenuRowIcon Glyph={Glyph} top={description !== undefined} /> : null}
+          {description === undefined ? (
+            label
+          ) : (
+            <MenuRowText label={label} description={description} />
+          )}
           <parts.Shortcut shortcut={str(typed.shortcut)} />
         </parts.Item>
       );
@@ -155,9 +247,9 @@ function renderMenuEntry(
 }
 
 /** A kit menu's `items`, as rows of the given host menu family. */
-export function renderMenuEntries(parts: KitMenuParts, items: unknown): ReactNode[] {
+export function renderMenuEntries(parts: KitMenuParts, items: unknown, depth = 0): ReactNode[] {
   const entries: readonly PluginDropdownMenuEntry[] = Array.isArray(items) ? items : [];
-  return entries.map((entry, index) => renderMenuEntry(parts, entry, index));
+  return entries.map((entry, index) => renderMenuEntry(parts, entry, index, depth));
 }
 
 /**

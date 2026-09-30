@@ -682,12 +682,16 @@ function KitSettingsActions({ children, status, ...rest }: PluginSettingsActions
 const LIST_ROW_BOX =
   "flex w-full min-w-0 items-center gap-2 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left text-sm text-text-primary";
 
+const LIST_ROW_CURSOR_CLASS =
+  "in-focus-visible:outline-solid in-focus-visible:outline-2 in-focus-visible:-outline-offset-2 in-focus-visible:outline-accent-primary";
+
 function KitListRow({
   title,
   subtitle,
   icon,
   meta,
   selected,
+  active,
   onSelect,
   disabled,
   className,
@@ -727,7 +731,20 @@ function KitListRow({
           if (!unavailable && typeof dom.onClick === "function") dom.onClick(event);
         }}
         aria-disabled={unavailable || undefined}
-        className={cn(PALETTE_ROW_CLASS, LIST_ROW_BOX, unavailable && "opacity-50", str(className))}
+        data-active={active === true ? "true" : undefined}
+        className={cn(
+          PALETTE_ROW_CLASS,
+          LIST_ROW_BOX,
+          // An option is chosen, not read: Shift-click extends the selection
+          // rather than dragging a text selection across the rows.
+          "select-none",
+          // In a multi-select list the fill is the selection, so the cursor
+          // takes the focus outline the app's own multi-select grids draw,
+          // shown only while the list has keyboard focus.
+          active === true && LIST_ROW_CURSOR_CLASS,
+          unavailable && "opacity-50",
+          str(className)
+        )}
       >
         {body}
       </div>

@@ -19,6 +19,7 @@ import type {
   PluginComboboxProps,
   PluginCommandPaletteProps,
   PluginConfirmDialogProps,
+  PluginConfirmPopoverProps,
   PluginContextMenuProps,
   PluginCopyButtonProps,
   PluginDataTableProps,
@@ -431,6 +432,23 @@ export const DonutChart: ComponentType<PluginDonutChartProps> = fromKit(
   (kit) => kit.DonutChart
 );
 
+// Selection, hotkeys, history, disclosure, debouncing, remembered view state,
+// toasts and inline confirms.
+
+export { useSelection } from "./selection";
+export { useHotkeys } from "./hotkeys";
+export { useUndoRedo } from "./undoRedo";
+export { useDisclosure } from "./disclosure";
+export { useDebouncedCallback, useDebouncedValue } from "./debounce";
+export { usePersistentViewState } from "./viewState";
+export { useToast } from "./toast";
+export const ConfirmPopover: ComponentType<PluginConfirmPopoverProps> = fromKit(
+  "ConfirmPopover",
+  (kit) => kit.ConfirmPopover,
+  // Like a Popover, the trigger is there from the first frame.
+  ({ trigger }) => (isValidElement(trigger) ? trigger : null)
+);
+
 export type {
   PluginMarkdownProps as MarkdownProps,
   PluginButtonProps as ButtonProps,
@@ -572,4 +590,24 @@ export type {
   PluginBarChartProps as BarChartProps,
   PluginLineChartProps as LineChartProps,
   PluginDonutChartProps as DonutChartProps,
+  PluginSelectionKey as SelectionKey,
+  PluginSelectionGesture as SelectionGesture,
+  PluginSelectionItemProps as SelectionItemProps,
+  UseSelectionOptions,
+  UseSelectionResult,
+  PluginHotkey as Hotkey,
+  UseHotkeysOptions,
+  UseUndoRedoOptions,
+  UseUndoRedoResult,
+  PluginUndoRedoPushOptions as UndoRedoPushOptions,
+  UseDisclosureOptions,
+  UseDisclosureResult,
+  UseDebouncedCallbackOptions,
+  PluginDebouncedCallback as DebouncedCallback,
+  PluginToastTone as ToastTone,
+  PluginViewToastOptions as ToastOptions,
+  PluginUndoToastOptions as UndoToastOptions,
+  PluginToastHandle as ToastHandle,
+  UseToastResult,
+  PluginConfirmPopoverProps as ConfirmPopoverProps,
 } from "@shared/types/plugin-sdk-react";

@@ -550,12 +550,30 @@ type PluginDropdownMenuEntry = {
     shortcut?: string;
     disabled?: boolean;
     destructive?: boolean;
+    /** A quiet second line under the label saying what the item does. */
+    description?: string;
 } | {
     type: "checkbox";
     label: string;
     checked: boolean;
     onCheckedChange: (checked: boolean) => void;
     disabled?: boolean;
+    /** A quiet second line under the label. */
+    description?: string;
+} | {
+    /**
+     * A row with a chevron that opens `items` in a nested menu: hovering
+     * or Right Arrow opens it, Left Arrow or Escape closes it, and typing
+     * jumps between its rows. The nested rows take every entry type,
+     * submenus included.
+     */
+    type: "submenu";
+    label: string;
+    items: readonly PluginDropdownMenuEntry[];
+    icon?: PluginIconName;
+    disabled?: boolean;
+    /** A quiet second line under the label. */
+    description?: string;
 } | {
     /** One choice from several, each a radio row with a check on the chosen one. */
     type: "radio-group";
@@ -1079,6 +1097,12 @@ interface PluginListRowProps extends Omit<PluginDomProps<HTMLElement>, "title"> 
     meta?: ReactNode;
     /** The selected record in a list-detail list (outside a listbox). */
     selected?: boolean;
+    /**
+     * The keyboard cursor in a multi-select listbox, where `aria-selected` marks
+     * the selection rather than the cursor: an outline while the list has
+     * keyboard focus. Pass `index === activeIndex`.
+     */
+    active?: boolean;
     onSelect?: () => void;
     /**
      * Dimmed and not clickable. In a `useListNavigation` listbox, report the same
@@ -1091,8 +1115,18 @@ interface PluginListRowProps extends Omit<PluginDomProps<HTMLElement>, "title"> 
 interface UseListNavigationOptions {
     /** Rows in the list. */
     count: number;
-    /** Enter, Space or a click on a row. */
-    onSelect?: (index: number) => void;
+    /**
+     * Enter, Space or a click on a row. `event` is the key or click that did it
+     * (absent when `getRowProps(i).onClick()` is called without one), so a
+     * multi-select list can read its modifiers (see `useSelection`).
+     */
+    onSelect?: (index: number, event?: KeyboardEvent<HTMLElement> | MouseEvent<HTMLElement>) => void;
+    /**
+     * The cursor moved by keyboard (arrows, Home/End, typeahead), with the key
+     * that moved it. With `useSelection`, pass `handleNavigate` here so
+     * Shift+Arrow extends the selection.
+     */
+    onActiveIndexChange?: (index: number, event: KeyboardEvent<HTMLElement>) => void;
     /** Past either end, go round to the other. Defaults to false. */
     loop?: boolean;
     /** Where the cursor starts. Defaults to 0. */
@@ -1120,7 +1154,8 @@ interface PluginListNavigationRowProps {
     "aria-selected": boolean;
     /** Set on rows `isDisabled` reports. */
     "aria-disabled"?: true;
-    onClick: () => void;
+    /** Takes the click, when there is one, so `onSelect` can read its modifiers. */
+    onClick: (event?: MouseEvent<HTMLElement>) => void;
     onPointerMove: () => void;
 }
 interface UseListNavigationResult {
@@ -2366,6 +2401,238 @@ interface PluginDaintreeTheme {
     readonly themeId: string;
     readonly tokens: PluginThemeTokens;
 }
+/** The id type `useSelection` keys rows by. */
+type PluginSelectionKey = string | number;
+/**
+ * A click or key that changes a selection. Only the modifiers and `key` are
+ * read, so a DOM event, a React event or a plain object all work.
+ */
+interface PluginSelectionGesture {
+    metaKey?: boolean;
+    ctrlKey?: boolean;
+    shiftKey?: boolean;
+    /** `" "` (Space) toggles the row rather than replacing the selection. */
+    key?: string;
+}
+interface UseSelectionOptions<K extends PluginSelectionKey = string> {
+    /**
+     * Every row's id, in the order the rows are shown. Ranges and "select all"
+     * walk this order, and `selected` only ever holds ids in it: a row filtered
+     * out of view drops out of `selected` until it is back.
+     */
+    ids: readonly K[];
+    /** `multiple` (the default) or `single`, where choosing a row replaces the last. */
+    mode?: "single" | "multiple";
+    /** Controlled selection. Pair with `onSelectedChange`. */
+    selected?: readonly K[];
+    /** The starting selection when uncontrolled. */
+    defaultSelected?: readonly K[];
+    /** Every change, as the new ids in row order. */
+    onSelectedChange?: (selected: K[]) => void;
+    /** Rows that cannot be selected: ranges and "select all" skip them. */
+    isDisabled?: (id: K) => boolean;
+}
+/** Props `useSelection().getItemProps(id)` hands a row that has no `useListNavigation`. */
+interface PluginSelectionItemProps {
+    "aria-selected": boolean;
+    onClick: (event: MouseEvent<HTMLElement>) => void;
+}
+interface UseSelectionResult<K extends PluginSelectionKey = string> {
+    /** The selected ids, in row order. */
+    selected: K[];
+    /** How many rows are selected. */
+    count: number;
+    /** The row the next Shift-click or Shift+Arrow extends from, or null. */
+    anchor: K | null;
+    isSelected: (id: K) => boolean;
+    /** Every selectable row is selected (false for an empty list). */
+    allSelected: boolean;
+    /** Adds or removes one row, and makes it the anchor. */
+    toggle: (id: K) => void;
+    /** Replaces the selection with these rows; the first becomes the anchor. */
+    select: (ids: K | readonly K[]) => void;
+    /**
+     * Selects from the anchor to `id`, replacing the last range but keeping
+     * rows Cmd/Ctrl-clicked before it. `additive` keeps the whole current
+     * selection as well. With no anchor it selects `id` alone.
+     */
+    selectRange: (id: K, options?: {
+        additive?: boolean;
+    }) => void;
+    selectAll: () => void;
+    clear: () => void;
+    /**
+     * A click or Enter/Space on a row, read the platform way: plain replaces
+     * the selection, Cmd (Ctrl elsewhere) or Space toggles, Shift selects a
+     * range from the anchor and Shift with Cmd/Ctrl adds the range. Pass it as
+     * `useListNavigation`'s `onSelect` (mapping the index to an id).
+     */
+    handleSelect: (id: K, gesture?: PluginSelectionGesture) => void;
+    /**
+     * The keyboard cursor arrived on `id`. With Shift held it selects the range
+     * from the anchor; otherwise it does nothing, so the cursor moves without
+     * changing the selection. Pass it as `useListNavigation`'s
+     * `onActiveIndexChange`.
+     */
+    handleNavigate: (id: K, gesture?: PluginSelectionGesture) => void;
+    /** `aria-selected` and a click handler for a row you draw without `useListNavigation`. */
+    getItemProps: (id: K) => PluginSelectionItemProps;
+}
+/** One view-scoped shortcut: a canonical combo and what it does. */
+interface PluginHotkey {
+    /**
+     * The app's chord notation, as `KbdChord` draws it: `"Delete"`,
+     * `"Cmd+A"`, `"Cmd+Shift+Z"`. `Cmd` is Command on macOS and Ctrl
+     * elsewhere; `Ctrl` is the Control key everywhere; `Alt` is Option on
+     * macOS. Single combos only, not two-step chords.
+     */
+    combo: string;
+    /** Runs on the key. The default is prevented unless you return `false`. */
+    handler: (event: globalThis.KeyboardEvent) => void | boolean;
+    /** Also fires while focus is in a text field. Defaults to false. */
+    allowInInput?: boolean;
+    /** Skips the binding without re-rendering to remove it. */
+    disabled?: boolean;
+}
+interface UseHotkeysOptions {
+    /**
+     * Where the keys work: while focus is inside this element. Omitted, they
+     * work anywhere in your view.
+     */
+    scope?: {
+        readonly current: HTMLElement | null;
+    };
+    /** Turns every binding off at once. Defaults to true. */
+    enabled?: boolean;
+}
+interface UseUndoRedoOptions {
+    /** Most undo steps kept; older ones fall off. Defaults to 100. */
+    limit?: number;
+    /**
+     * How long, in ms, pushes with the same `coalesce` key keep merging into
+     * one step. Defaults to 1000.
+     */
+    coalesceMs?: number;
+}
+interface PluginUndoRedoPushOptions {
+    /**
+     * Pushes with the same key inside `coalesceMs` of each other make one undo
+     * step, so typing a word is one undo rather than one per letter.
+     */
+    coalesce?: string;
+}
+interface UseUndoRedoResult<T> {
+    /** The current value. */
+    value: T;
+    /** Records a new value as a step. A function gets the current value. */
+    push: (next: T | ((current: T) => T), options?: PluginUndoRedoPushOptions) => void;
+    /** Steps back and returns the value it restored, or undefined when there is none. */
+    undo: () => T | undefined;
+    /** Steps forward again and returns the value, or undefined when there is none. */
+    redo: () => T | undefined;
+    canUndo: boolean;
+    canRedo: boolean;
+    /** Forgets every step and starts again from `value` (the current one when omitted). */
+    reset: (value?: T) => void;
+}
+interface UseDisclosureOptions {
+    /** Controlled. Pair with `onOpenChange`. */
+    open?: boolean;
+    defaultOpen?: boolean;
+    onOpenChange?: (open: boolean) => void;
+}
+interface UseDisclosureResult {
+    open: boolean;
+    onOpen: () => void;
+    onClose: () => void;
+    onToggle: () => void;
+    /** The kit overlays' own callback: spread `{ open, onOpenChange }` onto a `Popover`. */
+    onOpenChange: (open: boolean) => void;
+}
+interface UseDebouncedCallbackOptions {
+    /** Also run on the first call of a burst. Defaults to false (trailing only). */
+    leading?: boolean;
+    /** The longest a burst can hold a call back, in ms. */
+    maxWait?: number;
+}
+/** A debounced function from `useDebouncedCallback`. Identity is stable for the life of the component. */
+type PluginDebouncedCallback<A extends unknown[]> = ((...args: A) => void) & {
+    /** Drops the pending call. */
+    cancel: () => void;
+    /** Runs the pending call now, if there is one. */
+    flush: () => void;
+    /** Whether a call is waiting. */
+    isPending: () => boolean;
+};
+/** The tone of a view toast, which picks its glyph and colour. */
+type PluginToastTone = "info" | "success" | "warning" | "error";
+interface PluginViewToastOptions {
+    /** One or two sentences. Daintree prefixes your plugin's name. */
+    message: string;
+    /** Defaults to `info`. */
+    tone?: PluginToastTone;
+    /**
+     * How long it stays up, in ms; longer than 60 seconds is 60 seconds.
+     * Defaults to the app's time for the tone, or, with an `action`, until the
+     * user answers it.
+     */
+    durationMs?: number;
+    /**
+     * One button on the toast. It closes the toast. A toast with an action
+     * stays up until the user answers it unless you pass `durationMs`.
+     */
+    action?: {
+        label: string;
+        onClick: () => void;
+    };
+}
+interface PluginUndoToastOptions {
+    /** What just happened, past tense: `"3 snippets deleted"`. */
+    message: string;
+    /** Puts it back. Runs at most once, and only while the toast is up. */
+    onUndo: () => void;
+    /** Defaults to the app's Undo window, 5 seconds. */
+    durationMs?: number;
+}
+/** A toast `useToast` put up. */
+interface PluginToastHandle {
+    /** Takes it down if it is still up. */
+    dismiss: () => void;
+}
+interface UseToastResult {
+    show: (options: PluginViewToastOptions) => PluginToastHandle;
+    /** A success toast with an Undo button. A plugin has one up at a time; a new one replaces the last. */
+    showUndo: (options: PluginUndoToastOptions) => PluginToastHandle;
+}
+/**
+ * Props of `ConfirmPopover`: a small "are you sure" anchored to its trigger,
+ * for an action that is cheap to undo or easy to redo. For anything that
+ * cannot be taken back, use `ConfirmDialog`.
+ */
+interface PluginConfirmPopoverProps {
+    /** The element that opens it; it must accept a ref and DOM props (a kit `Button` does). */
+    trigger: ReactElement;
+    /** The question, naming what it acts on: `"Clear all 12 snippets?"`. */
+    message: string;
+    /** The consequence, in a quieter line under the question. */
+    description?: string;
+    onConfirm: () => void;
+    onCancel?: () => void;
+    /** A verb-noun ("Clear snippets"). Defaults to "Confirm". */
+    confirmLabel?: string;
+    /** Defaults to "Cancel". */
+    cancelLabel?: string;
+    /**
+     * `danger` draws the confirm as destructive and puts focus on Cancel when
+     * it opens; `default` focuses the confirm.
+     */
+    tone?: "default" | "danger";
+    open?: boolean;
+    defaultOpen?: boolean;
+    onOpenChange?: (open: boolean) => void;
+    side?: PluginSide;
+    align?: PluginAlign;
+}
 
 /**
  * Typed companion to `host.registerHandler(channel, schema, handler)` for
@@ -3058,4 +3325,4 @@ interface PluginHostBridge {
     onPanel(pluginId: string, channel: string, panelId: string, callback: (payload: unknown) => void): () => void;
 }
 
-export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAccordionItem, type PluginAccordionProps, type PluginAlign, type PluginAriaRootAttributes, type PluginAvatarGroupItem, type PluginAvatarGroupProps, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginBarChartProps, type PluginBreadcrumbItem, type PluginBreadcrumbsProps, type PluginButtonProps, type PluginButtonVariant, type PluginCalendarBaseProps, type PluginCalendarProps, type PluginCalendarRangeProps, type PluginCalendarSingleProps, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCardProps, type PluginChartBaseProps, type PluginChartColor, type PluginChartSeries, type PluginCheckboxProps, type PluginComboboxProps, type PluginCommandPaletteItem, type PluginCommandPaletteProps, type PluginConfirmDialogProps, type PluginContextMenuProps, type PluginCopyButtonProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableSort, type PluginDateFieldBaseProps, type PluginDatePickerProps, type PluginDateRange, type PluginDateRangePickerProps, type PluginDateRangePreset, type PluginDescriptionItem, type PluginDescriptionListItemProps, type PluginDescriptionListProps, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDiffStatProps, type PluginDisclosureProps, type PluginDismissButtonProps, type PluginDividerProps, type PluginDocumentPackage, type PluginDomProps, type PluginDonutChartProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginEmojiPickerProps, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFileDropzoneProps, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFilterChipProps, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginHighlightedTextProps, type PluginHostBridge, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginInputProps, type PluginIsoDate, type PluginKbdChordProps, type PluginKbdProps, type PluginLineChartProps, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginMeterProps, type PluginMeterThresholds, type PluginMultiSelectProps, type PluginNavListItem, type PluginNavListProps, type PluginNavListSection, type PluginNumberInputProps, type PluginPaneHeaderProps, type PluginPaneStateProps, type PluginPickerBaseProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginProgressBarProps, type PluginRadioGroupProps, type PluginRadioOption, type PluginResizableSplitProps, type PluginRootAttributes, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSectionLabelProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSheetProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSliderProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginStatCardProps, type PluginStepState, type PluginStepperProps, type PluginStepperStep, type PluginSwitchProps, type PluginTabItem, type PluginTabsProps, type PluginTagInputProps, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginTimeAgoProps, type PluginTimelineActor, type PluginTimelineItem, type PluginTimelineProps, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTruncatedTooltipProps, type PluginVirtualListBaseProps, type PluginVirtualListComponent, type PluginVirtualListCountProps, type PluginVirtualListItemsProps, type PluginVirtualListProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseHostChannelResult, type UseListNavigationOptions, type UseListNavigationResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };
+export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAccordionItem, type PluginAccordionProps, type PluginAlign, type PluginAriaRootAttributes, type PluginAvatarGroupItem, type PluginAvatarGroupProps, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginBarChartProps, type PluginBreadcrumbItem, type PluginBreadcrumbsProps, type PluginButtonProps, type PluginButtonVariant, type PluginCalendarBaseProps, type PluginCalendarProps, type PluginCalendarRangeProps, type PluginCalendarSingleProps, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCardProps, type PluginChartBaseProps, type PluginChartColor, type PluginChartSeries, type PluginCheckboxProps, type PluginComboboxProps, type PluginCommandPaletteItem, type PluginCommandPaletteProps, type PluginConfirmDialogProps, type PluginConfirmPopoverProps, type PluginContextMenuProps, type PluginCopyButtonProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableSort, type PluginDateFieldBaseProps, type PluginDatePickerProps, type PluginDateRange, type PluginDateRangePickerProps, type PluginDateRangePreset, type PluginDebouncedCallback, type PluginDescriptionItem, type PluginDescriptionListItemProps, type PluginDescriptionListProps, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDiffStatProps, type PluginDisclosureProps, type PluginDismissButtonProps, type PluginDividerProps, type PluginDocumentPackage, type PluginDomProps, type PluginDonutChartProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginEmojiPickerProps, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFileDropzoneProps, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFilterChipProps, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginHighlightedTextProps, type PluginHostBridge, type PluginHotkey, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginInputProps, type PluginIsoDate, type PluginKbdChordProps, type PluginKbdProps, type PluginLineChartProps, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginMeterProps, type PluginMeterThresholds, type PluginMultiSelectProps, type PluginNavListItem, type PluginNavListProps, type PluginNavListSection, type PluginNumberInputProps, type PluginPaneHeaderProps, type PluginPaneStateProps, type PluginPickerBaseProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginProgressBarProps, type PluginRadioGroupProps, type PluginRadioOption, type PluginResizableSplitProps, type PluginRootAttributes, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSectionLabelProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSelectionGesture, type PluginSelectionItemProps, type PluginSelectionKey, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSheetProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSliderProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginStatCardProps, type PluginStepState, type PluginStepperProps, type PluginStepperStep, type PluginSwitchProps, type PluginTabItem, type PluginTabsProps, type PluginTagInputProps, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginTimeAgoProps, type PluginTimelineActor, type PluginTimelineItem, type PluginTimelineProps, type PluginToastHandle, type PluginToastTone, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTruncatedTooltipProps, type PluginUndoRedoPushOptions, type PluginUndoToastOptions, type PluginViewToastOptions, type PluginVirtualListBaseProps, type PluginVirtualListComponent, type PluginVirtualListCountProps, type PluginVirtualListItemsProps, type PluginVirtualListProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseDebouncedCallbackOptions, type UseDisclosureOptions, type UseDisclosureResult, type UseHostChannelResult, type UseHotkeysOptions, type UseListNavigationOptions, type UseListNavigationResult, type UseSelectionOptions, type UseSelectionResult, type UseToastResult, type UseUndoRedoOptions, type UseUndoRedoResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };

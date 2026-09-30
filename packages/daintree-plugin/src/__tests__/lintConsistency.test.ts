@@ -425,3 +425,86 @@ describe("zero-build views written with createElement", () => {
     }
   });
 });
+
+describe("view-web-storage", () => {
+  it("flags localStorage and sessionStorage in a view, bare or qualified", async () => {
+    const flagged = await lintFor("view-web-storage", {
+      "src/panel.tsx": `export default function Panel() {
+  const tab = localStorage.getItem("tab");
+  window.sessionStorage.setItem("split", "240");
+  return <div>{tab}</div>;
+}
+`,
+    });
+    expect(flagged.map((f) => f.line)).toEqual([2, 3]);
+    expect(flagged[0]!.message).toMatch(/usePersistentViewState/);
+  });
+
+  it("accepts a local binding, an object key, a string, and worker code", async () => {
+    const clean = await lintFor("view-web-storage", {
+      "src/panel.tsx": `import { localStorage } from "./memoryStore";
+const config = { sessionStorage: false };
+export default function Panel() {
+  // localStorage would be wrong here
+  return <div title="localStorage">{localStorage.get("tab")}</div>;
+}
+`,
+      "src/index.ts": `export function activate() {
+  return globalThis.localStorage;
+}
+`,
+    });
+    expect(clean).toEqual([]);
+  });
+});
+
+describe("view-web-storage receivers and imports", () => {
+  it("ignores another object's property and an aliased import, but not the global behind a local name", async () => {
+    const flagged = await lintFor("view-web-storage", {
+      "src/panel.tsx": `import { localStorage as memory } from "./memoryStore";
+const localStorage = memory;
+export default function Panel({ settings }) {
+  const cached = settings.localStorage;
+  const real = window.localStorage.getItem("tab");
+  return <div>{cached}{real}{localStorage.get("x")}</div>;
+}
+`,
+    });
+    expect(flagged.map((f) => f.line)).toEqual([5]);
+  });
+});
+
+describe("global-key-listener", () => {
+  it("flags a keydown or keyup listener on the document or window in a view", async () => {
+    const flagged = await lintFor("global-key-listener", {
+      "src/panel.tsx": `import { useEffect } from "react";
+export default function Panel() {
+  useEffect(() => {
+    const onKey = () => {};
+    document.addEventListener("keydown", onKey);
+    window.addEventListener('keyup', onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+  return <div />;
+}
+`,
+    });
+    expect(flagged.map((f) => f.line)).toEqual([5, 6]);
+    expect(flagged[0]!.message).toMatch(/useHotkeys/);
+  });
+
+  it("accepts element listeners, other events, comments and strings", async () => {
+    const clean = await lintFor("global-key-listener", {
+      "src/panel.tsx": `export default function Panel({ node, frame }) {
+  node.addEventListener("keydown", () => {});
+  frame.document.addEventListener("keydown", () => {});
+  document.addEventListener("pointerdown", () => {});
+  // document.addEventListener("keydown", onKey);
+  const hint = 'document.addEventListener("keydown")';
+  return <div title={hint} />;
+}
+`,
+    });
+    expect(clean).toEqual([]);
+  });
+});

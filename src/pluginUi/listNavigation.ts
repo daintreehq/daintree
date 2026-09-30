@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import type {
   PluginListNavigationRowProps,
   UseListNavigationOptions,
@@ -73,6 +73,8 @@ export function useListNavigation(options: UseListNavigationOptions): UseListNav
   const loop = options.loop === true;
   const onSelect = typeof options.onSelect === "function" ? options.onSelect : undefined;
   const getLabel = typeof options.getLabel === "function" ? options.getLabel : undefined;
+  const onActiveIndexChange =
+    typeof options.onActiveIndexChange === "function" ? options.onActiveIndexChange : undefined;
   const isDisabledOption =
     typeof options.isDisabled === "function" ? options.isDisabled : undefined;
   const isDisabled = (index: number): boolean => {
@@ -111,9 +113,10 @@ export function useListNavigation(options: UseListNavigationOptions): UseListNav
     });
   }, [baseId, revealIndex]);
 
-  const moveTo = (index: number) => {
+  const moveTo = (index: number, event?: KeyboardEvent<HTMLElement>) => {
     setCursor(index);
     setRevealIndex(index);
+    if (event) onActiveIndexChange?.(index, event);
   };
 
   const findByPrefix = (prefix: string): number => {
@@ -134,7 +137,7 @@ export function useListNavigation(options: UseListNavigationOptions): UseListNav
     const next = stepIndex(event.key, activeIndex, count, loop, isDisabled);
     if (next !== null) {
       event.preventDefault();
-      moveTo(next);
+      moveTo(next, event);
       return;
     }
     if (event.key === "Enter" || event.key === " ") {
@@ -148,7 +151,7 @@ export function useListNavigation(options: UseListNavigationOptions): UseListNav
         }
       }
       event.preventDefault();
-      if (activeIndex >= 0 && !isDisabled(activeIndex)) onSelect?.(activeIndex);
+      if (activeIndex >= 0 && !isDisabled(activeIndex)) onSelect?.(activeIndex, event);
       return;
     }
     if (getLabel && event.key.length === 1) {
@@ -164,7 +167,7 @@ export function useListNavigation(options: UseListNavigationOptions): UseListNav
       const match = findByPrefix(repeated ? first : text);
       if (match >= 0) {
         event.preventDefault();
-        moveTo(match);
+        moveTo(match, event);
       }
     }
   };
@@ -176,10 +179,10 @@ export function useListNavigation(options: UseListNavigationOptions): UseListNav
       role: "option",
       "aria-selected": index === activeIndex,
       ...(disabled ? { "aria-disabled": true as const } : {}),
-      onClick: () => {
+      onClick: (event?: MouseEvent<HTMLElement>) => {
         if (isDisabled(index)) return;
         setCursor(index);
-        onSelect?.(index);
+        onSelect?.(index, event);
       },
       onPointerMove: () => {
         if (index !== activeIndex && !isDisabled(index)) setCursor(index);

@@ -68,3 +68,20 @@ export function fromKit<P extends object>(
   KitComponent.displayName = name;
   return KitComponent;
 }
+
+/** The kit if its chunk is already in, for code that must not wait on it. */
+export function peekKit(): PluginKit | null {
+  return loaded;
+}
+
+/**
+ * Runs `run` with the kit: now when it is in, else once it loads. A kit that
+ * fails to load drops the call, as a component would render nothing.
+ */
+export function withKit(run: (kit: PluginKit) => void): void {
+  if (loaded) {
+    run(loaded);
+    return;
+  }
+  loadKit().then(run, () => {});
+}
