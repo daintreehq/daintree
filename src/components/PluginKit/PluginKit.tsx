@@ -33,7 +33,7 @@ import type {
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Callout, type CalloutSeverity } from "@/components/ui/Callout";
+import { CALLOUT_ICON, Callout, type CalloutSeverity } from "@/components/ui/Callout";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -44,6 +44,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuTrigger,
@@ -51,7 +53,7 @@ import {
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useFieldControl } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Kbd, KbdChord } from "@/components/ui/Kbd";
+import { KBD_COMPACT_CLASS, Kbd, KbdChord } from "@/components/ui/Kbd";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { SearchField } from "@/components/ui/SearchField";
 import {
@@ -73,7 +75,15 @@ import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { PluginKitIcon, renderIconSource, resolvePluginKitIcon } from "./PluginKitIcons";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
+import { cn } from "@/lib/utils";
+import {
+  PluginKitIcon,
+  isPluginKitIconName,
+  renderIconSource,
+  resolvePluginKitIcon,
+} from "./PluginKitIcons";
 import {
   ALIGNS,
   SIDES,
@@ -92,6 +102,8 @@ import {
 } from "./kitProps";
 import { pluginKitPatterns } from "./PluginKitPatterns";
 import { pluginKitLists } from "./PluginKitLists";
+import { pluginKitOverlays } from "./PluginKitOverlays";
+import { primeRadix } from "@/components/ui/radix-loader";
 
 export { pickDomProps };
 
@@ -105,6 +117,7 @@ const BUTTON_VARIANTS = [
   "destructive",
   "ghost-danger",
   "link",
+  "pill",
 ] as const;
 const BUTTON_TYPES = ["button", "submit", "reset"] as const;
 
@@ -207,6 +220,7 @@ function KitTruncatedTooltip({
   side,
   align,
   focusable,
+  isTruncated,
 }: PluginTruncatedTooltipProps) {
   if (!isValidElement(children)) return null;
   return (
@@ -215,6 +229,7 @@ function KitTruncatedTooltip({
       side={oneOf(side, SIDES)}
       align={oneOf(align, ALIGNS)}
       focusable={focusable !== false}
+      isTruncated={typeof isTruncated === "boolean" ? isTruncated : undefined}
     >
       {children}
     </TruncatedTooltip>
@@ -313,7 +328,18 @@ function numberOrString(value: unknown): string | number | undefined {
   return textValue(value);
 }
 
-const INPUT_TYPES = ["text", "search", "email", "url", "password", "number", "tel"] as const;
+const INPUT_TYPES = [
+  "text",
+  "search",
+  "email",
+  "url",
+  "password",
+  "number",
+  "tel",
+  "date",
+  "time",
+  "datetime-local",
+] as const;
 
 function KitInput({
   type,
@@ -431,10 +457,13 @@ function readSelectOption(value: unknown, seen: Set<string>): PluginSelectOption
   // report the same pick.
   if (optionValue === undefined || label === undefined || seen.has(optionValue)) return null;
   seen.add(optionValue);
+  const icon = field(value, "icon");
   return {
     value: optionValue,
     label,
     description: str(field(value, "description")),
+    // Kept only when it names a glyph, so the row never reserves an empty gutter.
+    icon: isPluginKitIconName(icon) ? icon : undefined,
     disabled: field(value, "disabled") === true,
   };
 }
@@ -462,6 +491,7 @@ export function normalizeSelectOptions(options: unknown): SelectEntry[] {
 }
 
 function renderSelectItem(option: PluginSelectOption) {
+  const Glyph = option.icon === undefined ? undefined : resolvePluginKitIcon(option.icon);
   return (
     <SelectItem
       key={option.value}
@@ -469,26 +499,39 @@ function renderSelectItem(option: PluginSelectOption) {
       disabled={option.disabled}
       description={option.description}
     >
-      {option.label}
+      {Glyph ? (
+        // Inside the item text, so the trigger mirrors the glyph with the label.
+        <span className="inline-flex min-w-0 items-center gap-2">
+          <Glyph className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
+          {option.label}
+        </span>
+      ) : (
+        option.label
+      )}
     </SelectItem>
   );
 }
 
-function KitSelect({
-  options,
-  value,
-  defaultValue,
-  onValueChange,
-  placeholder,
-  disabled,
-  density,
-  name,
-  id,
-  "aria-label": ariaLabel,
-  "aria-labelledby": ariaLabelledBy,
-  "aria-describedby": ariaDescribedBy,
-  className,
-}: PluginSelectProps) {
+function KitSelect(props: PluginSelectProps) {
+  const {
+    options,
+    value,
+    defaultValue,
+    onValueChange,
+    placeholder,
+    disabled,
+    density,
+    name,
+    id,
+    "aria-label": ariaLabel,
+    "aria-labelledby": ariaLabelledBy,
+    "aria-describedby": ariaDescribedBy,
+    className,
+  } = props;
+  // Passing `value` at all makes the Select controlled, so a cleared value
+  // (`""`, `null`, `undefined`) goes back to the placeholder rather than
+  // leaving Radix holding the last pick uncontrolled.
+  const controlled = Object.hasOwn(props, "value");
   const entries = normalizeSelectOptions(options);
   // Radix's trigger does not read the field context the other controls do, so
   // a Select inside a kit FormField is wired here.
@@ -499,8 +542,8 @@ function KitSelect({
   });
   return (
     <Select
-      value={str(value)}
-      defaultValue={str(defaultValue)}
+      value={controlled ? (str(value) ?? "") : undefined}
+      defaultValue={controlled ? undefined : str(defaultValue)}
       onValueChange={fn(onValueChange)}
       disabled={disabled === true}
       name={str(name)}
@@ -581,7 +624,11 @@ function KitSegmentedControl({
   );
 }
 
-function KitKbd({ children, className }: PluginKbdProps) {
+function KitKbd({ children, density, className }: PluginKbdProps) {
+  if (density === "compact") {
+    // The host Kbd has one size; its compact box is the class KbdChord draws with.
+    return <kbd className={cn(KBD_COMPACT_CLASS, str(className))}>{node(children)}</kbd>;
+  }
   return <Kbd className={str(className)}>{node(children)}</Kbd>;
 }
 
@@ -606,7 +653,8 @@ function KitKbdChord({
 }
 
 function KitCopyButton(props: PluginCopyButtonProps) {
-  const { text, tooltip, tooltipSide, onCopied, onCopyError, disabled, className } = props;
+  const { text, tooltip, tooltipSide, onCopied, onCopyError, announcement, disabled, className } =
+    props;
   const payload = typeof text === "string" || typeof text === "function" ? text : "";
   const shared = {
     text: payload,
@@ -614,6 +662,7 @@ function KitCopyButton(props: PluginCopyButtonProps) {
     tooltipSide: oneOf(tooltipSide, SIDES),
     onCopied: fn(onCopied),
     onCopyError: fn(onCopyError),
+    announcement: nonEmpty(announcement),
     disabled: disabled === true,
     className: str(className),
   };
@@ -676,24 +725,149 @@ function KitCallout({
   children,
   title,
   action,
+  actionPlacement,
+  onDismiss,
+  dismissLabel,
+  variant,
   icon,
   size,
   className,
+  ...rest
 }: PluginCalloutProps) {
   const tone = oneOf(severity, CALLOUT_SEVERITIES) ?? "neutral";
+  const actionNode = content(action);
+  const below = actionPlacement === "below";
+  const dismiss = fn(onDismiss);
+  const dismissName = nonEmpty(dismissLabel) ?? "Dismiss";
+  const glyph = tone === "neutral" ? resolvePluginKitIcon(icon) : undefined;
+
+  if (variant === "strip") {
+    return (
+      <KitCalloutStrip
+        tone={tone}
+        title={content(title)}
+        body={content(children)}
+        action={actionNode}
+        below={below}
+        onDismiss={dismiss}
+        dismissLabel={dismissName}
+        glyph={glyph}
+        role={oneOf(rest.role, ["alert", "status"] as const)}
+        ariaLive={oneOf(rest["aria-live"], ["off", "polite", "assertive"] as const)}
+        testId={str(rest["data-testid"])}
+        className={str(className)}
+      />
+    );
+  }
+
+  const trailing =
+    (actionNode !== undefined && !below) || dismiss ? (
+      <span className="flex items-center gap-1">
+        {below ? null : actionNode}
+        {dismiss ? <DismissButton aria-label={dismissName} onClick={() => dismiss()} /> : null}
+      </span>
+    ) : undefined;
   const shared = {
+    ...pickDomProps(rest),
     title: content(title),
-    action: content(action),
+    action: trailing,
     size: oneOf(size, ["default", "compact"] as const),
     className: str(className),
-    children: node(children),
+    children: (
+      <>
+        {node(children)}
+        {below && actionNode !== undefined ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2">{actionNode}</div>
+        ) : null}
+      </>
+    ),
   };
   // A severity callout always wears its severity's glyph; only a neutral one
   // may carry a domain glyph of the plugin's choosing.
   if (tone === "neutral") {
-    return <Callout {...shared} severity="neutral" icon={resolvePluginKitIcon(icon)} />;
+    return <Callout {...shared} severity="neutral" icon={glyph} />;
   }
   return <Callout {...shared} severity={tone} />;
+}
+
+type BannerGlyph = NonNullable<Parameters<typeof InlineStatusBanner>[0]["icon"]>;
+
+/**
+ * The strip is the host's pane banner, not a restyled box: the same band,
+ * tint and control layout Daintree draws across its own panes. The kit's
+ * `action` node goes in the banner's trailing slot, so it keeps the kit's
+ * one-control shape rather than the banner's action objects.
+ */
+function KitCalloutStrip({
+  tone,
+  title,
+  body,
+  action,
+  below,
+  onDismiss,
+  dismissLabel,
+  glyph,
+  role,
+  ariaLive,
+  testId,
+  className,
+}: {
+  tone: (typeof CALLOUT_SEVERITIES)[number];
+  title: ReactNode;
+  body: ReactNode;
+  action: ReactNode;
+  below: boolean;
+  onDismiss: (() => void) | undefined;
+  dismissLabel: string;
+  glyph: BannerGlyph | undefined;
+  role: "alert" | "status" | undefined;
+  ariaLive: "off" | "polite" | "assertive" | undefined;
+  testId: string | undefined;
+  className: string | undefined;
+}) {
+  // Without a title the body is the headline, so the band is still one line.
+  const headline = title ?? body ?? "";
+  const description = title === undefined ? undefined : body;
+  // The banner sets its description in a <p>: text stays there, anything
+  // element-shaped goes in the block slot beneath it so it cannot nest a
+  // <div> or a control inside the paragraph.
+  const inline = typeof description === "string" || typeof description === "number";
+  const common = {
+    title: <PluginStyleScope>{headline}</PluginStyleScope>,
+    description: inline ? description : undefined,
+    descriptionExtras:
+      description === undefined || inline ? undefined : (
+        <PluginStyleScope block>{description}</PluginStyleScope>
+      ),
+    trailingSlot: action,
+    layout: below ? ("stacked" as const) : ("pane" as const),
+    inset: false,
+    role,
+    ariaLive,
+    closeAriaLabel: dismissLabel,
+    onClose: onDismiss,
+    className,
+    "data-testid": testId,
+  };
+  // `danger` is a caution about a destructive consequence: the banner has no
+  // separate tier for it, so it takes the error band with the octagon glyph.
+  if (tone === "error" || tone === "danger") {
+    return (
+      <InlineStatusBanner
+        {...common}
+        severity="error"
+        icon={tone === "danger" ? CALLOUT_ICON.danger : undefined}
+      />
+    );
+  }
+  // Green only ever says "this just happened" and a kit strip does not time
+  // itself out, so a success strip stands as a neutral band with the check.
+  if (tone === "success") {
+    return <InlineStatusBanner {...common} severity="neutral" icon={SEVERITY_GLYPH.success} />;
+  }
+  return (
+    <InlineStatusBanner {...common} severity={tone} icon={tone === "neutral" ? glyph : undefined} />
+  );
 }
 
 function KitEmptyState({
@@ -774,21 +948,23 @@ function KitSkeleton({ children, label, className }: PluginSkeletonProps) {
   );
 }
 
-function KitSkeletonBone({ className, heightPx, shimmer }: PluginSkeletonBoneProps) {
+function KitSkeletonBone({ className, heightPx, shimmer, immediate }: PluginSkeletonBoneProps) {
   return (
     <SkeletonBone
       className={str(className)}
       heightPx={positive(heightPx, 10_000)}
       shimmer={shimmer === true}
+      immediate={immediate === true}
     />
   );
 }
 
-function KitSkeletonText({ lines, shimmer, className }: PluginSkeletonTextProps) {
+function KitSkeletonText({ lines, shimmer, immediate, className }: PluginSkeletonTextProps) {
   return (
     <SkeletonText
       lines={typeof lines === "number" && Number.isFinite(lines) ? lines : undefined}
       shimmer={shimmer === true}
+      immediate={immediate === true}
       className={str(className)}
     />
   );
@@ -800,9 +976,11 @@ function KitScrollShadow({
   scrollClassName,
   compact,
   ref,
+  ...rest
 }: PluginScrollShadowProps) {
   return (
     <ScrollShadow
+      {...pickDomProps(rest)}
       ref={typeof ref === "function" || (typeof ref === "object" && ref !== null) ? ref : undefined}
       className={str(className)}
       scrollClassName={str(scrollClassName)}
@@ -856,10 +1034,50 @@ function KitSearchField({
   );
 }
 
+function readRadioItems(items: unknown): { value: string; label: string; disabled: boolean }[] {
+  if (!Array.isArray(items)) return [];
+  const seen = new Set<string>();
+  const out: { value: string; label: string; disabled: boolean }[] = [];
+  for (const item of items) {
+    if (typeof item !== "object" || item === null) continue;
+    const value = nonEmpty(field(item, "value"));
+    const label = nonEmpty(field(item, "label"));
+    if (value === undefined || label === undefined || seen.has(value)) continue;
+    seen.add(value);
+    out.push({ value, label, disabled: field(item, "disabled") === true });
+  }
+  return out;
+}
+
 function renderMenuEntry(entry: PluginDropdownMenuEntry, index: number): ReactNode {
   if (typeof entry !== "object" || entry === null) return null;
   const key = `entry-${index}`;
   switch (entry.type) {
+    case "radio-group": {
+      const choices = readRadioItems(entry.items);
+      if (choices.length === 0) return null;
+      const onValueChange = fn(entry.onValueChange);
+      const heading = nonEmpty(entry.label);
+      return (
+        <DropdownMenuRadioGroup
+          key={key}
+          value={str(entry.value) ?? ""}
+          onValueChange={(next) => onValueChange?.(next)}
+          aria-label={heading}
+        >
+          {heading ? <DropdownMenuLabel>{heading}</DropdownMenuLabel> : null}
+          {choices.map((choice) => (
+            <DropdownMenuRadioItem
+              key={choice.value}
+              value={choice.value}
+              disabled={choice.disabled}
+            >
+              {choice.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      );
+    }
     case "separator":
       return <DropdownMenuSeparator key={key} />;
     case "label": {
@@ -910,6 +1128,10 @@ function renderMenuEntry(entry: PluginDropdownMenuEntry, index: number): ReactNo
   }
 }
 
+function stopEvent(event: { stopPropagation: () => void }) {
+  event.stopPropagation();
+}
+
 function KitDropdownMenu({
   trigger,
   items,
@@ -918,9 +1140,15 @@ function KitDropdownMenu({
   open,
   onOpenChange,
   "aria-label": ariaLabel,
+  onCloseAutoFocus,
+  stopPropagation,
 }: PluginDropdownMenuProps) {
   if (!isValidElement(trigger)) return null;
   const entries: readonly PluginDropdownMenuEntry[] = Array.isArray(items) ? items : [];
+  const closeAutoFocus = fn(onCloseAutoFocus);
+  // Only the view's ancestors are cut off: the menu's own handlers run on the
+  // content element itself, so Radix's keyboard and focus policy are untouched.
+  const isolate = stopPropagation === true;
   return (
     <DropdownMenu
       open={typeof open === "boolean" ? open : undefined}
@@ -931,6 +1159,10 @@ function KitDropdownMenu({
         side={oneOf(side, SIDES)}
         align={oneOf(align, ALIGNS)}
         aria-label={str(ariaLabel)}
+        onCloseAutoFocus={closeAutoFocus ? (event) => closeAutoFocus(event) : undefined}
+        onClick={isolate ? stopEvent : undefined}
+        onPointerDown={isolate ? stopEvent : undefined}
+        onKeyDown={isolate ? stopEvent : undefined}
       >
         {entries.map(renderMenuEntry)}
       </DropdownMenuContent>
@@ -949,12 +1181,25 @@ function readDialogAction(action: PluginDialogAction | undefined): DialogAction 
     disabled: action.disabled === true,
     loading: action.loading === true,
     intent: oneOf(action.intent, ["default", "destructive"] as const),
+    icon: renderIconSource(action.icon) ?? undefined,
   };
 }
 
-function iconNode(name: unknown): ReactNode {
-  const Glyph = name === undefined ? undefined : resolvePluginKitIcon(name);
-  return Glyph ? <Glyph aria-hidden="true" /> : undefined;
+/**
+ * A disabled primary's reason, for the footer hint. Only the primary: it is
+ * the one button the host points at the hint with `aria-describedby`.
+ */
+function disabledReasonOf(action: PluginDialogAction | undefined): ReactNode {
+  if (typeof action !== "object" || action === null || action.disabled !== true) return undefined;
+  return content(action.disabledReason);
+}
+
+function iconNode(source: unknown): ReactNode {
+  return renderIconSource(source) ?? undefined;
+}
+
+function zIndexOf(layer: unknown): "nested" | undefined {
+  return layer === "nested" ? "nested" : undefined;
 }
 
 function noop() {}
@@ -970,16 +1215,24 @@ function KitDialog({
   primaryAction,
   secondaryAction,
   hint,
+  footer,
   dismissible,
+  layer,
+  "data-testid": testId,
 }: PluginDialogProps) {
   const primary = readDialogAction(primaryAction);
   const secondary = readDialogAction(secondaryAction);
+  const custom = content(footer);
+  const footerHint =
+    content(hint) ?? (custom === undefined ? disabledReasonOf(primaryAction) : undefined);
   return (
     <AppDialog
       isOpen={open === true}
       onClose={fn(onClose) ?? noop}
       size={oneOf(size, ["sm", "md", "lg"] as const) ?? "md"}
       dismissible={dismissible !== false}
+      zIndex={zIndexOf(layer)}
+      data-testid={nonEmpty(testId)}
     >
       <AppDialog.Header>
         <AppDialog.Title icon={iconNode(icon)}>{node(title)}</AppDialog.Title>
@@ -993,12 +1246,15 @@ function KitDialog({
           {node(children)}
         </PluginStyleScope>
       </AppDialog.Body>
-      {primary || secondary ? (
-        <AppDialog.Footer
-          primaryAction={primary}
-          secondaryAction={secondary}
-          hint={content(hint)}
-        />
+      {custom !== undefined ? (
+        <AppDialog.Footer hint={footerHint}>
+          {/* One container: a hint spreads the footer, and loose controls would scatter across it. */}
+          <PluginStyleScope block className="flex shrink-0 items-center gap-3">
+            {custom}
+          </PluginStyleScope>
+        </AppDialog.Footer>
+      ) : primary || secondary ? (
+        <AppDialog.Footer primaryAction={primary} secondaryAction={secondary} hint={footerHint} />
       ) : null}
     </AppDialog>
   );
@@ -1018,6 +1274,8 @@ function KitConfirmDialog({
   loading,
   confirmDisabled,
   typedNameTarget,
+  hint,
+  layer,
 }: PluginConfirmDialogProps) {
   const confirm = fn(onConfirm);
   const common = {
@@ -1034,6 +1292,8 @@ function KitConfirmDialog({
     cancelLabel: nonEmpty(cancelLabel),
     isConfirmLoading: loading === true,
     confirmDisabled: confirmDisabled === true,
+    hint: content(hint),
+    zIndex: zIndexOf(layer),
   };
   const tone = oneOf(variant, ["default", "destructive", "info"] as const) ?? "default";
   if (tone === "destructive") {
@@ -1083,6 +1343,16 @@ export const pluginKit = {
   Icon: PluginKitIcon,
   ...pluginKitPatterns,
   ...pluginKitLists,
+  ...pluginKitOverlays,
 };
 
 export type PluginKit = typeof pluginKit;
+
+/**
+ * Everything the kit's first frame depends on beyond this chunk: the Radix
+ * primitives behind its overlays and selects load on their own, so "ready"
+ * waits for them too.
+ */
+export async function preparePluginKit(): Promise<void> {
+  await primeRadix();
+}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -9,6 +9,8 @@ interface AvatarProps {
   title?: string;
   className?: string;
   shape?: "circle" | "square";
+  /** Drawn in place of the person glyph when there is no picture (initials). */
+  fallback?: ReactNode;
 }
 
 type AvatarStatus = "loading" | "loaded" | "failed";
@@ -40,7 +42,7 @@ export function avatarUrlAtSize(url: string | undefined, px: number): string {
   return `${url}${url.includes("?") ? "&" : "?"}s=${px}`;
 }
 
-export function Avatar({ src, alt, title, className, shape = "circle" }: AvatarProps) {
+export function Avatar({ src, alt, title, className, shape = "circle", fallback }: AvatarProps) {
   const [state, setState] = useState(() => ({ src, status: initialStatus(src) }));
 
   // Status belongs to one src. On a swap it is re-derived during render, so the
@@ -83,9 +85,8 @@ export function Avatar({ src, alt, title, className, shape = "circle" }: AvatarP
               : "bg-overlay-medium text-text-secondary"
           )}
         >
-          {status === "failed" && (
-            <User className="w-[70%] h-[70%]" strokeWidth={2.5} aria-hidden="true" />
-          )}
+          {status === "failed" &&
+            (fallback ?? <User className="w-[70%] h-[70%]" strokeWidth={2.5} aria-hidden="true" />)}
         </span>
       )}
       {status !== "failed" && (

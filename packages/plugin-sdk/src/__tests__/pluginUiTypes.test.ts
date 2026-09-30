@@ -203,6 +203,79 @@ export const labels: string[] = [
   formatCount(12_345),
   formatDuration(90_000),
 ];
+
+// Added in 1.2.
+import * as ui from "@daintreehq/plugin-ui";
+
+export const ready: Promise<void> = ui.whenPluginUiReady();
+ui.preloadPluginUi();
+export const avatar = createElement(ui.Avatar, { name: "Ada Lovelace", src: "", size: "md" });
+// @ts-expect-error an avatar needs a name
+export const namelessAvatar = createElement(ui.Avatar, { src: "x" });
+export const popover = createElement(ui.Popover, {
+  trigger: createElement(ui.Button, {}, "Filter"),
+  width: "trigger",
+  padding: "none",
+  children: createElement(ui.PopoverSearchField, { value: "", "aria-label": "Search" }),
+});
+// @ts-expect-error popover widths are a closed set
+export const badPopover = createElement(ui.Popover, { trigger: createElement("button"), width: "huge" });
+export const hint = createElement(ui.SkeletonHint, { message: "Fetching", onCancel: () => {} });
+export const pill = createElement(ui.Button, { variant: "pill" });
+export const date = createElement(ui.Input, { type: "date", value: "2026-09-30" });
+export const compactKey = createElement(ui.Kbd, { density: "compact", children: "K" });
+export const cleared = createElement(ui.Select, { options: [], value: null, placeholder: "Pick" });
+export const iconOption: ui.SelectOption = { value: "a", label: "A", icon: "git-branch" };
+export const strip = createElement(ui.Callout, {
+  severity: "error",
+  variant: "strip",
+  title: "Couldn't load",
+  role: "alert",
+  "data-testid": "banner",
+  onDismiss: () => {},
+  actionPlacement: "below",
+});
+export const shadowed = createElement(ui.ScrollShadow, { role: "listbox", id: "rows", children: "x" });
+export const shadowList = createElement(ui.VirtualList, { count: 1, "aria-label": "x", shadows: true, renderItem: () => null });
+const sortMenu: ui.DropdownMenuEntry = {
+  type: "radio-group",
+  value: "a",
+  onValueChange: (next: string) => void next,
+  items: [{ value: "a", label: "A" }],
+};
+export const menu12 = createElement(ui.DropdownMenu, {
+  trigger: createElement("button"),
+  items: [sortMenu],
+  stopPropagation: true,
+  onCloseAutoFocus: (event: Event) => event.preventDefault(),
+});
+const layer: ui.DialogLayer = "nested";
+export const dialog12 = createElement(ui.Dialog, {
+  open: true,
+  onClose: () => {},
+  title: "Create",
+  icon: createElement(ui.Spinner, {}),
+  layer,
+  footer: createElement(ui.Button, {}, "Done"),
+  "data-testid": "bulk",
+  primaryAction: { label: "Go", onClick: () => {}, icon: "check", disabled: true, disabledReason: "Nothing picked" },
+});
+// @ts-expect-error layers are a closed set
+export const badLayer: ui.DialogLayer = "top";
+export const confirm12 = createElement(ui.ConfirmDialog, {
+  open: true,
+  onClose: () => {},
+  onConfirm: () => {},
+  title: "Reset?",
+  confirmLabel: "Reset",
+  hint: "Now",
+  layer: "nested",
+});
+export const copy12 = createElement(ui.CopyButton, { text: "x", "aria-label": "Copy", announcement: "Path copied" });
+export const truncated = createElement(ui.TruncatedTooltip, { content: "x", isTruncated: true, children: createElement("span") });
+export const bone = createElement(ui.SkeletonBone, { immediate: true });
+const newIcon: ui.IconName = "user-plus";
+export const newIcons = createElement(ui.Icon, { name: newIcon });
 `;
 
 let consumerDir: string;

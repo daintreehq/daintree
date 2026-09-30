@@ -5,6 +5,7 @@
 // statically; the host components load through `fromKit`.
 import { isValidElement, type ComponentType, type ReactNode } from "react";
 import type {
+  PluginAvatarProps,
   PluginBadgeProps,
   PluginButtonProps,
   PluginCalloutProps,
@@ -26,6 +27,8 @@ import type {
   PluginLogViewProps,
   PluginPaneHeaderProps,
   PluginPaneStateProps,
+  PluginPopoverProps,
+  PluginPopoverSearchFieldProps,
   PluginProgressBarProps,
   PluginScrollShadowProps,
   PluginSearchFieldProps,
@@ -37,6 +40,7 @@ import type {
   PluginSettingsSectionProps,
   PluginSeverityIconProps,
   PluginSkeletonBoneProps,
+  PluginSkeletonHintProps,
   PluginSkeletonProps,
   PluginSkeletonTextProps,
   PluginSpinnerProps,
@@ -52,6 +56,8 @@ import type {
 } from "@shared/types/plugin-sdk-react";
 import { fromKit } from "./kit";
 
+export { preloadPluginUi, whenPluginUiReady } from "./kit";
+
 export { Markdown } from "./Markdown";
 export { getDaintreeTheme, onDidChangeDaintreeTheme, useDaintreeTheme } from "./theme";
 export { useListNavigation } from "./listNavigation";
@@ -64,7 +70,7 @@ export {
 } from "./format";
 
 /** The kit's contract version: additive minors, no prop removed within a major. */
-export const PLUGIN_UI_VERSION = "1.1.0";
+export const PLUGIN_UI_VERSION = "1.2.0";
 
 // Tooltips fall back to their trigger, so the control is there from the first
 // frame and only the hover card waits on the kit chunk.
@@ -213,6 +219,24 @@ export const SeverityIcon: ComponentType<PluginSeverityIconProps> = fromKit(
   (kit) => kit.SeverityIcon
 );
 
+// 1.2: avatars, popovers and the long-load hint.
+
+export const Avatar: ComponentType<PluginAvatarProps> = fromKit("Avatar", (kit) => kit.Avatar);
+export const Popover: ComponentType<PluginPopoverProps> = fromKit(
+  "Popover",
+  (kit) => kit.Popover,
+  // Like a tooltip, the trigger is there from the first frame.
+  ({ trigger }) => (isValidElement(trigger) ? trigger : null)
+);
+export const PopoverSearchField: ComponentType<PluginPopoverSearchFieldProps> = fromKit(
+  "PopoverSearchField",
+  (kit) => kit.PopoverSearchField
+);
+export const SkeletonHint: ComponentType<PluginSkeletonHintProps> = fromKit(
+  "SkeletonHint",
+  (kit) => kit.SkeletonHint
+);
+
 export type {
   PluginMarkdownProps as MarkdownProps,
   PluginButtonProps as ButtonProps,
@@ -279,4 +303,11 @@ export type {
   PluginListNavigationRowProps as ListNavigationRowProps,
   PluginSeverity as Severity,
   PluginSeverityIconProps as SeverityIconProps,
+  PluginAvatarProps as AvatarProps,
+  PluginPopoverProps as PopoverProps,
+  PluginPopoverSearchFieldProps as PopoverSearchFieldProps,
+  PluginSkeletonHintProps as SkeletonHintProps,
+  PluginDropdownMenuRadioItem as DropdownMenuRadioItem,
+  PluginDialogLayer as DialogLayer,
+  PluginIconSource as IconSource,
 } from "@shared/types/plugin-sdk-react";
