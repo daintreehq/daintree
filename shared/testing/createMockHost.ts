@@ -1589,7 +1589,11 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       );
       const override = dispatchOverrides.get(actionId);
       if (override) return override;
-      if (options.dispatch) return options.dispatch(actionId, args, dispatchOptions);
+      if (options.dispatch) {
+        return dispatchOptions === undefined
+          ? options.dispatch(actionId, args)
+          : options.dispatch(actionId, args, dispatchOptions);
+      }
       // Match the real host's contract: dispatch ids are always fully
       // namespaced as `{pluginId}.{descriptor.id}`. Looking up by the full
       // form means a plugin calling `host.dispatch("greet")` against a

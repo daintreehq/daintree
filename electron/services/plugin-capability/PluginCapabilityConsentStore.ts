@@ -64,6 +64,37 @@ export class PluginCapabilityConsentStore {
     this.flush();
   }
 
+  /**
+   * Set a grant from an explicit user switch and report whether it reached
+   * disk (#13119). Unlike {@link grant}/{@link revoke}, a failed write is not
+   * swallowed: a switch that reads "off" while the grant rehydrates on the next
+   * launch is the one outcome this must never produce. A failed enable is
+   * rolled back so memory matches disk; a failed disable stays revoked in
+   * memory (the safe direction) and a retry re-writes the snapshot even though
+   * there is nothing left to delete.
+   */
+  setGrant(identity: PluginCapabilityIdentity, enabled: boolean): boolean {
+    this.hydrate();
+    const key = makeKey(identity);
+    const previous = this.grants.get(key);
+    if (enabled) {
+      this.grants.set(key, {
+        pluginId: identity.pluginId,
+        capability: identity.capability,
+        scopeKey: identity.scopeKey ?? DEFAULT_SCOPE_KEY,
+        approvedAt: previous?.approvedAt ?? Date.now(),
+      });
+    } else {
+      this.grants.delete(key);
+    }
+    if (this.flush() || this.flush()) return true;
+    if (enabled) {
+      if (previous) this.grants.set(key, previous);
+      else this.grants.delete(key);
+    }
+    return false;
+  }
+
   /** Read all live grants. Newest-first. */
   list(): PluginCapabilityConsentRecord[] {
     this.hydrate();

@@ -202,7 +202,36 @@ describe("PluginDetailPane project targeting switch (#13119)", () => {
 
     fireEvent.click(targetingSwitch());
     await vi.waitFor(() => expect(screen.getByText(/Couldn't save this setting/)).toBeTruthy());
+    // Re-read from main rather than guessing what is in force after a failed write.
+    await vi.waitFor(() =>
+      expect(projectTargetingMock.getProjectTargeting).toHaveBeenCalledTimes(2)
+    );
     expect(targetingSwitch().getAttribute("aria-checked")).toBe("true");
+    expect(targetingSwitch().getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("names the switch by its visible label and describes it", async () => {
+    renderPane(withCapabilities(["project:dispatch"]));
+    const control = screen.getByRole("switch", { name: "Allow project targeting" });
+    const describedBy = control.getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(describedBy)?.textContent).toMatch(/audit log/);
+
+    await vi.waitFor(() => expect(control.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(screen.getByText("Allow project targeting"));
+    await vi.waitFor(() => expect(control.getAttribute("aria-checked")).toBe("true"));
+  });
+
+  it("offers a retry when the setting can't be read, and recovers", async () => {
+    projectTargetingMock.getProjectTargeting.mockRejectedValueOnce(new Error("ipc down"));
+    projectTargetingMock.getProjectTargeting.mockResolvedValueOnce(true);
+    renderPane(withCapabilities(["project:dispatch"]));
+
+    await vi.waitFor(() => expect(screen.getByText("Couldn't read this setting.")).toBeTruthy());
+    expect(targetingSwitch().hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(screen.queryByText("Couldn't read this setting.")).toBeNull();
   });
 
   it("is absent when the plugin does not declare project:dispatch", () => {

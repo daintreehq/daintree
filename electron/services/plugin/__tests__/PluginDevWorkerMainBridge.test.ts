@@ -239,7 +239,12 @@ describe("PluginDevWorkerMainBridge", () => {
       params: { actionId: "terminal.focus" },
     });
     await flush();
-    expect(host.dispatch).toHaveBeenNthCalledWith(1, "agent.launch", { a: 1 }, { projectId: "p-b" });
+    expect(host.dispatch).toHaveBeenNthCalledWith(
+      1,
+      "agent.launch",
+      { a: 1 },
+      { projectId: "p-b" }
+    );
     expect(host.dispatch).toHaveBeenNthCalledWith(2, "terminal.focus", undefined, undefined);
   });
 

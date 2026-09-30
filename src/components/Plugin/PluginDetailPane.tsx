@@ -114,7 +114,7 @@ function PluginCapabilityList({
         ))}
       </ul>
       {plugin.origin === "global" && granted.includes("project:dispatch") && (
-        <ProjectTargetingSwitch pluginId={plugin.instanceId} label={pluginLabel(plugin)} />
+        <ProjectTargetingSwitch pluginId={plugin.instanceId} />
       )}
     </div>
   );
@@ -128,27 +128,32 @@ function PluginCapabilityList({
  * Only for app-wide plugins — a project plugin can only ever reach its own
  * project, so there is nothing to grant.
  */
-function ProjectTargetingSwitch({ pluginId, label }: { pluginId: string; label: string }) {
+function ProjectTargetingSwitch({ pluginId }: { pluginId: string }) {
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<"read" | "save" | null>(null);
+  const [loadNonce, setLoadNonce] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    setEnabled(null);
-    setError(null);
     window.electron.pluginCapability
       .getProjectTargeting({ pluginId })
       .then((value) => {
-        if (!cancelled) setEnabled(value);
+        if (cancelled) return;
+        setEnabled(value);
+        // A save error stays up through the re-read that follows it.
+        setError((current) => (current === "read" ? null : current));
       })
       .catch(() => {
-        if (!cancelled) setError("Couldn't read this setting.");
+        if (!cancelled) {
+          setEnabled(null);
+          setError("read");
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [pluginId]);
+  }, [pluginId, loadNonce]);
 
   const handleChange = (next: boolean) => {
     setSaving(true);
@@ -156,28 +161,51 @@ function ProjectTargetingSwitch({ pluginId, label }: { pluginId: string; label: 
     window.electron.pluginCapability
       .setProjectTargeting({ pluginId, enabled: next })
       .then((persisted) => setEnabled(persisted))
-      .catch(() => setError("Couldn't save this setting. Try again."))
+      .catch(() => {
+        // Main may have kept the change in memory without writing it (a failed
+        // disable stays off), so show what is in force now, not a guess.
+        setError("save");
+        setLoadNonce((n) => n + 1);
+      })
       .finally(() => setSaving(false));
   };
 
+  const switchId = `plugin-project-targeting-${pluginId}`;
+  const descriptionId = `${switchId}-description`;
+  const errorId = `${switchId}-error`;
+
   return (
-    <div className="flex items-start justify-between gap-3 pt-2 border-t border-daintree-border">
+    <div className="flex items-start justify-between gap-3 pt-2 border-t border-border-default">
       <div className="min-w-0">
-        <div className="text-xs text-text-primary">
+        <label htmlFor={switchId} className="block text-xs text-text-primary">
           Allow project targeting
+        </label>
+        <div id={descriptionId} className="text-2xs text-text-secondary">
+          Lets this plugin run actions in any open project, not just the one in front. Each targeted
+          action is recorded in the plugin audit log.
         </div>
-        <div className="text-2xs text-text-secondary">
-          Lets this plugin run actions in any open project, not just the one in front. Each
-          targeted action is recorded in the plugin audit log.
-        </div>
-        {error && <div className="text-2xs text-status-danger mt-0.5">{error}</div>}
+        {error && (
+          <div id={errorId} className="flex items-center gap-2 mt-0.5">
+            <span className="text-2xs text-status-danger">
+              {error === "read"
+                ? "Couldn't read this setting."
+                : "Couldn't save this setting. Try again."}
+            </span>
+            {error === "read" && (
+              <Button variant="ghost" size="xs" onClick={() => setLoadNonce((n) => n + 1)}>
+                Retry
+              </Button>
+            )}
+          </div>
+        )}
       </div>
       <SettingsSwitch
+        id={switchId}
         checked={enabled === true}
         onCheckedChange={handleChange}
         disabled={enabled === null || saving}
-        aria-label={`Allow ${label} to target projects`}
-        aria-invalid={error !== null}
+        aria-describedby={error ? `${descriptionId} ${errorId}` : descriptionId}
+        aria-invalid={error === "save"}
         data-testid="plugin-project-targeting-switch"
       />
     </div>

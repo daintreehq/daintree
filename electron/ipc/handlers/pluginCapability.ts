@@ -294,8 +294,9 @@ export async function handleSetProjectTargeting(
     throw new Error("enabled must be a boolean");
   }
   const store = getPluginCapabilityConsentStore();
-  if (input.enabled) store.grant(identity);
-  else store.revoke(identity);
+  if (!store.setGrant(identity, input.enabled)) {
+    throw new Error("The project targeting setting could not be saved");
+  }
   return store.hasGrant(identity);
 }
 

@@ -153,6 +153,28 @@ function resolveCall(proxy: any, sent: any[], method: string, result: unknown): 
   proxy.handleMessage({ type: "host-result", requestId: call.requestId, ok: true, result });
 }
 
+describe("PluginDevWorkerHostProxy dispatch target (#13119)", () => {
+  it("relays the options argument to main, and leaves it off when absent", async () => {
+    const { proxy, sent } = makeProxy();
+
+    const targeted = proxy.host.dispatch("agent.launch", { a: 1 }, { projectId: "p-b" });
+    expect([...sent].reverse().find((m) => m.method === "dispatch").params).toEqual({
+      actionId: "agent.launch",
+      args: { a: 1 },
+      options: { projectId: "p-b" },
+    });
+    resolveCall(proxy, sent, "dispatch", { ok: true, result: "done" });
+    await expect(targeted).resolves.toEqual({ ok: true, result: "done" });
+
+    const ambient = proxy.host.dispatch("terminal.focus");
+    const params = [...sent].reverse().find((m) => m.method === "dispatch").params;
+    expect(params).toEqual({ actionId: "terminal.focus", args: undefined });
+    expect("options" in params).toBe(false);
+    resolveCall(proxy, sent, "dispatch", { ok: true, result: null });
+    await ambient;
+  });
+});
+
 describe("PluginDevWorkerHostProxy getWorktreesResult (#12174)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());

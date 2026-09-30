@@ -594,9 +594,9 @@ describe("an explicit dispatch target (#13119)", () => {
     projectTargetingGrant.granted = true;
     const host = hostBoundTo({ projectId: PROJECT_A, projectRoot: projectRootOf(PROJECT_A) });
 
-    expect(await rejection(host.dispatch("terminal.focus", null, { projectId: PROJECT_B }))).toMatch(
-      /^PERMISSION_REQUIRED: .*bound to its own project/
-    );
+    expect(
+      await rejection(host.dispatch("terminal.focus", null, { projectId: PROJECT_B }))
+    ).toMatch(/^PERMISSION_REQUIRED: .*bound to its own project/);
     await flushThaw();
     expect(wcA.send).not.toHaveBeenCalled();
     expect(wcB.send).not.toHaveBeenCalled();
@@ -617,9 +617,9 @@ describe("an explicit dispatch target (#13119)", () => {
     projectTargetingGrant.granted = true;
     const host = hostBoundTo(UNBOUND_PLUGIN_HOST_BINDING);
 
-    expect(await rejection(host.dispatch("terminal.focus", null, { projectId: PROJECT_A }))).toMatch(
-      /^PERMISSION_REQUIRED: .*"project:dispatch"/
-    );
+    expect(
+      await rejection(host.dispatch("terminal.focus", null, { projectId: PROJECT_A }))
+    ).toMatch(/^PERMISSION_REQUIRED: .*"project:dispatch"/);
     await flushThaw();
     expect(wcA.send).not.toHaveBeenCalled();
     expect(wcB.send).not.toHaveBeenCalled();
@@ -629,9 +629,9 @@ describe("an explicit dispatch target (#13119)", () => {
     declaredCapabilities.push("project:dispatch");
     const host = hostBoundTo(UNBOUND_PLUGIN_HOST_BINDING);
 
-    expect(await rejection(host.dispatch("terminal.focus", null, { projectId: PROJECT_A }))).toMatch(
-      /^PERMISSION_REQUIRED: .*"Allow project targeting"/
-    );
+    expect(
+      await rejection(host.dispatch("terminal.focus", null, { projectId: PROJECT_A }))
+    ).toMatch(/^PERMISSION_REQUIRED: .*"Allow project targeting"/);
     await flushThaw();
     expect(wcA.send).not.toHaveBeenCalled();
     expect(wcB.send).not.toHaveBeenCalled();
