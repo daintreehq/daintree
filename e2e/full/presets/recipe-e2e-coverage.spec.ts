@@ -1,10 +1,10 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
-import { createFixtureRepo, createFixtureRepoWithRecipes } from "../../helpers/fixtures";
+import { createFixtureRepoWithRecipes } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
 import { chooseSelectOption } from "../../helpers/select";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 import { dismissBlockingPalette } from "../../helpers/overlays";
 
 // E2E coverage for recipe and onboarding surfaces that lacked specs (#9597):
@@ -48,7 +48,8 @@ async function loadRecipesViaSettings(window: Page): Promise<void> {
   await palette.locator(SEL.projectSwitcher.projectSettings).click();
   await expect(window.locator(SEL.projectSettings.heading)).toBeVisible({ timeout: T_MEDIUM });
   await window.locator(SEL.projectSettings.recipesTab).click();
-  await window.waitForTimeout(T_SETTLE);
+  // The tab loads recipes on mount; its section rendering means it mounted.
+  await expect(window.locator("#project-default-recipe")).toBeVisible({ timeout: T_MEDIUM });
   await window.locator(SEL.projectSettings.closeButton).click();
   await expect(window.locator(SEL.projectSettings.heading)).not.toBeVisible({ timeout: T_SHORT });
 }
@@ -68,21 +69,31 @@ async function createProjectRecipe(window: Page, name: string): Promise<void> {
   await expect(editor).not.toBeVisible({ timeout: T_MEDIUM });
 }
 
-test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
+test.describe("Recipe & onboarding coverage (#9597)", () => {
   // ---------------------------------------------------------------------------
-  // Surfaces that share one app + one plain project: conflict dialog, clipboard
-  // export/import, terminal-type marshaling, variable preview.
+  // One app and one project seeded with an in-repo recipe: conflict dialog,
+  // clipboard export/import, terminal-type marshaling, variable preview, then
+  // Team scope and shadowing (a same-named project recipe over the in-repo one).
   // ---------------------------------------------------------------------------
-  test.describe.serial("Recipe dialogs", () => {
+  test.describe.serial("Recipe dialogs and scopes", () => {
     let ctx: AppContext;
     let cleanup: (() => void) | undefined;
 
     test.beforeAll(async () => {
       ctx = await launchApp();
-      const { dir, cleanup: c } = createFixtureRepo({ name: "recipe-dialogs" });
+      const { dir, cleanup: c } = createFixtureRepoWithRecipes({
+        name: "recipe-dialogs",
+        inRepoRecipes: [
+          {
+            name: "Shared Dev",
+            terminals: [{ type: "terminal", command: "npm run dev", env: {} }],
+          },
+        ],
+      });
       cleanup = c;
       ctx.window = await openAndOnboardProject(ctx.app, ctx.window, dir, "Recipe Dialogs");
-      await ctx.window.waitForTimeout(T_SETTLE);
+      // Load the seeded in-repo recipe from disk into the store.
+      await loadRecipesViaSettings(ctx.window);
     });
 
     test.afterAll(async () => {
@@ -252,38 +263,6 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       await expect(editor).not.toBeVisible({ timeout: T_MEDIUM });
       await expect(window.locator('[role="dialog"]')).toHaveCount(0, { timeout: T_MEDIUM });
     });
-  });
-
-  // ---------------------------------------------------------------------------
-  // Team scope + shadowing: seed an in-repo recipe, then shadow it with a
-  // same-named project recipe.
-  // ---------------------------------------------------------------------------
-  test.describe.serial("Recipe scopes and shadowing", () => {
-    let ctx: AppContext;
-    let cleanup: (() => void) | undefined;
-
-    test.beforeAll(async () => {
-      ctx = await launchApp();
-      const { dir, cleanup: c } = createFixtureRepoWithRecipes({
-        name: "recipe-scopes",
-        inRepoRecipes: [
-          {
-            name: "Shared Dev",
-            terminals: [{ type: "terminal", command: "npm run dev", env: {} }],
-          },
-        ],
-      });
-      cleanup = c;
-      ctx.window = await openAndOnboardProject(ctx.app, ctx.window, dir, "Recipe Scopes");
-      await ctx.window.waitForTimeout(T_SETTLE);
-      // Load the seeded in-repo recipe from disk into the store.
-      await loadRecipesViaSettings(ctx.window);
-    });
-
-    test.afterAll(async () => {
-      if (ctx?.app) await closeApp(ctx.app);
-      cleanup?.();
-    });
 
     test("team section lists the in-repo recipe", async () => {
       const { window } = ctx;
@@ -326,22 +305,24 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // RecipeRunner empty state: a project with package.json scripts and no recipes
-  // surfaces suggestion pills in the content-grid empty state.
+  // A project with package.json scripts and no recipes: the RecipeRunner empty
+  // state surfaces suggestion pills; then the GettingStartedChecklist is forced
+  // visible (forceShow path) and marked / collapsed / dismissed with
+  // persistence checks. Launched with the first-run skip disabled so the
+  // checklist starts fresh instead of pre-dismissed.
   // ---------------------------------------------------------------------------
-  test.describe.serial("Recipe runner empty state", () => {
+  test.describe.serial("Recipe runner empty state and getting started checklist", () => {
     let ctx: AppContext;
     let cleanup: (() => void) | undefined;
 
     test.beforeAll(async () => {
-      ctx = await launchApp();
+      ctx = await launchApp({ env: { DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS: "0" } });
       const { dir, cleanup: c } = createFixtureRepoWithRecipes({
         name: "recipe-runner",
         packageScripts: { dev: "vite", test: "vitest" },
       });
       cleanup = c;
       ctx.window = await openAndOnboardProject(ctx.app, ctx.window, dir, "Recipe Runner");
-      await ctx.window.waitForTimeout(T_SETTLE);
       // Sets the recipe store's currentProjectId so the RecipeRunner (gated on
       // recipesProjectId !== null) renders in the content-grid empty state.
       await loadRecipesViaSettings(ctx.window);
@@ -369,29 +350,6 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       await expect(empty.getByRole("button", { name: /Create your first recipe/ })).toBeVisible({
         timeout: T_SHORT,
       });
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // GettingStartedChecklist: force it visible (forceShow path), then mark /
-  // collapse / dismiss with persistence checks. Launched with the first-run
-  // skip disabled so the checklist starts fresh instead of pre-dismissed.
-  // ---------------------------------------------------------------------------
-  test.describe.serial("Getting started checklist", () => {
-    let ctx: AppContext;
-    let cleanup: (() => void) | undefined;
-
-    test.beforeAll(async () => {
-      ctx = await launchApp({ env: { DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS: "0" } });
-      const { dir, cleanup: c } = createFixtureRepo({ name: "checklist" });
-      cleanup = c;
-      ctx.window = await openAndOnboardProject(ctx.app, ctx.window, dir, "Checklist");
-      await ctx.window.waitForTimeout(T_SETTLE);
-    });
-
-    test.afterAll(async () => {
-      if (ctx?.app) await closeApp(ctx.app);
-      cleanup?.();
     });
 
     async function showChecklist(window: Page): Promise<Locator> {
