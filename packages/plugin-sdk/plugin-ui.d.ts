@@ -254,6 +254,25 @@ declare module "@daintreehq/plugin-ui" {
     PluginStackProps,
     PluginStatusBarProps,
     PluginStatusBarSlot,
+    PluginBulkAction,
+    PluginBulkActionBarProps,
+    PluginDrawerProps,
+    PluginDrawerToggleProps,
+    PluginGroupedVirtualListProps,
+    PluginInspectorProps,
+    PluginInspectorSectionProps,
+    PluginListGroup,
+    PluginLoadMoreFooterProps,
+    PluginMasterDetailProps,
+    PluginPropertyRowProps,
+    PluginRefreshOverlayProps,
+    PluginSplitGroupProps,
+    PluginSplitLayout,
+    PluginSplitPane,
+    PluginStaleIndicatorProps,
+    PluginTask,
+    PluginTaskListProps,
+    PluginTaskStatus,
   } from "@daintreehq/plugin-sdk/react";
 
   export type MarkdownProps = PluginMarkdownProps;
@@ -470,6 +489,25 @@ declare module "@daintreehq/plugin-ui" {
   export type OverflowToolbarSeparator = PluginOverflowToolbarSeparator;
   export type ContainerSize = PluginContainerSize;
   export type ContainerTarget = PluginContainerTarget;
+  export type MasterDetailProps = PluginMasterDetailProps;
+  export type SplitPane = PluginSplitPane;
+  export type SplitLayout = PluginSplitLayout;
+  export type SplitGroupProps = PluginSplitGroupProps;
+  export type InspectorProps = PluginInspectorProps;
+  export type InspectorSectionProps = PluginInspectorSectionProps;
+  export type PropertyRowProps = PluginPropertyRowProps;
+  export type DrawerProps = PluginDrawerProps;
+  export type DrawerToggleProps = PluginDrawerToggleProps;
+  export type ListGroup<T = unknown> = PluginListGroup<T>;
+  export type GroupedVirtualListProps<T = unknown> = PluginGroupedVirtualListProps<T>;
+  export type BulkAction = PluginBulkAction;
+  export type BulkActionBarProps = PluginBulkActionBarProps;
+  export type LoadMoreFooterProps = PluginLoadMoreFooterProps;
+  export type TaskStatus = PluginTaskStatus;
+  export type Task = PluginTask;
+  export type TaskListProps = PluginTaskListProps;
+  export type RefreshOverlayProps = PluginRefreshOverlayProps;
+  export type StaleIndicatorProps = PluginStaleIndicatorProps;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -908,4 +946,47 @@ declare module "@daintreehq/plugin-ui" {
   export function useToast(): UseToastResult;
   /** A small confirm anchored to `trigger`, for actions that are cheap to undo. The trigger shows while the kit loads. */
   export const ConfirmPopover: ComponentType<ConfirmPopoverProps>;
+
+  /**
+   * A list pane beside a detail pane that becomes one pane with a Back strip
+   * below `collapseBelow` px of its own width. The list width is resizable
+   * when wide and remembered under `persistKey`.
+   */
+  export const MasterDetail: ComponentType<MasterDetailProps>;
+  /**
+   * Two or more panes in a row or column, each sized pane with a draggable,
+   * keyboard-resizable handle facing the pane that fills. Min, max, collapse
+   * and remembered sizes per pane; nest one in a pane for a grid of splits.
+   */
+  export const SplitGroup: ComponentType<SplitGroupProps>;
+  /** A property panel's frame: its `PropertyRow`s put labels beside values when it is 240px or wider. */
+  export const Inspector: ComponentType<InspectorProps>;
+  /** A collapsible heading over a group of `PropertyRow`s in an `Inspector`. */
+  export const InspectorSection: ComponentType<InspectorSectionProps>;
+  /** A 28px label and value row; a kit control inside is labelled by it. */
+  export const PropertyRow: ComponentType<PropertyRowProps>;
+  /**
+   * A panel that slides in from an edge of its own pane, over the content or
+   * beside it. Modal overlays trap focus over a scrim; Escape closes. The
+   * content shows while the kit loads.
+   */
+  export const Drawer: ComponentType<DrawerProps>;
+  /** The toolbar button that opens and closes a `Drawer`, with `aria-expanded`. */
+  export const DrawerToggle: ComponentType<DrawerToggleProps>;
+  /** A `VirtualList` in groups under sticky headers with counts, optionally foldable. */
+  export const GroupedVirtualList: <T>(props: GroupedVirtualListProps<T>) => ReactNode;
+  /** "3 issues selected", the actions for them and a clear button; nothing while none are. */
+  export const BulkActionBar: ComponentType<BulkActionBarProps>;
+  /** The end of a paged list: Load more, loading, "All 212 loaded", or the error with Retry. */
+  export const LoadMoreFooter: ComponentType<LoadMoreFooterProps>;
+  /** A queue of jobs with state, progress, duration and Retry or Cancel, under a count summary. */
+  export const TaskList: ComponentType<TaskListProps>;
+  /**
+   * Content that stays valid while a fresh copy loads: a thin bar and an
+   * "Updating…" note past 400ms, no layout shift, no blocking. The content
+   * shows while the kit loads.
+   */
+  export const RefreshOverlay: ComponentType<RefreshOverlayProps>;
+  /** "Updated 5m ago", stale or disconnected, with a refresh button. */
+  export const StaleIndicator: ComponentType<StaleIndicatorProps>;
 }

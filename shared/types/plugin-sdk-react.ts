@@ -3845,3 +3845,380 @@ export interface PluginContainerSize {
 
 /** What `useContainerSize` and `useBreakpoint` observe: a ref, or the element itself. */
 export type PluginContainerTarget = RefObject<Element | null> | Element | null | undefined;
+
+// Layout panes: list and detail, multi-pane splits, inspectors, in-pane
+// drawers, grouped lists, selection bars, pagination footers, job queues and
+// stale-data signals.
+
+/**
+ * Props of `MasterDetail`: a list pane beside a detail pane that becomes one
+ * pane with a Back strip when the panel is narrower than `collapseBelow`. It
+ * answers to its own width, never the window's, and fills its container.
+ */
+export interface PluginMasterDetailProps extends PluginRootAttributes {
+  /** The list pane, usually a `VirtualList` or `GroupedVirtualList`. */
+  list: ReactNode;
+  /** The detail pane: the selected record, or what to show while none is. */
+  detail: ReactNode;
+  /**
+   * The selected record's id, controlled. Narrow, a value shows the detail
+   * pane and `null` or `undefined` shows the list; wide, both show whatever it is.
+   */
+  selectedId?: string | number | null;
+  /** The Back strip's button, narrow: clear `selectedId` here. */
+  onBack?: () => void;
+  /** Names the list pane as a region. Defaults to "List". */
+  listLabel?: string;
+  /** Names the detail pane as a region. Defaults to "Details". */
+  detailLabel?: string;
+  /** The Back button's name. Defaults to "Back". */
+  backLabel?: string;
+  /** What the Back strip shows beside the button, narrow: the record's title. */
+  detailTitle?: ReactNode;
+  /** Below this width in px the two panes become one. Defaults to 560. */
+  collapseBelow?: number;
+  /** The list pane's width in px when wide, before the reader resizes it. Defaults to 320. */
+  defaultListSize?: number;
+  /** In px. Defaults to 220. */
+  minListSize?: number;
+  /** In px. Defaults to 560. */
+  maxListSize?: number;
+  /**
+   * Remembers the list pane's width under this key (see
+   * `usePersistentViewState`). Without it the width lasts until unmount.
+   */
+  persistKey?: string;
+  className?: string;
+}
+
+/** One pane of a `SplitGroup`. */
+export interface PluginSplitPane {
+  /** Non-empty and unique within the group. */
+  id: string;
+  content: ReactNode;
+  /**
+   * The pane's starting size in px. Omit it on the one pane that fills what
+   * the others leave (or mark that pane `fill`); without either, the last pane fills.
+   */
+  defaultSize?: number;
+  /** Takes the room the sized panes leave. At most one pane fills. */
+  fill?: boolean;
+  /** In px. Defaults to 120 (a filling pane: 0). */
+  minSize?: number;
+  /** In px. Defaults to 100000. */
+  maxSize?: number;
+  /**
+   * The pane can collapse: a drag below half its `minSize`, or Enter or Space
+   * on its handle. It stays mounted while collapsed. A filling pane cannot.
+   */
+  collapsible?: boolean;
+  /** Starts collapsed when uncontrolled. */
+  defaultCollapsed?: boolean;
+  /** Names the pane's handle ("Resize inspector"). Defaults to "Resize pane". */
+  handleLabel?: string;
+}
+
+/** A `SplitGroup`'s layout, as `onLayoutChange` reports it and `persistKey` stores it. */
+export interface PluginSplitLayout {
+  /** Each sized pane's size in px, by pane id. */
+  sizes: Record<string, number>;
+  /** The ids of the collapsed panes. */
+  collapsed: string[];
+}
+
+/**
+ * Props of `SplitGroup`: two or more panes in a row or a column, each sized
+ * pane with its own draggable, keyboard-resizable handle on the side facing
+ * the filling pane. Nest a `SplitGroup` in a pane for a grid of splits.
+ */
+export interface PluginSplitGroupProps extends PluginRootAttributes {
+  panes: readonly PluginSplitPane[];
+  /** `horizontal` (the default) puts the panes side by side; `vertical` stacks them. */
+  orientation?: "horizontal" | "vertical";
+  /** Remembers sizes and collapsed panes under this key (see `usePersistentViewState`). */
+  persistKey?: string;
+  /** The collapsed panes' ids, controlled: a toolbar toggle for an inspector. */
+  collapsed?: readonly string[];
+  onCollapsedChange?: (collapsed: string[]) => void;
+  /** Called when a drag ends, on a key press and on a reset. */
+  onLayoutChange?: (layout: PluginSplitLayout) => void;
+  className?: string;
+}
+
+/**
+ * Props of `Inspector`: the frame of a property panel. Its `PropertyRow`s put
+ * the label beside the value while the inspector is at least 240px wide and
+ * above it when narrower.
+ */
+export interface PluginInspectorProps extends PluginAriaRootAttributes {
+  children?: ReactNode;
+  /** Names the inspector as a region. */
+  "aria-label"?: string;
+  /** The label column's width in px, wide. Defaults to 88. */
+  labelWidth?: number;
+  className?: string;
+}
+
+/**
+ * Props of `InspectorSection`: a heading row over a group of `PropertyRow`s,
+ * collapsible by default. Content stays mounted while folded only if you keep
+ * it so; a folded section renders no rows.
+ */
+export interface PluginInspectorSectionProps extends PluginRootAttributes {
+  /** Sentence case; drawn as a small uppercase label. */
+  title: string;
+  children?: ReactNode;
+  /** `false` for a section that cannot fold. Defaults to `true`. */
+  collapsible?: boolean;
+  open?: boolean;
+  /** Defaults to `true`. */
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** A control or two at the end of the heading row (an add or reset button). */
+  actions?: ReactNode;
+  className?: string;
+}
+
+/**
+ * Props of `PropertyRow`: a label beside its value in a 28px row. A kit
+ * control in `children` is labelled by the row, as in a `FormField`.
+ */
+export interface PluginPropertyRowProps extends PluginRootAttributes {
+  label: string;
+  /** The control, or read-only text. */
+  children?: ReactNode;
+  /** A control id to label, when the row cannot find its control. */
+  htmlFor?: string;
+  /** A quiet note after the label (a unit, "Inherited"); never part of its name. */
+  hint?: ReactNode;
+  /** `start` pins the label to the first line of a tall control. Defaults to `center`. */
+  align?: "center" | "start";
+  className?: string;
+}
+
+/**
+ * Props of `Drawer`: a panel that slides in from an edge of its own pane,
+ * over the content (`overlay`) or beside it (`push`). Wrap the pane's content
+ * in it; `Sheet` is the window-edge equivalent.
+ */
+export interface PluginDrawerProps extends PluginRootAttributes {
+  open: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** The pane's own content, which the drawer slides over or beside. */
+  children?: ReactNode;
+  /** The drawer's body. */
+  panel: ReactNode;
+  /** The drawer's heading. With it the drawer draws a header row with a close button. */
+  title?: ReactNode;
+  /** Names the drawer when there is no string `title`. */
+  "aria-label"?: string;
+  /** Controls at the end of the header row, before the close button. */
+  actions?: ReactNode;
+  /** A strip along the drawer's bottom (Apply, Reset). */
+  footer?: ReactNode;
+  /** Defaults to `right`. */
+  side?: "left" | "right" | "top" | "bottom";
+  /** `overlay` (the default) floats over the content; `push` narrows it. */
+  mode?: "overlay" | "push";
+  /**
+   * An overlay drawer that holds focus until closed, over a scrim that closes
+   * it. Defaults to `true` for `overlay`; a `push` drawer is never modal.
+   */
+  modal?: boolean;
+  /** Width (or height, top and bottom) in px. Defaults to 320; never more than 90% of the pane. */
+  size?: number;
+  /** The drawer panel's id, for a `DrawerToggle`'s `controls`. Generated when omitted. */
+  panelId?: string;
+  className?: string;
+}
+
+/** Props of `DrawerToggle`: the toolbar button that opens and closes a `Drawer`. */
+export interface PluginDrawerToggleProps extends PluginRootAttributes {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Required: the drawer it opens ("Filters"). The name holds still; the state is `aria-expanded`. */
+  label: string;
+  /** The `Drawer`'s `panelId`. */
+  controls?: string;
+  /** Defaults to a panel glyph facing `side`. */
+  icon?: PluginIconSource;
+  /** Where the drawer sits, for the default glyph. Defaults to `right`. */
+  side?: "left" | "right" | "top" | "bottom";
+  /** Draws the label beside the icon. */
+  showLabel?: boolean;
+  /** A count of what the drawer has in effect (active filters), as a quiet badge. */
+  badge?: number;
+  disabled?: boolean;
+  className?: string;
+}
+
+/** One group of a `GroupedVirtualList`. */
+export interface PluginListGroup<T = unknown> {
+  /** Non-empty and unique within the list. */
+  id: string;
+  /** The sticky header's text, sentence case. */
+  label: string;
+  items: readonly T[];
+  /** The number after the label. Defaults to `items.length`; `false` for none. */
+  count?: number | false;
+}
+
+/**
+ * Props of `GroupedVirtualList`: a `VirtualList` in groups, each under a
+ * header that sticks to the top while its rows scroll past. Rows are indexed
+ * across the list as drawn, headers not counted and folded groups left out,
+ * so `activeIndex` and `useListNavigation`'s `count` use the same numbers.
+ */
+export interface PluginGroupedVirtualListProps<T = unknown> extends PluginVirtualListBaseProps {
+  groups: readonly PluginListGroup<T>[];
+  /** Renders one row. `index` is the row's index across the drawn list. */
+  renderItem(item: T, index: number, group: PluginListGroup<T>): ReactNode;
+  /** A stable key per row. Defaults to the group id and the row's index in it. */
+  itemKey?(item: T, group: PluginListGroup<T>): string | number;
+  /** Headers fold their group on click, Enter or Space. */
+  collapsible?: boolean;
+  /** The folded groups' ids, controlled. */
+  collapsedGroups?: readonly string[];
+  defaultCollapsedGroups?: readonly string[];
+  onCollapsedGroupsChange?: (collapsed: string[]) => void;
+  /** After the last row, inside the scroller: usually a `LoadMoreFooter`. */
+  footer?: ReactNode;
+  /** Shown instead of the list when every group is empty. */
+  empty?: ReactNode;
+}
+
+/** One action of a `BulkActionBar`. */
+export interface PluginBulkAction {
+  /** Non-empty and unique within the bar. */
+  id: string;
+  label: string;
+  icon?: PluginIconSource;
+  onSelect?: () => void;
+  disabled?: boolean;
+  /** A destructive menu row once it has folded. */
+  destructive?: boolean;
+  /** Higher stays in the bar longer. Defaults to 0. */
+  priority?: number;
+}
+
+/**
+ * Props of `BulkActionBar`: "3 issues selected", the actions that apply to
+ * them and a clear button, in the band along a list's bottom. It renders
+ * nothing while the count is 0. Actions that do not fit fold into a menu.
+ */
+export interface PluginBulkActionBarProps extends PluginRootAttributes {
+  /** How many are selected. Or pass `selection`. */
+  count?: number;
+  /** A `useSelection` result: its `count` and `clear` drive the bar. */
+  selection?: { count: number; clear: () => void };
+  /** What is selected: `"issue"`, or `{ one: "pull request", other: "pull requests" }`. */
+  noun?: string | { one: string; other: string };
+  /** How many selected rows the list is not showing (filtered or not loaded). */
+  hiddenCount?: number;
+  actions?: readonly PluginBulkAction[];
+  /** Clears the selection. Defaults to `selection.clear`. */
+  onClear?: () => void;
+  /** Names the bar. Defaults to "Bulk actions". */
+  "aria-label"?: string;
+  className?: string;
+}
+
+/**
+ * Props of `LoadMoreFooter`: the end of a paged list. A Load more button, a
+ * loading row, "All 212 loaded", or the error with Retry.
+ */
+export interface PluginLoadMoreFooterProps extends PluginRootAttributes {
+  status: "idle" | "loading" | "error" | "done";
+  onLoadMore?: () => void;
+  /** Rows loaded so far, for "50 of 212". */
+  loadedCount?: number;
+  /** Rows there are in all, when known. */
+  totalCount?: number;
+  /** What the rows are: `"issue"`, or `{ one, other }`. Defaults to "item". */
+  noun?: string | { one: string; other: string };
+  /** What went wrong, with `status: "error"`. Defaults to "Couldn't load more". */
+  error?: ReactNode;
+  /** Loads the next page when the footer scrolls into view while `idle`. Never retries an error. */
+  autoLoad?: boolean;
+  /** The button's label. Defaults to "Load more". */
+  label?: string;
+  className?: string;
+}
+
+/** A `TaskList` job's state. */
+export type PluginTaskStatus = "pending" | "running" | "done" | "failed" | "cancelled";
+
+/** One job of a `TaskList`. */
+export interface PluginTask {
+  /** Non-empty and unique within the list. */
+  id: string;
+  title: string;
+  status: PluginTaskStatus;
+  /** 0 to 1 while running: a thin bar under the title. Omitted or `null`, the spinner alone. */
+  progress?: number | null;
+  /** A quiet line under the title ("12 of 40 issues", the failure's cause). */
+  detail?: ReactNode;
+  /** Epoch ms, an ISO string or a `Date`: when the job started. */
+  startedAt?: number | string | Date;
+  /** When it finished; with `startedAt`, the duration a settled job shows. */
+  finishedAt?: number | string | Date;
+  /** Offers Retry on a failed or cancelled job. Defaults to `true` when `onRetry` is set. */
+  retryable?: boolean;
+  /** Offers Cancel on a pending or running job. Defaults to `true` when `onCancel` is set. */
+  cancellable?: boolean;
+}
+
+/**
+ * Props of `TaskList`: a queue of jobs, each with its state, progress,
+ * duration and Retry or Cancel, under a summary ("2 running · 1 failed").
+ */
+export interface PluginTaskListProps extends PluginRootAttributes {
+  tasks: readonly PluginTask[];
+  /** Required: names the list ("Sync jobs"). */
+  "aria-label": string;
+  /** A heading drawn before the summary. */
+  title?: ReactNode;
+  /** The summary line of counts. Defaults to `true`. */
+  summary?: boolean;
+  /** Controls at the end of the summary row ("Clear finished"). */
+  actions?: ReactNode;
+  onRetry?: (task: PluginTask) => void;
+  onCancel?: (task: PluginTask) => void;
+  /** Shown when there are no tasks. */
+  empty?: ReactNode;
+  className?: string;
+}
+
+/**
+ * Props of `RefreshOverlay`: content that is still valid while a fresh copy
+ * loads. A thin bar along the top and an "Updating…" note, drawn after 400ms
+ * so a quick refresh shows nothing; the content never moves or blocks.
+ */
+export interface PluginRefreshOverlayProps extends PluginRootAttributes {
+  refreshing: boolean;
+  children?: ReactNode;
+  /** The note's words. Defaults to "Updating…". */
+  label?: string;
+  className?: string;
+}
+
+/**
+ * Props of `StaleIndicator`: when the data was last updated, whether that is
+ * now old or the source is disconnected, and a refresh button.
+ */
+export interface PluginStaleIndicatorProps extends PluginRootAttributes {
+  /** Epoch ms, an ISO string or a `Date`. Omitted reads "Not updated yet". */
+  updatedAt?: number | string | Date | null;
+  /** Older than this many ms (positive) reads as stale. Omit to never go stale on age alone. */
+  staleAfterMs?: number;
+  /** Stale whatever the age. */
+  stale?: boolean;
+  /** The source is unreachable: the strongest state, with the last update after it. */
+  disconnected?: boolean;
+  /** A refresh is in flight: the button spins and is disabled. */
+  refreshing?: boolean;
+  onRefresh?: () => void;
+  /** The refresh button's name. Defaults to "Refresh". */
+  refreshLabel?: string;
+  className?: string;
+}

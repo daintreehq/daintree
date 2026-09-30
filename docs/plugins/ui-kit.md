@@ -331,6 +331,98 @@ export default function Dashboard() {
 }
 ```
 
+### Panes
+
+What a panel needs once it is more than one pane: a list beside its record, splits of three or more, an inspector, a drawer inside the pane, a long grouped list, a selection bar, the end of a paged list, a queue of jobs and the marks of data that is refreshing or old. All of it answers to the pane's own width, never the window's.
+
+| Export | Props | Notes |
+| --- | --- | --- |
+| `MasterDetail` | `list`, `detail`, `selectedId?: string \| number \| null`, `onBack?()`, `listLabel?` ("List"), `detailLabel?` ("Details"), `backLabel?` ("Back"), `detailTitle?`, `collapseBelow?` (560), `defaultListSize?` (320), `minListSize?` (220), `maxListSize?` (560), `persistKey?`, `className?` | A list pane beside a detail pane, split by the host's divider (a `ResizableSplit`). Below `collapseBelow` px of its own width it is one pane: the list while `selectedId` is `null` or `undefined`, the detail under a 32 px Back strip (with `detailTitle`) once it is not; clear `selectedId` in `onBack`. Focus follows the swap: to Back when a record opens, and back to the row that opened it. Both panes stay mounted across the breakpoint, so a scrolled list or a half-written comment survives it. `persistKey` remembers the list width (see `usePersistentViewState`). It fills its container. |
+| `SplitGroup` | `panes: { id, content, defaultSize?, fill?, minSize?, maxSize?, collapsible?, defaultCollapsed?, handleLabel? }[]`, `orientation?: "horizontal" \| "vertical"`, `persistKey?`, `collapsed?: string[]`, `onCollapsedChange?(ids)`, `onLayoutChange?({ sizes, collapsed })`, `className?` | Two or more panes in a row or column. One pane fills (the one marked `fill`, else the first without a `defaultSize`, else the last); every other pane holds a size in px (240 by default, `minSize` 120) and owns the one handle on its side facing the filling pane, so each boundary has exactly one handle and a drag moves only that pane. Handles are the host's: arrows (10 px), Shift+arrows (50), Home, End, double-click to reset, and a pane never grows past the room the others leave. `collapsible` panes fold on a drag below half their `minSize` or on Enter or Space, and stay mounted; `collapsed` makes that controlled, for a toolbar toggle. Nest a `SplitGroup` in a pane for a grid of splits. `persistKey` remembers sizes and folded panes. |
+| `Inspector` | `children?`, `"aria-label"?`, `labelWidth?` (88), `className?` | A property panel's frame, for a side pane or a `Drawer`. Its `PropertyRow`s put the label in a `labelWidth` column beside the value while the inspector is at least 240 px wide, and above it when narrower. Named, it is a region. |
+| `InspectorSection` | `title`, `children?`, `collapsible?` (true), `open?`, `defaultOpen?` (true), `onOpenChange?(open)`, `actions?`, `className?` | A 28 px heading row (the small uppercase label) over a group of rows, split from the one above by a hairline. The heading folds the section; a folded section renders no rows. `actions` is a button or two at the row's end. |
+| `PropertyRow` | `label`, `children?`, `htmlFor?`, `hint?`, `align?: "center" \| "start"`, `className?` | One property at a height the eye can count: a 12 px label and its value, 28 px tall. A kit control in `children` (an `Input`, `Select`, `Switch`, …) is labelled by the row, as in a `FormField`; `htmlFor` names a control the row cannot find. Text or a number is a read-only value, and nothing draws a quiet dash read as "None". `hint` sits after the label and is never part of its name. `align="start"` pins the label to the first line of a tall control. Give controls their compact size. |
+| `Drawer` | `open`, `onOpenChange?(open)`, `children?` (the pane's content), `panel` (the drawer's body), `title?`, `"aria-label"?`, `actions?`, `footer?`, `side?: "left" \| "right" \| "top" \| "bottom"` (`right`), `mode?: "overlay" \| "push"` (`overlay`), `modal?`, `size?` (320), `panelId?`, `className?` | A panel that slides in from an edge of its own pane: wrap the pane's content in it. `overlay` floats on the app's elevated surface and shadow over the content and, `modal` by default, dims it, makes it inert and holds focus in the drawer until it closes; `push` sits beside the content and narrows it, and is never modal. Opening moves focus in (the body's first control when modal, else the drawer); Escape, the header's close button and a click on the scrim close it, and focus goes back to what opened it. With `title` it draws a 32 px header with `actions` and a close button; `footer` is a strip for Apply and Reset. It is never wider than 90 % of the pane. For a record against the window's edge use `Sheet`. |
+| `DrawerToggle` | `open`, `onOpenChange(open)`, `label`, `controls?` (the `Drawer`'s `panelId`), `icon?`, `side?`, `showLabel?`, `badge?`, `disabled?`, `className?` | The pane-toolbar button for a `Drawer`: a panel glyph facing `side`, `aria-expanded` for the state and `aria-controls` for the drawer. The name is the drawer ("Filters"), never the next action. `badge` counts what the drawer has in effect, as a quiet number. |
+| `GroupedVirtualList<T>` | `groups: { id, label, items, count? }[]`, `renderItem(item, index, group)`, `itemKey?(item, group)`, `"aria-label"`, `collapsible?`, `collapsedGroups?`, `defaultCollapsedGroups?`, `onCollapsedGroupsChange?(ids)`, `footer?`, `empty?`, `estimatedItemSize?` (28), `overscan?`, `onEndReached?(lastIndex)`, `activeIndex?`, `shadows?`, `className?`; DOM props except `style` and `ref` | A `VirtualList` in groups, each under a 28 px header (the list label, then the count) that sticks to the top while its rows scroll past. `count` overrides the number shown (a total larger than the page loaded) and `false` hides it. `collapsible` headers fold their group. Rows are indexed across the list as drawn, headers not counted and folded groups left out, so `renderItem`'s `index`, `activeIndex` and `useListNavigation`'s `count` agree; spread `containerProps` for a keyboard listbox as on `VirtualList`. `footer` sits after the last row inside the scroller, usually a `LoadMoreFooter`. `empty` replaces the list when every group is empty. It fills its container's height. |
+| `BulkActionBar` | `count?` or `selection?` (a `useSelection` result), `noun?: string \| { one, other }`, `hiddenCount?`, `actions?: { id, label, icon?, onSelect?, disabled?, destructive?, priority? }[]`, `onClear?`, `"aria-label"?`, `className?` | "3 issues selected", the actions that apply to them, and a clear button, in a 36 px band with a hairline on top: render it in place of the list's footer, not under it. It renders nothing while the count is 0. Actions are text buttons that fold into a "More actions" menu when the band is too narrow (the lowest `priority` first). `hiddenCount` adds "· 2 not shown" for selected rows a filter or an unloaded page hides. Escape inside the bar clears the selection. |
+| `LoadMoreFooter` | `status: "idle" \| "loading" \| "error" \| "done"`, `onLoadMore?()`, `loadedCount?`, `totalCount?`, `noun?`, `error?`, `autoLoad?`, `label?` ("Load more"), `className?` | The end of a paged list. `idle` is a Load more button with "50 of 212" when both counts are known; `loading` keeps the button in place with its spinner (and focus); `done` says "All 212 issues loaded"; `error` shows the reason and Retry. Each change is announced. `autoLoad` loads the next page as the footer scrolls into view, and again while it stays in view after each page, but never retries an error. When the focused button goes away, focus stays in the footer. |
+| `TaskList` | `tasks: { id, title, status: "pending" \| "running" \| "done" \| "failed" \| "cancelled", progress?, detail?, startedAt?, finishedAt?, retryable?, cancellable? }[]`, `"aria-label"`, `title?`, `summary?` (true), `actions?`, `onRetry?(task)`, `onCancel?(task)`, `empty?`, `className?` | A queue of jobs: sync runs, exports, deliveries. Each row has its state's glyph (spoken as a word), its title, a `detail` line, a spinner while it runs with a thin bar under it once `progress` (0 to 1) is known, and its duration (live while running, from `startedAt`; fixed once `finishedAt` is set). Only a failure is coloured: finished work is neutral. With `onRetry`, failed and cancelled jobs offer Retry; with `onCancel`, pending and running ones offer Cancel; a job's `retryable` or `cancellable` opts it out. The header's summary reads "2 running · 1 failed · 5 done". |
+| `RefreshOverlay` | `refreshing`, `children?`, `label?` ("Updating…"), `className?` | Content that is still valid while a fresh copy loads. It is `aria-busy` at once, and past the 400 ms gate draws a thin bar along its top edge and a small "Updating…" note in the corner, both on top of the content: nothing moves, nothing is dimmed, and the content stays usable. For a first load with nothing to show, use `PaneState` or `Skeleton`. |
+| `StaleIndicator` | `updatedAt?`, `staleAfterMs?`, `stale?`, `disconnected?`, `refreshing?`, `onRefresh?()`, `refreshLabel?` ("Refresh"), `className?` | "Updated 5m ago" as a live `TimeAgo`, for a `StatusBar` or a `PaneHeader` subtitle. Older than `staleAfterMs` (a positive number of ms), or with `stale`, a clock glyph marks it out of date; `disconnected` leads with "Disconnected" and the last update after it. `onRefresh` adds a refresh button that spins while `refreshing`, and ignores presses until it stops. It takes the text size of where it sits. |
+
+```tsx
+import {
+  BulkActionBar,
+  Drawer,
+  DrawerToggle,
+  GroupedVirtualList,
+  ListRow,
+  LoadMoreFooter,
+  MasterDetail,
+  PaneLayout,
+  StaleIndicator,
+  StatusBar,
+  Toolbar,
+  useSelection,
+} from "@daintreehq/plugin-ui";
+
+const selection = useSelection({ ids: issues.map((issue) => issue.id) });
+
+<PaneLayout
+  scroll="none"
+  toolbar={
+    <Toolbar variant="bar" aria-label="Issues">
+      <DrawerToggle
+        label="Filters"
+        controls="filters"
+        open={filtersOpen}
+        onOpenChange={setFiltersOpen}
+      />
+    </Toolbar>
+  }
+  footer={
+    <BulkActionBar
+      selection={selection}
+      noun="issue"
+      actions={[{ id: "close", label: "Close", icon: "x", onSelect: closeSelected }]}
+    />
+  }
+  statusBar={
+    <StatusBar
+      right={<StaleIndicator updatedAt={syncedAt} staleAfterMs={300_000} onRefresh={sync} />}
+    />
+  }
+>
+  <Drawer
+    open={filtersOpen}
+    onOpenChange={setFiltersOpen}
+    panelId="filters"
+    title="Filters"
+    panel={<Filters />}
+  >
+    <MasterDetail
+      persistKey="issues"
+      selectedId={openId}
+      onBack={() => setOpenId(null)}
+      detailTitle={openIssue?.title}
+      list={
+        <GroupedVirtualList
+          aria-label="Issues"
+          groups={groups}
+          collapsible
+          renderItem={(issue) => (
+            <ListRow title={issue.title} onSelect={() => setOpenId(issue.id)} />
+          )}
+          footer={<LoadMoreFooter status={pageStatus} onLoadMore={loadMore} autoLoad />}
+        />
+      }
+      detail={<IssueDetail issue={openIssue} />}
+    />
+  </Drawer>
+</PaneLayout>;
+```
+
 ### Settings grammar
 
 A settings view is a stack of `SettingsSection`s, each holding `SettingsGroup`s of `SettingsRow`s — the same section → group → row grammar Daintree's own settings pages use.
