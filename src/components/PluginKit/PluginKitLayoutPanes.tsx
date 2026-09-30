@@ -28,7 +28,7 @@ import {
   PanelTopOpen,
   RefreshCw,
   WifiOff,
-  XCircle,
+  X,
 } from "lucide-react";
 import {
   GroupedVirtuoso,
@@ -71,6 +71,7 @@ import {
 } from "@/components/ui/paneToolbarStyles";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { ResizeHandle } from "@/components/ui/ResizeHandle";
+import { OVERLAY_SHEET_SHADOW_CLASS } from "@/components/ui/floatingSurface";
 import { ScrollShadow, useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { LIST_LABEL_CLASS, SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Spinner } from "@/components/ui/Spinner";
@@ -80,6 +81,7 @@ import { resolveSplitterKey, type SplitterGrowKey } from "@/hooks/useSplitterKey
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { pluralNoun } from "@/lib/pluralize";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { usePersistentViewState } from "@/pluginUi/viewState";
@@ -103,6 +105,7 @@ import {
 } from "./kitProps";
 
 const LIMIT_PX = 100_000;
+const ErrorGlyph = SEVERITY_GLYPH.error;
 const SIDES = ["left", "right", "top", "bottom"] as const;
 type Side = (typeof SIDES)[number];
 
@@ -663,6 +666,28 @@ function KitSplitGroup({
     }
   };
 
+  // A pane folded from outside (a toolbar toggle, a narrow layout) while focus
+  // was in it hands focus to its handle, the control that brings it back.
+  const focusedPane = useRef<string | null>(null);
+  const collapsedKey = layout.collapsed.join("|");
+  useLayoutEffect(() => {
+    const id = focusedPane.current;
+    if (id === null || !root || !collapsedKey.split("|").includes(id)) return;
+    // Hiding an element does not move focus off it until the browser's
+    // focus fixup runs, so focus still inside the folded pane counts as lost.
+    const active = document.activeElement;
+    const pane = [...root.querySelectorAll<HTMLElement>("[data-split-group-pane]")].find(
+      (candidate) => candidate.dataset.splitGroupPane === id
+    );
+    const lost = active === null || active === document.body || (pane?.contains(active) ?? false);
+    if (!lost) return;
+    focusedPane.current = null;
+    const handle = [...root.querySelectorAll<HTMLElement>("[data-split-handle-for]")].find(
+      (candidate) => candidate.dataset.splitHandleFor === id
+    );
+    handle?.focus({ preventScroll: true });
+  }, [collapsedKey, root]);
+
   const children: ReactNode[] = [];
   entries.forEach((pane, index) => {
     const dragging = drag?.id === pane.id ? drag : null;
@@ -679,6 +704,7 @@ function KitSplitGroup({
         max={Math.max(size, roomFor(index))}
         isResizing={dragging !== null}
         aria-controls={paneElementId(index)}
+        data-split-handle-for={pane.id}
         aria-valuetext={folded ? "Collapsed" : `${Math.round(size)} pixels`}
         className="z-10"
         onMouseDown={(event) => startDrag(index, event)}
@@ -695,6 +721,9 @@ function KitSplitGroup({
         key={pane.id}
         id={paneElementId(index)}
         data-split-group-pane={pane.id}
+        onFocus={() => {
+          focusedPane.current = pane.id;
+        }}
         data-collapsed={folded ? "true" : undefined}
         style={folded ? undefined : style}
         className={cn(
@@ -791,7 +820,7 @@ function KitInspectorSection({
             <button
               type="button"
               aria-expanded={isOpen}
-              aria-controls={isOpen ? bodyId : undefined}
+              aria-controls={bodyId}
               onClick={() => {
                 setOwnOpen(!isOpen);
                 change?.(!isOpen);
@@ -819,11 +848,15 @@ function KitInspectorSection({
           <div className="flex shrink-0 items-center gap-0.5">{node(actions)}</div>
         ) : null}
       </div>
-      {isOpen ? (
-        <div id={bodyId} className="flex min-w-0 flex-col px-3 pb-2">
-          {node(children)}
-        </div>
-      ) : null}
+      {/* Folded, the rows stay mounted and hidden: the heading's control
+          target always exists, and a half-edited field keeps its value. */}
+      <div
+        id={bodyId}
+        hidden={!isOpen}
+        className={cn("min-w-0 flex-col px-3 pb-2", isOpen ? "flex" : "hidden")}
+      >
+        {node(children)}
+      </div>
     </section>
   );
 }
@@ -904,6 +937,20 @@ const DRAWER_DEFAULT_PX = 320;
 const FOCUSABLE =
   'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"]),[contenteditable="true"]';
 
+// Whether the user's last input was a pointer press rather than a key, read
+// when a drawer moves focus: one listener pair for the whole document.
+let pointerLast = false;
+let tracking = false;
+function lastInputWasPointer(): boolean {
+  return pointerLast;
+}
+function trackLastInput(): void {
+  if (tracking || typeof document === "undefined") return;
+  tracking = true;
+  document.addEventListener("pointerdown", () => (pointerLast = true), true);
+  document.addEventListener("keydown", () => (pointerLast = false), true);
+}
+
 /** What Tab can reach inside `root`: not inert, not hidden, not taken out of the order. */
 function focusablesIn(root: HTMLElement): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
@@ -968,6 +1015,8 @@ function KitDrawer({
   const panelRef = useRef<HTMLDivElement>(null);
   const returnTo = useRef<HTMLElement | null>(null);
   const pointerClose = useRef(false);
+
+  useEffect(() => trackLastInput(), []);
   const titleText = str(title);
   const name = nonEmpty(ariaLabel) ?? (titleText ? undefined : "Drawer");
 
@@ -1000,7 +1049,9 @@ function KitDrawer({
       const first = isModal
         ? ((body ? focusablesIn(body)[0] : undefined) ?? focusablesIn(panelEl)[0])
         : undefined;
-      (first ?? panelEl).focus({ preventScroll: true });
+      // Opened from a click, focus lands without a ring, as the host's
+      // overlays do; opened from the keyboard, the ring shows where it went.
+      (first ?? panelEl).focus({ preventScroll: true, focusVisible: !lastInputWasPointer() });
     }
     return () => {
       const now = document.activeElement;
@@ -1085,7 +1136,8 @@ function KitDrawer({
               !isOpen && "hidden"
             )
           : cn(
-              "absolute z-20 border-border-default bg-surface-panel-elevated shadow-[var(--theme-shadow-floating)]",
+              "absolute z-20 border-border-default bg-surface-panel-elevated",
+              isModal ? OVERLAY_SHEET_SHADOW_CLASS : "shadow-[var(--theme-shadow-floating)]",
               DRAWER_EDGE_CLASS[edge],
               // Visibility rides the slide, so a closing drawer stays painted
               // until it is off the edge and then leaves the tab order.
@@ -1136,7 +1188,9 @@ function KitDrawer({
             if (event.button === 0) close(true);
           }}
           className={cn(
-            "absolute inset-0 z-10 bg-scrim-soft transition-opacity ease-out motion-reduce:transition-none",
+            // The dialog scrim on dark themes, where the soft step barely moves
+            // the page; light themes read a layer from the soft step already.
+            "absolute inset-0 z-10 bg-scrim-medium [.light_&]:bg-scrim-soft transition-opacity ease-out motion-reduce:transition-none",
             isOpen ? "opacity-100 duration-200" : "pointer-events-none opacity-0 duration-[120ms]"
           )}
         />
@@ -1553,7 +1607,27 @@ function KitBulkActionBar({
   const clearSelection = fn(fromSelection?.clear);
   const clear = fn(onClear) ?? clearSelection;
   const hidden = wholeCount(hiddenCount) ?? 0;
-  if (selected <= 0) return null;
+  const visible = selected > 0;
+  // Where focus came from when it entered the bar (the list, usually), and
+  // whether it is inside the bar now: clearing takes the bar away, and focus
+  // inside it would otherwise fall to the page.
+  const cameFrom = useRef<HTMLElement | null>(null);
+  const holdsFocus = useRef(false);
+
+  useEffect(() => trackLastInput(), []);
+
+  useLayoutEffect(() => {
+    if (visible || !holdsFocus.current) return;
+    holdsFocus.current = false;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    const target = cameFrom.current;
+    if (target?.isConnected) {
+      target.focus({ preventScroll: true, focusVisible: !lastInputWasPointer() });
+    }
+  }, [visible]);
+
+  if (!visible) return null;
   // The toolbar validates each action itself; the bar only asks for words.
   const items: PluginOverflowToolbarItem[] = Array.isArray(actions)
     ? actions.map((action: PluginBulkAction) => ({
@@ -1571,6 +1645,17 @@ function KitBulkActionBar({
       role="group"
       aria-label={nonEmpty(ariaLabel) ?? "Bulk actions"}
       data-bulk-action-bar=""
+      onFocus={(event) => {
+        holdsFocus.current = true;
+        const from = event.relatedTarget;
+        if (from instanceof HTMLElement && !event.currentTarget.contains(from)) {
+          cameFrom.current = from;
+        }
+      }}
+      onBlur={(event) => {
+        const next = event.relatedTarget;
+        if (next !== null && !event.currentTarget.contains(next)) holdsFocus.current = false;
+      }}
       onKeyDown={(event) => {
         if (event.key === "Escape" && !event.defaultPrevented && clear) {
           event.preventDefault();
@@ -1683,7 +1768,7 @@ function KitLoadMoreFooter({
     spoken = typeof message === "string" ? message : "Couldn't load more";
     body = (
       <>
-        <XCircle aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-status-error" />
+        <ErrorGlyph aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-status-error" />
         <span className="min-w-0 truncate">{message}</span>
         <Button
           variant="ghost"
@@ -1837,7 +1922,7 @@ function TaskGlyph({ status }: { status: PluginTaskStatus }) {
     case "done":
       return <CircleCheck aria-hidden="true" className={cn(glyph, "text-text-secondary")} />;
     case "failed":
-      return <XCircle aria-hidden="true" className={cn(glyph, "text-status-error")} />;
+      return <ErrorGlyph aria-hidden="true" className={cn(glyph, "text-status-error")} />;
     case "cancelled":
       return <CircleSlash aria-hidden="true" className={cn(glyph, "text-text-secondary")} />;
   }
@@ -1848,6 +1933,76 @@ function taskDuration(entry: TaskEntry, now: number): string | null {
   if (entry.status === "running") return formatElapsedDuration(Math.max(0, now - entry.started));
   if (entry.status === "pending" || Number.isNaN(entry.finished)) return null;
   return formatElapsedDuration(Math.max(0, entry.finished - entry.started));
+}
+
+/** What a change of state says, for the list's live region; nothing while it moves. */
+function taskOutcome(title: string, status: PluginTaskStatus): string | null {
+  const name = title || "Task";
+  if (status === "done") return `${name} finished`;
+  if (status === "failed") return `${name} failed`;
+  if (status === "cancelled") return `${name} cancelled`;
+  return null;
+}
+
+/**
+ * What changed between two renders of a task list, from the snapshot the
+ * list serialises: each task's state now, and the outcomes worth saying.
+ * Nothing is news on the first render. Exported for tests.
+ */
+export function taskNews(
+  snapshot: string,
+  previous: ReadonlyMap<string, PluginTaskStatus> | null
+): { statuses: Map<string, PluginTaskStatus>; news: string } {
+  const statuses = new Map<string, PluginTaskStatus>();
+  const messages: string[] = [];
+  const rows: unknown = JSON.parse(snapshot);
+  if (!Array.isArray(rows)) return { statuses, news: "" };
+  for (const row of rows) {
+    if (!Array.isArray(row)) continue;
+    const id: unknown = row[0];
+    const status = oneOf(row[1], TASK_STATUSES);
+    const name: unknown = row[2];
+    if (typeof id !== "string" || status === undefined) continue;
+    statuses.set(id, status);
+    const before = previous?.get(id);
+    if (before === undefined || before === status) continue;
+    const message = taskOutcome(typeof name === "string" ? name : "", status);
+    if (message) messages.push(message);
+  }
+  return { statuses, news: messages.join(". ") };
+}
+
+/** An icon-only row action: a 24px ghost button with its name as the tooltip. */
+function TaskAction({
+  label,
+  tooltip,
+  onClick,
+  children,
+}: {
+  label: string;
+  tooltip: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  const overlayZ = useKitOverlayZClass();
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={label}
+          onClick={onClick}
+          className="shrink-0 [&_svg]:size-3.5"
+        >
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className={overlayZ}>
+        {tooltip}
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 function KitTaskList({
@@ -1873,6 +2028,39 @@ function KitTaskList({
   const showSummary = summary !== false;
   const line = taskSummary(entries.map((entry) => entry.status));
   const hasHeader = hasContent(title) || (showSummary && line !== "") || hasContent(actions);
+  // One action at most per row (Retry once settled, Cancel before), so one
+  // reserved slot keeps every duration in a single column.
+  const hasActions = entries.some((entry) => entry.retryable || entry.cancellable);
+  const signature = entries.map((entry) => `${entry.id}:${entry.status}`).join("|");
+
+  const listRef = useRef<HTMLUListElement>(null);
+  const focusedTask = useRef<string | null>(null);
+  const seen = useRef<Map<string, PluginTaskStatus> | null>(null);
+  const [spoken, setSpoken] = useState("");
+
+  // A row's action goes away as its task moves on (Cancel once it finishes,
+  // Retry once it restarts): focus it held stays on that task's row.
+  useLayoutEffect(() => {
+    const id = focusedTask.current;
+    const list = listRef.current;
+    if (id === null || !list) return;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    const row = [...list.querySelectorAll<HTMLElement>("[data-task-id]")].find(
+      (candidate) => candidate.dataset.taskId === id
+    );
+    (row ?? list).focus({ preventScroll: true });
+  }, [signature]);
+
+  // Outcomes only: a task settling is news, its ticking time and progress are
+  // not. The snapshot changes exactly when a task's state does.
+  const snapshot = JSON.stringify(entries.map((entry) => [entry.id, entry.status, entry.title]));
+  useEffect(() => {
+    const { statuses, news } = taskNews(snapshot, seen.current);
+    seen.current = statuses;
+    if (news !== "") setSpoken(news);
+  }, [snapshot]);
+
   return (
     <section
       {...pickRootProps(rest)}
@@ -1902,32 +2090,48 @@ function KitTaskList({
           <div className="px-3 py-2 text-xs text-text-secondary">{node(empty)}</div>
         ) : null
       ) : (
-        <ul aria-label={nonEmpty(ariaLabel)} className="m-0 flex list-none flex-col p-0">
+        <ul
+          ref={listRef}
+          tabIndex={-1}
+          aria-label={nonEmpty(ariaLabel)}
+          onFocus={(event) => {
+            const row =
+              event.target instanceof HTMLElement
+                ? event.target.closest<HTMLElement>("[data-task-id]")
+                : null;
+            focusedTask.current = row?.dataset.taskId ?? null;
+          }}
+          onBlur={(event) => {
+            const next = event.relatedTarget;
+            if (next !== null && !event.currentTarget.contains(next)) focusedTask.current = null;
+          }}
+          className={cn("m-0 flex list-none flex-col p-0", PROGRAMMATIC_FOCUS_RING)}
+        >
           {entries.map((entry) => {
             const duration = taskDuration(entry, now);
             const detail = field(entry.task, "detail");
             const showBar = entry.status === "running" && entry.progress !== null;
+            const name = entry.title || "task";
             return (
               <li
                 key={entry.id}
+                tabIndex={-1}
+                data-task-id={entry.id}
                 data-task-status={entry.status}
-                className="flex min-h-8 min-w-0 items-start gap-2 py-1 pr-1.5 pl-3"
+                className={cn(
+                  "flex min-h-8 min-w-0 items-start gap-2 py-1 pl-3",
+                  hasActions ? "pr-1.5" : "pr-3",
+                  PROGRAMMATIC_FOCUS_RING
+                )}
               >
                 <span className="flex h-6 w-3.5 shrink-0 items-center justify-center">
                   <TaskGlyph status={entry.status} />
                 </span>
-                <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5 py-1">
-                  <div className="flex min-w-0 items-baseline gap-2">
-                    <span className="min-w-0 flex-1 truncate text-xs text-text-primary">
-                      <span className="sr-only">{TASK_WORD[entry.status]}: </span>
-                      {entry.title}
-                    </span>
-                    {duration ? (
-                      <span className="shrink-0 text-2xs text-text-secondary tabular-nums">
-                        {duration}
-                      </span>
-                    ) : null}
-                  </div>
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5 py-1">
+                  <span className="min-w-0 truncate text-xs leading-4 text-text-primary">
+                    <span className="sr-only">{TASK_WORD[entry.status]}: </span>
+                    {entry.title}
+                  </span>
                   {hasContent(detail) ? (
                     <div className="min-w-0 truncate text-2xs text-text-secondary">
                       {node(detail)}
@@ -1938,37 +2142,42 @@ function KitTaskList({
                       value={Math.round((entry.progress ?? 0) * 100)}
                       label={entry.title || "Progress"}
                       size="thin"
-                      className="mt-0.5"
+                      className="mt-1"
                     />
                   ) : null}
                 </div>
-                {entry.retryable || entry.cancellable ? (
-                  <div className="flex h-6 shrink-0 items-center">
+                <span className="flex h-6 shrink-0 items-center text-2xs text-text-secondary tabular-nums">
+                  {duration}
+                </span>
+                {hasActions ? (
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center">
                     {entry.retryable ? (
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        aria-label={entry.title ? `Retry ${entry.title}` : "Retry"}
+                      <TaskAction
+                        label={`Retry ${name}`}
+                        tooltip="Retry"
                         onClick={() => retry?.(entry.task)}
                       >
                         <RefreshCw aria-hidden="true" />
-                        Retry
-                      </Button>
-                    ) : null}
-                    {entry.cancellable ? (
-                      <DismissButton
-                        aria-label={entry.title ? `Cancel ${entry.title}` : "Cancel"}
+                      </TaskAction>
+                    ) : entry.cancellable ? (
+                      <TaskAction
+                        label={`Cancel ${name}`}
                         tooltip="Cancel"
                         onClick={() => cancel?.(entry.task)}
-                      />
+                      >
+                        <X aria-hidden="true" />
+                      </TaskAction>
                     ) : null}
-                  </div>
+                  </span>
                 ) : null}
               </li>
             );
           })}
         </ul>
       )}
+      <span role="status" className="sr-only">
+        {spoken}
+      </span>
     </section>
   );
 }
@@ -2006,11 +2215,14 @@ function KitRefreshOverlay({
   return (
     <div
       {...pickRootProps(rest)}
-      aria-busy={active || undefined}
       data-refreshing={active ? "true" : undefined}
       className={cn("relative flex min-h-0 min-w-0 flex-1 flex-col", str(className))}
     >
-      {node(children)}
+      {/* Busy is the content alone: a live region inside a busy subtree may
+          be held back until it clears, which is after the news is over. */}
+      <div aria-busy={active || undefined} className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {node(children)}
+      </div>
       <div
         aria-hidden="true"
         className={cn(
@@ -2058,6 +2270,16 @@ function KitStaleIndicator({
   const refresh = fn(onRefresh);
   const refreshName = nonEmpty(refreshLabel) ?? "Refresh";
   const TimeAgo = pluginKitDates.TimeAgo;
+  // Connectivity changes are news; the age ticking over is not.
+  const offline = state === "disconnected";
+  const wasOffline = useRef<boolean | null>(null);
+  const [spoken, setSpoken] = useState("");
+  useEffect(() => {
+    const previous = wasOffline.current;
+    wasOffline.current = offline;
+    if (previous === null || previous === offline) return;
+    setSpoken(offline ? "Disconnected" : "Reconnected");
+  }, [offline]);
   return (
     <span
       {...pickRootProps(rest)}
@@ -2095,6 +2317,9 @@ function KitStaleIndicator({
           <SpinningIcon icon={RefreshCw} active={busy} aria-hidden="true" />
         </Button>
       ) : null}
+      <span role="status" className="sr-only">
+        {spoken}
+      </span>
     </span>
   );
 }

@@ -3409,8 +3409,8 @@ interface PluginInspectorProps extends PluginAriaRootAttributes {
 }
 /**
  * Props of `InspectorSection`: a heading row over a group of `PropertyRow`s,
- * collapsible by default. Content stays mounted while folded only if you keep
- * it so; a folded section renders no rows.
+ * collapsible by default. A folded section keeps its rows mounted and hidden,
+ * so a half-edited field keeps its value.
  */
 interface PluginInspectorSectionProps extends PluginRootAttributes {
     /** Sentence case; drawn as a small uppercase label. */
