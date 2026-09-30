@@ -840,7 +840,12 @@ function withSeparators(entries: OverflowEntry[], shown: (action: OverflowAction
 }
 
 // An `hr`, as Divider draws one: the separator role without a hand-rolled one.
-const OVERFLOW_SEPARATOR_CLASS = "mx-1 my-0 h-4 w-px shrink-0 border-0 bg-border-divider";
+// The pane divider ink, not the app toolbar's `.toolbar-divider`, whose theme
+// value is tuned for that bar's own surface and all but vanishes on a pane.
+// Forced-colors resets a background to Canvas, so there it paints CanvasText,
+// as `.toolbar-divider` does, rather than letting the groups run together.
+const OVERFLOW_SEPARATOR_CLASS =
+  "mx-1 my-0 h-4 w-px shrink-0 border-0 bg-border-divider forced-colors:bg-[CanvasText]";
 // Its 1px line and the 4px margin either side.
 const OVERFLOW_SEPARATOR_PX = 9;
 
