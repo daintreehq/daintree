@@ -132,6 +132,12 @@ export interface AppPaletteDialogProps {
    * one material for the whole family is the point.
    */
   className?: string;
+  /**
+   * The stacking layer. `"nested"` lifts the palette above a nested dialog,
+   * for one opened from inside it: at the modal tier it would take the
+   * keyboard while drawn behind the dialog that opened it.
+   */
+  zIndex?: "modal" | "nested";
 }
 
 export function AppPaletteDialog({
@@ -142,6 +148,7 @@ export function AppPaletteDialog({
   tier,
   initialFocusRef,
   className,
+  zIndex = "modal",
 }: AppPaletteDialogProps) {
   const closeOnEscape = useCallback(() => onClose("escape"), [onClose]);
   useEscapeStack(isOpen, closeOnEscape);
@@ -353,7 +360,8 @@ export function AppPaletteDialog({
   return createPortal(
     <div
       className={cn(
-        "fixed inset-0 z-[var(--z-modal)] flex items-start justify-center pt-[15vh] bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur-palette)] backdrop-saturate-[var(--theme-material-saturation)]",
+        "fixed inset-0 flex items-start justify-center pt-[15vh] bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur-palette)] backdrop-saturate-[var(--theme-material-saturation)]",
+        zIndex === "nested" ? "z-[calc(var(--z-nested-dialog)+1)]" : "z-[var(--z-modal)]",
         // Opacity-only, so reduced motion leaves it alone: a scrim fade is not
         // spatial motion. WCAG 2.3.3.
         "transition-opacity starting:opacity-0",

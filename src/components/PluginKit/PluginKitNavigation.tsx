@@ -1,6 +1,8 @@
 import {
   isValidElement,
+  useContext,
   useDeferredValue,
+  useEffect,
   useId,
   useMemo,
   useRef,
@@ -69,7 +71,7 @@ import {
   str,
   useKitOwnerAttributes,
 } from "./kitProps";
-import { useKitOverlayZClass } from "./kitScope";
+import { PluginKitLayerContext, useKitOverlayZClass } from "./kitScope";
 import { sizedIcon } from "./PluginKitPatterns";
 
 const CONTEXT_MENU_PARTS: KitMenuParts = {
@@ -358,9 +360,13 @@ function KitCommandPalette({
   const reportQuery = fn(onQueryChange);
   const heading = str(title) ?? "";
   const action = nonEmpty(actionLabel);
+  const layer = useContext(PluginKitLayerContext);
 
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
+  // The query the plugin last heard, so every close tells it the search is
+  // empty again exactly once, however the palette closed.
+  const reportedQuery = useRef("");
   // Closed from outside, the palette still opens next time on an empty search.
   const [wasOpen, setWasOpen] = useState(isOpen);
   if (wasOpen !== isOpen) {
@@ -370,6 +376,11 @@ function KitCommandPalette({
       setCursor(0);
     }
   }
+  useEffect(() => {
+    if (isOpen || reportedQuery.current === "") return;
+    reportedQuery.current = "";
+    reportQuery?.("");
+  }, [isOpen, reportQuery]);
 
   const normalized = useMemo(() => readPaletteItems(items), [items]);
   const fuse = useMemo(() => new Fuse(normalized, PALETTE_FUSE_OPTIONS), [normalized]);
@@ -404,14 +415,34 @@ function KitCommandPalette({
     if (row !== undefined) handle.current?.scrollIntoView({ index: row });
   };
 
+  // A new search puts the cursor's row in view: the list keeps its scroll
+  // across results, so the active row could otherwise sit outside the rendered
+  // range, named by the field's active descendant but never drawn. Keyed on
+  // the query the results reflect, not the items, so a plugin refreshing its
+  // items does not pull the list back while it is being scrolled.
+  const revealedQuery = useRef(filterQuery);
+  const activeRow = rowOf[active];
+  useEffect(() => {
+    if (revealedQuery.current === filterQuery) return;
+    revealedQuery.current = filterQuery;
+    if (activeRow === undefined) return;
+    // The first row takes its band's heading into view with it.
+    if (activeRow <= 1) handle.current?.scrollToIndex({ index: 0 });
+    else handle.current?.scrollIntoView({ index: activeRow });
+  }, [filterQuery, activeRow]);
+
   const handleQuery = (next: string) => {
     setQuery(next);
     setCursor(0);
+    reportedQuery.current = next;
     reportQuery?.(next);
   };
 
   const close = () => {
-    if (query !== "") reportQuery?.("");
+    if (reportedQuery.current !== "") {
+      reportedQuery.current = "";
+      reportQuery?.("");
+    }
     change?.(false);
   };
 
@@ -536,6 +567,8 @@ function KitCommandPalette({
   return (
     <SearchablePalette<PaletteResult>
       tier="command"
+      // Opened from inside a nested kit dialog, it has to stack above it.
+      zIndex={layer === "nested" ? "nested" : undefined}
       isOpen={isOpen}
       query={query}
       results={results}
@@ -781,9 +814,12 @@ function KitNavList(props: PluginNavListProps) {
   const baseId = useId();
   const headed = bands.some((band) => band.label !== undefined);
   // Where each band's rows start in the list's one run of indices.
-  const starts = bands.map((_band, at) =>
-    bands.slice(0, at).reduce((sum, band) => sum + band.entries.length, 0)
-  );
+  const starts: number[] = [];
+  let runningStart = 0;
+  for (const band of bands) {
+    starts.push(runningStart);
+    runningStart += band.entries.length;
+  }
   return (
     <div
       {...pickRootProps(rest)}
