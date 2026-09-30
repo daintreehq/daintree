@@ -1,7 +1,7 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
-import { dismissTelemetryConsent, openAndOnboardProject } from "../helpers/project";
+import { openAndOnboardProject } from "../helpers/project";
 import { getTerminalText } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
 import {
@@ -92,8 +92,6 @@ async function waitForOpenCodeReady(agentPanel: Locator): Promise<"ready" | "nee
   let lastKind: OpenCodeOutputKind = "pending";
 
   while (Date.now() < deadline) {
-    await dismissTelemetryConsent(window);
-
     lastText = await getTerminalText(agentPanel);
     const classification = classifyOpenCodeOutput(lastText);
     lastKind = classification.kind;

@@ -1,7 +1,7 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
-import { dismissTelemetryConsent, openAndOnboardProject } from "../helpers/project";
+import { openAndOnboardProject } from "../helpers/project";
 import { getTerminalText, writeTerminalInput } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
 import {
@@ -157,7 +157,6 @@ test.describe("Claude Online Flow", () => {
 
       while (Date.now() < deadline && !reachedReadyState) {
         // Dismiss telemetry consent if it appeared after agent launch
-        await dismissTelemetryConsent(window);
 
         const text = await getTerminalText(agentPanel);
         const lower = text.toLowerCase();

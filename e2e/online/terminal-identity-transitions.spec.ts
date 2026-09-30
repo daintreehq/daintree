@@ -8,7 +8,7 @@ import {
 } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
-import { dismissTelemetryConsent, openAndOnboardProject } from "../helpers/project";
+import { openAndOnboardProject } from "../helpers/project";
 import { getTerminalText, runTerminalCommand } from "../helpers/terminal";
 import { getGridPanelIds, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
@@ -147,7 +147,6 @@ async function waitForClaudeInteractivePrompt(
   const deadline = Date.now() + timeoutMs;
   let lastText = "";
   while (Date.now() < deadline) {
-    await dismissTelemetryConsent(page);
     const text = (await getTerminalText(panel)).toLowerCase();
     lastText = text;
 

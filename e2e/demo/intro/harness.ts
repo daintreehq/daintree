@@ -9,7 +9,6 @@ import {
   mockOpenDialog,
   refreshActiveWindow,
 } from "../../helpers/launch";
-import { dismissTelemetryConsent } from "../../helpers/project";
 import { dismissBlockingPalette } from "../../helpers/overlays";
 import { addAndSwitchToProject, selectExistingProjectAndRefresh } from "../../helpers/workflows";
 import { getTerminalTextById } from "../../helpers/terminal";
@@ -112,7 +111,6 @@ export class Director {
     for (let i = 0; i < 15; i++) {
       try {
         this.page = await refreshActiveWindow(this.app, this.page);
-        await dismissTelemetryConsent(this.page);
         await this.page.waitForTimeout(800);
         await dismissBlockingPalette(this.page);
         await this.page.waitForFunction(

@@ -29,7 +29,6 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync 
 import { tmpdir } from "os";
 import path from "path";
 import { launchApp, closeApp, mockOpenDialog, type AppContext } from "../helpers/launch";
-import { dismissTelemetryConsent } from "../helpers/project";
 import { dismissBlockingPalette } from "../helpers/overlays";
 import { SEL } from "../helpers/selectors";
 import { T_LONG } from "../helpers/timeouts";
@@ -174,7 +173,6 @@ test("non-git folder dialog review — choice screen across entry paths and them
     const app = ctx.app;
     const page = ctx.window;
 
-    await dismissTelemetryConsent(page);
     await dismissBlockingPalette(page);
     await page.locator(SEL.welcome.openFolder).waitFor({ state: "visible", timeout: T_LONG });
     await page.addStyleTag({ content: POLISH_CSS }).catch(() => {});

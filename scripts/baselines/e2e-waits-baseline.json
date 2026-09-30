@@ -1,7 +1,7 @@
 {
   "totals": {
-    "waitForTimeout": 410,
-    "isVisibleTimeout": 86
+    "waitForTimeout": 305,
+    "isVisibleTimeout": 63
   },
   "files": {
     "e2e/core/core-first-run-onboarding.spec.ts": {
@@ -13,62 +13,11 @@
     "e2e/core/core-terminal-agent-promotion.spec.ts": {
       "waitForTimeout": 3
     },
-    "e2e/full/panels/core-action-palette-commands.spec.ts": {
-      "waitForTimeout": 9,
-      "isVisibleTimeout": 1
-    },
-    "e2e/full/panels/core-browser-panel.spec.ts": {
-      "waitForTimeout": 12
-    },
-    "e2e/full/panels/core-diagnostics-auto-open.spec.ts": {
-      "isVisibleTimeout": 1
-    },
-    "e2e/full/panels/core-dock-launcher-search.spec.ts": {
-      "waitForTimeout": 5
-    },
-    "e2e/full/panels/core-dock-popover-dismissal.spec.ts": {
-      "waitForTimeout": 7,
-      "isVisibleTimeout": 1
-    },
-    "e2e/full/panels/core-drag-drop.spec.ts": {
-      "waitForTimeout": 3
-    },
-    "e2e/full/panels/core-event-inspector.spec.ts": {
-      "waitForTimeout": 1,
-      "isVisibleTimeout": 1
-    },
     "e2e/full/panels/core-palette-specialized.spec.ts": {
-      "waitForTimeout": 6,
       "isVisibleTimeout": 1
-    },
-    "e2e/full/panels/core-panel-layout-undo-redo.spec.ts": {
-      "waitForTimeout": 3
-    },
-    "e2e/full/panels/core-panel-tab-groups.spec.ts": {
-      "waitForTimeout": 3
-    },
-    "e2e/full/panels/core-portal-panel.spec.ts": {
-      "waitForTimeout": 1
-    },
-    "e2e/full/panels/core-portal.spec.ts": {
-      "waitForTimeout": 8
-    },
-    "e2e/full/panels/core-toolbar-launcher-shared.spec.ts": {
-      "waitForTimeout": 2,
-      "isVisibleTimeout": 1
-    },
-    "e2e/full/panels/core-toolbar-overflow.spec.ts": {
-      "waitForTimeout": 2,
-      "isVisibleTimeout": 4
-    },
-    "e2e/full/panels/dev-preview-promote-to-portal.spec.ts": {
-      "waitForTimeout": 1
     },
     "e2e/full/panels/notification-toasts.spec.ts": {
       "waitForTimeout": 1
-    },
-    "e2e/full/panels/pane-header-controls-stability.spec.ts": {
-      "waitForTimeout": 3
     },
     "e2e/full/platform/core-accessibility.spec.ts": {
       "waitForTimeout": 3
@@ -282,47 +231,8 @@
     "e2e/full/terminal/terminal-scratchpad.spec.ts": {
       "waitForTimeout": 1
     },
-    "e2e/full/worktree/core-cross-project-workflows.spec.ts": {
-      "waitForTimeout": 7
-    },
-    "e2e/full/worktree/core-external-git-detection.spec.ts": {
-      "waitForTimeout": 2
-    },
-    "e2e/full/worktree/core-project-deletion-cleanup.spec.ts": {
-      "isVisibleTimeout": 2
-    },
-    "e2e/full/worktree/core-project-lifecycle.spec.ts": {
-      "waitForTimeout": 2
-    },
-    "e2e/full/worktree/core-project-management-advanced.spec.ts": {
-      "waitForTimeout": 1
-    },
-    "e2e/full/worktree/core-project-switch-race.spec.ts": {
-      "waitForTimeout": 7
-    },
-    "e2e/full/worktree/core-worktree-cards.spec.ts": {
-      "waitForTimeout": 1
-    },
-    "e2e/full/worktree/core-worktree-cross-boundary.spec.ts": {
-      "waitForTimeout": 7
-    },
-    "e2e/full/worktree/core-worktree-external.spec.ts": {
-      "waitForTimeout": 2
-    },
-    "e2e/full/worktree/core-worktree-port-rebind.spec.ts": {
-      "waitForTimeout": 7
-    },
-    "e2e/full/worktree/core-worktree-resource-lifecycle.spec.ts": {
-      "isVisibleTimeout": 2
-    },
-    "e2e/full/worktree/core-worktree-session-bulk.spec.ts": {
-      "waitForTimeout": 1
-    },
     "e2e/full/worktree/new-worktree-dialog.spec.ts": {
       "isVisibleTimeout": 1
-    },
-    "e2e/full/worktree/startup-agent-worktree-restore.spec.ts": {
-      "waitForTimeout": 2
     },
     "e2e/helpers/claudeAuth.ts": {
       "waitForTimeout": 1
@@ -341,8 +251,7 @@
       "isVisibleTimeout": 8
     },
     "e2e/helpers/presets.ts": {
-      "waitForTimeout": 3,
-      "isVisibleTimeout": 10
+      "waitForTimeout": 3
     },
     "e2e/helpers/stress.ts": {
       "waitForTimeout": 1
@@ -377,5 +286,5 @@
       "waitForTimeout": 5
     }
   },
-  "updatedAt": "2026-09-30T05:46:35.758Z"
+  "updatedAt": "2026-09-30T08:44:45.111Z"
 }
