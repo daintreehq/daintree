@@ -1168,6 +1168,11 @@ export const CHANNELS = {
   // silent no-op, so without an explicit receipt an undeliverable prompt is
   // indistinguishable from an ignored one until the five-minute timeout.
   PLUGIN_CAPABILITY_ACKNOWLEDGE_CONSENT: "plugin-capability:acknowledge-consent",
+  // The per-plugin "Allow project targeting" switch (#13119): the
+  // `project:dispatch` grant that lets an app-wide plugin name a target project
+  // on `host.dispatch`. Set only from the Plugin Manager, never by a prompt.
+  PLUGIN_CAPABILITY_GET_PROJECT_TARGETING: "plugin-capability:get-project-targeting",
+  PLUGIN_CAPABILITY_SET_PROJECT_TARGETING: "plugin-capability:set-project-targeting",
 
   // Plugin managed-process channels (#9234) — child processes spawned by a
   // plugin via `host.process.spawn` (gated on `shell:exec`). `list` is the

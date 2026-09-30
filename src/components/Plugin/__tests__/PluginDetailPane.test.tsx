@@ -38,7 +38,20 @@ const pluginMcpListMock = vi.hoisted(() => vi.fn(() => Promise.resolve([])));
 const getDiagnosticsSnapshotMock = vi.hoisted(() =>
   vi.fn(() => Promise.resolve({ plugins: [] as unknown[] }))
 );
+const projectTargetingMock = vi.hoisted(() => ({
+  getProjectTargeting: vi.fn((_input: { pluginId: string }) => Promise.resolve(false)),
+  setProjectTargeting: vi.fn((input: { pluginId: string; enabled: boolean }) =>
+    Promise.resolve(input.enabled)
+  ),
+}));
+
 beforeEach(() => {
+  projectTargetingMock.getProjectTargeting.mockReset();
+  projectTargetingMock.getProjectTargeting.mockResolvedValue(false);
+  projectTargetingMock.setProjectTargeting.mockReset();
+  projectTargetingMock.setProjectTargeting.mockImplementation((input) =>
+    Promise.resolve(input.enabled)
+  );
   pluginMcpListMock.mockClear();
   getDiagnosticsSnapshotMock.mockClear();
   getDiagnosticsSnapshotMock.mockResolvedValue({ plugins: [] });
@@ -59,6 +72,7 @@ beforeEach(() => {
       pathExists: vi.fn(() => Promise.resolve(true)),
       getDiagnosticsSnapshot: getDiagnosticsSnapshotMock,
     },
+    pluginCapability: projectTargetingMock,
   } as unknown as Window["electron"];
 });
 
@@ -157,6 +171,132 @@ function withAuthors(
   const base = makePlugin();
   return { ...base, manifest: { ...base.manifest, authors } };
 }
+
+describe("PluginDetailPane project targeting switch (#13119)", () => {
+  function targetingSwitch(): HTMLElement {
+    return screen.getByTestId("plugin-project-targeting-switch");
+  }
+
+  it("is off by default and turns the grant on for this plugin", async () => {
+    renderPane(withCapabilities(["project:dispatch"]));
+    expect(screen.getByText("Run actions in other projects")).toBeTruthy();
+    await vi.waitFor(() => expect(targetingSwitch().hasAttribute("disabled")).toBe(false));
+    expect(targetingSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(projectTargetingMock.getProjectTargeting).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+    });
+
+    fireEvent.click(targetingSwitch());
+    await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(projectTargetingMock.setProjectTargeting).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+      enabled: true,
+    });
+  });
+
+  it("shows the persisted state and reports a failed save on the row", async () => {
+    projectTargetingMock.getProjectTargeting.mockResolvedValue(true);
+    projectTargetingMock.setProjectTargeting.mockRejectedValue(new Error("disk full"));
+    renderPane(withCapabilities(["project:dispatch"]));
+    await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
+
+    fireEvent.click(targetingSwitch());
+    await vi.waitFor(() => expect(screen.getByText(/Couldn't save turning this off/)).toBeTruthy());
+    // Re-read from main rather than guessing what is in force after a failed write.
+    await vi.waitFor(() =>
+      expect(projectTargetingMock.getProjectTargeting).toHaveBeenCalledTimes(2)
+    );
+    expect(targetingSwitch().getAttribute("aria-checked")).toBe("true");
+    expect(targetingSwitch().getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("names the switch by its visible label and describes it", async () => {
+    renderPane(withCapabilities(["project:dispatch"]));
+    const control = screen.getByRole("switch", { name: "Allow project targeting" });
+    const describedBy = control.getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(describedBy)?.textContent).toMatch(/audit log/);
+
+    await vi.waitFor(() => expect(control.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(screen.getByText("Allow project targeting"));
+    await vi.waitFor(() => expect(control.getAttribute("aria-checked")).toBe("true"));
+  });
+
+  it("offers a retry when the setting can't be read, and recovers", async () => {
+    projectTargetingMock.getProjectTargeting.mockRejectedValueOnce(new Error("ipc down"));
+    projectTargetingMock.getProjectTargeting.mockResolvedValueOnce(true);
+    renderPane(withCapabilities(["project:dispatch"]));
+
+    await vi.waitFor(() => expect(screen.getByText("Couldn't read this setting.")).toBeTruthy());
+    expect(targetingSwitch().hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(screen.queryByText("Couldn't read this setting.")).toBeNull();
+  });
+
+  it("holds the row disabled while it re-reads after a failed save", async () => {
+    projectTargetingMock.setProjectTargeting.mockRejectedValueOnce(new Error("disk full"));
+    renderPane(withCapabilities(["project:dispatch"]));
+    await vi.waitFor(() => expect(targetingSwitch().hasAttribute("disabled")).toBe(false));
+
+    let finishRead!: (value: boolean) => void;
+    projectTargetingMock.getProjectTargeting.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        finishRead = resolve;
+      })
+    );
+    fireEvent.click(targetingSwitch());
+    await vi.waitFor(() => expect(screen.getByText("Couldn't turn this on.")).toBeTruthy());
+    // Nothing can race the recovery read: the switch and Retry wait for it.
+    expect(targetingSwitch().hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled")).toBe(true);
+
+    finishRead(false);
+    await vi.waitFor(() => expect(targetingSwitch().hasAttribute("disabled")).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(screen.queryByText("Couldn't turn this on.")).toBeNull();
+  });
+
+  it("keeps the unsaved-off warning when the recovery read also fails, and retries the write", async () => {
+    projectTargetingMock.getProjectTargeting.mockResolvedValueOnce(true);
+    projectTargetingMock.getProjectTargeting.mockRejectedValueOnce(new Error("ipc down"));
+    projectTargetingMock.setProjectTargeting.mockRejectedValueOnce(new Error("disk full"));
+    renderPane(withCapabilities(["project:dispatch"]));
+    await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
+
+    fireEvent.click(targetingSwitch());
+    await vi.waitFor(() =>
+      expect(projectTargetingMock.getProjectTargeting).toHaveBeenCalledTimes(2)
+    );
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled")).toBe(false)
+    );
+    expect(screen.getByText(/Couldn't save turning this off/)).toBeTruthy();
+    expect(screen.queryByText("Couldn't read this setting.")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await vi.waitFor(() => expect(screen.queryByText(/Couldn't save turning this off/)).toBeNull());
+    expect(projectTargetingMock.setProjectTargeting).toHaveBeenLastCalledWith({
+      pluginId: "acme.demo",
+      enabled: false,
+    });
+    expect(targetingSwitch().getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("is absent when the plugin does not declare project:dispatch", () => {
+    renderPane(withCapabilities(["fs:project-read"]));
+    expect(screen.queryByTestId("plugin-project-targeting-switch")).toBeNull();
+    expect(projectTargetingMock.getProjectTargeting).not.toHaveBeenCalled();
+  });
+
+  it("is absent for a project plugin, which can only reach its own project", () => {
+    renderPane(
+      withCapabilities(["project:dispatch"], { origin: "project", projectId: "project-a" })
+    );
+    expect(screen.queryByTestId("plugin-project-targeting-switch")).toBeNull();
+  });
+});
 
 describe("PluginDetailPane capabilities", () => {
   it("renders a labelled row for each declared capability", () => {

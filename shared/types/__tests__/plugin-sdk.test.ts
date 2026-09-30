@@ -2,6 +2,7 @@ import { describe, it, expect, expectTypeOf } from "vitest";
 import type {
   PluginManifest,
   PluginHostApi,
+  PluginDispatchOptions,
   PluginActivationApi,
   PluginWorktreesResult,
   PluginWorktreesUnavailableReason,
@@ -382,8 +383,13 @@ describe("plugin-sdk boundary", () => {
       // dispatch is typed against ActionId, so a built-in id autocompletes and a
       // plugin-authored id (a plain string) still type-checks without a cast.
       expectTypeOf<PluginHostApi["dispatch"]>().toEqualTypeOf<
-        (actionId: ActionId, args?: unknown) => Promise<ActionDispatchResult>
+        (
+          actionId: ActionId,
+          args?: unknown,
+          options?: PluginDispatchOptions
+        ) => Promise<ActionDispatchResult>
       >();
+      expectTypeOf<PluginDispatchOptions>().toEqualTypeOf<{ projectId?: string }>();
       expectTypeOf<BuiltInActionId>().toMatchTypeOf<Parameters<PluginHostApi["dispatch"]>[0]>();
       expectTypeOf<string>().toMatchTypeOf<Parameters<PluginHostApi["dispatch"]>[0]>();
 

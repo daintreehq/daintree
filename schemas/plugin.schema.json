@@ -110,7 +110,8 @@
           "clipboard:write",
           "shell:exec",
           "socket:connect",
-          "mcp:expose"
+          "mcp:expose",
+          "project:dispatch"
         ]
       }
     },
@@ -510,7 +511,8 @@
                     "clipboard:write",
                     "shell:exec",
                     "socket:connect",
-                    "mcp:expose"
+                    "mcp:expose",
+                    "project:dispatch"
                   ]
                 }
               }

@@ -3,6 +3,8 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const PLUGIN_CAPABILITY_METHOD_CHANNELS = {
   resolveConsent: "plugin-capability:resolve-consent",
   acknowledgeConsent: "plugin-capability:acknowledge-consent",
+  getProjectTargeting: "plugin-capability:get-project-targeting",
+  setProjectTargeting: "plugin-capability:set-project-targeting",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PLUGIN_CAPABILITY_METHOD_CHANNELS;

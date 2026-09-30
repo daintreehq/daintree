@@ -19,7 +19,10 @@ import {
   type RenderReservation,
 } from "./pluginPdfRenderer.js";
 
-import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
+import {
+  getPluginCapabilityConsentService,
+  getPluginCapabilityConsentStore,
+} from "../plugin-capability/instances.js";
 import { resolveContainedPath, PluginPathNotAllowedError } from "./pluginFsContainment.js";
 import { PluginHostGit, type HostGitFactory } from "./pluginHostGit.js";
 import {
@@ -1780,7 +1783,7 @@ export function createHost(
     // validated by ActionService against the action's argsSchema, and
     // danger:"restricted"/"confirm" are rejected there with the "plugin"
     // source, so the host does not re-check them.
-    dispatch: async (actionId, args) => {
+    dispatch: async (actionId, args, options) => {
       if (!deps.plugins.has(pluginId)) {
         return {
           ok: false,
@@ -1790,11 +1793,64 @@ export function createHost(
           },
         };
       }
-      // A bound dispatch reaches only its own project's renderer and rejects
-      // with PROJECT_VIEW_UNAVAILABLE when that project has no live view;
-      // unbound stays ambient, since an app-global plugin's action belongs
-      // wherever the user is looking.
-      return deps.dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId);
+      const requestedProjectId = parseDispatchTarget(pluginId, options);
+      if (requestedProjectId === undefined) {
+        // A bound dispatch reaches only its own project's renderer and rejects
+        // with PROJECT_VIEW_UNAVAILABLE when that project has no live view;
+        // unbound stays ambient, since an app-global plugin's action belongs
+        // wherever the user is looking.
+        return deps.dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId);
+      }
+      if (boundProjectId !== null) {
+        // The confused-deputy guard: a project-bound plugin may restate its own
+        // project but never reach another one, whatever the user has granted.
+        if (requestedProjectId !== boundProjectId) {
+          throw new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" is bound to its own project and cannot dispatch to project "${requestedProjectId}"`
+          );
+        }
+        return deps.dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId);
+      }
+      // Unbound with an explicit target (#13119): only after the user turned
+      // the switch on. No JIT prompt and no built-in bypass — the switch is the
+      // whole grant, so an unattended plugin fails fast instead of waiting on a
+      // dialog nobody is there to answer.
+      if (!deps.declaredCapabilities(pluginId).has("project:dispatch")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" dispatch with options.projectId requires "project:dispatch", which is not declared in manifest.capabilities`
+        );
+      }
+      if (!hasProjectTargetingGrant(pluginId)) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" dispatch with options.projectId requires "Allow project targeting", which is off. Turn it on in the plugin's Permissions in the Plugin Manager.`
+        );
+      }
+      const startedAt = Date.now();
+      const audit = (result: "success" | "error", errorMessage: string): void => {
+        deps.safeAppendAudit({
+          pluginId,
+          actionId: `dispatch:${requestedProjectId}:${actionId}`,
+          recordType: "ipc-invoke",
+          channel: "plugin:dispatch-targeted",
+          result,
+          errorMessage,
+          argsHash: deps.safeArgsHash([args]),
+          durationMs: Date.now() - startedAt,
+        });
+      };
+      try {
+        const result = await deps.dispatcher.sendDispatchToRenderer(
+          actionId,
+          args,
+          requestedProjectId
+        );
+        if (result.ok) audit("success", "");
+        else audit("error", result.error.code);
+        return result;
+      } catch (err) {
+        audit("error", isProjectViewUnavailable(err) ? "PROJECT_VIEW_UNAVAILABLE" : "ERROR");
+        throw err;
+      }
     },
     // Built-in action catalog (#10561). NOT revoke-guarded for the same reason
     // as dispatch: plugins introspect from post-activation callbacks/timers.
@@ -2327,6 +2383,38 @@ function resolvePtyDimension(
     );
   }
   return value;
+}
+
+/**
+ * The explicit target on `host.dispatch(actionId, args, options)` (#13119), or
+ * `undefined` when the caller named none. Arrives from an untrusted worker, so
+ * the shape is checked here; an empty or non-string id is refused rather than
+ * read as "no target", since that would silently route to the focused project.
+ */
+function parseDispatchTarget(pluginId: string, options: unknown): string | undefined {
+  if (options === undefined || options === null) return undefined;
+  if (typeof options !== "object" || Array.isArray(options)) {
+    throw new Error(`Plugin "${pluginId}" dispatch: options must be an object`);
+  }
+  const { projectId } = options as { projectId?: unknown };
+  if (projectId === undefined) return undefined;
+  if (typeof projectId !== "string" || projectId.trim().length === 0) {
+    throw new Error(`Plugin "${pluginId}" dispatch: options.projectId must be a non-empty string`);
+  }
+  return projectId;
+}
+
+/**
+ * Whether the user turned on "Allow project targeting" for an app-wide plugin.
+ * Read straight from the grant store: the switch is the only writer, and the
+ * JIT consent flow never mints this capability.
+ */
+function hasProjectTargetingGrant(pluginId: string): boolean {
+  return getPluginCapabilityConsentStore().hasGrant({
+    pluginId,
+    capability: "project:dispatch",
+    scopeKey: "global",
+  });
 }
 
 /**

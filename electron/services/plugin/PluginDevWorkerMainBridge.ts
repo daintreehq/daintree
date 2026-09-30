@@ -791,7 +791,11 @@ export class PluginDevWorkerMainBridge {
       }
       case "dispatch": {
         const p = params as DispatchParams;
-        return this.host.dispatch(p.actionId, p.args);
+        return this.host.dispatch(
+          p.actionId,
+          p.args,
+          p.options as Parameters<PluginHostApi["dispatch"]>[2]
+        );
       }
       case "reloadPanel": {
         const p = params as ReloadPanelParams;

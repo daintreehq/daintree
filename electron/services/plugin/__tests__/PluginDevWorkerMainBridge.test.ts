@@ -224,6 +224,30 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(result).toMatchObject({ ok: true, result: [{ id: "w1" }] });
   });
 
+  it("relays dispatch options to the real host, and omits nothing when absent (#13119)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-d1",
+      method: "dispatch",
+      params: { actionId: "agent.launch", args: { a: 1 }, options: { projectId: "p-b" } },
+    });
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-d2",
+      method: "dispatch",
+      params: { actionId: "terminal.focus" },
+    });
+    await flush();
+    expect(host.dispatch).toHaveBeenNthCalledWith(
+      1,
+      "agent.launch",
+      { a: 1 },
+      { projectId: "p-b" }
+    );
+    expect(host.dispatch).toHaveBeenNthCalledWith(2, "terminal.focus", undefined, undefined);
+  });
+
   it("relays db.resolve with only the database id", async () => {
     const { host, workerHost } = makeBridge();
     (host as unknown as { db: { resolve: ReturnType<typeof vi.fn> } }).db = {

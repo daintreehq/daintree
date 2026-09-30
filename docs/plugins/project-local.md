@@ -205,7 +205,7 @@ A project plugin's host object is bound to its project at construction, and ever
 
 There is no fallback to the focused view. `host.dispatch` and the UI prompts reject with `PROJECT_VIEW_UNAVAILABLE` when the bound project has no live renderer, rather than landing somewhere else — handing project A's plugin project B's renderer is the confused-deputy bug the binding exists to prevent. The read-only catalog surfaces (`host.actions.list` / `get` / `canDispatch`) never throw by contract, so they answer empty in the same situation. A project view that has been backgrounded and cached still counts as live: the project is open, just not on screen. A renderer actually reclaimed under memory pressure does not — there is nothing to target until the user opens that project's view again.
 
-Installed and builtin plugins keep their existing ambient behaviour — they have no project of their own, so the focused view is the only thing their calls can mean.
+Installed and builtin plugins keep their existing ambient behaviour — they have no project of their own, so the focused view is what their calls mean unless one declares `project:dispatch`, the user turns on **Allow project targeting** for it, and it names a project with `host.dispatch(actionId, args, { projectId })` ([host API → Targeting a project](./host-api.md#targeting-a-project)). A project plugin can only name its own project.
 
 ## Settings and storage
 

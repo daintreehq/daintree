@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getWindowRegistry, getProjectViewManager } from "../../window/windowRef.js";
 import { resolveTargetWebContents, type PluginTargetProjectId } from "./rendererTargeting.js";
+import { thawThenSend } from "../../utils/thawThenSend.js";
 import type {
   ActionDispatchResult,
   PluginActionManifestEntry,
@@ -302,20 +303,36 @@ export class PluginRendererDispatcher {
         destroyedCleanup,
       });
 
-      try {
-        webContents.send(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, { requestId, actionId, args });
-      } catch {
-        clearTimeout(timer);
-        destroyedCleanup();
-        this.pendingPluginDispatches.delete(requestId);
-        resolve({
-          ok: false,
-          error: {
-            code: "EXECUTION_ERROR",
-            message: `Failed to dispatch plugin action: ${actionId}`,
-          },
-        });
-      }
+      // Thawed first (#13119): a targeted or bound dispatch lands in a cached
+      // background view by design, and under the efficiency profile that view
+      // is CDP-frozen — the request would sit unanswered until the timeout and
+      // then still run once the view woke. The pending entry and timer above
+      // are armed before the thaw so the deadline covers it, and a request that
+      // settled meanwhile is never sent.
+      thawThenSend(
+        webContents,
+        () => this.pendingPluginDispatches.has(requestId),
+        () => {
+          try {
+            webContents.send(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, {
+              requestId,
+              actionId,
+              args,
+            });
+          } catch {
+            clearTimeout(timer);
+            destroyedCleanup();
+            this.pendingPluginDispatches.delete(requestId);
+            resolve({
+              ok: false,
+              error: {
+                code: "EXECUTION_ERROR",
+                message: `Failed to dispatch plugin action: ${actionId}`,
+              },
+            });
+          }
+        }
+      );
     });
   }
 

@@ -916,6 +916,22 @@ describe("createMockHost", () => {
       expect(dispatch).toHaveBeenCalledWith("anything", { x: 1 });
       expect(result).toEqual({ ok: true, result: 42 });
     });
+
+    it("records and forwards a dispatch target (#13119)", async () => {
+      const dispatch = vi.fn(async () => ({ ok: true as const, result: 1 }));
+      const host = createMockHost({ dispatch });
+      await host.dispatch("agent.launch", { agentId: "claude" }, { projectId: "p-b" });
+      expect(dispatch).toHaveBeenCalledWith(
+        "agent.launch",
+        { agentId: "claude" },
+        { projectId: "p-b" }
+      );
+      expect(host.dispatchedActions.at(-1)).toEqual({
+        actionId: "agent.launch",
+        args: { agentId: "claude" },
+        options: { projectId: "p-b" },
+      });
+    });
   });
 
   describe("actions catalog", () => {
