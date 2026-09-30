@@ -1436,6 +1436,9 @@ function KitInlineEdit(props: PluginInlineEditProps) {
           <input
             {...inlineRenameFieldInputProps}
             ref={inputRef}
+            // No intrinsic width of its own: the sizer text sets the box, as
+            // in the pane title's rename.
+            size={1}
             value={draft}
             maxLength={limit}
             readOnly={pending}
@@ -1582,10 +1585,16 @@ function KitSecretInput(props: PluginSecretInputProps) {
     }
     if (!replacing || stored !== true) return;
     const close = () => {
+      // Focus follows to Replace only if the user is still in the field;
+      // someone who moved on while it saved keeps their place.
+      const input = inputRef.current;
+      const active = input?.ownerDocument.activeElement;
+      const stillHere =
+        !!input && (active === input || active === input.ownerDocument.body || !active);
       change("");
       setReplacing(false);
       setShown(false);
-      setFocusTarget("replace");
+      if (stillHere) setFocusTarget("replace");
     };
     if (!isThenable(outcome.value)) {
       close();

@@ -938,6 +938,35 @@ describe("SecretInput", () => {
     expect((screen.getByLabelText("Token") as HTMLInputElement).readOnly).toBe(true);
   });
 
+  it("leaves focus where the user moved it while a replacement saved", async () => {
+    let resolve: () => void = () => {};
+    render(
+      <>
+        <kit.SecretInput
+          aria-label="Token"
+          stored
+          onSubmit={() =>
+            new Promise<void>((done) => {
+              resolve = done;
+            })
+          }
+        />
+        <button type="button">Next</button>
+      </>
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    fireEvent.change(screen.getByLabelText("Token"), { target: { value: "new" } });
+    fireEvent.keyDown(screen.getByLabelText("Token"), { key: "Enter" });
+    const next = screen.getByRole("button", { name: "Next" });
+    next.focus();
+    await act(async () => {
+      resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: "Replace" })).toBeTruthy();
+    expect(document.activeElement).toBe(next);
+  });
+
   it("stays in the field when a replacement's save fails", async () => {
     render(
       <kit.SecretInput
