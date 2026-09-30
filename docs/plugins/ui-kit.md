@@ -276,6 +276,51 @@ Hovering a bar, part or x position, or focusing the chart (one tab stop) and pre
 
 `formatValue` formats the axis ticks, tooltip, legend and table; omitted, the axis reads compact (`1.2K`) and the rest in full (`1,234`). `formatX` does the same for x. A formatter that throws or returns something other than a string gets the default label for that value. `loading` draws the kit's `Skeleton` at the chart's height; with no data, `empty` is shown, or a quiet "No data", centred in a frame the chart's height. Props from untyped JavaScript are narrowed like every kit component's: a bad value falls back to its default rather than throwing.
 
+### Drag and drop
+
+Reordering and moving by drag, with the pointer or the keyboard. Every kit drag moves with pointer events on the host's own drag engine, never the system drag-and-drop, so it starts and ends inside your view: the panel grid, the tab strips and an agent terminal's [`daintree-context` drop](./views.md#handing-work-to-an-agent-by-drag) never see it, and a press inside a kit list never picks up the panel around it. The lifted copy follows the pointer on the app's raised surface, held within the list, the board or (under a `DragDropProvider` with `renderOverlay`) the view; the slot it came from stays behind, faded, as a placeholder; a scrolling ancestor scrolls when the pointer nears its edge. Picking up takes 8px of travel with the mouse, so a click is still a click, or a long press on touch. A press that starts on a button, link or field inside a draggable item belongs to that control.
+
+On the keyboard, the list or board is one tab stop and the arrow keys move between items. Space picks the focused item up, the arrow keys move it (on a `Kanban`, Up and Down within its column and Left and Right to the next column), Space or Enter drops it and Escape puts it back; moving focus away also puts it back. The held item is drawn lifted at its new position as it moves, and every pickup, step and drop is announced with its position ("Rate limits, position 2 of 3 in In progress"). Reduced motion drops the lift's scale-in and the landing glide.
+
+`SortableList` and `Kanban` do not reorder anything themselves: they report the move and draw whatever `items` or `cards` you hand back, so an ignored move puts the item back.
+
+| Export | Props | Notes |
+| --- | --- | --- |
+| `SortableList<T>` | `items`, `renderItem(item, { index, isDragging, isOverlay, disabled })`, `"aria-label"`, `getId?(item, index)`, `onReorder?(from, to)`, `onChange?(items)`, `orientation?: "vertical" \| "horizontal"`, `handle?`, `isItemDisabled?(item, index)`, `getItemLabel?(item, index)`, `className?`; `id` and `data-*` | A list of rows the user reorders: priorities, a playlist, the columns of a table. The list draws each row (hover, lift, focus ring); `renderItem` draws its content, and is called once more with `isOverlay` for the lifted copy. `getId` defaults to the item's `id`, then its index; give items stable ids so a row keeps its state across a move. `onReorder` hears the old and new index, `onChange` the reordered array. With `handle`, a grip at the row's start is the only handle, so buttons in the row keep working; without it the whole row is the handle, so keep controls out of it. A disabled item cannot be picked up, but others can be dropped around it. The list takes its content's height: put a long one in a `ScrollShadow` or a sized container and dragging near the edge scrolls it. `horizontal` lays the rows in a single row for chips or tabs; put a long one in a sideways scroller. |
+| `Kanban<T>` | `columns: { id, title, limit?, empty? }[]`, `cards: Record<columnId, T[]>`, `renderCard(card, { columnId, index, isDragging, isOverlay, disabled })`, `"aria-label"`, `getCardId?(card)`, `onMove?({ cardId, fromColumn, toColumn, fromIndex, index })`, `handle?`, `isCardDisabled?(card)`, `getCardLabel?(card)`, `columnActions?(column)`, `collapsible?`, `collapsedColumns?`, `defaultCollapsedColumns?`, `onCollapsedColumnsChange?(ids)`, `columnWidth?` (272), `className?`; `id` and `data-*` | A board of columns, each a hairline frame with a quiet uppercase title and its card count. `limit` is a work-in-progress limit: the count reads "4/3" and turns to a warning past it, but the drop is never refused. An empty column shows `empty` ("No cards" by default). Cards are drawn on the card surface with `renderCard` inside; a card is dragged within its column or to another, and `onMove` reports it once on drop, `index` being its place in `toColumn` after the move. Card ids must be unique across the board (`getCardId` defaults to the card's `id`). `columnActions` fills the end of each header (an "Add card" `IconButton`). With `collapsible`, each header gets a fold button that narrows the column to a strip, which still shows its count and still takes drops, at its end; keyboard moves skip folded columns. The board fills its container's height, each column scrolls on its own and the board scrolls sideways when the columns don't fit, so give it a sized container. `columnWidth` runs 200 to 480. |
+| `DragDropProvider` | `children?`, `onDragStart?(event)`, `onDragOver?(event)`, `onDragEnd?(event)`, `onDragCancel?(event)`, `renderOverlay?(activeId)`, `getLabel?(id)`, `className?` | The scope for your own drag and drop, when neither component above fits: dragging a file onto a folder, a person onto a slot. Every event is `{ activeId, overId }`, `overId` being `null` off every target (treat that drop as a cancel). With `renderOverlay`, the lifted copy is yours and the dragged item stays in place, faded; without it the item itself moves with its `style`. On the keyboard the arrow keys jump between drop targets. `getLabel` names ids in the announcements. Without `className` the provider takes no box. |
+
+`useDraggable({ id, disabled? })` returns `{ ref, handleProps, isDragging, style }`: put `ref` and `style` on the item and spread `handleProps` on what the user grabs, the item itself or a grip inside it (it is a focusable button that picks up with the pointer or Space). `useDroppable({ id, disabled? })` returns `{ ref, isOver, activeId }`; draw your own "drop here" cue from `isOver`. Ids are strings or numbers, unique within the provider. Both hooks are inert outside a `DragDropProvider` (and so until its kit has loaded): nothing can be picked up or dropped, and they never suspend.
+
+```tsx
+import { Badge, Kanban, SortableList } from "@daintreehq/plugin-ui";
+
+<Kanban
+  aria-label="Sprint board"
+  columns={[
+    { id: "todo", title: "Backlog" },
+    { id: "doing", title: "In progress", limit: 3 },
+    { id: "done", title: "Done" },
+  ]}
+  cards={cardsByColumn}
+  renderCard={(card) => (
+    <div className="flex flex-col gap-1.5">
+      <span className="font-medium">{card.title}</span>
+      <Badge tone="info">{card.label}</Badge>
+    </div>
+  )}
+  onMove={({ cardId, toColumn, index }) => moveCard(cardId, toColumn, index)}
+/>;
+
+<SortableList
+  aria-label="Priorities"
+  items={priorities}
+  handle
+  renderItem={(item) => item.title}
+  onChange={setPriorities}
+/>;
+```
+
 ### Icons
 
 `Icon` draws one of Daintree's own icons by name: `name`, `size?` (16 px; inside a kit `Button` the button sizes it), `className?`, `"aria-label"?` (omitted, the icon is decorative and `aria-hidden`). An unknown name renders nothing, with a warning in development, rather than throwing. The set only grows. The names are Lucide-style kebab-case, plus two Daintree concepts, `worktree` (a git worktree) and `daintree` (the app's mark):
@@ -336,4 +381,4 @@ A builtin that still needs a covered export gets an exception scoped to one file
 
 ## Checking a view against the kit
 
-`daintree-plugin lint` points at hand-rolled versions of kit controls — `raw-button`, `raw-form-control`, `native-title-tooltip`, `inline-svg-icon`, `lucide-react-import`, `hand-rolled-spinner`, `hand-rolled-badge`, `native-dialog-in-view` — and at classes that compile to nothing against the design contract. The Styles tab in Settings → Plugins runs the same class check against a running view. See [Development loop → Lint](./dev-loop.md#daintree-plugin-lint-dir).
+`daintree-plugin lint` points at hand-rolled versions of kit controls — `raw-button`, `raw-form-control`, `native-title-tooltip`, `inline-svg-icon`, `lucide-react-import`, `dnd-library-import`, `hand-rolled-spinner`, `hand-rolled-badge`, `native-dialog-in-view` — and at classes that compile to nothing against the design contract. The Styles tab in Settings → Plugins runs the same class check against a running view. See [Development loop → Lint](./dev-loop.md#daintree-plugin-lint-dir).

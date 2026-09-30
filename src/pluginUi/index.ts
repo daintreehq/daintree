@@ -32,6 +32,9 @@ import type {
   PluginDismissButtonProps,
   PluginDividerProps,
   PluginDonutChartProps,
+  PluginDragDropProviderProps,
+  PluginKanbanProps,
+  PluginSortableListProps,
   PluginDropdownMenuProps,
   PluginEmojiPickerProps,
   PluginEmptyStateProps,
@@ -101,6 +104,7 @@ export { preloadPluginUi, whenPluginUiReady } from "./kit";
 export { Markdown } from "./Markdown";
 export { getDaintreeTheme, onDidChangeDaintreeTheme, useDaintreeTheme } from "./theme";
 export { useListNavigation } from "./listNavigation";
+export { useDraggable, useDroppable } from "./dnd";
 export {
   formatBytes,
   formatCount,
@@ -431,6 +435,24 @@ export const DonutChart: ComponentType<PluginDonutChartProps> = fromKit(
   (kit) => kit.DonutChart
 );
 
+// Drag and drop. The hooks live in the facade itself (see ./dnd).
+
+export const DragDropProvider: ComponentType<PluginDragDropProviderProps> = fromKit(
+  "DragDropProvider",
+  (kit) => kit.DragDropProvider,
+  // Until the kit is in, the content is there without drag.
+  ({ children }) => children
+);
+// Generic over the item type in the public types, like the list components.
+export const SortableList: <T>(props: PluginSortableListProps<T>) => ReactNode = fromKit(
+  "SortableList",
+  (kit) => kit.SortableList
+);
+export const Kanban: <T>(props: PluginKanbanProps<T>) => ReactNode = fromKit(
+  "Kanban",
+  (kit) => kit.Kanban
+);
+
 export type {
   PluginMarkdownProps as MarkdownProps,
   PluginButtonProps as ButtonProps,
@@ -572,4 +594,18 @@ export type {
   PluginBarChartProps as BarChartProps,
   PluginLineChartProps as LineChartProps,
   PluginDonutChartProps as DonutChartProps,
+  PluginDragId as DragId,
+  PluginDragEvent as DragEvent,
+  PluginDragDropProviderProps as DragDropProviderProps,
+  PluginUseDraggableOptions as UseDraggableOptions,
+  PluginDragHandleProps as DragHandleProps,
+  PluginDraggableState as DraggableState,
+  PluginUseDroppableOptions as UseDroppableOptions,
+  PluginDroppableState as DroppableState,
+  PluginSortableItemState as SortableItemState,
+  PluginSortableListProps as SortableListProps,
+  PluginKanbanColumn as KanbanColumn,
+  PluginKanbanMove as KanbanMove,
+  PluginKanbanCardState as KanbanCardState,
+  PluginKanbanProps as KanbanProps,
 } from "@shared/types/plugin-sdk-react";

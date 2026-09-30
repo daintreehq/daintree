@@ -58,6 +58,11 @@ const DROPPABLE_PAINTERS: Record<string, string> = {
     "src/components/Terminal/ContentGridDefault.tsx",
 };
 
+// Public hooks named `useDroppable` that paint nothing themselves: the plugin
+// UI facade's hook hands `isOver` to the view that calls it, which draws its
+// own target. The kit's own droppables (PluginKitDnd.tsx) are checked above.
+const DROPPABLE_HOOK_FACADES = new Set(["src/pluginUi/dnd.ts"]);
+
 const codeOf = (rel: string) => SOURCES.find((s) => s.rel === rel)?.code ?? "";
 
 describe("drag and drop feedback contract", () => {
@@ -65,7 +70,7 @@ describe("drag and drop feedback contract", () => {
     const droppables = SOURCES.filter(({ text }) => /\buseDroppable\(/.test(text));
     expect(droppables.length).toBeGreaterThan(0);
     const offenders = droppables
-      .filter(({ rel }) => !CSS_FRAMED_DROPPABLES.has(rel))
+      .filter(({ rel }) => !CSS_FRAMED_DROPPABLES.has(rel) && !DROPPABLE_HOOK_FACADES.has(rel))
       .filter(
         ({ rel, code }) =>
           !/\bDROP_TARGET_FRAME\b/.test(

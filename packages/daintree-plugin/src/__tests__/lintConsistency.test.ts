@@ -238,6 +238,34 @@ describe("lucide-react-import", () => {
   });
 });
 
+describe("dnd-library-import", () => {
+  it("flags a view importing a drag-and-drop library and passes one using the kit", async () => {
+    for (const specifier of [
+      "@dnd-kit/core",
+      "react-beautiful-dnd",
+      "@hello-pangea/dnd",
+      "sortablejs",
+      "sortablejs/modular/sortable.core.esm.js",
+    ]) {
+      expect(
+        await lintFor("dnd-library-import", view(`<X />`, `import { X } from "${specifier}";\n`))
+      ).toHaveLength(1);
+    }
+    for (const statement of [`import "sortablejs";`, `const dnd = await import("react-dnd");`]) {
+      expect(await lintFor("dnd-library-import", view(`<X />`, `${statement}\n`))).toHaveLength(1);
+    }
+    expect(
+      await lintFor("dnd-library-import", view(`<X />`, `import { X } from "sortable-table";\n`))
+    ).toEqual([]);
+    expect(
+      await lintFor(
+        "dnd-library-import",
+        view(`<SortableList />`, `import { SortableList } from "@daintreehq/plugin-ui";\n`)
+      )
+    ).toEqual([]);
+  });
+});
+
 describe("self-container-query", () => {
   it("flags a container-query variant on the element that declares the container", async () => {
     const flagged = await lintFor(
