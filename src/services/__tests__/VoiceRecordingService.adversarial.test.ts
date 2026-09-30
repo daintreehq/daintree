@@ -514,7 +514,11 @@ describe("VoiceRecordingService adversarial", () => {
     setupGlobals();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // resetModules() doesn't stop the old singleton; its silence timer would
+    // otherwise fire into a later test's shared runtime mock.
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -1007,6 +1011,27 @@ describe("VoiceRecordingService adversarial", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("MIC_STALE_CAPTURE_CANNOT_MARK_NEW_SESSION_LIVE", async () => {
+    runtime.getUserMediaQueue.push(createStream(), createStream());
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+    const staleHandler = runtime.createdWorkletNodes[0]?.port.onmessage;
+    expect(staleHandler).toBeTypeOf("function");
+
+    await voiceRecordingService.start({ panelId: "panel-2", panelTitle: "Panel Two" });
+    expect(runtime.voiceState.activeTarget?.panelId).toBe("panel-2");
+    runtime.voiceFns.setMicSignal.mockClear();
+    runtime.voiceFns.announce.mockClear();
+
+    const speech = new Int16Array(2400);
+    speech[0] = 1200;
+    staleHandler?.(pcmEvent(speech));
+
+    expect(runtime.voiceFns.setMicSignal).not.toHaveBeenCalled();
+    expect(runtime.voiceFns.announce).not.toHaveBeenCalled();
+    expect(runtime.voiceState.micSignal).toBe("pending");
   });
 
   it("MIC_SILENCE_TIMER_CLEARED_ON_STOP", async () => {

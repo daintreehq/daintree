@@ -1337,6 +1337,7 @@ describe("VoiceRecordingService — pause/resume (#9191)", () => {
     const voiceState = await getVoiceMockState();
     voiceState.activeTarget = { panelId: "panel-1" };
     voiceState.status = "paused";
+    (voiceState as { micSignal?: string }).micSignal = "live";
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
@@ -1351,6 +1352,28 @@ describe("VoiceRecordingService — pause/resume (#9191)", () => {
     expect(node.port.postMessage).toHaveBeenCalledWith({ type: "setPaused", value: false });
     expect(useVoiceRecordingStore.getState().setStatus).toHaveBeenCalledWith("recording");
     expect(useVoiceRecordingStore.getState().announce).toHaveBeenCalledWith("Dictation resumed.");
+  });
+
+  it("resume() before the mic went live defers the announcement to real audio (#13105)", async () => {
+    setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "paused";
+    (voiceState as { micSignal?: string }).micSignal = "pending";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    (useVoiceRecordingStore.getState().announce as ReturnType<typeof vi.fn>).mockClear();
+
+    voiceRecordingService.resume();
+
+    expect(useVoiceRecordingStore.getState().setStatus).toHaveBeenCalledWith("recording");
+    expect(useVoiceRecordingStore.getState().announce).not.toHaveBeenCalledWith(
+      "Dictation resumed."
+    );
+    voiceRecordingService.destroy();
   });
 
   it("resume() is a no-op when status is not paused", async () => {
