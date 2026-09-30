@@ -566,6 +566,9 @@ class VoiceRecordingService {
       });
       return;
     }
+    // A stop still draining would otherwise finish afterwards and overwrite
+    // the error with "idle".
+    if (this.stopPromise) await this.stopPromise;
     useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
   }
 
