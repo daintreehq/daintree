@@ -630,7 +630,6 @@ const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly string[
     "DiffStat",
     "DescriptionList",
     "DescriptionListItem",
-    "Dialog",
     "Disclosure",
     "DismissButton",
     "Divider",

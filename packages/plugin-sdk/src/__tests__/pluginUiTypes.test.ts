@@ -454,12 +454,12 @@ export const badSectionTag = createElement(ui.SectionLabel, { as: "span" }, "x")
 export const split = createElement(ui.ResizableSplit, { first: "a", second: "b", "aria-label": "Resize list", orientation: "vertical", sizedPane: "second", size: 240, onSizeChange: (size: number) => void size, minSize: 120, maxSize: 480, collapsible: true, collapsed: false, onCollapsedChange: (collapsed: boolean) => void collapsed });
 // @ts-expect-error a split's divider needs an aria-label
 export const unnamedSplit = createElement(ui.ResizableSplit, { first: "a", second: "b" });
-const sections: ui.AccordionItem[] = [{ value: "a", title: "General", content: "x", trailing: 3, disabled: false }];
-export const accordion = createElement(ui.Accordion, { items: sections, type: "multiple", value: ["a"], onValueChange: (value: string[]) => void value, headingLevel: 4 });
+const accordionItems: ui.AccordionItem[] = [{ value: "a", title: "General", content: "x", trailing: 3, disabled: false }];
+export const accordion = createElement(ui.Accordion, { items: accordionItems, type: "multiple", value: ["a"], onValueChange: (value: string[]) => void value, headingLevel: 4 });
 // @ts-expect-error accordion modes are a closed set
-export const badAccordion = createElement(ui.Accordion, { items: sections, type: "some" });
+export const badAccordion = createElement(ui.Accordion, { items: accordionItems, type: "some" });
 // @ts-expect-error heading levels run 2 to 6
-export const badLevel = createElement(ui.Accordion, { items: sections, headingLevel: 1 });
+export const badLevel = createElement(ui.Accordion, { items: accordionItems, headingLevel: 1 });
 export const disclosure = createElement(ui.Disclosure, { title: "Details", open: true, onOpenChange: (open: boolean) => void open }, "Body");
 // @ts-expect-error a disclosure needs a title
 export const untitledDisclosure = createElement(ui.Disclosure, {}, "Body");
