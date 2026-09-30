@@ -428,6 +428,9 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
                   ...buffer,
                   liveItems,
                   liveText,
+                  // Any legacy anchor from an unidentified delta is consumed here;
+                  // leaving it would let a later stop flush slice at a stale offset.
+                  draftLengthAtSegmentStart: -1,
                   completedSegments: finalText
                     ? [...buffer.completedSegments, finalText]
                     : buffer.completedSegments,
@@ -448,6 +451,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
                 [panelId]: {
                   ...buffer,
                   liveText: "",
+                  liveItems: [],
                   draftLengthAtSegmentStart: -1,
                   transcriptPhase: "idle" as VoiceTranscriptPhase,
                 },
@@ -461,6 +465,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               [panelId]: {
                 ...buffer,
                 liveText: "",
+                liveItems: [],
                 draftLengthAtSegmentStart: -1,
                 completedSegments: [...buffer.completedSegments, normalized],
                 transcriptPhase: "utterance_final" as VoiceTranscriptPhase,

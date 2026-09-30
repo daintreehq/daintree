@@ -1976,7 +1976,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     stop(): Promise<{ rawText: string | null }>;
     flushParagraph(): Promise<{ rawText: string | null }>;
     sendAudioChunk(chunk: ArrayBuffer): void;
-    onTranscriptionDelta(callback: (payload: { text: string; itemId?: string }) => void): () => void;
+    onTranscriptionDelta(
+      callback: (payload: { text: string; itemId?: string }) => void
+    ): () => void;
     onTranscriptionComplete(
       callback: (payload: { text: string; willCorrect: boolean; itemId?: string }) => void
     ): () => void;

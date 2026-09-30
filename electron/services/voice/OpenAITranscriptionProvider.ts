@@ -72,6 +72,10 @@ const DRAIN_TIMEOUT_MS = 3_000;
 // session to become ready so the buffered audio can still be transcribed.
 // Connecting normally takes ~1.5-2s; past this the audio is discarded.
 const STOP_CONNECT_TIMEOUT_MS = 3_000;
+// How long a completed segment may wait behind an earlier one that hasn't
+// reported back before the earlier one is settled with its interim text, so a
+// lost or failed transcription can't hold later dictation back indefinitely.
+const HELD_COMPLETION_TIMEOUT_MS = 5_000;
 // Client-side ping/pong heartbeat. The OpenAI Realtime server sends its own
 // pings (auto-ponged by `ws`), but a half-open TCP connection on our side —
 // server alive, our socket silently dead — is only detectable by us pinging
@@ -318,6 +322,10 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   // to the draft without tracking per-segment offsets.
   private commitOrder: string[] = [];
   private heldCompletions = new Map<string, string>();
+  // Interim text per in-flight item, used to settle an item that never reports
+  // back in its commit-order slot rather than after the text that follows it.
+  private itemDeltaText = new Map<string, string>();
+  private heldCompletionTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Cumulative delta text since the last complete event — used for incremental diffs. */
   private liveText = "";
@@ -884,11 +892,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         // it never does, the session config or the commit cadence is wrong.
         const itemId = typeof payload.item_id === "string" ? payload.item_id : undefined;
         logDebug(`${P} ← input_audio_buffer.committed`, { itemId });
-        if (
-          itemId &&
-          !this.completedItemIds.has(itemId) &&
-          !this.commitOrder.includes(itemId)
-        ) {
+        if (itemId && !this.completedItemIds.has(itemId) && !this.commitOrder.includes(itemId)) {
           this.commitOrder.push(itemId);
         }
         return;
@@ -908,6 +912,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         // Length only — dictated text is user content, kept out of logs.
         logDebug(`${P} ← transcription.delta`, { itemId, length: delta.length });
         if (!delta) return;
+        if (itemId) {
+          // A delta for an item already finalized would resurrect its preview.
+          if (this.completedItemIds.has(itemId)) return;
+          this.itemDeltaText.set(itemId, (this.itemDeltaText.get(itemId) ?? "") + delta);
+        }
         this.emit({ type: "delta", text: delta, ...(itemId ? { itemId } : {}) });
         this.liveText += delta;
         return;
@@ -1060,6 +1069,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     if (this.pendingCommits > 0) {
       this.pendingCommits--;
     }
+    if (itemId) this.itemDeltaText.delete(itemId);
     if (itemId && this.commitOrder.includes(itemId)) {
       this.heldCompletions.set(itemId, transcript);
       this.releaseHeldCompletions(false);
@@ -1076,18 +1086,47 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   }
 
   /**
-   * Emits held completions in commit order. Normally stops at the first item
-   * still in flight; `force` releases everything held (drain end, connection
-   * loss) so a predecessor that never reports back can't strand later text.
+   * Emits held completions in commit order, stopping at the first item still in
+   * flight. `force` settles every unresolved item with its interim text instead
+   * (drain end, connection loss, stop); `settleHead` settles only the first one
+   * (the hold timeout). Settling in place keeps the draft in commit order even
+   * when a predecessor never reports back.
    */
-  private releaseHeldCompletions(force: boolean): void {
+  private releaseHeldCompletions(force: boolean, settleHead = false): void {
     for (let itemId = this.commitOrder[0]; itemId !== undefined; itemId = this.commitOrder[0]) {
-      const transcript = this.heldCompletions.get(itemId);
-      if (transcript === undefined && !force) return;
+      let transcript = this.heldCompletions.get(itemId);
+      if (transcript === undefined) {
+        if (!force && !settleHead) break;
+        settleHead = false;
+        transcript = (this.itemDeltaText.get(itemId) ?? "").trim();
+        this.completedItemIds.add(itemId);
+        this.itemDeltaText.delete(itemId);
+        if (this.pendingCommits > 0) this.pendingCommits--;
+        logWarn(`${P} Settling unreported item with its interim text`, {
+          itemId,
+          length: transcript.length,
+        });
+      }
       this.commitOrder.shift();
-      if (transcript === undefined) continue;
       this.heldCompletions.delete(itemId);
       this.emitCompletion(transcript, itemId);
+    }
+    this.clearHeldCompletionTimer();
+    if (this.heldCompletions.size > 0) {
+      this.heldCompletionTimer = setTimeout(() => {
+        this.heldCompletionTimer = null;
+        this.releaseHeldCompletions(false, true);
+        if (this.isDraining && this.pendingCommits === 0) {
+          this.settleDrain("held-completion-timeout");
+        }
+      }, HELD_COMPLETION_TIMEOUT_MS);
+    }
+  }
+
+  private clearHeldCompletionTimer(): void {
+    if (this.heldCompletionTimer) {
+      clearTimeout(this.heldCompletionTimer);
+      this.heldCompletionTimer = null;
     }
   }
 
@@ -1252,6 +1291,8 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.completedItemIds.clear();
     this.commitOrder = [];
     this.heldCompletions.clear();
+    this.itemDeltaText.clear();
+    this.clearHeldCompletionTimer();
     this.preConnectBuffer = [];
     this.preConnectBufferBytes = 0;
     this.clearConnectTimeout();
@@ -1519,6 +1560,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.clearReconnectTimer();
 
     if (!this.connection || !this.isReady) {
+      this.releaseHeldCompletions(true);
       this.cleanupPreviousSession();
       this.emit({ type: "status", status: "idle" });
       return;
@@ -1544,6 +1586,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         this.bytesSinceCommit = 0;
       } catch {
         logWarn(`${P} Failed to send final commit, closing immediately`);
+        this.releaseHeldCompletions(true);
         this.cleanupPreviousSession();
         this.emit({ type: "status", status: "idle" });
         return;
@@ -1574,6 +1617,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       await this.drainPromise;
     } else {
       logInfo(`${P} Nothing to drain — no outstanding transcriptions`);
+      this.releaseHeldCompletions(true);
       this.isDraining = false;
     }
 

@@ -413,7 +413,10 @@ describe("voiceInput — spoken-command paragraphing", () => {
     emitTranscriptionEvent({ type: "delta", text: "lo" });
 
     const deltas = win.__sent.filter((m) => m.channel === "voice-input:transcription-delta");
-    expect(deltas.map((m) => m.payload)).toEqual([{ text: "hel", itemId: "item-A" }, { text: "lo" }]);
+    expect(deltas.map((m) => m.payload)).toEqual([
+      { text: "hel", itemId: "item-A" },
+      { text: "lo" },
+    ]);
   });
 
   it("tags every split part of an identified completion with its item id", () => {

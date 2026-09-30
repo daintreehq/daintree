@@ -360,12 +360,21 @@ describe("voiceRecordingStore — identified items (#13109)", () => {
     expect(buffer().transcriptPhase).toBe("idle");
   });
 
-  it("does not disturb the legacy segment anchor", () => {
+  it("consumes a legacy segment anchor so a later flush can't slice at it", () => {
     const store = useVoiceRecordingStore.getState();
     store.setDraftLengthAtSegmentStart(PANEL_ID, 5);
     store.appendDelta("hello", "item-a");
     store.completeSegment("Hello.", "item-a");
-    expect(buffer().draftLengthAtSegmentStart).toBe(5);
+    expect(buffer().draftLengthAtSegmentStart).toBe(-1);
+  });
+
+  it("an unidentified completion clears identified item state", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.appendDelta("stale", "item-a");
+    store.completeSegment("Stale.");
+    expect(buffer().liveItems).toEqual([]);
+    store.appendDelta("fresh", "item-b");
+    expect(buffer().liveText).toBe("fresh");
   });
 
   it("paragraph reset preserves other items' interim text", () => {
