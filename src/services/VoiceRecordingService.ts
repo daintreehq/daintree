@@ -999,6 +999,7 @@ class VoiceRecordingService {
     logDebug(`${LOG_PREFIX} Eager audio capture started`);
     logStep("source_attach");
     const captureAttachedAt = performance.now();
+    let micSilenceGraceMs = VoiceRecordingService.MIC_SILENCE_GRACE_MS;
 
     // Only an actually-started session (open mic stream) needs to be torn
     // down here. `this.stream` is the canonical "audio is open" flag and is
@@ -1020,6 +1021,9 @@ class VoiceRecordingService {
         abandonCapture(stream);
         return;
       }
+      // The new mic has been capturing through the drain, so that time counts
+      // against its grace window.
+      micSilenceGraceMs = Math.max(0, micSilenceGraceMs - (performance.now() - captureAttachedAt));
     }
 
     const generation = ++this.generation;
@@ -1058,19 +1062,11 @@ class VoiceRecordingService {
     this.sessionStartedAt = Date.now();
     this.startElapsedTimer();
     this.micCaptureAttachedAt = captureAttachedAt;
-    // Audio that arrived while a previous session drained already counts, and
-    // the grace window runs from capture attach rather than from promotion.
+    // Real audio that arrived while a previous session drained already counts.
     if (firstSignalChunk) {
       this.markMicLive(target, firstSignalChunk);
     } else {
-      this.startMicSilenceTimer(
-        generation,
-        startRequestId,
-        Math.max(
-          0,
-          VoiceRecordingService.MIC_SILENCE_GRACE_MS - (performance.now() - captureAttachedAt)
-        )
-      );
+      this.startMicSilenceTimer(generation, startRequestId, micSilenceGraceMs);
     }
 
     // Connect in parallel — audio keeps queueing until the backend is ready.

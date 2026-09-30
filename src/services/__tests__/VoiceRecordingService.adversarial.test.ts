@@ -741,6 +741,57 @@ describe("VoiceRecordingService adversarial", () => {
       expect(runtime.createdStreams[1]?.track.stop).not.toHaveBeenCalled();
     });
 
+    it("marks the mic live from held audio before the backend connects (#13105)", async () => {
+      const backendStart = deferred<{ ok: boolean }>();
+      runtime.startQueue.push(backendStart.promise);
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const starting = voiceRecordingService.start(panelOne);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+      });
+
+      emitChunk(0, 0);
+      expect(runtime.voiceFns.setMicSignal).not.toHaveBeenCalled();
+      expect(runtime.voiceFns.announce).not.toHaveBeenCalledWith(
+        expect.stringContaining("Dictation started")
+      );
+
+      emitChunk(0, 100);
+      expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+      expect(runtime.voiceState.micSignal).toBe("live");
+      expect(runtime.voiceFns.announce).toHaveBeenCalledWith(
+        expect.stringContaining("Dictation started")
+      );
+
+      backendStart.resolve({ ok: true });
+      await starting;
+      expect(runtime.voiceFns.setMicSignal).toHaveBeenCalledTimes(1);
+    });
+
+    it("carries real audio captured during a retarget drain into the new session's mic signal", async () => {
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start(panelOne);
+      runtime.voiceState.status = "recording";
+
+      const drain = deferred<void>();
+      runtime.stopQueue.push(drain.promise);
+      const retargeting = voiceRecordingService.start(panelTwo);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
+      });
+
+      emitChunk(1, 100);
+      expect(runtime.voiceFns.setMicSignal).not.toHaveBeenCalled();
+
+      drain.resolve();
+      await retargeting;
+
+      expect(runtime.voiceFns.beginSession).toHaveBeenLastCalledWith(panelTwo);
+      expect(runtime.voiceFns.setMicSignal).toHaveBeenLastCalledWith("live");
+      expect(runtime.voiceState.micSignal).toBe("live");
+    });
+
     it("releases the new microphone when a retarget is cancelled during the drain", async () => {
       const { voiceRecordingService } = await import("../VoiceRecordingService");
       await voiceRecordingService.start(panelOne);
