@@ -10,7 +10,9 @@ export const daintreeThemeSettings = {
   selectionMatch: "var(--theme-terminal-selection)",
   lineHighlight: "var(--theme-border-default)",
   gutterBackground: "var(--theme-surface-canvas)",
-  gutterForeground: "var(--theme-activity-idle)",
+  // Secondary ink, as every Daintree gutter: line numbers are coordinates
+  // people read, and the idle-activity hue sits under 4.5:1 on several themes.
+  gutterForeground: "var(--theme-text-secondary)",
   fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
 } as const;
 
