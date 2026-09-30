@@ -1,0 +1,256 @@
+# UI kit — `@daintreehq/plugin-ui`
+
+`@daintreehq/plugin-ui` is Daintree's own controls, served to plugin views through the host import map and themed with the app: the same buttons, fields, menus, dialogs, lists and pane chrome Daintree draws itself. A view that uses it looks and behaves like the rest of the app, follows the user's theme without a re-render, and pays nothing in bundle size.
+
+There is no package behind the specifier. The implementation exists only inside the running app (compiled from `src/pluginUi`), `@daintreehq/plugin-vite` keeps the import external, and a raw `plugin://` view imports it directly. Types come from the SDK: add `"@daintreehq/plugin-sdk/plugin-ui"` to `compilerOptions.types` (the scaffold's tsconfig already does), or put `/// <reference types="@daintreehq/plugin-sdk/plugin-ui" />` in one file. `packages/plugin-sdk/plugin-ui.d.ts` declares the module; the prop interfaces live in `shared/types/plugin-sdk-react.ts` and are re-exported from `@daintreehq/plugin-sdk/react` as `Plugin*Props`. Those two files are the contract; this page is the readable form of them.
+
+```tsx
+import { Button, Callout, PaneHeader, Toolbar, ToolbarButton } from "@daintreehq/plugin-ui";
+
+export default function Panel() {
+  return (
+    <div className="flex h-full flex-col">
+      <PaneHeader
+        title="Builds"
+        icon="rocket"
+        actions={
+          <Toolbar aria-label="Build actions">
+            <ToolbarButton icon="refresh" aria-label="Refresh" onClick={refresh} />
+          </Toolbar>
+        }
+      />
+      <Callout
+        severity="error"
+        title="Build failed"
+        action={<Button onClick={retry}>Retry</Button>}
+      >
+        The last build exited with code 1.
+      </Callout>
+    </div>
+  );
+}
+```
+
+## Versioning and stability
+
+`PLUGIN_UI_VERSION` is the kit's contract version, a semver string — `"1.2.0"` for this release. The rules:
+
+- **Minors are additive.** A minor version adds components, optional props, accepted values, icon names and theme token keys. The only other change a minor may make is renaming an **extended** theme token (below), with the change in the release notes.
+- **Nothing is removed or narrowed within a major.** No export, prop, accepted value or core token key goes away, and no prop's accepted values shrink, until the next major version.
+- **Props are validated at runtime.** Props arrive from untyped JavaScript as often as from TypeScript, so every component checks each one and ignores a value outside its type rather than throwing. A wrong value degrades to the default; it never takes the view down.
+- **The export list is pinned.** The host build checks the facade's runtime exports against `HOST_FACADE_REQUIRED_EXPORTS` in `vite.config.ts`, so an export dropped from the facade fails Daintree's own build. That list is maintained by hand beside `plugin-ui.d.ts`, and the two are kept aligned in review rather than derived from each other.
+
+Theme tokens come in two tiers:
+
+| Tier | Groups | Stability |
+| --- | --- | --- |
+| Core | `surface-*`, `text-*`, `border-*`, `accent-*`, `focus-ring`, `status-*` | Stable for the whole major version |
+| Extended | `terminal-*` (including the 16 ANSI colours), `syntax-*`, `activity-*`, `category-*` | Best effort; may be renamed in a minor, with a note. Read them with a fallback |
+
+**Feature detection.** A view built against a newer kit than the running Daintree serves can fail to link: a named import the host facade does not export is an ESM link error, and the whole view module fails to load. Import the namespace and branch on what is there, which never fails to link:
+
+```ts
+import * as kit from "@daintreehq/plugin-ui";
+
+const [major, minor] = kit.PLUGIN_UI_VERSION.split(".").map(Number);
+const hasPopover = major > 1 || (major === 1 && minor >= 2); // Popover arrived in 1.2
+const Avatar = kit.Avatar ?? FallbackAvatar;
+```
+
+Every export below says which minor it arrived in; so do props added later, in the declarations. Declaring [`engines.daintree`](./manifest.md#enginesdaintree) tells users which release the plugin expects, but the range is advisory — an unmet one is warned about and the plugin still loads — so it is no substitute for detection.
+
+## Readiness and loading
+
+Kit components are lazy. The facade that the import map serves is small, and the host adapters behind it load as one chunk, requested the moment a view imports the kit. Until that chunk is in, a component renders nothing — except `Tooltip` and `TruncatedTooltip`, which render their child, and `Popover`, which renders its trigger — so the first time a view renders it, a control could paint a frame late.
+
+The host's view load path closes that gap for panel views: it starts loading the kit alongside the plugin's activation and waits for it together with the view's styles, so once the kit has loaded, a view's first committed frame already has every kit control in it; a kit that fails to load is left to each control's own boundary rather than failing the view (see [Architecture → The plugin view load path](./architecture.md#the-plugin-view-load-path)). Two exports cover everything else:
+
+| Export | Since | Behaviour |
+| --- | --- | --- |
+| `whenPluginUiReady(): Promise<void>` | 1.2 | Resolves once every component renders on its first frame with no placeholder. Await it in tests and in code that measures kit output or must not paint late. Rejects when the chunk fails to load; calling it again retries. |
+| `preloadPluginUi(): void` | 1.2 | Starts loading without waiting. Every call shares one request. Call it when a view is about to open outside the host's load path. |
+
+`Markdown` loads its renderer separately, on its first render, and is not covered by `whenPluginUiReady`.
+
+## Overlays, portals and layers
+
+Tooltip bodies, menus, select lists, popovers and dialogs open in host overlays that portal to the document body, outside the view's style root. Two consequences:
+
+- **The overlay's own chrome takes no `className`.** Those props do not exist on `DropdownMenu`, `Dialog`, `ConfirmDialog`, `Popover`, `Tooltip` or `Select`'s list: the chrome is the host's. `Select`'s `className` styles its trigger only.
+- **What you put inside an overlay is still yours.** Content you pass into a tooltip, popover or dialog body is re-marked as a plugin style root and tagged with your plugin, so your view's Tailwind classes apply there too and diagnostics (the Styles check, long-frame attribution) know whose it is. A portal you open yourself with `createPortal` must mark its container with the `PLUGIN_STYLE_ROOT_ATTRIBUTE` attribute from `@daintreehq/plugin-sdk`, or your classes will not reach it ([Views](./views.md)).
+
+Overlays stack at the popover tier. A dialog opened from inside another modal surface — Settings, another dialog — passes `layer="nested"` (1.2), and kit overlays opened inside that dialog lift themselves above it.
+
+Menus and popovers are rendered through React portals, so React events still bubble to the trigger's ancestors: a menu on a clickable row would also click the row. `DropdownMenu`'s `stopPropagation` (1.2) stops that.
+
+## Shared vocabulary
+
+**Status.** `Badge`'s `tone`, `Callout`'s `severity` and `SeverityIcon` share one vocabulary: `error`, `danger`, `warning`, `success`, `info`, `neutral`. `error` and `danger` are the same colour (the `status-error` class aliases the `status-danger` theme token); a `Badge` draws them identically, while a `Callout` gives `danger` — a destructive caution — its own octagon glyph. `outline` is a Badge-only, uncoloured shape. Error banners are `Callout severity="error"` with a Retry `action`; a pane that failed as a whole is `PaneState kind="error"`. There is no separate banner component.
+
+**DOM props.** Every control that renders in the view (not in an overlay) forwards `PluginDomProps` to its root: `id`, `title`, `tabIndex`, `role`, `style`, any `aria-*` or `data-*` attribute, DOM event handlers, and `ref`. That is also what lets a kit control be a `DropdownMenu` or `Popover` `trigger`, or a `Tooltip` child. Tables below mark these components "DOM props".
+
+**Icons.** Most props that take an icon take a `PluginIconSource`: an icon name, or your own element (an inline `<svg>`); a string is always read as a name, never as text. A few take a name only (`PluginIconName`): `Select` options, `Callout`'s `icon`, `DropdownMenu` items, `Tabs` items and `SpinningIcon`. Sides are `"top" | "right" | "bottom" | "left"`; alignments `"start" | "center" | "end"`.
+
+**Density.** Controls that sit in toolbars and filter strips take `density: "compact"`; defaults suit forms.
+
+## Components
+
+Props are listed in full; `?` marks optional ones. "Since" is the kit minor that added the export; a prop added later says so beside it.
+
+### Actions
+
+| Export | Since | Props | Notes |
+| --- | --- | --- | --- |
+| `Button` | 1.0 | `children?`, `variant?: "default" \| "secondary" \| "outline" \| "ghost" \| "subtle" \| "contrast" \| "destructive" \| "ghost-danger" \| "link" \| "pill"`, `size?: "default" \| "sm" \| "xs" \| "lg"`, `icon?`, `loading?`, `pressed?`, `disabled?`, `type?`, `className?`; DOM props | `default` is the accent-filled primary: at most one per region. `loading` overlays a spinner and blocks activation while keeping focus and width. `pressed` makes it a toggle (`aria-pressed`). `pill` (1.2) is a rounded, quiet chip for floating toolbars and status strips. |
+| `IconButton` | 1.0 | `icon`, `"aria-label"`, `tooltip?: ReactNode \| false`, `tooltipSide?`, `variant?: "ghost" \| "outline" \| "subtle" \| "ghost-danger"`, `size?: "default" \| "sm" \| "xs"`, `loading?`, `pressed?`, `disabled?`, `type?`, `className?`; DOM props except `title` | Icon-only; the required `aria-label` doubles as its tooltip unless `tooltip` says otherwise (`false` for none). Sizes are 32, 28 and 24 px. |
+| `CopyButton` | 1.0 | `text: string \| (() => string \| Promise<string>)`, `tooltip?`, `tooltipSide?`, `onCopied?`, `onCopyError?`, `announcement?` (1.2), `disabled?`, `className?`; then either `"aria-label"` and `size?: "xs" \| "sm"` (icon-only), or `label`, `"aria-label"?`, `variant?: "ghost" \| "outline" \| "subtle"`, `size?: "xs" \| "sm" \| "default"` | Confirms with a check and a spoken announcement ("Copied" by default). A function `text` is read at click time; a throw counts as a failed copy. With `onCopyError` the button stays quiet about failures. |
+| `DismissButton` | 1.0 | `"aria-label"`, `onClick`, `tooltip?`, `disabled?`, `className?` | The X on a card, banner or hint. Name what goes away ("Dismiss tip"). |
+| `DropdownMenu` | 1.0 | `trigger: ReactElement`, `items`, `side?`, `align?`, `open?`, `onOpenChange?`, `"aria-label"?`, `onCloseAutoFocus?` (1.2), `stopPropagation?` (1.2) | Built from an `items` array. The trigger must accept a ref and DOM props (a kit `Button` does). `onCloseAutoFocus` runs before focus returns to the trigger; `event.preventDefault()` keeps focus where your handler moved it. |
+
+`DropdownMenu` entries (`PluginDropdownMenuEntry`):
+
+| `type` | Fields |
+| --- | --- |
+| `"item"` (or omitted) | `label`, `onSelect`, `icon?`, `shortcut?` (a canonical combo such as `"Cmd+Enter"`, drawn in the key column), `disabled?`, `destructive?` |
+| `"checkbox"` | `label`, `checked`, `onCheckedChange`, `disabled?` |
+| `"radio-group"` (1.2) | `value`, `onValueChange`, `items: { value, label, disabled? }[]` (values non-empty and unique), `label?` heading |
+| `"label"` | `label` |
+| `"separator"` | — |
+
+### Form controls
+
+| Export | Since | Props | Notes |
+| --- | --- | --- | --- |
+| `Input` | 1.0 | `type?: "text" \| "search" \| "email" \| "url" \| "password" \| "number" \| "tel" \| "date" \| "time" \| "datetime-local"`, `value?`, `defaultValue?`, `onValueChange?(value)`, `placeholder?`, `name?`, `disabled?`, `readOnly?`, `required?`, `autoFocus?`, `autoComplete?`, `spellCheck?`, `maxLength?`, `min?`, `max?`, `step?`, `invalid?`, `density?: "default" \| "compact"`, `className?`; DOM props | Single-line field. `date`, `time` and `datetime-local` (1.2) use the platform picker in the theme's light or dark scheme, with ISO values (`"2026-09-30"`, `"14:05"`, `"2026-09-30T14:05"`). `onValueChange` fires beside the native `onChange`. |
+| `Textarea` | 1.0 | `value?`, `defaultValue?`, `onValueChange?`, `placeholder?`, `name?`, `rows?`, `disabled?`, `readOnly?`, `required?`, `autoFocus?`, `spellCheck?`, `maxLength?`, `invalid?`, `density?`, `variant?: "default" \| "code"`, `resize?: "vertical" \| "none"`, `className?`; DOM props | `code` for paths, prompts and JSON. |
+| `Select` | 1.0 | `options: (SelectOption \| SelectOptionGroup)[]`, `value?: string \| null`, `defaultValue?`, `onValueChange?`, `placeholder?`, `disabled?`, `density?`, `name?`, `id?`, `"aria-label"?`, `"aria-labelledby"?`, `"aria-describedby"?`, `className?` (trigger) | Options are `{ value, label, description?, icon? (1.2), disabled? }`, values non-empty and unique; a group is `{ label, options }`. Passing `value` at all makes it controlled, and `""`, `null` or `undefined` then shows the placeholder again (a form reset); leave it out for an uncontrolled Select. `compact` is 28 px. |
+| `SegmentedControl` | 1.0 | `options: { value, label, disabled?, "aria-label"?, tooltip? }[]`, `value`, `onValueChange`, `"aria-label"`, `"aria-describedby"?`, `disabled?`, `fullWidth?`, `density?`, `className?` | Exactly one of a few options, with radio-group keyboard behaviour. `compact` is 24 px, for a 32 px toolbar strip. |
+| `Checkbox` | 1.0 | `checked?: boolean \| "indeterminate"`, `defaultChecked?`, `onCheckedChange?(checked)`, `disabled?`, `invalid?`, `required?`, `name?`, `value?`, `size?: "sm" \| "md"`, `className?`; DOM props | Pair with `<label htmlFor>` or an `aria-label`. An indeterminate box resolves to `true`. |
+| `Switch` | 1.1 | `checked?`, `defaultChecked?`, `onCheckedChange?`, `disabled?`, `name?`, `size?` (deprecated, ignored), `className?`; DOM props | An instant on/off setting, neutral (never accent) when on. In a form with a Save, use `Checkbox`. |
+| `SearchField` | 1.0 | `value`, `onValueChange?`, `onClear?`, `placeholder?`, `"aria-label"?`, `clearLabel?`, `size?: "compact" \| "dense" \| "palette"`, `autoFocus?`, `disabled?`, `invalid?`, `className?`; DOM props | Controlled only. `onClear` shows the clear button while there is text and makes Escape clear first. Sizes are 28 (default), 24 and 38 px. |
+| `FormField` | 1.1 | `label`, `description?`, `error?`, `required?`, `htmlFor?`, `orientation?: "vertical" \| "horizontal"`, `disabled?`, `children: ReactNode \| ((control) => ReactNode)`, `className?` | Wires label, description and error to the control for assistive tech. Kit `Input`, `Textarea`, `Select`, `Checkbox` and `Switch` join on their own; for your own control, pass a function and spread the `{ id, "aria-labelledby"?, "aria-describedby"?, "aria-invalid"? }` it receives. `horizontal` puts a checkbox or switch before its label and makes the row clickable. |
+
+### Status and feedback
+
+| Export | Since | Props | Notes |
+| --- | --- | --- | --- |
+| `Badge` | 1.0 | `children?`, `tone?: "neutral" \| "outline" \| "error" \| "danger" \| "warning" \| "success" \| "info"`, `size?: "xs" \| "sm" \| "md"`, `shape?: "default" \| "pill"`, `className?`; DOM props | Presentation only; wrap it in a `Button` to make it clickable. |
+| `Callout` | 1.0 | `severity`, `children?`, `title?`, `action?`, `actionPlacement?: "inline" \| "below"` (1.2), `onDismiss?` (1.2), `dismissLabel?` (1.2), `variant?: "box" \| "strip"` (1.2), `icon?`, `size?: "default" \| "compact"`, `className?`; DOM props except `title` | An inline message whose glyph and tint follow `severity`. `strip` is the full-width band across the top of a pane or popover: `title` is its headline and `children` one line under it; a strip never stands green (`success` draws neutral with the check glyph) and forwards only `role`, `aria-live` and `data-testid`. `icon` replaces the info mark on `neutral` only. Since 1.2 `role="alert"` or `role="status"` reaches the root for a message that should be announced. |
+| `SeverityIcon` | 1.1 | `severity`, `size?` (16), `"aria-label"?`, `className?` | The one glyph per severity: error ✕-circle, warning triangle, danger octagon, success check, info and neutral `i`. Label it when the glyph is the only statement of the severity. |
+| `Spinner` | 1.0 | `size?: "xs" \| "sm" \| "md" \| "lg" \| "xl" \| "2xl"`, `className?` | Decorative: say what is loading in text beside it. |
+| `SpinningIcon` | 1.0 | `icon` (a name), `active`, `size?` (16), `className?` | Spins while `active` and always finishes at least one full turn before stopping. |
+| `ProgressBar` | 1.1 | `value?: number \| null` (0–1), `indeterminate?`, `label`, `valueText?`, `size?: "default" \| "thin"`, `className?` | Always neutral. Omitted or `null` `value` is indeterminate. `thin` is 2 px. |
+| `Skeleton` | 1.0 | `children?`, `label?` ("Loading"), `className?` | The accessible loading region; put `SkeletonBone` and `SkeletonText` inside. |
+| `SkeletonBone` | 1.0 | `className?`, `heightPx?`, `shimmer?`, `immediate?` (1.2) | One placeholder shape. Appears after a short delay to avoid flicker; `immediate` skips it, for a placeholder that replaces content already on screen. |
+| `SkeletonText` | 1.0 | `lines?` (3), `shimmer?`, `immediate?` (1.2), `className?` | Ragged placeholder lines. |
+| `SkeletonHint` | 1.2 | `message?`, `onCancel?`, `onRetry?`, `firstThreshold?` (8000), `secondThreshold?` (13000), `actionThreshold?` (20000), `className?` | Invisible for 8 s, then "Still working…", then escalates, offering Cancel with the first hint and Retry once the wait is long. Place it beside the `Skeleton`, never inside it — both are live regions. |
+| `EmptyState` | 1.0 | `title`, `variant?: "zero-data" \| "filtered-empty" \| "user-cleared"`, `scale?: "canvas" \| "sidebar" \| "popover"`, `description?` (canvas only), `icon?`, `action?`, `className?` | `zero-data` invites an action; `filtered-empty` has no icon; `user-cleared` has no description or action. |
+| `PaneState` | 1.1 | `kind: "loading" \| "empty" \| "error"`, `title`, `description?`, `icon?` (empty only), `action?`, `onRetry?` (error only), `retryLabel?`, `onCancel?` (loading only), `className?` | A whole pane's state in Daintree's pane frame. `loading` stays blank for 400 ms, then shows a spinner and the title; `error` is announced and draws Retry when `onRetry` is given. For an error inside content that still renders, use `Callout`. |
+
+### Text, keys and people
+
+| Export | Since | Props | Notes |
+| --- | --- | --- | --- |
+| `Markdown` | 1.0 | `source`, `basePath?`, `rootPath?`, `className?`, `fontSize?: "2xs" \| "xs" \| "sm" \| "base" \| "lg" \| "xl" \| "2xl" \| "3xl"` | Daintree's own renderer: GFM, highlighted fences, the app's document typography. Raw HTML is dropped, never rendered, so untrusted text is safe. `http(s)` and `mailto` links open in the browser; relative links open in the file viewer and relative images load from disk while they stay inside `rootPath` (default: the directory `basePath` resolves to; a `basePath` ending in a Markdown extension is read as the document itself). |
+| `Kbd` | 1.0 | `children`, `density?: "default" \| "compact"` (1.2), `className?` | One literal key cap. |
+| `KbdChord` | 1.0 | `shortcut`, `density?: "default" \| "compact" \| "bare"`, `foreground?: "secondary" \| "primary" \| "inverse"`, `"aria-label"?`, `className?` | A combo such as `"Cmd+Shift+P"` or a two-step `"Cmd+K T"`, drawn with the platform's glyphs and spoken in words. `bare` drops the key boxes where every row has a binding. |
+| `Tooltip` | 1.0 | `children: ReactElement`, `content`, `side?`, `align?`, `delayDuration?`, `disabled?` | A hover card on one child that accepts a ref and DOM props. Empty, `null` or `false` content renders the child alone. The child shows while the kit loads. |
+| `TruncatedTooltip` | 1.0 | `children: ReactElement`, `content`, `side?`, `align?`, `focusable?` (true), `isTruncated?` (1.2) | Opens only while the child's `truncate` text is cut off. `focusable={false}` inside a row that already owns the keyboard. `isTruncated` overrides the overflow check for text your code shortens itself. |
+| `Avatar` | 1.2 | `name`, `src?`, `size?: "xs" \| "sm" \| "md" \| "lg"` (16/20/24/32 px, default `sm`), `shape?: "circle" \| "square"`, `tooltip?`, `decorative?`, `className?` | Falls back to initials when there is no `src` or it fails to load. `square` says "bot or app, not a person"; `decorative` hides it from assistive tech beside the name in text. |
+
+### Overlays
+
+| Export | Since | Props | Notes |
+| --- | --- | --- | --- |
+| `Dialog` | 1.0 | `open`, `onClose`, `title`, `icon?`, `description?`, `children?`, `size?: "sm" \| "md" \| "lg"`, `primaryAction?`, `secondaryAction?`, `hint?`, `footer?` (1.2), `dismissible?` (true), `layer?: "default" \| "nested"` (1.2), `"data-testid"?` (1.2) | A modal with a title bar, scrolling body and footer. Actions are `{ label, onClick, disabled?, disabledReason? (1.2), loading?, intent?: "default" \| "destructive", icon? (1.2) }`; a disabled action stays focusable and announced unavailable, and a disabled primary's `disabledReason` shows as the footer hint when the dialog has none. `footer` replaces the two actions with your own right-aligned kit `Button`s, the primary last and `contrast`. `dismissible={false}` blocks Escape, the backdrop and the close button. `icon` accepts an element since 1.2. |
+| `ConfirmDialog` | 1.0 | `open`, `onClose`, `onConfirm: () => void \| Promise<void>`, `title`, `description?`, `children?`, `confirmLabel`, `cancelLabel?`, `variant?: "default" \| "destructive" \| "info"`, `icon?`, `loading?`, `confirmDisabled?`, `typedNameTarget?`, `hint?` (1.2), `layer?` (1.2) | The one confirm-or-cancel shape. `confirmLabel` is a verb-noun ("Delete branch"), never "OK". `loading` puts a spinner on the confirm and locks the dialog. On a `destructive` dialog, `typedNameTarget` makes the user type that exact text to enable the confirm. |
+| `Popover` | 1.2 | `trigger: ReactElement`, `children?`, `side?`, `align?`, `open?`, `defaultOpen?`, `onOpenChange?`, `width?: "sm" \| "md" \| "lg" \| "trigger" \| "auto"`, `padding?: "default" \| "none"`, `"aria-label"?`, `onCloseAutoFocus?` | A floating panel for a filter, picker or detail card. Focus moves in on open and back to the trigger on close; Escape and an outside click close it. Widths are 14, 18 (default) and 24 rem, the trigger's width, or the content's. The trigger shows while the kit loads. |
+| `PopoverSearchField` | 1.2 | `value`, `onValueChange?`, `onClear?`, `placeholder?`, `"aria-label"?`, `clearLabel?`, `autoFocus?`, `disabled?`; DOM props | The full-width search strip at the top of a filtering `Popover` with `padding="none"`. Controlled only. Anywhere else, use `SearchField`. |
+
+### Lists and tables
+
+| Export | Since | Props | Notes |
+| --- | --- | --- | --- |
+| `VirtualList<T>` | 1.1 | `items?` or `count?`, `renderItem(index, item)`, `itemKey?(index, item)`, `estimatedItemSize?` (28), `overscan?` (8), `onEndReached?(lastIndex)`, `activeIndex?`, `shadows?` (1.2), `"aria-label"`, `className?`; DOM props | Mounts only the rows in view, so ten thousand items cost what forty do. It fills its container's height, so give the container one. Without `itemKey` rows key by index and remount when the list reorders. DOM props land on the element that holds the rows, except `style` and `ref`, which the virtualiser owns there; spread `useListNavigation().containerProps` for a keyboard listbox, and the list then takes focus on its scroller (the size of the viewport) rather than the row element. Without a `role` it is a plain list. `shadows` adds `ScrollShadow`'s edge fades. |
+| `DataTable<T>` | 1.1 | `columns`, `rows`, `rowKey: ((row, index) => string \| number) \| string`, `sort?: { columnId, direction: "asc" \| "desc" } \| null`, `onSortChange?`, `onRowClick?(row, index)`, `selectedRowKey?`, `empty?`, `estimatedRowSize?` (28), `onEndReached?`, `"aria-label"`, `className?` | A sticky header over an always-virtualised body that fills its container. Columns are `{ id, header, width?, align?, sortable?, render?(row, index) }`; without `render` a cell shows `row[id]` when that is a string or number. Sorting is controlled: the table reports `onSortChange` (ascending first, then flipping) and you sort `rows`. With `onRowClick` it is a keyboard grid: one tab stop, Up/Down/Home/End, Enter. |
+| `LogView` | 1.1 | `lines: (string \| { text, severity? })[]`, `maxLines?` (5000), `follow?` (true), `monospace?` (true), `wrap?` (true), `"aria-label"`, `className?` | A bounded, virtualised log that stays pinned to the newest line while the reader is at the bottom. It bounds the DOM, not your array: append in batches (`useStreamBuffer`) and drop old lines yourself if you keep them in state. |
+| `ListRow` | 1.1 | `title`, `subtitle?`, `icon?`, `meta?`, `selected?`, `onSelect?`, `disabled?`, `className?`; DOM props except `title` | A row with Daintree's highlight. Spread `getRowProps(index)` into it for a keyboard listbox; otherwise, with `onSelect`, it is a button, and without, a plain row. In a listbox, report disabled rows through `useListNavigation`'s `isDisabled` too. |
+| `ScrollShadow` | 1.0 | `children`, `className?` (the frame; size it here), `scrollClassName?` (the scroller; pad it here), `compact?`, `ref?` (the scroller); DOM props | A vertical scroller with fades that show there is more. Since 1.2 DOM props land on the scrolling element, so it can be a listbox. For a windowed list use `VirtualList` with `shadows`. |
+
+`useListNavigation(options)` (1.1) is the keyboard model of a list: one tab stop, Up/Down/Home/End move the cursor, Enter or Space selects, typing jumps when `getLabel` is given. Options are `count`, `onSelect?(index)`, `loop?` (false), `initialIndex?` (0), `getLabel?(index)` and `isDisabled?(index)` (rows the cursor, typeahead, Enter, Space and clicks all skip; 1.2). It returns `{ activeIndex, setActiveIndex, containerProps, getRowProps }`: `containerProps` is `{ role: "listbox", tabIndex: 0, "aria-activedescendant", onKeyDown }`, and `getRowProps(index)` is `{ id, role: "option", "aria-selected", "aria-disabled"?, onClick, onPointerMove }`. `activeIndex` is `-1` for an empty list.
+
+### Pane chrome
+
+| Export | Since | Props | Notes |
+| --- | --- | --- | --- |
+| `PaneHeader` | 1.1 | `title`, `icon?`, `subtitle?`, `actions?`, `className?` | A pane's compact title bar. `subtitle` is one quiet line (a count, a path, a filter in effect); `actions` is usually a `Toolbar`. |
+| `Toolbar` | 1.1 | `children?`, `"aria-label"`, `variant?: "inline" \| "bar"`, `className?` | A row of controls that is one tab stop, Left/Right between them. `bar` draws a pane's toolbar strip; `inline` (the default) is the bare group for inside a `PaneHeader`. |
+| `ToolbarButton` | 1.1 | `icon?`, `label?`, `"aria-label"?`, `onClick?`, `pressed?`, `expanded?`, `disabled?`, `tooltip?: ReactNode \| false`, `tooltipSide?: "top" \| "bottom"` | Icon-only (its `aria-label` doubles as the tooltip) or, with `label`, an icon and a word. `pressed` is a toggle, `expanded` a disclosure; never both. Disabled buttons stay in the arrow-key order and ignore clicks. |
+| `Tabs` | 1.1 | `items: { value, label, icon?, badge? }[]`, `value`, `onValueChange`, `"aria-label"`, `children?: ReactNode \| ((value) => ReactNode)`, `content?: Record<string, ReactNode>`, `density?: "page" \| "strip"`, `className?`, `panelClassName?` | Switches between panes of content; for a value picker use `SegmentedControl`. Arrow keys and Home/End move and select. A number `badge` draws a count pill. |
+
+### Settings grammar
+
+A settings view is a stack of `SettingsSection`s, each holding `SettingsGroup`s of `SettingsRow`s — the same section → group → row grammar Daintree's own settings pages use.
+
+| Export | Since | Props | Notes |
+| --- | --- | --- | --- |
+| `SettingsSection` | 1.1 | `title`, `description?`, `action?`, `badge?`, `id?`, `children?` | Sentence-case title, no icon. `action` is one control on the heading's right; `badge` a short tag ("Beta"). |
+| `SettingsGroup` | 1.1 | `label?`, `id?`, `children?` | One surface of related rows split by hairlines. `label` sits above it when a section has more than one group. |
+| `SettingsRow` | 1.1 | `label`, `description?`, `control?: ReactNode \| ((ids) => ReactNode)`, `layout?: "inline" \| "stacked"`, `accessory?`, `disabled?`, `disabledReason?`, `error?`, `isModified?`, `onReset?`, `id?` | Words on the left, control on the rail. A function `control` receives `{ labelId, descriptionId, disabled }` to wire as `aria-labelledby` / `aria-describedby`. `stacked` for paths, code and lists. `isModified` draws the modified-from-default mark, and with `onReset` a reset button. |
+| `SettingsActions` | 1.1 | `children?`, `status?` | The explicit-save row at the end of a group: actions right-aligned (`contrast` Save, `outline` others, all `size="sm"`), and a politely announced status on the left. |
+
+### Icons
+
+`Icon` draws one of Daintree's own icons by name: `name`, `size?` (16 px; inside a kit `Button` the button sizes it), `className?`, `"aria-label"?` (omitted, the icon is decorative and `aria-hidden`). An unknown name renders nothing, with a warning in development, rather than throwing. The set only grows. The names are Lucide-style kebab-case, plus two Daintree concepts, `worktree` (a git worktree) and `daintree` (the app's mark):
+
+`activity`, `alert-octagon`, `alert-triangle`, `arrow-down`, `arrow-left`, `arrow-right`, `arrow-up`, `arrow-up-right`, `at-sign`, `bell`, `bell-dot`, `book-open`, `bookmark`, `bot`, `braces`, `bug`, `calendar`, `chart-column`, `chart-line`, `chart-pie`, `check`, `check-square`, `chevron-down`, `chevron-left`, `chevron-right`, `chevron-up`, `chevrons-up-down`, `circle-check`, `circle-dashed`, `circle-dot`, `circle-slash`, `circle-x`, `clipboard`, `clock`, `cloud`, `cloud-off`, `code`, `copy`, `daintree`, `database`, `download`, `external-link`, `eye`, `eye-off`, `file`, `file-code`, `file-diff`, `file-plus`, `file-text`, `file-warning`, `filter`, `flame`, `flask`, `folder`, `folder-code`, `folder-open`, `folder-search`, `folder-tree`, `folder-x`, `gauge`, `git-branch`, `git-branch-plus`, `git-commit`, `git-compare`, `git-fork`, `git-merge`, `git-merge-conflict`, `git-pull-request`, `git-pull-request-closed`, `git-pull-request-draft`, `globe`, `grip-vertical`, `hash`, `help`, `history`, `home`, `hourglass`, `image`, `import`, `inbox`, `info`, `key`, `layers`, `layout-grid`, `layout-panel-top`, `lightbulb`, `link`, `list`, `list-checks`, `list-todo`, `loader`, `lock`, `mail`, `maximize`, `menu`, `message-square`, `minimize`, `minus`, `monitor`, `monitor-play`, `more-horizontal`, `more-vertical`, `mouse-pointer`, `notebook`, `package`, `panel-left`, `panel-right`, `panel-right-close`, `panel-right-open`, `paperclip`, `pause`, `pencil`, `pin`, `pin-off`, `play`, `plug`, `plus`, `puzzle`, `redo`, `refresh`, `rocket`, `rotate-ccw`, `rotate-cw`, `save`, `search`, `send`, `server`, `settings`, `share`, `shield`, `sliders`, `sort`, `sparkles`, `square`, `square-dashed-mouse-pointer`, `star`, `sticky-note`, `table`, `tag`, `target`, `terminal`, `trash`, `undo`, `unlink`, `unlock`, `unplug`, `upload`, `user`, `user-plus`, `users`, `wifi-off`, `workflow`, `worktree`, `wrench`, `x`, `zap`.
+
+`PluginIconName` in `shared/types/plugin-sdk-react.ts` is the authoritative list. For a glyph that is not in it, pass your own `<svg>` element to a prop that takes a `PluginIconSource`. Importing `lucide-react` bundles it into the view, which `daintree-plugin lint` flags.
+
+## Theme
+
+For styling DOM, use the theme's utility classes and CSS variables (`bg-surface-panel`, `text-text-secondary`, `var(--theme-border-default)`); they follow the theme with no re-render, and [Views](./views.md) lists the vocabulary. The theme readers are for code that cannot use CSS — a canvas, WebGL, a chart library that takes colours as values:
+
+| Export | Behaviour |
+| --- | --- |
+| `useDaintreeTheme()` | The active theme; re-renders the component when it changes. |
+| `getDaintreeTheme()` | The same, outside React. Cheap to call often: tokens are resolved once per theme change and the same frozen object returns until the next one. |
+| `onDidChangeDaintreeTheme(listener)` | Calls `listener(theme)` after every theme change. Returns a function that stops it. |
+
+Each returns `{ colorMode, themeId, tokens }`, with `colorMode` either `"dark"` or `"light"`. `themeId` is a built-in id such as `"daintree"` or a custom theme's id. `tokens` maps each key to a concrete sRGB colour — `#rrggbb` when opaque, `rgba(r, g, b, a)` when not — that parses anywhere, including WebGL; a value the theme uses `oklch()` or `color-mix()` for is resolved first. A key the document does not define reads as `""`, so give extended tokens a fallback: `theme.tokens["syntax-keyword"] || "#c678dd"`. The object is replaced on a change, never mutated.
+
+| Group | Tier | Keys |
+| --- | --- | --- |
+| Surfaces | Core | `surface-{grid,sidebar,canvas,panel,panel-elevated,input,inset,hover,active}` |
+| Text | Core | `text-{primary,secondary,muted,placeholder,inverse,link}` |
+| Borders | Core | `border-{default,subtle,strong,divider,interactive}` |
+| Accent | Core | `accent-{primary,foreground,hover,soft,muted}`, `focus-ring` |
+| Status | Core | `status-{success,warning,danger,info}` |
+| Agent activity | Extended | `activity-{active,idle,working,waiting}` |
+| Terminal | Extended | `terminal-{background,foreground,muted,cursor,selection}`, and the ANSI colours `terminal-{black,red,green,yellow,blue,magenta,cyan,white}` with their `terminal-bright-*` pairs |
+| Syntax | Extended | `syntax-{comment,punctuation,number,string,operator,keyword,function,link,quote}` |
+| Categories | Extended | `category-{blue,purple,cyan,green,amber,orange,teal,indigo,rose,pink,violet,slate}`, a 12-hue ramp for charts and tags |
+
+## Formatters
+
+The same formatting Daintree's own surfaces use, so a plugin's times and sizes read like the app's:
+
+| Export | Output |
+| --- | --- |
+| `formatTimeAgo(value, now?)` | "just now", "5m ago", "11d ago", then the date past 30 days |
+| `formatRelativeTime(value, now?)` | "5 minutes ago", "in 3 hours", then the date past 30 days |
+| `formatBytes(bytes)` | 1024 steps: "0 B", "1.5 KB", "3 MB" |
+| `formatCount(count)` | Exact below 1,000, then "1.2k", "23k", "1.2M"; truncates, never rounds up |
+| `formatDuration(ms)` | "45s", "12m", "3h 5m", "2d 4h" |
+
+`value` is a timestamp in milliseconds, an ISO string or a `Date`. Pair the relative formatters with `useNow()` from `@daintreehq/plugin-sdk/react`, so every time on screen turns over together on one shared timer.
+
+## Builtins draw through the kit
+
+Daintree's built-in plugins (GitHub, GitLab, the Markdown editor, the SvelteKit site builder) render through this same public kit rather than importing the host's internal components, so every gap a third-party plugin would hit shows up in a first-party one first, and the kit is what gets fixed. An ESLint rule in `eslint.config.js` enforces it: in `plugins/builtin/*/renderer/**`, importing any host UI export the kit covers — `Button`, `Select`, `Dialog`, `Popover`, the settings rows and the rest, listed export by export — is an error with "Use the equivalent from @daintreehq/plugin-ui."
+
+A builtin that still needs a covered export gets an exception scoped to one file and exactly those export names, and the block's `name` records the kit gap that forces it (a `Popover` with no anchor, a `Select` whose options cannot carry item markup, and so on). A contract test (`src/components/ui/__tests__/bundledPluginPrimitives.contract.test.ts`) reads those blocks and fails any exception the file no longer uses, so an exception disappears the moment the kit closes its gap. Tests and preview harnesses are exempt; they are not the plugin's runtime.
+
+## Checking a view against the kit
+
+`daintree-plugin lint` points at hand-rolled versions of kit controls — `raw-button`, `raw-form-control`, `native-title-tooltip`, `inline-svg-icon`, `lucide-react-import`, `hand-rolled-spinner`, `hand-rolled-badge`, `native-dialog-in-view` — and at classes that compile to nothing against the design contract. The Styles tab in Settings → Plugins runs the same class check against a running view. See [Development loop → Lint](./dev-loop.md#daintree-plugin-lint-dir).
