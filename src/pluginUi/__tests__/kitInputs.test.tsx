@@ -302,7 +302,7 @@ describe("NumberInput", () => {
     expect(screen.getByRole("spinbutton", { name: "Port" })).toBeTruthy();
   });
 
-  it("lays the value, unit and buttons side by side, the value keeping room for six digits", () => {
+  it("lays the value, unit and buttons side by side, and gives way at the unit, never past the frame", () => {
     render(
       createElement(kit.NumberInput, {
         "aria-label": "Seats",
@@ -314,19 +314,23 @@ describe("NumberInput", () => {
     const frame = value.parentElement!;
     const unit = frame.querySelector("[data-number-unit]")!;
     const stepper = frame.querySelector("[data-number-stepper]")!;
+    const classes = (el: Element) => el.className.split(" ");
     // One flex row in the frame, in reading order; nothing is drawn over the text.
-    expect(frame.className.split(" ")).toContain("flex");
+    expect(classes(frame)).toContain("flex");
     expect(Array.from(frame.children)).toEqual([value, unit, stepper]);
     for (const part of [value, unit, stepper]) {
       expect(part.className).not.toMatch(/\babsolute\b/);
       expect(part.getAttribute("style")).toBeNull();
     }
-    // The text takes the room left over but never gives up its six-digit floor;
-    // the unit and the buttons never shrink into it.
-    expect(value.className.split(" ")).toContain("flex-1");
-    expect(value.className).toMatch(/min-w-\[calc\(6ch\+/);
-    expect(unit.className.split(" ")).toContain("shrink-0");
-    expect(stepper.className.split(" ")).toContain("shrink-0");
+    // Nothing paints outside the field's border, however narrow the column.
+    expect(classes(frame)).toContain("overflow-hidden");
+    // The text takes the room left over and keeps a digit floor of its own.
+    expect(classes(value)).toContain("flex-1");
+    expect(value.className).toMatch(/min-w-\[calc\(\d+ch\+/);
+    // The unit is the part that gives way, with an ellipsis; the buttons never do.
+    expect(classes(unit)).toEqual(expect.arrayContaining(["min-w-0", "truncate"]));
+    expect(classes(unit)).not.toContain("shrink-0");
+    expect(classes(stepper)).toContain("shrink-0");
   });
 
   it("keeps the Input's height at both densities", () => {
