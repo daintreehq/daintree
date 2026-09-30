@@ -21,7 +21,9 @@ export const CLOSE_CONFIRM_AGENT_STATES: ReadonlySet<AgentState> = new Set(["wor
  * even one it launched (#12881). Wider than CLOSE_CONFIRM_AGENT_STATES, which
  * gates a person's own close: an agent parked at "waiting" is mid-conversation
  * with whoever is driving it, and the assistant closing it takes that
- * conversation away without anyone having finished it.
+ * conversation away without anyone having finished it. The exception is an
+ * agent that handed back what the assistant asked for, untouched since
+ * (#13128) — see `closeNeedsApproval`.
  */
 export const ASSISTANT_CLOSE_CONFIRM_AGENT_STATES: ReadonlySet<AgentState> = new Set([
   "working",

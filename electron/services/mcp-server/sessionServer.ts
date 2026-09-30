@@ -26,7 +26,11 @@ import {
   type BatchItemOutcome,
   type TerminalCloseManyArgs,
 } from "../../../shared/types/mcpBatch.js";
-import { ASSISTANT_CLOSE_CONFIRM_AGENT_STATES } from "../../../shared/types/agent.js";
+import {
+  ASSISTANT_CLOSE_CONFIRM_AGENT_STATES,
+  type AgentState,
+} from "../../../shared/types/agent.js";
+import type { TerminalHandback } from "../../../shared/types/handback.js";
 import { dispatchCarriesRecipeId } from "../../../shared/utils/dispatchRecipeId.js";
 import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
 import {
@@ -844,6 +848,26 @@ export function validateDisplayImageUrl(
   return { valid: true };
 }
 
+/** The pty-host's observations about one terminal that decide the assistant's close. */
+export interface TerminalCloseContext {
+  /** Absent for a terminal with no agent attached. */
+  agentState?: AgentState;
+  lastHandback?: Pick<TerminalHandback, "observedAt">;
+  lastTypedInputAt?: number;
+}
+
+/**
+ * Whether the agent printed the handback it was asked for and nothing has been
+ * typed into it since (#13128). A tie asks: a millisecond clock cannot order
+ * the two.
+ */
+export function isHandedBackUntouched(context: TerminalCloseContext): boolean {
+  const observedAt = context.lastHandback?.observedAt;
+  if (typeof observedAt !== "number" || !Number.isFinite(observedAt)) return false;
+  const typedAt = context.lastTypedInputAt;
+  return typedAt === undefined || typedAt < observedAt;
+}
+
 export interface SessionServerDeps extends OwnedMainExecutors {
   sessionStore: SessionStore;
   /**
@@ -973,15 +997,14 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   isTerminalIdInUse: (terminalId: string) => boolean;
   /**
-   * The pty-host's own agent state for a terminal (#12881): `null` for an id
-   * it does not track, such as a browser panel. Rejects when the state cannot
-   * be read. Asked rather than the AgentAvailabilityStore mirror, which each
-   * window's startup replaces with an empty one, so a missing entry there says
-   * nothing about the agent. Absent, every close of a busy-capable panel asks.
+   * What the pty-host itself observed about a terminal, for the assistant's
+   * close (#12881, #13128): `null` for an id it does not track, such as a
+   * browser panel. Rejects when the terminal cannot be read. Asked rather than
+   * the AgentAvailabilityStore mirror, which each window's startup replaces
+   * with an empty one, so a missing entry there says nothing about the agent.
+   * Absent, every close of a busy-capable panel asks.
    */
-  readTerminalAgentState?: (
-    terminalId: string
-  ) => Promise<import("../../../shared/types/agent.js").AgentState | null>;
+  readTerminalCloseContext?: (terminalId: string) => Promise<TerminalCloseContext | null>;
   /**
    * Whether a terminal belongs to the workspace of this session's pinned view,
    * re-resolved on every call (#12883). What admits Daintree's own assistant to
@@ -1209,7 +1232,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     resolveOwnPane,
     requestApproval,
     requestCloseApproval,
-    readTerminalAgentState,
+    readTerminalCloseContext,
   } = deps;
 
   /**
@@ -1512,13 +1535,21 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
      * A hand-over does not count as creation: it lends the right to drive an
      * agent, not to discard it. Anything unknown asks: no ownership record, or
      * an agent state that could not be read.
+     *
+     * One `waiting` agent is finished rather than mid-conversation (#13128):
+     * it printed the handback this session asked for, and nothing has been
+     * typed into it since. The pty-host drops the handback when a later prompt
+     * is submitted, so one still present answers the latest submission.
      */
     const closeNeedsApproval = async (terminalId: string): Promise<boolean> => {
       if (ownedRecordFor("terminal", terminalId) === undefined) return true;
-      if (readTerminalAgentState === undefined) return true;
+      if (readTerminalCloseContext === undefined) return true;
       try {
-        const state = await readTerminalAgentState(terminalId);
-        return state !== null && ASSISTANT_CLOSE_CONFIRM_AGENT_STATES.has(state);
+        const context = await readTerminalCloseContext(terminalId);
+        const state = context?.agentState;
+        if (context === null || state === undefined) return false;
+        if (!ASSISTANT_CLOSE_CONFIRM_AGENT_STATES.has(state)) return false;
+        return !(state === "waiting" && isHandedBackUntouched(context));
       } catch {
         return true;
       }

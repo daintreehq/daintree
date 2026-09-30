@@ -132,7 +132,8 @@ export interface TerminalPublicState {
   /**
    * The most recent handback marker seen for a request this terminal held
    * (#12488). Set in `AgentStateService` at a settle out of `working`; cleared
-   * on respawn; ephemeral (not persisted). An observation of printed text, not
+   * on respawn and when a later submission reaches the pty (#13128);
+   * ephemeral (not persisted). An observation of printed text, not
    * a completion verdict — see `TerminalHandback`.
    */
   lastHandback?: TerminalHandback;

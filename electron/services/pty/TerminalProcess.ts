@@ -38,7 +38,7 @@ import type { TerminalSubmissionRecord } from "../../../shared/types/terminalSub
 import { AgentOutputForwarder } from "./AgentOutputForwarder.js";
 import { TerminalInputController } from "./TerminalInputController.js";
 import { HandbackTracker } from "./HandbackTracker.js";
-import { findHandback, rawHandbackText } from "./HandbackDetector.js";
+import { findHandback, keepFirstObservation, rawHandbackText } from "./HandbackDetector.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
@@ -1345,6 +1345,10 @@ export class TerminalProcess {
    * `handbackCode` is the code minted for a submission that asked for a
    * handback (#12488); its instruction is already in `text`. A terminal that
    * never asked keeps no tracker, so its submits pay one property read.
+   *
+   * A submission that reaches the pty drops the last handback: it answered an
+   * earlier prompt, and the assistant's close reads its presence as the agent
+   * having finished the latest one (#13128).
    */
   submit(
     text: string,
@@ -1355,7 +1359,12 @@ export class TerminalProcess {
   ): void {
     const tracker =
       handbackCode !== undefined ? this.ensureHandbackTracker() : this.terminalInfo.handbackTracker;
-    const onPtyWritten = tracker?.noteSubmission(handbackCode, token);
+    const onTrackerWritten = tracker?.noteSubmission(handbackCode, token);
+    const onPtyWritten = (): void => {
+      this.terminalInfo.lastHandback = undefined;
+      this.terminalInfo.lastHandbackUnpublished = false;
+      onTrackerWritten?.();
+    };
     this.inputController.submit(text, token, onPtyWritten, guard, imagePaths);
   }
 
@@ -2161,11 +2170,12 @@ export class TerminalProcess {
     // reported, or the code would stay open until the next submission.
     if (t.agentState !== "working") tracker.retire(hit.code);
     if (!changed) return;
-    t.lastHandback = hit.handback;
+    const handback = keepFirstObservation(t.lastHandback, hit.handback);
+    t.lastHandback = handback;
     t.lastHandbackUnpublished = true;
     events.emit("agent:handback-observed", {
       terminalId: this.id,
-      handback: hit.handback,
+      handback,
       code: hit.code,
       timestamp: now,
     });

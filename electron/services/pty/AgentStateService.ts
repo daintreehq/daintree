@@ -16,7 +16,12 @@ import type { AgentActivityObservationResult } from "./AgentActivityTemperature.
 import type { TerminalInfo } from "./types.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import { checkResultsEqual, detectCheckResult } from "./CheckResultDetector.js";
-import { findHandback, rawHandbackText, type HandbackHit } from "./HandbackDetector.js";
+import {
+  findHandback,
+  keepFirstObservation,
+  rawHandbackText,
+  type HandbackHit,
+} from "./HandbackDetector.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 
@@ -503,7 +508,7 @@ export class AgentStateService {
 
     const delivered = tracker.deliveredRequests();
     if (delivered.length === 0) return undefined;
-    return findHandback(
+    const hit = findHandback(
       [
         { read: () => tracker.screenText(), rendered: true },
         { read: () => rawHandbackText(terminal.semanticBuffer), rendered: false },
@@ -511,6 +516,8 @@ export class AgentStateService {
       delivered,
       timestamp
     );
+    if (hit === undefined) return undefined;
+    return { ...hit, handback: keepFirstObservation(terminal.lastHandback, hit.handback) };
   }
 
   /**

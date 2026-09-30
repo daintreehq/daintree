@@ -19,7 +19,7 @@ import {
   VIEWLESS_MAIN_PROCESS_TOOLS,
 } from "../sessionServer.js";
 import { MCP_SURFACE_TOOL_ID } from "../surfaceManifest.js";
-import type { SessionServerDeps } from "../sessionServer.js";
+import type { SessionServerDeps, TerminalCloseContext } from "../sessionServer.js";
 import type { SessionStore } from "../sessionStore.js";
 import type { McpSessionOrigin } from "../../../../shared/types/ipc/mcpServer.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
@@ -1437,7 +1437,7 @@ describe("terminal notices", () => {
     it("drops the pane's own notice for a terminal it closes", async () => {
       const { deps, terminalNotify, start } = notifyDeps(
         { origin: "help" },
-        { readTerminalAgentState: vi.fn(async () => null) }
+        { readTerminalCloseContext: vi.fn(async () => null) }
       );
       // One the session launched, idle, so the close runs without asking (#12881).
       deps.sessionStore.resourceOwnership.record("session-close-forgets", [
@@ -11066,10 +11066,16 @@ describe("assistant close approval (#12881)", () => {
   function closeDeps(
     origin: string,
     requestCloseApproval: SessionServerDeps["requestCloseApproval"] | undefined,
-    agentStates: Record<string, AgentState> = {}
+    agentStates: Record<string, AgentState | TerminalCloseContext> = {}
   ) {
     const sessionStore = fakeSessionStore("core");
-    const readTerminalAgentState = vi.fn(async (id: string) => agentStates[id] ?? null);
+    const readTerminalCloseContext = vi.fn(
+      async (id: string): Promise<TerminalCloseContext | null> => {
+        const entry = agentStates[id];
+        if (entry === undefined) return null;
+        return typeof entry === "string" ? { agentState: entry } : entry;
+      }
+    );
     const dispatchAction = vi.fn(async (_id: string, args: unknown) => ({
       result: {
         ok: true as const,
@@ -11079,7 +11085,7 @@ describe("assistant close approval (#12881)", () => {
     const deps = fakeDeps({
       sessionStore,
       dispatchAction,
-      readTerminalAgentState,
+      readTerminalCloseContext,
       ...(requestCloseApproval !== undefined ? { requestCloseApproval } : {}),
     });
     const start = async (sessionId: string, owned: string[] = []) => {
@@ -11097,7 +11103,7 @@ describe("assistant close approval (#12881)", () => {
       await server.connect(makeMockTransport());
       return server;
     };
-    return { dispatchAction, readTerminalAgentState, start };
+    return { dispatchAction, readTerminalCloseContext, start };
   }
 
   it("asks before the assistant closes a panel it did not open, then closes it", async () => {
@@ -11161,6 +11167,109 @@ describe("assistant close approval (#12881)", () => {
     }
   );
 
+  describe("once its handback arrives (#13128)", () => {
+    const handback = { observedAt: 2_000 };
+
+    it("closes its own waiting panel that handed back, untouched since, without asking", async () => {
+      const requestCloseApproval = vi.fn();
+      const { dispatchAction, start } = closeDeps("help", requestCloseApproval, {
+        "t-own": { agentState: "waiting", lastHandback: handback, lastTypedInputAt: 1_000 },
+      });
+      const server = await start("s-close-handed-back", ["t-own"]);
+
+      await callTool(server, { name: "terminal.close", arguments: { terminalId: "t-own" } });
+
+      expect(requestCloseApproval).not.toHaveBeenCalled();
+      expect(dispatchAction).toHaveBeenCalledWith("terminal.close", { terminalId: "t-own" }, false);
+    });
+
+    it("closes one nobody ever typed into without asking", async () => {
+      const requestCloseApproval = vi.fn();
+      const { dispatchAction, start } = closeDeps("assistant-pane", requestCloseApproval, {
+        "t-own": { agentState: "waiting", lastHandback: handback },
+      });
+      const server = await start("s-close-handed-back-untyped", ["t-own"]);
+
+      await callTool(server, { name: "terminal.close", arguments: { terminalId: "t-own" } });
+
+      expect(requestCloseApproval).not.toHaveBeenCalled();
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ["typed into after the handback", { lastTypedInputAt: 3_000 }],
+      ["typed into in the same millisecond", { lastTypedInputAt: 2_000 }],
+      ["with no handback", { lastHandback: undefined }],
+    ])("asks before closing its own waiting panel %s", async (_label, overrides) => {
+      const requestCloseApproval = vi.fn().mockResolvedValue(approve(["t-own"]));
+      const { start } = closeDeps("help", requestCloseApproval, {
+        "t-own": { agentState: "waiting", lastHandback: handback, ...overrides },
+      });
+      const server = await start("s-close-handed-back-touched", ["t-own"]);
+
+      await callTool(server, { name: "terminal.close", arguments: { terminalId: "t-own" } });
+
+      expect(requestCloseApproval).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks before closing its own panel whose agent is working again", async () => {
+      const requestCloseApproval = vi.fn().mockResolvedValue(approve(["t-own"]));
+      const { start } = closeDeps("help", requestCloseApproval, {
+        "t-own": { agentState: "working", lastHandback: handback },
+      });
+      const server = await start("s-close-handed-back-working", ["t-own"]);
+
+      await callTool(server, { name: "terminal.close", arguments: { terminalId: "t-own" } });
+
+      expect(requestCloseApproval).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks before closing a panel it did not open, even one that handed back", async () => {
+      const requestCloseApproval = vi.fn().mockResolvedValue(approve(["t-user"]));
+      const { start } = closeDeps("help", requestCloseApproval, {
+        "t-user": { agentState: "waiting", lastHandback: handback },
+      });
+      const server = await start("s-close-handed-back-unowned");
+
+      await callTool(server, { name: "terminal.close", arguments: { terminalId: "t-user" } });
+
+      expect(requestCloseApproval).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes several handed-back panels it launched in bulk without asking", async () => {
+      const requestCloseApproval = vi.fn();
+      const { dispatchAction, start } = closeDeps("help", requestCloseApproval, {
+        "t-a": { agentState: "waiting", lastHandback: handback },
+        "t-b": { agentState: "waiting", lastHandback: handback, lastTypedInputAt: 1_500 },
+      });
+      const server = await start("s-close-many-handed-back", ["t-a", "t-b"]);
+
+      await callTool(server, {
+        name: "terminal.closeMany",
+        arguments: { terminalIds: ["t-a", "t-b"] },
+      });
+
+      expect(requestCloseApproval).not.toHaveBeenCalled();
+      expect(dispatchAction).toHaveBeenCalledTimes(2);
+    });
+
+    it("asks once in bulk when one of its panels was typed into after its handback", async () => {
+      const requestCloseApproval = vi.fn().mockResolvedValue(approve(["t-a", "t-b"]));
+      const { start } = closeDeps("help", requestCloseApproval, {
+        "t-a": { agentState: "waiting", lastHandback: handback },
+        "t-b": { agentState: "waiting", lastHandback: handback, lastTypedInputAt: 2_500 },
+      });
+      const server = await start("s-close-many-handed-back-mixed", ["t-a", "t-b"]);
+
+      await callTool(server, {
+        name: "terminal.closeMany",
+        arguments: { terminalIds: ["t-a", "t-b"] },
+      });
+
+      expect(requestCloseApproval).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it.each(["directing", "completed", "exited"] as const)(
     "closes its own panel whose agent is %s without asking",
     async (state) => {
@@ -11179,8 +11288,8 @@ describe("assistant close approval (#12881)", () => {
 
   it("asks when its own panel's agent state cannot be read", async () => {
     const requestCloseApproval = vi.fn().mockResolvedValue(approve(["t-own"]));
-    const { readTerminalAgentState, start } = closeDeps("help", requestCloseApproval);
-    readTerminalAgentState.mockRejectedValue(new Error("pty host gone"));
+    const { readTerminalCloseContext, start } = closeDeps("help", requestCloseApproval);
+    readTerminalCloseContext.mockRejectedValue(new Error("pty host gone"));
     const server = await start("s-close-own-unreadable", ["t-own"]);
 
     await callTool(server, { name: "terminal.close", arguments: { terminalId: "t-own" } });
@@ -11548,7 +11657,7 @@ describe("assistant skip preference (#12874)", () => {
       entries: [makeManifestEntry("terminal.close")],
       extraDeps: {
         requestCloseApproval,
-        readTerminalAgentState: vi.fn(async () => null),
+        readTerminalCloseContext: vi.fn(async () => null),
       },
     });
     await help.server.connect(makeMockTransport());
@@ -11569,7 +11678,7 @@ describe("assistant skip preference (#12874)", () => {
       origin: "help",
       skipped: true,
       entries: [makeManifestEntry("terminal.close")],
-      extraDeps: { readTerminalAgentState: vi.fn(async () => null) },
+      extraDeps: { readTerminalCloseContext: vi.fn(async () => null) },
     });
     help.sessionStore.resourceOwnership.record("s", [{ kind: "terminal", id: "t-own" }]);
     await help.server.connect(makeMockTransport());
@@ -11589,7 +11698,7 @@ describe("assistant skip preference (#12874)", () => {
       entries: [makeManifestEntry("terminal.close"), makeManifestEntry("terminal.closeMany")],
       extraDeps: {
         requestCloseApproval,
-        readTerminalAgentState: vi.fn(async () => null),
+        readTerminalCloseContext: vi.fn(async () => null),
       },
     });
     help.sessionStore.resourceOwnership.record("s", [{ kind: "terminal", id: "t-own" }]);
@@ -11625,7 +11734,7 @@ describe("assistant skip preference (#12874)", () => {
       entries: [makeManifestEntry("terminal.close"), makeManifestEntry("terminal.closeMany")],
       extraDeps: {
         requestCloseApproval,
-        readTerminalAgentState: vi.fn(async () => null),
+        readTerminalCloseContext: vi.fn(async () => null),
       },
     });
     await pane.server.connect(makeMockTransport());
@@ -11652,7 +11761,7 @@ describe("assistant skip preference (#12874)", () => {
       entries: [makeManifestEntry("terminal.close")],
       extraDeps: {
         requestCloseApproval,
-        readTerminalAgentState: vi.fn(async () => null),
+        readTerminalCloseContext: vi.fn(async () => null),
       },
     });
     await help.server.connect(makeMockTransport());
@@ -11676,7 +11785,7 @@ describe("assistant skip preference (#12874)", () => {
       entries: [makeManifestEntry("terminal.close"), makeManifestEntry("terminal.closeMany")],
       extraDeps: {
         requestCloseApproval,
-        readTerminalAgentState: vi.fn(async () => null),
+        readTerminalCloseContext: vi.fn(async () => null),
       },
     });
     await help.server.connect(makeMockTransport());

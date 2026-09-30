@@ -110,6 +110,39 @@ describe("AgentStateService handback detection (#12488)", () => {
     expect(payloads.filter((p) => p.lastHandback !== undefined)).toHaveLength(1);
   });
 
+  it("keeps the first observation of a capture already seen mid-turn (#13128)", () => {
+    const service = new AgentStateService();
+    const early = { message: "fixed the race in the retry loop", observedAt: 1, truncated: false };
+    const terminal = askedTerminal([MARKER], {
+      lastHandback: early,
+      lastHandbackUnpublished: true,
+    });
+    const payloads = capturePayloads();
+
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+    expect(terminal.lastHandback).toBe(early);
+    expect(payloads[0]?.lastHandback).toEqual(early);
+    expect(terminal.handbackTracker?.hasRequests()).toBe(false);
+  });
+
+  it("keeps the first observation when the capture changed since mid-turn", () => {
+    const service = new AgentStateService();
+    const early = { message: "fixed the race", observedAt: 1, truncated: false };
+    const terminal = askedTerminal([MARKER], {
+      lastHandback: early,
+      lastHandbackUnpublished: true,
+    });
+
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+    expect(terminal.lastHandback).toEqual({
+      message: "fixed the race in the retry loop",
+      observedAt: 1,
+      truncated: false,
+    });
+  });
+
   it("publishes nothing for the echoed instruction and keeps waiting", () => {
     const service = new AgentStateService();
     const terminal = askedTerminal([ECHO, "⏺ Looking into it…"]);

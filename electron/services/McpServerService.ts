@@ -370,13 +370,19 @@ export class McpServerService {
       // `getTerminalAsync` answers null for a failed read as well as an unknown
       // id, so the id is checked first: null for a tracked terminal is a read
       // that failed, and the assistant's close must ask rather than assume idle.
-      readTerminalAgentState: async (terminalId) => {
+      readTerminalCloseContext: async (terminalId) => {
         const client = getPtyClient();
         if (!client) throw new Error("The pty host is not available.");
         if (!client.hasTerminal(terminalId)) return null;
         const info = await client.getTerminalAsync(terminalId);
         if (info === null) throw new Error(`Could not read terminal '${terminalId}'.`);
-        return info.agentState ?? null;
+        return {
+          ...(info.agentState !== undefined ? { agentState: info.agentState } : {}),
+          ...(info.lastHandback !== undefined ? { lastHandback: info.lastHandback } : {}),
+          ...(info.lastTypedInputAt !== undefined
+            ? { lastTypedInputAt: info.lastTypedInputAt }
+            : {}),
+        };
       },
       isAgentPaneInWorkspace: (terminalId, workspaceId) =>
         isAgentPaneInWorkspace(getPtyClient(), terminalId, workspaceId),
