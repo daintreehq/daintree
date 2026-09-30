@@ -740,6 +740,65 @@ describe("DeepgramTranscriptionProvider", () => {
     expect(statuses.at(-1)).toBe("idle");
   });
 
+  it("a keyterm-overflow retry while waiting on a connecting stop still flushes the audio", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    void provider.start(BASE_SETTINGS);
+    await Promise.resolve();
+    const firstSocket = latestInstance();
+    provider.sendAudioChunk(new Uint8Array([1, 2, 3]).buffer);
+
+    const stopPromise = provider.stopGracefully();
+    firstSocket.simulateUnexpectedResponse(400);
+    const retrySocket = latestInstance();
+    expect(retrySocket).not.toBe(firstSocket);
+
+    retrySocket.simulateOpen();
+    expect(retrySocket.sent).toEqual([
+      Buffer.from([1, 2, 3]),
+      JSON.stringify({ type: "CloseStream" }),
+    ]);
+    retrySocket.simulateClose(1000);
+    await stopPromise;
+  });
+
+  it("a failed keyterm-overflow retry settles a connecting stop without waiting out the deadline", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const statuses: string[] = [];
+    provider.onEvent((e) => {
+      if (e.type === "status") statuses.push(e.status);
+    });
+    void provider.start(BASE_SETTINGS);
+    await Promise.resolve();
+    const firstSocket = latestInstance();
+    provider.sendAudioChunk(new Uint8Array([1, 2, 3]).buffer);
+
+    const stopPromise = provider.stopGracefully();
+    throwOnConstruct = true;
+    firstSocket.simulateUnexpectedResponse(400);
+    await stopPromise;
+    expect(statuses.at(-1)).toBe("idle");
+  });
+
+  it("start() while waiting on a connecting stop does not tear down the new session", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const statuses: string[] = [];
+    provider.onEvent((e) => {
+      if (e.type === "status") statuses.push(e.status);
+    });
+    void provider.start(BASE_SETTINGS);
+    await Promise.resolve();
+    provider.sendAudioChunk(new Uint8Array([1, 2, 3]).buffer);
+    const stopPromise = provider.stopGracefully();
+
+    const { socket: secondSocket, result } = await bringSessionReady(provider);
+    await stopPromise;
+
+    expect(result).toEqual({ ok: true });
+    expect(secondSocket.closeCalls).toBe(0);
+    expect(statuses.at(-1)).toBe("recording");
+    provider.stop();
+  });
+
   it("stopGracefully while connecting gives up after the connect wait if the socket never opens", async () => {
     const provider = new DeepgramTranscriptionProvider();
     const statuses: string[] = [];

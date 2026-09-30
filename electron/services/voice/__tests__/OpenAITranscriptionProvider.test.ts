@@ -1701,7 +1701,12 @@ describe("OpenAITranscriptionProvider", () => {
         await expect(startPromise).resolves.toEqual({ ok: true });
 
         expect(appendedBytes(socket)).toBe(4_800);
-        expect(commitCount(socket)).toBe(1);
+        expect(socket.sentJson().map((p) => p.type)).toEqual([
+          "session.update",
+          "input_audio_buffer.append",
+          "input_audio_buffer.append",
+          "input_audio_buffer.commit",
+        ]);
         expect(statuses).not.toContain("recording");
         expect(vadWorkers).toHaveLength(0);
 
@@ -1830,7 +1835,7 @@ describe("OpenAITranscriptionProvider", () => {
       await Promise.all([first, second]);
     });
 
-    it("a connection failure while waiting settles the stop", async () => {
+    it("a transport error and trailing close while waiting settle the stop once", async () => {
       const service = new OpenAITranscriptionProvider();
       const statuses: string[] = [];
       service.onEvent((e) => {
@@ -1844,8 +1849,53 @@ describe("OpenAITranscriptionProvider", () => {
 
       const stopPromise = service.stopGracefully();
       socket.simulateError(new Error("ECONNREFUSED"));
+      socket.simulateClose(1006);
       await stopPromise;
       expect(statuses.at(-1)).toBe("idle");
+      expect(statuses.filter((s) => s === "idle")).toHaveLength(1);
+      vi.advanceTimersByTime(10_000);
+      expect(instances).toHaveLength(1);
+    });
+
+    it("a server error before session.updated settles the stop", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      socket.simulateOpen();
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      socket.simulateMessage("error", {
+        error: { type: "invalid_request_error", code: "invalid_api_key", message: "bad key" },
+      });
+      await stopPromise;
+      expect(statuses.at(-1)).toBe("idle");
+      expect(commitCount(socket)).toBe(0);
+    });
+
+    it("the original connect timeout firing during the wait settles the stop", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      const startPromise = service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      vi.advanceTimersByTime(8_000);
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      vi.advanceTimersByTime(2_000);
+      await stopPromise;
+      expect(statuses.at(-1)).toBe("idle");
+      await expect(startPromise).resolves.toMatchObject({ ok: false });
     });
 
     it("start() while waiting does not tear down the new session", async () => {

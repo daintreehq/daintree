@@ -228,6 +228,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       });
       this.emit({ type: "status", status: "error" });
       this.settlePendingStart(mySessionId, { ok: false, error: message });
+      this.settleDrain("connect-failed");
       return;
     }
 
