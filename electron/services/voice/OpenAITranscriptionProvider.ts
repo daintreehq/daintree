@@ -61,9 +61,9 @@ const OPENAI_TRANSCRIPTION_MODEL = "gpt-live-transcribe";
 // VAD_MAX_SEGMENT_MS below (client-side segmentation), and the two do not fight.
 const OPENAI_TRANSCRIPTION_DELAY: OpenAITranscriptionDelay = "low";
 const CONNECT_TIMEOUT_MS = 10_000;
-// Backstop for the drain: if a committed segment's `conversation.item.done`
-// never arrives (server error, dropped frame), force-close after this long
-// rather than hanging the stop.
+// Backstop for the drain: if a committed segment never reports a terminal
+// result (server error, dropped frame, or only an empty `conversation.item.done`),
+// force-close after this long rather than hanging the stop.
 const DRAIN_TIMEOUT_MS = 3_000;
 const PRE_CONNECT_BUFFER_MAX = 100;
 // Hard byte ceiling for buffered-but-not-yet-sent audio (pre-connect and during
@@ -290,10 +290,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private preRollChunks: ArrayBuffer[] = [];
   private preRollBytes = 0;
   private bytesSinceCommit = 0;
-  // Commits sent (interval, paragraph-boundary, or final) whose
-  // `conversation.item.done` we haven't seen yet. Each commit yields exactly
-  // one completion, so the drain is finished precisely when this hits zero —
-  // no timing heuristic needed.
+  // Commits sent (interval, paragraph-boundary, or final) whose terminal result
+  // we haven't seen yet — a `...transcription.completed`/`.failed`, or a
+  // `conversation.item.done` that actually carries text. Each commit yields
+  // exactly one, so the drain is finished precisely when this hits zero — no
+  // timing heuristic needed.
   private pendingCommits = 0;
   // Item ids already counted toward `pendingCommits` — guards against a
   // completion being counted twice (e.g. a `.completed` and a `.done` for the
@@ -849,14 +850,32 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       }
 
       case "conversation.item.input_audio_transcription.completed": {
-        // Side-channel transcription event used by conversation-style sessions.
-        // The `?intent=transcription` endpoint reports completions via
-        // `conversation.item.done` instead (handled below) — this case stays so
-        // a session that does emit it still works.
+        // The authoritative final transcript for a committed item. The
+        // `?intent=transcription` endpoint sends it after an empty
+        // `conversation.item.done` for the same item, so it must count even
+        // though a `done` was already seen. An empty transcript here is the
+        // server's verdict of silence — still terminal, just nothing to emit.
         const transcript = typeof payload.transcript === "string" ? payload.transcript : "";
         const itemId = typeof payload.item_id === "string" ? payload.item_id : undefined;
         logInfo(`${P} ← transcription.completed`, { itemId, length: transcript.length });
         this.handleTranscriptComplete(transcript, itemId);
+        return;
+      }
+
+      case "conversation.item.input_audio_transcription.failed": {
+        // Terminal for the item: no transcript is coming, so count the commit
+        // rather than making the stop wait out DRAIN_TIMEOUT_MS. Without an
+        // item id we can't tell which commit failed, so leave the backstop in
+        // charge. The error payload may echo user content — log its code only.
+        const itemId = typeof payload.item_id === "string" ? payload.item_id : undefined;
+        const failure = payload.error as { code?: string; type?: string } | undefined;
+        logWarn(`${P} ← transcription.failed`, {
+          itemId,
+          code: failure?.code,
+          errorType: failure?.type,
+        });
+        if (!itemId) return;
+        this.handleTranscriptComplete("", itemId);
         return;
       }
 
@@ -873,10 +892,10 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       }
 
       case "conversation.item.done": {
-        // The `?intent=transcription` endpoint reports each committed segment's
-        // final transcript via `conversation.item.done`, not via
-        // `...input_audio_transcription.completed`. The text lives on the
-        // item's `input_audio` content part.
+        // Some servers put a committed segment's final transcript on the item's
+        // `input_audio` content part here. The `?intent=transcription` endpoint
+        // instead sends this with an empty transcript *before* the deltas and
+        // `...transcription.completed`, so only a `done` carrying text counts.
         const item = payload.item as
           { id?: string; content?: Array<{ type?: string; transcript?: string }> } | undefined;
         const audioPart = item?.content?.find((part) => part.type === "input_audio");
@@ -892,6 +911,15 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           // outstanding commit, or a stray `done` could settle the drain early.
           logWarn(`${P} conversation.item.done carried no input_audio content part — not counted`, {
             contentTypes: item?.content?.map((part) => part.type),
+          });
+          return;
+        }
+        if (!transcript.trim()) {
+          // A placeholder, not a result: claiming the item id or decrementing
+          // here would drop the real `.completed` as a duplicate and settle the
+          // drain before the final transcript lands.
+          logDebug(`${P} conversation.item.done had an empty transcript — awaiting completion`, {
+            itemId: item?.id,
           });
           return;
         }
@@ -943,14 +971,14 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   }
 
   /**
-   * Handles one committed segment's transcript: emits it to the renderer and
-   * decrements the outstanding-commit counter. While draining, settles the
-   * drain the moment every committed segment has reported back. Shared by the
-   * `...input_audio_transcription.completed` and `conversation.item.done`
-   * paths since both report a committed segment.
+   * Handles one committed segment's terminal result: emits any transcript to
+   * the renderer and decrements the outstanding-commit counter. While draining,
+   * settles the drain the moment every committed segment has reported back.
+   * Callers only route terminal results here — `.completed`, `.failed`, or a
+   * `conversation.item.done` that carries text.
    *
-   * `itemId` is deduped: a completion already counted (e.g. a `.completed` and
-   * a `.done` for the same item, or a repeated frame) is ignored entirely, so
+   * `itemId` is deduped: a result already counted (e.g. a text-bearing `.done`
+   * followed by `.completed` for the same item, or a repeated frame) is ignored entirely, so
    * it can't drop `pendingCommits` below the number genuinely in flight and
    * settle the drain before the final transcript lands.
    */

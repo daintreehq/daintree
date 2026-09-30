@@ -1397,6 +1397,227 @@ describe("OpenAITranscriptionProvider", () => {
     await drainPromise;
   });
 
+  it("keeps draining past an empty conversation.item.done and settles on the item's .completed", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const completes: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "complete") completes.push(e.text);
+    });
+
+    const { socket } = await bringSessionReady(service);
+    feedCommittableAudio(service);
+    const drainPromise = service.stopGracefully();
+
+    let settled = false;
+    void drainPromise.then(() => {
+      settled = true;
+    });
+
+    // The intent=transcription endpoint's real ordering: an empty `done` for
+    // the item, then deltas, then the authoritative `.completed`.
+    socket.simulateMessage("conversation.item.done", {
+      item: { id: "item-final", content: [{ type: "input_audio", transcript: "" }] },
+    });
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      item_id: "item-final",
+      delta: "final words",
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(completes).toEqual([]);
+
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-final",
+      transcript: "final words",
+    });
+    await drainPromise;
+    expect(completes).toEqual(["final words"]);
+  });
+
+  it("falls back to the drain timeout when a segment only ever gets an empty conversation.item.done", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    feedCommittableAudio(service);
+    const drainPromise = service.stopGracefully();
+
+    let settled = false;
+    void drainPromise.then(() => {
+      settled = true;
+    });
+
+    socket.simulateMessage("conversation.item.done", {
+      item: { id: "item-ws", content: [{ type: "input_audio", transcript: "   " }] },
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    vi.advanceTimersByTime(3_000);
+    await expect(drainPromise).resolves.toBeUndefined();
+  });
+
+  it("an empty conversation.item.done for one item does not settle the drain for another", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const completes: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "complete") completes.push(e.text);
+    });
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    feedCommittableAudio(service);
+    const drainPromise = service.stopGracefully(); // two outstanding commits
+
+    let settled = false;
+    void drainPromise.then(() => {
+      settled = true;
+    });
+
+    socket.simulateMessage("conversation.item.done", {
+      item: { id: "item-A", content: [{ type: "input_audio", transcript: "" }] },
+    });
+    socket.simulateMessage("conversation.item.done", {
+      item: { id: "item-B", content: [{ type: "input_audio", transcript: "" }] },
+    });
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-A",
+      transcript: "alpha",
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-B",
+      transcript: "beta",
+    });
+    await drainPromise;
+    expect(completes).toEqual(["alpha", "beta"]);
+  });
+
+  it("an empty .completed is terminal: counts its commit without emitting and dedupes a later done", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const completes: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "complete") completes.push(e.text);
+    });
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    feedCommittableAudio(service);
+    const drainPromise = service.stopGracefully(); // two outstanding commits
+
+    let settled = false;
+    void drainPromise.then(() => {
+      settled = true;
+    });
+
+    // Silence: the server's authoritative verdict is an empty transcript.
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-silent",
+      transcript: "",
+    });
+    // A contradictory later `done` for the same item must neither emit nor
+    // count against the other outstanding commit.
+    socket.simulateMessage("conversation.item.done", {
+      item: { id: "item-silent", content: [{ type: "input_audio", transcript: "late" }] },
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(completes).toEqual([]);
+
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-B",
+      transcript: "beta",
+    });
+    await drainPromise;
+    expect(completes).toEqual(["beta"]);
+  });
+
+  it("a text-bearing conversation.item.done counts, and the item's later .completed is deduped", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const completes: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "complete") completes.push(e.text);
+    });
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    feedCommittableAudio(service);
+    const drainPromise = service.stopGracefully(); // two outstanding commits
+
+    let settled = false;
+    void drainPromise.then(() => {
+      settled = true;
+    });
+
+    socket.simulateMessage("conversation.item.done", {
+      item: { id: "item-A", content: [{ type: "input_audio", transcript: "alpha" }] },
+    });
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-A",
+      transcript: "alpha",
+    });
+    await Promise.resolve();
+    // The duplicate `.completed` must not count against item B's commit.
+    expect(settled).toBe(false);
+    expect(completes).toEqual(["alpha"]);
+
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-B",
+      transcript: "beta",
+    });
+    await drainPromise;
+    expect(completes).toEqual(["alpha", "beta"]);
+  });
+
+  it("treats transcription.failed as terminal for its item without emitting", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const completes: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "complete") completes.push(e.text);
+    });
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    feedCommittableAudio(service);
+    const drainPromise = service.stopGracefully(); // two outstanding commits
+
+    let settled = false;
+    void drainPromise.then(() => {
+      settled = true;
+    });
+
+    socket.simulateMessage("conversation.item.done", {
+      item: { id: "item-A", content: [{ type: "input_audio", transcript: "" }] },
+    });
+    // A failure without an item id can't be matched to a commit — ignored.
+    socket.simulateMessage("conversation.item.input_audio_transcription.failed", {
+      error: { code: "transcription_failed" },
+    });
+    socket.simulateMessage("conversation.item.input_audio_transcription.failed", {
+      item_id: "item-A",
+      error: { code: "transcription_failed", message: "secret dictated words" },
+    });
+    // A repeated failure frame must not count twice.
+    socket.simulateMessage("conversation.item.input_audio_transcription.failed", {
+      item_id: "item-A",
+      error: { code: "transcription_failed" },
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-B",
+      transcript: "beta",
+    });
+    await drainPromise;
+    expect(completes).toEqual(["beta"]);
+    expect(loggedText()).not.toContain("secret dictated words");
+  });
+
   it("repeated stopGracefully calls share a single in-flight drain", async () => {
     const service = new OpenAITranscriptionProvider();
     const { socket } = await bringSessionReady(service);
