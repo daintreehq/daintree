@@ -107,6 +107,7 @@ import { pluginKitPatterns } from "./PluginKitPatterns";
 import { pluginKitLists } from "./PluginKitLists";
 import { pluginKitOverlays } from "./PluginKitOverlays";
 import { pluginKitData } from "./PluginKitData";
+import { pluginKitDisplay } from "./PluginKitDisplay";
 import { pluginKitFileTree } from "./PluginKitFileTree";
 import { primeRadix } from "@/components/ui/radix-loader";
 
@@ -1451,6 +1452,7 @@ export const pluginKit = {
   ...pluginKitLists,
   ...pluginKitOverlays,
   ...pluginKitData,
+  ...pluginKitDisplay,
   ...pluginKitFileTree,
 };
 

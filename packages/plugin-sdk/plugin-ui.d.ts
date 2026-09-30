@@ -37,6 +37,8 @@
 declare module "@daintreehq/plugin-ui" {
   import type { ComponentType, ReactNode } from "react";
   import type {
+    PluginAvatarGroupItem,
+    PluginAvatarGroupProps,
     PluginAvatarProps,
     PluginBadgeProps,
     PluginButtonProps,
@@ -52,6 +54,7 @@ declare module "@daintreehq/plugin-ui" {
     PluginDialogAction,
     PluginDialogLayer,
     PluginDialogProps,
+    PluginDiffStatProps,
     PluginDismissButtonProps,
     PluginDropdownMenuEntry,
     PluginDropdownMenuProps,
@@ -62,8 +65,10 @@ declare module "@daintreehq/plugin-ui" {
     PluginFileTreeItem,
     PluginFileTreeNode,
     PluginFileTreeProps,
+    PluginFilterChipProps,
     PluginFormFieldGroupProps,
     PluginFormFieldProps,
+    PluginHighlightedTextProps,
     PluginIconButtonProps,
     PluginIconName,
     PluginIconProps,
@@ -76,6 +81,8 @@ declare module "@daintreehq/plugin-ui" {
     PluginListRowProps,
     PluginLogEntry,
     PluginLogViewProps,
+    PluginMeterProps,
+    PluginMeterThresholds,
     PluginMarkdownProps,
     PluginPaneHeaderProps,
     PluginPaneStateProps,
@@ -108,6 +115,9 @@ declare module "@daintreehq/plugin-ui" {
     PluginTabItem,
     PluginTabsProps,
     PluginTextareaProps,
+    PluginTimelineActor,
+    PluginTimelineItem,
+    PluginTimelineProps,
     PluginThemeTokenKey,
     PluginThemeTokens,
     PluginToolbarButtonProps,
@@ -199,6 +209,16 @@ declare module "@daintreehq/plugin-ui" {
   export type StatCardProps = PluginStatCardProps;
   export type SparklineProps = PluginSparklineProps;
   export type FormFieldGroupProps = PluginFormFieldGroupProps;
+  export type FilterChipProps = PluginFilterChipProps;
+  export type HighlightedTextProps = PluginHighlightedTextProps;
+  export type DiffStatProps = PluginDiffStatProps;
+  export type AvatarGroupProps = PluginAvatarGroupProps;
+  export type AvatarGroupItem = PluginAvatarGroupItem;
+  export type MeterProps = PluginMeterProps;
+  export type MeterThresholds = PluginMeterThresholds;
+  export type TimelineProps<T extends TimelineItem = TimelineItem> = PluginTimelineProps<T>;
+  export type TimelineItem = PluginTimelineItem;
+  export type TimelineActor = PluginTimelineActor;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -348,6 +368,22 @@ declare module "@daintreehq/plugin-ui" {
   export const Sparkline: ComponentType<SparklineProps>;
   /** One label, at a field label's size, over a set of controls such as checkboxes. */
   export const FormFieldGroup: ComponentType<FormFieldGroupProps>;
+
+  /** One value in a filter bar: a pressed toggle, or with `onRemove` an applied filter with a ×. */
+  export const FilterChip: ComponentType<FilterChipProps>;
+  /** Text with its search matches on a neutral band, from a `query` or your own `ranges`. */
+  export const HighlightedText: ComponentType<HighlightedTextProps>;
+  /** Line churn in Daintree's one spelling: "+12 -3". */
+  export const DiffStat: ComponentType<DiffStatProps>;
+  /** Overlapping avatars with a "+N" whose tooltip lists the rest. */
+  export const AvatarGroup: ComponentType<AvatarGroupProps>;
+  /** How much of a limit is used: neutral below its thresholds, then warning or danger. */
+  export const Meter: ComponentType<MeterProps>;
+  /**
+   * An activity feed or audit log on a connecting rail, virtualised with
+   * measured rows. As tall as its entries up to its container, then it scrolls.
+   */
+  export const Timeline: <T extends TimelineItem>(props: TimelineProps<T>) => ReactNode;
 
   /**
    * The keyboard model of a list: one tab stop, Up/Down/Home/End move the

@@ -310,14 +310,14 @@ export default function Notes({ pluginId, disposeSignal }) {
 | For | Components |
 | --- | --- |
 | Actions | `Button` (variants `default` — the accent primary, and the default — `secondary`, `outline`, `ghost`, `subtle`, `contrast`, `destructive`, `ghost-danger`, `link`, `pill`), `IconButton`, `CopyButton`, `DismissButton`, `DropdownMenu` |
-| Forms | `Input` (text, search, email, url, password, number, tel, date, time, datetime-local), `Textarea`, `Select` (an `options` array; `value={null}` shows the placeholder again), `Checkbox`, `Switch`, `SegmentedControl`, `SearchField`, `FormField` (label, description and error wired to the control), `FormFieldGroup` (one label over a set of controls) |
-| Lists and tables | `VirtualList`, `DataTable`, `LogView`, `ListRow` with `useListNavigation`, `ScrollShadow`, `FileTree` |
-| Figures | `StatCard` (a labelled figure with an optional change), `Sparkline` |
+| Forms | `Input` (text, search, email, url, password, number, tel, date, time, datetime-local), `Textarea`, `Select` (an `options` array; `value={null}` shows the placeholder again), `Checkbox`, `Switch`, `SegmentedControl`, `SearchField`, `FilterChip` (a toggle or removable filter in a filter bar), `FormField` (label, description and error wired to the control), `FormFieldGroup` (one label over a set of controls) |
+| Lists and tables | `VirtualList`, `DataTable`, `LogView`, `ListRow` with `useListNavigation`, `ScrollShadow`, `FileTree`, `Timeline` (an activity feed or audit log), `HighlightedText` (search matches in a row) |
+| Figures | `StatCard` (a labelled figure with an optional change), `Sparkline`, `Meter` (usage against a limit, with warning and danger thresholds), `DiffStat` ("+12 -3") |
 | Pane chrome | `PaneHeader`, `Toolbar`, `ToolbarButton`, `Tabs` |
 | States and status | `PaneState` (a whole pane's `loading`, `empty` or `error`), `EmptyState`, `Callout` (an inline message; `severity="error"` with a Retry `action` is the error banner, `variant="strip"` the pane-wide band), `Badge`, `Spinner`, `SpinningIcon`, `ProgressBar`, `Skeleton`, `SkeletonBone`, `SkeletonText`, `SkeletonHint`, `SeverityIcon` |
 | Overlays | `Dialog`, `ConfirmDialog` (including the destructive typed-name gate), `Popover`, `PopoverSearchField`, `Tooltip`, `TruncatedTooltip` |
 | Settings views | `SettingsSection`, `SettingsGroup`, `SettingsRow`, `SettingsActions` — the host's section → group → row grammar |
-| Everything else | `Markdown`, `Icon`, `Avatar`, `Kbd`, `KbdChord`; formatters `formatTimeAgo`, `formatRelativeTime`, `formatDuration`, `formatBytes`, `formatCount`; the theme API below |
+| Everything else | `Markdown`, `Icon`, `Avatar`, `AvatarGroup`, `Kbd`, `KbdChord`; formatters `formatTimeAgo`, `formatRelativeTime`, `formatDuration`, `formatBytes`, `formatCount`; the theme API below |
 
 One status vocabulary runs through `Badge` `tone`, `Callout` `severity` and `SeverityIcon`: `error` (the same colour as `danger`, which `Badge` also accepts), `warning`, `success`, `info` and `neutral`.
 
