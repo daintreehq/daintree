@@ -2525,10 +2525,10 @@ describe("sessionServer tier-mismatch notifier", () => {
     const server = createSessionServer("session-A4", deps);
     await server.connect(makeMockTransport());
 
-    const result = await callTool(server, {
+    const result = (await callTool(server, {
       name: "worktree.delete",
       arguments: { worktreeId: "wt-from-an-earlier-session" },
-    });
+    })) as { isError?: boolean };
 
     expect(notify).not.toHaveBeenCalled();
     expect(result.isError).not.toBe(true);
