@@ -246,8 +246,10 @@ What the no-build path costs, and what it doesn't: the worker cannot import npm 
 | You need | Use |
 | --- | --- |
 | A button, an icon button, a menu | `Button` (no `variant` is the accent primary: one per region; `secondary`, `outline`, `ghost`, `subtle` for the rest), `IconButton`, `DropdownMenu`, `ContextMenu` for a right-click menu |
-| A form | `Input` (including `number`, `date`, `time`), `Textarea`, `Select`, `Checkbox`, `Switch`, `SegmentedControl`, `SearchField`, wrapped in `FormField`; `FormFieldGroup` for one label over a set of controls |
+| A form | `Input` (including `date`, `time`), `Textarea`, `Select`, `Checkbox`, `Switch`, `RadioGroup`, `SegmentedControl`, `NumberInput`, `Slider`, `SearchField`, wrapped in `FormField`; `FormFieldGroup` for one label over a set of controls |
 | A list or table of any length | `DataTable`, `VirtualList` with `ListRow`, `LogView` for output, `HighlightedText` for the matches in a filtered row |
+| A searchable pick, labels, assignees, tags | `Combobox` (one value; `filter="none"` with `onSearchChange` and `loading` for options you fetch), `MultiSelect` (several, as chips), `TagInput` (free text) |
+| Files from the user, an emoji | `FileDropzone` (hands you `File` objects to read in the view, never a path), `EmojiPicker` |
 | A filter bar | `FilterChip` (toggles, or removable "Status: Open" chips) beside a `SearchField` |
 | An activity feed, audit log or comment thread | `Timeline` (`renderContent` for a comment body in `Markdown`) |
 | A file tree | `FileTree` (takes `host.fs.walk` entries as they come) |
@@ -277,7 +279,7 @@ Things the lab watched agents get wrong, each of which the kit or the host alrea
 - **`window.confirm` in a view.** It ignores the theme and blocks the whole window. Use `ConfirmDialog`.
 - **A second setup banner.** A panel of a plugin with an unset `required` setting already shows the host's "needs setup" strip; render an empty state, not your own warning.
 - **A modal with a stock-palette scrim** (`bg-black/40`), which compiles to nothing, so the dialog floats with no dimming. Use `Dialog`.
-- **Native `<select>`, checkboxes and date inputs** beside host-styled text fields. Use `Select`, `Checkbox`, `DatePicker`.
+- **Native `<select>`, checkboxes, radios, ranges and date inputs** beside host-styled text fields. Use `Select`, `Checkbox`, `RadioGroup`, `Slider`, `DatePicker`.
 - **A `PaneHeader` that repeats the panel's name.** The host's panel chrome already shows the panel's title and icon above your view, so `title="Review queue"` under a "Review Queue" tab says it twice. Give `PaneHeader` view-specific context — the filter in effect, the selected item, a count ("4,096 of 5,000") — or leave it out and put the actions in a `Toolbar variant="bar"`. `title` is required, so there is no header that is only actions.
 - **A filled button as a status.** A green "✓ Approved" primary button where Approve used to be reads as a control that does something. Show the state with a `Badge` or a `SeverityIcon` beside the title, and keep the button for the action (disabled, or swapped for the next one, such as "Undo").
 

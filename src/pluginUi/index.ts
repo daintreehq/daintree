@@ -20,6 +20,7 @@ import type {
   PluginCalloutProps,
   PluginCardProps,
   PluginCheckboxProps,
+  PluginComboboxProps,
   PluginConfirmDialogProps,
   PluginCopyButtonProps,
   PluginDataTableProps,
@@ -33,7 +34,9 @@ import type {
   PluginDismissButtonProps,
   PluginDividerProps,
   PluginDropdownMenuProps,
+  PluginEmojiPickerProps,
   PluginEmptyStateProps,
+  PluginFileDropzoneProps,
   PluginFileTreeProps,
   PluginFilterChipProps,
   PluginFormFieldGroupProps,
@@ -47,12 +50,15 @@ import type {
   PluginListRowProps,
   PluginLogViewProps,
   PluginMeterProps,
+  PluginMultiSelectProps,
+  PluginNumberInputProps,
   PluginPaneHeaderProps,
   PluginPaneStateProps,
   PluginPopoverProps,
   PluginPopoverSearchFieldProps,
   PluginProgressBarProps,
   PluginResizableSplitProps,
+  PluginRadioGroupProps,
   PluginScrollShadowProps,
   PluginSearchFieldProps,
   PluginSectionLabelProps,
@@ -67,12 +73,14 @@ import type {
   PluginSkeletonHintProps,
   PluginSkeletonProps,
   PluginSkeletonTextProps,
+  PluginSliderProps,
   PluginSparklineProps,
   PluginSpinnerProps,
   PluginStatCardProps,
   PluginSpinningIconProps,
   PluginSwitchProps,
   PluginTabsProps,
+  PluginTagInputProps,
   PluginTextareaProps,
   PluginTimelineItem,
   PluginTimelineProps,
@@ -368,6 +376,38 @@ export const DescriptionList: ComponentType<PluginDescriptionListProps> = fromKi
 export const DescriptionListItem: ComponentType<PluginDescriptionListItemProps> = fromKit(
   "DescriptionListItem",
   (kit) => kit.DescriptionListItem
+// Radio groups, numbers, sliders, pickers, tags, file drops and emoji.
+
+export const RadioGroup: ComponentType<PluginRadioGroupProps> = fromKit(
+  "RadioGroup",
+  (kit) => kit.RadioGroup
+);
+export const NumberInput: ComponentType<PluginNumberInputProps> = fromKit(
+  "NumberInput",
+  (kit) => kit.NumberInput
+);
+export const Slider: ComponentType<PluginSliderProps> = fromKit("Slider", (kit) => kit.Slider);
+export const Combobox: ComponentType<PluginComboboxProps> = fromKit(
+  "Combobox",
+  (kit) => kit.Combobox
+);
+export const MultiSelect: ComponentType<PluginMultiSelectProps> = fromKit(
+  "MultiSelect",
+  (kit) => kit.MultiSelect
+);
+export const TagInput: ComponentType<PluginTagInputProps> = fromKit(
+  "TagInput",
+  (kit) => kit.TagInput
+);
+export const FileDropzone: ComponentType<PluginFileDropzoneProps> = fromKit(
+  "FileDropzone",
+  (kit) => kit.FileDropzone
+);
+export const EmojiPicker: ComponentType<PluginEmojiPickerProps> = fromKit(
+  "EmojiPicker",
+  (kit) => kit.EmojiPicker,
+  // Like a Popover, the trigger is there from the first frame.
+  ({ trigger }) => (isValidElement(trigger) ? trigger : null)
 );
 
 export type {
@@ -493,4 +533,14 @@ export type {
   PluginDescriptionListProps as DescriptionListProps,
   PluginDescriptionListItemProps as DescriptionListItemProps,
   PluginDescriptionItem as DescriptionItem,
+  PluginRadioGroupProps as RadioGroupProps,
+  PluginRadioOption as RadioOption,
+  PluginNumberInputProps as NumberInputProps,
+  PluginSliderProps as SliderProps,
+  PluginPickerBaseProps as PickerBaseProps,
+  PluginComboboxProps as ComboboxProps,
+  PluginMultiSelectProps as MultiSelectProps,
+  PluginTagInputProps as TagInputProps,
+  PluginFileDropzoneProps as FileDropzoneProps,
+  PluginEmojiPickerProps as EmojiPickerProps,
 } from "@shared/types/plugin-sdk-react";

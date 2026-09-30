@@ -154,6 +154,7 @@ describe("element rules", () => {
       expect.stringContaining('type="email">; prefer `Input`'),
       expect.stringContaining('type="number">; prefer `Input`'),
       expect.stringContaining("`Button`"),
+      expect.stringContaining('type="range">; prefer `Slider`'),
     ]);
   });
 
@@ -184,9 +185,16 @@ describe("element rules", () => {
     expect(findings[0]!.message).toContain('type="email"');
   });
 
-  it("does not suggest the single-choice kit Select for a multi-select", async () => {
-    expect(await lintFor("raw-form-control", view(`<select multiple />`))).toEqual([]);
-    expect(await lintFor("raw-form-control", view(`<select />`))).toHaveLength(1);
+  it("suggests MultiSelect, not the single-choice Select, for a multi-select", async () => {
+    const multi = await lintFor("raw-form-control", view(`<select multiple />`));
+    expect(multi.map((f) => f.message)).toEqual([expect.stringContaining("`MultiSelect`")]);
+    const single = await lintFor("raw-form-control", view(`<select />`));
+    expect(single.map((f) => f.message)).toEqual([expect.stringContaining("`Select`")]);
+  });
+
+  it("suggests RadioGroup for a raw radio", async () => {
+    const findings = await lintFor("raw-form-control", view(`<input type="radio" />`));
+    expect(findings.map((f) => f.message)).toEqual([expect.stringContaining("`RadioGroup`")]);
   });
 
   it("flags title= on intrinsic elements only, not on kit components", async () => {

@@ -468,6 +468,28 @@ export const details = createElement(ui.DescriptionList, { items: rows, layout: 
 export const detailChildren = createElement(ui.DescriptionList, {}, createElement(ui.DescriptionListItem, { label: "Path", value: "/tmp" }));
 // @ts-expect-error description layouts are a closed set
 export const badDetails = createElement(ui.DescriptionList, { items: rows, layout: "grid" });
+// Radio groups, numbers, sliders, pickers, tags, file drops and emoji.
+const radioOptions: ui.RadioOption[] = [{ value: "merge", label: "Merge", description: "Keeps history" }];
+export const radios = createElement(ui.RadioGroup, { options: radioOptions, value: null, onValueChange: (v: string) => void v, orientation: "horizontal", variant: "plain", "aria-label": "Method" });
+// @ts-expect-error orientations are a closed set
+export const badRadios = createElement(ui.RadioGroup, { options: radioOptions, orientation: "grid" });
+export const number = createElement(ui.NumberInput, { value: null, onValueChange: (v: number | null) => void v, min: 0, max: 10, step: 0.5, precision: 1, unit: "s", stepper: false, "aria-label": "Delay" });
+// @ts-expect-error a NumberInput's value is a number
+export const textNumber = createElement(ui.NumberInput, { value: "3" });
+export const slider = createElement(ui.Slider, { value: 40, onValueCommit: (v: number) => void v, formatValue: (v: number) => \`\${v}%\`, showValue: true, "aria-label": "Opacity" });
+export const combo = createElement(ui.Combobox, { options: [{ value: "a", label: "A" }], value: null, onSearchChange: (q: string) => void q, filter: "none", loading: true, allowCustomValue: true, "aria-label": "Pick" });
+// @ts-expect-error filters are a closed set
+export const badCombo = createElement(ui.Combobox, { options: [], filter: "fuzzy" });
+export const multi = createElement(ui.MultiSelect, { options: [], value: ["a"], onValueChange: (v: string[]) => void v, max: 3, maxChips: 2, "aria-label": "Labels" });
+// @ts-expect-error a MultiSelect's value is a list
+export const singleMulti = createElement(ui.MultiSelect, { options: [], value: "a" });
+export const tags = createElement(ui.TagInput, { defaultValue: ["a"], validate: (tag: string) => tag.length > 1, "aria-label": "Tags" });
+export const drop = createElement(ui.FileDropzone, { onFiles: (files: File[]) => void files, accept: ".md", multiple: true, icon: "upload" });
+// @ts-expect-error a FileDropzone needs onFiles
+export const deafDrop = createElement(ui.FileDropzone, { accept: ".md" });
+export const emoji = createElement(ui.EmojiPicker, { trigger: createElement(ui.Button, {}, "Icon"), onSelect: (e: string) => void e, value: "🙂" });
+// @ts-expect-error an EmojiPicker needs a trigger
+export const noTrigger = createElement(ui.EmojiPicker, { onSelect: () => {} });
 
 // Root attributes: \`id\` and \`data-*\` everywhere, \`aria-*\` where the root is the control.
 export const selectId = createElement(ui.Select, { options: [], "aria-label": "Pick", "data-testid": "pick" });

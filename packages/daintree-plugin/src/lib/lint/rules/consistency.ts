@@ -234,6 +234,8 @@ const KIT_INPUT_TYPES = new Set(["text", "search", "email", "url", "password", "
 
 const KIT_FOR_INPUT: Record<string, string> = {
   checkbox: "Checkbox",
+  radio: "RadioGroup",
+  range: "Slider",
   button: "Button",
   submit: "Button",
   reset: "Button",
@@ -251,20 +253,20 @@ const rawFormControl = elementRule(
     if (element.tag === "textarea")
       return "raw <textarea>; prefer `Textarea` from @daintreehq/plugin-ui";
     if (element.tag === "select") {
-      // The kit `Select` is single-choice; a multi-select has no kit equivalent.
-      if (hasProp(file, element, "multiple")) return null;
-      return "raw <select>; prefer `Select` from @daintreehq/plugin-ui";
+      return hasProp(file, element, "multiple")
+        ? "raw <select multiple>; prefer `MultiSelect` from @daintreehq/plugin-ui"
+        : "raw <select>; prefer `Select` from @daintreehq/plugin-ui";
     }
     if (element.tag !== "input") return null;
     const literal = propString(file, element, "type");
     // A computed type could be anything; only a literal one is worth a suggestion.
     if (literal === null && hasProp(file, element, "type")) return null;
     const type = (literal ?? "text").toLowerCase();
-    if (type === "radio")
-      return 'raw <input type="radio">; prefer a selection control from @daintreehq/plugin-ui';
     const kit = KIT_FOR_INPUT[type] ?? (KIT_INPUT_TYPES.has(type) ? "Input" : null);
-    // date, time, range, color, file, hidden and the rest have no kit control:
-    // the native element, styled with theme tokens, is the right call.
+    // date, time, color, hidden and the rest have no kit control: the native
+    // element, styled with theme tokens, is the right call. A file input is
+    // often the hidden half of a plugin's own "Import…" button, so it is left
+    // alone rather than pointed at `FileDropzone`.
     if (kit === null) return null;
     return `raw <input type="${type}">; prefer \`${kit}\` from @daintreehq/plugin-ui`;
   }
