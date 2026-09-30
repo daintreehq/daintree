@@ -580,6 +580,41 @@ describe("DescriptionList", () => {
     expect(names).toEqual(["Copy Commit", "Copy Size", "Copy Link"]);
   });
 
+  it("keeps the copy buttons in one column that follows the values, not the far edge", () => {
+    const { container } = render(
+      withTooltips(
+        createElement(kit.DescriptionList, {
+          copyable: true,
+          items: [
+            { label: "Email", value: "sofia@example.com" },
+            { label: "Region", value: "North America" },
+          ],
+        })
+      )
+    );
+    const list = element(container.querySelector("dl"));
+    // Tracks: label, value, copy, filler. The value track is sized to its
+    // content (never stretched to the edge), the copy track comes straight
+    // after it, and only the trailing filler takes the leftover width.
+    const template = /grid-cols-\[([^\]]+)\]/.exec(list.className)?.[1]?.split("_") ?? [];
+    expect(template).toHaveLength(4);
+    expect(template[1]).toMatch(/^minmax\(0,max-content\)$|^fit-content/);
+    expect(template[1]).not.toContain("fr");
+    expect(template[2]).toBe("auto");
+    expect(template[3]).toContain("fr");
+    // No column gap sits between a value and its button.
+    expect(list.className).not.toMatch(/(^|\s)gap-x-|(^|\s)gap-\d/);
+    for (const row of container.querySelectorAll("dl > div")) {
+      expect(row.className).toContain("col-span-3");
+      expect(row.className).toContain("grid-cols-subgrid");
+      const detail = element(row.querySelector("dd"));
+      // The value and its button share the list's value and copy tracks.
+      expect(detail.className).toContain("col-span-2");
+      expect(detail.className).toContain("grid-cols-subgrid");
+      expect(detail.lastElementChild?.getAttribute("aria-label")).toMatch(/^Copy /);
+    }
+  });
+
   it("takes its rows as children and forwards root attributes", () => {
     const { container } = render(
       createElement(
