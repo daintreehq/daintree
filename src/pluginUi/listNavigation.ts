@@ -50,6 +50,14 @@ function stepIndex(
   }
 }
 
+/** Shift+F10 or the Menu key: the keyboard's right-click. */
+function isMenuKey(event: KeyboardEvent<HTMLElement>): boolean {
+  return (
+    event.key === "ContextMenu" ||
+    (event.key === "F10" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey)
+  );
+}
+
 function nearestEnabled(index: number, count: number, blocked: (index: number) => boolean) {
   if (index < 0 || !blocked(index)) return index;
   for (let at = index + 1; at < count; at++) if (!blocked(at)) return at;
@@ -131,8 +139,29 @@ export function useListNavigation(options: UseListNavigationOptions): UseListNav
     return -1;
   };
 
+  const hasRowMenus = options.hasRowMenus === true;
+
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.nativeEvent.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.nativeEvent.isComposing) return;
+    // Shift+F10 or the Menu key open the cursor row's own menu. Focus stays on
+    // the list, so the key never reaches the row's trigger by itself: hand the
+    // row the right-click the key stands for, at the row.
+    if (hasRowMenus && isMenuKey(event)) {
+      const row = activeIndex >= 0 ? document.getElementById(rowId(activeIndex)) : null;
+      if (!row) return;
+      event.preventDefault();
+      const rect = row.getBoundingClientRect();
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: rect.left + 8,
+          clientY: rect.top + rect.height / 2,
+        })
+      );
+      return;
+    }
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
     if (count === 0) return;
     const next = stepIndex(event.key, activeIndex, count, loop, isDisabled);
     if (next !== null) {
@@ -200,6 +229,8 @@ export function useListNavigation(options: UseListNavigationOptions): UseListNav
       tabIndex: 0,
       "aria-activedescendant": activeIndex >= 0 ? rowId(activeIndex) : undefined,
       onKeyDown,
+      // Tells the app's own Shift+F10 handler to leave the key to the row menus.
+      ...(hasRowMenus ? { "data-row-menu": "" as const } : {}),
     },
     getRowProps,
   };
