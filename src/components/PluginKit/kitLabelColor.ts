@@ -218,3 +218,19 @@ export function labelTextContrast(
     )
   );
 }
+
+/**
+ * Whether a label colour, drawn as a small swatch on the pane, falls under the
+ * 3:1 a mark needs to hold its shape there (WCAG 1.4.11): a white dot on a
+ * light pane, a black one on a dark pane. Such a swatch takes an edge.
+ */
+export function swatchNeedsEdge(
+  color: unknown,
+  surfaceToken: string | undefined,
+  mode: "light" | "dark"
+): boolean {
+  const rgb = parseLabelHex(color);
+  if (!rgb) return false;
+  const [surface] = resolveSurfaces(surfaceToken, mode);
+  return contrast(rgb, surface!) < 3;
+}

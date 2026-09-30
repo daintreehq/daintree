@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { labelColors, labelTextContrast, parseLabelHex } from "../kitLabelColor";
+import { labelColors, labelTextContrast, parseLabelHex, swatchNeedsEdge } from "../kitLabelColor";
 
 // A spread of real label colours: GitHub's defaults, near-white, near-black and
 // fully saturated primaries, the cases a fixed tint gets wrong.
@@ -90,5 +90,16 @@ describe("labelColors", () => {
 
   it("is null for a non-hex colour", () => {
     expect(labelColors("blue", "#ffffff", "light")).toBeNull();
+  });
+});
+
+describe("swatchNeedsEdge", () => {
+  it("edges a swatch that would vanish into its pane, and only that", () => {
+    expect(swatchNeedsEdge("#ffffff", "#ffffff", "light")).toBe(true);
+    expect(swatchNeedsEdge("#fef2c0", "#ffffff", "light")).toBe(true);
+    expect(swatchNeedsEdge("#000000", "#18181b", "dark")).toBe(true);
+    expect(swatchNeedsEdge("#d73a4a", "#ffffff", "light")).toBe(false);
+    expect(swatchNeedsEdge("#ffffff", "#18181b", "dark")).toBe(false);
+    expect(swatchNeedsEdge("nope", "#ffffff", "light")).toBe(false);
   });
 });
