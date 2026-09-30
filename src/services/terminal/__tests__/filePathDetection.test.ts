@@ -3,6 +3,7 @@ import {
   DIR_PATH_REGEX,
   FILE_PATH_REGEX,
   FILE_URL_REGEX,
+  findSpacedFilePathCandidates,
   isPathExcluded,
   resolveDirPathCandidate,
   resolveFilePathCandidate,
@@ -375,5 +376,149 @@ describe("resolveDirPathCandidate", () => {
 
   it("joins against a Windows cwd with the drive's separator", () => {
     expect(resolveDirPathCandidate("src/panels", "C:\\repo")).toBe("C:\\repo\\src\\panels");
+  });
+});
+
+describe("findSpacedFilePathCandidates", () => {
+  const ISSUE_PATH =
+    "/Users/me/Library/Application Support/Daintree/assistant-scratch/a1/b2/issue-body.md";
+
+  it("offers an unquoted path whose space sits in a directory name, pending a probe", () => {
+    const text = `wrote ${ISSUE_PATH}`;
+    expect(findSpacedFilePathCandidates(text)).toEqual([
+      {
+        startIndex: 6,
+        endIndex: text.length,
+        path: ISSUE_PATH,
+        probeDir: "/Users/me/Library/Application Support/Daintree/assistant-scratch/a1/b2",
+      },
+    ]);
+  });
+
+  it("keeps a :line:col suffix in the path but out of the probe", () => {
+    const [candidate] = findSpacedFilePathCandidates("/a b/c.ts:12:3");
+    expect(candidate?.path).toBe("/a b/c.ts:12:3");
+    expect(candidate?.probeDir).toBe("/a b");
+  });
+
+  it("spans several spaced directory names", () => {
+    expect(findSpacedFilePathCandidates("/a b/c x/y d/e.md")).toEqual([
+      { startIndex: 0, endIndex: 17, path: "/a b/c x/y d/e.md", probeDir: "/a b/c x/y d" },
+    ]);
+  });
+
+  it("stops growing after a word that ends like a whole file", () => {
+    expect(findSpacedFilePathCandidates("Error at /a/b.ts in foo/bar.ts")).toEqual([]);
+    expect(findSpacedFilePathCandidates("Error at /a/b.ts. See foo/bar.ts")).toEqual([]);
+    expect(findSpacedFilePathCandidates("/a b/c.md and d/e.md").map((c) => c.path)).toEqual([
+      "/a b/c.md",
+    ]);
+  });
+
+  it("ends before sentence punctuation", () => {
+    expect(findSpacedFilePathCandidates("/a b/c.md. See details")[0]?.path).toBe("/a b/c.md");
+  });
+
+  it("keeps a multi-dot filename whole", () => {
+    expect(findSpacedFilePathCandidates("/a b/c.tar.gz.")[0]?.path).toBe("/a b/c.tar.gz");
+  });
+
+  it("stops at a word that starts its own absolute path", () => {
+    expect(findSpacedFilePathCandidates("/tmp/a.md /tmp/b c/d.md").map((c) => c.path)).toEqual([
+      "/tmp/b c/d.md",
+    ]);
+  });
+
+  it("ignores spaced text whose last word carries no separator", () => {
+    expect(findSpacedFilePathCandidates("/usr/bin/node script.js")).toEqual([]);
+    expect(findSpacedFilePathCandidates("see /tmp/notes.md for details")).toEqual([]);
+  });
+
+  it("caps how many words one candidate may span", () => {
+    const words = Array.from({ length: 10 }, (_, i) => `w${i}`).join(" ");
+    expect(findSpacedFilePathCandidates(`/${words}/x.md`)).toEqual([]);
+  });
+
+  it("takes an unquoted Windows drive path", () => {
+    const [candidate] = findSpacedFilePathCandidates("C:\\Program Files\\App\\log.txt");
+    expect(candidate?.path).toBe("C:\\Program Files\\App\\log.txt");
+    expect(candidate?.probeDir).toBe("C:\\Program Files\\App");
+  });
+
+  it("never proposes a UNC root, which a probe would dial over SMB", () => {
+    for (const text of [
+      "//attacker.host/share a/x.md",
+      "see //attacker.host/share a/x.md",
+      "/\\attacker.host/share a/x.md",
+      '"//attacker.host/share a/x.md"',
+      '"\\\\attacker.host\\share a\\x.md"',
+      "'\\/attacker.host/share a/x.md'",
+      "//attacker.host/share\\ a/x.md",
+    ]) {
+      expect(findSpacedFilePathCandidates(text)).toEqual([]);
+    }
+  });
+
+  it("links a quoted path without a probe, underlining inside the quotes", () => {
+    const text = `open "${ISSUE_PATH}" now`;
+    expect(findSpacedFilePathCandidates(text)).toEqual([
+      { startIndex: 6, endIndex: 6 + ISSUE_PATH.length, path: ISSUE_PATH },
+    ]);
+  });
+
+  it("accepts single quotes, backticks, and quoted relative paths", () => {
+    expect(findSpacedFilePathCandidates("'./my dir/a.md'")[0]?.path).toBe("./my dir/a.md");
+    expect(findSpacedFilePathCandidates("`/a b/c.ts:4`")[0]?.path).toBe("/a b/c.ts:4");
+  });
+
+  it("leaves space-free and prose quotes alone", () => {
+    expect(findSpacedFilePathCandidates('"src/foo.ts"')).toEqual([]);
+    expect(findSpacedFilePathCandidates('"hello world"')).toEqual([]);
+    expect(findSpacedFilePathCandidates('"see https://x.y/a b.md"')).toEqual([]);
+    expect(findSpacedFilePathCandidates("Run 'cat src/a.ts' first")).toEqual([]);
+    // Not a quoted path — only the unquoted scanner's probe-gated guess remains.
+    expect(findSpacedFilePathCandidates('"see /a b/c.md"')).toEqual([
+      { startIndex: 5, endIndex: 14, path: "/a b/c.md", probeDir: "/a b" },
+    ]);
+  });
+
+  it("decodes shell-escaped spaces without a probe", () => {
+    const raw = "/Users/me/Library/Application\\ Support/Daintree/x.md";
+    const text = `cat ${raw}:7`;
+    expect(findSpacedFilePathCandidates(text)).toEqual([
+      {
+        startIndex: 4,
+        endIndex: text.length,
+        path: "/Users/me/Library/Application Support/Daintree/x.md:7",
+      },
+    ]);
+  });
+});
+
+describe("resolveSelectedFilePath with spaced paths", () => {
+  it("resolves a selected unquoted spaced path", () => {
+    expect(resolveSelectedFilePath("/a b/c.md:3", "/cwd")).toEqual({
+      absolutePath: "/a b/c.md",
+      line: 3,
+      col: undefined,
+    });
+  });
+
+  it("resolves a selected quoted path, quotes included in the selection", () => {
+    expect(resolveSelectedFilePath('"./my dir/a.md"', "/cwd")?.absolutePath).toBe(
+      "/cwd/my dir/a.md"
+    );
+  });
+
+  it("resolves a selected shell-escaped path", () => {
+    expect(resolveSelectedFilePath("/a\\ b/c.md", "/cwd")?.absolutePath).toBe("/a b/c.md");
+  });
+
+  it("rejects a selection spanning an absolute and a relative path", () => {
+    expect(resolveSelectedFilePath("/a/one.ts b/two.ts", "/cwd")).toBeNull();
+  });
+
+  it("still rejects a spaced path embedded in prose", () => {
+    expect(resolveSelectedFilePath("see /a b/c.md now", "/cwd")).toBeNull();
   });
 });
