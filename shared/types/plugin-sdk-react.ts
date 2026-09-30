@@ -1563,6 +1563,212 @@ export interface PluginFormFieldGroupProps extends PluginRootAttributes {
   className?: string;
 }
 
+// Context menus, sheets, command palettes, breadcrumbs, nav lists and steppers.
+
+/**
+ * Props of `ContextMenu`: the menu a right-click on `children` opens, built
+ * from the same rows as `DropdownMenu`. From the keyboard, Shift+F10 or the
+ * Menu key opens it while focus is anywhere inside `children`. The menu
+ * renders in a host overlay, so it takes no classes.
+ */
+export interface PluginContextMenuProps {
+  /** The surface it belongs to: one element that accepts a ref and DOM props (a row, a card). */
+  children: ReactElement;
+  items: readonly PluginDropdownMenuEntry[];
+  /** Called as the menu opens and closes. A context menu opens only from a gesture, so there is no `open`. */
+  onOpenChange?: (open: boolean) => void;
+  "aria-label"?: string;
+  /** Renders `children` alone, with no menu: while a row is being renamed, say. */
+  disabled?: boolean;
+  /** As on `DropdownMenu`. */
+  onCloseAutoFocus?: (event: Event) => void;
+  /** As on `DropdownMenu`: keeps events inside the menu off the view's own handlers. */
+  stopPropagation?: boolean;
+}
+
+/**
+ * Props of `Sheet`: a full-height panel that slides in from the window's
+ * edge over a scrim, for a record's detail or edit form beside the list it
+ * came from. It has a `Dialog`'s parts (title bar, scrolling body, footer
+ * actions) and behaves as one: focus moves in and stays in while it is open,
+ * and goes back to where it was when it closes.
+ */
+export interface PluginSheetProps {
+  open: boolean;
+  /** Called with `false` for Escape, the scrim and the close button. */
+  onOpenChange: (open: boolean) => void;
+  title: ReactNode;
+  /** The title's glyph: a name, or your own element. */
+  icon?: PluginIconSource;
+  description?: ReactNode;
+  children?: ReactNode;
+  /** The edge it opens against. Defaults to `right`. */
+  side?: "right" | "left";
+  /** `sm` 28rem, `md` 36rem (the default), `lg` 42rem, `xl` 56rem; never wider than the window. */
+  size?: "sm" | "md" | "lg" | "xl";
+  primaryAction?: PluginDialogAction;
+  secondaryAction?: PluginDialogAction;
+  /** A subdued line beside the actions: why the primary is unavailable, say. */
+  hint?: ReactNode;
+  /** Your own footer controls in place of `primaryAction`/`secondaryAction`, as on `Dialog`. */
+  footer?: ReactNode;
+  /** False blocks Escape, the scrim and the close button. Defaults to true. */
+  dismissible?: boolean;
+  layer?: PluginDialogLayer;
+  /** On the sheet's root, for tests. */
+  "data-testid"?: string;
+}
+
+/** One row of a `CommandPalette`. */
+export interface PluginCommandPaletteItem {
+  /** Unique within the palette. */
+  id: string;
+  label: string;
+  /** A second, quieter line: where the item lives, what it does. */
+  description?: string;
+  icon?: PluginIconSource;
+  /** More words the search matches that are not on screen: synonyms, an issue number. */
+  keywords?: readonly string[];
+  /** A canonical combo shown at the row's end, e.g. `"Cmd+Shift+P"`. */
+  shortcut?: string;
+  /** Rows sharing a group sit together under its heading, in the order groups first appear. */
+  group?: string;
+  /** Shown but skipped by the cursor and never selected. */
+  disabled?: boolean;
+}
+
+/**
+ * Props of `CommandPalette`: Daintree's search palette as a quick switcher or
+ * "jump to…": a search field over a virtualised list, fuzzy-matched on the
+ * label, description and keywords with the matches marked. Up/Down move,
+ * Enter selects, Escape clears the search and then closes. Selecting an item
+ * closes the palette. It renders in a host overlay, so it takes no classes.
+ */
+export interface PluginCommandPaletteProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  items: readonly PluginCommandPaletteItem[];
+  onSelect: (item: PluginCommandPaletteItem) => void;
+  /** Required: the small heading over the search field, and the palette's accessible name ("Go to issue"). */
+  title: string;
+  placeholder?: string;
+  /** A canonical combo beside the title: the shortcut that opens this palette. */
+  shortcut?: string;
+  /** Called as the search text changes, to fetch items for it. The text clears when the palette closes. */
+  onQueryChange?: (query: string) => void;
+  /**
+   * `true` (the default) fuzzy-filters `items` by the search text. `false`
+   * shows `items` as given, for a palette whose items come from a search you
+   * run yourself in `onQueryChange`.
+   */
+  filter?: boolean;
+  /** Items are still arriving: the header shows a loading bar and an empty list says nothing yet. */
+  loading?: boolean;
+  /** Shown when there are no items and no search text. */
+  emptyText?: string;
+  /** What Enter does to the highlighted item, shown in the footer ("Open issue"). */
+  actionLabel?: string;
+}
+
+/** One crumb of `Breadcrumbs`. */
+export interface PluginBreadcrumbItem {
+  label: string;
+  /** Makes the crumb a link back to that level. The last crumb is the current page and never is. */
+  onSelect?: () => void;
+  icon?: PluginIconSource;
+}
+
+/**
+ * Props of `Breadcrumbs`: the path to the current page, each level a link
+ * back to it and the last one the page itself (`aria-current`). A long path
+ * keeps its first and last crumbs and folds the middle ones into a menu.
+ */
+export interface PluginBreadcrumbsProps extends PluginRootAttributes {
+  items: readonly PluginBreadcrumbItem[];
+  /** How many crumbs show before the middle ones fold into a menu. Defaults to 4; at least 2. */
+  maxItems?: number;
+  /** Names the trail. Defaults to "Breadcrumb". */
+  "aria-label"?: string;
+  className?: string;
+}
+
+/** One destination of a `NavList`. */
+export interface PluginNavListItem {
+  /** Unique within the list; what `value` and `onValueChange` carry. */
+  id: string;
+  label: string;
+  icon?: PluginIconSource;
+  /** A count at the row's end: unread, open, failing. Zero shows nothing. */
+  count?: number;
+  /** A short tag at the row's end instead of a count: a kit `Badge`, say. */
+  badge?: ReactNode;
+  /** Shown but skipped by the cursor and never selected. */
+  disabled?: boolean;
+  /** Destinations under this one, indented beneath it. One level: theirs are ignored. */
+  children?: readonly PluginNavListItem[];
+}
+
+/** A band of a `NavList`, with an optional heading. */
+export interface PluginNavListSection {
+  label?: string;
+  items: readonly PluginNavListItem[];
+}
+
+/**
+ * Props of `NavList`: the left rail of an app, the destinations its pages
+ * switch between, drawn with Daintree's sidebar rows (the selected one takes
+ * the neutral highlight, never the accent). One tab stop: Up/Down/Home/End
+ * move the cursor, Enter or Space selects, typing jumps to a matching label.
+ * Give it `sections`, or `items` for one band with no heading.
+ */
+export interface PluginNavListProps extends PluginRootAttributes {
+  sections?: readonly PluginNavListSection[];
+  items?: readonly PluginNavListItem[];
+  /** The selected destination's id, controlled. Passing it at all makes the list controlled. */
+  value?: string | null;
+  defaultValue?: string | null;
+  onValueChange?: (id: string) => void;
+  /** Required: names the list for assistive tech ("Sections"). */
+  "aria-label": string;
+  className?: string;
+}
+
+/** Where a `Stepper` step stands. */
+export type PluginStepState = "complete" | "current" | "upcoming" | "error";
+
+/** One step of a `Stepper`. */
+export interface PluginStepperStep {
+  /** Unique within the stepper; what `current` and `onStepSelect` carry. */
+  id: string;
+  label: string;
+  /** A quieter line under the label. */
+  description?: string;
+  /**
+   * Overrides the state the step's place gives it (before `current` is
+   * complete, after it upcoming): `error` for a step that needs another look,
+   * `complete` for one done out of order.
+   */
+  state?: PluginStepState;
+}
+
+/**
+ * Props of `Stepper`: a wizard's progress, one marker per step with its
+ * label. Neutral throughout: the current step is the high-contrast marker, a
+ * completed one a check, a failed one the error glyph.
+ */
+export interface PluginStepperProps extends PluginRootAttributes {
+  steps: readonly PluginStepperStep[];
+  /** The current step's id. */
+  current: string;
+  /** `horizontal` (the default) runs across the top of a wizard; `vertical` down its side. */
+  orientation?: "horizontal" | "vertical";
+  /** Makes complete and error steps buttons that go back to them. */
+  onStepSelect?: (id: string) => void;
+  /** Names the steps. Defaults to "Progress". */
+  "aria-label"?: string;
+  className?: string;
+}
+
 /**
  * Keys of {@link PluginThemeTokens}: Daintree's semantic theme tokens, the
  * same names as the `--theme-*` CSS variables without the prefix. The surface,
