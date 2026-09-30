@@ -91,7 +91,9 @@ export function MarkdownDocument({
   // Runs after the first commit, which is the point the host's height pin can
   // hand the box back to the document. Cold fence grammars land later and swap
   // plain text for span-wrapped identical text — same characters, same line
-  // count, so they can't shrink the box and don't gate this.
+  // count, so they can't shrink the box and don't gate this. Mermaid diagrams
+  // also land later and do change the height; the pin only has to survive the
+  // swap itself, so they don't gate it either.
   useEffect(() => {
     onRendered?.();
   }, [onRendered]);

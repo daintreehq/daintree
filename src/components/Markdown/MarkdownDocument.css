@@ -183,3 +183,30 @@
   margin-right: 0.5em;
   accent-color: var(--color-accent-primary);
 }
+
+/* Mermaid fences. A rendered diagram takes the fence's frame so the swap from
+   source to diagram doesn't restyle the block; the diagram's own colors come
+   from the theme via mermaidTheme.ts, not from here. Until it renders (or if
+   it never does), the fence is an ordinary <pre> and keeps the rules above. */
+.markdown-document .markdown-mermaid {
+  margin-block: 1.7142857em;
+}
+
+.markdown-document .markdown-mermaid > pre {
+  margin: 0;
+}
+
+.markdown-document .markdown-mermaid__diagram {
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+  padding: 1rem;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklab, var(--color-surface-sidebar) 30%, transparent);
+}
+
+.markdown-document .markdown-mermaid__diagram > svg {
+  max-width: 100%;
+  height: auto;
+}

@@ -13,6 +13,7 @@ import {
   type ExtraProps,
   type Options,
 } from "react-markdown";
+import type { ElementContent, Element as HastElement } from "hast";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import { refractor } from "refractor/core";
@@ -25,6 +26,7 @@ import { dirname, isAbsolute, isPathInside, join, normalize } from "@shared/util
 import { buildDaintreeFileUrl } from "@/components/FileViewer/filePreviewKinds";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
+import { MermaidDiagram } from "./mermaid/MermaidDiagram";
 
 /**
  * Everything that decides how one rendered Markdown document treats untrusted
@@ -37,9 +39,13 @@ import { logError } from "@/utils/logger";
  * boundary both surfaces are held to.
  *
  * Note what is NOT here: raw HTML handling. Both callers pass `skipHtml` and
- * neither adds `rehype-raw`, so embedded markup is dropped before it can reach
- * the DOM. That absence is the reason this can render arbitrary repo files
- * inside an Electron renderer without a sanitizer — do not add it.
+ * neither adds `rehype-raw`, so markup authored in the document is dropped
+ * before it can reach the DOM. That absence is what lets this render arbitrary
+ * repo files inside an Electron renderer — do not add it.
+ *
+ * The one piece of markup this pipeline does insert is generated, not
+ * authored: a ```mermaid fence becomes SVG, which goes through
+ * `sanitizeMermaidSvg` before it touches the DOM (see `mermaid/`).
  */
 
 /**
@@ -166,6 +172,29 @@ export function HighlightedCode({ language, code }: { language: string; code: st
   return <code className={`language-${lang}`}>{highlighted ?? code}</code>;
 }
 
+function hastText(nodes: readonly ElementContent[]): string {
+  let text = "";
+  for (const child of nodes) {
+    if (child.type === "text") text += child.value;
+    else if (child.type === "element") text += hastText(child.children);
+  }
+  return text;
+}
+
+/** The source of a ```mermaid fence, or null when `pre` holds anything else. */
+function mermaidFenceSource(pre: HastElement | undefined): string | null {
+  const code = pre?.children.length === 1 ? pre.children[0] : undefined;
+  if (code?.type !== "element" || code.tagName !== "code") return null;
+  const className = code.properties.className;
+  if (
+    !Array.isArray(className) ||
+    !className.some((name) => String(name).toLowerCase() === "language-mermaid")
+  ) {
+    return null;
+  }
+  return hastText(code.children).replace(/\n$/, "");
+}
+
 /** Resolve a link/image target against the document's directory. */
 function resolveAgainstFile(filePath: string, target: string): string {
   return isAbsolute(target) ? normalize(target) : normalize(join(dirname(filePath), target));
@@ -286,6 +315,15 @@ export function useMarkdownRenderPolicy({
   const components = useMemo<Components>(
     () => ({
       img: MarkdownImage,
+      pre: ({ node, children, ...props }) => {
+        const mermaidSource = mermaidFenceSource(node);
+        if (mermaidSource !== null) {
+          return (
+            <MermaidDiagram source={mermaidSource} fallback={<pre {...props}>{children}</pre>} />
+          );
+        }
+        return <pre {...props}>{children}</pre>;
+      },
       code: ({ node: _node, className: codeClassName, children, ...props }) => {
         const language = /language-([\w+-]+)/.exec(codeClassName ?? "")?.[1];
         if (language) {
