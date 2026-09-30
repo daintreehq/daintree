@@ -183,7 +183,7 @@ export interface HttpLifecycleDeps {
   ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
   handleTerminalReadLastMessageOwned: import("./sessionServer.js").OwnedMainExecutors["handleTerminalReadLastMessageOwned"];
   isTerminalIdInUse: (terminalId: string) => boolean;
-  readTerminalAgentState?: import("./sessionServer.js").SessionServerDeps["readTerminalAgentState"];
+  readTerminalCloseContext?: import("./sessionServer.js").SessionServerDeps["readTerminalCloseContext"];
   /**
    * Whether the pty-host's record places a terminal as an agent pane of this
    * workspace (#12883). `false` for anything it cannot place.
@@ -2279,8 +2279,8 @@ export class HttpLifecycle {
       handleTerminalGetStatusViewless: this.deps.handleTerminalGetStatusViewless,
       handleTerminalReadLastMessageOwned: this.deps.handleTerminalReadLastMessageOwned,
       isTerminalIdInUse: this.deps.isTerminalIdInUse,
-      ...(this.deps.readTerminalAgentState !== undefined
-        ? { readTerminalAgentState: this.deps.readTerminalAgentState }
+      ...(this.deps.readTerminalCloseContext !== undefined
+        ? { readTerminalCloseContext: this.deps.readTerminalCloseContext }
         : {}),
       isTerminalInPinnedWorkspace,
       ...(this.deps.replyWaiter !== undefined ? { replyWaiter: this.deps.replyWaiter } : {}),

@@ -326,6 +326,41 @@ describe("TerminalProcess handback requests (#12488)", () => {
     terminal.dispose();
   });
 
+  it("drops the last handback once a later plain submission reaches the pty (#13128)", async () => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    const terminal = createTerminal({ launchAgentId: "claude", handbackCode: "k7f3qa" });
+    terminal.getInfo().agentState = "waiting";
+
+    ptyOnDataCallback!("DAINTREE-DONE-k7f3qa: reviewed END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(terminal.getInfo().lastHandback?.message).toBe("reviewed");
+    // The hit retired the only request, so the tracker has nothing left to retire.
+    expect(terminal.getInfo().handbackTracker?.hasRequests()).toBe(false);
+
+    terminal.submit("one more thing", "tok-2");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(terminal.getSubmission("tok-2")?.phase).toBe("pty_written");
+    expect(terminal.getInfo().lastHandback).toBeUndefined();
+    expect(terminal.getInfo().lastHandbackUnpublished).toBe(false);
+    vi.useRealTimers();
+    terminal.dispose();
+  });
+
+  it("keeps the last handback while a later submission has not reached the pty", () => {
+    const terminal = createTerminal();
+    const handback = { message: "done", observedAt: 1, truncated: false };
+    terminal.getInfo().lastHandback = handback;
+    const release = acquireInputLock(terminal);
+
+    terminal.submit("queued", "tok-1");
+
+    expect(terminal.getInfo().lastHandback).toBe(handback);
+    release();
+    terminal.dispose();
+  });
+
   it("reports a done marker the moment it is complete on screen, without waiting for a settle", async () => {
     vi.useFakeTimers();
     ptyOnDataCallback = null;
