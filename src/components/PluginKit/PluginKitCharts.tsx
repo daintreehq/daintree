@@ -764,22 +764,22 @@ function ChartEmpty({
   className: string | undefined;
   root: Record<string, string | number | boolean>;
 }) {
-  if (hasContent(empty)) {
-    return (
-      <div {...root} className={className}>
-        {node(empty)}
-      </div>
-    );
-  }
+  // An author's empty node sits in the same frame as the default: the chart's height,
+  // centred both ways. Only the placement is the kit's; the node keeps its own type.
+  const custom = hasContent(empty);
   return (
     <div
       {...root}
       role="group"
       aria-label={label}
       style={{ height }}
-      className={cn("flex items-center justify-center text-xs text-text-secondary", className)}
+      className={cn(
+        "flex items-center justify-center",
+        !custom && "text-xs text-text-secondary",
+        className
+      )}
     >
-      No data
+      {custom ? node(empty) : "No data"}
     </div>
   );
 }

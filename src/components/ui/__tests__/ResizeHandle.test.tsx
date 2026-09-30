@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ResizeHandle, type ResizeHandleEdge } from "../ResizeHandle";
 import type { SplitterGrowKey } from "@/hooks/useSplitterKeys";
+import { BUILT_IN_APP_SCHEMES, blendOverBackground, contrastRatio, parseRgba } from "@shared/theme";
 
 const PLACEMENTS: Array<{ edge: ResizeHandleEdge; growKey: SplitterGrowKey }> = [
   { edge: "left", growKey: "ArrowLeft" },
@@ -99,18 +100,66 @@ describe("ResizeHandle", () => {
     }
   });
 
-  it.each(cases)("steps the grip ink up from rest to hover to focus (%s)", (_, placement) => {
+  // A grip is a UI component under WCAG 1.4.11: at rest it owes 3:1 against every
+  // surface a splitter sits on, in the dark and the light reference theme, and each
+  // state after rest has to read as a step up from it. Measured on the themes'
+  // real values so a retuned token trips this rather than the eye.
+  const GRIP_THEMES = ["daintree", "svalbard"] as const;
+  const SPLITTER_SURFACES = [
+    "surface-canvas",
+    "surface-sidebar",
+    "surface-grid",
+    "surface-panel",
+    "surface-panel-elevated",
+  ] as const;
+  const gripInk = (grip: Element, prefix: string) => {
+    const token = tokens(grip).find(
+      (x) => x.startsWith(`${prefix}bg-`) && !x.slice(prefix.length).includes(":")
+    );
+    if (!token) throw new Error(`no ${prefix || "rest"} ink`);
+    return token.slice(prefix.length + "bg-".length);
+  };
+  const worstContrast = (schemeId: string, ink: string) => {
+    const scheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === schemeId)!;
+    const value = (scheme.tokens as Record<string, string>)[ink];
+    if (!value) throw new Error(`${ink} is not a ${schemeId} theme token`);
+    return Math.min(
+      ...SPLITTER_SURFACES.map((surface) => {
+        const bg = scheme.tokens[surface];
+        const alpha = parseRgba(value);
+        return contrastRatio(alpha ? blendOverBackground(alpha.hex, bg, alpha.opacity) : value, bg);
+      })
+    );
+  };
+
+  it.each(cases)("draws the grip in theme tokens, never slash-alpha ink (%s)", (_, placement) => {
+    for (const isResizing of [false, true]) {
+      const { grip } = renderHandle(placement, { isResizing });
+      const inks = tokens(grip).filter((x) => /(^|:)bg-/.test(x));
+      expect(inks.length).toBeGreaterThan(0);
+      for (const ink of inks) expect(ink).not.toMatch(/\/\d+$/);
+      expect(tokens(grip).some((x) => x.startsWith("[.light_&]"))).toBe(false);
+      cleanup();
+    }
+  });
+
+  it.each(cases)("rests at 3:1 and steps up to hover then focus (%s)", (_, placement) => {
     const { grip } = renderHandle(placement);
-    const alpha = (prefix: string) => {
-      const token = tokens(grip).find((x) => new RegExp(`^${prefix}bg-text-primary/\\d+$`).test(x));
-      if (!token) throw new Error(`no ${prefix || "rest"} ink`);
-      return Number(token.split("/").pop());
-    };
-    const rest = alpha("");
-    const hover = alpha("group-hover/resize:");
-    const focus = alpha("group-focus-visible/resize:");
-    expect(rest).toBeLessThan(hover);
-    expect(hover).toBeLessThan(focus);
+    const rest = gripInk(grip, "");
+    const hover = gripInk(grip, "group-hover/resize:");
+    const focus = gripInk(grip, "group-focus-visible/resize:");
+    cleanup();
+    const drag = gripInk(renderHandle(placement, { isResizing: true }).grip, "");
+    for (const theme of GRIP_THEMES) {
+      const r = worstContrast(theme, rest);
+      const h = worstContrast(theme, hover);
+      const f = worstContrast(theme, focus);
+      const d = worstContrast(theme, drag);
+      expect(r, `${theme} resting grip ${rest}`).toBeGreaterThanOrEqual(3);
+      expect(h, `${theme} hover ${hover} over rest ${rest}`).toBeGreaterThan(r);
+      expect(f, `${theme} focus ${focus} over hover ${hover}`).toBeGreaterThan(h);
+      expect(d, `${theme} drag ${drag} over rest ${rest}`).toBeGreaterThan(r);
+    }
   });
 
   it.each(cases)("lets nothing hover-driven outrank the drag state (%s)", (_, placement) => {
