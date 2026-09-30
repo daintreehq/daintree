@@ -3,6 +3,7 @@ import {
   EditorView,
   drawSelection,
   dropCursor,
+  highlightActiveLineGutter,
   highlightSpecialChars,
   keymap,
   lineNumbers as lineNumberGutter,
@@ -80,6 +81,12 @@ function loadLanguage(name: string): Promise<LanguageSupport | null> {
   // highlighted fences, nothing rewritten on paste).
   if (description.name === "Markdown") return loadMarkdownSupport();
   return description.load();
+}
+
+// The file viewer's gutter: numbers, fold markers, and the caret's line
+// lifted in the gutter as @uiw's basic setup draws it there.
+function gutterExtensions(): Extension {
+  return [lineNumberGutter(), foldGutter(), highlightActiveLineGutter()];
 }
 
 function readOnlyExtensions(readOnly: boolean): Extension {
@@ -184,7 +191,7 @@ export default function KitCodeEditorImpl({
               },
             })
           ),
-          parts.gutter.of(start.lineNumbers ? [lineNumberGutter(), foldGutter()] : []),
+          parts.gutter.of(start.lineNumbers ? gutterExtensions() : []),
           highlightSpecialChars(),
           history(),
           drawSelection(),
@@ -315,9 +322,7 @@ export default function KitCodeEditorImpl({
 
   useEffect(() => {
     viewRef.current?.dispatch({
-      effects: compartments.current.gutter.reconfigure(
-        lineNumbers ? [lineNumberGutter(), foldGutter()] : []
-      ),
+      effects: compartments.current.gutter.reconfigure(lineNumbers ? gutterExtensions() : []),
     });
   }, [lineNumbers]);
 

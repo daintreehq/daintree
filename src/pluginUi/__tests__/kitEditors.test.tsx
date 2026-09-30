@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { createElement, createRef, type ReactNode } from "react";
+import { createElement, createRef, useState, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
@@ -135,6 +135,33 @@ describe("CodeEditor", () => {
     act(() => void window.dispatchEvent(new CustomEvent("daintree:find-in-panel")));
     focused.mockRestore();
     expect(root.querySelector(".cm-search")).not.toBeNull();
+  });
+
+  it("keeps an open find bar's replace row in step with readOnly", async () => {
+    const ref = createRef<CodeEditorHandle>();
+    const { rerender } = render(
+      createElement(kit.CodeEditor, { value: "needle", ref, "data-testid": "ed" })
+    );
+    const root = screen.getByTestId("ed");
+    await editorIn(root);
+    act(() => ref.current?.openSearch());
+    const replace = () => root.querySelector<HTMLInputElement>(".cm-search input[name=replace]");
+    replace()!.focus();
+    rerender(
+      createElement(kit.CodeEditor, { value: "needle", ref, readOnly: true, "data-testid": "ed" })
+    );
+    expect(replace()).toBeNull();
+    // The keyboard was in the row that went: it is handed to the find field.
+    expect(document.activeElement?.getAttribute("main-field")).toBe("true");
+    rerender(createElement(kit.CodeEditor, { value: "needle", ref, "data-testid": "ed" }));
+    expect(replace()).not.toBeNull();
+  });
+
+  it("lifts the caret's line in the gutter, as the file viewer does", async () => {
+    render(createElement(kit.CodeEditor, { value: "a\nb", "data-testid": "ed" }));
+    const root = screen.getByTestId("ed");
+    await editorIn(root);
+    expect(root.querySelector(".cm-activeLineGutter")).not.toBeNull();
   });
 
   it("takes a CRLF value with the caret past its normalised length", async () => {
@@ -314,6 +341,48 @@ describe("DiffView", () => {
     // Undone one after the other, bottom first, the pair give back the original.
     const reverted = kit.revertHunk(kit.revertHunk(after, insertion!) ?? "", deletion!);
     expect(reverted).toBe(before);
+  });
+
+  it("hands the keyboard to the next hunk's action when a Revert removes its own hunk", async () => {
+    function Reverting() {
+      const [text, setText] = useState(EDITED);
+      return createElement(kit.DiffView, {
+        oldText: SAVED,
+        newText: text,
+        context: 1,
+        hunkActions: [{ id: "revert", label: "Revert" }],
+        onHunkAction: (_id: string, hunk: DiffHunk) => setText(kit.revertHunk(text, hunk) ?? text),
+        "data-testid": "diff",
+      });
+    }
+    render(withTooltips(createElement(Reverting)));
+    await hunkHeaders(await loadedDiff("diff"));
+    const [first] = screen.getAllByRole("button", { name: "Revert" });
+    first!.focus();
+    act(() => first!.click());
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Revert" })).toHaveLength(1));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Revert" }));
+  });
+
+  it("keeps the keyboard on the hunk header after expanding hidden lines", async () => {
+    render(
+      withTooltips(
+        createElement(kit.DiffView, {
+          oldText: SAVED,
+          newText: EDITED,
+          context: 1,
+          "data-testid": "diff",
+        })
+      )
+    );
+    const root = await loadedDiff("diff");
+    await hunkHeaders(root);
+    const expand = screen.getAllByRole("button", { name: /^Expand/ })[0]!;
+    expand.focus();
+    act(() => expand.click());
+    await waitFor(() => expect(expand.isConnected).toBe(false));
+    expect(root.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(document.body);
   });
 
   it("drops a custom hunk node React cannot render", async () => {
@@ -518,6 +587,19 @@ describe("formatMarkdown", () => {
     const address = run("https://daintree.dev", 0, 20, "link");
     expect(address.next).toBe("[](https://daintree.dev)");
     expect(address.edit.selectionStart).toBe(1);
+    // With nothing selected, what is typed next is the link's text.
+    const empty = run("see ", 4, 4, "link");
+    expect(empty.next).toBe("see [](url)");
+    expect([empty.edit.selectionStart, empty.edit.selectionEnd]).toEqual([5, 5]);
+  });
+
+  it("keeps a selection inside one line on the same text when listing it", () => {
+    const listed = run("fix the bug", 4, 7, "bullets");
+    expect(listed.next).toBe("- fix the bug");
+    expect(listed.selected).toBe("the");
+    const unlisted = run("- fix the bug", 6, 9, "bullets");
+    expect(unlisted.next).toBe("fix the bug");
+    expect(unlisted.selected).toBe("the");
   });
 
   it("toggles list markers over every selected line, swapping one kind for the other", () => {
@@ -562,6 +644,10 @@ describe("MarkdownEditor", () => {
     expect(onModeChange).toHaveBeenCalledWith("preview");
     // Kept behind Preview, so its undo history survives the visit.
     expect(textarea(root).closest("[hidden]")).not.toBeNull();
+    // Both panels stay mounted, so each tab's aria-controls resolves.
+    for (const tab of screen.getAllByRole("tab")) {
+      expect(document.getElementById(tab.getAttribute("aria-controls") ?? "")).not.toBeNull();
+    }
     expect(screen.queryByRole("toolbar", { name: "Formatting" })).toBeNull();
     const strong = await waitFor(() => {
       const found = root.querySelector("strong");

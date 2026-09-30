@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import type { HunkData } from "react-diff-view";
 import type { PluginDiffHunk, PluginDiffHunkAction } from "@shared/types/plugin-sdk-react";
 import { Button } from "@/components/ui/button";
@@ -183,7 +183,7 @@ function HunkActionButton({
   onPress,
 }: {
   action: PluginDiffHunkAction;
-  onPress: () => void;
+  onPress: (button: HTMLElement) => void;
 }) {
   const overlayZ = useKitOverlayZClass();
   const button = (
@@ -192,7 +192,7 @@ function HunkActionButton({
       variant="ghost"
       size="xs"
       disabled={action.disabled}
-      onClick={onPress}
+      onClick={(event) => onPress(event.currentTarget)}
       data-kit-hunk-action={action.id}
     >
       {renderIconSource(action.icon)}
@@ -227,6 +227,42 @@ export default function KitDiffViewImpl({
   className,
   rootProps,
 }: KitDiffViewImplProps) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  // A pressed action whose hunk the view then removes (Revert, Stage) takes
+  // its button with it, a commit or two later once the viewer has re-parsed
+  // the diff. Until then its place among the same actions is watched, so the
+  // keyboard lands on the next hunk's one rather than on the body.
+  const watchRef = useRef<MutationObserver | null>(null);
+  useEffect(() => () => watchRef.current?.disconnect(), []);
+  const pressAction = (button: HTMLElement, actionId: string, hunk: PluginDiffHunk) => {
+    const root = rootRef.current;
+    watchRef.current?.disconnect();
+    watchRef.current = null;
+    if (root && typeof MutationObserver !== "undefined") {
+      const selector = `[data-kit-hunk-action="${CSS.escape(actionId)}"]`;
+      const position = Math.max(0, Array.from(root.querySelectorAll(selector)).indexOf(button));
+      const until = Date.now() + 2000;
+      const observer = new MutationObserver(() => {
+        if (Date.now() > until) {
+          observer.disconnect();
+          return;
+        }
+        if (button.isConnected) return;
+        observer.disconnect();
+        const active = document.activeElement;
+        // Somewhere else on purpose: leave it there.
+        if (active && active !== document.body && active.isConnected) return;
+        const same = root.querySelectorAll<HTMLElement>(selector);
+        const target =
+          same[Math.min(position, same.length - 1)] ??
+          root.querySelector<HTMLElement>('[role="region"]');
+        target?.focus({ preventScroll: true });
+      });
+      observer.observe(root, { childList: true, subtree: true });
+      watchRef.current = observer;
+    }
+    onHunkAction?.(actionId, hunk);
+  };
   const twoTexts = oldText !== undefined && newText !== undefined;
   const diff = twoTexts
     ? unifiedDiff(oldText, newText, { path: path ?? "", context })
@@ -258,7 +294,7 @@ export default function KitDiffViewImpl({
               <HunkActionButton
                 key={action.id}
                 action={action}
-                onPress={() => onHunkAction?.(action.id, plugin)}
+                onPress={(button) => pressAction(button, action.id, plugin)}
               />
             ))}
             {custom}
@@ -271,6 +307,7 @@ export default function KitDiffViewImpl({
   return (
     <div
       {...rootProps}
+      ref={rootRef}
       role="group"
       aria-label={ariaLabel ?? (path ? `Changes to ${path}` : "Changes")}
       data-kit-diff-view=""

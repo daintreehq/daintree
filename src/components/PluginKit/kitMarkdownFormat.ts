@@ -98,6 +98,11 @@ function link(text: string, start: number, end: number): MarkdownEdit {
     };
   }
   const insert = `[${selected}](url)`;
+  // Nothing selected: the caret waits for the link's text, which is what gets
+  // typed first; with text selected, the address placeholder does.
+  if (selected === "") {
+    return { from: start, to: end, insert, selectionStart: start + 1, selectionEnd: start + 1 };
+  }
   const urlStart = start + selected.length + 3;
   return { from: start, to: end, insert, selectionStart: urlStart, selectionEnd: urlStart + 3 };
 }
@@ -131,14 +136,15 @@ function lists(
     return `${indent}${kind === "bullets" ? "-" : `${count}.`} ${bare.slice(indent.length)}`;
   });
   const insert = changed.join("\n");
-  const single = lines.length === 1;
-  return {
-    from,
-    to,
-    insert,
-    selectionStart: single ? from + insert.length : from,
-    selectionEnd: from + insert.length,
-  };
+  if (lines.length === 1) {
+    // One line: the selection (or caret) moves with the text it was on, past
+    // a marker added in front of it or back over one taken off.
+    const delta = insert.length - lines[0]!.length;
+    const lead = /^\s*(?:[-*+]|\d+[.)]) /.exec(insert)?.[0].length ?? 0;
+    const place = (at: number) => Math.min(from + insert.length, Math.max(from + lead, at + delta));
+    return { from, to, insert, selectionStart: place(start), selectionEnd: place(end) };
+  }
+  return { from, to, insert, selectionStart: from, selectionEnd: from + insert.length };
 }
 
 export function formatMarkdown(
