@@ -364,9 +364,12 @@ function KitCodeBlock({
       )}
     >
       {/* A scroller with no focusable content is a tab stop of its own in
-          Chromium, so a clipped block stays reachable from the keyboard. */}
+          Chromium, so a clipped block stays reachable from the keyboard.
+          `contain: inline-size` keeps its longest line out of its ancestors'
+          min-content width: without it a code block in a flex row widens the
+          row to fit the line instead of scrolling. */}
       <pre
-        className="m-0 min-w-0 flex-1 overflow-auto py-2 font-mono text-xs leading-5 text-text-primary"
+        className="m-0 min-w-0 flex-1 overflow-auto py-2 font-mono text-xs leading-5 text-text-primary [contain:inline-size]"
         style={height === undefined ? undefined : { maxHeight: height }}
       >
         <code className={cn("block", wraps ? "w-full" : "w-max min-w-full")}>
@@ -497,7 +500,14 @@ function KitPathLabel({ path, mono, focusable, className, ...rest }: PluginPathL
         ) : null}
         {/* Never shrinks, only capped at the label's width: a shrink share, even a
             fraction of a pixel, would ellipsise the name while directory remains. */}
-        <span ref={nameRef} className="max-w-full min-w-0 shrink-0 truncate">
+        <span
+          ref={nameRef}
+          className={cn(
+            "min-w-0 shrink-0 truncate",
+            // Beside a directory, leave the directory's "…/" its two characters.
+            directory ? "max-w-[calc(100%-2ch)]" : "max-w-full"
+          )}
+        >
           {name}
         </span>
       </span>
@@ -704,8 +714,8 @@ function KitColoredLabel({
             // Through a variable, so the forced-colors fill can still win: an
             // inline background would beat the class and be painted as Canvas.
             // A swatch too close to the pane (white on light, black on dark)
-            // takes a hairline so it still reads as a dot.
-            className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--kit-label-dot)] data-[edged]:ring-1 data-[edged]:ring-border-strong data-[edged]:ring-inset forced-colors:bg-[CanvasText]"
+            // takes a hairline in secondary ink, which holds 3:1 on the chip.
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--kit-label-dot)] data-[edged]:ring-1 data-[edged]:ring-text-secondary data-[edged]:ring-inset forced-colors:bg-[CanvasText]"
             style={labelDotStyle(hex)}
           />
         ) : null}
