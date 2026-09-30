@@ -39,6 +39,8 @@ declare module "@daintreehq/plugin-ui" {
   import type {
     PluginAvatarGroupItem,
     PluginAvatarGroupProps,
+    PluginAccordionItem,
+    PluginAccordionProps,
     PluginAvatarProps,
     PluginBreadcrumbItem,
     PluginBreadcrumbsProps,
@@ -59,6 +61,7 @@ declare module "@daintreehq/plugin-ui" {
     PluginCalendarRangeProps,
     PluginCalendarSingleProps,
     PluginCalloutProps,
+    PluginCardProps,
     PluginCheckboxProps,
     PluginConfirmDialogProps,
     PluginCopyButtonProps,
@@ -76,7 +79,15 @@ declare module "@daintreehq/plugin-ui" {
     PluginDialogLayer,
     PluginDialogProps,
     PluginDiffStatProps,
+    PluginDescriptionItem,
+    PluginDescriptionListItemProps,
+    PluginDescriptionListProps,
+    PluginDialogAction,
+    PluginDialogLayer,
+    PluginDialogProps,
+    PluginDisclosureProps,
     PluginDismissButtonProps,
+    PluginDividerProps,
     PluginDropdownMenuEntry,
     PluginDropdownMenuProps,
     PluginDropdownMenuRadioItem,
@@ -111,8 +122,10 @@ declare module "@daintreehq/plugin-ui" {
     PluginPopoverProps,
     PluginPopoverSearchFieldProps,
     PluginProgressBarProps,
+    PluginResizableSplitProps,
     PluginScrollShadowProps,
     PluginSearchFieldProps,
+    PluginSectionLabelProps,
     PluginSegmentedControlProps,
     PluginSegmentedOption,
     PluginSelectOption,
@@ -265,6 +278,16 @@ declare module "@daintreehq/plugin-ui" {
   export type StepperProps = PluginStepperProps;
   export type StepperStep = PluginStepperStep;
   export type StepState = PluginStepState;
+  export type CardProps = PluginCardProps;
+  export type DividerProps = PluginDividerProps;
+  export type SectionLabelProps = PluginSectionLabelProps;
+  export type ResizableSplitProps = PluginResizableSplitProps;
+  export type AccordionProps = PluginAccordionProps;
+  export type AccordionItem = PluginAccordionItem;
+  export type DisclosureProps = PluginDisclosureProps;
+  export type DescriptionListProps = PluginDescriptionListProps;
+  export type DescriptionListItemProps = PluginDescriptionListItemProps;
+  export type DescriptionItem = PluginDescriptionItem;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -456,6 +479,29 @@ declare module "@daintreehq/plugin-ui" {
   export const NavList: ComponentType<NavListProps>;
   /** A wizard's progress: one marker per step, complete, current, upcoming or in error. */
   export const Stepper: ComponentType<StepperProps>;
+
+  /**
+   * The app's card surface: a hairline frame with an optional header, body and
+   * footer. With `onClick` the whole card is one button.
+   */
+  export const Card: ComponentType<CardProps>;
+  /** A hairline between groups, horizontal or vertical, with an optional centred label. */
+  export const Divider: ComponentType<DividerProps>;
+  /** The small quiet uppercase heading above a group of content. */
+  export const SectionLabel: ComponentType<SectionLabelProps>;
+  /**
+   * Two panes with a draggable, keyboard-resizable divider; one pane holds a
+   * size in px, optionally collapsible. It fills its container.
+   */
+  export const ResizableSplit: ComponentType<ResizableSplitProps>;
+  /** Stacked sections that show or hide their content, one or many open at a time. */
+  export const Accordion: ComponentType<AccordionProps>;
+  /** One heading button that shows or hides the content under it. */
+  export const Disclosure: ComponentType<DisclosureProps>;
+  /** The label and value rows of a record's detail page, inline or stacked. */
+  export const DescriptionList: ComponentType<DescriptionListProps>;
+  /** One row of a `DescriptionList`, for building the rows as children. */
+  export const DescriptionListItem: ComponentType<DescriptionListItemProps>;
 
   /**
    * The keyboard model of a list: one tab stop, Up/Down/Home/End move the

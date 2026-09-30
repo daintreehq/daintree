@@ -316,6 +316,7 @@ export default function Notes({ pluginId, disposeSignal }) {
 | Dates | `Calendar` (an inline month grid, one day or a range), `DatePicker` and `DateRangePicker` (typed or picked ISO `"YYYY-MM-DD"` days, range presets), `TimeAgo` (an age that keeps itself current) |
 | Pane chrome | `PaneHeader`, `Toolbar`, `ToolbarButton`, `Tabs` |
 | Navigation | `NavList` (an app's left rail), `Breadcrumbs`, `Stepper` (a wizard's progress), `CommandPalette` (a quick switcher or "jump to…") |
+| Layout | `Card` (header, body and footer; clickable with `onClick`), `Divider`, `SectionLabel`, `ResizableSplit` (two panes with a draggable divider), `Accordion`, `Disclosure`, `DescriptionList` (a record's label and value rows) |
 | States and status | `PaneState` (a whole pane's `loading`, `empty` or `error`), `EmptyState`, `Callout` (an inline message; `severity="error"` with a Retry `action` is the error banner, `variant="strip"` the pane-wide band), `Badge`, `Spinner`, `SpinningIcon`, `ProgressBar`, `Skeleton`, `SkeletonBone`, `SkeletonText`, `SkeletonHint`, `SeverityIcon` |
 | Overlays | `Dialog`, `ConfirmDialog` (including the destructive typed-name gate), `Sheet` (a record's detail or edit form against the window's edge), `Popover`, `PopoverSearchField`, `Tooltip`, `TruncatedTooltip` |
 | Settings views | `SettingsSection`, `SettingsGroup`, `SettingsRow`, `SettingsActions` — the host's section → group → row grammar |

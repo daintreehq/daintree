@@ -439,6 +439,35 @@ export const stepper = createElement(ui.Stepper, { steps, current: "b", orientat
 export const badStep: ui.StepState = "skipped";
 // @ts-expect-error a stepper needs its current step
 export const noCurrent = createElement(ui.Stepper, { steps });
+// Layout
+export const card = createElement(ui.Card, { title: "Deploy", description: "Production", actions: createElement(ui.Button, {}, "Redeploy"), footer: "5m ago", variant: "inset", padding: "none", "data-testid": "card" }, "Body");
+export const clickCard = createElement(ui.Card, { title: "Open", onClick: () => {}, disabled: false });
+// @ts-expect-error a clickable card is one button, so it takes no actions
+export const clickCardActions = createElement(ui.Card, { title: "Open", onClick: () => {}, actions: "x" });
+// @ts-expect-error card variants are a closed set
+export const badCardVariant = createElement(ui.Card, { variant: "elevated" });
+export const divider = createElement(ui.Divider, { orientation: "vertical" });
+export const labelledDivider = createElement(ui.Divider, { label: "Older" });
+export const sectionLabel = createElement(ui.SectionLabel, { variant: "list", as: "div" }, "Recent");
+// @ts-expect-error a section label is a heading or a div
+export const badSectionTag = createElement(ui.SectionLabel, { as: "span" }, "x");
+export const split = createElement(ui.ResizableSplit, { first: "a", second: "b", "aria-label": "Resize list", orientation: "vertical", sizedPane: "second", size: 240, onSizeChange: (size: number) => void size, minSize: 120, maxSize: 480, collapsible: true, collapsed: false, onCollapsedChange: (collapsed: boolean) => void collapsed });
+// @ts-expect-error a split's divider needs an aria-label
+export const unnamedSplit = createElement(ui.ResizableSplit, { first: "a", second: "b" });
+const sections: ui.AccordionItem[] = [{ value: "a", title: "General", content: "x", trailing: 3, disabled: false }];
+export const accordion = createElement(ui.Accordion, { items: sections, type: "multiple", value: ["a"], onValueChange: (value: string[]) => void value, headingLevel: 4 });
+// @ts-expect-error accordion modes are a closed set
+export const badAccordion = createElement(ui.Accordion, { items: sections, type: "some" });
+// @ts-expect-error heading levels run 2 to 6
+export const badLevel = createElement(ui.Accordion, { items: sections, headingLevel: 1 });
+export const disclosure = createElement(ui.Disclosure, { title: "Details", open: true, onOpenChange: (open: boolean) => void open }, "Body");
+// @ts-expect-error a disclosure needs a title
+export const untitledDisclosure = createElement(ui.Disclosure, {}, "Body");
+const rows: ui.DescriptionItem[] = [{ label: "Branch", value: "main", hint: "origin", copyText: "main" }];
+export const details = createElement(ui.DescriptionList, { items: rows, layout: "stacked", copyable: true });
+export const detailChildren = createElement(ui.DescriptionList, {}, createElement(ui.DescriptionListItem, { label: "Path", value: "/tmp" }));
+// @ts-expect-error description layouts are a closed set
+export const badDetails = createElement(ui.DescriptionList, { items: rows, layout: "grid" });
 
 // Root attributes: \`id\` and \`data-*\` everywhere, \`aria-*\` where the root is the control.
 export const selectId = createElement(ui.Select, { options: [], "aria-label": "Pick", "data-testid": "pick" });
