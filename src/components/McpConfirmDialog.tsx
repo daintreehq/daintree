@@ -534,6 +534,9 @@ function AssistantConfirmationPreference() {
   const saveSeqRef = useRef(0);
   const lastSettledSeqRef = useRef(0);
   const persistedRef = useRef<HelpAssistantDaintreeConfirmations | null>(null);
+  // The newest save failed and the control shows the fallback; an older save
+  // that succeeds afterwards changes what main holds, so the display follows.
+  const showingFallbackRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -563,6 +566,7 @@ function AssistantConfirmationPreference() {
   const handleChange = (value: string) => {
     if (!isHelpAssistantDaintreeConfirmations(value) || preference === null) return;
     const seq = ++saveSeqRef.current;
+    showingFallbackRef.current = false;
     setPreference(value);
     setStatus("ready");
     window.electron.helpAssistant.setSettings({ daintreeConfirmations: value }).then(
@@ -570,6 +574,7 @@ function AssistantConfirmationPreference() {
         if (seq > lastSettledSeqRef.current) {
           lastSettledSeqRef.current = seq;
           persistedRef.current = value;
+          if (mountedRef.current && showingFallbackRef.current) setPreference(value);
         }
       },
       (err: unknown) => {
@@ -578,6 +583,7 @@ function AssistantConfirmationPreference() {
         if (!mountedRef.current || seq !== saveSeqRef.current) return;
         const fallback = persistedRef.current;
         if (fallback !== null) setPreference(fallback);
+        showingFallbackRef.current = true;
         setStatus("save-failed");
       }
     );

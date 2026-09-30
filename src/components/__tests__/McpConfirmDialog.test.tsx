@@ -1213,6 +1213,32 @@ describe("McpConfirmDialog", () => {
       expect(document.body.textContent ?? "").not.toContain("Couldn't save that change");
     });
 
+    it("shows an older save that succeeds after the newest one failed", async () => {
+      let resolveFirst: (() => void) | undefined;
+      helpAssistantApi.setSettings.mockImplementationOnce(
+        () => new Promise<void>((resolve) => (resolveFirst = resolve))
+      );
+      helpAssistantApi.setSettings.mockRejectedValueOnce(new Error("disk full"));
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      act(() => {
+        fireEvent.click(segment("Never ask"));
+      });
+      await act(async () => {
+        fireEvent.click(segment("Always ask"));
+        await Promise.resolve();
+      });
+      expect(segment("Follow global setting").getAttribute("aria-checked")).toBe("true");
+
+      await act(async () => {
+        resolveFirst?.();
+        await Promise.resolve();
+      });
+
+      expect(segment("Never ask").getAttribute("aria-checked")).toBe("true");
+    });
+
     it("falls back to the last saved value, not the last pick, when the newest save fails", async () => {
       helpAssistantApi.setSettings.mockResolvedValueOnce(undefined);
       void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
