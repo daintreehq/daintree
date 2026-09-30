@@ -114,6 +114,7 @@ describe("resolveMermaidPalette", () => {
         ({
           color: "oklch(0.5 0.1 200 / 0.5)",
           fontFamily: element === document.body ? "Inter, sans-serif" : "",
+          fontSize: element === document.body ? "" : "13px",
           getPropertyValue: () => "",
         }) as unknown as CSSStyleDeclaration
     );
@@ -123,6 +124,8 @@ describe("resolveMermaidPalette", () => {
 
     expect(palette.darkMode).toBe(true);
     expect(palette.fontFamily).toBe("Inter, sans-serif");
+    // Read off the type scale rather than hard-coded.
+    expect(palette.fontSize).toBe("13px");
     // The background composites over black in a dark theme...
     expect(palette.colors.background).toBe("#101010");
     expect(layers[0]).toEqual(["#000", "oklch(0.5 0.1 200 / 0.5)"]);

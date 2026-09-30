@@ -30,6 +30,8 @@ const FALLBACK_FONT = "system-ui, sans-serif";
 export interface MermaidPalette {
   darkMode: boolean;
   fontFamily: string;
+  /** The body type-scale rung in px, which Mermaid needs as a length; absent if unresolved. */
+  fontSize?: string;
   /** Opaque hex per token; a token that could not be resolved is left out. */
   colors: Partial<Record<ThemeTokenName, string>>;
 }
@@ -102,7 +104,10 @@ export function resolveMermaidPalette(
   probe.style.pointerEvents = "none";
   document.body.appendChild(probe);
   const colors: Partial<Record<ThemeTokenName, string>> = {};
+  let fontSize: string | undefined;
   try {
+    probe.style.fontSize = "var(--text-sm)";
+    fontSize = getComputedStyle(probe).fontSize || undefined;
     const background =
       toOpaqueHex(readTokenColor(probe, BACKGROUND_TOKEN), darkMode ? "#000" : "#fff") ??
       (darkMode ? "#1e1e1e" : "#ffffff");
@@ -117,7 +122,7 @@ export function resolveMermaidPalette(
   }
   // The UI font, which the document body carries; diagram labels match it.
   const font = getComputedStyle(document.body).fontFamily.trim();
-  return { darkMode, fontFamily: font || FALLBACK_FONT, colors };
+  return { darkMode, fontFamily: font || FALLBACK_FONT, fontSize, colors };
 }
 
 /**
@@ -130,7 +135,7 @@ export function toMermaidThemeVariables(palette: MermaidPalette): Record<string,
   const variables: Record<string, string | boolean | undefined> = {
     darkMode: palette.darkMode,
     fontFamily: palette.fontFamily,
-    fontSize: "14px",
+    fontSize: palette.fontSize,
     background: colors.background,
     mainBkg: colors.nodeFill,
     primaryColor: colors.nodeFill,
