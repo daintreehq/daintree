@@ -22,8 +22,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 const resizeCallbacks = new Set<() => void>();
 class ManualResizeObserver {
   private readonly callback: () => void;
-  constructor(callback: () => void) {
-    this.callback = () => callback();
+  // Reports no entries: the kit re-reads geometry itself, and Floating UI's
+  // own observer (an open menu's) destructures the list.
+  constructor(callback: (entries: unknown[]) => void) {
+    this.callback = () => callback([]);
   }
   observe() {
     resizeCallbacks.add(this.callback);
@@ -393,6 +395,28 @@ describe("StatusBar", () => {
     expect(classesOf(screen.getByText("12 lines"))).toContain("truncate");
   });
 
+  it("gives up width from the end: only the last text fact of a side truncates", () => {
+    render(
+      createElement(kit.StatusBar, {
+        left: ["6 worktrees", "3 agents running", "develop ↑2"],
+        "data-testid": "bar",
+      })
+    );
+    const left = screen
+      .getByTestId("bar")
+      .querySelector<HTMLElement>('[data-status-bar-slot="left"]')!;
+    const truncating = [...left.querySelectorAll<HTMLElement>(".truncate")].map(
+      (span) => span.textContent
+    );
+    expect(truncating).toEqual(["develop ↑2"]);
+  });
+
+  it("does not pad the compact strip around its controls", () => {
+    render(createElement(kit.StatusBar, { left: "a", "data-testid": "bar" }));
+    const padding = classesOf(screen.getByTestId("bar")).filter((name) => /^py-(?!0$)/.test(name));
+    expect(padding).toEqual([]);
+  });
+
   it("ignores unknown density and placement", () => {
     render(untyped("StatusBar", { left: "a", density: "huge", placement: 1, "data-testid": "x" }));
     render(createElement(kit.StatusBar, { left: "a", "data-testid": "y" }));
@@ -714,6 +738,35 @@ describe("OverflowToolbar", () => {
     );
     expect(screen.queryByRole("button", { name: "B" })).toBeNull();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "More actions" }));
+  });
+
+  it("never clips the live row with a bare overflow, which would cut focus rings", () => {
+    setGeometry(100);
+    toolbar();
+    relayout();
+    const region = document.querySelector<HTMLElement>("[data-overflow-region]");
+    expect(region).not.toBeNull();
+    expect(
+      classesOf(region!).filter((name) => /^overflow-(x-|y-)?(hidden|auto|scroll)$/.test(name))
+    ).toEqual([]);
+  });
+
+  it("closes the menu and follows a focused menu row back into the strip", async () => {
+    setGeometry(100);
+    toolbar();
+    relayout();
+    const more = screen.getByRole("button", { name: "More actions" });
+    await act(async () => {
+      fireEvent.keyDown(more, { key: "Enter" });
+    });
+    const row = await screen.findByRole("menuitem", { name: "Settings" });
+    act(() => row.focus());
+    expect(document.activeElement).toBe(row);
+    setGeometry(1000);
+    relayout();
+    await act(async () => {});
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Settings" }));
   });
 
   it("keeps a high-priority control in the strip over earlier ones", () => {
