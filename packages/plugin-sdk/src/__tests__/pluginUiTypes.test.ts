@@ -276,6 +276,37 @@ export const truncated = createElement(ui.TruncatedTooltip, { content: "x", isTr
 export const bone = createElement(ui.SkeletonBone, { immediate: true });
 const newIcon: ui.IconName = "user-plus";
 export const newIcons = createElement(ui.Icon, { name: newIcon });
+
+// 1.3
+const walked: ui.FileTreeEntry[] = [{ path: "src/a.ts", type: "file" }, { path: "src", type: "dir" }];
+export const tree = createElement(ui.FileTree, {
+  entries: walked,
+  "aria-label": "Files",
+  selectedPath: "src/a.ts",
+  onSelect: (path: string, item: ui.FileTreeItem) => void [path, item.type, item.depth],
+  expandedPaths: ["src"],
+  onExpandedPathsChange: (paths: string[]) => void paths,
+  onActivate: (path: string) => void path,
+  sort: "natural",
+});
+const nested: ui.FileTreeNode[] = [{ name: "src", children: [{ name: "a.ts" }] }];
+export const nestedTree = createElement(ui.FileTree, { nodes: nested, "aria-label": "Files" });
+// @ts-expect-error a tree needs an aria-label
+export const unnamedTree = createElement(ui.FileTree, { entries: walked });
+// @ts-expect-error sort orders are a closed set
+export const badSort = createElement(ui.FileTree, { entries: walked, "aria-label": "Files", sort: "size" });
+export const stat = createElement(ui.StatCard, { label: "Changed files", value: 43, delta: -2, tone: "warning", hint: "2 worktrees" });
+// @ts-expect-error a stat needs a value
+export const noValue = createElement(ui.StatCard, { label: "Changed files" });
+export const spark = createElement(ui.Sparkline, { values: [1, 2, 3], "aria-label": "Events", height: 32, tone: "info", min: 0 });
+// @ts-expect-error a sparkline needs an aria-label
+export const unnamedSpark = createElement(ui.Sparkline, { values: [1, 2] });
+export const group = createElement(ui.FormFieldGroup, { label: "Labels", layout: "inline", required: true }, createElement(ui.Checkbox, {}));
+export const startMarkdown = createElement(ui.Markdown, { source: "x", align: "start" });
+// @ts-expect-error alignments are a closed set
+export const badAlign = createElement(ui.Markdown, { source: "x", align: "right" });
+const growColumn: ui.DataTableColumn<{ id: string }> = { id: "id", header: "Id", grow: true };
+void growColumn;
 `;
 
 let consumerDir: string;

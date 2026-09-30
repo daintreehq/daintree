@@ -58,6 +58,11 @@ declare module "@daintreehq/plugin-ui" {
     PluginDropdownMenuRadioItem,
     PluginEmptyStateProps,
     PluginFormFieldControlProps,
+    PluginFileTreeEntry,
+    PluginFileTreeItem,
+    PluginFileTreeNode,
+    PluginFileTreeProps,
+    PluginFormFieldGroupProps,
     PluginFormFieldProps,
     PluginIconButtonProps,
     PluginIconName,
@@ -95,7 +100,9 @@ declare module "@daintreehq/plugin-ui" {
     PluginSkeletonHintProps,
     PluginSkeletonProps,
     PluginSkeletonTextProps,
+    PluginSparklineProps,
     PluginSpinnerProps,
+    PluginStatCardProps,
     PluginSpinningIconProps,
     PluginSwitchProps,
     PluginTabItem,
@@ -185,8 +192,15 @@ declare module "@daintreehq/plugin-ui" {
   export type DropdownMenuRadioItem = PluginDropdownMenuRadioItem;
   export type DialogLayer = PluginDialogLayer;
   export type IconSource = PluginIconSource;
+  export type FileTreeProps = PluginFileTreeProps;
+  export type FileTreeEntry = PluginFileTreeEntry;
+  export type FileTreeNode = PluginFileTreeNode;
+  export type FileTreeItem = PluginFileTreeItem;
+  export type StatCardProps = PluginStatCardProps;
+  export type SparklineProps = PluginSparklineProps;
+  export type FormFieldGroupProps = PluginFormFieldGroupProps;
 
-  /** The kit's contract version (semver): `"1.2.0"` for this release. */
+  /** The kit's contract version (semver): `"1.3.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
 
   /**
@@ -321,6 +335,23 @@ declare module "@daintreehq/plugin-ui" {
   export const PopoverSearchField: ComponentType<PopoverSearchFieldProps>;
   /** The "Still working…" line beside a `Skeleton` once a load runs long. */
   export const SkeletonHint: ComponentType<SkeletonHintProps>;
+
+  // Added in 1.3.0.
+
+  /**
+   * Daintree's file tree, virtualised: the host browser's chevron gutter,
+   * file-type icons and keyboard model. Takes a flat `entries` list (the shape
+   * `host.fs.walk` returns) or nested `nodes`, and sorts folders first in
+   * natural, numeric-aware order unless `sort="none"`. It fills its
+   * container's height.
+   */
+  export const FileTree: ComponentType<FileTreeProps>;
+  /** One figure with a sentence-case label, an optional delta and a quiet hint. */
+  export const StatCard: ComponentType<StatCardProps>;
+  /** A small trend line with no axes, in a theme colour, filling its container's width. */
+  export const Sparkline: ComponentType<SparklineProps>;
+  /** One label, at a field label's size, over a set of controls such as checkboxes. */
+  export const FormFieldGroup: ComponentType<FormFieldGroupProps>;
 
   /**
    * The keyboard model of a list: one tab stop, Up/Down/Home/End move the

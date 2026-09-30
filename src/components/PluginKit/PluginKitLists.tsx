@@ -192,6 +192,7 @@ interface TableColumn {
   id: string;
   header: ReactNode;
   width: number | string | undefined;
+  grow: boolean;
   align: "start" | "center" | "end";
   sortable: boolean;
   render: ((row: unknown, index: number) => unknown) | undefined;
@@ -218,6 +219,7 @@ function readColumns(columns: unknown): TableColumn[] {
             ? positive(width, 10_000)
             : undefined,
       align: oneOf(field(entry, "align"), ["start", "center", "end"] as const) ?? "start",
+      grow: field(entry, "grow") === true,
       sortable: field(entry, "sortable") === true,
       render:
         typeof render === "function"
@@ -226,6 +228,54 @@ function readColumns(columns: unknown): TableColumn[] {
     });
   }
   return out;
+}
+
+/** The widest a column without a `width` grows before the rest is left as trailing space. */
+export const FLEX_COLUMN_MAX_PX = 480;
+
+interface ColumnLayout {
+  widths: (number | string | undefined)[];
+  /** A trailing, unlabelled column that takes the width no column claims. */
+  filler: boolean;
+}
+
+/** A column width in px: 0 for none, null for a length that cannot be summed. */
+function pxWidth(width: number | string | undefined): number | null {
+  if (width === undefined) return 0;
+  if (typeof width === "number") return width;
+  const match = /^\s*(\d+(?:\.\d+)?)px\s*$/.exec(width);
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * How wide each column is drawn. The table is fixed-layout and full-width, so
+ * whatever the sized columns leave goes to the unsized ones; alone, one of
+ * them would stretch across the pane and push every column after it to the
+ * far edge. Unsized columns stop at FLEX_COLUMN_MAX_PX instead and a filler
+ * takes the remainder, and a table of sized columns keeps exactly the widths
+ * it asked for. A `grow` column opts back into taking everything. Exported for
+ * tests.
+ */
+export function layoutColumns(
+  columns: readonly { width: number | string | undefined; grow: boolean }[],
+  available: number | null
+): ColumnLayout {
+  const widths = columns.map((column) => column.width);
+  // `grow` means "take the leftover", which only an unsized column can do.
+  if (columns.length === 0 || columns.some((column) => column.grow && column.width === undefined)) {
+    return { widths, filler: false };
+  }
+  const flexible = columns.filter((column) => column.width === undefined).length;
+  if (flexible === 0) return { widths, filler: true };
+  // Only px can be summed against the measured width; a relative length (a
+  // percentage, `rem`, `ch`) or an unmeasured table keeps the plain share.
+  const px = columns.map((column) => pxWidth(column.width));
+  if (available === null || px.some((value) => value === null)) {
+    return { widths, filler: false };
+  }
+  const sized = px.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+  if ((available - sized) / flexible <= FLEX_COLUMN_MAX_PX) return { widths, filler: false };
+  return { widths: widths.map((width) => width ?? FLEX_COLUMN_MAX_PX), filler: true };
 }
 
 const ALIGN_CLASS = { start: "text-start", center: "text-center", end: "text-end" } as const;
@@ -357,6 +407,18 @@ function KitDataTable({
 
   const [range, setRange] = useState<ListRange | null>(null);
 
+  const [scroller, setScroller] = useState<HTMLElement | null>(null);
+  const [available, setAvailable] = useState<number | null>(null);
+  useEffect(() => {
+    if (scroller === null || typeof ResizeObserver === "undefined") return;
+    const measure = () => setAvailable(scroller.clientWidth || null);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(scroller);
+    return () => observer.disconnect();
+  }, [scroller]);
+  const layout = layoutColumns(cols, available);
+
   const onKeyDown = (event: KeyboardEvent<HTMLTableElement>) => {
     // Keys on a header's sort button are the button's, not the grid cursor's.
     if (event.target !== event.currentTarget) return;
@@ -419,7 +481,8 @@ function KitDataTable({
 
   const header = () => (
     <tr aria-rowindex={1}>
-      {cols.map((column) => {
+      {cols.map((column, columnIndex) => {
+        const width = layout.widths[columnIndex];
         const direction = current?.columnId === column.id ? current.direction : undefined;
         return (
           <th
@@ -434,7 +497,7 @@ function KitDataTable({
                     : "none"
                 : undefined
             }
-            style={column.width === undefined ? undefined : { width: column.width }}
+            style={width === undefined ? undefined : { width }}
             className={cn(
               "border-b border-divider bg-surface-canvas px-3 py-1.5 font-medium text-text-secondary",
               ALIGN_CLASS[column.align]
@@ -465,12 +528,16 @@ function KitDataTable({
           </th>
         );
       })}
+      {layout.filler ? (
+        <th aria-hidden="true" className="border-b border-divider bg-surface-canvas p-0" />
+      ) : null}
     </tr>
   );
 
   return (
     <TableVirtuoso
       ref={handle}
+      scrollerRef={(element) => setScroller(element instanceof HTMLElement ? element : null)}
       className={cn(SCROLLER_RING_INSET, str(className))}
       style={{ height: "100%" }}
       data={data}
@@ -481,8 +548,8 @@ function KitDataTable({
       computeItemKey={(index, row) => keyOf(row, index)}
       fixedHeaderContent={header}
       rangeChanged={setRange}
-      itemContent={(index, row) =>
-        cols.map((column) => (
+      itemContent={(index, row) => [
+        ...cols.map((column) => (
           <td
             key={column.id}
             className={cn(
@@ -492,8 +559,9 @@ function KitDataTable({
           >
             {cellValue(row, column, index)}
           </td>
-        ))
-      }
+        )),
+        ...(layout.filler ? [<td key={"\u0000filler"} aria-hidden="true" className="p-0" />] : []),
+      ]}
       endReached={endReached ? (index) => endReached(index) : undefined}
     />
   );

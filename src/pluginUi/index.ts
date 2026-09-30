@@ -17,6 +17,8 @@ import type {
   PluginDismissButtonProps,
   PluginDropdownMenuProps,
   PluginEmptyStateProps,
+  PluginFileTreeProps,
+  PluginFormFieldGroupProps,
   PluginFormFieldProps,
   PluginIconButtonProps,
   PluginIconProps,
@@ -43,7 +45,9 @@ import type {
   PluginSkeletonHintProps,
   PluginSkeletonProps,
   PluginSkeletonTextProps,
+  PluginSparklineProps,
   PluginSpinnerProps,
+  PluginStatCardProps,
   PluginSpinningIconProps,
   PluginSwitchProps,
   PluginTabsProps,
@@ -70,7 +74,7 @@ export {
 } from "./format";
 
 /** The kit's contract version: additive minors, no prop removed within a major. */
-export const PLUGIN_UI_VERSION = "1.2.0";
+export const PLUGIN_UI_VERSION = "1.3.0";
 
 // Tooltips fall back to their trigger, so the control is there from the first
 // frame and only the hover card waits on the kit chunk.
@@ -237,6 +241,25 @@ export const SkeletonHint: ComponentType<PluginSkeletonHintProps> = fromKit(
   (kit) => kit.SkeletonHint
 );
 
+// 1.3: file trees, stat cards, sparklines and field groups.
+
+export const FileTree: ComponentType<PluginFileTreeProps> = fromKit(
+  "FileTree",
+  (kit) => kit.FileTree
+);
+export const StatCard: ComponentType<PluginStatCardProps> = fromKit(
+  "StatCard",
+  (kit) => kit.StatCard
+);
+export const Sparkline: ComponentType<PluginSparklineProps> = fromKit(
+  "Sparkline",
+  (kit) => kit.Sparkline
+);
+export const FormFieldGroup: ComponentType<PluginFormFieldGroupProps> = fromKit(
+  "FormFieldGroup",
+  (kit) => kit.FormFieldGroup
+);
+
 export type {
   PluginMarkdownProps as MarkdownProps,
   PluginButtonProps as ButtonProps,
@@ -310,4 +333,11 @@ export type {
   PluginDropdownMenuRadioItem as DropdownMenuRadioItem,
   PluginDialogLayer as DialogLayer,
   PluginIconSource as IconSource,
+  PluginFileTreeProps as FileTreeProps,
+  PluginFileTreeEntry as FileTreeEntry,
+  PluginFileTreeNode as FileTreeNode,
+  PluginFileTreeItem as FileTreeItem,
+  PluginStatCardProps as StatCardProps,
+  PluginSparklineProps as SparklineProps,
+  PluginFormFieldGroupProps as FormFieldGroupProps,
 } from "@shared/types/plugin-sdk-react";
