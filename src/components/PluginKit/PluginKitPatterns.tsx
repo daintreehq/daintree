@@ -53,6 +53,7 @@ import { SEVERITY_VISUAL } from "@/lib/statusSeverity";
 import { formatCompactCount } from "@/lib/formatCount";
 import { cn } from "@/lib/utils";
 import { renderIconSource, resolvePluginKitIcon } from "./PluginKitIcons";
+import { useKitOverlayZClass } from "./kitScope";
 import {
   content,
   field,
@@ -132,6 +133,7 @@ function KitToolbarButton({
   tooltip,
   tooltipSide,
 }: PluginToolbarButtonProps) {
+  const overlayZ = useKitOverlayZClass();
   const text = nonEmpty(label);
   const name = str(ariaLabel);
   const handleClick = fn(onClick);
@@ -161,7 +163,10 @@ function KitToolbarButton({
   return (
     <Tooltip>
       <TooltipTrigger asChild>{button}</TooltipTrigger>
-      <TooltipContent side={oneOf(tooltipSide, ["top", "bottom"] as const) ?? "bottom"}>
+      <TooltipContent
+        side={oneOf(tooltipSide, ["top", "bottom"] as const) ?? "bottom"}
+        className={overlayZ}
+      >
         <PluginStyleScope>{node(tip)}</PluginStyleScope>
       </TooltipContent>
     </Tooltip>

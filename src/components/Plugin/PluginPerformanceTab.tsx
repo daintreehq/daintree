@@ -153,9 +153,9 @@ export function PluginPerformanceSection({
 
         {latestLoad && (
           <MetricRow
-            label="Last view first paint"
+            label="Last view first frame"
             value={measured(latestLoad.firstPaintMs)}
-            detail="From opening the view to its first painted frame"
+            detail="From opening the view to the start of the first frame that can show it"
             budget={`Budget ${measured(budgets.viewFirstPaintMs)}`}
             aboveBudget={over(snapshot, "viewFirstPaintMs")}
           />

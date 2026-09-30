@@ -36,9 +36,11 @@ export interface PluginViewLoadSample {
    */
   loadMs: number;
   /**
-   * Open → the animation frame after the view's first commit: the first frame
-   * that can show it. A view whose first commit is its own loading state
-   * reports that frame, not the one its data arrived in.
+   * Open → the start of the animation frame after the view's first commit:
+   * the first frame that can show it. The frame's timestamp precedes that
+   * frame's style, layout and paint, so this is the first frame opportunity,
+   * not a measured paint; the name is historical. A view whose first commit is
+   * its own loading state reports that frame, not the one its data arrived in.
    */
   firstPaintMs: number;
   /** A retry after a failed load rather than a cold open. */

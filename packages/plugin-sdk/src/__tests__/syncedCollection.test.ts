@@ -328,6 +328,60 @@ describe("useSyncedCollection", () => {
     expect(ids(result.current.items)).toEqual(["x1"]);
   });
 
+  it("shows the new channel's loading state at once, not the old items, while its snapshot is pending", async () => {
+    const b = fakeBridge();
+    const second = deferred<SyncedCollectionSnapshot<Row>>();
+    b.invoke.mockImplementation((_pluginId: string, ch: string) =>
+      ch === "rows-snapshot" ? Promise.resolve(snap(3, [{ id: "a", v: 1 }])) : second.promise
+    );
+    const { result, rerender } = renderHook(
+      ({ channel }) => useSyncedCollection<Row>("acme", channel),
+      { initialProps: { channel: "rows" } }
+    );
+    await settle();
+    expect(ids(result.current.items)).toEqual(["a1"]);
+    expect(result.current.loading).toBe(false);
+
+    const seen: Array<{ items: string[]; loading: boolean }> = [];
+    rerender({ channel: "other" });
+    seen.push({ items: ids(result.current.items), loading: result.current.loading });
+    await settle();
+    seen.push({ items: ids(result.current.items), loading: result.current.loading });
+    expect(seen).toEqual([
+      { items: [], loading: true },
+      { items: [], loading: true },
+    ]);
+    expect(result.current.revision).toBe(0);
+
+    await act(async () => second.resolve(snap(1, [{ id: "z", v: 1 }])));
+    await settle();
+    expect(ids(result.current.items)).toEqual(["z1"]);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("keeps the last items while disabled and starts over on re-enable", async () => {
+    const b = fakeBridge();
+    b.invoke.mockResolvedValueOnce(snap(2, [{ id: "a", v: 1 }]));
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useSyncedCollection<Row>("acme", "rows", { enabled }),
+      { initialProps: { enabled: true } }
+    );
+    await settle();
+    rerender({ enabled: false });
+    await settle();
+    expect(ids(result.current.items)).toEqual(["a1"]);
+    expect(b.subscribers("rows")).toBe(0);
+
+    const repull = deferred<SyncedCollectionSnapshot<Row>>();
+    b.invoke.mockReturnValueOnce(repull.promise);
+    rerender({ enabled: true });
+    expect(ids(result.current.items)).toEqual([]);
+    expect(result.current.loading).toBe(true);
+    await act(async () => repull.resolve(snap(4, [{ id: "b", v: 1 }])));
+    await settle();
+    expect(ids(result.current.items)).toEqual(["b1"]);
+  });
+
   it("unsubscribes on unmount and on the signal", async () => {
     const b = fakeBridge();
     b.invoke.mockResolvedValue(snap(0, []));

@@ -7,7 +7,7 @@ import {
 import { getPluginHostBridge } from "./hostBridge.js";
 
 export interface SyncedCollectionViewOptions {
-  /** False unsubscribes and stops pulling; the last items stay. Default true. */
+  /** False unsubscribes and stops pulling; the last items stay until it is re-enabled, which starts over from a fresh snapshot. Default true. */
   enabled?: boolean;
   /** The view's `disposeSignal`. Once it aborts nothing more is pulled or applied. */
   signal?: AbortSignal;
@@ -37,6 +37,16 @@ interface ViewState<T> {
   revision: number;
   loading: boolean;
   error: Error | null;
+  /** The subscription this state belongs to; null while disabled. */
+  source: string | null;
+}
+
+function subscriptionKey(pluginId: string, channel: string): string {
+  return `${pluginId}\u0000${channel}`;
+}
+
+function loadingState<T>(source: string | null): ViewState<T> {
+  return { items: [], revision: 0, loading: true, error: null, source };
 }
 
 function isDelta(value: unknown): value is SyncedCollectionDelta<unknown> {
@@ -142,17 +152,22 @@ export function useSyncedCollection<T>(
   options: SyncedCollectionViewOptions = {}
 ): SyncedCollectionViewResult<T> {
   const { enabled = true, signal } = options;
-  const [state, setState] = useState<ViewState<T>>(() => ({
-    items: [],
-    revision: 0,
-    loading: true,
-    error: null,
-  }));
+  const active = enabled && !signal?.aborted;
+  const source = active ? subscriptionKey(pluginId, channel) : null;
+  const [state, setState] = useState<ViewState<T>>(() => loadingState(source));
+  // A new subscription (another plugin or channel, or re-enabled) starts from
+  // nothing, so show its loading state in this render rather than the previous
+  // collection until its snapshot lands. Disabling keeps the last items and
+  // only forgets which subscription they came from.
+  if (state.source !== source) {
+    setState(source === null ? { ...state, source: null } : loadingState(source));
+  }
   const resyncRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     if (!enabled || signal?.aborted) return;
 
+    const key = subscriptionKey(pluginId, channel);
     let live = true;
     let mirror: Mirror<T> | null = null;
     // Epochs a successful pull has moved past: a late delta from a worker that
@@ -172,6 +187,7 @@ export function useSyncedCollection<T>(
         revision: m?.revision ?? 0,
         loading: pulling || (m === null && !failed),
         error: failed ? lastError : null,
+        source: key,
       });
     };
     const commits = createCommitScheduler(commit);
@@ -217,8 +233,9 @@ export function useSyncedCollection<T>(
       if (pulling) return;
       pulling = true;
       const seq = ++pullSeq;
-      // Before the first snapshot the view already shows `loading`; committing
-      // it again would only spend the throttle's gap the snapshot is about to need.
+      // Before the first snapshot the view already shows `loading` (a new
+      // subscription resets to it during render); committing it again would
+      // only spend the throttle's gap the snapshot is about to need.
       if (mirror !== null || failed) scheduleCommit();
       Promise.resolve()
         .then(() =>
@@ -310,5 +327,6 @@ export function useSyncedCollection<T>(
   }, [pluginId, channel, enabled, signal]);
 
   const resync = useCallback(() => resyncRef.current(), []);
-  return { ...state, resync };
+  const { items, revision, loading, error } = state;
+  return { items, revision, loading, error, resync };
 }

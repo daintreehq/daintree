@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { lazy, useEffect } from "react";
+import { lazy, useContext, useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelViewProps } from "@shared/types/plugin";
 import { makePluginViewContent, type PluginViewContentConfig } from "../PluginViewContent";
@@ -9,6 +9,8 @@ import {
   registerBuiltinView,
 } from "@/registry/builtinRendererRegistry";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { PluginKitOwnerContext } from "@/components/PluginKit/kitScope";
+import { PluginStyleScope } from "@/components/PluginKit/kitProps";
 
 /**
  * In-process resolution of built-in plugin panel views (#11244). Uses the real
@@ -175,6 +177,25 @@ describe("built-in panel views", () => {
     expect(activateForView).toHaveBeenCalledWith(BUILTIN_KIND);
     expect(stylePrep.calls).toEqual([]);
     expect(documentViews.calls).toEqual([]);
+  });
+
+  it("names the view's plugin to kit content it portals out of the view", async () => {
+    function Inspector() {
+      const owner = useContext(PluginKitOwnerContext);
+      return (
+        <PluginStyleScope>
+          <span data-testid="builtin-view">{owner}</span>
+        </PluginStyleScope>
+      );
+    }
+    registerBuiltinView(BUILTIN_KIND, Inspector, { pluginId: BUILTIN_ID, label: "Site Inspector" });
+
+    const Content = makePluginViewContent(builtinConfig());
+    render(<Content panelId="panel-owner" worktreeId="wt-1" />);
+
+    const view = await screen.findByTestId("builtin-view");
+    expect(view.textContent).toBe(BUILTIN_ID);
+    expect(view.parentElement?.getAttribute("data-daintree-plugin-owner")).toBe(BUILTIN_ID);
   });
 
   // SvelteKit Tools registers `lazy(() => import("./SiteInspectorView"))` to keep

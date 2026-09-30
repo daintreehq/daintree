@@ -114,13 +114,13 @@ export function formatDevMetrics(snapshot: PluginPerfSnapshot): string {
       note: mark(snapshot, "viewLoadMs", loadMs),
     });
     rows.push({
-      label: "view first paint",
+      label: "view first frame",
       value: formatMs(load.firstPaintMs),
       note: mark(snapshot, "viewFirstPaintMs", load.firstPaintMs),
     });
   } else {
     rows.push({ label: "view load", value: NONE, note: "" });
-    rows.push({ label: "view first paint", value: NONE, note: "" });
+    rows.push({ label: "view first frame", value: NONE, note: "" });
   }
 
   const commits = snapshot.viewCommits;

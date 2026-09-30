@@ -1,5 +1,7 @@
 import { isValidElement, type ReactNode } from "react";
 import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "@shared/types/plugin";
+import { PLUGIN_STYLE_OWNER_ATTRIBUTE } from "@/services/plugin/pluginStyleContract";
+import { usePluginKitOwner } from "./kitScope";
 
 // Every adapter here narrows its props rather than trusting them: a plugin
 // view is as often hand-written JavaScript as TypeScript, and the public props
@@ -61,9 +63,20 @@ export function content(value: unknown): ReactNode {
 }
 
 /**
+ * The owner stamp for an element a kit overlay portals out of the view, so
+ * diagnostics attribute what happens inside it to the plugin. Empty outside a
+ * plugin view.
+ */
+export function useKitOwnerAttributes(): Record<string, string> {
+  const owner = usePluginKitOwner();
+  return owner ? { [PLUGIN_STYLE_OWNER_ATTRIBUTE]: owner } : {};
+}
+
+/**
  * Plugin content inside a host overlay (tooltip body, dialog body) portals out
  * of the view's style root, where the plugin's compiled classes are scoped.
- * Re-marking the subtree keeps them applying; the overlay chrome stays host-owned.
+ * Re-marking the subtree keeps them applying, and names the owning plugin as
+ * the view's own root does; the overlay chrome stays host-owned.
  */
 export function PluginStyleScope({
   children,
@@ -74,7 +87,7 @@ export function PluginStyleScope({
   block?: boolean;
   className?: string;
 }) {
-  const scope = { [PLUGIN_STYLE_ROOT_ATTRIBUTE]: "" };
+  const scope = { [PLUGIN_STYLE_ROOT_ATTRIBUTE]: "", ...useKitOwnerAttributes() };
   return block ? (
     <div {...scope} className={className}>
       {children}

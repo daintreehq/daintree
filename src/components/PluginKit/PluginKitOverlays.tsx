@@ -20,7 +20,9 @@ import {
   pickDomProps,
   PluginStyleScope,
   str,
+  useKitOwnerAttributes,
 } from "./kitProps";
+import { useKitOverlayZClass } from "./kitScope";
 
 const AVATAR_SIZE = {
   xs: "h-4 w-4",
@@ -88,10 +90,13 @@ function KitPopover({
   "aria-label": ariaLabel,
   onCloseAutoFocus,
 }: PluginPopoverProps) {
+  const overlayZ = useKitOverlayZClass();
+  const owner = useKitOwnerAttributes();
   if (!isValidElement(trigger)) return null;
   const closeAutoFocus = fn(onCloseAutoFocus);
   const widthKey = oneOf(width, ["sm", "md", "lg", "trigger", "auto"] as const) ?? "md";
   const panel = {
+    ...owner,
     side: oneOf(side, SIDES),
     align: oneOf(align, ALIGNS),
     "aria-label": str(ariaLabel),
@@ -100,7 +105,8 @@ function KitPopover({
       POPOVER_WIDTH[widthKey],
       // A narrow window must not push the panel off screen; a tall body scrolls.
       "max-w-[calc(100vw-2rem)] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto",
-      padding === "none" ? "p-0" : "p-3"
+      padding === "none" ? "p-0" : "p-3",
+      overlayZ
     ),
     children: <PluginStyleScope block>{node(children)}</PluginStyleScope>,
   };

@@ -96,7 +96,7 @@ describe("PluginPerformanceSection", () => {
   it("reports view load as activation plus the longer of import and styles", () => {
     render(<PluginPerformanceSection snapshot={makeSnapshot()} developmentBuild={false} />);
     expect(row("Last view load").textContent).toContain("110ms");
-    expect(row("Last view first paint").textContent).toContain("180ms");
+    expect(row("Last view first frame").textContent).toContain("180ms");
   });
 
   it("says render time is development-only instead of showing zero in production", () => {
@@ -261,7 +261,7 @@ describe("PluginPerformanceSection", () => {
     );
     expect(row("Activation").textContent).toContain("Not activated yet");
     expect(row("Last view load").textContent).toContain("No view opened yet");
-    expect(screen.queryByText("Last view first paint")).toBeNull();
+    expect(screen.queryByText("Last view first frame")).toBeNull();
     expect(row("Messages to views").textContent).toContain("None yet");
   });
 });
