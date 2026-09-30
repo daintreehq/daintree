@@ -285,6 +285,9 @@ test.describe.serial("Core: Terminal Trash TTL Expiry", () => {
 
       // Reopen-last should be a no-op
       await window.keyboard.press(`${mod}+Shift+T`);
+      // Restoring from trash is a synchronous store move that renders within a
+      // frame, so a wrongly-kept entry would reappear well inside this window.
+      // timer: negative-assertion dwell for reopen-last after TTL expiry
       await window.waitForTimeout(T_SETTLE);
       expect(await getGridPanelCount(window)).toBe(0);
     });

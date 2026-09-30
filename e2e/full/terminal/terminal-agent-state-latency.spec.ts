@@ -9,9 +9,12 @@ import {
   getTerminalText,
   getTerminalTextById,
   waitForTerminalText,
+  waitForTerminalReady,
   writeTerminalInput,
+  openTerminalContextMenu,
+  clickTerminalContextMenuItem,
 } from "../../helpers/terminal";
-import { switchWorktree } from "../../helpers/workflows";
+import { spawnTerminalAndVerify, switchWorktree } from "../../helpers/workflows";
 import { getGridPanelIds } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_LONG, T_MEDIUM, T_SHORT } from "../../helpers/timeouts";
@@ -22,6 +25,7 @@ import {
   ptyWrite,
   readFakeAgentStdin,
   sendFakeAgentCommand,
+  FAKE_AGENT_IDLE,
   FAKE_AGENT_STOP,
   FAKE_AGENT_MARK_OUTPUT,
 } from "../../helpers/fakeAgent";
@@ -38,6 +42,9 @@ const WORKING_CEILING_MS = T_SHORT;
 // wake is measured from the slow cadence a real idle agent sits on.
 const BACKOFF_SETTLE_MS = 6_000;
 const STREAM_WARMUP_MS = 4_000;
+// A stdin-driven idle echoes once and restarts the quiet clock, so it gets
+// headroom above the quiet window that scales with the runner.
+const T_WAITING = T_LONG * 2;
 const FEATURE_BRANCH = "feature/test-branch";
 
 let ctx: AppContext;
@@ -124,6 +131,11 @@ function report(name: string, ms: number): void {
   test.info().annotations.push({ type: "latency", description: `${name}=${ms}ms` });
 }
 
+/** Commands go to the latency agent's own control file; other agents in this file ignore them. */
+function agentCommand(cmd: Parameters<typeof sendFakeAgentCommand>[1]) {
+  return sendFakeAgentCommand(fakeBinDir, cmd, T_MEDIUM, agentPanelId);
+}
+
 /**
  * Puts the agent in `working` with its stream advancing. `settled` is for a
  * test that times the next working → waiting against the quiet-window floor:
@@ -131,7 +143,7 @@ function report(name: string, ms: number): void {
  * as a real one rather than a heartbeat over a static screen.
  */
 async function establishWorking(page: Page, { settled = false } = {}): Promise<void> {
-  const started = await sendFakeAgentCommand(fakeBinDir, "work");
+  const started = await agentCommand("work");
   // The launch-time state is hydrated, not announced, so until the first
   // transition the rendered pane is the only evidence there is.
   const latestState = async () =>
@@ -144,7 +156,7 @@ async function establishWorking(page: Page, { settled = false } = {}): Promise<v
   }
   // Agent-side truth that output is advancing, not a heartbeat alone.
   await expect
-    .poll(async () => (await sendFakeAgentCommand(fakeBinDir, "stream-on")).streamSeq, {
+    .poll(async () => (await agentCommand("stream-on")).streamSeq, {
       timeout: T_MEDIUM,
       intervals: [100],
     })
@@ -170,7 +182,7 @@ async function measureTransition(
 }
 
 async function measureWorkingToWaiting(page: Page, label: string, mounted = true): Promise<void> {
-  const stopped = await sendFakeAgentCommand(fakeBinDir, "idle");
+  const stopped = await agentCommand("idle");
   const ms = await measureTransition(
     page,
     `${label}.working→waiting`,
@@ -186,7 +198,7 @@ async function measureWaitingToWorking(page: Page, label: string, mounted = true
   // timer: FSM_IDLE_BACKOFF_SETTLE_MS (3s) — the wake must come from the
   // backed-off idle poll a real waiting agent sits on, which nothing renders.
   await page.waitForTimeout(BACKOFF_SETTLE_MS);
-  const started = await sendFakeAgentCommand(fakeBinDir, "work");
+  const started = await agentCommand("work");
   const ms = await measureTransition(
     page,
     `${label}.waiting→working`,
@@ -206,12 +218,20 @@ async function spinnersAdvancing(page: Page): Promise<{ count: number; advancing
     );
     const read = () => spinners.map((el) => getComputedStyle(el).transform);
     const before = read();
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    const after = read();
-    return {
-      count: spinners.length,
-      advancing: after.filter((transform, i) => transform !== before[i]).length,
-    };
+    const moved = before.map(() => false);
+    // Polled, and done as soon as every spinner has stepped. Timers rather than
+    // frames, because the test windows run in the background where rAF can stall.
+    // timer: the cap spans several steps of the slowest tier that still moves:
+    // `.animate-spin-slow` under `body[data-motion-rate="reduced"]` steps about
+    // every 120ms (index.css).
+    const deadline = performance.now() + 900;
+    while (moved.includes(false) && performance.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      read().forEach((transform, i) => {
+        if (transform !== before[i]) moved[i] = true;
+      });
+    }
+    return { count: spinners.length, advancing: moved.filter(Boolean).length };
   }, agentPanelId);
 }
 
@@ -223,53 +243,101 @@ async function setWindowFocus(focused: boolean): Promise<void> {
   }, focused);
 }
 
-async function launchAgent(page: Page): Promise<void> {
+async function newestPanelId(page: Page, previousIds: Set<string>): Promise<string> {
+  let id: string | undefined;
+  await expect
+    .poll(
+      async () => {
+        id = (await getGridPanelIds(page)).find((candidate) => !previousIds.has(candidate));
+        return id !== undefined;
+      },
+      { timeout: T_LONG, intervals: [250] }
+    )
+    .toBe(true);
+  return id!;
+}
+
+/**
+ * Launch the fake Claude from the toolbar tray, answer its workspace-trust
+ * prompt, and wait until the pane is a detected agent in `working`. The fake
+ * binary emits OSC 9;4 progress so working is driven by a viewport-independent
+ * signal rather than output volume, which is unreliable in small grid tiles.
+ */
+async function launchWorkingClaude(page: Page): Promise<{ panelId: string; panel: Locator }> {
   const before = new Set(await getGridPanelIds(page));
   await dismissBlockingPalette(page);
   await page.locator(SEL.agent.trayButton).click();
   await page.locator(SEL.agent.launcherRow("Claude")).first().click();
 
-  await expect
-    .poll(async () => (await getGridPanelIds(page)).some((id) => !before.has(id)), {
-      timeout: T_LONG,
-      intervals: [250],
-    })
-    .toBe(true);
-  agentPanelId = (await getGridPanelIds(page)).find((id) => !before.has(id))!;
-  agentPanel = page.locator(`[data-panel-id="${agentPanelId}"]`);
-  await installObservers(page, agentPanelId);
+  const panelId = await newestPanelId(page, before);
+  const panel = page.locator(`[data-panel-id="${panelId}"]`);
 
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const lower = (await getTerminalText(agentPanel)).toLowerCase();
-    if (lower.includes("fake_claude_ready")) break;
-    if (lower.includes("enter to confirm")) {
-      await writeTerminalInput(page, agentPanel, "\r");
-      break;
-    }
-    await page.waitForTimeout(250);
-  }
-  await waitForTerminalText(agentPanel, "FAKE_CLAUDE_READY", T_LONG);
   await expect
-    .poll(() => agentPanel.getAttribute("data-detected-agent-id"), {
+    .poll(
+      async () => {
+        const lower = (await getTerminalText(panel)).toLowerCase();
+        if (lower.includes("fake_claude_ready")) return "ready";
+        if (lower.includes("enter to confirm")) return "trust-prompt";
+        return "starting";
+      },
+      { timeout: T_LONG, intervals: [250] }
+    )
+    .not.toBe("starting");
+  if (!(await getTerminalText(panel)).includes("FAKE_CLAUDE_READY")) {
+    await writeTerminalInput(page, panel, "\r");
+  }
+  await waitForTerminalText(panel, "FAKE_CLAUDE_READY", T_LONG);
+  await expect
+    .poll(() => panel.getAttribute("data-detected-agent-id"), {
       timeout: 60_000,
       intervals: [250, 500],
     })
     .toBe("claude");
-  await expect(agentPanel).toHaveAttribute("data-agent-state", "working", { timeout: T_LONG });
+  await expect(panel).toHaveAttribute("data-agent-state", "working", { timeout: T_LONG });
+  return { panelId, panel };
 }
 
-test.describe("Full: agent-state transitions and hidden-pane delivery", () => {
+async function stopAgent(page: Page, panelId: string, panel: Locator): Promise<void> {
+  expect(await ptyWrite(page, panelId, `${FAKE_AGENT_STOP}\r`)).toBe(true);
+  await waitForTerminalText(panel, "FAKE_CLAUDE_EXIT", T_LONG);
+}
+
+/**
+ * The main worktree's collapsed session summary in the sidebar. It counts the
+ * renderer panel store's agent states, and stays on screen while the pane
+ * itself is unmounted because another worktree is active.
+ */
+function mainSessionSummary(page: Page): Locator {
+  return page
+    .locator(SEL.worktree.mainRow)
+    .locator('[data-testid="collapsed-session-indicators"]')
+    .first();
+}
+
+async function expectSummaryState(summary: Locator, state: "waiting" | "working", timeout: number) {
+  const other = state === "waiting" ? "working" : "waiting";
+  await expect(summary.locator(`[data-state="${state}"]`)).toHaveCount(1, { timeout });
+  await expect(summary.locator(`[data-state="${other}"]`)).toHaveCount(0);
+  await expect(summary).toHaveAttribute("aria-label", new RegExp(`\\b1 ${state}\\b`));
+}
+
+// Tests share one long-lived agent, but each starts by putting it back in
+// `working` and ends back on the main worktree, so a failure only relaunches
+// the app for the remainder rather than stranding the tests after it.
+test.describe("Full: agent-state transitions, status surfaces, and hidden-pane delivery", () => {
   test.beforeAll(async () => {
     const { dir, cleanup } = createFixtureRepo({
       name: "terminal-agent-state-latency",
       withFeatureBranch: true,
     });
     fixtureCleanup = cleanup;
+    // perPane keys each instance's control, events and stdin logs on its pane,
+    // so the extra agents the status tests launch never replay the latency
+    // agent's control commands.
     fakeBinDir = installFakeAgent(dir, {
       streamLinesPerSec: 80,
-      controlChannel: true,
       queryOnFocus: true,
+      perPane: true,
     });
     writeFileSync(
       path.join(dir, "package.json"),
@@ -284,7 +352,10 @@ test.describe("Full: agent-state transitions and hidden-pane delivery", () => {
       dir,
       "Terminal Agent State Latency"
     );
-    await launchAgent(ctx.window);
+    const launched = await launchWorkingClaude(ctx.window);
+    agentPanelId = launched.panelId;
+    agentPanel = launched.panel;
+    await installObservers(ctx.window, agentPanelId);
   });
 
   test.afterAll(async () => {
@@ -320,15 +391,21 @@ test.describe("Full: agent-state transitions and hidden-pane delivery", () => {
   test("hidden pane: state transitions reach the view while it is hidden", async () => {
     test.setTimeout(180_000);
     const { window } = ctx;
+    const summary = mainSessionSummary(window);
 
     await establishWorking(window);
     await switchWorktree(window, FEATURE_BRANCH);
     await expect(agentPanel).toBeHidden({ timeout: T_LONG });
+    await expectSummaryState(summary, "working", T_LONG);
 
-    const stopped = await sendFakeAgentCommand(fakeBinDir, "idle");
-    await waitForObserved(window, "state", "waiting", stopped.at, T_LONG * 3);
-    const started = await sendFakeAgentCommand(fakeBinDir, "work");
-    await waitForObserved(window, "state", "working", started.at, T_LONG * 3);
+    // The subject is what the renderer's panel store makes of the host events
+    // while the pane is hidden, read off the surface that draws from it.
+    await agentCommand("idle");
+    await expectSummaryState(summary, "waiting", T_LONG * 3);
+    await expect(agentPanel).toBeHidden();
+    await agentCommand("work");
+    await expectSummaryState(summary, "working", T_LONG * 3);
+    await expect(agentPanel).toBeHidden();
 
     await switchWorktree(window, "main");
     await expect(agentPanel).toBeVisible({ timeout: T_LONG });
@@ -343,15 +420,15 @@ test.describe("Full: agent-state transitions and hidden-pane delivery", () => {
     await switchWorktree(window, FEATURE_BRANCH);
     await expect(agentPanel).toBeHidden({ timeout: T_LONG });
     // Everything from here to the marker is written while the pane is hidden.
-    const hiddenFrom = await sendFakeAgentCommand(fakeBinDir, "stream-on");
+    const hiddenFrom = await agentCommand("stream-on");
     await expect
-      .poll(async () => (await sendFakeAgentCommand(fakeBinDir, "stream-on")).streamSeq, {
+      .poll(async () => (await agentCommand("stream-on")).streamSeq, {
         timeout: T_MEDIUM,
         intervals: [100],
       })
       .toBeGreaterThan(hiddenFrom.streamSeq + 60);
-    await sendFakeAgentCommand(fakeBinDir, "stream-off");
-    const marked = await sendFakeAgentCommand(fakeBinDir, "mark");
+    await agentCommand("stream-off");
+    const marked = await agentCommand("mark");
     expect(marked.streamSeq).toBeGreaterThan(hiddenFrom.streamSeq + 50);
 
     // Still hidden: the buffer must already hold the marker and every line of
@@ -443,10 +520,11 @@ test.describe("Full: agent-state transitions and hidden-pane delivery", () => {
 
   // Battery and a locked screen cannot be arranged from a test, so this drives
   // the two body flags the motion hook owns and checks what the shipped
-  // stylesheet does with them.
+  // stylesheet does with them. It only needs a spinner, so no stream warm-up.
   test("power saving slows a visible working spinner and stops only an unseen one", async () => {
     const { window } = ctx;
-    await establishWorking(window);
+    await agentCommand("work");
+    await expect(agentPanel).toHaveAttribute("data-agent-state", "working", { timeout: T_LONG });
 
     const withFlags = (flags: { powerSaving?: string; motionRate?: string }) =>
       window.evaluate(
@@ -504,7 +582,7 @@ test.describe("Full: agent-state transitions and hidden-pane delivery", () => {
 
     // Directing is only reachable from waiting.
     await establishWorking(window);
-    await sendFakeAgentCommand(fakeBinDir, "idle");
+    await agentCommand("idle");
     await expect(agentPanel).toHaveAttribute("data-agent-state", "waiting", {
       timeout: T_LONG * 3,
     });
@@ -512,15 +590,15 @@ test.describe("Full: agent-state transitions and hidden-pane delivery", () => {
     await switchWorktree(window, FEATURE_BRANCH);
     await expect(agentPanel).toBeHidden({ timeout: T_LONG });
 
-    const stdinBefore = readFakeAgentStdin(fakeBinDir).length;
+    const stdinBefore = readFakeAgentStdin(fakeBinDir, agentPanelId).length;
     const selectAt = Date.now();
     await switchWorktree(window, "main");
     await expect(agentPanel).toBeVisible({ timeout: T_LONG });
     await agentPanel.locator(SEL.terminal.xtermRows).click();
-    await sendFakeAgentCommand(fakeBinDir, "query");
+    await agentCommand("query");
 
     // Every reply must have made the round trip, or the run exercised nothing.
-    const replies = () => readFakeAgentStdin(fakeBinDir).slice(stdinBefore);
+    const replies = () => readFakeAgentStdin(fakeBinDir, agentPanelId).slice(stdinBefore);
     // eslint-disable-next-line no-control-regex
     const expected = [/\x1b\[\d+;\d+R/, /\x1b\[\?[\d;]+c/, /\x1b\]11;rgb:/];
     await expect
@@ -543,5 +621,132 @@ test.describe("Full: agent-state transitions and hidden-pane delivery", () => {
     const typeAt = Date.now();
     await window.keyboard.type("x");
     await waitForObserved(window, "dom", "directing", typeAt, T_SHORT);
+  });
+
+  // The status tests launch their own short-lived agents beside the latency one
+  // and drive them over stdin, the way a user's keystrokes would.
+  test("agent session drives the working→waiting state arc, chip, and hybrid input bar", async () => {
+    test.setTimeout(180_000);
+    const { window } = ctx;
+
+    const { panelId, panel } = await launchWorkingClaude(window);
+
+    await test.step("working state surfaces the agent chip and an active hybrid input bar", async () => {
+      // The agent-state chip is a role=status element labelled with the state.
+      const chip = panel.locator(SEL.terminal.agentStateChip);
+      await expect(chip).toBeVisible({ timeout: T_MEDIUM });
+      await expect(chip).toHaveAttribute("aria-label", "Agent state: working");
+
+      // The hybrid input bar renders for agent panels (CodeMirror editor) and is
+      // not disabled while the backend is connected and the agent is working.
+      const editor = panel.locator(SEL.terminal.cmEditor);
+      await expect(editor).toBeVisible({ timeout: T_MEDIUM });
+      const picker = panel.locator('[aria-label="Open command picker"]');
+      await expect(picker).toBeVisible({ timeout: T_MEDIUM });
+      await expect(picker).toBeEnabled();
+    });
+
+    await test.step("agent transitions to waiting once the OSC heartbeat stops", async () => {
+      expect(await ptyWrite(window, panelId, `${FAKE_AGENT_IDLE}\r`)).toBe(true);
+      await expect
+        .poll(() => panel.getAttribute("data-agent-state"), {
+          timeout: T_WAITING,
+          intervals: [500, 1000],
+        })
+        .toBe("waiting");
+      // The visible chip must track the FSM, not lag on the prior label.
+      await expect(panel.locator(SEL.terminal.agentStateChip)).toHaveAttribute(
+        "aria-label",
+        "Agent state: waiting"
+      );
+    });
+
+    await test.step("agent state clears when the session exits", async () => {
+      await stopAgent(window, panelId, panel);
+      await expect
+        .poll(() => panel.getAttribute("data-agent-state"), {
+          timeout: T_LONG,
+          intervals: [250, 500],
+        })
+        .toBeNull();
+    });
+  });
+
+  test("exit-error restart banner exposes a working Restart action", async () => {
+    test.setTimeout(120_000);
+    const { window } = ctx;
+
+    const panel = await spawnTerminalAndVerify(window);
+    const panelId = await panel.evaluate((el) => {
+      const p = el.closest("[data-panel-id]");
+      return p?.getAttribute("data-panel-id") ?? "";
+    });
+
+    // A non-zero exit always preserves the terminal for debugging, surfacing the
+    // exit-error restart banner with a single recovery action.
+    expect(await ptyWrite(window, panelId, "exit 1\r")).toBe(true);
+
+    const banner = panel.getByRole("alert");
+    await expect(banner).toContainText("Session exited with code 1", { timeout: T_LONG });
+
+    const restartAction = panel.locator(SEL.terminal.restartBannerAction);
+    await expect(restartAction).toBeVisible({ timeout: T_MEDIUM });
+    await expect(restartAction).toBeEnabled();
+
+    // Clicking Restart respawns the PTY and clears the exit-error banner.
+    await restartAction.click();
+    await expect(banner).not.toBeVisible({ timeout: T_LONG });
+    // The recovery action is only meaningful if the PTY is actually live again,
+    // not merely if the banner was dismissed.
+    await waitForTerminalReady(window, panel, T_LONG);
+  });
+
+  test("context menu gates destructive actions while an agent is working", async () => {
+    test.setTimeout(180_000);
+    const { window } = ctx;
+
+    const { panelId, panel } = await launchWorkingClaude(window);
+
+    await openTerminalContextMenu(panel);
+
+    // Opening the menu involves clicks that can momentarily repaint the pane
+    // (#8867); re-confirm the working state before asserting the gated items.
+    await expect
+      .poll(() => panel.getAttribute("data-agent-state"), {
+        timeout: T_MEDIUM,
+        intervals: [250],
+      })
+      .toBe("working");
+
+    await test.step("Restart terminal opens a confirmation dialog instead of firing", async () => {
+      await clickTerminalContextMenuItem(panel, "Restart terminal");
+      const dialog = window.getByRole("alertdialog");
+      await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
+      await expect(dialog).toContainText("Its agent is working and will be interrupted.");
+      // Cancel — leave the agent session intact.
+      await window.locator('[data-confirm-role="cancel"]').click();
+      await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
+    });
+
+    await test.step("Kill terminal is guarded by the same confirmation while working", async () => {
+      await openTerminalContextMenu(panel);
+      await clickTerminalContextMenuItem(panel, "Kill terminal");
+      const dialog = window.getByRole("alertdialog");
+      await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
+      await expect(dialog).toContainText("Its agent is working and will be stopped.");
+      await window.locator('[data-confirm-role="cancel"]').click();
+      await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
+    });
+
+    await test.step("Escape closes the context menu", async () => {
+      await openTerminalContextMenu(panel);
+      const menu = window.locator(SEL.contextMenu.content);
+      await expect(menu).toBeVisible({ timeout: T_SHORT });
+      await window.keyboard.press("Escape");
+      await expect(menu).not.toBeVisible({ timeout: T_MEDIUM });
+    });
+
+    // Clean up the agent session so it doesn't bleed into afterAll teardown.
+    await stopAgent(window, panelId, panel);
   });
 });
