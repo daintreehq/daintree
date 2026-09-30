@@ -120,31 +120,27 @@ test.describe.serial("Core: ReviewHub large-list virtualization", () => {
 
       // Offscreen rows intentionally have no DOM nodes. Reveal them through
       // the shared scroll container.
-      await expect
-        .poll(
-          async () => {
-            await scroller.evaluate((element) => {
-              element.scrollTop = (element.scrollHeight - element.clientHeight) / 2;
-            });
-            return hub.locator(SEL.reviewHub.stageButton(midFileName)).isVisible();
-          },
-          { timeout: T_LIST_MOUNT }
-        )
-        .toBe(true);
+      // toBeInViewport, not isVisible: a mounted row in Virtuoso's overscan
+      // is "visible" while still clipped outside the scroller.
+      await expect(async () => {
+        await scroller.evaluate((element) => {
+          element.scrollTop = (element.scrollHeight - element.clientHeight) / 2;
+        });
+        await expect(hub.locator(SEL.reviewHub.stageButton(midFileName))).toBeInViewport({
+          timeout: T_SHORT,
+        });
+      }).toPass({ timeout: T_LIST_MOUNT });
 
       // Revealing new rows updates Virtuoso's estimated height. Keep following
       // the live extent until the actual last file mounts, not the old bottom.
-      await expect
-        .poll(
-          async () => {
-            await scroller.evaluate((element) => {
-              element.scrollTop = element.scrollHeight;
-            });
-            return hub.locator(SEL.reviewHub.stageButton(lastFileName)).isVisible();
-          },
-          { timeout: T_LIST_MOUNT }
-        )
-        .toBe(true);
+      await expect(async () => {
+        await scroller.evaluate((element) => {
+          element.scrollTop = element.scrollHeight;
+        });
+        await expect(hub.locator(SEL.reviewHub.stageButton(lastFileName))).toBeInViewport({
+          timeout: T_SHORT,
+        });
+      }).toPass({ timeout: T_LIST_MOUNT });
       await expect.poll(() => hub.getByRole("option").count()).toBeLessThan(FILE_COUNT);
     });
   });

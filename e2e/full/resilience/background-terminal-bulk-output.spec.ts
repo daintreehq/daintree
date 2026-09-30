@@ -8,7 +8,7 @@ import {
   runTerminalCommand,
   waitForTerminalText,
 } from "../../helpers/terminal";
-import { T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_LONG } from "../../helpers/timeouts";
 
 let ctx: AppContext;
 let fixtureDir: string;
@@ -106,7 +106,6 @@ test.describe
     await openTerminal(ctx.window);
     terminalPanel = getFirstGridPanel(ctx.window);
     await expect(terminalPanel).toBeVisible({ timeout: T_LONG });
-    await ctx.window.waitForTimeout(T_SETTLE);
   });
 
   test.afterAll(async () => {
@@ -133,7 +132,10 @@ test.describe
     // Move the terminal to BACKGROUND tier without touching panel location —
     // this is what a hidden tab or off-screen panel-group produces.
     expect(await applyTier(window, panelId, "BACKGROUND")).toBe(true);
-    await window.waitForTimeout(T_SETTLE);
+    // A downgrade only lands after the hysteresis window; restoring earlier
+    // cancels it, and the BACKGROUND transition would never be exercised.
+    // timer: TIER_DOWNGRADE_HYSTERESIS_MS (500ms)
+    await window.waitForTimeout(800);
 
     // Simulate a ResizeObserver firing for a substantially smaller container
     // (e.g. window or split divider shrunk while the panel is in a background
@@ -171,7 +173,6 @@ test.describe
     expect(afterRestore).not.toBeNull();
     expect(afterRestore!.cols).toBeGreaterThanOrEqual(observed!.cols);
     expect(afterRestore!.rows).toBeGreaterThanOrEqual(observed!.rows);
-    await window.waitForTimeout(T_SETTLE);
   });
 
   test("bulk output during BACKGROUND survives restore without garbling", async () => {
@@ -182,7 +183,6 @@ test.describe
 
     // Bring back to FOCUSED for a clean starting point.
     expect(await applyTier(window, panelId, "FOCUSED")).toBe(true);
-    await window.waitForTimeout(T_SETTLE);
 
     const initial = await getTerminalDimensions(terminalPanel);
     expect(initial).not.toBeNull();
@@ -201,6 +201,8 @@ test.describe
 
     // Switch to BACKGROUND tier while output is mid-flight.
     expect(await applyTier(window, panelId, "BACKGROUND")).toBe(true);
+    // timer: TIER_DOWNGRADE_HYSTERESIS_MS (500ms)
+    await window.waitForTimeout(800);
 
     // Capture a slightly narrower geometry while the container is hidden.
     const narrower = Math.max(200, Math.floor(initial!.cols * 8 * 0.7));
@@ -211,7 +213,6 @@ test.describe
     // Restore visibility — the narrower grid was already committed to both
     // xterm and the PTY while hidden, so the repaint targets it directly.
     expect(await applyTier(window, panelId, "FOCUSED")).toBe(true);
-    await window.waitForTimeout(T_SETTLE);
 
     // Output must finish and the DONE sentinel must be present in the buffer —
     // proves the visibility transition didn't drop or corrupt PTY data.
