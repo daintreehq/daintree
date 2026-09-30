@@ -666,6 +666,24 @@ function KitSplitGroup({
     }
   };
 
+  // What each pane is drawn at: a group too small for every size squeezes the
+  // sized panes, and a handle must report the size the reader sees.
+  const [drawnSizes, setDrawnSizes] = useState<Record<string, number>>({});
+  const layoutKey = JSON.stringify(layout);
+  useLayoutEffect(() => {
+    if (!root) return;
+    const next: Record<string, number> = {};
+    for (const el of root.querySelectorAll<HTMLElement>("[data-split-group-pane]")) {
+      const id = el.dataset.splitGroupPane;
+      const rect = el.getBoundingClientRect();
+      const extent = Math.round(horizontal ? rect.width : rect.height);
+      if (id && extent > 0) next[id] = extent;
+    }
+    setDrawnSizes((previous) =>
+      JSON.stringify(previous) === JSON.stringify(next) ? previous : next
+    );
+  }, [root, groupSize, horizontal, layoutKey]);
+
   // A pane folded from outside (a toolbar toggle, a narrow layout) while focus
   // was in it hands focus to its handle, the control that brings it back.
   const focusedPane = useRef<string | null>(null);
@@ -693,19 +711,21 @@ function KitSplitGroup({
     const dragging = drag?.id === pane.id ? drag : null;
     const folded = dragging ? dragging.collapsed : isCollapsed(pane);
     const size = dragging ? dragging.size : sizeOf(pane);
+    const drawnSize = Object.hasOwn(drawnSizes, pane.id) ? drawnSizes[pane.id] : undefined;
+    const shown = dragging || drawnSize === undefined ? size : Math.min(size, drawnSize);
     const handle = pane.fill ? null : (
       <ResizeHandle
         key={`handle-${pane.id}`}
         growKey={splitGrowKey(horizontal, index < fillIndex)}
         edge="inline"
         label={pane.handleLabel}
-        value={folded ? 0 : size}
+        value={folded ? 0 : shown}
         min={pane.collapsible ? 0 : pane.min}
-        max={Math.max(size, roomFor(index))}
+        max={Math.max(shown, roomFor(index))}
         isResizing={dragging !== null}
         aria-controls={paneElementId(index)}
         data-split-handle-for={pane.id}
-        aria-valuetext={folded ? "Collapsed" : `${Math.round(size)} pixels`}
+        aria-valuetext={folded ? "Collapsed" : `${Math.round(shown)} pixels`}
         className="z-10"
         onMouseDown={(event) => startDrag(index, event)}
         onKeyDown={(event) => handleKey(index, event)}
@@ -804,6 +824,18 @@ function KitInspectorSection({
   const heading = str(title) ?? "";
   const bodyId = `${baseId}body`;
   const headingId = `${baseId}heading`;
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // Folded from outside (a controlled `open`) while a field in it had focus:
+  // the hidden field keeps focus until the browser's fixup, so move it to the
+  // heading that brings the rows back.
+  useLayoutEffect(() => {
+    if (isOpen) return;
+    const active = document.activeElement;
+    if (active !== null && (bodyRef.current?.contains(active) ?? false)) {
+      triggerRef.current?.focus({ preventScroll: true });
+    }
+  }, [isOpen]);
   return (
     <section
       {...pickRootProps(rest)}
@@ -818,6 +850,7 @@ function KitInspectorSection({
         <h3 id={headingId} className="m-0 flex min-w-0 flex-1">
           {canFold ? (
             <button
+              ref={triggerRef}
               type="button"
               aria-expanded={isOpen}
               aria-controls={bodyId}
@@ -851,6 +884,7 @@ function KitInspectorSection({
       {/* Folded, the rows stay mounted and hidden: the heading's control
           target always exists, and a half-edited field keeps its value. */}
       <div
+        ref={bodyRef}
         id={bodyId}
         hidden={!isOpen}
         className={cn("min-w-0 flex-col px-3 pb-2", isOpen ? "flex" : "hidden")}
@@ -1015,6 +1049,7 @@ function KitDrawer({
   const panelRef = useRef<HTMLDivElement>(null);
   const returnTo = useRef<HTMLElement | null>(null);
   const pointerClose = useRef(false);
+  const openedAtMount = useRef(isOpen);
 
   useEffect(() => trackLastInput(), []);
   const titleText = str(title);
@@ -1040,9 +1075,16 @@ function KitDrawer({
   }, [isOpen]);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      openedAtMount.current = false;
+      return;
+    }
     const panelEl = panelRef.current;
-    if (panelEl && !panelEl.contains(document.activeElement)) {
+    // A drawer restored open with its view has nothing to answer: focus stays
+    // where the view put it until the user opens a drawer themselves.
+    const restored = openedAtMount.current;
+    openedAtMount.current = false;
+    if (!restored && panelEl && !panelEl.contains(document.activeElement)) {
       // The body's first control, not the header's Close: a drawer opens to
       // be used, and Escape already closes it.
       const body = panelEl.querySelector<HTMLElement>("[data-drawer-body]");
@@ -1117,7 +1159,6 @@ function KitDrawer({
       ref={panelRef}
       id={id}
       role={isModal ? "dialog" : "complementary"}
-      aria-modal={isModal && isOpen ? true : undefined}
       aria-labelledby={name ? undefined : titleId}
       aria-label={name}
       tabIndex={-1}
@@ -1952,11 +1993,12 @@ function taskOutcome(title: string, status: PluginTaskStatus): string | null {
 export function taskNews(
   snapshot: string,
   previous: ReadonlyMap<string, PluginTaskStatus> | null
-): { statuses: Map<string, PluginTaskStatus>; news: string } {
+): { statuses: Map<string, PluginTaskStatus>; news: string; changed: boolean } {
   const statuses = new Map<string, PluginTaskStatus>();
   const messages: string[] = [];
   const rows: unknown = JSON.parse(snapshot);
-  if (!Array.isArray(rows)) return { statuses, news: "" };
+  let changed = false;
+  if (!Array.isArray(rows)) return { statuses, news: "", changed };
   for (const row of rows) {
     if (!Array.isArray(row)) continue;
     const id: unknown = row[0];
@@ -1966,10 +2008,11 @@ export function taskNews(
     statuses.set(id, status);
     const before = previous?.get(id);
     if (before === undefined || before === status) continue;
+    changed = true;
     const message = taskOutcome(typeof name === "string" ? name : "", status);
     if (message) messages.push(message);
   }
-  return { statuses, news: messages.join(". ") };
+  return { statuses, news: messages.join(". "), changed };
 }
 
 /** An icon-only row action: a 24px ghost button with its name as the tooltip. */
@@ -2056,9 +2099,12 @@ function KitTaskList({
   // not. The snapshot changes exactly when a task's state does.
   const snapshot = JSON.stringify(entries.map((entry) => [entry.id, entry.status, entry.title]));
   useEffect(() => {
-    const { statuses, news } = taskNews(snapshot, seen.current);
+    const { statuses, news, changed } = taskNews(snapshot, seen.current);
     seen.current = statuses;
+    // A task moving on without news (a retry starting) clears the last
+    // outcome, so the same outcome a second time is spoken again.
     if (news !== "") setSpoken(news);
+    else if (changed) setSpoken("");
   }, [snapshot]);
 
   return (

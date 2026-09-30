@@ -46,7 +46,11 @@ const ownRect = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "getBound
 
 function sizeOf(element: HTMLElement) {
   for (const [attribute, size] of sizes) {
-    if (element.hasAttribute(attribute)) return size;
+    // A bare name is an attribute to carry; a bracketed key is a selector.
+    const hit = attribute.startsWith("[")
+      ? element.matches(attribute)
+      : element.hasAttribute(attribute);
+    if (hit) return size;
   }
   return { width: 0, height: 0 };
 }
@@ -374,6 +378,20 @@ describe("SplitGroup", () => {
     expect(screen.getByRole("separator").getAttribute("aria-valuenow")).toBe("0");
   });
 
+  it("reports a squeezed pane's drawn size, not the size it asked for", () => {
+    sizes.set('[data-split-group-pane="side"]', { width: 150, height: 400 });
+    mount(
+      <kit.SplitGroup
+        panes={[
+          { id: "main", content: "M" },
+          { id: "side", content: "S", defaultSize: 300 },
+        ]}
+      />
+    );
+    relayout();
+    expect(screen.getByRole("separator").getAttribute("aria-valuenow")).toBe("150");
+  });
+
   it("restores sizes remembered under persistKey", () => {
     const panes = [
       { id: "list", content: "List", defaultSize: 240 },
@@ -489,27 +507,43 @@ describe("Drawer and DrawerToggle", () => {
   });
 
   it("opens to the first control Tab can reach, past hidden ones", () => {
-    mount(
-      <kit.Drawer
-        open
-        title="Filters"
-        panel={
-          <>
-            <input type="hidden" name="token" />
-            <button type="button" tabIndex={-1}>
-              Skipped
-            </button>
-            <div hidden>
-              <button type="button">Hidden</button>
-            </div>
-            <button type="button">Reachable</button>
-          </>
-        }
-      >
+    const panel = (
+      <>
+        <input type="hidden" name="token" />
+        <button type="button" tabIndex={-1}>
+          Skipped
+        </button>
+        <div hidden>
+          <button type="button">Hidden</button>
+        </div>
+        <button type="button">Reachable</button>
+      </>
+    );
+    const view = mount(
+      <kit.Drawer open={false} title="Filters" panel={panel}>
+        Content
+      </kit.Drawer>
+    );
+    view.update(
+      <kit.Drawer open title="Filters" panel={panel}>
         Content
       </kit.Drawer>
     );
     expect(document.activeElement?.textContent).toBe("Reachable");
+  });
+
+  it("leaves focus alone when it mounts already open", () => {
+    mount(
+      <>
+        <button type="button">Elsewhere</button>
+        <kit.Drawer open title="Filters" panel={<button type="button">Inside</button>}>
+          Content
+        </kit.Drawer>
+      </>
+    );
+    expect(document.activeElement).toBe(document.body);
+    // Named as a dialog, but never claims to be modal: the pane around it stays live.
+    expect(screen.getByRole("dialog", { name: "Filters" }).hasAttribute("aria-modal")).toBe(false);
   });
 
   it("closes on the scrim", () => {
@@ -921,6 +955,28 @@ describe("TaskList focus, alignment and announcements", () => {
     expect((document.activeElement as HTMLElement | null)?.dataset.taskId).toBe("sync");
   });
 
+  it("re-arms the announcer when a task moves on, so a repeat outcome is spoken", () => {
+    const failed = taskNews(JSON.stringify([["a", "failed", "Sync"]]), new Map([["a", "running"]]));
+    expect(failed.news).toBe("Sync failed");
+    const retrying = taskNews(JSON.stringify([["a", "running", "Sync"]]), failed.statuses);
+    expect(retrying).toMatchObject({ news: "", changed: true });
+
+    const at = (status: "running" | "failed") => (
+      <kit.TaskList aria-label="Jobs" tasks={[{ id: "a", title: "Sync", status }]} />
+    );
+    const view = mount(at("running"));
+    const spoken = () =>
+      [...document.querySelectorAll('[data-task-list] [role="status"]')].map(
+        (el) => el.textContent
+      );
+    view.update(at("failed"));
+    expect(spoken()).toEqual(["Sync failed"]);
+    view.update(at("running"));
+    expect(spoken()).toEqual([""]);
+    view.update(at("failed"));
+    expect(spoken()).toEqual(["Sync failed"]);
+  });
+
   it("announces a task settling, and nothing on the first render or while it runs", () => {
     const first = taskNews(JSON.stringify([["a", "running", "Sync"]]), null);
     expect(first.news).toBe("");
@@ -981,6 +1037,28 @@ describe("focus handed back when things go away", () => {
     button.focus();
     fireEvent.click(button);
     expect(document.activeElement).toBe(screen.getByRole("separator"));
+  });
+
+  it("returns focus to a section's heading when it folds from outside", () => {
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      return (
+        <kit.Inspector>
+          <kit.InspectorSection title="Triage" open={open}>
+            <kit.PropertyRow label="Fold">
+              <button type="button" onClick={() => setOpen(false)}>
+                Fold
+              </button>
+            </kit.PropertyRow>
+          </kit.InspectorSection>
+        </kit.Inspector>
+      );
+    }
+    mount(<Harness />);
+    const button = screen.getByRole("button", { name: "Fold" });
+    button.focus();
+    fireEvent.click(button);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Triage" }));
   });
 
   it("says when the source drops and comes back, not when it merely ages", () => {
