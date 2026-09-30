@@ -43,6 +43,9 @@ const DEFAULT_COLLISION_PADDING = 8;
  * Radix shifts the content along the anchor's axis to stay inside that
  * boundary, so this is its `--radix-popover-content-available-width` once it
  * is placed, known before it is. The window, without layout to measure.
+ *
+ * Reads layout and mounts the boundary on first use, so call it from a layout
+ * effect or an event handler, never during render.
  */
 function getPopoverAvailableWidth(collisionPadding = DEFAULT_COLLISION_PADDING): number {
   if (typeof window === "undefined") return Number.POSITIVE_INFINITY;
