@@ -374,6 +374,21 @@ const selfContainerQuery: LintRule = {
   },
 };
 
+const VIEWPORT_VARIANT = /^(?:max-)?(?:sm|md|lg|xl|2xl)$|^(?:min|max)-\[/;
+
+const viewportBreakpoint = classRule(
+  {
+    id: "viewport-breakpoint",
+    severity: "warn",
+    message: "viewport breakpoint in a panel",
+    hint: "a panel is one pane of the window: use a container query (@container on a wrapper, @md: on its children), AutoGrid, or useBreakpoint from @daintreehq/plugin-ui",
+  },
+  (token, { variants }) =>
+    variants.some((variant) => VIEWPORT_VARIANT.test(variant))
+      ? `"${token}" answers to the window's width, not the pane's`
+      : null
+);
+
 const NATIVE_DIALOG =
   /(?:\b(?:window|globalThis|self)\s*\.\s*|(?<![\w$.]))(confirm|alert|prompt)\s*\(/g;
 
@@ -470,4 +485,5 @@ export const CONSISTENCY_RULES: LintRule[] = [
   selfContainerQuery,
   nativeDialogInView,
   rawPortal,
+  viewportBreakpoint,
 ];

@@ -200,6 +200,26 @@ declare module "@daintreehq/plugin-ui" {
     PluginTextTone,
     PluginUnreadDotProps,
     PluginVisuallyHiddenProps,
+    PluginAutoGridProps,
+    PluginClusterProps,
+    PluginContainerSize,
+    PluginContainerTarget,
+    PluginGridProps,
+    PluginInlineProps,
+    PluginLayoutAlign,
+    PluginLayoutBaseProps,
+    PluginLayoutElement,
+    PluginLayoutGap,
+    PluginLayoutJustify,
+    PluginOverflowToolbarAction,
+    PluginOverflowToolbarItem,
+    PluginOverflowToolbarProps,
+    PluginOverflowToolbarSeparator,
+    PluginPaneLayoutProps,
+    PluginScrollAreaProps,
+    PluginStackProps,
+    PluginStatusBarProps,
+    PluginStatusBarSlot,
   } from "@daintreehq/plugin-sdk/react";
 
   export type MarkdownProps = PluginMarkdownProps;
@@ -362,6 +382,26 @@ declare module "@daintreehq/plugin-ui" {
   export type IndicatorPlacement = PluginIndicatorPlacement;
   export type UnreadDotProps = PluginUnreadDotProps;
   export type CountIndicatorProps = PluginCountIndicatorProps;
+  export type LayoutGap = PluginLayoutGap;
+  export type LayoutAlign = PluginLayoutAlign;
+  export type LayoutJustify = PluginLayoutJustify;
+  export type LayoutElement = PluginLayoutElement;
+  export type LayoutBaseProps = PluginLayoutBaseProps;
+  export type StackProps = PluginStackProps;
+  export type InlineProps = PluginInlineProps;
+  export type ClusterProps = PluginClusterProps;
+  export type GridProps = PluginGridProps;
+  export type AutoGridProps = PluginAutoGridProps;
+  export type PaneLayoutProps = PluginPaneLayoutProps;
+  export type StatusBarProps = PluginStatusBarProps;
+  export type StatusBarSlot = PluginStatusBarSlot;
+  export type ScrollAreaProps = PluginScrollAreaProps;
+  export type OverflowToolbarProps = PluginOverflowToolbarProps;
+  export type OverflowToolbarItem = PluginOverflowToolbarItem;
+  export type OverflowToolbarAction = PluginOverflowToolbarAction;
+  export type OverflowToolbarSeparator = PluginOverflowToolbarSeparator;
+  export type ContainerSize = PluginContainerSize;
+  export type ContainerTarget = PluginContainerTarget;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -634,12 +674,51 @@ declare module "@daintreehq/plugin-ui" {
    */
   export function useAnnounce(): (message: string, options?: AnnounceOptions) => void;
 
+  /** Children in a column on the app's spacing scale (`gap` xs 4 · sm 8 · md 12 · lg 16 · xl 24 px). */
+  export const Stack: ComponentType<StackProps>;
+  /** Children in a row, vertically centred; `wrap` lets it wrap. */
+  export const Inline: ComponentType<InlineProps>;
+  /** A wrapping row for chips, tags and badges. */
+  export const Cluster: ComponentType<ClusterProps>;
+  /** A grid of explicit columns: a count (1 to 12) or a `grid-template-columns` value. */
+  export const Grid: ComponentType<GridProps>;
+  /** As many equal columns as fit, each at least `minColumnWidth` px, reflowing with the pane's width. */
+  export const AutoGrid: ComponentType<AutoGridProps>;
+  /**
+   * A plugin panel's shell: header, toolbar strip, a body that is the only
+   * scroller, footer and status bar, at the host panes' own heights.
+   */
+  export const PaneLayout: ComponentType<PaneLayoutProps>;
+  /** The thin strip along a pane's edge: facts on the left, controls on the right. */
+  export const StatusBar: ComponentType<StatusBarProps>;
+  /** A scroller on either axis or both, fading each edge that has more. */
+  export const ScrollArea: ComponentType<ScrollAreaProps>;
+  /** A toolbar whose controls fold into a "More actions" menu when the strip is too narrow. */
+  export const OverflowToolbar: ComponentType<OverflowToolbarProps>;
+
   /**
    * The keyboard model of a list: one tab stop, Up/Down/Home/End move the
    * cursor, Enter or Space selects, typing jumps when `getLabel` is given.
    * Rows `isDisabled` reports are skipped and never selected.
    */
   export function useListNavigation(options: UseListNavigationOptions): UseListNavigationResult;
+
+  /**
+   * The size of an element (a ref or the element), in CSS px, re-read at most
+   * once a frame while it changes. `{ width: 0, height: 0 }` until measured.
+   * Layout that answers to a panel's width should read this, never the window.
+   */
+  export function useContainerSize(target: ContainerTarget): ContainerSize;
+  /**
+   * The named step of an element's width: the widest breakpoint whose minimum
+   * it reaches, or null while it is narrower than all of them (and before it
+   * is measured). Defaults to `{ sm: 360, md: 640, lg: 960 }`.
+   */
+  export function useBreakpoint(target: ContainerTarget): "sm" | "md" | "lg" | null;
+  export function useBreakpoint<K extends string>(
+    target: ContainerTarget,
+    breakpoints: Readonly<Record<K, number>>
+  ): K | null;
 
   /** "just now", "5m ago", "11d ago", then the date past 30 days. */
   export function formatTimeAgo(value: number | string | Date, now?: number): string;

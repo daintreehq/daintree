@@ -35,23 +35,36 @@ import { useVerticalScrollShadows } from "@/hooks/useVerticalScrollShadows";
  * media queries stay separate on purpose — macOS fires only the former and
  * Windows swaps in system colours; see the block comments in `index.css`.
  */
-function ScrollShadowOverlay({
+const EDGE_CLASS: Record<ScrollShadowEdge, string> = {
+  top: "top-0 bg-gradient-to-b from-[var(--scroll-shadow-color)] to-transparent forced-colors:border-t-2",
+  bottom:
+    "bottom-0 bg-gradient-to-t from-[var(--scroll-shadow-color)] to-transparent forced-colors:border-b-2",
+  left: "left-0 bg-gradient-to-r from-[var(--scroll-shadow-color)] to-transparent forced-colors:border-l-2",
+  right:
+    "right-0 bg-gradient-to-l from-[var(--scroll-shadow-color)] to-transparent forced-colors:border-r-2",
+};
+
+export type ScrollShadowEdge = "top" | "bottom" | "left" | "right";
+
+export function ScrollShadowOverlay({
   edge,
   visible,
   compact,
 }: {
-  edge: "top" | "bottom";
+  edge: ScrollShadowEdge;
   visible: boolean;
   compact?: boolean;
 }) {
+  const vertical = edge === "top" || edge === "bottom";
   return (
     <div
       aria-hidden="true"
       data-visible={visible}
       className={cn(
-        "pointer-events-none absolute inset-x-0 z-10 transition-opacity duration-150 ease-out",
-        compact ? "h-4" : "h-8",
-        "forced-colors:h-0",
+        "pointer-events-none absolute z-10 transition-opacity duration-150 ease-out",
+        vertical ? "inset-x-0" : "inset-y-0",
+        vertical ? (compact ? "h-4" : "h-8") : compact ? "w-4" : "w-8",
+        vertical ? "forced-colors:h-0" : "forced-colors:w-0",
         // Under increased contrast the gradient is swapped for a solid
         // hairline rather than removed. The wash itself is the problem — it
         // lowers the contrast of real content at the scrolling edge, in the
@@ -63,10 +76,9 @@ function ScrollShadowOverlay({
         // would leave no at-rest signal at all. A solid rule says the same
         // thing and reads better at high contrast.
         // `forced-colors` is deliberately left to its own block above.
-        "contrast-more:bg-none contrast-more:h-px contrast-more:bg-border-strong",
-        edge === "top"
-          ? "top-0 bg-gradient-to-b from-[var(--scroll-shadow-color)] to-transparent forced-colors:border-t-2"
-          : "bottom-0 bg-gradient-to-t from-[var(--scroll-shadow-color)] to-transparent forced-colors:border-b-2",
+        "contrast-more:bg-none contrast-more:bg-border-strong",
+        vertical ? "contrast-more:h-px" : "contrast-more:w-px",
+        EDGE_CLASS[edge],
         visible ? "opacity-100" : "opacity-0"
       )}
     />
