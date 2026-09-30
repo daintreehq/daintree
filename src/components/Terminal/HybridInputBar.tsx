@@ -1058,7 +1058,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
             aria-disabled={disabled}
-            aria-busy={isInitializing || isVoiceConnecting || isVoiceMicStarting}
+            aria-busy={
+              isInitializing ||
+              isVoiceConnecting ||
+              (isVoiceMicStarting && voiceMicSignal === "pending")
+            }
           >
             <AutocompleteMenu
               ref={menuRef}

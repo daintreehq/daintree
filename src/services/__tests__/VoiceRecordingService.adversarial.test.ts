@@ -940,8 +940,8 @@ describe("VoiceRecordingService adversarial", () => {
     // Bluetooth HFP warm-up: digital silence plus rounding dither.
     const zeros = new Int16Array(2400);
     const dither = new Int16Array(2400);
-    dither[10] = 2;
-    dither[20] = -2;
+    dither[10] = 3;
+    dither[20] = -3;
     handler?.(pcmEvent(zeros));
     handler?.(pcmEvent(dither));
 
@@ -953,7 +953,7 @@ describe("VoiceRecordingService adversarial", () => {
     expect(runtime.voiceInput.sendAudioChunk).toHaveBeenCalledTimes(2);
 
     const speech = new Int16Array(2400);
-    speech[100] = -900;
+    speech[100] = -66;
     handler?.(pcmEvent(speech));
     handler?.(pcmEvent(speech.slice()));
 
@@ -983,6 +983,27 @@ describe("VoiceRecordingService adversarial", () => {
       speech[0] = 1200;
       handler?.(pcmEvent(speech));
       expect(runtime.voiceFns.setMicSignal).toHaveBeenLastCalledWith("live");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("MIC_SILENCE_GRACE_ONLY_COUNTS_UNPAUSED_CAPTURE", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+      runtime.voiceState.status = "recording";
+
+      voiceRecordingService.pause();
+      vi.advanceTimersByTime(10_000);
+      expect(runtime.voiceFns.setMicSignal).not.toHaveBeenCalledWith("silent");
+
+      runtime.voiceState.status = "paused";
+      voiceRecordingService.resume();
+      runtime.voiceState.status = "recording";
+      vi.advanceTimersByTime(3_000);
+      expect(runtime.voiceFns.setMicSignal).toHaveBeenCalledWith("silent");
     } finally {
       vi.useRealTimers();
     }

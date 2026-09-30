@@ -68,7 +68,7 @@ import {
   useTerminalInputStore,
 } from "@/store";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
-import { isVoiceMicPending, useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { errorsClient } from "@/clients";
@@ -569,12 +569,10 @@ function TerminalPaneComponent({
 
   const isHibernated = useIsHibernated(id);
 
-  // Pre-audio confirmation cue. Holds from the hotkey press until the mic
-  // delivers real audio, so the border never blanks out while a Bluetooth mic
-  // is still handing over zeros (#13105). Subscribes to the target too so a
-  // swap mid-arming repaints the right pane on the next render.
+  // Pre-audio confirmation cue. Subscribes to both fields so a target swap
+  // mid-arming repaints the right pane on the next render.
   const isVoiceArming = useVoiceRecordingStore(
-    (s) => (s.status === "arming" || isVoiceMicPending(s)) && s.activeTarget?.panelId === id
+    (s) => s.status === "arming" && s.activeTarget?.panelId === id
   );
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);

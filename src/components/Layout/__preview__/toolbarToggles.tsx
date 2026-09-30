@@ -98,6 +98,7 @@ if (state.voice) {
   useVoiceRecordingStore.setState({
     isConfigured: true,
     status: state.voice,
+    micSignal: "live",
     elapsedSeconds: 42,
     activeTarget: {
       panelId: "voice-elsewhere",
