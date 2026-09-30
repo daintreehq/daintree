@@ -68,7 +68,7 @@ function issue(n: number, title: string, over: Partial<Issue> = {}): Issue {
     state: "open",
     rawState: "OPEN",
     url: `https://github.com/daintreehq/daintree/issues/${n}`,
-    author: { login: "gregpriday", avatarUrl: AVATAR },
+    author: { login: "gregpriday", avatarUrl: AVATAR, rawData: null },
     assignees: [],
     labels: [],
     commentCount: 0,
@@ -90,7 +90,7 @@ function pr(n: number, title: string, over: Partial<PR> = {}): PR {
     isDraft: false,
     merged: false,
     url: `https://github.com/daintreehq/daintree/pull/${n}`,
-    author: { login: "gregpriday", avatarUrl: AVATAR },
+    author: { login: "gregpriday", avatarUrl: AVATAR, rawData: null },
     baseRef: "develop",
     headRef: `feature/issue-${n}`,
     commentCount: 0,
@@ -113,7 +113,7 @@ const ISSUES: Issue[] = [
   }),
   issue(11949, "Show Claude Code subagents as inspectable child terminals", {
     labels: [L("enhancement", "a2eeef"), L("terminal", "5319e7")],
-    assignees: [{ login: "gregpriday", avatarUrl: AVATAR }],
+    assignees: [{ login: "gregpriday", avatarUrl: AVATAR, rawData: null }],
   }),
   issue(11755, "Publish Daintree to winget", {
     labels: [L("enhancement", "a2eeef"), L("infrastructure", "0e8a16")],
@@ -125,7 +125,7 @@ const ISSUES: Issue[] = [
   issue(11244, "Fold the forge slot view seam into the panel contract", {
     labels: [L("architecture", "c5def5"), L("plugins", "7cd44a")],
     commentCount: 1,
-    assignees: [{ login: "gregpriday", avatarUrl: AVATAR }],
+    assignees: [{ login: "gregpriday", avatarUrl: AVATAR, rawData: null }],
     linkedPR: {
       number: 11250,
       state: "open",
@@ -138,7 +138,7 @@ const ISSUES: Issue[] = [
   }),
   issue(11158, "Remote SSH workspace mode", {
     labels: [L("epic", "3e4b9e")],
-    assignees: [{ login: "gregpriday", avatarUrl: AVATAR }],
+    assignees: [{ login: "gregpriday", avatarUrl: AVATAR, rawData: null }],
   }),
 ];
 

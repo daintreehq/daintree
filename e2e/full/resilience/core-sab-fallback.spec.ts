@@ -36,7 +36,9 @@ test.describe.serial("Core: SAB Fallback (IPC-only terminal output)", () => {
     // that can't share buffers), so the bridge hands back no transport buffers and the
     // app falls through to the IPC path. The renderer's SharedArrayBuffer global may
     // still exist — the load-bearing signal is the empty buffer handshake, not the global.
-    const buffers = await window.evaluate(() => window.electron.terminal.getSharedBuffers());
+    const buffers = await window.evaluate(() =>
+      globalThis.window.electron.terminal.getSharedBuffers()
+    );
     expect(buffers.signalBuffer).toBeNull();
     expect(buffers.visualBuffers).toHaveLength(0);
 
@@ -59,7 +61,9 @@ test.describe.serial("Core: SAB Fallback (IPC-only terminal output)", () => {
     await panel.locator(SEL.terminal.xtermRows).click();
     await window.waitForTimeout(T_SETTLE);
     await expectTerminalFocused(panel);
-    await window.evaluate(() => window.dispatchEvent(new CustomEvent("daintree:find-in-panel")));
+    await window.evaluate(() =>
+      globalThis.window.dispatchEvent(new CustomEvent("daintree:find-in-panel"))
+    );
 
     const searchInput = panel.locator(SEL.terminal.searchInput);
     await expect(searchInput).toBeVisible({ timeout: T_MEDIUM });

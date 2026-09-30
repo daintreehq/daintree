@@ -10,7 +10,6 @@ let repoPath: string;
 let fixtureCleanup: (() => void) | undefined;
 
 const TERMINAL_SPAWN_BURST = 6;
-const MAX_QUEUE_DEPTH = 50;
 
 async function resetRateLimits(app: AppContext["app"]): Promise<void> {
   await app.evaluate(() => {

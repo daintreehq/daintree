@@ -190,8 +190,6 @@ test.describe("Claude Online Flow", () => {
     });
 
     await test.step("verify response contains hello", async () => {
-      const { window } = ctx;
-
       const agentPanel = claudeAgentPanel;
 
       await expect

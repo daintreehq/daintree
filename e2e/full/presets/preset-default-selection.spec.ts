@@ -83,7 +83,7 @@ function launchEnv(): Record<string, string> {
 // Pins Claude so its toolbar split-button (and preset chevron) renders.
 async function setClaudePinned(window: Page, pinned: boolean): Promise<void> {
   await window.evaluate(async (value) => {
-    await window.electron.agentSettings.set("claude", { pinned: value } as never);
+    await globalThis.window.electron.agentSettings.set("claude", { pinned: value } as never);
   }, pinned);
 }
 

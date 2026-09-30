@@ -102,7 +102,8 @@ async function open(page: Page, theme: string, width: number): Promise<void> {
 
 async function setRunning(page: Page, running: boolean): Promise<void> {
   await page.evaluate(async (on) => {
-    const mod = await import(/* @vite-ignore */ "/src/store/copyTreeRunStore.ts");
+    const url = "/src/store/copyTreeRunStore.ts";
+    const mod = (await import(/* @vite-ignore */ url)) as typeof import("@/store/copyTreeRunStore");
     const store = mod.useCopyTreeRunStore.getState();
     if (on) store.beginRun();
     else store.endRun();
@@ -112,7 +113,8 @@ async function setRunning(page: Page, running: boolean): Promise<void> {
 async function announce(page: Page): Promise<void> {
   await page.bringToFront();
   await page.evaluate(async () => {
-    const mod = await import(/* @vite-ignore */ "/src/lib/copyTreeFeedback.ts");
+    const url = "/src/lib/copyTreeFeedback.ts";
+    const mod = (await import(/* @vite-ignore */ url)) as typeof import("@/lib/copyTreeFeedback");
     mod.announceCopyTreeCopy(
       { title: "Context copied", message: "184 files · 612 KB · XML" },
       "copy-tree-harness"

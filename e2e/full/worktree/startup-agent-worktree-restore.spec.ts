@@ -16,7 +16,7 @@ import { createFixtureRepo, removePathSync } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { waitForTerminalText } from "../../helpers/terminal";
 import { SEL } from "../../helpers/selectors";
-import { T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
 // Regression coverage for #11234 (PR #11235): on a cold restart, hydration
 // races the workspace host, and `worktree.getAll()` can answer `[]` before

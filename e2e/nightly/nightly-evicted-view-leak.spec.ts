@@ -102,7 +102,8 @@ test.describe.serial("Nightly: Evicted project view leak detection", () => {
     // loaded CI runners (especially macOS), `selectExistingProjectAndRefresh`
     // returning doesn't guarantee that the previous project's view has been
     // moved into the cache map yet.
-    let lastSnapshot: Awaited<ReturnType<typeof readPvmState>> = null;
+    // Assigned inside the poll callback, so declare it without a narrowing initializer.
+    let lastSnapshot = null as Awaited<ReturnType<typeof readPvmState>>;
     try {
       await expect
         .poll(

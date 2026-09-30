@@ -80,8 +80,8 @@ test.describe.serial("Core: Dev Preview", () => {
         element.closest("[data-panel-id]")?.getAttribute("data-panel-id")
       );
       const { project, proxyPort } = await window.evaluate(async () => ({
-        project: await window.electron.project.getCurrent(),
-        proxyPort: (await window.electron.devPreview.getProxyPort()).port,
+        project: await globalThis.window.electron.project.getCurrent(),
+        proxyPort: (await globalThis.window.electron.devPreview.getProxyPort()).port,
       }));
       expect(panelId).toBeTruthy();
       expect(project).toBeTruthy();
@@ -208,10 +208,10 @@ server.listen(0, '127.0.0.1', () => {
       // Set devServerCommand via IPC to avoid the unsaved-changes dialog.
       // Read current settings, merge the dev command, and save back.
       await window.evaluate(async () => {
-        const current = await window.electron.project.getCurrent();
+        const current = await globalThis.window.electron.project.getCurrent();
         if (!current?.id) return;
-        const settings = await window.electron.project.getSettings(current.id);
-        await window.electron.project.saveSettings(current.id, {
+        const settings = await globalThis.window.electron.project.getSettings(current.id);
+        await globalThis.window.electron.project.saveSettings(current.id, {
           ...settings,
           devServerCommand: "node dev-server.cjs",
         });

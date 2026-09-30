@@ -232,7 +232,7 @@ interface CustomPresetState {
 
 async function getCustomPresetState(window: Page, agentId: string): Promise<CustomPresetState> {
   return window.evaluate(async (id): Promise<CustomPresetState> => {
-    const settings = await window.electron.agentSettings.get();
+    const settings = await globalThis.window.electron.agentSettings.get();
     const agents = settings.agents as
       Record<string, { customPresets?: unknown[]; presetId?: string } | undefined> | undefined;
     const entry = agents?.[id];
@@ -265,7 +265,7 @@ async function persistCustomPresetDirectly(window: Page, agentId: string): Promi
       options?: { source?: string }
     ) => Promise<DispatchResult>;
 
-    const settings = (await window.electron.agentSettings.get()) as AgentSettings;
+    const settings = (await globalThis.window.electron.agentSettings.get()) as AgentSettings;
     const entry = settings.agents?.[targetAgentId] ?? {};
     const existing = Array.isArray(entry.customPresets) ? entry.customPresets : [];
     const presetId = `e2e-preset-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -297,7 +297,7 @@ async function persistCustomPresetDirectly(window: Page, agentId: string): Promi
       return;
     }
 
-    await window.electron.agentSettings.set(targetAgentId, nextEntry);
+    await globalThis.window.electron.agentSettings.set(targetAgentId, nextEntry);
   }, agentId);
 }
 
@@ -403,7 +403,7 @@ const CCR_POLL_INTERVALS = [250, 500, 1_000, 2_000];
 
 async function getCcrPresetLabels(window: Page): Promise<string[]> {
   return window.evaluate(async (): Promise<string[]> => {
-    const presets = await window.electron.agentCapabilities.getCcrPresets();
+    const presets = await globalThis.window.electron.agentCapabilities.getCcrPresets();
     return presets
       .map((preset: { name?: unknown }) =>
         typeof preset.name === "string" ? preset.name.replace(/^CCR:\s*/, "").trim() : ""

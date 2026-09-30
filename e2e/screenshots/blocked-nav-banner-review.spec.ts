@@ -90,7 +90,8 @@ async function open(page: Page, fixture: BlockedNavFixtureName, theme: string): 
   await page.mouse.move(0, 0);
   page.removeAllListeners("pageerror");
   page.on("pageerror", (error) => console.warn(`[blocked-nav-shots] pageerror: ${error.message}`));
-  const rejectOpen = BLOCKED_NAV_FIXTURES[fixture].drive === "open-failed";
+  const fixtureSpec: BlockedNavFixture = BLOCKED_NAV_FIXTURES[fixture];
+  const rejectOpen = fixtureSpec.drive === "open-failed";
   const url = `${server!.baseURL}/blocked-nav-banner-preview.html?theme=${theme}&fixture=${fixture}${rejectOpen ? "&openExternal=reject" : ""}`;
   const frame = page.locator(FRAME).first();
   try {

@@ -167,17 +167,17 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
     await stubRepoStats(ctx.app, { issueCount: 3, prCount: 0, commitCount: 5 }, window);
     await stubListIssues(ctx.app, [
       makeFixtureIssue(201, "One assignee", {
-        assignees: [{ login: "alice", avatarUrl: "" }],
+        assignees: [{ login: "alice", avatarUrl: "", rawData: null }],
       }),
       makeFixtureIssue(202, "Three assignees, so the row also carries a +2", {
         assignees: [
-          { login: "alice", avatarUrl: "" },
-          { login: "bob", avatarUrl: "" },
-          { login: "carol", avatarUrl: "" },
+          { login: "alice", avatarUrl: "", rawData: null },
+          { login: "bob", avatarUrl: "", rawData: null },
+          { login: "carol", avatarUrl: "", rawData: null },
         ],
       }),
       makeFixtureIssue(203, "One assignee and a long title that will truncate hard", {
-        assignees: [{ login: "dave", avatarUrl: "" }],
+        assignees: [{ login: "dave", avatarUrl: "", rawData: null }],
         labels: [{ name: "bug", color: "d73a4a" }],
         commentCount: 12,
       }),

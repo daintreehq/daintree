@@ -227,7 +227,7 @@ test.describe.serial("Full: Worktree Resource Substitution", () => {
         async () =>
           window.evaluate(
             async ({ branch }) => {
-              const states = window.__DAINTREE_E2E_WORKTREES__?.() ?? [];
+              const states = globalThis.window.__DAINTREE_E2E_WORKTREES__?.() ?? [];
               return states.find((state) => state.branch === branch)?.resourceConnectCommand ?? "";
             },
             { branch: BRANCH }
@@ -239,13 +239,13 @@ test.describe.serial("Full: Worktree Resource Substitution", () => {
     const panelIdsBefore = new Set(await getGridPanelIds(window));
     await window.evaluate(
       async ({ branch }) => {
-        const worktree = window
+        const worktree = globalThis.window
           .__DAINTREE_E2E_WORKTREES__?.()
           .find((state) => state.branch === branch);
         if (!worktree?.resourceConnectCommand?.includes("BRANCH=")) {
           throw new Error("Renderer worktree snapshot does not contain the rewritten command");
         }
-        const dispatch = window.__daintreeDispatchAction;
+        const dispatch = globalThis.window.__daintreeDispatchAction;
         if (!dispatch) throw new Error("__daintreeDispatchAction is not installed");
         await dispatch("worktree.resource.connect", { worktreeId: worktree.id });
       },

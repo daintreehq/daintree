@@ -29,6 +29,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+      # ubuntu-22.04 runner images do not ship ripgrep.
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
       - name: Extract quarantine annotations
         run: |
           # rg exits 0 (matches) or 1 (no matches); any other code is a real

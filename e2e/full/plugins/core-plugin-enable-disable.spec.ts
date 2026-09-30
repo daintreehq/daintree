@@ -42,7 +42,7 @@ test.describe.serial("Core: Plugin enable/disable", () => {
 
     const isDisabled = () =>
       window.evaluate(async () => {
-        const plugins = await window.electron.plugin.list();
+        const plugins = await globalThis.window.electron.plugin.list();
         return (
           plugins.find((plugin) => plugin.manifest.name === "daintree.hello")?.disabled === true
         );

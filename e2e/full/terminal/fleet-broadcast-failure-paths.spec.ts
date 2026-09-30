@@ -7,7 +7,6 @@ import { getFocusedPanelId, getPanelById } from "../../helpers/panels";
 import {
   waitForTerminalPty,
   waitForTerminalText,
-  waitForTerminalTextById,
   getTerminalText,
   getTerminalTextById,
 } from "../../helpers/terminal";

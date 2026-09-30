@@ -59,13 +59,13 @@ function launchEnv(): Record<string, string> {
 
 async function setClaudePinned(window: Page, pinned: boolean): Promise<void> {
   await window.evaluate(async (value) => {
-    await window.electron.agentSettings.set("claude", { pinned: value } as never);
+    await globalThis.window.electron.agentSettings.set("claude", { pinned: value } as never);
   }, pinned);
 }
 
 async function getClaudeCustomPresetCount(window: Page): Promise<number> {
   return window.evaluate(async () => {
-    const settings = await window.electron.agentSettings.get();
+    const settings = await globalThis.window.electron.agentSettings.get();
     const agents = settings.agents as
       Record<string, { customPresets?: unknown[] } | undefined> | undefined;
     const entry = agents?.claude;

@@ -18,7 +18,7 @@ npm run test:e2e:full-terminal     # Run a single bucket — substitute any of:
                                    #   full-plugins
 npm run test:e2e:online            # Claude/OpenCode-dependent online tests
 npm run test:e2e:nightly           # Memory-leak / soak suite (serialized, workers=1)
-npm run test:e2e:demo              # Demo-engine specs (workers=1, screencast capture)
+npm run test:e2e:demo              # Demo-engine specs (own config, workers=1, screencast capture)
 npx playwright test e2e/full/terminal/core-terminal-search.spec.ts  # Single file
 PWDEBUG=1 npx playwright test --project=core                         # Debug mode
 ```
@@ -35,7 +35,7 @@ npx playwright test --project=core --headed                          # Watch the
 
 ## Test Suites
 
-Tests are split into twelve Playwright projects:
+Tests are split into eleven Playwright projects:
 
 - **core** — Lightweight deterministic release-gate smoke (5 specs). This is the Playwright e2e smoke suite (`npm run test:e2e:core`), distinct from the Electron stability soak (`npm run test:smoke`). See [test:smoke vs Playwright core](#testsmoke-vs-playwright-core) below.
 - **full-terminal** — PTY mechanics, scrollback, search, layout, recipes, output flood, context injection, fleet broadcast.
@@ -48,7 +48,6 @@ Tests are split into twelve Playwright projects:
 - **online** — Tests that interact with real agent CLIs (requires `ANTHROPIC_API_KEY`).
 - **nightly** — Long-running memory-leak / soak detection, 5 specs (workers=1, no retries). The project name predates the scheduled nightly; it now runs as part of the `stabilize` sweep and on demand, not on a cron.
 - **screenshots** — The theme tour and the per-surface design-review captures. Run locally on demand, not part of the PR/release gates.
-- **demo** — Demo-engine specs that exercise the in-app demo automation API (`window.electron.demo`) — screencast recording and scripted terminal input (workers=1, no retries). Runs on demand via the `demo` suite in `e2e.yml`; not a release gate. The 4K dimension assertion in `demo-reel` is skipped on hosted CI (where the virtual display can't reach 4K) unless `DAINTREE_DEMO_STRICT_DIMS=1` is set.
 
 ## Configuration
 
@@ -60,7 +59,7 @@ Tests are split into twelve Playwright projects:
 
 `playwright.mechanism.config.ts` holds checks that answer "does the platform actually behave this way" rather than "does the product still work" — currently `e2e/mechanism/media-range-streaming.spec.ts`, which is intended to establish whether Chromium issues real follow-up byte ranges against the `standard: true` `daintree-media://` scheme (#12242). Run it with `npm run test:e2e:mechanism`, after `npm run build:e2e`.
 
-It is a second config rather than a thirteenth project on purpose: `npm run test:e2e` is a bare `npx playwright test`, which runs _every_ project in `playwright.config.ts`, and these generate several hundred megabytes of encoded fixtures per run. Don't fold it in.
+It is a second config rather than a twelfth project on purpose: `npm run test:e2e` is a bare `npx playwright test`, which runs _every_ project in `playwright.config.ts`, and these generate several hundred megabytes of encoded fixtures per run. Don't fold it in.
 
 ### Assistant workflow runs (separate config)
 
@@ -75,6 +74,19 @@ DAINTREE_E2E_ASSISTANT_WORKFLOW=facts-vote DAINTREE_E2E_AUTO_TRUST=1 DAINTREE_E2
 `DAINTREE_E2E_AUTO_TRUST=1` answers worker trust dialogs as a user whose project every CLI already trusts (a CLI may remember that answer for the temporary project path in its own config); leave it off to exercise the assistant's own dialog handling. An unknown scenario id fails the run instead of skipping everything, and so does a turn that never settles within the scenario's budget or a run whose assistant transcript cannot be found. Each run writes a timeline, screenshots, every terminal's final text, the assistant's instructions and transcript, copies of its session files and `metrics.json` (turns, notices, tool calls, tokens, and every reply a `waitForReply` returned with its outcome and handback summary, or `unread` when a result could not be parsed) under `test-results-assistant/`, which the next run clears.
 
 A new workflow is one entry in `e2e/assistant/scenarios.ts`: an `id`, the project files (`e2e/assistant/projects.ts` has a small inventory CLI), the messages, a timeout and a `check`. Checks match text against `answer` (what the assistant said, from its transcript) rather than the screen, which also shows the user's prompt. Each turn waits until every agent is idle, so notices land inside it; `settleOnAssistant` sends the next message as soon as the assistant is idle instead. The kit is `e2e/assistant/harness.ts`.
+
+### Demo-engine specs (separate config)
+
+`playwright.demo.config.ts` runs `e2e/demo/`, the specs that exercise the in-app demo automation API (`window.electron.demo`): screencast recording and scripted terminal input (workers=1, no retries). It shares the main config's reporter wiring, so the `demo` suite in `e2e.yml` produces the same JSON and blob outputs; it runs on demand and is not a release gate. It is a separate config so a bare `npm run test:e2e` never records 4K screencasts.
+
+```bash
+npm run build:e2e && npm run test:e2e:demo
+npm run build:e2e && npx playwright test --config=playwright.demo.config.ts e2e/demo/demo-terminal-input.spec.ts
+```
+
+- **`demo-terminal-input.spec.ts`** proves `typeInTerminal` and `sendKeyToTerminal` reach a real PTY.
+- **`demo-reel.spec.ts`** records the worktree-dashboard reel and checks the capture pipeline. Its 4K dimension assertion is skipped on hosted CI (where the virtual display can't reach 4K) unless `DAINTREE_DEMO_STRICT_DIMS=1` is set.
+- **`intro-video.spec.ts`** records the narrated intro video. It has no assertions and drives the real Claude, Codex, Grok and Antigravity CLIs by default, so it skips unless `DAINTREE_DEMO_INTRO=1`.
 
 ### Live plugin checks (separate config)
 
@@ -108,7 +120,6 @@ Things these specs have to handle that bucket specs don't:
 | online          | `./e2e/online`          | 1            | 1-2     |
 | nightly         | `./e2e/nightly`         | 0            | 1       |
 | screenshots     | `./e2e/screenshots`     | 0            | 1-2     |
-| demo            | `./e2e/demo`            | 0            | 1       |
 
 ## Directory Structure
 
@@ -139,9 +150,11 @@ e2e/
 ├── screenshots/         # design-review capture harnesses (on demand)
 │   ├── theme-tour.spec.ts        # 19-scene theme review tour
 │   └── *-review.spec.ts          # per-surface design-review captures
-└── demo/                # demo-engine specs (on demand)
+└── demo/                # demo-engine specs (playwright.demo.config.ts, on demand)
     ├── demo-reel.spec.ts
-    └── demo-terminal-input.spec.ts
+    ├── demo-terminal-input.spec.ts
+    ├── intro-video.spec.ts       # opt-in: DAINTREE_DEMO_INTRO=1
+    └── intro/                    # intro-video scenes, fixtures and post-processing
 ```
 
 ## Shared Helpers

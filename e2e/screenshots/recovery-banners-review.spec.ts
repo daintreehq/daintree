@@ -158,7 +158,7 @@ async function withPage<T>(
   context: BrowserContext,
   what: string,
   body: (page: Page) => Promise<T>,
-  init?: (page: Page) => Promise<void>
+  init?: (page: Page) => Promise<unknown>
 ): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     const page = await context.newPage();

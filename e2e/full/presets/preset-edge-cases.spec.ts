@@ -21,7 +21,7 @@ async function readCustomPresets(
   agentId = "claude"
 ): Promise<{ id: string; name: string }[]> {
   return window.evaluate(async (id) => {
-    const settings = await window.electron.agentSettings.get();
+    const settings = await globalThis.window.electron.agentSettings.get();
     const agents = settings.agents as
       Record<string, { customPresets?: { id: string; name: string }[] } | undefined> | undefined;
     const entry = agents?.[id];
@@ -147,7 +147,7 @@ test.describe.serial("Presets: Edge Cases & Resilience (97–100)", () => {
           const settings = await window.electron.agentSettings.get();
           const agents = settings.agents as Record<
             string,
-            { customPresets?: { id: string }[] } | undefined
+            { customPresets?: { id: string; name: string }[] } | undefined
           >;
           const next = (agents.claude?.customPresets ?? []).filter((p) => p.id !== id);
           if (dispatch) {

@@ -33,7 +33,7 @@ test.describe.serial("Core: Diagnostics Dock — auto-open preserves focus", () 
     await expect(textarea.first()).toBeFocused({ timeout: T_SHORT });
 
     await window.evaluate(() => {
-      window.__DAINTREE_E2E_ADD_ERROR__?.("E2E focus preservation test error");
+      globalThis.window.__DAINTREE_E2E_ADD_ERROR__?.("E2E focus preservation test error");
     });
 
     const dock = window.locator(SEL.diagnostics.dock);
@@ -47,7 +47,7 @@ test.describe.serial("Core: Diagnostics Dock — auto-open preserves focus", () 
     await expect(textarea.first()).toBeFocused({ timeout: T_SHORT });
 
     await window.evaluate(() => {
-      window.__DAINTREE_E2E_CLEAR_ERRORS__?.();
+      globalThis.window.__DAINTREE_E2E_CLEAR_ERRORS__?.();
     });
 
     await window.locator(SEL.diagnostics.closeButton).click();

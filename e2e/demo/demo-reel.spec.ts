@@ -11,7 +11,7 @@
  *
  * Run locally:
  *   npm run build:e2e
- *   npx playwright test e2e/demo/demo-reel.spec.ts --project=demo
+ *   npx playwright test --config=playwright.demo.config.ts e2e/demo/demo-reel.spec.ts
  *
  * The scene needs NO ANTHROPIC_API_KEY — it shows the worktree dashboard,
  * which is fully populated by the brush-cms fixture.

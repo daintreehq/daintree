@@ -72,7 +72,11 @@ async function getLivePtyCount(window: Page, projectId: string | null = null): P
   return window.evaluate(async (pid) => {
     const terminals: Array<{ hasPty?: boolean; projectId?: string }> = await (
       window as unknown as {
-        electron: { terminal: { getAllTerminals: () => Promise<unknown[]> } };
+        electron: {
+          terminal: {
+            getAllTerminals: () => Promise<Array<{ hasPty?: boolean; projectId?: string }>>;
+          };
+        };
       }
     ).electron.terminal.getAllTerminals();
     return terminals.filter((t) => t.hasPty === true && (pid === null || t.projectId === pid))

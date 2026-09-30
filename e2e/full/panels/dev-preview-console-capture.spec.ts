@@ -70,10 +70,10 @@ server.listen(0, '127.0.0.1', () => {
     });
 
     await window.evaluate(async () => {
-      const current = await window.electron.project.getCurrent();
+      const current = await globalThis.window.electron.project.getCurrent();
       if (!current?.id) return;
-      const settings = await window.electron.project.getSettings(current.id);
-      await window.electron.project.saveSettings(current.id, {
+      const settings = await globalThis.window.electron.project.getSettings(current.id);
+      await globalThis.window.electron.project.saveSettings(current.id, {
         ...settings,
         devServerCommand: "node dev-server.cjs",
       });

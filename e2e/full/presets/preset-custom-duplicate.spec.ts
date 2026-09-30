@@ -18,7 +18,7 @@ import {
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
 
-type PersistedPreset = { id: string; name?: string };
+type PersistedPreset = { id: string; name: string };
 type PersistedAgentEntry = {
   customPresets?: PersistedPreset[];
   presetId?: string;
@@ -29,20 +29,22 @@ type PersistedAgentSettings = {
 
 async function getClaudeCustomPresets(window: Page): Promise<PersistedPreset[]> {
   return window.evaluate(async () => {
-    const settings = (await window.electron.agentSettings.get()) as PersistedAgentSettings;
+    const settings =
+      (await globalThis.window.electron.agentSettings.get()) as PersistedAgentSettings;
     return settings.agents?.claude?.customPresets ?? [];
   });
 }
 
 async function deleteFirstOriginalClaudePreset(window: Page): Promise<void> {
   await window.evaluate(async () => {
-    const settings = (await window.electron.agentSettings.get()) as PersistedAgentSettings;
+    const settings =
+      (await globalThis.window.electron.agentSettings.get()) as PersistedAgentSettings;
     const entry = settings.agents?.claude ?? {};
     const presets = entry.customPresets ?? [];
     const target = presets.find((preset) => !(preset.name ?? "").includes("(copy)")) ?? presets[0];
     if (!target) throw new Error("No Claude custom preset available to delete");
 
-    await window.electron.agentSettings.set("claude", {
+    await globalThis.window.electron.agentSettings.set("claude", {
       ...entry,
       customPresets: presets.filter((preset) => preset.id !== target.id),
       presetId: entry.presetId === target.id ? undefined : entry.presetId,
@@ -59,7 +61,8 @@ async function resetClaudeCustomPresets(window: Page): Promise<void> {
       options?: { source?: string }
     ) => Promise<DispatchResult>;
 
-    const settings = (await window.electron.agentSettings.get()) as PersistedAgentSettings;
+    const settings =
+      (await globalThis.window.electron.agentSettings.get()) as PersistedAgentSettings;
     const entry = settings.agents?.claude ?? {};
     const nextEntry = {
       ...entry,
@@ -81,7 +84,7 @@ async function resetClaudeCustomPresets(window: Page): Promise<void> {
       return;
     }
 
-    await window.electron.agentSettings.set("claude", nextEntry);
+    await globalThis.window.electron.agentSettings.set("claude", nextEntry);
   });
 }
 
@@ -94,7 +97,8 @@ async function duplicateClaudePresetDirectly(window: Page, presetId: string): Pr
       options?: { source?: string }
     ) => Promise<DispatchResult>;
 
-    const settings = (await window.electron.agentSettings.get()) as PersistedAgentSettings;
+    const settings =
+      (await globalThis.window.electron.agentSettings.get()) as PersistedAgentSettings;
     const entry = settings.agents?.claude ?? {};
     const presets = entry.customPresets ?? [];
     const target = presets.find((preset) => preset.id === targetPresetId);
@@ -124,7 +128,7 @@ async function duplicateClaudePresetDirectly(window: Page, presetId: string): Pr
       return;
     }
 
-    await window.electron.agentSettings.set("claude", nextEntry);
+    await globalThis.window.electron.agentSettings.set("claude", nextEntry);
   }, presetId);
 }
 

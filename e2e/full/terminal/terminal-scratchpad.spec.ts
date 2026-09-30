@@ -16,7 +16,7 @@ let fixtureCleanup: (() => void) | undefined;
 let panel: Locator;
 
 /** Capture a settled state and attach it to the report for visual review. */
-async function capture(page: Page, testInfo: TestInfo, target: Locator, name: string) {
+async function capture(testInfo: TestInfo, target: Locator, name: string) {
   await expect(target).toBeVisible();
   const path = testInfo.outputPath(`${name}.png`);
   await target.screenshot({ path, animations: "disabled", caret: "hide" });
@@ -66,7 +66,7 @@ test.describe.serial("Terminal scratchpad (#12835)", () => {
       .poll(async () => (await getTerminalDimensions(panel))?.cols ?? 0, { timeout: T_LONG })
       .toBeLessThan(before!.cols);
 
-    await capture(window, testInfo, panel, "01-scratchpad-open-empty");
+    await capture(testInfo, panel, "01-scratchpad-open-empty");
   });
 
   test("takes typing only when clicked into, and gives the terminal its keys back", async () => {
@@ -88,7 +88,7 @@ test.describe.serial("Terminal scratchpad (#12835)", () => {
     await waitForTerminalText(panel, "scratchpad-keys-ok", T_LONG);
     await expect(editor).toHaveValue(notes);
 
-    await capture(window, testInfo, panel, "02-scratchpad-with-notes");
+    await capture(testInfo, panel, "02-scratchpad-with-notes");
   });
 
   test("resizes from its left edge", async () => {
@@ -112,12 +112,11 @@ test.describe.serial("Terminal scratchpad (#12835)", () => {
       .poll(async () => (await scratchpad.boundingBox())?.width ?? 0, { timeout: T_SHORT })
       .toBeGreaterThan(start!.width + 40);
 
-    await capture(window, testInfo, panel, "03-scratchpad-resized");
+    await capture(testInfo, panel, "03-scratchpad-resized");
   });
 
   test("toggles from a header control and expands back as it was", async () => {
     const testInfo = test.info();
-    const { window } = ctx;
     const scratchpad = panel.getByTestId("terminal-scratchpad");
     const width = (await scratchpad.boundingBox())!.width;
     const editor = panel.getByTestId("terminal-scratchpad-editor");
@@ -130,7 +129,7 @@ test.describe.serial("Terminal scratchpad (#12835)", () => {
     await expect(scratchpad).toHaveCount(0);
     await expect(toggle).toHaveAttribute("aria-label", "Show scratchpad");
 
-    await capture(window, testInfo, panel, "04-scratchpad-collapsed");
+    await capture(testInfo, panel, "04-scratchpad-collapsed");
 
     await toggle.click();
     await expect(scratchpad).toBeVisible();
@@ -157,7 +156,7 @@ test.describe.serial("Terminal scratchpad (#12835)", () => {
     await expect(panel.getByTestId("terminal-scratchpad")).toHaveCount(0);
     await expect(panel.getByTestId("panel-toggle-scratchpad")).toHaveCount(0);
 
-    await capture(window, testInfo, panel, "05-scratchpad-closed");
+    await capture(testInfo, panel, "05-scratchpad-closed");
 
     await openScratchpadFromMenu(window, panel);
     await expect(panel.getByTestId("terminal-scratchpad")).toBeVisible();

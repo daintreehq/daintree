@@ -1,5 +1,9 @@
 import { test, expect } from "@playwright/test";
+import type { WebContents, WebPreferences } from "electron";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
+
+// Internal WebContents method Electron keeps but leaves out of its typings.
+type WebContentsWithPrefs = WebContents & { getLastWebPreferences(): WebPreferences | null };
 
 let ctx: AppContext;
 
@@ -28,7 +32,8 @@ test.describe.serial("Core: Security", () => {
     // by URL across all alive webContents to verify *its* preferences.
     const prefs = await ctx.app.evaluate(
       ({ webContents }, { pageUrl }) => {
-        const wc = webContents.getAllWebContents().find((c) => c.getURL() === pageUrl);
+        const wc = webContents.getAllWebContents().find((c) => c.getURL() === pageUrl) as
+          WebContentsWithPrefs | undefined;
         return wc?.getLastWebPreferences() ?? null;
       },
       { pageUrl: ctx.window.url() }

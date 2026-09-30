@@ -230,11 +230,11 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
 
     // Resolve both sessions through the full IPC stack.
     const mainSession = await window.evaluate(
-      (id: string) => window.electron.devPreview.getByWorktree({ worktreeId: id }),
+      (id: string) => globalThis.window.electron.devPreview.getByWorktree({ worktreeId: id }),
       mainWorktreeId
     );
     const featureSession = await window.evaluate(
-      (id: string) => window.electron.devPreview.getByWorktree({ worktreeId: id }),
+      (id: string) => globalThis.window.electron.devPreview.getByWorktree({ worktreeId: id }),
       featureWorktreeId
     );
 
@@ -294,7 +294,7 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
       .poll(
         () =>
           window.evaluate(
-            (id: string) => window.electron.devPreview.getByWorktree({ worktreeId: id }),
+            (id: string) => globalThis.window.electron.devPreview.getByWorktree({ worktreeId: id }),
             featureWorktreeId
           ),
         { timeout: T_MEDIUM }
@@ -303,7 +303,7 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
 
     // Main worktree: session untouched — still running with the same URL.
     const mainAfter = await window.evaluate(
-      (id: string) => window.electron.devPreview.getByWorktree({ worktreeId: id }),
+      (id: string) => globalThis.window.electron.devPreview.getByWorktree({ worktreeId: id }),
       mainWorktreeId
     );
     expect(mainAfter?.status).toBe("running");

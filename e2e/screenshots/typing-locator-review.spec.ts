@@ -199,7 +199,7 @@ test("Typing locator — states and themes", async ({ browser }) => {
     await show(page, "locate", "unmount");
     await page.waitForTimeout(timings.dwell + STRETCH_MS * 0.4);
     written.push(await snapZoom(page, "locate", `08-exit-mid-${theme}.png`));
-    await stretch.evaluate((el) => el.remove());
+    await stretch.evaluate((el) => (el as ChildNode).remove());
     await page.evaluate(() => (window as unknown as HarnessWindow).__typingLocator.clear());
     await expect(pill(page, "locate")).toHaveCount(0, { timeout: 3_000 });
 

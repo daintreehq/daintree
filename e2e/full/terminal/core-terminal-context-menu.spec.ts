@@ -158,11 +158,11 @@ test.describe.serial("Core: Terminal Context Menu", () => {
       expect(panelId).toBeTruthy();
 
       await window.evaluate(() => {
-        const target = window as Window & {
+        const target = globalThis.window as Window & {
           __daintreeTerminalRenameEvents?: unknown[];
         };
         target.__daintreeTerminalRenameEvents = [];
-        window.addEventListener(
+        globalThis.window.addEventListener(
           "daintree:rename-terminal",
           (event) => {
             target.__daintreeTerminalRenameEvents?.push((event as CustomEvent).detail);
@@ -182,7 +182,7 @@ test.describe.serial("Core: Terminal Context Menu", () => {
             window.evaluate(
               () =>
                 (
-                  window as Window & {
+                  globalThis.window as Window & {
                     __daintreeTerminalRenameEvents?: Array<{ id?: string }>;
                   }
                 ).__daintreeTerminalRenameEvents?.at(0)?.id ?? null

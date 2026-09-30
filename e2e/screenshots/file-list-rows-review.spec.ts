@@ -128,7 +128,7 @@ async function load(page: Page, theme: string) {
   await page.waitForTimeout(250);
 }
 
-const background = (page: Page, locator: ReturnType<Page["locator"]>) =>
+const background = (locator: ReturnType<Page["locator"]>) =>
   locator.evaluate((el) => getComputedStyle(el).backgroundColor);
 
 // One test, not one per theme: Playwright gives each test its own worker, and
@@ -145,12 +145,12 @@ test("file-list rows", async ({ page }) => {
       const frame = within(page, surface.slug);
 
       await load(page, theme);
-      const restBg = await background(page, surface.target(page));
+      const restBg = await background(surface.target(page));
       await snap(frame, `${surface.slug}--rest--${theme}.png`);
 
       await surface.target(page).hover();
       await page.waitForTimeout(250);
-      const hoverBg = await background(page, surface.target(page));
+      const hoverBg = await background(surface.target(page));
       if (hoverBg === restBg) {
         throw new Error(`${surface.slug}/${theme}: hover painted nothing (${hoverBg})`);
       }

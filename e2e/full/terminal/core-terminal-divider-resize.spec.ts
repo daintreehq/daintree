@@ -3,7 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { getGridPanelIds } from "../../helpers/panels";
-import { T_LONG, T_SHORT } from "../../helpers/timeouts";
+import { T_LONG } from "../../helpers/timeouts";
 import { spawnTerminalAndVerify } from "../../helpers/workflows";
 
 type TerminalGeometry = {

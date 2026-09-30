@@ -17,7 +17,7 @@ import { dismissBlockingPalette } from "../../helpers/overlays";
 async function openRecipeManager(window: Page): Promise<Locator> {
   await dismissBlockingPalette(window).catch(() => undefined);
   await window.evaluate(() =>
-    window.dispatchEvent(new CustomEvent("daintree:open-recipe-manager"))
+    globalThis.window.dispatchEvent(new CustomEvent("daintree:open-recipe-manager"))
   );
   const dialog = window.locator(SEL.recipeManager.dialog);
   await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
@@ -93,7 +93,7 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
     test("conflict dialog resolves via reload from disk", async () => {
       const { window } = ctx;
       await window.evaluate(() =>
-        window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__?.("Conflicting Recipe")
+        globalThis.window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__?.("Conflicting Recipe")
       );
 
       const dialog = window.locator(SEL.recipeConflict.dialog);
@@ -110,7 +110,7 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
     test("conflict dialog resolves via overwrite", async () => {
       const { window } = ctx;
       await window.evaluate(() =>
-        window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__?.("Conflicting Recipe")
+        globalThis.window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__?.("Conflicting Recipe")
       );
 
       const dialog = window.locator(SEL.recipeConflict.dialog);
@@ -303,9 +303,9 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       // name collides with an in-repo recipe. The editor create flow writes
       // in-repo recipes, so seed the machine-local one through the project IPC.
       await window.evaluate(async () => {
-        const project = await window.electron.project.getCurrent();
+        const project = await globalThis.window.electron.project.getCurrent();
         if (!project?.id) throw new Error("No active project");
-        await window.electron.project.addRecipe(project.id, {
+        await globalThis.window.electron.project.addRecipe(project.id, {
           id: "recipe-local-shadow",
           name: "Shared Dev",
           projectId: project.id,
@@ -395,7 +395,9 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
     });
 
     async function showChecklist(window: Page): Promise<Locator> {
-      await window.evaluate(() => window.dispatchEvent(new Event("daintree:show-getting-started")));
+      await window.evaluate(() =>
+        globalThis.window.dispatchEvent(new Event("daintree:show-getting-started"))
+      );
       const panel = window.locator(SEL.checklist.panel);
       await expect(panel).toBeVisible({ timeout: T_MEDIUM });
       return panel;
@@ -410,9 +412,13 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       const item = panel.locator(SEL.checklist.item("createdWorktree"));
       await expect(item).toBeVisible({ timeout: T_SHORT });
 
-      await window.evaluate(() => window.electron.onboarding.markChecklistItem("createdWorktree"));
+      await window.evaluate(() =>
+        globalThis.window.electron.onboarding.markChecklistItem("createdWorktree")
+      );
 
-      const persisted = await window.evaluate(() => window.electron.onboarding.getChecklist());
+      const persisted = await window.evaluate(() =>
+        globalThis.window.electron.onboarding.getChecklist()
+      );
       expect(persisted.items.createdWorktree).toBe(true);
 
       // Re-show re-hydrates from disk, so the row now renders as done (rendered
@@ -435,7 +441,9 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       await window.locator(SEL.checklist.dismissButton).click();
       await expect(panel).toHaveCount(0, { timeout: T_MEDIUM });
 
-      const persisted = await window.evaluate(() => window.electron.onboarding.getChecklist());
+      const persisted = await window.evaluate(() =>
+        globalThis.window.electron.onboarding.getChecklist()
+      );
       expect(persisted.dismissed).toBe(true);
     });
   });

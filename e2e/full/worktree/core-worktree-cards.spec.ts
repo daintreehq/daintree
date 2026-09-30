@@ -44,8 +44,6 @@ test.describe.serial("Core: Worktree Cards", () => {
     test("main card is selected by default", async () => {
       const { window } = ctx;
 
-      const mainCard = window.locator(SEL.worktree.mainCard);
-
       await expect(window.locator(SEL.worktree.mainRow)).toHaveAttribute("aria-current", "true", {
         timeout: T_LONG,
       });
@@ -75,7 +73,6 @@ test.describe.serial("Core: Worktree Cards", () => {
     test("clicking feature card switches selection", async () => {
       const { window } = ctx;
 
-      const mainCard = window.locator(SEL.worktree.mainCard);
       const featureCard = window.locator(SEL.worktree.card(FEATURE));
 
       // Click the top of the card to avoid hitting interactive child elements
@@ -97,7 +94,6 @@ test.describe.serial("Core: Worktree Cards", () => {
       const { window } = ctx;
 
       const mainCard = window.locator(SEL.worktree.mainCard);
-      const featureCard = window.locator(SEL.worktree.card(FEATURE));
 
       await mainCard.click({ position: { x: 10, y: 10 } });
 

@@ -92,7 +92,7 @@ test.describe("plugin file-tree sample", () => {
   });
 
   test.afterEach(async () => {
-    await closeApp(ctx);
+    await closeApp(ctx.app);
     cleanupRepo();
   });
 

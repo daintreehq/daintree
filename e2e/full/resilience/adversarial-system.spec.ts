@@ -23,7 +23,7 @@ interface PresetSnapshot {
 
 async function readPresetState(window: Page, agentId = "claude"): Promise<PresetSnapshot> {
   return window.evaluate(async (id): Promise<PresetSnapshot> => {
-    const settings = await window.electron.agentSettings.get();
+    const settings = await globalThis.window.electron.agentSettings.get();
     const entry = settings.agents?.[id];
     const presets = Array.isArray(entry?.customPresets) ? entry.customPresets : [];
     return {

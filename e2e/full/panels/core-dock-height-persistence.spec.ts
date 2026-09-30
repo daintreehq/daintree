@@ -149,7 +149,9 @@ test.describe.serial("UI: Dock popover drag resize", () => {
     // so its height tracks the rendered popover height.
     const heightOf = () =>
       handle.evaluate(
-        (el) => (el.offsetParent as HTMLElement | null)?.getBoundingClientRect().height ?? 0
+        (el) =>
+          ((el as HTMLElement).offsetParent as HTMLElement | null)?.getBoundingClientRect()
+            .height ?? 0
       );
 
     const before = await heightOf();

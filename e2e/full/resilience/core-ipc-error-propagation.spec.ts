@@ -84,7 +84,7 @@ async function startSpawnResultRecording(window: Page) {
     const state = window as any;
     state.__DAINTREE_E2E_SPAWN_RESULTS__?.dispose?.();
     const results: Array<{ id: string; success: boolean }> = [];
-    const dispose = window.electron.terminal.onSpawnResult((id, result) => {
+    const dispose = globalThis.window.electron.terminal.onSpawnResult((id, result) => {
       results.push({ id, success: result.success });
     });
     state.__DAINTREE_E2E_SPAWN_RESULTS__ = { results, dispose };

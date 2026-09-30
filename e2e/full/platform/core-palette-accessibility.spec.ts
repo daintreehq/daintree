@@ -29,7 +29,7 @@ async function resetToApp(window: Page): Promise<void> {
  */
 async function openNewTerminalPalette(window: Page): Promise<void> {
   await window.evaluate(() =>
-    window.dispatchEvent(new CustomEvent("daintree:open-new-terminal-palette"))
+    globalThis.window.dispatchEvent(new CustomEvent("daintree:open-new-terminal-palette"))
   );
 }
 
