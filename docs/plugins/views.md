@@ -6,7 +6,7 @@ A plugin view is a React component the renderer mounts inside a panel, or in the
 
 Views render **inline** in Daintree's React tree, not in an iframe. Same document, same CSS cascade, same `:root` custom properties, same React instance. That is what makes the styling below possible, and it is also why a view has the same reach as Daintree's own UI, including the full `window.electron` bridge. The [trust model](./trust-model.md) covers what that means; this page covers what to do with it.
 
-The host mounts your default export under an error boundary and a `Suspense` boundary, inside a container that is `flex flex-col flex-1 min-h-0 w-full`. Make your root element fill it: `height: 100%` with `display: flex; flex-direction: column; min-height: 0` is the shape that scrolls correctly, because `min-height: 0` is what lets a flex child shrink below its content and hand the overflow to an inner scroller. A root that is only `height: 100%` will push the panel's own scrollbar around instead of owning it.
+The host mounts your default export under an error boundary and a `Suspense` boundary, inside a container that is `flex flex-col flex-1 min-h-0 w-full`. Make your root element fill it: `height: 100%` with `display: flex; flex-direction: column; min-height: 0` is the shape that scrolls correctly, because `min-height: 0` is what lets a flex child shrink below its content and hand the overflow to an inner scroller. A root that is only `height: 100%` will push the panel's own scrollbar around instead of owning it. The kit's [`PaneLayout`](./ui-kit.md#page-structure) is that shape already, with the header, toolbar and status strip at the host panes' own heights and the body as the one scroller.
 
 You receive [`PanelViewProps`](./contribution-points.md#views--shipped): `panelId`, `pluginId`, `worktreeId`, `disposeSignal`, `panelRemovedSignal`, `initialArgs`, `stateVersion`, `persistState`, `requestReload`, `setHasUnsavedChanges`, `styleRootAttributes`, and on a settings view `settingsContext`. Two of these are misread in every first plugin. `pluginId` is your host-side id, which for a project plugin is the instance key, not your manifest name; pass it through to the bridge as given. `disposeSignal` aborts on every unmount, including the temporary ones (a sibling pane maximised, a dock tab left), so it is for cancelling fetches, never for deciding something is finished. `stateVersion` says which shape `initialArgs` holds, and is only meaningful once you declare `stateVersion` on the panel contribution — see [panel state versioning](./contribution-points.md#panels--shipped).
 
@@ -91,7 +91,7 @@ Semantic colours resolve to live theme variables, so a panel built on them follo
 
 **Not part of the vocabulary:** stock palette colours (`bg-red-500`, `text-blue-600`); `dark:` — Daintree themes are runtime tokens, not a class, so a semantic token is already theme-aware and `dark:` is never the answer; `prose` (`@tailwindcss/typography` is not in the plugin contract; for rendered Markdown use [`Markdown`](#host-ui-components), which brings the host's document styles with it); `@apply`, which needs a build step this path does not have.
 
-Prefer **container queries** (`@container`, `@sm:`, `@md:`) over viewport breakpoints (`sm:`, `md:`). A breakpoint describes the whole window; your panel is one pane in a grid and can be narrow while the window is wide. The container has to be an **ancestor**: `@md:` answers to the nearest enclosing `@container`, never to the element carrying it, so `@container @md:grid-cols-4` on one element never applies (lint: `self-container-query`). Put `@container` on the wrapper and the variants on its children.
+Prefer **container queries** (`@container`, `@sm:`, `@md:`) over viewport breakpoints (`sm:`, `md:`). A breakpoint describes the whole window; your panel is one pane in a grid and can be narrow while the window is wide. The container has to be an **ancestor**: `@md:` answers to the nearest enclosing `@container`, never to the element carrying it, so `@container @md:grid-cols-4` on one element never applies (lint: `self-container-query`). Put `@container` on the wrapper and the variants on its children. When the structure itself has to change with the pane — a list beside its detail when wide, stacked when narrow — read the width with the kit's `useContainerSize` or `useBreakpoint`, which answer to the element you hand them, and lay the grid out with `AutoGrid`, which reflows with its own width.
 
 ### The vocabulary
 
@@ -150,8 +150,9 @@ Everything else Tailwind ships that does not name a colour works too — this li
 ### Copy-ready shapes
 
 ```jsx
-// Panel root. `flex flex-col flex-1 min-h-0` is what makes an inner scroller own
-// the overflow instead of pushing the panel's own scrollbar around.
+// Panel root, when the kit's PaneLayout doesn't fit. `flex flex-col flex-1 min-h-0`
+// is what makes an inner scroller own the overflow instead of pushing the
+// panel's own scrollbar around.
 <div className="flex flex-col flex-1 min-h-0 bg-surface-panel text-text-primary">
 
 // A bespoke row the kit's ListRow doesn't fit
