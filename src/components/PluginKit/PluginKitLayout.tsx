@@ -138,13 +138,25 @@ function KitCard(props: PluginCardProps) {
   ) : null;
 
   if (click) {
+    const dom = pickDomProps(rest);
+    // The plugin's own name wins over the title's; its description references
+    // join the card's own.
+    const ownLabel = nonEmpty(dom["aria-labelledby"]) ?? nonEmpty(dom["aria-label"]);
+    const describedBy = [
+      hasDescription ? descriptionId : undefined,
+      nonEmpty(dom["aria-describedby"]),
+    ]
+      .filter((ref) => ref !== undefined)
+      .join(" ");
     return (
       <ChoiceCard
-        {...pickDomProps(rest)}
+        {...dom}
         onClick={click}
         disabled={disabled === true}
-        aria-labelledby={hasTitle ? titleId : undefined}
-        aria-describedby={hasDescription ? descriptionId : undefined}
+        aria-labelledby={
+          nonEmpty(dom["aria-labelledby"]) ?? (!ownLabel && hasTitle ? titleId : undefined)
+        }
+        aria-describedby={describedBy || undefined}
         className={cn("min-w-0 flex-col items-stretch p-0", str(className))}
       >
         {header}
@@ -247,8 +259,9 @@ export function isShrinkKey(key: string, growKey: SplitterGrowKey): boolean {
   }
 }
 
-// The drag measures nothing: the size is the start size plus the pointer's
-// travel, as the host's own sidebars do, and moves land at most once a frame.
+// The drag measures once, at the press: the size is the pane's rendered size
+// plus the pointer's travel, as the host's own sidebars do, and moves land at
+// most once a frame.
 // Only the release commits, so a controlled parent re-renders once per drag.
 function KitResizableSplit({
   first,
@@ -309,7 +322,17 @@ function KitResizableSplit({
     if (event.button !== 0 || event.detail > 1) return;
     event.preventDefault();
     const origin = horizontal ? event.clientX : event.clientY;
-    const startSize = committedCollapsed ? 0 : committedSize;
+    // A container narrower than the size caps the pane, so the drag starts
+    // from what is drawn; starting from the size would swallow the first
+    // stretch of travel with nothing moving.
+    const pane = document.getElementById(paneId);
+    const rect = pane?.getBoundingClientRect();
+    const drawn = rect ? (horizontal ? rect.width : rect.height) : 0;
+    const startSize = committedCollapsed
+      ? 0
+      : drawn > 0 && drawn < committedSize
+        ? drawn
+        : committedSize;
     let latest: SplitDrag | null = null;
     let frame = 0;
     let scheduled = false;
@@ -595,7 +618,12 @@ function KitAccordion({
   const single = oneOf(type, ["single", "multiple"] as const) !== "multiple";
   const [ownValue, setOwnValue] = useState<string[]>(() => readValues(defaultValue) ?? []);
   const controlled = readValues(value);
-  const open = controlled ?? ownValue;
+  const given = controlled ?? ownValue;
+  // Single keeps at most one section open whatever it was handed: the first
+  // value that names a section.
+  const open = single
+    ? given.filter((entry) => entries.some((item) => item.value === entry)).slice(0, 1)
+    : given;
   const handleChange = fn(onValueChange);
   const toggle = (itemValue: string) => {
     const isOpen = open.includes(itemValue);
