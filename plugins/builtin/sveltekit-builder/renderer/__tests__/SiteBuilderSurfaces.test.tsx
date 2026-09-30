@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const context = vi.hoisted(() => ({
   current: { projectId: "p1", worktreeId: "wt-1", worktreePath: "/repo" },
@@ -38,6 +38,7 @@ import { usePanelStore } from "@/store/panelStore";
 // The plugin renders inside the app's TooltipProvider (App.tsx); its segmented
 // controls carry Radix tooltips, so the harness supplies the same ancestor.
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { kitReady } from "./kitReady";
 import {
   FILE,
   OBSERVATION,
@@ -131,6 +132,8 @@ async function mountSelected() {
 function text(): string {
   return document.body.textContent ?? "";
 }
+
+beforeAll(kitReady);
 
 beforeEach(() => {
   context.current = { projectId: "p1", worktreeId: "wt-1", worktreePath: "/repo" };

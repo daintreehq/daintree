@@ -1,11 +1,12 @@
 import { ExternalLink } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Badge, IconButton, TruncatedTooltip } from "@daintreehq/plugin-ui";
+// Host controls where the kit's lack a prop this block depends on: CopyButton
+// has no custom `announcement`, and TruncatedTooltip no `isTruncated` for text
+// shortened in JS rather than by CSS overflow.
 import { CopyButton } from "@/components/ui/CopyButton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { TruncatedTooltip as HostTruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { actionService } from "@/services/ActionService";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
 import type { SelectedNode } from "../shared/model.js";
 import { worktreeRelative, type SelectionState } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
@@ -108,28 +109,22 @@ export function SelectionIdentity({
               tooltipSide="bottom"
             />
             {absolute ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    // The glyph, not the hit box, sits on the column edge the
-                    // fields below end at.
-                    className="-mr-1"
-                    aria-label="Open in editor"
-                    onClick={() =>
-                      void actionService.dispatch(
-                        "file.openInEditor",
-                        line === null ? { path: absolute } : { path: absolute, line },
-                        { source: "user" }
-                      )
-                    }
-                  >
-                    <ExternalLink aria-hidden="true" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Open in editor</TooltipContent>
-              </Tooltip>
+              <IconButton
+                icon={<ExternalLink aria-hidden="true" />}
+                size="xs"
+                tooltipSide="bottom"
+                // The glyph, not the hit box, sits on the column edge the
+                // fields below end at.
+                className="-mr-1"
+                aria-label="Open in editor"
+                onClick={() =>
+                  void actionService.dispatch(
+                    "file.openInEditor",
+                    line === null ? { path: absolute } : { path: absolute, line },
+                    { source: "user" }
+                  )
+                }
+              />
             ) : null}
           </>
         ) : (
@@ -215,9 +210,9 @@ export function SourcePath({
     >
       {dir ? (
         // Only the directories ever shorten, so they carry the disclosure.
-        <TruncatedTooltip content={full} isTruncated={shownDir !== dir || undefined}>
+        <HostTruncatedTooltip content={full} isTruncated={shownDir !== dir || undefined}>
           <span className="min-w-0 shrink truncate">{shownDir}</span>
-        </TruncatedTooltip>
+        </HostTruncatedTooltip>
       ) : null}
       <span className="shrink-0">
         {name}

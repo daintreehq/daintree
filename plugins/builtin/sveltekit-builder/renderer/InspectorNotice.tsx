@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
-import { X } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { DismissButton } from "@daintreehq/plugin-ui";
 import { cn } from "@/lib/utils";
+// Callout's tokens, not the component: the kit Callout has no dismiss control,
+// no `role`, and puts its action beside the message rather than under it.
 import {
   CALLOUT_ICON,
   CALLOUT_ICON_TONE,
@@ -74,19 +75,14 @@ export function InspectorNotice({
         <div className="flex items-start justify-between gap-2">
           <p className="min-w-0 font-medium text-text-primary">{title}</p>
           {onDismiss ? (
-            // The primitive, not a hand-rolled button: hover, focus ring,
-            // radius and transition are the same ones every other icon control
-            // in the product draws. The offsets pull its 24px box back onto the
-            // title's optical line — the glyph inside it is still 12px.
-            <Button
-              variant="ghost"
-              size="icon-xs"
+            // The shared dismiss control: hover, focus ring, radius and glyph
+            // are the ones every other closable surface draws. The offsets pull
+            // its 24px box back onto the title's optical line.
+            <DismissButton
               aria-label="Dismiss"
               onClick={onDismiss}
               className="-mr-1 -mt-1 shrink-0"
-            >
-              <X aria-hidden="true" />
-            </Button>
+            />
           ) : null}
         </div>
         {children ? <div className="text-text-secondary">{children}</div> : null}

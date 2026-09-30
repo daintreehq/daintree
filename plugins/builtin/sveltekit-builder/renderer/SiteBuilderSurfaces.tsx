@@ -23,16 +23,23 @@ import {
 } from "lucide-react";
 import type { DevPreviewToolSurfaceProps } from "@/registry/devPreviewToolRegistry";
 import type { SelectedNode } from "../shared/model.js";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { DismissButton } from "@/components/ui/DismissButton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import {
+  Badge,
+  Button,
+  DismissButton,
+  IconButton,
+  KbdChord,
+  ScrollShadow,
+  SegmentedControl,
+  Tooltip,
+} from "@daintreehq/plugin-ui";
 import { cn } from "@/lib/utils";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
-import { KBD_COMPACT_CLASS, KbdChord } from "@/components/ui/Kbd";
-import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
+// Host pieces the kit has no equivalent for: TruncatedTooltip's `isTruncated`
+// (the path is shortened in JS, not by overflow), the compact key-cap class for
+// a literal arrow row, and a Select whose items take their own class and title.
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
 import {
   Select,
   SelectContent,
@@ -76,6 +83,12 @@ const MODE_OPTIONS = [
   { value: "browse" as const, label: "Browse" },
   { value: "select" as const, label: "Inspect" },
 ];
+
+type CanvasMode = (typeof MODE_OPTIONS)[number]["value"];
+
+function isCanvasMode(value: string): value is CanvasMode {
+  return MODE_OPTIONS.some((option) => option.value === value);
+}
 
 /**
  * The builder for the dev preview hosting it: the host's session for this
@@ -241,12 +254,14 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
       onKeyDown={onStripKeyDown}
       className="@container/strip flex h-8 shrink-0 items-center gap-2 border-b border-overlay bg-surface px-2"
     >
-      <SegmentedRadioGroup
+      <SegmentedControl
         density="compact"
         aria-label="Canvas mode"
         options={MODE_OPTIONS}
         value={state.mode}
-        onChange={(mode) => void controller.setMode(mode)}
+        onValueChange={(mode) => {
+          if (isCanvasMode(mode)) void controller.setMode(mode);
+        }}
       />
       <div aria-hidden="true" className="toolbar-divider h-4 w-px shrink-0" />
       <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-text-secondary">
@@ -281,24 +296,16 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
 function DrawerToggle({ panelId, expanded }: { panelId: string; expanded: boolean }) {
   const collapsed = useDrawerCollapsed(panelId);
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Site Builder details"
-          aria-expanded={expanded}
-          onClick={() => setDrawerCollapsed(panelId, !collapsed)}
-        >
-          {collapsed ? (
-            <PanelRightOpen aria-hidden="true" />
-          ) : (
-            <PanelRightClose aria-hidden="true" />
-          )}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">Site Builder details</TooltipContent>
-    </Tooltip>
+    <IconButton
+      icon={
+        collapsed ? <PanelRightOpen aria-hidden="true" /> : <PanelRightClose aria-hidden="true" />
+      }
+      size="xs"
+      tooltipSide="bottom"
+      aria-label="Site Builder details"
+      aria-expanded={expanded}
+      onClick={() => setDrawerCollapsed(panelId, !collapsed)}
+    />
   );
 }
 
@@ -516,11 +523,8 @@ function StripMessage({
   );
   if (!title) return message;
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>{message}</TooltipTrigger>
-      <TooltipContent side="bottom" align="start">
-        {title}
-      </TooltipContent>
+    <Tooltip content={title} side="bottom" align="start">
+      {message}
     </Tooltip>
   );
 }
@@ -755,26 +759,19 @@ function SiteSourceBody({
               const relative = relativeTo(worktreePath, appRoot);
               return (
                 <li key={appRoot}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-full justify-between gap-2 px-2 font-mono text-xs font-normal"
-                        onClick={() => void controller.openWorkspace(appRoot)}
-                      >
-                        <span className="min-w-0 truncate">
-                          {relative === "." ? "./" : relative}
-                        </span>
-                        <ChevronRight
-                          className="h-3.5 w-3.5 shrink-0 text-text-secondary"
-                          aria-hidden="true"
-                        />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" align="start">
-                      {appRoot}
-                    </TooltipContent>
+                  <Tooltip content={appRoot} side="bottom" align="start">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-full justify-between gap-2 px-2 font-mono text-xs font-normal"
+                      onClick={() => void controller.openWorkspace(appRoot)}
+                    >
+                      <span className="min-w-0 truncate">{relative === "." ? "./" : relative}</span>
+                      <ChevronRight
+                        className="h-3.5 w-3.5 shrink-0 text-text-secondary"
+                        aria-hidden="true"
+                      />
+                    </Button>
                   </Tooltip>
                 </li>
               );

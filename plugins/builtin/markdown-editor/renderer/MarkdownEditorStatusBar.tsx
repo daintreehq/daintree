@@ -1,7 +1,5 @@
 import { AlertTriangle, Save } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatBytes } from "@/lib/formatBytes";
+import { Button, Tooltip, formatBytes } from "@daintreehq/plugin-ui";
 import {
   FILE_METADATA_RUN_CLASS,
   FILE_METADATA_STRIP_CLASS,
@@ -77,19 +75,17 @@ export function MarkdownEditorStatusBar({
       </span>
 
       {mixedEol && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span
-              className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-status-warning"
-              data-testid="markdown-editor-mixed-eol"
-            >
-              <AlertTriangle aria-hidden="true" className="h-3 w-3" />
-              Mixed endings → {eolLabel}
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            {`This file mixes LF and CRLF line endings. Saving normalises every line to ${eolLabel}.`}
-          </TooltipContent>
+        <Tooltip
+          side="top"
+          content={`This file mixes LF and CRLF line endings. Saving normalises every line to ${eolLabel}.`}
+        >
+          <span
+            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-status-warning"
+            data-testid="markdown-editor-mixed-eol"
+          >
+            <AlertTriangle aria-hidden="true" className="h-3 w-3" />
+            Mixed endings → {eolLabel}
+          </span>
         </Tooltip>
       )}
 
@@ -118,8 +114,8 @@ export function MarkdownEditorStatusBar({
           loading={saving}
           aria-label="Save file"
           data-testid="markdown-editor-save"
+          icon={<Save />}
         >
-          <Save />
           Save
         </Button>
       </span>

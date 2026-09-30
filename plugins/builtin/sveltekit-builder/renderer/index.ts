@@ -15,11 +15,18 @@ export const ENTRY_TOOL_ID = "daintree.sveltekit-builder.builder";
 // this entry for exactly that side effect). Only the toolbar button is eager;
 // the builder itself — zod schemas, the controller, the surfaces — is a lazy
 // chunk loaded the first time someone switches it on.
+// The kit chunk loads with the surfaces: its components render nothing until
+// it is in, and the strip's roving focus needs its buttons on the first frame.
+const loadSurfaces = () =>
+  Promise.all([import("./SiteBuilderSurfaces.js"), import("@/components/PluginKit/PluginKit")])
+    // One task, so the kit's own import callback has run and its components
+    // render synchronously; the kit exposes no ready promise to await instead.
+    .then(([m]) => new Promise<typeof m>((resolve) => setTimeout(resolve, 0, m)));
 const SiteBuilderToolbar = lazy(() =>
-  import("./SiteBuilderSurfaces.js").then((m) => ({ default: m.SiteBuilderToolbar }))
+  loadSurfaces().then((m) => ({ default: m.SiteBuilderToolbar }))
 );
 const SiteBuilderDrawer = lazy(() =>
-  import("./SiteBuilderSurfaces.js").then((m) => ({ default: m.SiteBuilderDrawer }))
+  loadSurfaces().then((m) => ({ default: m.SiteBuilderDrawer }))
 );
 
 registerDevPreviewTool({
