@@ -342,7 +342,10 @@ export function McpConfirmDialog() {
         />
       )}
 
-      {showAssistantPreference && <AssistantConfirmationPreference key={current.requestId} />}
+      {/* Not keyed per request: one assistant request promoting into another
+          would otherwise unmount a focused segment and drop focus to the body.
+          The value is app-wide, so it carries across requests unchanged. */}
+      {showAssistantPreference && <AssistantConfirmationPreference />}
     </div>
   );
 
@@ -512,8 +515,8 @@ function SessionApprovalOption({
  * setting and what it resolves to right now, because "Follow global setting"
  * alone hides whether that means asking or not.
  *
- * The section is laid out before the read lands so the footer never moves
- * under the pointer when it does.
+ * The section is laid out before the read lands, with room reserved for the
+ * resolved line, so the footer never moves under the pointer when it does.
  */
 function AssistantConfirmationPreference() {
   const [preference, setPreference] = useState<HelpAssistantDaintreeConfirmations | null>(null);
@@ -525,7 +528,12 @@ function AssistantConfirmationPreference() {
   );
   const detailId = useId();
   const mountedRef = useRef(true);
-  const lastPickRef = useRef<HelpAssistantDaintreeConfirmations | null>(null);
+  // Saves are told apart by issue order, not by value: Never → Always → Never
+  // must not let the first save's failure undo the third's success. A failure
+  // on the newest save falls back to the value main last confirmed.
+  const saveSeqRef = useRef(0);
+  const lastSettledSeqRef = useRef(0);
+  const persistedRef = useRef<HelpAssistantDaintreeConfirmations | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -534,11 +542,11 @@ function AssistantConfirmationPreference() {
       .getSettings()
       .then((settings) => {
         if (cancelled) return;
-        setPreference(
-          isHelpAssistantDaintreeConfirmations(settings.daintreeConfirmations)
-            ? settings.daintreeConfirmations
-            : "inherit"
-        );
+        const loaded = isHelpAssistantDaintreeConfirmations(settings.daintreeConfirmations)
+          ? settings.daintreeConfirmations
+          : "inherit";
+        persistedRef.current = loaded;
+        setPreference(loaded);
         setStatus("ready");
       })
       .catch((err) => {
@@ -554,20 +562,25 @@ function AssistantConfirmationPreference() {
 
   const handleChange = (value: string) => {
     if (!isHelpAssistantDaintreeConfirmations(value) || preference === null) return;
-    const previous = preference;
-    lastPickRef.current = value;
+    const seq = ++saveSeqRef.current;
     setPreference(value);
     setStatus("ready");
-    window.electron.helpAssistant
-      .setSettings({ daintreeConfirmations: value })
-      .catch((err: unknown) => {
+    window.electron.helpAssistant.setSettings({ daintreeConfirmations: value }).then(
+      () => {
+        if (seq > lastSettledSeqRef.current) {
+          lastSettledSeqRef.current = seq;
+          persistedRef.current = value;
+        }
+      },
+      (err: unknown) => {
         logError("Failed to save Daintree confirmations from the MCP confirm dialog", err);
         // A later pick has already moved the value on; its own save decides.
-        if (!mountedRef.current || lastPickRef.current !== value) return;
-        lastPickRef.current = previous;
-        setPreference(previous);
+        if (!mountedRef.current || seq !== saveSeqRef.current) return;
+        const fallback = persistedRef.current;
+        if (fallback !== null) setPreference(fallback);
         setStatus("save-failed");
-      });
+      }
+    );
   };
 
   let detail: string;
@@ -584,7 +597,7 @@ function AssistantConfirmationPreference() {
         : `Right now it ${current}.`;
     const failed =
       status === "save-failed" ? "Couldn't save that change, so it's back to what it was. " : "";
-    detail = `${failed}${resolved} A change applies from the assistant's next call; this request still needs your answer.`;
+    detail = `${failed}${resolved}`;
   }
 
   return (
@@ -592,8 +605,9 @@ function AssistantConfirmationPreference() {
       <div className="space-y-0.5">
         <div className={SECTION_LABEL_CLASS}>Daintree confirmations</div>
         <div className="text-2xs text-text-secondary">
-          Whether Daintree asks before the assistant runs actions like this one. Same as Settings
-          &gt; Daintree Assistant &gt; Daintree confirmations.
+          Whether Daintree asks before the assistant runs actions like this one, as in Settings &gt;
+          Daintree Assistant &gt; Daintree confirmations. A change applies from the assistant&apos;s
+          next call; this request still needs your answer.
         </div>
       </div>
       <SegmentedRadioGroup<string>
@@ -608,7 +622,7 @@ function AssistantConfirmationPreference() {
         fullWidth
         testId="mcp-confirm-assistant-preference"
       />
-      <div id={detailId} aria-live="polite" className="text-2xs text-text-secondary">
+      <div id={detailId} aria-live="polite" className="min-h-[2lh] text-2xs text-text-secondary">
         {detail}
       </div>
     </div>

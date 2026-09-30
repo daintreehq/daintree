@@ -1176,8 +1176,60 @@ describe("McpConfirmDialog", () => {
       await renderLoaded();
 
       expect(document.body.textContent ?? "").toContain("Couldn't read the current setting");
-      fireEvent.click(segment("Never ask"));
-      expect(helpAssistantApi.setSettings).not.toHaveBeenCalled();
+      for (const label of ["Follow global setting", "Always ask", "Never ask"]) {
+        expect(segment(label).hasAttribute("disabled")).toBe(true);
+      }
+    });
+
+    it("does not let an earlier failed save undo a later successful one", async () => {
+      const rejections: Array<(err: Error) => void> = [];
+      helpAssistantApi.setSettings.mockImplementation((patch: { daintreeConfirmations: string }) =>
+        patch.daintreeConfirmations === "always-ask"
+          ? Promise.resolve()
+          : new Promise<void>((_resolve, reject) => rejections.push(reject))
+      );
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      // Never (pending) → Always (saved) → Never (saved later); the first Never fails last.
+      act(() => {
+        fireEvent.click(segment("Never ask"));
+      });
+      await act(async () => {
+        fireEvent.click(segment("Always ask"));
+        await Promise.resolve();
+      });
+      helpAssistantApi.setSettings.mockResolvedValue(undefined);
+      await act(async () => {
+        fireEvent.click(segment("Never ask"));
+        await Promise.resolve();
+      });
+      await act(async () => {
+        rejections[0]?.(new Error("disk full"));
+        await Promise.resolve();
+      });
+
+      expect(segment("Never ask").getAttribute("aria-checked")).toBe("true");
+      expect(document.body.textContent ?? "").not.toContain("Couldn't save that change");
+    });
+
+    it("falls back to the last saved value, not the last pick, when the newest save fails", async () => {
+      helpAssistantApi.setSettings.mockResolvedValueOnce(undefined);
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      await act(async () => {
+        fireEvent.click(segment("Always ask"));
+        await Promise.resolve();
+      });
+      helpAssistantApi.setSettings.mockRejectedValue(new Error("disk full"));
+      await act(async () => {
+        fireEvent.click(segment("Never ask"));
+        await Promise.resolve();
+      });
+
+      expect(segment("Always ask").getAttribute("aria-checked")).toBe("true");
+      expect(document.body.textContent ?? "").toContain("Couldn't save that change");
     });
 
     it("lands initial focus on Cancel rather than the preference control", async () => {
