@@ -423,7 +423,6 @@ function KitNumberInput(props: PluginNumberInputProps) {
       disabled={inert || (direction > 0 ? atMax : atMin)}
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => stepBySteps(direction)}
-      className={compact ? "h-5 w-5" : undefined}
     >
       {direction > 0 ? <Plus aria-hidden="true" /> : <Minus aria-hidden="true" />}
     </Button>
@@ -1368,13 +1367,16 @@ function KitTagInput(props: PluginTagInputProps) {
       {tags.map((tag, index) => (
         <Badge key={tag} size="sm" className="min-w-0 max-w-full gap-0.5 pr-0.5 text-text-primary">
           <span className="truncate">{tag}</span>
+          {/* The glyph stays chip-sized; an invisible 24px hit area centred on
+              it reaches only into the chip and half the gap to the next one,
+              so neighbouring targets never meet. */}
           <button
             type="button"
             aria-label={`Remove ${tag}`}
             disabled={inert}
             data-tag-remove=""
             onClick={(event) => remove(index, event.currentTarget)}
-            className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[var(--radius-xs)] text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-medium hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary disabled:pointer-events-none"
+            className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[var(--radius-xs)] text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-medium hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary disabled:pointer-events-none after:absolute after:-inset-1 after:content-['']"
           >
             <X aria-hidden="true" />
           </button>

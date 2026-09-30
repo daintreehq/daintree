@@ -440,9 +440,24 @@ describe("NumberInput", () => {
       expect(py(value)).toEqual(py(plain));
       const size = (el: Element) => el.className.split(" ").filter((c) => /^text-(xs|sm)$/.test(c));
       expect(size(frame)).toEqual(size(plain));
-      // The buttons sit inside that line box: no taller than the text with its padding.
-      const button = screen.getByRole("button", { name: "Increase" });
-      expect(button.className).toMatch(density === "compact" ? /\bh-5\b/ : /\bh-6\b/);
+      // Each button is a 24px pointer target at either density, and still sits
+      // inside the text's line box, so the frame keeps the Input's height.
+      const spacing = (el: Element, prefix: string) =>
+        el.className
+          .split(" ")
+          .filter((c) => c.startsWith(prefix))
+          .map((c) => Number(c.slice(prefix.length)) * 4);
+      const lineHeight = size(frame)[0] === "text-xs" ? 16 : 20;
+      const lineBox = 2 * spacing(value, "py-")[0]! + lineHeight;
+      for (const name of ["Increase", "Decrease"]) {
+        const button = screen.getByRole("button", { name });
+        for (const axis of ["h-", "w-"]) {
+          const sizes = spacing(button, axis);
+          expect(sizes.length).toBeGreaterThan(0);
+          expect(Math.min(...sizes)).toBeGreaterThanOrEqual(24);
+          expect(Math.max(...sizes)).toBeLessThanOrEqual(lineBox);
+        }
+      }
       cleanup();
     }
   });
@@ -1066,6 +1081,40 @@ describe("TagInput", () => {
     expect(document.activeElement).toBe(removeB);
     fireEvent.click(removeB);
     expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Tags" }));
+  });
+
+  it("gives each remove button a 24px target that never reaches a neighbouring target, keeping the chip compact", () => {
+    render(createElement(kit.TagInput, { "aria-label": "Tags", defaultValue: ["alpha", "beta"] }));
+    const field = screen.getByRole("textbox", { name: "Tags" });
+    const box = field.parentElement!;
+    const px = (el: Element, prefix: string) => {
+      const hit = el.className.split(" ").find((c) => c.startsWith(prefix));
+      return hit === undefined ? undefined : Number(hit.slice(prefix.length)) * 4;
+    };
+    const gap = px(box, "gap-")!;
+    const rowHeight = px(field, "h-")!;
+    for (const name of ["Remove alpha", "Remove beta"]) {
+      const button = screen.getByRole("button", { name });
+      const chip = button.parentElement!;
+      const classes = button.className.split(" ");
+      const glyph = px(button, "h-")!;
+      expect(px(button, "w-")).toBe(glyph);
+      // The hit area is an absolutely placed pseudo-element on the button,
+      // pushed out past the glyph on every side.
+      expect(classes).toContain("relative");
+      expect(classes).toContain("after:absolute");
+      expect(classes).toContain("after:content-['']");
+      const reach = px(button, "after:-inset-")!;
+      expect(glyph + 2 * reach).toBeGreaterThanOrEqual(24);
+      // The glyph itself stays chip-sized: no taller than the text line.
+      expect(glyph).toBeLessThanOrEqual(16);
+      // Sideways it passes the chip's edge by no more than half the gap, so it
+      // cannot meet the next chip's text or target, or the field.
+      expect(reach - px(chip, "pr-")!).toBeLessThanOrEqual(gap / 2);
+      // Upright it stays inside the row the field sets, so wrapped rows' targets
+      // are held apart by the gap between rows.
+      expect(glyph + 2 * reach).toBeLessThanOrEqual(rowHeight);
+    }
   });
 
   it("joins a FormField and honours max", () => {
