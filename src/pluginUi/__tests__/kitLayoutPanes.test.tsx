@@ -43,6 +43,7 @@ function relayout() {
 // marker attribute they carry, and 0 otherwise.
 const sizes = new Map<string, { width: number; height: number }>();
 const ownRect = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "getBoundingClientRect");
+const ownOffsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
 
 function sizeOf(element: HTMLElement) {
   const byLength = [...sizes].sort((a, b) => b[0].length - a[0].length);
@@ -69,6 +70,19 @@ beforeEach(() => {
       return DOMRect.fromRect({ x: 0, y: 0, width, height });
     },
   });
+  // Layout sizes, for code that must not read a transformed box.
+  Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return sizeOf(this).width;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return sizeOf(this).width;
+    },
+  });
 });
 
 afterEach(() => {
@@ -78,6 +92,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
   if (ownRect) Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", ownRect);
+  if (ownOffsetWidth) Object.defineProperty(HTMLElement.prototype, "offsetWidth", ownOffsetWidth);
+  else Reflect.deleteProperty(HTMLElement.prototype, "offsetWidth");
+  Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
 });
 
 function wrap(element: ReactNode) {
@@ -189,6 +206,42 @@ describe("MasterDetail", () => {
     view.unmount();
     mount(<kit.MasterDetail list="L" detail="D" persistKey="md-test" defaultListSize={300} />);
     expect(screen.getByRole("separator").getAttribute("aria-valuenow")).toBe("310");
+  });
+
+  it("steps the list from its drawn width when the pane is narrower than its size", () => {
+    sizes.set("data-master-detail", { width: 400, height: 600 });
+    sizes.set("[data-master-detail] > div", { width: 400, height: 600 });
+    sizes.set('[data-split-pane="sized"]', { width: 394, height: 600 });
+    mount(
+      <kit.MasterDetail
+        list="L"
+        detail="D"
+        collapseBelow={350}
+        defaultListSize={500}
+        maxListSize={600}
+      />
+    );
+    relayout();
+    const handle = screen.getByRole("separator");
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    expect(handle.getAttribute("aria-valuenow")).toBe("384");
+  });
+
+  it("lets Home reach the floor from a fractional size the pane rounds to", () => {
+    const onSizeChange = vi.fn();
+    sizes.set('[data-split-pane="sized"]', { width: 160, height: 400 });
+    mount(
+      <kit.ResizableSplit
+        aria-label="Resize"
+        first="A"
+        second="B"
+        size={160.4}
+        minSize={160}
+        onSizeChange={onSizeChange}
+      />
+    );
+    fireEvent.keyDown(screen.getByRole("separator"), { key: "Home" });
+    expect(onSizeChange).toHaveBeenLastCalledWith(160);
   });
 
   it("ignores a selectedId that is not a string or number", () => {
