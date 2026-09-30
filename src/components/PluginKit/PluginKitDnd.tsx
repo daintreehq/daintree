@@ -306,7 +306,7 @@ const CURSOR_GAP_PX = 8;
 export function besideCursor(
   cursor: { x: number; y: number } | null,
   rect: { left: number; top: number; width: number; height: number } | null,
-  boundary: HTMLElement | null
+  boundary: Element | null
 ): { x: number; y: number } | null {
   if (!cursor || !rect) return null;
   const box = boundary?.getBoundingClientRect();
@@ -329,18 +329,26 @@ export function besideCursor(
 const EDGE_BAND_PX = 40;
 const EDGE_STEP_PX = 14;
 
-export function edgeScroll(point: { x: number; y: number }, slow: boolean) {
+/** The plugin view a reorder component sits in: the element auto-scroll stays inside. */
+function viewOf(lanes: Map<string, HTMLElement>): Element {
+  const lane = lanes.values().next().value;
+  return lane?.closest(`[${PLUGIN_STYLE_ROOT_ATTRIBUTE}]`) ?? document.documentElement;
+}
+
+export function edgeScroll(point: { x: number; y: number }, slow: boolean, view: Element) {
   if (typeof document.elementsFromPoint !== "function") return;
   const hit = document
     .elementsFromPoint(point.x, point.y)
     .find((element) => element.closest("[data-kit-drag-overlay]") === null);
+  // Only the drag's own view scrolls: over the host, or another plugin, nothing does.
+  if (!hit || !view.contains(hit)) return;
   let scrolledX = false;
   let scrolledY = false;
   const step = (depth: number) => {
     const size = Math.max(1, Math.round(EDGE_STEP_PX * Math.min(1, depth / EDGE_BAND_PX)));
     return slow ? Math.max(1, Math.round(size / 2)) : size;
   };
-  for (let element = hit ?? null; element; element = element.parentElement) {
+  for (let element: Element | null = hit; element; element = element.parentElement) {
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
     if (!scrolledY && /auto|scroll/.test(style.overflowY)) {
@@ -368,7 +376,7 @@ export function edgeScroll(point: { x: number; y: number }, slow: boolean) {
       }
     }
     // Never past the view: the host's own scrollers are not the plugin's.
-    if (element.hasAttribute(PLUGIN_STYLE_ROOT_ATTRIBUTE)) break;
+    if (element === view) break;
   }
 }
 
@@ -566,7 +574,8 @@ interface Held {
   key: DragKey;
   /** Read at pickup, so the drag can still name an item that has since gone. */
   label: string;
-  mode: "pointer" | "keyboard";
+  /** `menu` is a context-menu move: committed at once, never held. */
+  mode: "pointer" | "keyboard" | "menu";
   from: Spot;
   to: Spot;
 }
@@ -674,7 +683,7 @@ function useReorderEngine({
     return `position ${spot.index + 1} of ${others + 1}${where}`;
   };
 
-  const lift = (key: DragKey, mode: Held["mode"]) => {
+  const lift = (key: DragKey, mode: "pointer" | "keyboard") => {
     const from = spotOf(lanesRef.current, key);
     if (!from) return;
     const label = labelOf(key);
@@ -780,7 +789,7 @@ function useReorderEngine({
     let frame = 0;
     const tick = () => {
       const point = pointRef.current;
-      if (point) edgeScroll(point, skipMotion);
+      if (point) edgeScroll(point, skipMotion, viewOf(laneEls.current));
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
@@ -790,10 +799,7 @@ function useReorderEngine({
   const overlayModifiers = useMemo<Modifier[]>(
     () => [
       ({ transform, overlayNodeRect }) => {
-        const lane = laneEls.current.values().next().value;
-        const view =
-          lane?.closest<HTMLElement>(`[${PLUGIN_STYLE_ROOT_ATTRIBUTE}]`) ?? document.body;
-        const offset = besideCursor(pointRef.current, overlayNodeRect, view);
+        const offset = besideCursor(pointRef.current, overlayNodeRect, viewOf(laneEls.current));
         return offset ? { ...transform, ...offset } : transform;
       },
     ],
@@ -808,7 +814,7 @@ function useReorderEngine({
     const label = labelOf(key);
     refocusRef.current = key;
     setMessage(`Moved ${label} to ${describeSpot(key, to)}.`);
-    onCommit({ key, label, mode: "keyboard", from, to });
+    onCommit({ key, label, mode: "menu", from, to });
   };
 
   const moveEntries = (key: DragKey): PluginDropdownMenuEntry[] => {
@@ -856,10 +862,12 @@ function useReorderEngine({
   // where they clicked.
   useLayoutEffect(() => {
     const key = refocusRef.current;
-    refocusRef.current = null;
     if (key === null) return;
     const handle = handleEls.current.get(key);
+    // Not drawn yet (a menu move into a column that is unfolding): keep the
+    // request until it is.
     if (!handle) return;
+    refocusRef.current = null;
     if (document.activeElement !== handle) handle.focus({ preventScroll: true });
     handle.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   });
@@ -1085,6 +1093,8 @@ interface ItemShellProps {
   indicator: "before" | "after" | null;
   /** The surface's own classes: a list row or a card. */
   surfaceClass: string;
+  /** Its hover treatment, left off while a pointer drag is held so only the drop line speaks. */
+  hoverClass: string;
   instructionsId: string;
   /** Names the grip with the item: "Reorder Alpha", "Move Fix login". */
   gripVerb: string;
@@ -1103,14 +1113,17 @@ function ItemShell({
   gap,
   indicator,
   surfaceClass,
+  hoverClass,
   instructionsId,
   gripVerb,
   children,
 }: ItemShellProps) {
+  const skipMotion = useShouldSkipMotion();
   const held = engine.held;
   const isHeld = held?.key === itemKey;
   const keyboardLifted = isHeld && held.mode === "keyboard";
   const ghost = isHeld && held.mode === "pointer";
+  const pointerDragging = held?.mode === "pointer";
   const { setNodeRef, setActivatorNodeRef, listeners } = useDraggable({
     id: itemKey,
     disabled: disabled || (held !== null && held.mode === "keyboard"),
@@ -1139,16 +1152,20 @@ function ItemShell({
       style={ghost ? { opacity: DRAG_GHOST_OPACITY } : undefined}
       className={cn(
         surfaceClass,
+        !pointerDragging && hoverClass,
         !handle && HANDLE_FOCUS,
-        !handle && !disabled && "cursor-grab",
-        keyboardLifted && [LIFTED_SURFACE, "z-10"]
+        !handle && !disabled && (pointerDragging ? "cursor-grabbing" : "cursor-grab"),
+        keyboardLifted && [LIFTED_SURFACE, "z-10"],
+        // The source fades out over the host's state-change tier on pickup
+        // and comes back at once, as SortableDockItem's does.
+        ghost && !skipMotion && "transition-opacity duration-150 ease-out"
       )}
     >
       {handle && !disabled ? (
         <span
           {...handleProps}
           aria-label={`${gripVerb} ${label}`}
-          className={cn(DRAG_GRIP_CLASS, GRIP_OFFSET)}
+          className={cn(DRAG_GRIP_CLASS, GRIP_OFFSET, pointerDragging && "cursor-grabbing")}
         >
           <GripVertical aria-hidden="true" className={DRAG_GRIP_ICON_CLASS} />
         </span>
@@ -1278,7 +1295,8 @@ function registerIn<K>(map: Map<K, HTMLElement>, key: K, element: HTMLElement | 
 const LIST_GAP_PX = 2;
 const ROW_LAYOUT =
   "relative flex min-w-0 items-center gap-2 rounded-[var(--radius-md)] px-2 py-1.5 text-sm text-text-primary";
-const ROW_SURFACE = cn(ROW_LAYOUT, "border border-transparent hover:bg-overlay-subtle");
+const ROW_SURFACE = cn(ROW_LAYOUT, "border border-transparent");
+const ROW_HOVER = "hover:bg-overlay-subtle";
 
 // The lifted copy wears the host's drag-preview material (WorktreeDragPreview,
 // TerminalDragPreview): the panel surface, its default edge and the floating
@@ -1445,7 +1463,12 @@ function SortableListFrame({
       aria-label={ariaLabel}
       data-no-dnd=""
       data-orientation={axis === "y" ? "vertical" : "horizontal"}
-      className={cn("flex min-w-0 gap-0.5", axis === "y" ? "flex-col" : "flex-row", className)}
+      className={cn(
+        "flex min-w-0 gap-0.5",
+        axis === "y" ? "flex-col" : "flex-row",
+        held?.mode === "pointer" && "cursor-grabbing",
+        className
+      )}
     >
       {engine.displayKeys(lane).map((key, index) => (
         <ItemShell
@@ -1461,6 +1484,7 @@ function SortableListFrame({
             typeof indicator === "object" && indicator?.key === key ? indicator.edge : null
           }
           surfaceClass={ROW_SURFACE}
+          hoverClass={ROW_HOVER}
           instructionsId={instructionsId}
           gripVerb="Reorder"
         >
@@ -1495,8 +1519,9 @@ const CARD_LAYOUT =
   "relative flex min-w-0 gap-2 rounded-[var(--radius-md)] px-3 py-2.5 text-left text-sm text-text-primary";
 const CARD_SURFACE = cn(
   CARD_LAYOUT,
-  "border border-border-default bg-surface-panel transition-[border-color] duration-150 ease-out hover:border-border-strong"
+  "border border-border-default bg-surface-panel transition-[border-color] duration-150 ease-out"
 );
+const CARD_HOVER = "hover:border-border-strong";
 
 interface BoardCard<T> {
   card: T;
@@ -1789,7 +1814,10 @@ function KitKanban<T>(props: PluginKanbanProps<T>) {
     isDisabled,
     labelOf,
     handleMode: useHandle,
-    onCommit: ({ key, from, to }) => {
+    onCommit: ({ key, mode, from, to }) => {
+      // A menu move into a folded column unfolds it, so the card the user just
+      // moved (and their focus, which follows it) has somewhere to be.
+      if (mode === "menu" && folded.includes(to.lane)) toggleFold(to.lane);
       const report = {
         cardId: key,
         fromColumn: from.lane,
@@ -1831,6 +1859,7 @@ function KitKanban<T>(props: PluginKanbanProps<T>) {
       data-no-dnd=""
       className={cn(
         "flex h-full min-h-0 min-w-0 items-stretch gap-3 overflow-x-auto",
+        held?.mode === "pointer" && "cursor-grabbing",
         str(className)
       )}
     >
@@ -1877,6 +1906,7 @@ function KitKanban<T>(props: PluginKanbanProps<T>) {
                     typeof indicator === "object" && indicator?.key === key ? indicator.edge : null
                   }
                   surfaceClass={CARD_SURFACE}
+                  hoverClass={CARD_HOVER}
                   instructionsId={instructions.id}
                   gripVerb="Move"
                 >

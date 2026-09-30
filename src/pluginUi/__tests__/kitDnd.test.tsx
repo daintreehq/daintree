@@ -769,13 +769,20 @@ describe("drag presentation rules", () => {
       value: () => [scroller],
     });
     try {
-      edgeScroll({ x: 200, y: 200 }, false);
+      edgeScroll({ x: 200, y: 200 }, false, document.body);
       expect(scroller.scrollTop).toBe(0);
       expect(scroller.scrollLeft).toBe(0);
-      edgeScroll({ x: 200, y: 395 }, false);
+      edgeScroll({ x: 200, y: 395 }, false, document.body);
       expect(scroller.scrollTop).toBeGreaterThan(0);
       expect(scroller.scrollLeft).toBe(0);
-      edgeScroll({ x: 395, y: 200 }, false);
+      edgeScroll({ x: 395, y: 200 }, false, document.body);
+      // A scroller outside the drag's own view never scrolls, however near its edge.
+      const view = document.createElement("section");
+      document.body.append(view);
+      const before = scroller.scrollTop;
+      edgeScroll({ x: 200, y: 395 }, false, view);
+      expect(scroller.scrollTop).toBe(before);
+      view.remove();
       expect(scroller.scrollLeft).toBeGreaterThan(0);
     } finally {
       Reflect.deleteProperty(document, "elementsFromPoint");
@@ -880,6 +887,87 @@ describe("moves without dragging", () => {
       fromIndex: 1,
       index: 0,
     });
+  });
+});
+
+describe("menu moves into a folded column", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("unfolds the column the card was moved into", () => {
+    const onMove = vi.fn();
+    render(
+      withTooltips(
+        createElement(kit.Kanban<Card>, {
+          columns: COLUMNS,
+          cards: CARDS,
+          "aria-label": "Sprint board",
+          renderCard: (card) => card.title,
+          collapsible: true,
+          defaultCollapsedColumns: ["done"],
+          onMove,
+        })
+      )
+    );
+    const done = () => element(screen.getByRole("heading", { name: "Done" }).closest("section"));
+    expect(done().getAttribute("data-state")).toBe("collapsed");
+    fireEvent.contextMenu(
+      handles().find((h) => h.textContent === "Rate limits")!,
+      {
+        button: 2,
+        clientX: 5,
+        clientY: 5,
+      }
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Done" }));
+    expect(onMove).toHaveBeenCalledWith(expect.objectContaining({ toColumn: "done", index: 1 }));
+    expect(done().getAttribute("data-state")).toBeNull();
+  });
+});
+
+describe("items under a pointer drag", () => {
+  it("drop their own hover treatment while one is held", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement
+    ) {
+      const row = this.closest("[role=listitem]");
+      const list = this.closest("[role=list]");
+      if (row && list) {
+        const index = [...list.children].indexOf(row);
+        return DOMRect.fromRect({ x: 0, y: index * 20, width: 200, height: 20 });
+      }
+      return DOMRect.fromRect({ x: 0, y: 0, width: 200, height: 60 });
+    });
+    render(
+      createElement(kit.SortableList<Task>, {
+        items: TASKS,
+        "aria-label": "Priorities",
+        renderItem: (item) => item.title,
+      })
+    );
+    const surfaces = () =>
+      [...document.querySelectorAll("[role=list] > [role=listitem] > *")].map(
+        (el) => el.getAttribute("class") ?? ""
+      );
+    expect(surfaces().some((names) => names.includes("hover:"))).toBe(true);
+    fireEvent.mouseDown(handles()[0]!, { button: 0, clientX: 10, clientY: 10 });
+    fireEvent.mouseMove(document, { clientX: 10, clientY: 25 });
+    expect(surfaces().filter((names) => names.includes("hover:"))).toEqual([]);
+    act(() => {
+      fireEvent.mouseUp(document);
+    });
+    await act(() => new Promise((resolve) => setTimeout(resolve, CLICK_GUARD_LAPSE_MS)));
   });
 });
 
