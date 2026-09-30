@@ -1,4 +1,4 @@
-import { isValidElement, type ChangeEvent, type ReactNode, type SyntheticEvent } from "react";
+import { isValidElement, type ChangeEvent, type ReactNode } from "react";
 import type {
   PluginBadgeProps,
   PluginButtonProps,
@@ -6,10 +6,8 @@ import type {
   PluginCheckboxProps,
   PluginConfirmDialogProps,
   PluginCopyButtonProps,
-  PluginDialogAction,
   PluginDialogProps,
   PluginDismissButtonProps,
-  PluginDropdownMenuEntry,
   PluginDropdownMenuProps,
   PluginEmptyStateProps,
   PluginIconButtonProps,
@@ -30,7 +28,6 @@ import type {
   PluginTooltipProps,
   PluginTruncatedTooltipProps,
 } from "@shared/types/plugin-sdk-react";
-import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CALLOUT_ICON, Callout, type CalloutSeverity } from "@/components/ui/Callout";
@@ -102,12 +99,15 @@ import {
   str,
   useKitOwnerAttributes,
 } from "./kitProps";
-import { PluginKitLayerContext, useKitOverlayZClass, type PluginKitLayer } from "./kitScope";
+import { PluginKitLayerContext, useKitOverlayZClass } from "./kitScope";
+import { renderMenuEntries, stopReactPropagation, type KitMenuParts } from "./kitMenu";
+import { iconNode, KitDialogFrame, layerOf, noop, zIndexOf } from "./kitDialog";
 import { pluginKitPatterns } from "./PluginKitPatterns";
 import { pluginKitLists } from "./PluginKitLists";
 import { pluginKitOverlays } from "./PluginKitOverlays";
 import { pluginKitData } from "./PluginKitData";
 import { pluginKitFileTree } from "./PluginKitFileTree";
+import { pluginKitNavigation } from "./PluginKitNavigation";
 import { primeRadix } from "@/components/ui/radix-loader";
 
 export { pickDomProps };
@@ -1107,118 +1107,15 @@ function KitSearchField({
   );
 }
 
-function readRadioItems(items: unknown): { value: string; label: string; disabled: boolean }[] {
-  if (!Array.isArray(items)) return [];
-  const seen = new Set<string>();
-  const out: { value: string; label: string; disabled: boolean }[] = [];
-  for (const item of items) {
-    if (typeof item !== "object" || item === null) continue;
-    const value = nonEmpty(field(item, "value"));
-    const label = nonEmpty(field(item, "label"));
-    if (value === undefined || label === undefined || seen.has(value)) continue;
-    seen.add(value);
-    out.push({ value, label, disabled: field(item, "disabled") === true });
-  }
-  return out;
-}
-
-function renderMenuEntry(entry: PluginDropdownMenuEntry, index: number): ReactNode {
-  if (typeof entry !== "object" || entry === null) return null;
-  const key = `entry-${index}`;
-  switch (entry.type) {
-    case "radio-group": {
-      const choices = readRadioItems(entry.items);
-      if (choices.length === 0) return null;
-      const onValueChange = fn(entry.onValueChange);
-      const heading = nonEmpty(entry.label);
-      return (
-        <DropdownMenuRadioGroup
-          key={key}
-          value={str(entry.value) ?? ""}
-          onValueChange={(next) => onValueChange?.(next)}
-          aria-label={heading}
-        >
-          {heading ? <DropdownMenuLabel>{heading}</DropdownMenuLabel> : null}
-          {choices.map((choice) => (
-            <DropdownMenuRadioItem
-              key={choice.value}
-              value={choice.value}
-              disabled={choice.disabled}
-            >
-              {choice.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      );
-    }
-    case "separator":
-      return <DropdownMenuSeparator key={key} />;
-    case "label": {
-      const label = str(entry.label);
-      return label ? <DropdownMenuLabel key={key}>{label}</DropdownMenuLabel> : null;
-    }
-    case "checkbox": {
-      const label = str(entry.label);
-      const onCheckedChange = fn(entry.onCheckedChange);
-      if (!label) return null;
-      return (
-        <DropdownMenuCheckboxItem
-          key={key}
-          checked={entry.checked === true}
-          onCheckedChange={(next) => onCheckedChange?.(next === true)}
-          disabled={entry.disabled === true}
-        >
-          {label}
-        </DropdownMenuCheckboxItem>
-      );
-    }
-    case undefined:
-    case "item": {
-      const label = str(entry.label);
-      const onSelect = fn(entry.onSelect);
-      if (!label) return null;
-      const Glyph = entry.icon === undefined ? undefined : resolvePluginKitIcon(entry.icon);
-      return (
-        <DropdownMenuItem
-          key={key}
-          onSelect={() => onSelect?.()}
-          disabled={entry.disabled === true}
-          destructive={entry.destructive === true}
-        >
-          {Glyph ? (
-            // `data-menu-icon` gives text-only rows in the same menu the matching gutter.
-            <span data-menu-icon="" aria-hidden="true" className="mr-2 inline-flex shrink-0">
-              <Glyph className="h-3.5 w-3.5" aria-hidden="true" />
-            </span>
-          ) : null}
-          {label}
-          <DropdownMenuShortcut shortcut={str(entry.shortcut)} />
-        </DropdownMenuItem>
-      );
-    }
-    default:
-      return null;
-  }
-}
-
-/**
- * Stops a React event reaching the view's handlers without stopping the native
- * event. React's `stopPropagation()` also stops the native event where React
- * listens, which is below `document`, so Radix's document `pointerdown`
- * listener would never see a press inside the menu and never clear the flag
- * that press set: the next click outside would read as inside and be ignored.
- * Shadowing the native method for the call keeps the native event flowing.
- */
-function stopReactPropagation(event: SyntheticEvent) {
-  const native = event.nativeEvent;
-  const keep = () => {};
-  Object.defineProperty(native, "stopPropagation", { value: keep, configurable: true });
-  try {
-    event.stopPropagation();
-  } finally {
-    Reflect.deleteProperty(native, "stopPropagation");
-  }
-}
+const DROPDOWN_MENU_PARTS: KitMenuParts = {
+  Item: DropdownMenuItem,
+  CheckboxItem: DropdownMenuCheckboxItem,
+  RadioGroup: DropdownMenuRadioGroup,
+  RadioItem: DropdownMenuRadioItem,
+  Label: DropdownMenuLabel,
+  Separator: DropdownMenuSeparator,
+  Shortcut: DropdownMenuShortcut,
+};
 
 function KitDropdownMenu({
   trigger,
@@ -1234,7 +1131,6 @@ function KitDropdownMenu({
   const overlayZ = useKitOverlayZClass();
   const owner = useKitOwnerAttributes();
   if (!isValidElement(trigger)) return null;
-  const entries: readonly PluginDropdownMenuEntry[] = Array.isArray(items) ? items : [];
   const closeAutoFocus = fn(onCloseAutoFocus);
   // Only the view's ancestors are cut off: the menu's own handlers run on the
   // content element itself, and the native events still reach the document,
@@ -1257,49 +1153,11 @@ function KitDropdownMenu({
         onPointerDown={isolate ? stopReactPropagation : undefined}
         onKeyDown={isolate ? stopReactPropagation : undefined}
       >
-        {entries.map(renderMenuEntry)}
+        {renderMenuEntries(DROPDOWN_MENU_PARTS, items)}
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
-
-function readDialogAction(action: PluginDialogAction | undefined): DialogAction | undefined {
-  if (typeof action !== "object" || action === null) return undefined;
-  const label = nonEmpty(action.label);
-  const onClick = fn(action.onClick);
-  if (!label || !onClick) return undefined;
-  return {
-    label,
-    onClick: () => onClick(),
-    disabled: action.disabled === true,
-    loading: action.loading === true,
-    intent: oneOf(action.intent, ["default", "destructive"] as const),
-    icon: renderIconSource(action.icon) ?? undefined,
-  };
-}
-
-/**
- * A disabled primary's reason, for the footer hint. Only the primary: it is
- * the one button the host points at the hint with `aria-describedby`.
- */
-function disabledReasonOf(action: PluginDialogAction | undefined): ReactNode {
-  if (typeof action !== "object" || action === null || action.disabled !== true) return undefined;
-  return content(action.disabledReason);
-}
-
-function iconNode(source: unknown): ReactNode {
-  return renderIconSource(source) ?? undefined;
-}
-
-function zIndexOf(layer: unknown): "nested" | undefined {
-  return layer === "nested" ? "nested" : undefined;
-}
-
-function layerOf(layer: unknown): PluginKitLayer {
-  return layer === "nested" ? "nested" : "modal";
-}
-
-function noop() {}
 
 function KitDialog({
   open,
@@ -1317,47 +1175,25 @@ function KitDialog({
   layer,
   "data-testid": testId,
 }: PluginDialogProps) {
-  const primary = readDialogAction(primaryAction);
-  const secondary = readDialogAction(secondaryAction);
-  const custom = content(footer);
-  const footerHint =
-    content(hint) ?? (custom === undefined ? disabledReasonOf(primaryAction) : undefined);
   return (
-    // Context reaches through the dialog's portal, so kit overlays opened
-    // inside it can stack above a nested dialog.
-    <PluginKitLayerContext.Provider value={layerOf(layer)}>
-      <AppDialog
-        isOpen={open === true}
-        onClose={fn(onClose) ?? noop}
-        size={oneOf(size, ["sm", "md", "lg"] as const) ?? "md"}
-        dismissible={dismissible !== false}
-        zIndex={zIndexOf(layer)}
-        data-testid={nonEmpty(testId)}
-      >
-        <AppDialog.Header>
-          <AppDialog.Title icon={iconNode(icon)}>{node(title)}</AppDialog.Title>
-          <AppDialog.CloseButton />
-        </AppDialog.Header>
-        <AppDialog.Body>
-          <PluginStyleScope block className="space-y-3">
-            {hasContent(description) ? (
-              <AppDialog.Description>{node(description)}</AppDialog.Description>
-            ) : null}
-            {node(children)}
-          </PluginStyleScope>
-        </AppDialog.Body>
-        {custom !== undefined ? (
-          <AppDialog.Footer hint={footerHint}>
-            {/* One container: a hint spreads the footer, and loose controls would scatter across it. */}
-            <PluginStyleScope block className="flex shrink-0 items-center gap-3">
-              {custom}
-            </PluginStyleScope>
-          </AppDialog.Footer>
-        ) : primary || secondary ? (
-          <AppDialog.Footer primaryAction={primary} secondaryAction={secondary} hint={footerHint} />
-        ) : null}
-      </AppDialog>
-    </PluginKitLayerContext.Provider>
+    <KitDialogFrame
+      open={open}
+      onClose={onClose}
+      title={title}
+      icon={icon}
+      description={description}
+      size={oneOf(size, ["sm", "md", "lg"] as const) ?? "md"}
+      placement="center"
+      primaryAction={primaryAction}
+      secondaryAction={secondaryAction}
+      hint={hint}
+      footer={footer}
+      dismissible={dismissible}
+      layer={layer}
+      testId={testId}
+    >
+      {children}
+    </KitDialogFrame>
   );
 }
 
@@ -1452,6 +1288,7 @@ export const pluginKit = {
   ...pluginKitOverlays,
   ...pluginKitData,
   ...pluginKitFileTree,
+  ...pluginKitNavigation,
 };
 
 export type PluginKit = typeof pluginKit;

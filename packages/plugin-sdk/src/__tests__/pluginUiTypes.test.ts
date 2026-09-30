@@ -308,6 +308,60 @@ export const badAlign = createElement(ui.Markdown, { source: "x", align: "right"
 const growColumn: ui.DataTableColumn<{ id: string }> = { id: "id", header: "Id", grow: true };
 void growColumn;
 
+// Context menus, sheets, command palettes, breadcrumbs, nav lists and steppers.
+export const contextMenu = createElement(ui.ContextMenu, {
+  items: [{ label: "Rename", onSelect: () => {}, shortcut: "F2" }, { type: "separator" }],
+  onOpenChange: (open: boolean) => void open,
+  stopPropagation: true,
+  children: createElement("div"),
+});
+// @ts-expect-error a context menu needs the surface it belongs to
+export const surfaceless = createElement(ui.ContextMenu, { items: [] });
+export const sheet = createElement(ui.Sheet, {
+  open: true,
+  onOpenChange: (open: boolean) => void open,
+  title: "Issue #12",
+  side: "left",
+  size: "xl",
+  primaryAction: { label: "Save", onClick: () => {} },
+  layer: "nested",
+});
+// @ts-expect-error a sheet opens against the left or right edge
+export const topSheet = createElement(ui.Sheet, { open: true, onOpenChange: () => {}, title: "x", side: "top" });
+const commands: ui.CommandPaletteItem[] = [
+  { id: "a", label: "Alpha", description: "First", icon: "file", keywords: ["one"], shortcut: "Cmd+1", group: "Files", disabled: false },
+];
+export const palette = createElement(ui.CommandPalette, {
+  open: true,
+  onOpenChange: () => {},
+  items: commands,
+  onSelect: (item: ui.CommandPaletteItem) => void item.id,
+  title: "Go to file",
+  onQueryChange: (query: string) => void query,
+  filter: false,
+  loading: true,
+  emptyText: "No files yet",
+  actionLabel: "Open file",
+});
+// @ts-expect-error a palette needs a title
+export const untitledPalette = createElement(ui.CommandPalette, { open: true, onOpenChange: () => {}, items: commands, onSelect: () => {} });
+const trail: ui.BreadcrumbItem[] = [{ label: "Projects", onSelect: () => {}, icon: "folder" }, { label: "Daintree" }];
+export const crumbs = createElement(ui.Breadcrumbs, { items: trail, maxItems: 3, "data-testid": "trail" });
+const sections: ui.NavListSection[] = [
+  { label: "Views", items: [{ id: "inbox", label: "Inbox", icon: "inbox", count: 3, children: [{ id: "starred", label: "Starred" }] }] },
+];
+export const nav = createElement(ui.NavList, { sections, value: "inbox", onValueChange: (id: string) => void id, "aria-label": "Sections" });
+const flatNav: ui.NavListItem[] = [{ id: "a", label: "A", badge: "New", disabled: true }];
+export const flatNavList = createElement(ui.NavList, { items: flatNav, defaultValue: "a", "aria-label": "Sections" });
+// @ts-expect-error a nav list needs an aria-label
+export const unnamedNav = createElement(ui.NavList, { items: flatNav });
+const steps: ui.StepperStep[] = [{ id: "a", label: "Details", description: "Name it" }, { id: "b", label: "Review", state: "error" }];
+export const stepper = createElement(ui.Stepper, { steps, current: "b", orientation: "vertical", onStepSelect: (id: string) => void id });
+// @ts-expect-error step states are a closed set
+export const badStep: ui.StepState = "skipped";
+// @ts-expect-error a stepper needs its current step
+export const noCurrent = createElement(ui.Stepper, { steps });
+
 // Root attributes: \`id\` and \`data-*\` everywhere, \`aria-*\` where the root is the control.
 export const selectId = createElement(ui.Select, { options: [], "aria-label": "Pick", "data-testid": "pick" });
 export const segmentedId = createElement(ui.SegmentedControl, { options: [], value: "", onValueChange: () => {}, "aria-label": "Mode", "data-testid": "mode", "aria-describedby": "hint" });

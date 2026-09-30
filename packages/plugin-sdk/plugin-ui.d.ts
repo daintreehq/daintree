@@ -38,6 +38,18 @@ declare module "@daintreehq/plugin-ui" {
   import type { ComponentType, ReactNode } from "react";
   import type {
     PluginAvatarProps,
+    PluginBreadcrumbItem,
+    PluginBreadcrumbsProps,
+    PluginCommandPaletteItem,
+    PluginCommandPaletteProps,
+    PluginContextMenuProps,
+    PluginNavListItem,
+    PluginNavListProps,
+    PluginNavListSection,
+    PluginSheetProps,
+    PluginStepState,
+    PluginStepperProps,
+    PluginStepperStep,
     PluginBadgeProps,
     PluginButtonProps,
     PluginCalloutProps,
@@ -199,6 +211,18 @@ declare module "@daintreehq/plugin-ui" {
   export type StatCardProps = PluginStatCardProps;
   export type SparklineProps = PluginSparklineProps;
   export type FormFieldGroupProps = PluginFormFieldGroupProps;
+  export type ContextMenuProps = PluginContextMenuProps;
+  export type SheetProps = PluginSheetProps;
+  export type CommandPaletteProps = PluginCommandPaletteProps;
+  export type CommandPaletteItem = PluginCommandPaletteItem;
+  export type BreadcrumbsProps = PluginBreadcrumbsProps;
+  export type BreadcrumbItem = PluginBreadcrumbItem;
+  export type NavListProps = PluginNavListProps;
+  export type NavListItem = PluginNavListItem;
+  export type NavListSection = PluginNavListSection;
+  export type StepperProps = PluginStepperProps;
+  export type StepperStep = PluginStepperStep;
+  export type StepState = PluginStepState;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -348,6 +372,19 @@ declare module "@daintreehq/plugin-ui" {
   export const Sparkline: ComponentType<SparklineProps>;
   /** One label, at a field label's size, over a set of controls such as checkboxes. */
   export const FormFieldGroup: ComponentType<FormFieldGroupProps>;
+
+  /** The right-click menu of `children`, from `DropdownMenu`'s rows; Shift+F10 and the Menu key open it too. */
+  export const ContextMenu: ComponentType<ContextMenuProps>;
+  /** A full-height panel against the window's edge, with a `Dialog`'s title bar, body and footer. */
+  export const Sheet: ComponentType<SheetProps>;
+  /** A searchable, virtualised palette for a quick switcher or "jump to…"; selecting an item closes it. */
+  export const CommandPalette: ComponentType<CommandPaletteProps>;
+  /** The path to the current page, with the middle crumbs folded into a menu when it runs long. */
+  export const Breadcrumbs: ComponentType<BreadcrumbsProps>;
+  /** An app's left-rail navigation: sections of destinations, one selected, one tab stop. */
+  export const NavList: ComponentType<NavListProps>;
+  /** A wizard's progress: one marker per step, complete, current, upcoming or in error. */
+  export const Stepper: ComponentType<StepperProps>;
 
   /**
    * The keyboard model of a list: one tab stop, Up/Down/Home/End move the
