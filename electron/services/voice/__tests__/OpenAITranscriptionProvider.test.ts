@@ -1494,7 +1494,7 @@ describe("OpenAITranscriptionProvider", () => {
     expect(completes).toEqual(["alpha", "beta"]);
   });
 
-  it("an empty .completed is terminal: settles the drain without emitting and dedupes a later done", async () => {
+  it("an empty .completed is terminal: counts its commit without emitting and dedupes a later done", async () => {
     const service = new OpenAITranscriptionProvider();
     const completes: string[] = [];
     service.onEvent((e) => {
@@ -1502,20 +1502,36 @@ describe("OpenAITranscriptionProvider", () => {
     });
 
     const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
     feedCommittableAudio(service);
-    const drainPromise = service.stopGracefully();
+    const drainPromise = service.stopGracefully(); // two outstanding commits
+
+    let settled = false;
+    void drainPromise.then(() => {
+      settled = true;
+    });
 
     // Silence: the server's authoritative verdict is an empty transcript.
     socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
       item_id: "item-silent",
       transcript: "",
     });
-    await drainPromise;
-
+    // A contradictory later `done` for the same item must neither emit nor
+    // count against the other outstanding commit.
     socket.simulateMessage("conversation.item.done", {
       item: { id: "item-silent", content: [{ type: "input_audio", transcript: "late" }] },
     });
+    await Promise.resolve();
+    expect(settled).toBe(false);
     expect(completes).toEqual([]);
+
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-B",
+      transcript: "beta",
+    });
+    await drainPromise;
+    expect(completes).toEqual(["beta"]);
   });
 
   it("a text-bearing conversation.item.done counts, and the item's later .completed is deduped", async () => {
