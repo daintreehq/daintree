@@ -81,6 +81,7 @@ import {
   PluginPushListenerRegistry,
   resetPluginPushListenerRegistryForTests,
 } from "../plugin/pluginPushListenerRegistry.js";
+import { observePluginPushListeners } from "../plugin/pluginInternalApprovers.js";
 
 let svc: PluginService;
 let baseDir: string;
@@ -261,6 +262,46 @@ describe("host.hasListeners / onDidChangeListeners (in-process)", () => {
     expect(() => host.hasListeners!("a:b")).toThrow(/channel/);
     expect(() => host.onDidChangeListeners!("", () => {})).toThrow(/channel/);
     expect(() => host.onDidChangeListeners!("tick", 1 as never)).toThrow(/callback/);
+  });
+
+  const eventSubscriptions = (): number =>
+    (svc as unknown as { pluginEventCleanups: Map<string, unknown[]> }).pluginEventCleanups.get(
+      "acme.fsgit"
+    )?.length ?? 0;
+
+  it("counts onDidChangeListeners as an event subscription, but not the worker's observation", () => {
+    const host = registerPlugin([], []);
+    const r = renderer(1);
+    registry.report(r, []);
+    const seen: boolean[] = [];
+    const observation = observePluginPushListeners(host, "tick", (has) => seen.push(has));
+    expect(observation?.current).toBe(false);
+    expect(eventSubscriptions()).toBe(0);
+    // Passive: an observation alone never runs the periodic reconcile.
+    expect(registry.isReconciling()).toBe(false);
+    registry.report(r, [["plugin:acme.fsgit:tick", null]]);
+    expect(seen).toEqual([true]);
+
+    const dispose = host.onDidChangeListeners!("tick", () => {});
+    expect(eventSubscriptions()).toBe(1);
+    expect(registry.isReconciling()).toBe(true);
+    dispose();
+    expect(eventSubscriptions()).toBe(0);
+    expect(registry.isReconciling()).toBe(false);
+    observation?.dispose();
+    expect(registry.watcherCount()).toBe(0);
+  });
+
+  it("drops a worker observation that outlives its plugin on the next change", () => {
+    const host = registerPlugin([], []);
+    const r = renderer(1);
+    registry.report(r, []);
+    const seen: boolean[] = [];
+    observePluginPushListeners(host, "tick", (has) => seen.push(has));
+    svc.unloadPlugin("acme.fsgit");
+    registry.report(r, [["plugin:acme.fsgit:tick", null]]);
+    expect(seen).toEqual([]);
+    expect(registry.watcherCount()).toBe(0);
   });
 
   it("answers false and stops notifying once the plugin unloads", () => {

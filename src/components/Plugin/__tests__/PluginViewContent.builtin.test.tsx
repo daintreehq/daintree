@@ -182,10 +182,10 @@ describe("built-in panel views", () => {
     expect(documentViews.calls).toEqual([]);
   });
 
-  it("renders a reopened builtin view in the commit that mounts it", async () => {
+  it("shows a reopened builtin view as soon as its activation answers", async () => {
     // Main publishes no runtime status for a builtin with no worker, so an
-    // absent status must not read as "backend unknown" for one — or a builtin
-    // panel would pay an activation round trip on every reopen.
+    // absent status must not read as "backend unknown" for one. The reopen is
+    // warm, but it still activates before it renders (#10523).
     function Inspector() {
       return <div data-testid="builtin-view" />;
     }
@@ -196,11 +196,21 @@ describe("built-in panel views", () => {
     await screen.findByTestId("builtin-view");
     first.unmount();
 
-    activateForView.mockReturnValue(new Promise<never>(() => {}));
+    let answer!: () => void;
+    activateForView.mockReturnValue(
+      new Promise<undefined>((resolve) => {
+        answer = () => resolve(undefined);
+      })
+    );
     render(<Content panelId="panel-reopen" worktreeId="wt-1" />);
-    expect(screen.getByTestId("builtin-view")).toBeTruthy();
     await act(async () => {});
+    expect(screen.queryByTestId("builtin-view")).toBeNull();
     expect(activateForView).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      answer();
+    });
+    expect(screen.getByTestId("builtin-view")).toBeTruthy();
   });
 
   it("names the view's plugin to kit content it portals out of the view", async () => {

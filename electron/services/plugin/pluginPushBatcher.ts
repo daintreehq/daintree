@@ -4,7 +4,6 @@ import {
 } from "../../../shared/config/pluginBudgets.js";
 import { getProjectRendererTargets } from "../../ipc/utils.js";
 import { PLUGIN_PUSH_BATCH_CHANNEL, type PluginPushBatchEntry } from "./pluginPushProtocol.js";
-import { getPluginPushListenerRegistry } from "./pluginPushListenerRegistry.js";
 
 /** The slice of `Electron.WebContents` the batcher sends through. */
 export interface PluginPushTarget {
@@ -17,8 +16,8 @@ export interface PluginPushTarget {
  * Called once per plugin per flush with what was actually handed to IPC:
  * `messages` counts deliveries (one push reaching two renderers counts two)
  * and `bytes` sums their estimated payload sizes. Pushes that reached no
- * renderer (destroyed, out of scope, aimed at a closed panel, or with no
- * subscriber there) are not counted.
+ * renderer (destroyed, out of scope, or aimed at a closed panel) are not
+ * counted.
  */
 export type PluginPushFlushObserver = (pluginId: string, messages: number, bytes: number) => void;
 
@@ -53,17 +52,6 @@ export interface PluginPushRoute {
 /** The renderers a scope covers: the project's views, or every renderer for `null`. */
 export type PluginPushScopeResolver = (projectId: string | null) => readonly PluginPushTarget[];
 
-/**
- * Whether renderer `targetId` has a subscriber a push on `channel` (targeted at
- * `panelId`, or `null` for a broadcast) would be dispatched to. Must answer
- * true for a renderer it knows nothing about.
- */
-export type PluginPushListenerFilter = (
-  targetId: number,
-  channel: string,
-  panelId: string | null
-) => boolean;
-
 interface QueuedPush {
   route: PluginPushRoute;
   entry: PluginPushBatchEntry;
@@ -74,7 +62,6 @@ export interface PluginPushBatcherOptions {
   maxBatchSize?: number;
   maxBatchBytes?: number;
   resolveScope?: PluginPushScopeResolver;
-  hasListener?: PluginPushListenerFilter;
 }
 
 /**
@@ -89,9 +76,8 @@ export interface PluginPushBatcherOptions {
  * transport, so the relative order a renderer observes is exactly the order
  * the pushes were made. Nothing is merged; a flush over the entry or byte cap
  * goes out as several consecutive messages. A push is dropped only when it has
- * nowhere to go (no live renderer in scope, its panel is closed, or no renderer
- * in scope reported a subscriber for it) or, alone among its batch, when IPC
- * refuses to serialize it.
+ * nowhere to go (no live renderer in scope, or its panel is closed) or, alone
+ * among its batch, when IPC refuses to serialize it.
  */
 export class PluginPushBatcher {
   private queue: QueuedPush[] = [];
@@ -101,7 +87,6 @@ export class PluginPushBatcher {
   private readonly maxBatchSize: number;
   private readonly maxBatchBytes: number;
   private readonly resolveScope: PluginPushScopeResolver;
-  private readonly hasListener: PluginPushListenerFilter;
 
   constructor(options: PluginPushBatcherOptions = {}) {
     this.schedule = options.schedule ?? ((flush) => void setImmediate(flush));
@@ -109,10 +94,6 @@ export class PluginPushBatcher {
     this.maxBatchBytes = options.maxBatchBytes ?? PLUGIN_PUSH_MAX_PAYLOAD_BYTES;
     this.resolveScope =
       options.resolveScope ?? ((projectId) => getProjectRendererTargets(projectId));
-    this.hasListener =
-      options.hasListener ??
-      ((targetId, channel, panelId) =>
-        getPluginPushListenerRegistry().shouldDeliver(targetId, channel, panelId));
   }
 
   /** Install (or with `null`, remove) the per-flush metering hook. */
@@ -179,8 +160,7 @@ export class PluginPushBatcher {
    * renderer(s) holding the panel, so the others never deserialize it; the
    * preload still filters by panel id as a second line of defence. A panel not
    * reported yet falls back to the scope — never wider — and a closed one
-   * receives nothing. Last, renderers that reported no subscriber the push
-   * could reach are dropped; one that never reported keeps receiving.
+   * receives nothing.
    */
   private targetsFor(
     route: PluginPushRoute,
@@ -197,13 +177,6 @@ export class PluginPushBatcher {
       scope = resolved;
       scopes.set(route.projectId, scope);
     }
-    return this.listening(route, this.panelTargets(route, scope));
-  }
-
-  private panelTargets(
-    route: PluginPushRoute,
-    scope: readonly PluginPushTarget[]
-  ): readonly PluginPushTarget[] {
     if (route.panelId === null || !route.locatePanel || scope.length === 0) return scope;
     let location: PluginPushPanelLocation;
     try {
@@ -215,20 +188,6 @@ export class PluginPushBatcher {
     if (location.length === 0 || scope.length === 1) return scope;
     const narrowed = scope.filter((target) => location.includes(target.id));
     return narrowed.length > 0 ? narrowed : scope;
-  }
-
-  private listening(
-    route: PluginPushRoute,
-    targets: readonly PluginPushTarget[]
-  ): readonly PluginPushTarget[] {
-    if (targets.length === 0) return targets;
-    return targets.filter((target) => {
-      try {
-        return this.hasListener(target.id, route.channel, route.panelId);
-      } catch {
-        return true;
-      }
-    });
   }
 
   /**

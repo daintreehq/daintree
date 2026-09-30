@@ -12,8 +12,9 @@ import type { PluginViewContentConfig } from "../PluginViewContent";
  * fallback committed. Every plugin panel open used to suspend on its load, so
  * even an open main answered at once took ~300 ms to show. These pin the
  * replacement: a load that settles into plain state (no throttle), and a warm
- * open that renders in the commit that mounts it — without giving up
- * activate-before-render when the backend is not known to be live (#10523).
+ * open that waits only on its activation round trip — never giving up
+ * activate-before-render, since a status that still reads as the previous ready
+ * backend is not proof the plugin has activated (#10523).
  */
 
 vi.mock("@/components/ui/Skeleton", () => ({
@@ -32,12 +33,21 @@ vi.mock("@/services/plugin/pluginStyleContract", async (importOriginal) => ({
   preparePluginStyles: () => Promise.resolve(),
   registerPluginStyleRoot: () => () => {},
 }));
+// A real error boundary, reporting through `componentDidCatch` in the commit
+// phase exactly as the app's does, so the host's `onError` runs before any
+// passive effect of the commit that rendered the throwing view.
 vi.mock("@/components/ErrorBoundary", async () => {
   const { Component } = await import("react");
-  class FakeBoundary extends Component<{ children: React.ReactNode }, { failed: boolean }> {
+  class FakeBoundary extends Component<
+    { children: React.ReactNode; onError?: (error: Error) => void },
+    { failed: boolean }
+  > {
     state = { failed: false };
     static getDerivedStateFromError(): { failed: true } {
       return { failed: true };
+    }
+    componentDidCatch(error: Error): void {
+      this.props.onError?.(error);
     }
     render(): React.ReactNode {
       return this.state.failed ? <div data-testid="boundary-error" /> : this.props.children;
@@ -78,7 +88,14 @@ function worker(overrides: Partial<PluginWorkerStatus> = {}): PluginWorkerStatus
 
 let activateForView: ReturnType<typeof vi.fn<(kindId: string) => Promise<undefined>>>;
 
+const viewDouble = {
+  throwOnRender: false,
+  signals: [] as AbortSignal[],
+};
+
 beforeEach(() => {
+  viewDouble.throwOnRender = false;
+  viewDouble.signals = [];
   activateForView = vi.fn<(kindId: string) => Promise<undefined>>(() => Promise.resolve(undefined));
   Object.defineProperty(window, "electron", {
     configurable: true,
@@ -86,7 +103,9 @@ beforeEach(() => {
     value: { plugin: { onPanelKindsChanged: () => () => {}, activateForView } },
   });
   vi.doMock(VIEW_MODULE, () => ({
-    default: function DashboardView() {
+    default: function DashboardView({ disposeSignal }: { disposeSignal: AbortSignal }) {
+      viewDouble.signals.push(disposeSignal);
+      if (viewDouble.throwOnRender) throw new Error("view threw on its first render");
       return <div data-testid="plugin-view" />;
     },
   }));
@@ -223,7 +242,7 @@ describe("plugin view load path", () => {
     expect(screen.queryByTestId("skeleton")).toBeNull();
   });
 
-  it("renders a warm open in the commit that mounts it, and still activates", async () => {
+  it("holds a warm open until its activation answers, then shows it without the throttle", async () => {
     const { Content, setStatus } = await loadModules();
     setStatus(worker({ generation: 3 }));
 
@@ -233,13 +252,66 @@ describe("plugin view load path", () => {
     first.unmount();
     expect(activateForView).toHaveBeenCalledTimes(1);
 
-    // Activation is still sent — it stamps the plugin's idle-dispose activity —
-    // but nothing waits on it.
-    activateForView.mockReturnValue(new Promise<never>(() => {}));
+    // The status can still read as the previous ready backend after a restart,
+    // so a warm view must not mount (and run its effects) before activation.
+    const activation = deferred<undefined>();
+    activateForView.mockReturnValue(activation.promise);
     render(<Content panelId="panel-warm" />);
-    expect(viewOnScreen()).toBe(true);
-    await act(async () => {});
+    expect(viewOnScreen()).toBe(false);
+    await drainWithoutTimers(() => false);
+    expect(viewOnScreen()).toBe(false);
+    // Inside the skeleton gate: a warm open never flashes bones.
+    expect(screen.queryByTestId("skeleton")).toBeNull();
     expect(activateForView).toHaveBeenCalledTimes(2);
+
+    const elapsed = await msUntilViewOnScreen(() => activation.resolve(undefined));
+    expect(elapsed).toBeLessThan(REVEAL_THROTTLE_MS / 2);
+  });
+
+  it("shows a warm open within an IPC round trip and a frame, with the clock frozen", async () => {
+    vi.useFakeTimers({ toFake: FROZEN_TIMERS });
+    const { Content, setStatus } = await loadModules();
+    setStatus(worker({ generation: 3 }));
+    const first = render(<Content panelId="panel-warm-frozen" />);
+    await drainWithoutTimers(viewOnScreen);
+    first.unmount();
+
+    render(<Content panelId="panel-warm-frozen" />);
+    // No timer is advanced, so neither the reveal throttle nor the skeleton
+    // gate can be what reveals it.
+    await drainWithoutTimers(viewOnScreen);
+    expect(viewOnScreen()).toBe(true);
+    expect(screen.queryByTestId("skeleton")).toBeNull();
+  });
+
+  it("records the warm open's activation time", async () => {
+    const { pluginViewMetrics } = await import("@/services/plugin/pluginViewMetrics");
+    const recordViewLoad = vi.spyOn(pluginViewMetrics, "recordViewLoad");
+    const { Content, setStatus } = await loadModules();
+    setStatus(worker({ generation: 3 }));
+    const first = render(<Content panelId="panel-warm-timed" />);
+    await drainWithoutTimers(viewOnScreen);
+    first.unmount();
+
+    const activation = deferred<undefined>();
+    activateForView.mockReturnValue(activation.promise);
+    const now = vi.spyOn(performance, "now");
+    render(<Content panelId="panel-warm-timed" />);
+    await drainWithoutTimers(() => false);
+    const base = performance.now();
+    now.mockReturnValue(base + 40);
+    await act(async () => {
+      activation.resolve(undefined);
+    });
+    await drainWithoutTimers(viewOnScreen);
+    now.mockRestore();
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+    });
+
+    const sample = recordViewLoad.mock.calls.at(-1)?.[1];
+    expect(sample?.activateMs).toBeGreaterThanOrEqual(40);
+    recordViewLoad.mockRestore();
   });
 
   it("renders a warm open once under StrictMode's replayed effects", async () => {
@@ -255,8 +327,8 @@ describe("plugin view load path", () => {
         <Content panelId="panel-strict" />
       </StrictMode>
     );
+    await drainWithoutTimers(viewOnScreen);
     expect(viewOnScreen()).toBe(true);
-    await act(async () => {});
     // The replayed effect shares the attempt's one activation.
     expect(activateForView).toHaveBeenCalledTimes(1);
   });
@@ -313,10 +385,11 @@ describe("plugin view load path", () => {
 
     activateForView.mockRejectedValue(new Error("refused"));
     const second = render(<Content panelId="panel-refused" />);
-    expect(viewOnScreen()).toBe(true);
-    // The refusal still reaches the boundary, as it would on a cold open.
+    // The refusal reaches the boundary, as it would on a cold open, and the
+    // view it refused never mounted.
     await drainWithoutTimers(() => screen.queryByTestId("boundary-error") !== null);
     expect(screen.getByTestId("boundary-error")).toBeTruthy();
+    expect(viewOnScreen()).toBe(false);
     second.unmount();
 
     // With the backend in doubt, the next open waits on activation again.
@@ -329,5 +402,30 @@ describe("plugin view load path", () => {
     });
     await drainWithoutTimers(viewOnScreen);
     expect(viewOnScreen()).toBe(true);
+  });
+
+  it("aborts a warm replacement's own signal when it throws on its first render", async () => {
+    const { requestUserViewReload } = await import("@/services/plugin/pluginPanelLifecycle");
+    const { Content, setStatus } = await loadModules();
+    setStatus(worker({ generation: 3 }));
+    render(<Content panelId="panel-throws" offerRequestReload />);
+    await drainWithoutTimers(viewOnScreen);
+    const outgoing = viewDouble.signals.at(-1)!;
+    expect(outgoing.aborted).toBe(false);
+
+    // A user reload of a healthy view on a live backend: a warm attempt.
+    viewDouble.throwOnRender = true;
+    await act(async () => {
+      expect(requestUserViewReload("panel-throws")).toBe(true);
+    });
+    await drainWithoutTimers(() => screen.queryByTestId("boundary-error") !== null);
+    expect(screen.getByTestId("boundary-error")).toBeTruthy();
+
+    expect(outgoing.aborted).toBe(true);
+    const failed = viewDouble.signals.filter((signal) => signal !== outgoing);
+    expect(failed.length).toBeGreaterThan(0);
+    // Every render of the failed attempt saw one signal, and it is aborted.
+    expect(new Set(failed).size).toBe(1);
+    expect(failed.every((signal) => signal.aborted)).toBe(true);
   });
 });

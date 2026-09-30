@@ -1,6 +1,7 @@
 import { ipcMain, type IpcMainEvent, type WebContents } from "electron";
 import { CHANNELS } from "../channels.js";
 import { parsePushListenerReport } from "../../schemas/pluginPushListeners.js";
+import { onRendererScopeChanged } from "../../window/webContentsRegistry.js";
 import {
   getPluginPushListenerRegistry,
   type PluginPushListenerRegistry,
@@ -10,7 +11,7 @@ import {
  * Reports applied per renderer per second. The preload coalesces a report per
  * microtask and only when its set of subscribed channels changes, so a burst of
  * panels mounting at once is still one message. Past the budget the renderer's
- * state is marked unknown — which delivers everything to it — and the newest
+ * state is marked unknown — which counts as listening everywhere — and the newest
  * report is held and applied when the window ends, so a burst never leaves the
  * renderer unknown for good.
  */
@@ -26,8 +27,8 @@ interface SenderWindow {
 
 /**
  * Wire the fire-and-forget channel through which each renderer's preload tells
- * main which plugin push channels it has subscribers for, so pushes nobody
- * would receive are not sent to it at all.
+ * main which plugin push channels it has subscribers for. It feeds the
+ * producer-side `host.hasListeners` signal only; push delivery ignores it.
  */
 export function registerPluginPushListenerHandlers(
   registry: PluginPushListenerRegistry = getPluginPushListenerRegistry()
@@ -76,7 +77,13 @@ export function registerPluginPushListenerHandlers(
     timers.add(timer);
   };
   ipcMain.on(CHANNELS.PLUGIN_REPORT_PUSH_LISTENERS, handleReport);
+  // A renderer can report before it joins a project's scope (a window's first
+  // view loads before it is registered), and no report follows the
+  // registration. Re-evaluate every watcher — passive ones included, which the
+  // periodic reconcile does not keep — whenever scope membership changes.
+  const offScope = onRendererScopeChanged(() => registry.reconcile());
   return () => {
+    offScope();
     ipcMain.removeListener(CHANNELS.PLUGIN_REPORT_PUSH_LISTENERS, handleReport);
     for (const timer of timers) clearTimeout(timer);
     timers.clear();

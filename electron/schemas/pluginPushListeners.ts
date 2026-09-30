@@ -6,10 +6,10 @@ import type { PluginPushListenerKey } from "../services/plugin/pluginPushListene
  * subscriber.
  *
  * Refusing a report is always safe — the registry then treats the renderer as
- * unknown and delivers every push to it — so anything malformed or oversized
- * returns `null` rather than a partial list. A partial list would be worse
- * than none: a pair left out reads as "no subscriber here" and would be
- * skipped.
+ * unknown, which counts as listening everywhere — so anything malformed or
+ * oversized returns `null` rather than a partial list. A partial list would be
+ * worse than none: a pair left out reads as "no subscriber here" and could let
+ * a producer pause a stream a view is waiting on.
  */
 
 /** Pairs one report may carry; far above what any set of open panels subscribes. */

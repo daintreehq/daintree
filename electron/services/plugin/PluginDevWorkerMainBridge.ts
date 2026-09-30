@@ -81,7 +81,10 @@ import { parseWorkerToHostMessage } from "../../schemas/pluginDevWorker.js";
 import { abortErrorFor } from "./pluginAbortError.js";
 import { invokeSignalFor } from "./pluginInvokeDeadline.js";
 import { serializableErrorFields } from "./pluginHostErrorFields.js";
-import { approvePluginDatabaseBackup } from "./pluginInternalApprovers.js";
+import {
+  approvePluginDatabaseBackup,
+  observePluginPushListeners,
+} from "./pluginInternalApprovers.js";
 
 const logger = createLogger("main:PluginDevWorkerBridge");
 
@@ -1444,6 +1447,21 @@ export class PluginDevWorkerMainBridge {
         // between the two. The worker ignores a value it already holds.
         dispose = onDidChangeListeners.call(this.host, channel, (has) => push(has));
         push(hasListeners.call(this.host, channel));
+      } else if (kind === "push-listeners-observe") {
+        const channel = msg.key;
+        if (!channel) {
+          logger.warn(`[${this.pluginId}] push-listeners-observe subscribe missing key`);
+          return;
+        }
+        // Untracked by idle governance (see `observePluginPushListeners`); this
+        // bridge's own subscription cleanup is what releases it.
+        const observation = observePluginPushListeners(this.host, channel, (has) => push(has));
+        if (!observation) {
+          push(true);
+          return;
+        }
+        dispose = observation.dispose;
+        push(observation.current);
       } else if (kind === "process-exit" || kind === "process-crash" || kind === "process-data") {
         if (!msg.processId) {
           logger.warn(`[${this.pluginId}] ${kind} subscribe missing processId`);

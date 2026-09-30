@@ -60,7 +60,11 @@ import { isChannelSchema } from "./PluginChannelRegistry.js";
 import { abortErrorFor } from "./pluginAbortError.js";
 import { openPluginDatabase, resolvePluginDatabaseLocation } from "./pluginDatabase.js";
 import type { PluginDatabaseApi } from "../../../shared/types/plugin.js";
-import { databaseBackupApprovers, fsWriteApprovers } from "./pluginInternalApprovers.js";
+import {
+  databaseBackupApprovers,
+  fsWriteApprovers,
+  pushListenerObservers,
+} from "./pluginInternalApprovers.js";
 import { agentMcpEndpointRegistry } from "../pluginAgentMcp/endpointRegistry.js";
 import { validateAgentMcpTools } from "../pluginAgentMcp/validateTools.js";
 import type { AgentMcpToolInvoker } from "../pluginAgentMcp/types.js";
@@ -1224,6 +1228,9 @@ export function createHost(
           );
         }
       );
+      // Tracked like every other host event subscription, so it holds the
+      // worker against idle disposal: a disposed worker could not run the
+      // callback, and nothing re-forks it on a listener change.
       const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, unwatch);
       return dispose;
     },
@@ -2401,6 +2408,31 @@ export function createHost(
       },
     },
   };
+  // The worker bridge's backing for its synchronous `hasListeners` cache. Not a
+  // plugin event subscription: untracked in `pluginEventCleanups` (so a read
+  // never holds the worker against idle disposal) and passive in the registry
+  // (so it never keeps the periodic reconcile running). The bridge disposes it
+  // with its other subscriptions on worker teardown; one that outlives its
+  // plugin's binding unwatches itself on the next change.
+  pushListenerObservers.set(host, (channel, callback) => {
+    const transport = pushListenerChannel("hasListeners", channel);
+    // Unbound answers as `hasListeners` does, and never changes.
+    if (!isBound()) return { current: false, dispose: () => {} };
+    const registry = getPluginPushListenerRegistry();
+    const unwatch = registry.watch(
+      boundProjectId,
+      transport,
+      (hasListeners) => {
+        if (!isBound()) {
+          unwatch();
+          return;
+        }
+        callback(hasListeners);
+      },
+      { passive: true }
+    );
+    return { current: registry.hasListeners(boundProjectId, transport), dispose: unwatch };
+  });
   return {
     host,
     revoke: () => {
@@ -3595,7 +3627,7 @@ function buildFsApi(
         resolved,
         call,
         {
-          readdir: (dir) => fs.readdir(dir, { withFileTypes: true }),
+          opendir: (dir) => fs.opendir(dir, { bufferSize: 128 }),
           realpath: (dir) => fs.realpath(dir),
           fileSize: (file) =>
             fs.lstat(file).then(

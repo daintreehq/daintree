@@ -107,9 +107,21 @@ export const PLUGIN_FS_WALK_MAX_GLOB_TESTS = 1_000_000;
 /** Entries processed between yields to the event loop. */
 const YIELD_EVERY = 2_048;
 
+/** An open directory read one entry at a time — the slice of `fs.Dir` a walk uses. */
+export interface WalkDir {
+  /** The next entry, or `null` at the end. */
+  read(): Promise<Dirent | null>;
+  close(): Promise<void>;
+}
+
 /** The filesystem and git operations a walk performs, injectable for tests. */
 export interface WalkIo {
-  readdir(dir: string): Promise<Dirent[]>;
+  /**
+   * Open `dir` for incremental reading (`fs.promises.opendir`), so a huge
+   * directory is never materialised whole: the walk reads only as many entries
+   * as its budget has left.
+   */
+  opendir(dir: string): Promise<WalkDir>;
   realpath(dir: string): Promise<string>;
   /** A file's size, or `undefined` when it can no longer be stat'ed. */
   fileSize(file: string): Promise<number | undefined>;
@@ -152,6 +164,51 @@ function comparePaths(a: string, b: string): number {
 
 const defaultYield = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
+/** Elements sorted or merged between yields by {@link sortYielding}. */
+const SORT_RUN = 2_048;
+
+/**
+ * Sort `items` by `compare` without holding the event loop for the whole sort:
+ * runs of {@link SORT_RUN} are sorted, then merged bottom-up, and `tick` is
+ * awaited after every run's worth of work. Stable, like `Array.prototype.sort`.
+ */
+async function sortYielding<T>(
+  items: T[],
+  compare: (a: T, b: T) => number,
+  tick: () => Promise<void>
+): Promise<T[]> {
+  if (items.length <= SORT_RUN) return items.sort(compare);
+  let src = items;
+  for (let start = 0; start < src.length; start += SORT_RUN) {
+    const run = src.slice(start, start + SORT_RUN).sort(compare);
+    for (let i = 0; i < run.length; i++) src[start + i] = run[i]!;
+    await tick();
+  }
+  let dst: T[] = new Array<T>(src.length);
+  for (let width = SORT_RUN; width < src.length; width *= 2) {
+    let sinceTick = 0;
+    for (let lo = 0; lo < src.length; lo += 2 * width) {
+      const mid = Math.min(lo + width, src.length);
+      const hi = Math.min(lo + 2 * width, src.length);
+      let i = lo;
+      let j = mid;
+      let k = lo;
+      while (i < mid && j < hi) {
+        dst[k++] = compare(src[j]!, src[i]!) < 0 ? src[j++]! : src[i++]!;
+        if (++sinceTick >= SORT_RUN) {
+          sinceTick = 0;
+          await tick();
+        }
+      }
+      while (i < mid) dst[k++] = src[i++]!;
+      while (j < hi) dst[k++] = src[j++]!;
+    }
+    [src, dst] = [dst, src];
+    await tick();
+  }
+  return src;
+}
+
 /**
  * Walk `root` — already contained and realpath-resolved by the caller —
  * breadth-first, one directory level at a time. `checkpoint` runs before each
@@ -165,9 +222,20 @@ const defaultYield = (): Promise<void> => new Promise((resolve) => setImmediate(
  * so a swap and swap back between those checks is not excluded — the same
  * honest limit `readdir` documents.
  *
+ * Sizes (`includeSize`) are read after the traversal, so each one re-checks
+ * that the file's directory still resolves to where it was listed, before and
+ * after the stat, and leaves the size out when it does not — a directory
+ * swapped for a link since cannot make a size read land outside the root.
+ *
  * Cost: bounded by the entry `limit`, the result byte budget, a cap on entries
  * examined and on glob tests, with a yield to the event loop every few
- * thousand entries so a large walk never holds the main process.
+ * thousand entries (while reading, filtering and sorting) so a large walk never
+ * holds the main process. A directory is read incrementally, keeping no more
+ * entries than the examine budget has left (one more is read, and discarded, to
+ * learn that it overflowed); one with more than that contributes only the
+ * entries kept — which of its entries those are depends on the filesystem's
+ * enumeration order, so it is unspecified — sorted like any other, and the
+ * result is `truncated`.
  */
 export async function runWalk(
   root: string,
@@ -207,6 +275,49 @@ export async function runWalk(
   };
   const stillAt = async (dir: string): Promise<boolean> =>
     (await io.realpath(dir).catch(() => null)) === dir;
+  const tick = async (): Promise<void> => {
+    sinceYield = 0;
+    await yieldNow();
+    signal?.throwIfAborted();
+    checkpoint();
+  };
+  /**
+   * Up to `cap` entries of `dir`, and whether it held more — learned by reading
+   * one entry past the cap, which is discarded unexamined. A close failure fails
+   * the read like any other error; one after a failed read is dropped so the
+   * read's own error surfaces.
+   */
+  const readBounded = async (
+    dir: string,
+    cap: number
+  ): Promise<{ dirents: Dirent[]; capped: boolean }> => {
+    const handle = await io.opendir(dir);
+    const dirents: Dirent[] = [];
+    let capped = false;
+    let read = false;
+    try {
+      for (;;) {
+        const dirent = await handle.read();
+        if (dirent === null) break;
+        if (dirents.length >= cap) {
+          capped = true;
+          break;
+        }
+        dirents.push(dirent);
+        await pause();
+      }
+      read = true;
+    } finally {
+      if (read) await handle.close();
+      else await handle.close().catch(() => {});
+    }
+    return { dirents, capped };
+  };
+  const hasGitEntry = (dir: string): Promise<boolean> =>
+    io.realpath(path.join(dir, ".git")).then(
+      () => true,
+      () => false
+    );
 
   walk: for (let depth = 1; depth <= maxDepth && level.length > 0; depth++) {
     const candidates: Candidate[] = [];
@@ -216,33 +327,43 @@ export async function runWalk(
       checkpoint();
       const isRoot = dir.rel === "";
       if (!isRoot && !(await stillAt(dir.abs))) continue;
-      let dirents: Dirent[];
+      // A nested repository or submodule: listed, not entered — the outer
+      // repository's ignore rules do not describe its contents. Probed before
+      // the read so a large one spends none of the examine budget.
+      if (ignoreActive && !isRoot && (await hasGitEntry(dir.abs))) continue;
+      let listing: { dirents: Dirent[]; capped: boolean };
       try {
-        dirents = await io.readdir(dir.abs);
+        listing = await readBounded(dir.abs, maxVisited - visited);
       } catch (error) {
         // The root failing is the call failing; a subdirectory that vanished
         // or cannot be read is left out.
+        signal?.throwIfAborted();
+        checkpoint();
         if (isRoot) throw error;
         continue;
       }
+      const { capped } = listing;
+      visited += listing.dirents.length;
       signal?.throwIfAborted();
       if (!(await stillAt(dir.abs))) {
         if (isRoot) throw new Error("TARGET_UNAVAILABLE: the walk root moved while it was read");
         continue;
       }
-      if (ignoreActive && !isRoot && dirents.some((d) => d.name === ".git")) {
-        // A nested repository or submodule: listed, not entered — the outer
-        // repository's ignore rules do not describe its contents.
-        continue;
-      }
-      dirents.sort((a, b) => comparePaths(a.name, b.name));
-      for (const dirent of dirents) {
-        if (++visited > maxVisited) {
-          // Keep what was collected; nothing past this point is examined.
+      // `.git` appearing between the probe and the read.
+      if (ignoreActive && !isRoot && listing.dirents.some((d) => d.name === ".git")) {
+        if (capped) {
           truncated = true;
           lastLevel = true;
           break collect;
         }
+        continue;
+      }
+      const dirents = await sortYielding(
+        listing.dirents,
+        (a, b) => comparePaths(a.name, b.name),
+        tick
+      );
+      for (const dirent of dirents) {
         await pause();
         if (ignoreActive && dirent.name === ".git") continue;
         const type = dirent.isDirectory() ? "dir" : dirent.isFile() ? "file" : null;
@@ -258,6 +379,12 @@ export async function runWalk(
           if (excluded) continue;
         }
         candidates.push({ abs: path.join(dir.abs, dirent.name), rel, type });
+      }
+      if (capped) {
+        // Keep what was collected; nothing past this point is examined.
+        truncated = true;
+        lastLevel = true;
+        break collect;
       }
     }
 
@@ -323,14 +450,20 @@ export async function runWalk(
         const entry = entries[index]!;
         if (entry.type !== "file") continue;
         signal?.throwIfAborted();
+        // The traversal is over, so the file's ancestors are checked again
+        // around its own read; a size read through a swapped-in link is
+        // dropped.
+        const parent = path.dirname(entry.abs);
+        if (!(await stillAt(parent))) continue;
         const size = await io.fileSize(entry.abs);
-        if (size !== undefined) out[index] = { path: entry.path, type: "file", size };
+        if (size === undefined || !(await stillAt(parent))) continue;
+        out[index] = { path: entry.path, type: "file", size };
       }
     };
     await Promise.all(Array.from({ length: STAT_CONCURRENCY }, worker));
     checkpoint();
   }
   signal?.throwIfAborted();
-  out.sort((a, b) => comparePaths(a.path, b.path));
-  return { entries: out, truncated };
+  const sorted = await sortYielding(out, (a, b) => comparePaths(a.path, b.path), tick);
+  return { entries: sorted, truncated };
 }

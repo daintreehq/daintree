@@ -44,42 +44,49 @@ function setup() {
 }
 
 describe("PluginPushListenerRegistry", () => {
-  it("delivers to a renderer that has not reported", () => {
-    const { registry } = setup();
-    expect(registry.shouldDeliver(1, CH, null)).toBe(true);
-    expect(registry.shouldDeliver(1, CH, "panel-a")).toBe(true);
+  it("counts a renderer that has not reported as listening", () => {
+    const { registry, scopes } = setup();
+    scopes.set(null, [renderer(1)]);
+    expect(registry.hasListeners(null, CH)).toBe(true);
     expect(registry.isReported(1)).toBe(false);
+    expect(registry.reportedListeners(1)).toBeNull();
   });
 
-  it("skips what a reported renderer has no subscriber for, broadcast and targeted apart", () => {
-    const { registry } = setup();
+  it("records a report's broadcast and targeted pairs apart", () => {
+    const { registry, scopes } = setup();
     const r = renderer(1);
+    scopes.set(null, [r]);
     registry.report(r, [
       [CH, null],
       [OTHER, "panel-a"],
     ]);
-    expect(registry.shouldDeliver(1, CH, null)).toBe(true);
-    expect(registry.shouldDeliver(1, CH, "panel-a")).toBe(false);
-    expect(registry.shouldDeliver(1, OTHER, "panel-a")).toBe(true);
-    expect(registry.shouldDeliver(1, OTHER, null)).toBe(false);
-    expect(registry.shouldDeliver(1, "plugin:acme.demo:never", null)).toBe(false);
+    expect(registry.reportedListeners(1)).toEqual([
+      [CH, null],
+      [OTHER, "panel-a"],
+    ]);
+    expect(registry.hasListeners(null, CH)).toBe(true);
+    expect(registry.hasListeners(null, OTHER)).toBe(true);
+    expect(registry.hasListeners(null, "plugin:acme.demo:never")).toBe(false);
   });
 
   it("replaces a renderer's state on every report rather than accumulating it", () => {
-    const { registry } = setup();
+    const { registry, scopes } = setup();
     const r = renderer(1);
+    scopes.set(null, [r]);
     registry.report(r, [[CH, null]]);
     registry.report(r, []);
-    expect(registry.shouldDeliver(1, CH, null)).toBe(false);
+    expect(registry.hasListeners(null, CH)).toBe(false);
+    expect(registry.reportedListeners(1)).toEqual([]);
   });
 
-  it("treats a refused report (null) as unknown, restoring delivery", () => {
-    const { registry } = setup();
+  it("treats a refused report (null) as unknown, counting it as listening again", () => {
+    const { registry, scopes } = setup();
     const r = renderer(1);
+    scopes.set(null, [r]);
     registry.report(r, []);
-    expect(registry.shouldDeliver(1, CH, null)).toBe(false);
+    expect(registry.hasListeners(null, CH)).toBe(false);
     registry.report(r, null);
-    expect(registry.shouldDeliver(1, CH, null)).toBe(true);
+    expect(registry.hasListeners(null, CH)).toBe(true);
     expect(registry.isReported(1)).toBe(false);
   });
 
@@ -163,91 +170,17 @@ describe("PluginPushListenerRegistry", () => {
   });
 });
 
-describe("PluginPushBatcher with listener reports", () => {
-  function batcherWith(registry: PluginPushListenerRegistry, targets: FakeRenderer[]) {
+describe("PluginPushBatcher ignores listener reports", () => {
+  it("delivers to a renderer that reported no subscriber, so a later subscriber is not starved", () => {
+    const { registry } = setup();
+    const reportedNone = renderer(1);
+    const reportedPanel = renderer(2);
+    registry.report(reportedNone, []);
+    registry.report(reportedPanel, [[CH, "panel-a"]]);
     const scheduled: Array<() => void> = [];
     const batcher = new PluginPushBatcher({
       schedule: (flush) => scheduled.push(flush),
-      resolveScope: () => targets,
-      hasListener: (id, channel, panelId) => registry.shouldDeliver(id, channel, panelId),
-    });
-    return { batcher, run: () => scheduled.splice(0).forEach((f) => f()) };
-  }
-
-  it("skips a broadcast for a renderer that reported no broadcast subscriber", () => {
-    const { registry } = setup();
-    const listening = renderer(1);
-    const idle = renderer(2);
-    const fresh = renderer(3);
-    registry.report(listening, [[CH, null]]);
-    registry.report(idle, [[CH, "panel-a"]]);
-    const { batcher, run } = batcherWith(registry, [listening, idle, fresh]);
-    const observer = vi.fn();
-    batcher.setFlushObserver(observer);
-    batcher.enqueue({
-      pluginId: "acme.demo",
-      projectId: null,
-      channel: CH,
-      panelId: null,
-      payload: 1,
-      bytes: 10,
-    });
-    run();
-    expect(listening.send).toHaveBeenCalledTimes(1);
-    expect(idle.send).not.toHaveBeenCalled();
-    // Never reported: delivered exactly as before listener reports existed.
-    expect(fresh.send).toHaveBeenCalledTimes(1);
-    expect(observer).toHaveBeenCalledWith("acme.demo", 2, 20);
-  });
-
-  it("skips a targeted push for a renderer with no subscriber for that panel", () => {
-    const { registry } = setup();
-    const a = renderer(1);
-    const b = renderer(2);
-    registry.report(a, [[CH, null]]);
-    registry.report(b, [[CH, "panel-a"]]);
-    const { batcher, run } = batcherWith(registry, [a, b]);
-    batcher.enqueue({
-      pluginId: "acme.demo",
-      projectId: null,
-      channel: CH,
-      panelId: "panel-a",
-      payload: 1,
-      bytes: 10,
-      locatePanel: () => [],
-    });
-    run();
-    expect(a.send).not.toHaveBeenCalled();
-    expect(b.send).toHaveBeenCalledTimes(1);
-  });
-
-  it("decides at flush time, so a subscription reported before the flush is honoured", () => {
-    const { registry } = setup();
-    const a = renderer(1);
-    registry.report(a, []);
-    const { batcher, run } = batcherWith(registry, [a]);
-    batcher.enqueue({
-      pluginId: "acme.demo",
-      projectId: null,
-      channel: CH,
-      panelId: null,
-      payload: 1,
-      bytes: 10,
-    });
-    registry.report(a, [[CH, null]]);
-    run();
-    expect(a.send).toHaveBeenCalledTimes(1);
-  });
-
-  it("delivers when the listener check throws", () => {
-    const a = renderer(1);
-    const scheduled: Array<() => void> = [];
-    const batcher = new PluginPushBatcher({
-      schedule: (flush) => scheduled.push(flush),
-      resolveScope: () => [a],
-      hasListener: () => {
-        throw new Error("broken");
-      },
+      resolveScope: () => [reportedNone, reportedPanel],
     });
     batcher.enqueue({
       pluginId: "acme.demo",
@@ -258,7 +191,8 @@ describe("PluginPushBatcher with listener reports", () => {
       bytes: 10,
     });
     scheduled.splice(0).forEach((f) => f());
-    expect(a.send).toHaveBeenCalledTimes(1);
+    expect(reportedNone.send).toHaveBeenCalledTimes(1);
+    expect(reportedPanel.send).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -282,6 +216,39 @@ describe("PluginPushListenerRegistry reconciliation", () => {
     }
   });
 
+  it("runs the periodic reconcile only while an active watcher exists", () => {
+    vi.useFakeTimers();
+    try {
+      const scopes = new Map<string | null, PluginPushListenerTarget[]>();
+      const registry = new PluginPushListenerRegistry((p) => scopes.get(p) ?? [], 2_000);
+      const stopPassive = registry.watch(null, CH, () => {}, { passive: true });
+      expect(registry.isReconciling()).toBe(false);
+      const stopActive = registry.watch(null, CH, () => {});
+      expect(registry.isReconciling()).toBe(true);
+      stopActive();
+      stopActive();
+      expect(registry.isReconciling()).toBe(false);
+      expect(registry.watcherCount()).toBe(1);
+      stopPassive();
+      expect(registry.watcherCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still notifies a passive watcher on reports and teardown", () => {
+    const { registry, scopes } = setup();
+    const r = renderer(1);
+    scopes.set(null, [r]);
+    registry.report(r, []);
+    const seen: boolean[] = [];
+    registry.watch(null, CH, (has) => seen.push(has), { passive: true });
+    registry.report(r, [[CH, null]]);
+    scopes.set(null, []);
+    r.destroy();
+    expect(seen).toEqual([true, false]);
+  });
+
   it("treats a crashed renderer as having no listeners until it reports again", () => {
     const scopes = new Map<string | null, PluginPushListenerTarget[]>();
     const registry = new PluginPushListenerRegistry((p) => scopes.get(p) ?? [], 0);
@@ -297,7 +264,7 @@ describe("PluginPushListenerRegistry reconciliation", () => {
     const seen: boolean[] = [];
     registry.watch(null, CH, (has) => seen.push(has));
     crash!();
-    expect(registry.shouldDeliver(1, CH, null)).toBe(false);
+    expect(registry.reportedListeners(1)).toEqual([]);
     registry.report(r, [[CH, null]]);
     expect(seen).toEqual([false, true]);
   });

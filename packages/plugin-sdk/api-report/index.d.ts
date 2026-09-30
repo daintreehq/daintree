@@ -4147,7 +4147,10 @@ interface PluginFsWalkEntry {
 /** What a {@link PluginFsApi.walk} call returns. */
 interface PluginFsWalkResult {
     readonly entries: PluginFsWalkEntry[];
-    /** True when the walk stopped at `limit` or the result budget with entries left unlisted. */
+    /**
+     * True when the walk stopped at `limit`, the result budget or one of the
+     * host's cost bounds with entries left unlisted.
+     */
     readonly truncated: boolean;
 }
 /** Options for {@link PluginFsApi.watch}. */
@@ -4346,7 +4349,14 @@ interface PluginFsApi {
      * the tree; the same tree always truncates the same way. Besides `limit`,
      * the host bounds a walk's cost — at most 200,000 directory entries
      * examined and 1,000,000 glob tests — and a walk that reaches either bound
-     * returns what it had with `truncated: true`.
+     * returns what it had with `truncated: true`. A directory is read only as
+     * far as the examine bound allows, so when one directory alone holds more
+     * entries than the bound has left, the entries kept from it are whichever
+     * the filesystem enumerated first — still sorted, but not necessarily the
+     * first by path, and not guaranteed to repeat.
+     *
+     * With `includeSize`, a size is omitted for a file whose directory no
+     * longer resolves to where the walk listed it when its size is read.
      *
      * With `respectGitignore` (the default), inside a git repository an entry
      * git ignores — and not tracked — is left out and not descended into,
@@ -5016,9 +5026,10 @@ interface PluginHostApi extends PluginActivationApi {
     /**
      * Whether any renderer this host pushes to may currently be subscribed to
      * `channel` — through `window.electron.plugin.on` / `onPanel` or the SDK
-     * hooks built on them. Use it to stop producing pushes nobody will receive:
-     * the host already drops a push for every renderer that reported no
-     * subscriber for it, but the work of computing the payload is the plugin's.
+     * hooks built on them. Use it to stop producing pushes nobody will receive.
+     * It is a hint for the producer only: the host delivers every push to every
+     * renderer in scope whatever this answers, because a renderer's report is
+     * always a moment behind its subscribers.
      *
      * Errs towards `true`: a renderer that has not reported its subscriptions
      * yet (one just created) counts as listening, and in a worker the first
@@ -5026,9 +5037,10 @@ interface PluginHostApi extends PluginActivationApi {
      * arrives a moment later. `false` once the plugin is unloaded. Synchronous
      * and cheap — read it on every produce.
      *
-     * A view that subscribes after a push was skipped did not miss anything it
-     * could have caught: the push would have reached no subscriber. A view must
-     * still pull its initial state when it mounts, as it always had to.
+     * A push you skip because this said `false` is gone for good, and a view
+     * can subscribe the moment after you read it. So only skip work a view can
+     * recover by pulling state when it mounts (as a synced collection's snapshot
+     * does), never a one-off event.
      *
      * Optional in the type so hand-written {@link PluginHostApi} fakes keep
      * compiling; Daintree's host, the worker host and `createMockHost` always
@@ -5042,6 +5054,11 @@ interface PluginHostApi extends PluginActivationApi {
      * {@link hasListeners}. Returns a disposer; every registration is also
      * removed when the plugin unloads. Not revoke-guarded — callable any time
      * after activation, like {@link postToPanel}.
+     *
+     * A live registration is an event subscription like `onDidChangeWorktrees`:
+     * while one exists, an idle worker is not disposed, since a disposed worker
+     * could not be called back. Reading {@link hasListeners} alone never holds
+     * the worker.
      */
     onDidChangeListeners?(channel: string, callback: (hasListeners: boolean) => void): () => void;
     /**

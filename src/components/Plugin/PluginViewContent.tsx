@@ -238,15 +238,14 @@ interface ViewLoadTiming {
 }
 
 /**
- * One mount attempt of a plugin view. `warmView` is set when the attempt can
- * render in the commit that mounts it; otherwise the view arrives through
- * `run`, which the content calls from an effect and which settles into plain
- * component state — never a Suspense retry, so nothing waits on React's reveal
- * throttle. `run` is memoized per attempt.
+ * One mount attempt of a plugin view. The view arrives through `run`, which the
+ * content calls from an effect and which settles into plain component state —
+ * never a Suspense retry, so nothing waits on React's reveal throttle. A warm
+ * attempt's `run` only waits on activation, so it shows within one IPC round
+ * trip. `run` is memoized per attempt.
  */
 interface ViewAttempt {
   timing: ViewLoadTiming;
-  warmView: ComponentType<PanelViewProps> | null;
   run: () => Promise<ComponentType<PanelViewProps>>;
 }
 
@@ -701,8 +700,8 @@ export function makePluginViewContent(
   };
 
   /**
-   * The view a warm attempt can render in the commit that mounts it, or null
-   * when this attempt has to load first. Warm means the module (or builtin
+   * The view a warm attempt already holds, or null when this attempt has to
+   * load first. Warm means the module (or builtin
    * component) is the one already loaded AND the backend that activation
    * reached is still the one running — after an idle dispose, a worker restart
    * or crash, or a reload that republished the kind, the attempt activates
@@ -719,29 +718,43 @@ export function makePluginViewContent(
   };
 
   /**
-   * Still activate a warm view, without holding its render on the reply: main
-   * answers at once for an activated plugin, and the call is what stamps the
-   * plugin's idle-dispose activity. A rejection still reaches the boundary, so a
-   * backend that refuses the view fails it the way a cold open would.
+   * A warm view still activates before it renders (#10523): the renderer's
+   * status can report the previous backend as ready for a moment after a
+   * restart or reload, and a view mounted then would run its mount effects
+   * against a plugin that has not activated. Main answers at once for an
+   * activated plugin, so this costs one IPC round trip, and the call is what
+   * stamps the plugin's idle-dispose activity. A rejection reaches the boundary
+   * the way a cold open's would.
    */
   const activateWarmView = async (
     view: ComponentType<PanelViewProps>,
-    builtin: boolean
+    builtin: boolean,
+    timing: ViewLoadTiming
   ): Promise<ComponentType<PanelViewProps>> => {
     if (!builtin) {
       const viewPath = recoveryComponentPath ?? componentPath;
       pluginDocumentRuntime.registerView(pluginId, viewPath);
       pluginViewMetrics.registerViewOrigin(pluginId, viewPath);
     }
-    const activateStart = performance.now();
-    try {
-      await window.electron?.plugin?.activateForView?.(kindId);
-    } catch (err) {
-      forgetActivation();
-      throw err;
-    }
-    endPhase("activate", activateStart);
-    markPluginView(PERF_MARKS.PLUGIN_VIEW_ACTIVATED, { pluginId, kindId });
+    await withLoadTimeout(
+      (async () => {
+        const activateStart = performance.now();
+        try {
+          await window.electron?.plugin?.activateForView?.(kindId);
+        } catch (err) {
+          forgetActivation();
+          throw err;
+        }
+        timing.activateMs = endPhase("activate", activateStart);
+        markPluginView(PERF_MARKS.PLUGIN_VIEW_ACTIVATED, { pluginId, kindId });
+      })(),
+      () =>
+        new Error(
+          `Plugin "${pluginId}" view activation timed out after ${PLUGIN_VIEW_IMPORT_TIMEOUT_MS}ms`
+        )
+    );
+    timing.loadMs = endPhase("view-load", timing.openedAt);
+    markPluginView(PERF_MARKS.PLUGIN_VIEW_IMPORTED, { pluginId, kindId });
     return view;
   };
 
@@ -763,17 +776,13 @@ export function makePluginViewContent(
     const warmView = warmViewFor(requestRecoveryPath, builtinComponent);
     let started: Promise<ComponentType<PanelViewProps>> | null = null;
     if (warmView) {
-      timing.loadMs = endPhase("view-load", timing.openedAt);
-      markPluginView(PERF_MARKS.PLUGIN_VIEW_IMPORTED, { pluginId, kindId });
       return {
         timing,
-        warmView,
-        run: () => (started ??= activateWarmView(warmView, builtinComponent !== null)),
+        run: () => (started ??= activateWarmView(warmView, builtinComponent !== null, timing)),
       };
     }
     return {
       timing,
-      warmView: null,
       run: () =>
         (started ??= builtinComponent
           ? loadBuiltinView(builtinComponent, timing)
@@ -1191,8 +1200,13 @@ export function makePluginViewContent(
         // attempt already swapped it.
         controllerRef.current?.abort();
         // Fresh controller for the retry so the new attempt's view sees an
-        // unaborted signal; the mirror effect propagates it to controllerRef.
-        setController(new AbortController());
+        // unaborted signal. The ref is assigned here rather than left to the
+        // mirror effect: a replacement that throws in its first render reaches
+        // `handleRenderError` before any passive effect runs, and that abort
+        // must land on this attempt's signal, not the one already aborted.
+        const next = new AbortController();
+        controllerRef.current = next;
+        setController(next);
         // Restore what the panel most recently persisted rather than the bag it
         // was opened with — recovery is not supposed to cost the user their
         // work. Absent for hosts with no panel record, which keep the mount
@@ -1553,9 +1567,7 @@ export function makePluginViewContent(
       let current = true;
       attempt.run().then(
         (view) => {
-          if (current && view !== attempt.warmView) {
-            setSettled({ attempt, failed: false, view });
-          }
+          if (current) setSettled({ attempt, failed: false, view });
         },
         (error: unknown) => {
           if (current) setSettled({ attempt, failed: true, error });
@@ -1568,7 +1580,7 @@ export function makePluginViewContent(
 
     const settledHere = settled !== null && settled.attempt === attempt ? settled : null;
     const loadFailure = settledHere?.failed ? settledHere : null;
-    const View = attempt.warmView ?? (settledHere && !settledHere.failed ? settledHere.view : null);
+    const View = settledHere && !settledHere.failed ? settledHere.view : null;
     // Nothing for the first 200 ms, then the skeleton, held for its floor once
     // it has shown (design-system loading gates). Outside Suspense, so the gate
     // and the floor are the only things standing between a load and its view.

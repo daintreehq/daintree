@@ -127,9 +127,13 @@ export type PluginHostNotifyMethod =
  * own panel transitions (#11301) — the host replays each live panel's current
  * phase at subscribe time. `system-wake` streams machine resume pulses
  * (#12175); nothing is replayed for it, since a pulse has no resting state.
- * `push-listeners` streams whether any renderer in scope listens on the push
- * channel named by `key` — a boolean, the current value first, then each
- * change — backing the worker's synchronous `host.hasListeners`.
+ * `push-listeners-observe` streams whether any renderer in scope listens on
+ * the push channel named by `key` — a boolean, the current value first, then
+ * each change — backing the worker's synchronous `host.hasListeners`. It is an
+ * internal observation: it does not count as a plugin event subscription, so it
+ * never holds the worker against idle disposal. `push-listeners` streams the
+ * same values for a plugin's own `host.onDidChangeListeners` and is a real event
+ * subscription, holding the worker like any other.
  */
 export type PluginWorkerSubscriptionKind =
   | "active-worktree"
@@ -140,6 +144,7 @@ export type PluginWorkerSubscriptionKind =
   | "panel-lifecycle"
   | "system-wake"
   | "push-listeners"
+  | "push-listeners-observe"
   | "process-exit"
   | "process-crash"
   | "process-data";
