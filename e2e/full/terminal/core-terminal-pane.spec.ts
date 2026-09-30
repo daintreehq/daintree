@@ -1,18 +1,23 @@
 import { test, expect, type ElectronApplication, type Locator, type Page } from "@playwright/test";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http";
+import { tmpdir } from "os";
+import path from "path";
 import { fileURLToPath } from "url";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import {
   getTerminalDimensions,
+  getTerminalSelection,
   getTerminalText,
+  getTerminalViewport,
   runTerminalCommand,
-  selectAllTerminalText,
+  typeTerminalCommand,
   openTerminalContextMenu,
   clickTerminalContextMenuItem,
   triggerTerminalLink,
+  waitForTerminalReady,
   waitForTerminalText,
   waitForTerminalTextIgnoringLineBreaks,
 } from "../../helpers/terminal";
@@ -166,6 +171,100 @@ async function openFindViaEvent(page: Page, panel: Locator): Promise<void> {
 
 const FOUND_STATUS = /^(?:\d+ of \d+\+?|\d+\+? matches|Found)$/;
 
+/**
+ * A raw stdin recorder: enables bracketed paste, puts the TTY in raw mode so no
+ * line discipline or readline rewrites what arrives, and appends every byte to
+ * the file named by its first argument. A lone Enter ends it.
+ */
+const STDIN_RECORDER_SOURCE = `const fs = require("fs");
+const out = process.argv[2];
+fs.writeFileSync(out, "");
+process.stdin.setRawMode(true);
+process.stdin.on("data", (chunk) => {
+  if (chunk.length === 1 && chunk[0] === 0x0d) {
+    process.stdout.write("\\x1b[?2004l");
+    process.stdin.setRawMode(false);
+    // Exit from the write callback: TTY writes are asynchronous on Windows.
+    process.stdout.write("RECORDER_DONE\\n", () => process.exit(0));
+    process.stdin.pause();
+    return;
+  }
+  fs.appendFileSync(out, chunk);
+});
+process.stdout.write("\\x1b[?2004h");
+process.stdout.write("RECORDER_READY\\n");
+`;
+
+const BRACKETED_PASTE_START = "\x1b[200~";
+const BRACKETED_PASTE_END = "\x1b[201~";
+
+async function focusXtermInput(panel: Locator): Promise<void> {
+  const input = panel.locator(".xterm-helper-textarea");
+  await expect
+    .poll(
+      async () => {
+        await input.focus().catch(() => undefined);
+        return input.evaluate((el) => el === document.activeElement).catch(() => false);
+      },
+      { timeout: T_SHORT, message: "xterm input should hold keyboard focus" }
+    )
+    .toBe(true);
+}
+
+/**
+ * Right-click the pane to open its menu. Unlike openTerminalContextMenu this
+ * never presses Escape first, which would reach a raw-mode program as a byte.
+ */
+async function rightClickPane(page: Page, panel: Locator): Promise<void> {
+  const screen = panel.locator(SEL.terminal.xtermRows);
+  const box = await screen.boundingBox();
+  if (!box) throw new Error("terminal screen has no bounding box");
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: "right" });
+  await expect(page.locator(SEL.contextMenu.content)).toBeVisible({ timeout: T_SHORT });
+}
+
+async function clickMenuItem(page: Page, label: string): Promise<void> {
+  await menuItem(page, label).first().click();
+  await expect(page.locator(SEL.contextMenu.content)).not.toBeVisible({ timeout: T_SHORT });
+}
+
+/** Page coordinates of the visible row that reads exactly `text`, a few cells in. */
+async function visibleRowPoint(
+  page: Page,
+  panel: Locator,
+  text: string
+): Promise<{ x: number; y: number }> {
+  const panelId = await panelIdOf(panel);
+  const viewport = await getTerminalViewport(page, panelId);
+  const dims = await getTerminalDimensions(panel);
+  const box = await panel.locator(SEL.terminal.xtermRows).boundingBox();
+  if (!viewport || !dims || !box) throw new Error("terminal geometry unavailable");
+  const row = viewport.lines.findIndex((line) => line.trim() === text);
+  expect(row, `"${text}" should be a visible row in:\n${viewport.text}`).toBeGreaterThanOrEqual(0);
+  return {
+    x: box.x + (box.width / dims.cols) * 2.5,
+    y: box.y + (box.height / dims.rows) * (row + 0.5),
+  };
+}
+
+/**
+ * Negative dwell: `read()` must keep returning `expected` for `ms`. The check
+ * only passes once the window has elapsed with the value unchanged, and the
+ * recorded file is append-only, so a byte that lands mid-window fails it.
+ */
+async function expectUnchangedFor(
+  read: () => string,
+  expected: string,
+  ms: number,
+  message: string
+): Promise<void> {
+  const start = Date.now();
+  await expect(async () => {
+    expect(JSON.stringify(read()), message).toBe(JSON.stringify(expected));
+    expect(Date.now() - start).toBeGreaterThanOrEqual(ms);
+  }).toPass({ timeout: ms + T_SHORT, intervals: [100] });
+}
+
 test.describe("Core: Terminal pane", () => {
   test.beforeAll(async () => {
     server = createServer((_req: IncomingMessage, res: ServerResponse) => {
@@ -237,28 +336,6 @@ test.describe("Core: Terminal pane", () => {
       await window.keyboard.press("Escape");
     });
 
-    test("Copy with a selection puts the selected text on the clipboard", async () => {
-      const { app, window } = ctx;
-      await app.evaluate(({ clipboard }) => clipboard.clear());
-      await expect.poll(() => readClipboardText(app), { timeout: T_SHORT }).toBe("");
-
-      await selectAllTerminalText(panel);
-      await openTerminalContextMenu(panel, { preserveSelection: true });
-
-      const copyItem = menuItem(window, "Copy");
-      await expect(copyItem).toBeVisible({ timeout: T_SHORT });
-      await expect(copyItem).not.toHaveAttribute("data-disabled", { timeout: T_SHORT });
-
-      await copyItem.click();
-      await expect(window.locator(SEL.contextMenu.content)).not.toBeVisible({ timeout: T_SHORT });
-      await expect
-        .poll(() => readClipboardText(app), {
-          timeout: T_MEDIUM,
-          message: "Copy should put the terminal selection on the system clipboard",
-        })
-        .toContain("CONTEXT_MENU_TEST");
-    });
-
     test("Rename terminal opens the title editor and renames the pane", async () => {
       const { window } = ctx;
       const panelId = await panelIdOf(panel);
@@ -304,39 +381,269 @@ test.describe("Core: Terminal pane", () => {
         timeout: T_SHORT,
       });
     });
+  });
 
-    test("Lock input keeps typed keys out of the PTY until unlocked", async () => {
+  // ── Typed input ──────────────────────────────────────────
+
+  test.describe("Typed input", () => {
+    let scratchDir: string;
+    let recorderScript: string;
+    let pagerFile: string;
+
+    test.beforeAll(() => {
+      scratchDir = mkdtempSync(path.join(tmpdir(), "daintree-typed-input-"));
+      recorderScript = path.join(scratchDir, "stdin-recorder.cjs");
+      writeFileSync(recorderScript, STDIN_RECORDER_SOURCE);
+      pagerFile = path.join(scratchDir, "pager-input.txt");
+      writeFileSync(
+        pagerFile,
+        Array.from({ length: 300 }, (_, i) => `LESS_LINE_${String(i + 1).padStart(3, "0")}`).join(
+          "\n"
+        ) + "\n"
+      );
+    });
+
+    test.afterAll(() => {
+      if (scratchDir) rmSync(scratchDir, { recursive: true, force: true });
+    });
+
+    test.beforeEach(async () => {
+      await resetPanes(ctx.window);
+    });
+
+    test("typed keys, copy, bracketed paste, input lock, restart and clear cross the PTY", async () => {
+      const { app, window } = ctx;
+      const mac = process.platform === "darwin";
+      const nonce = Date.now().toString(36);
+      const panel = await spawnTerminalAndVerify(window);
+      const panelId = await panelIdOf(panel);
+      const typedMarker = `TYPED_${nonce}`;
+
+      await test.step("a typed command runs in the shell", async () => {
+        // Assembled at runtime so the echoed command line cannot satisfy it.
+        await typeTerminalCommand(window, panelId, `node -e "console.log('TYPED_' + '${nonce}')"`, {
+          expectOutput: typedMarker,
+          timeout: T_LONG,
+        });
+      });
+
+      await test.step("selecting the output row and copying puts exactly it on the clipboard", async () => {
+        await app.evaluate(({ clipboard }) => clipboard.clear());
+        await expect.poll(() => readClipboardText(app), { timeout: T_SHORT }).toBe("");
+
+        const point = await visibleRowPoint(window, panel, typedMarker);
+        await window.mouse.click(point.x, point.y, { clickCount: 3 });
+        await expect
+          .poll(() => getTerminalSelection(panel), {
+            timeout: T_SHORT,
+            message: "triple-click should select the output row",
+          })
+          .toBe(typedMarker);
+
+        if (!mac) {
+          await focusXtermInput(panel);
+          await window.keyboard.press("Control+Shift+C");
+          await expect
+            .poll(() => readClipboardText(app), {
+              timeout: T_MEDIUM,
+              message: "Ctrl+Shift+C should copy the selection to the system clipboard",
+            })
+            .toBe(typedMarker);
+          await app.evaluate(({ clipboard }) => clipboard.clear());
+          await expect.poll(() => readClipboardText(app), { timeout: T_SHORT }).toBe("");
+        }
+
+        await window.mouse.click(point.x, point.y, { button: "right" });
+        const copyItem = menuItem(window, "Copy").first();
+        await expect(copyItem).toBeVisible({ timeout: T_SHORT });
+        await expect(copyItem).not.toHaveAttribute("data-disabled", { timeout: T_SHORT });
+        await clickMenuItem(window, "Copy");
+        await expect
+          .poll(() => readClipboardText(app), {
+            timeout: T_MEDIUM,
+            message: "context-menu Copy should put the selected row on the system clipboard",
+          })
+          .toBe(typedMarker);
+      });
+
+      const recordPath = path.join(scratchDir, `stdin-${nonce}.bin`);
+      const readRecorded = (): string =>
+        existsSync(recordPath) ? readFileSync(recordPath, "utf8") : "";
+      const pasteText = `pasted ${nonce}`;
+      const wrapped = `${BRACKETED_PASTE_START}${pasteText}${BRACKETED_PASTE_END}`;
+      // Menu Paste everywhere, plus Ctrl+Shift+V off macOS.
+      const pastedBytes = mac ? wrapped : wrapped + wrapped;
+
+      await test.step("paste into a program that enabled bracketed paste arrives wrapped", async () => {
+        // Launching the recorder is setup; what it receives is the subject.
+        await runTerminalCommand(window, panel, `node "${recorderScript}" "${recordPath}"`);
+        await waitForTerminalText(panel, "RECORDER_READY", T_LONG);
+        await app.evaluate(({ clipboard }, text) => clipboard.writeText(text), pasteText);
+
+        await rightClickPane(window, panel);
+        await clickMenuItem(window, "Paste");
+        await expect
+          .poll(() => JSON.stringify(readRecorded()), {
+            timeout: T_MEDIUM,
+            message: "context-menu Paste should deliver the clipboard inside paste brackets",
+          })
+          .toBe(JSON.stringify(wrapped));
+
+        if (!mac) {
+          await focusXtermInput(panel);
+          await window.keyboard.press("Control+Shift+V");
+          await expect
+            .poll(() => JSON.stringify(readRecorded()), {
+              timeout: T_MEDIUM,
+              message: "Ctrl+Shift+V should deliver the clipboard inside paste brackets",
+            })
+            .toBe(JSON.stringify(wrapped + wrapped));
+        }
+      });
+
+      await test.step("locked input keeps keys and pastes out of the PTY until unlocked", async () => {
+        const beforeLock = pastedBytes;
+        expect(JSON.stringify(readRecorded()), "no late paste bytes before locking").toBe(
+          JSON.stringify(beforeLock)
+        );
+
+        await rightClickPane(window, panel);
+        await clickMenuItem(window, "Lock input");
+        await rightClickPane(window, panel);
+        await expect(menuItem(window, "Unlock input")).toBeVisible({ timeout: T_SHORT });
+        await clickMenuItem(window, "Paste");
+
+        await focusXtermInput(panel);
+        await window.keyboard.type("locked", { delay: 15 });
+        if (!mac) await window.keyboard.press("Control+Shift+V");
+        await expectUnchangedFor(
+          readRecorded,
+          beforeLock,
+          1_000,
+          "nothing typed or pasted while input is locked may reach the PTY"
+        );
+
+        await rightClickPane(window, panel);
+        await clickMenuItem(window, "Unlock input");
+        await typeTerminalCommand(window, panelId, "open", { submit: false });
+        // Keys reach the PTY in order, so exact equality also proves none of the
+        // locked-phase input was queued and released by the unlock.
+        await expect
+          .poll(() => JSON.stringify(readRecorded()), {
+            timeout: T_MEDIUM,
+            message: "typing should reach the PTY again once input is unlocked",
+          })
+          .toBe(JSON.stringify(`${beforeLock}open`));
+
+        await window.keyboard.press("Enter");
+        await waitForTerminalText(panel, "RECORDER_DONE", T_LONG);
+        expect(JSON.stringify(readRecorded()), "the finished recording").toBe(
+          JSON.stringify(`${beforeLock}open`)
+        );
+      });
+
+      await test.step("restart from the menu replaces the shell and starts a fresh buffer", async () => {
+        const pidBefore = await getPtyPid(window, panel);
+        await rightClickPane(window, panel);
+        await clickMenuItem(window, "Restart terminal");
+        await expect(window.getByRole("alertdialog")).toHaveCount(0);
+
+        let pidAfter = 0;
+        await expect
+          .poll(
+            async () => {
+              pidAfter = await getPtyPid(window, panel).catch(() => 0);
+              return pidAfter > 0 && pidAfter !== pidBefore;
+            },
+            { timeout: T_LONG, message: "Restart should spawn a replacement shell" }
+          )
+          .toBe(true);
+        expect(isPidAlive(pidAfter), `replacement shell ${pidAfter} should be running`).toBe(true);
+        await expect
+          .poll(() => isPidAlive(pidBefore), {
+            timeout: T_LONG,
+            message: `old shell ${pidBefore} should be gone`,
+          })
+          .toBe(false);
+        // The restarted pane has a fresh buffer, so any text is the new shell's
+        // prompt: typed input is sent once and must not race shell startup.
+        await waitForTerminalReady(window, panel, T_LONG);
+
+        await typeTerminalCommand(
+          window,
+          panelId,
+          `node -e "console.log('RESTARTED_' + '${nonce}')"`,
+          { expectOutput: `RESTARTED_${nonce}`, timeout: T_LONG }
+        );
+        const buffer = await getTerminalText(panel);
+        expect(buffer, "the restarted pane should not carry the old buffer").not.toContain(
+          typedMarker
+        );
+        expect(buffer).not.toContain("RECORDER_DONE");
+      });
+
+      await test.step("typed clear empties the viewport", async () => {
+        const clearMarker = `BEFORE_CLEAR_${nonce}`;
+        await typeTerminalCommand(
+          window,
+          panelId,
+          `node -e "console.log('BEFORE_CLEAR_' + '${nonce}')"`,
+          { expectOutput: clearMarker, timeout: T_LONG }
+        );
+        const viewportState = async (): Promise<string> => {
+          const viewport = await getTerminalViewport(window, panelId);
+          if (!viewport) return "no viewport";
+          return viewport.text.includes(clearMarker) ? `visible:\n${viewport.text}` : "cleared";
+        };
+        await expect.poll(viewportState, { timeout: T_SHORT }).toMatch(/^visible:/);
+
+        await typeTerminalCommand(window, panelId, "clear");
+        await expect
+          .poll(viewportState, {
+            timeout: T_MEDIUM,
+            message: "clear should leave no earlier output on screen",
+          })
+          .toBe("cleared");
+      });
+    });
+
+    test("less runs on the alternate screen and quitting restores the shell's screen", async () => {
+      if (process.platform === "win32") {
+        test.info().annotations.push({
+          type: "platform-skip",
+          description: "less is a POSIX pager; Windows shells have no alternate-screen pager",
+        });
+        test.skip(true, "less is a POSIX pager; Windows shells have no alternate-screen pager");
+      }
       const { window } = ctx;
-      const menu = window.locator(SEL.contextMenu.content);
+      const nonce = Date.now().toString(36);
+      const panel = await spawnTerminalAndVerify(window);
+      const panelId = await panelIdOf(panel);
+      const primaryMarker = `PRIMARY_${nonce}`;
+      const viewportText = async (): Promise<string> =>
+        (await getTerminalViewport(window, panelId))?.text ?? "no viewport";
 
-      await openTerminalContextMenu(panel);
-      await clickTerminalContextMenuItem(panel, "Lock input");
-      await expect(menu).not.toBeVisible({ timeout: T_SHORT });
+      await typeTerminalCommand(window, panelId, `node -e "console.log('PRIMARY_' + '${nonce}')"`, {
+        expectOutput: primaryMarker,
+        timeout: T_LONG,
+      });
+      await expect.poll(viewportText, { timeout: T_SHORT }).toContain(primaryMarker);
 
-      await openTerminalContextMenu(panel);
-      await expect(menuItem(window, "Unlock input")).toBeVisible({ timeout: T_SHORT });
-      await window.keyboard.press("Escape");
-      await expect(menu).not.toBeVisible({ timeout: T_SHORT });
+      // An inherited LESS=-X would keep less off the alternate screen.
+      await typeTerminalCommand(window, panelId, `LESS= less "${pagerFile}"`);
+      await expect
+        .poll(viewportText, { timeout: T_LONG, message: "less should draw the file's first page" })
+        .toContain("LESS_LINE_001");
+      expect(await viewportText()).not.toContain(primaryMarker);
 
-      await focusXterm(window, panel);
-      await window.keyboard.type("echo LOCKMARK_BLOCKED");
-      await window.keyboard.press("Enter");
-
-      await openTerminalContextMenu(panel);
-      await clickTerminalContextMenuItem(panel, "Unlock input");
-      await expect(menu).not.toBeVisible({ timeout: T_SHORT });
-      await openTerminalContextMenu(panel);
-      await expect(menuItem(window, "Lock input")).toBeVisible({ timeout: T_SHORT });
-      await window.keyboard.press("Escape");
-      await expect(menu).not.toBeVisible({ timeout: T_SHORT });
-
-      // Keys reach the PTY in order, so once the post-unlock keys have echoed
-      // back, anything typed while locked would already be in the buffer too.
-      await focusXterm(window, panel);
-      await window.keyboard.type("echo INPUT_RESTORED");
-      await window.keyboard.press("Enter");
-      await waitForTerminalText(panel, "INPUT_RESTORED", T_LONG);
-      expect(await getTerminalText(panel)).not.toContain("LOCKMARK_BLOCKED");
+      await window.keyboard.press("q");
+      await expect
+        .poll(viewportText, {
+          timeout: T_MEDIUM,
+          message: "quitting less should bring back the shell's screen",
+        })
+        .toContain(primaryMarker);
+      expect(await viewportText()).not.toContain("LESS_LINE_001");
     });
   });
 
@@ -801,10 +1108,21 @@ test.describe("Core: Terminal pane", () => {
           .toBe(true);
         expect(isPidAlive(pidAfter), `replacement shell ${pidAfter} should be running`).toBe(true);
         await expect.poll(() => isPidAlive(pidBefore), { timeout: T_LONG }).toBe(false);
+        // Typed input is sent once; wait for the new shell to draw before typing.
+        await waitForTerminalReady(window, panel, T_LONG);
 
-        // The echoed command line cannot satisfy this; only the new shell running it can.
-        await runTerminalCommand(window, panel, "echo RESTARTED_$((20+22))");
-        await waitForTerminalText(panel, "RESTARTED_42", T_LONG);
+        // Typed, because restart locks input while it respawns: the replacement
+        // shell has to take real keystrokes. The echoed command line cannot
+        // satisfy the marker; only the new shell running it can.
+        await typeTerminalCommand(
+          window,
+          activeId!,
+          "node -e \"console.log('RESTARTED_' + (20 + 22))\"",
+          {
+            expectOutput: "RESTARTED_42",
+            timeout: T_LONG,
+          }
+        );
       });
 
       await test.step("close all tabs leaves empty grid", async () => {
