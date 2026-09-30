@@ -408,6 +408,7 @@ describe("TerminalProcess handback requests (#12488)", () => {
     await vi.advanceTimersByTimeAsync(300);
     expect(seen).toEqual(["Voted A"]);
     expect(terminal.getInfo().handbackTracker?.deliveredRequests()).toHaveLength(1);
+    const firstObservedAt = terminal.getInfo().lastHandback?.observedAt;
 
     // The same screen sampled again reports nothing new.
     ptyOnDataCallback!("\r\n");
@@ -418,6 +419,8 @@ describe("TerminalProcess handback requests (#12488)", () => {
     await vi.advanceTimersByTimeAsync(300);
     expect(seen).toEqual(["Voted A", "Voted A, runner-up C."]);
     expect(terminal.getInfo().lastHandback?.message).toBe("Voted A, runner-up C.");
+    // Input typed between the two captures must still read as after the handback (#13128).
+    expect(terminal.getInfo().lastHandback?.observedAt).toBe(firstObservedAt);
 
     // Out of `working`, the same capture retires the code without reporting again.
     terminal.getInfo().agentState = "waiting";

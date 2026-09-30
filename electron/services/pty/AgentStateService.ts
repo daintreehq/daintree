@@ -16,7 +16,12 @@ import type { AgentActivityObservationResult } from "./AgentActivityTemperature.
 import type { TerminalInfo } from "./types.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import { checkResultsEqual, detectCheckResult } from "./CheckResultDetector.js";
-import { findHandback, rawHandbackText, type HandbackHit } from "./HandbackDetector.js";
+import {
+  findHandback,
+  keepFirstObservation,
+  rawHandbackText,
+  type HandbackHit,
+} from "./HandbackDetector.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 
@@ -511,21 +516,8 @@ export class AgentStateService {
       delivered,
       timestamp
     );
-    // The capture already seen mid-turn keeps its first observation: input
-    // typed since then must still read as after the handback (#13128). A
-    // later submission clears `lastHandback`, so one present answers this
-    // same request.
-    const previous = terminal.lastHandback;
-    if (
-      hit !== undefined &&
-      previous !== undefined &&
-      previous.message === hit.handback.message &&
-      previous.truncated === hit.handback.truncated &&
-      previous.submissionToken === hit.handback.submissionToken
-    ) {
-      return { ...hit, handback: previous };
-    }
-    return hit;
+    if (hit === undefined) return undefined;
+    return { ...hit, handback: keepFirstObservation(terminal.lastHandback, hit.handback) };
   }
 
   /**

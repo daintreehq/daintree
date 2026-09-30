@@ -126,7 +126,7 @@ describe("AgentStateService handback detection (#12488)", () => {
     expect(terminal.handbackTracker?.hasRequests()).toBe(false);
   });
 
-  it("restamps a capture that changed since it was seen mid-turn", () => {
+  it("keeps the first observation when the capture changed since mid-turn", () => {
     const service = new AgentStateService();
     const early = { message: "fixed the race", observedAt: 1, truncated: false };
     const terminal = askedTerminal([MARKER], {
@@ -138,7 +138,7 @@ describe("AgentStateService handback detection (#12488)", () => {
 
     expect(terminal.lastHandback).toEqual({
       message: "fixed the race in the retry loop",
-      observedAt: terminal.lastStateChange,
+      observedAt: 1,
       truncated: false,
     });
   });

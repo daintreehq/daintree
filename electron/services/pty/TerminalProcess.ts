@@ -38,7 +38,7 @@ import type { TerminalSubmissionRecord } from "../../../shared/types/terminalSub
 import { AgentOutputForwarder } from "./AgentOutputForwarder.js";
 import { TerminalInputController } from "./TerminalInputController.js";
 import { HandbackTracker } from "./HandbackTracker.js";
-import { findHandback, rawHandbackText } from "./HandbackDetector.js";
+import { findHandback, keepFirstObservation, rawHandbackText } from "./HandbackDetector.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
@@ -2170,11 +2170,12 @@ export class TerminalProcess {
     // reported, or the code would stay open until the next submission.
     if (t.agentState !== "working") tracker.retire(hit.code);
     if (!changed) return;
-    t.lastHandback = hit.handback;
+    const handback = keepFirstObservation(t.lastHandback, hit.handback);
+    t.lastHandback = handback;
     t.lastHandbackUnpublished = true;
     events.emit("agent:handback-observed", {
       terminalId: this.id,
-      handback: hit.handback,
+      handback,
       code: hit.code,
       timestamp: now,
     });

@@ -212,6 +212,22 @@ export interface HandbackHit {
 }
 
 /**
+ * The handback to record for a fresh capture, given the one already held.
+ * A later submission clears the held one, so one still present answers the
+ * same request: the capture keeps its first observation, and input typed
+ * since then still reads as after the handback (#13128). An unchanged capture
+ * keeps the held object itself.
+ */
+export function keepFirstObservation(
+  previous: TerminalHandback | undefined,
+  next: TerminalHandback
+): TerminalHandback {
+  if (previous === undefined || previous.submissionToken !== next.submissionToken) return next;
+  if (previous.message === next.message && previous.truncated === next.truncated) return previous;
+  return { ...next, observedAt: Math.min(previous.observedAt, next.observedAt) };
+}
+
+/**
  * Look for a marker for any of `requests` in the given texts, in order.
  *
  * Callers pass the rendered screen first: it is what the terminal actually
