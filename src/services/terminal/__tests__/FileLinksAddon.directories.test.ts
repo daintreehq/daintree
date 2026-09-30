@@ -541,6 +541,30 @@ describe("FileLinksAddon paths containing spaces", () => {
     }
   });
 
+  it("keeps a confirmed sibling when another probe stalls to the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const home = nextHome();
+      vi.mocked(systemClient.checkDirectory).mockImplementation((dir) =>
+        dir === `${home}/a b` ? Promise.resolve(true) : new Promise(() => {})
+      );
+      const callback = vi.fn();
+
+      new FileLinksAddon(flat([`${home}/a b/c.md ${home}/d e/f.md`]), () => "/repo").provideLinks(
+        1,
+        callback
+      );
+      await vi.advanceTimersByTimeAsync(1_600);
+
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(texts(callback.mock.calls[0]![0]).sort()).toEqual(
+        [`${home}/a b/c.md`, "e/f.md"].sort()
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("drops the reply when the row is rewritten mid-probe", async () => {
     const home = nextHome();
     const rows = [`${home}/a b/c.md`];

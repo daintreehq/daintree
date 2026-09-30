@@ -409,9 +409,14 @@ describe("findSpacedFilePathCandidates", () => {
 
   it("stops growing after a word that ends like a whole file", () => {
     expect(findSpacedFilePathCandidates("Error at /a/b.ts in foo/bar.ts")).toEqual([]);
+    expect(findSpacedFilePathCandidates("Error at /a/b.ts. See foo/bar.ts")).toEqual([]);
     expect(findSpacedFilePathCandidates("/a b/c.md and d/e.md").map((c) => c.path)).toEqual([
       "/a b/c.md",
     ]);
+  });
+
+  it("ends before sentence punctuation", () => {
+    expect(findSpacedFilePathCandidates("/a b/c.md. See details")[0]?.path).toBe("/a b/c.md");
   });
 
   it("keeps a multi-dot filename whole", () => {

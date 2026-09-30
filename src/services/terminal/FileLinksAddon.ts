@@ -680,9 +680,7 @@ export class FileLinksAddon implements ILinkProvider {
             () => {}
           )
         : undefined,
-      this._validateSpacedPaths(pending).then((spaced) => {
-        verdicts.spaced = spaced;
-      }),
+      this._validateSpacedPaths(pending, verdicts.spaced),
     ]);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<void>((resolve) => {
@@ -958,18 +956,25 @@ export class FileLinksAddon implements ILinkProvider {
    * worktree-scoped stat op can't see it. Each probe fails on its own — an
    * error just leaves that path unconfirmed.
    */
-  private async _validateSpacedPaths(pending: PendingSpacedPath[]): Promise<boolean[]> {
-    if (pending.length === 0) return [];
+  private async _validateSpacedPaths(
+    pending: PendingSpacedPath[],
+    confirmed: boolean[]
+  ): Promise<void> {
+    // Verdicts land in `confirmed` the moment each is known, rather than all
+    // at once: a probe that stalls to the deadline must not hide the siblings
+    // that already answered.
+    const settle = (dir: string, exists: boolean): void => {
+      pending.forEach(({ candidate }, index) => {
+        if (candidate.probeDir === dir) confirmed[index] = exists;
+      });
+    };
 
-    // Snapshot fresh verdicts before awaiting: a probe landing in a full cache
-    // clears it, and must not take this request's cached answers with it.
-    const known = new Map<string, boolean>();
     const toProbe = new Set<string>();
     for (const { candidate } of pending) {
       const dir = candidate.probeDir!;
       const cached = spacedDirCache.get(dir);
       if (cached !== undefined && Date.now() - cached.at < DIR_KIND_CACHE_TTL_MS) {
-        known.set(dir, cached.exists);
+        settle(dir, cached.exists);
       } else {
         toProbe.add(dir);
       }
@@ -979,7 +984,7 @@ export class FileLinksAddon implements ILinkProvider {
       [...toProbe].slice(0, MAX_SPACED_PROBES).map(async (dir) => {
         try {
           const exists = (await systemClient.checkDirectory(dir)) === true;
-          known.set(dir, exists);
+          settle(dir, exists);
           if (spacedDirCache.size >= DIR_KIND_CACHE_CAP) spacedDirCache.clear();
           spacedDirCache.set(dir, { exists, at: Date.now() });
         } catch {
@@ -987,8 +992,6 @@ export class FileLinksAddon implements ILinkProvider {
         }
       })
     );
-
-    return pending.map(({ candidate }) => known.get(candidate.probeDir!) === true);
   }
 
   /**

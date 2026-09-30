@@ -48,7 +48,8 @@ const SPACED_ANCHOR_REGEX = /(?:^|[\s(])((?:\/|[a-zA-Z]:[\\/])[\w./\\-]*)/g;
 const SPACED_WORD_REGEX = /[\w./\\-]+(?::\d+(?::\d+)?)?/y;
 const SPACED_TAIL_REGEX = /^[\w./\\-]*[\\/][\w./\\-]*\.\w+(?::\d+(?::\d+)?)?/;
 const ABSOLUTE_WORD = /^(?:\/|[a-zA-Z]:[\\/])/;
-const COMPLETE_FILE_WORD = /\.\w+(?::\d+(?::\d+)?)?$/;
+// Sentence punctuation after the name still ends it: `/a/b.ts. See foo/x.ts`.
+const COMPLETE_FILE_WORD = /\.\w+(?::\d+(?::\d+)?)?\.?$/;
 const MAX_SPACED_WORDS = 8;
 
 function stripLocationSuffix(path: string): string {
