@@ -247,13 +247,18 @@ What the no-build path costs, and what it doesn't: the worker cannot import npm 
 | --- | --- |
 | A button, an icon button, a menu | `Button` (no `variant` is the accent primary: one per region; `secondary`, `outline`, `ghost`, `subtle` for the rest), `IconButton`, `DropdownMenu` |
 | A form | `Input` (including `number`, `date`, `time`), `Textarea`, `Select`, `Checkbox`, `Switch`, `SegmentedControl`, `SearchField`, wrapped in `FormField`; `FormFieldGroup` for one label over a set of controls |
-| A list or table of any length | `DataTable`, `VirtualList` with `ListRow`, `LogView` for output |
+| A list or table of any length | `DataTable`, `VirtualList` with `ListRow`, `LogView` for output, `HighlightedText` for the matches in a filtered row |
+| A filter bar | `FilterChip` (toggles, or removable "Status: Open" chips) beside a `SearchField` |
+| An activity feed, audit log or comment thread | `Timeline` (`renderContent` for a comment body in `Markdown`) |
 | A file tree | `FileTree` (takes `host.fs.walk` entries as they come) |
 | A headline number, a trend | `StatCard`, `Sparkline` |
+| Usage against a limit | `Meter` (with `thresholds`), not `ProgressBar` |
+| Lines added and removed | `DiffStat` |
 | Pane chrome | `PaneHeader`, `Toolbar` with `ToolbarButton`, `Tabs` |
 | Loading, empty, error | `PaneState` for the whole pane, `EmptyState`, `Callout` (`severity="error"` with a Retry `action` is the error banner), `Skeleton`, `Spinner`, `ProgressBar` |
 | A status chip | `Badge` |
 | A confirm or a modal | `ConfirmDialog`, `Dialog` |
+| People on something | `Avatar`, `AvatarGroup` for several |
 | An icon | `Icon` by name (`git-branch`, `folder-open`, `alert-triangle`, `worktree`, …) |
 | Rendered Markdown | `Markdown` |
 | Relative times, sizes, durations | `formatTimeAgo`, `formatBytes`, `formatDuration`, `formatCount` |

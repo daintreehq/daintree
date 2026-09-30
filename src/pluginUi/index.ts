@@ -5,6 +5,7 @@
 // statically; the host components load through `fromKit`.
 import { isValidElement, type ComponentType, type ReactNode } from "react";
 import type {
+  PluginAvatarGroupProps,
   PluginAvatarProps,
   PluginBadgeProps,
   PluginButtonProps,
@@ -14,12 +15,15 @@ import type {
   PluginCopyButtonProps,
   PluginDataTableProps,
   PluginDialogProps,
+  PluginDiffStatProps,
   PluginDismissButtonProps,
   PluginDropdownMenuProps,
   PluginEmptyStateProps,
   PluginFileTreeProps,
+  PluginFilterChipProps,
   PluginFormFieldGroupProps,
   PluginFormFieldProps,
+  PluginHighlightedTextProps,
   PluginIconButtonProps,
   PluginIconProps,
   PluginInputProps,
@@ -27,6 +31,7 @@ import type {
   PluginKbdProps,
   PluginListRowProps,
   PluginLogViewProps,
+  PluginMeterProps,
   PluginPaneHeaderProps,
   PluginPaneStateProps,
   PluginPopoverProps,
@@ -52,6 +57,8 @@ import type {
   PluginSwitchProps,
   PluginTabsProps,
   PluginTextareaProps,
+  PluginTimelineItem,
+  PluginTimelineProps,
   PluginToolbarButtonProps,
   PluginToolbarProps,
   PluginTooltipProps,
@@ -260,6 +267,29 @@ export const FormFieldGroup: ComponentType<PluginFormFieldGroupProps> = fromKit(
   (kit) => kit.FormFieldGroup
 );
 
+// Filter chips, highlighted matches, diff stats, avatar groups, meters and timelines.
+
+export const FilterChip: ComponentType<PluginFilterChipProps> = fromKit(
+  "FilterChip",
+  (kit) => kit.FilterChip
+);
+export const HighlightedText: ComponentType<PluginHighlightedTextProps> = fromKit(
+  "HighlightedText",
+  (kit) => kit.HighlightedText
+);
+export const DiffStat: ComponentType<PluginDiffStatProps> = fromKit(
+  "DiffStat",
+  (kit) => kit.DiffStat
+);
+export const AvatarGroup: ComponentType<PluginAvatarGroupProps> = fromKit(
+  "AvatarGroup",
+  (kit) => kit.AvatarGroup
+);
+export const Meter: ComponentType<PluginMeterProps> = fromKit("Meter", (kit) => kit.Meter);
+// Generic over the entry type in the public types, like the list components.
+export const Timeline: <T extends PluginTimelineItem>(props: PluginTimelineProps<T>) => ReactNode =
+  fromKit("Timeline", (kit) => kit.Timeline);
+
 export type {
   PluginMarkdownProps as MarkdownProps,
   PluginButtonProps as ButtonProps,
@@ -340,4 +370,14 @@ export type {
   PluginStatCardProps as StatCardProps,
   PluginSparklineProps as SparklineProps,
   PluginFormFieldGroupProps as FormFieldGroupProps,
+  PluginFilterChipProps as FilterChipProps,
+  PluginHighlightedTextProps as HighlightedTextProps,
+  PluginDiffStatProps as DiffStatProps,
+  PluginAvatarGroupProps as AvatarGroupProps,
+  PluginAvatarGroupItem as AvatarGroupItem,
+  PluginMeterProps as MeterProps,
+  PluginMeterThresholds as MeterThresholds,
+  PluginTimelineProps as TimelineProps,
+  PluginTimelineItem as TimelineItem,
+  PluginTimelineActor as TimelineActor,
 } from "@shared/types/plugin-sdk-react";

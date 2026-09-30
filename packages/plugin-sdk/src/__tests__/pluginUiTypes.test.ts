@@ -308,6 +308,41 @@ export const badAlign = createElement(ui.Markdown, { source: "x", align: "right"
 const growColumn: ui.DataTableColumn<{ id: string }> = { id: "id", header: "Id", grow: true };
 void growColumn;
 
+// Filter chips, highlighted matches, diff stats, avatar groups, meters and timelines.
+export const chip = createElement(ui.FilterChip, { selected: true, onSelectedChange: (next: boolean) => void next, count: 3 }, "Open");
+export const appliedChip = createElement(ui.FilterChip, { onRemove: () => {}, removeLabel: "Remove status filter", "data-testid": "status" }, "Status: Open");
+// @ts-expect-error a chip's pressed state is \`selected\`, never raw aria-pressed
+export const rawPressedChip = createElement(ui.FilterChip, { "aria-pressed": true });
+export const highlighted = createElement(ui.HighlightedText, { text: "README.md", query: "read" });
+export const ranged = createElement(ui.HighlightedText, { text: "README.md", ranges: [[0, 2]] });
+// @ts-expect-error highlighted text needs its text
+export const noText = createElement(ui.HighlightedText, { query: "read" });
+export const churn = createElement(ui.DiffStat, { additions: 12, deletions: 3, "data-testid": "churn" });
+const reviewers: ui.AvatarGroupItem[] = [{ name: "Ada Lovelace", src: "https://example.com/a.png" }, { name: "dependabot", shape: "square" }];
+export const avatars = createElement(ui.AvatarGroup, { avatars: reviewers, max: 3, size: "md", "aria-label": "Reviewers" });
+// @ts-expect-error avatar sizes are a closed set
+export const badAvatars = createElement(ui.AvatarGroup, { avatars: reviewers, size: "xl" });
+const limits: ui.MeterThresholds = { warning: 0.8, danger: 0.95 };
+export const meter = createElement(ui.Meter, { value: 812, max: 1000, label: "API requests", valueText: "812 of 1,000", thresholds: limits, showLabel: false });
+// @ts-expect-error a meter needs a label
+export const unnamedMeter = createElement(ui.Meter, { value: 0.4 });
+// @ts-expect-error a meter needs a value
+export const emptyMeter = createElement(ui.Meter, { label: "Disk" });
+interface Comment extends ui.TimelineItem { body: string }
+const comments: Comment[] = [{ id: 1, title: "commented", actor: { name: "Ada" }, timestamp: Date.now(), body: "LGTM", tone: "info" }];
+export const timeline = createElement(ui.Timeline<Comment>, {
+  items: comments,
+  "aria-label": "Activity",
+  renderContent: (item: Comment) => createElement(ui.Markdown, { source: item.body }),
+  groupByDay: true,
+  timeFormat: "verbose",
+  onEndReached: (lastIndex: number) => void lastIndex,
+});
+// @ts-expect-error a timeline needs an aria-label
+export const unnamedTimeline = createElement(ui.Timeline, { items: comments });
+// @ts-expect-error time formats are a closed set
+export const badTimeFormat = createElement(ui.Timeline, { items: comments, "aria-label": "Activity", timeFormat: "long" });
+
 // Root attributes: \`id\` and \`data-*\` everywhere, \`aria-*\` where the root is the control.
 export const selectId = createElement(ui.Select, { options: [], "aria-label": "Pick", "data-testid": "pick" });
 export const segmentedId = createElement(ui.SegmentedControl, { options: [], value: "", onValueChange: () => {}, "aria-label": "Mode", "data-testid": "mode", "aria-describedby": "hint" });

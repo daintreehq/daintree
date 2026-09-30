@@ -1564,6 +1564,172 @@ export interface PluginFormFieldGroupProps extends PluginRootAttributes {
 }
 
 /**
+ * Props of `FilterChip`: one value in a filter bar that narrows a list
+ * ("Open", "Status: Open"). A toggle chip is pressed while its filter is on;
+ * with `onRemove` it is an applied filter that shows a × and removes itself on
+ * click, Backspace or Delete. Never accent: several chips can be on at once.
+ */
+export interface PluginFilterChipProps extends Omit<
+  PluginDomProps<HTMLButtonElement>,
+  "aria-pressed"
+> {
+  /** The chip's text, which is also its accessible name. */
+  children?: ReactNode;
+  /** Whether the filter is on. Pass with `onSelectedChange` to control it. */
+  selected?: boolean;
+  /** The starting state when `selected` is not passed. */
+  defaultSelected?: boolean;
+  /** Called with the next state when the chip is clicked. */
+  onSelectedChange?(selected: boolean): void;
+  /** Matches for this value, shown as "(3)". `0` on an unselected chip drops it to a quiet edge. Not shown on a removable chip. */
+  count?: number;
+  /** Makes it a removable, applied filter: always pressed, with a ×. Called on click, Backspace or Delete. */
+  onRemove?(): void;
+  /** The removable chip's tooltip. Defaults to "Remove filter". */
+  removeLabel?: string;
+  disabled?: boolean;
+  className?: string;
+}
+
+/**
+ * Props of `HighlightedText`: text with the parts that matched a search drawn
+ * on a neutral band, never accent. Pass `query` for a case-insensitive
+ * substring match (its first occurrence, which is what a substring filter
+ * tested), or `ranges` for matches you computed yourself.
+ */
+export interface PluginHighlightedTextProps extends PluginRootAttributes {
+  text: string;
+  /** Highlights the first case-insensitive occurrence. Ignored when `ranges` is given. */
+  query?: string;
+  /** Inclusive `[start, end]` character offsets, the shape fuse.js reports. Overlapping and touching ranges merge. */
+  ranges?: readonly (readonly [number, number])[];
+  className?: string;
+}
+
+/**
+ * Props of `DiffStat`: line churn in Daintree's one spelling, "+12 -3", the
+ * additions in the success ink and the deletions in the error ink. A zero side
+ * is left out, and so is the whole stat when both are. Size comes from the
+ * text around it.
+ */
+export interface PluginDiffStatProps extends PluginRootAttributes {
+  additions?: number;
+  deletions?: number;
+  className?: string;
+}
+
+/** One person or bot in an `AvatarGroup`. */
+export interface PluginAvatarGroupItem {
+  /** The accessible name, the tooltip and the initials. */
+  name: string;
+  src?: string;
+  /** `square` says "bot or app, not a person". */
+  shape?: "circle" | "square";
+}
+
+/**
+ * Props of `AvatarGroup`: overlapping avatars for the people on something (the
+ * reviewers of a pull request, the members of a channel), with a "+N" that
+ * lists the rest in its tooltip.
+ */
+export interface PluginAvatarGroupProps extends PluginRootAttributes {
+  avatars: readonly PluginAvatarGroupItem[];
+  /** The most avatars drawn before the rest fold into "+N". Defaults to 4. */
+  max?: number;
+  /** `xs` 16px, `sm` 20px (the default), `md` 24px, `lg` 32px. */
+  size?: "xs" | "sm" | "md" | "lg";
+  /** Names the group ("Reviewers"). Omitted, it is not announced as a group. */
+  "aria-label"?: string;
+  className?: string;
+}
+
+/** Where a `Meter` changes tone, as fractions of `max` (0 to 1). */
+export interface PluginMeterThresholds {
+  /** At or above this fraction the fill turns to the warning colour. */
+  warning?: number;
+  /** At or above this fraction the fill turns to the danger colour. */
+  danger?: number;
+}
+
+/**
+ * Props of `Meter`: how much of a known limit is used (a quota, a disk, a
+ * rate limit). Unlike `ProgressBar` it measures a level rather than a task,
+ * and it can change tone: neutral below its `thresholds`, then warning or
+ * danger, each with its glyph beside the value so colour is never the only
+ * signal. Announced as a `meter`.
+ */
+export interface PluginMeterProps extends PluginAriaRootAttributes {
+  /** The amount used, from 0 to `max`. Values outside that range are clamped. */
+  value: number;
+  /** The limit. Defaults to 1, so `value` can be a fraction. */
+  max?: number;
+  /** Required: the accessible name, and the visible label unless `showLabel` is false. */
+  label: string;
+  /** False drops the visible label and puts the value beside the bar, for a meter inside a row that already names it. Defaults to true. */
+  showLabel?: boolean;
+  /** The visible and spoken value ("812 of 1,000 requests"). Defaults to the percentage. */
+  valueText?: string;
+  /** Neutral when omitted. `{ warning: 0.8, danger: 0.95 }` warns at 80% and 95%. */
+  thresholds?: PluginMeterThresholds;
+  className?: string;
+}
+
+/** Who did a `Timeline` item: a name, or a name with a picture. */
+export interface PluginTimelineActor {
+  name: string;
+  src?: string;
+  shape?: "circle" | "square";
+}
+
+/** One entry of a `Timeline`. Extend it with your own fields and read them in `renderContent`. */
+export interface PluginTimelineItem {
+  /** Unique within the timeline; keys the row. */
+  id: string | number;
+  /** The rail marker. Omitted, a `tone` draws its severity glyph and anything else a dot. */
+  icon?: PluginIconSource;
+  /** One line: what happened ("opened this pull request"). */
+  title: ReactNode;
+  /** A quieter line under the title. */
+  description?: ReactNode;
+  /** Epoch ms, an ISO string or a Date. Drawn as a relative time with the exact time on hover. */
+  timestamp?: number | string | Date;
+  /** Drawn before the title, with their avatar when `src` is given. */
+  actor?: string | PluginTimelineActor;
+  /** Names the severity to assistive tech and marks it: its severity glyph without an `icon`, or a tint on the icon (`success` leaves an icon neutral). */
+  tone?: PluginSeverity;
+}
+
+/**
+ * Props of `Timeline`: an activity feed or audit log, one entry per row on a
+ * connecting rail, virtualised so a feed of thousands mounts one screen of
+ * rows. Rows are measured as they render, so entries of different heights (a
+ * comment body under one, a single line under the next) need no fixed height.
+ * The timeline is as tall as its rows up to its container's height and scrolls
+ * past that, so a long feed needs a sized container (`h-full` in a sized pane).
+ */
+export interface PluginTimelineProps<
+  T extends PluginTimelineItem = PluginTimelineItem,
+> extends PluginRootAttributes {
+  /** In display order: newest first for a feed, oldest first for a history. */
+  items: readonly T[];
+  /** Required: names the feed for assistive tech ("Activity"). */
+  "aria-label": string;
+  /** Custom content under an entry's title and description: a comment body in `Markdown`, a diff summary. */
+  renderContent?(item: T, index: number): ReactNode;
+  /** Puts a "Today", "Yesterday" or date header before each day's entries. Entries without a timestamp stay under the header above them. */
+  groupByDay?: boolean;
+  /** `compact` (the default) is "5m ago"; `verbose` is "5 minutes ago". */
+  timeFormat?: "compact" | "verbose";
+  /** A fixed clock for relative times and day headers. Omitted, the times refresh on a shared minute tick. */
+  now?: number;
+  /** Expected entry height in px, before rows are measured. Defaults to 44. */
+  estimatedItemSize?: number;
+  /** Called once the last entry scrolls into view: load the next page here. */
+  onEndReached?(lastIndex: number): void;
+  className?: string;
+}
+
+/**
  * Keys of {@link PluginThemeTokens}: Daintree's semantic theme tokens, the
  * same names as the `--theme-*` CSS variables without the prefix. The surface,
  * text, border, accent, `focus-ring` and status keys are core and stable within
