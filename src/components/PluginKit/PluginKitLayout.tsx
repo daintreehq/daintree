@@ -603,6 +603,12 @@ function moveBetweenHeaders(event: KeyboardEvent<HTMLDivElement>) {
   triggers[next]?.focus();
 }
 
+// A disclosure header's glyph sits on the content's edge and its hover wash
+// reaches past it; the panel starts under the title, past the glyph and gap.
+// Shared by Accordion and Disclosure so the two line up when stacked.
+const DISCLOSURE_EDGE_CLASS = "-mx-1.5 w-[calc(100%+0.75rem)] px-1.5";
+const DISCLOSURE_PANEL_INSET_CLASS = "min-w-0 pl-5.5";
+
 function KitAccordion({
   items,
   type,
@@ -657,14 +663,16 @@ function KitAccordion({
               title={entry.title}
               trailing={entry.trailing}
               onToggle={() => toggle(entry.value)}
-              className="px-3 py-2.5"
+              // On the content edge, as a Disclosure's is, so the chevrons of
+              // the two line up when they stack in one column.
+              className={cn(DISCLOSURE_EDGE_CLASS, "py-2.5")}
             />
             {isOpen ? (
               <div
                 role="region"
                 id={panelId}
                 aria-labelledby={triggerId}
-                className="min-w-0 pb-3 pl-8.5 pr-3 text-sm"
+                className={cn(DISCLOSURE_PANEL_INSET_CLASS, "pb-3 text-sm")}
               >
                 <InsetSurface>{node(entry.content)}</InsetSurface>
               </div>
@@ -712,15 +720,14 @@ function KitDisclosure({
           setOwnOpen(!isOpen);
           handleChange?.(!isOpen);
         }}
-        // The glyph sits on the content's edge; the hover wash reaches past it.
-        className="-mx-1.5 w-[calc(100%+0.75rem)] px-1.5 py-1.5"
+        className={cn(DISCLOSURE_EDGE_CLASS, "py-1.5")}
       />
       {isOpen ? (
         <div
           role="region"
           id={panelId}
           aria-labelledby={triggerId}
-          className="min-w-0 pb-1 pl-5.5 pt-1 text-sm"
+          className={cn(DISCLOSURE_PANEL_INSET_CLASS, "pb-1 pt-1 text-sm")}
         >
           {node(children)}
         </div>

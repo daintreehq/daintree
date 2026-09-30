@@ -44,6 +44,16 @@ export function avatarInitials(name: string, max: 1 | 2 = 2): string {
   return (first + last).toUpperCase();
 }
 
+/**
+ * The host avatar's picture and initials are absolutely placed, so its box has
+ * no text line and its baseline falls to its bottom edge: beside text, or as
+ * the first item of an author's `inline-flex` row, the disc sits a descender's
+ * height too high. A centred zero-width character gives it a real baseline,
+ * through the generated content so it adds nothing to `textContent`.
+ */
+const AVATAR_BASELINE_CLASS = "inline-flex items-center after:content-[attr(data-avatar-strut)]";
+const AVATAR_STRUT = "\u200B";
+
 function KitAvatar({
   src,
   name,
@@ -60,12 +70,12 @@ function KitAvatar({
   const initials = avatarInitials(label, px === "xs" || px === "sm" ? 1 : 2);
   return (
     <Avatar
-      rootAttributes={pickRootProps(rest)}
+      rootAttributes={{ ...pickRootProps(rest), "data-avatar-strut": AVATAR_STRUT }}
       src={str(src) ?? ""}
       alt={decorative === true ? "" : label}
       title={nonEmpty(tooltip)}
       shape={oneOf(shape, ["circle", "square"] as const)}
-      className={cn(AVATAR_SIZE[px], str(className))}
+      className={cn(AVATAR_BASELINE_CLASS, AVATAR_SIZE[px], str(className))}
       fallback={
         initials ? (
           <span

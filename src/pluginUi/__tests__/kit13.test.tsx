@@ -271,6 +271,62 @@ describe("StatCard and Sparkline", () => {
     expect(container.innerHTML).not.toMatch(/uppercase|tracking-|accent/);
   });
 
+  it("words a number delta with formatDelta and keeps the sign and arrow", () => {
+    const formatDelta = vi.fn((magnitude: number) => `${magnitude.toFixed(1)}%`);
+    render(
+      createElement(
+        "div",
+        null,
+        createElement(kit.StatCard, {
+          label: "MRR",
+          value: "$25,901",
+          delta: 12.5,
+          formatDelta,
+          "data-testid": "up",
+        }),
+        createElement(kit.StatCard, {
+          label: "Churn",
+          value: "2%",
+          delta: -3,
+          formatDelta,
+          "data-testid": "down",
+        }),
+        createElement(kit.StatCard, {
+          label: "Seats",
+          value: 40,
+          delta: 0,
+          formatDelta,
+          "data-testid": "flat",
+        })
+      )
+    );
+    // The formatter only ever sees the magnitude; the card owns the sign.
+    expect(formatDelta.mock.calls.map(([magnitude]) => magnitude)).toEqual([12.5, 3, 0]);
+    const up = screen.getByTestId("up");
+    expect(up.textContent).toContain("+12.5%");
+    expect(up.querySelector("svg.lucide-arrow-up")).not.toBeNull();
+    const down = screen.getByTestId("down");
+    expect(down.textContent).toContain("\u22123.0%");
+    expect(down.querySelector("svg.lucide-arrow-down")).not.toBeNull();
+    const flat = screen.getByTestId("flat");
+    expect(flat.textContent).toContain("0.0%");
+    expect(flat.querySelector("svg.lucide-arrow-up, svg.lucide-arrow-down")).toBeNull();
+  });
+
+  it("falls back to the grouped number when formatDelta returns no string", () => {
+    const formatDelta: (magnitude: number) => string = JSON.parse("null") ?? (() => 7);
+    render(
+      createElement(kit.StatCard, {
+        label: "Events",
+        value: 1,
+        delta: 1234,
+        formatDelta,
+        "data-testid": "stat",
+      })
+    );
+    expect(screen.getByTestId("stat").textContent).toContain("+1,234");
+  });
+
   it("marks a toned stat with its severity glyph and word", () => {
     render(createElement(kit.StatCard, { label: "Errors", value: 3, tone: "error" }));
     expect(screen.getByText("Error:", { exact: false }).className).toContain("sr-only");

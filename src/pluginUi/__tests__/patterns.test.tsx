@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { createElement, useState, type ComponentType, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { VirtuosoMockContext } from "react-virtuoso";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -272,6 +272,55 @@ describe("@daintreehq/plugin-ui lists", () => {
     onRowClick.mockClear();
     fireEvent.keyDown(screen.getByRole("columnheader", { name: "Name" }), { key: "Enter" });
     expect(onRowClick).not.toHaveBeenCalled();
+  });
+
+  it("opens a DataTable rowMenu for the right-clicked or cursor row", async () => {
+    const onSelect = vi.fn();
+    const rowMenu = vi.fn((row: { id: string; name: string }, index: number) =>
+      index === 5 ? null : [{ label: `Open ${row.name}`, onSelect: () => onSelect(row.id) }]
+    );
+    render(
+      inViewport(
+        createElement(kit.DataTable<{ id: string; name: string }>, {
+          "aria-label": "Menus",
+          rows: TEN_THOUSAND.slice(0, 20),
+          rowKey: "id",
+          columns: [{ id: "name", header: "Name" }],
+          rowMenu,
+        })
+      )
+    );
+    // A row menu alone makes the table a grid, so the keyboard can reach a row.
+    const grid = screen.getByRole("grid", { name: "Menus" });
+    expect(grid.hasAttribute("data-row-menu")).toBe(true);
+    // `hidden`: the open menu is modal and hides the rest of the page from queries.
+    const rows = () => screen.getAllByRole("row", { hidden: true });
+
+    fireEvent.contextMenu(within(rows()[3]!).getByText("Row 2"), { clientX: 5, clientY: 5 });
+    expect(rowMenu).toHaveBeenLastCalledWith(TEN_THOUSAND[2], 2);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Open Row 2" }));
+    expect(onSelect).toHaveBeenCalledWith("r2");
+    await vi.waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+
+    // Shift+F10 opens the cursor row's menu (the right-click moved the cursor
+    // to row 2), outlines that row, and hands focus back to the grid on close.
+    act(() => grid.focus());
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    fireEvent.keyDown(grid, { key: "F10", shiftKey: true });
+    expect(await screen.findByRole("menuitem", { name: "Open Row 3" })).toBeTruthy();
+    expect(rows()[4]!.getAttribute("data-state")).toBe("open");
+    expect(rows()[4]!.className).toContain("data-[state=open]:outline");
+    expect(rows()[3]!.getAttribute("data-state")).toBeNull();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await vi.waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(rows()[4]!.getAttribute("data-state")).toBeNull();
+    // Radix restores focus a task after the menu unmounts.
+    await vi.waitFor(() => expect(document.activeElement).toBe(grid));
+
+    // A row whose menu is null opens nothing.
+    fireEvent.contextMenu(within(rows()[6]!).getByText("Row 5"), { clientX: 5, clientY: 5 });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("shows `empty` in place of an empty DataTable", () => {

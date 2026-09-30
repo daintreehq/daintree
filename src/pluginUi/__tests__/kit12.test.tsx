@@ -300,6 +300,14 @@ describe("@daintreehq/plugin-ui avatars, popovers and hints", () => {
     const { container } = render(createElement(kit.Avatar, { name: "Ada Lovelace", size: "md" }));
     expect(screen.getByRole("img", { name: "Ada Lovelace" })).toBeTruthy();
     expect(container.textContent).toBe("AL");
+    // A text baseline through its middle, from generated content only, so it
+    // lines up with the text beside it instead of sitting on the baseline.
+    const root = container.firstElementChild!;
+    expect(root.getAttribute("data-avatar-strut")).toBe("\u200B");
+    expect(root.className).toContain("inline-flex");
+    expect(root.className).toContain("items-center");
+    expect(root.className).toContain("after:content-[attr(data-avatar-strut)]");
+    expect(root.className).not.toContain("inline-block");
     expect(avatarInitials("@dependabot[bot]", 1)).toBe("D");
     expect(avatarInitials("octocat")).toBe("O");
     expect(avatarInitials("   ")).toBe("");

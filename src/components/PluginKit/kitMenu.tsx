@@ -1,5 +1,14 @@
-import type { ComponentType, ReactNode, SyntheticEvent } from "react";
+import type { ComponentType, KeyboardEvent, ReactNode, SyntheticEvent } from "react";
 import type { PluginDropdownMenuEntry } from "@shared/types/plugin-sdk-react";
+import {
+  ContextMenuCheckboxItem,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+} from "@/components/ui/context-menu";
 import { resolvePluginKitIcon } from "./PluginKitIcons";
 import { field, fn, nonEmpty, str } from "./kitProps";
 
@@ -31,6 +40,24 @@ export interface KitMenuParts {
   Label: ComponentType<{ children?: ReactNode }>;
   Separator: ComponentType<object>;
   Shortcut: ComponentType<{ shortcut: string | null | undefined }>;
+}
+
+export const CONTEXT_MENU_PARTS: KitMenuParts = {
+  Item: ContextMenuItem,
+  CheckboxItem: ContextMenuCheckboxItem,
+  RadioGroup: ContextMenuRadioGroup,
+  RadioItem: ContextMenuRadioItem,
+  Label: ContextMenuLabel,
+  Separator: ContextMenuSeparator,
+  Shortcut: ContextMenuShortcut,
+};
+
+/** Shift+F10 or the Menu key: the keyboard's right-click. */
+export function isMenuKey(event: KeyboardEvent): boolean {
+  return (
+    event.key === "ContextMenu" ||
+    (event.key === "F10" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey)
+  );
 }
 
 function readRadioItems(items: unknown): { value: string; label: string; disabled: boolean }[] {

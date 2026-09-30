@@ -686,15 +686,7 @@ interface PluginConfirmDialogProps {
  * element carries your `id` and `data-*` (a `data-testid` included). Without a
  * `role` it is a plain `list` and each row is a `listitem`.
  */
-interface PluginVirtualListProps<T = unknown> extends PluginDomProps<HTMLDivElement> {
-    /** The rows. Omit and pass `count` when rows are fetched by index. */
-    items?: readonly T[];
-    /** The row count when there is no `items` array. Ignored when `items` is given. */
-    count?: number;
-    /** Renders one row. `item` is `undefined` for a `count`-only list. */
-    renderItem(index: number, item: T | undefined): ReactNode;
-    /** A stable key per row. Defaults to the index, which re-mounts rows when the list reorders. */
-    itemKey?(index: number, item: T | undefined): string | number;
+interface PluginVirtualListBaseProps extends PluginDomProps<HTMLDivElement> {
     /** Expected row height in px, before rows are measured. Defaults to 28. */
     estimatedItemSize?: number;
     /** Rows rendered beyond each edge of the viewport. Defaults to 8. */
@@ -713,6 +705,55 @@ interface PluginVirtualListProps<T = unknown> extends PluginDomProps<HTMLDivElem
     "aria-label": string;
     /** Classes for the scrolling element. */
     className?: string;
+}
+/**
+ * A `VirtualList` over an array: each row is handed its item, typed `T`. JSX
+ * and `createElement(VirtualList<T>, …)` pick this form when `items` is given.
+ */
+interface PluginVirtualListItemsProps<T = unknown> extends PluginVirtualListBaseProps {
+    /** The rows. */
+    items: readonly T[];
+    /** Ignored when `items` is given. */
+    count?: number;
+    /** Renders one row. */
+    renderItem(index: number, item: T): ReactNode;
+    /** A stable key per row. Defaults to the index, which re-mounts rows when the list reorders. */
+    itemKey?(index: number, item: T): string | number;
+}
+/** A `VirtualList` of `count` rows fetched by index: rows are handed no item. */
+interface PluginVirtualListCountProps extends PluginVirtualListBaseProps {
+    items?: undefined;
+    /** The row count. */
+    count: number;
+    /** Renders one row; `item` is always `undefined`, so read your data by `index`. */
+    renderItem(index: number, item: undefined): ReactNode;
+    /** A stable key per row. Defaults to the index, which re-mounts rows when the list reorders. */
+    itemKey?(index: number, item: undefined): string | number;
+}
+/**
+ * Props of `VirtualList` in their general form, either `items` or `count`, for
+ * a wrapper that forwards them. Written out directly, `VirtualList` narrows to
+ * `PluginVirtualListItemsProps` or `PluginVirtualListCountProps`.
+ */
+interface PluginVirtualListProps<T = unknown> extends PluginVirtualListBaseProps {
+    /** The rows. Omit and pass `count` when rows are fetched by index. */
+    items?: readonly T[];
+    /** The row count when there is no `items` array. Ignored when `items` is given. */
+    count?: number;
+    /** Renders one row. `item` is `undefined` for a `count`-only list. */
+    renderItem(index: number, item: T | undefined): ReactNode;
+    /** A stable key per row. Defaults to the index, which re-mounts rows when the list reorders. */
+    itemKey?(index: number, item: T | undefined): string | number;
+}
+/**
+ * `VirtualList`'s call signatures. With `items`, rows get `T`; with `count`,
+ * `undefined`; the last, general form keeps a bare `createElement(VirtualList,
+ * …)` and forwarded `PluginVirtualListProps` compiling as they always have.
+ */
+interface PluginVirtualListComponent {
+    <T>(props: PluginVirtualListItemsProps<T>): ReactNode;
+    (props: PluginVirtualListCountProps): ReactNode;
+    (props: PluginVirtualListProps): ReactNode;
 }
 /** One column of a `DataTable`. */
 interface PluginDataTableColumn<T = unknown> {
@@ -765,6 +806,14 @@ interface PluginDataTableProps<T = unknown> extends PluginRootAttributes {
     /** A sortable header was activated: ascending first, then it flips. */
     onSortChange?: (sort: PluginDataTableSort) => void;
     onRowClick?(row: T, index: number): void;
+    /**
+     * The row's context menu, in `DropdownMenu` entries: opened by a right-click
+     * on the row, or by Shift+F10 / the Menu key on the keyboard cursor's row.
+     * The row is outlined while its menu is open and focus returns to the table
+     * when it closes. Return `null` or `[]` for a row with no menu. Setting it
+     * makes the table a keyboard grid, as `onRowClick` does.
+     */
+    rowMenu?(row: T, index: number): readonly PluginDropdownMenuEntry[] | null;
     /** The key of the one selected row, drawn with the list highlight. */
     selectedRowKey?: string | number | null;
     /** Shown in place of the body while `rows` is empty: usually an `EmptyState`. */
@@ -1227,6 +1276,13 @@ interface PluginStatCardProps extends PluginDomProps<HTMLDivElement> {
      * up is good depends on the figure.
      */
     delta?: ReactNode;
+    /**
+     * Words a number `delta` with its unit, keeping the card's sign and arrow:
+     * it is handed the magnitude (never negative) and returns the text after
+     * the sign, so `(n) => n.toFixed(1) + "%"` draws "+12.5%" or "−3.0%".
+     * Defaults to the grouped number.
+     */
+    formatDelta?(magnitude: number): string;
     tone?: PluginSeverity;
     /** One quiet line under the figure: its scope or source. */
     hint?: ReactNode;
@@ -1703,7 +1759,11 @@ interface PluginTimelineProps<T extends PluginTimelineItem = PluginTimelineItem>
     "aria-label": string;
     /** Custom content under an entry's title and description: a comment body in `Markdown`, a diff summary. */
     renderContent?(item: T, index: number): ReactNode;
-    /** Puts a "Today", "Yesterday" or date header before each day's entries. Entries without a timestamp stay under the header above them. */
+    /**
+     * Puts a "Today", "Yesterday" or date header before each day's entries.
+     * Entries without a timestamp stay under the header above them. It does not
+     * sort: give `items` in date order, newest first, or a day's header repeats.
+     */
     groupByDay?: boolean;
     /** `compact` (the default) is "5m ago"; `verbose` is "5 minutes ago". */
     timeFormat?: "compact" | "verbose";
@@ -2985,4 +3045,4 @@ interface PluginHostBridge {
     onPanel(pluginId: string, channel: string, panelId: string, callback: (payload: unknown) => void): () => void;
 }
 
-export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAccordionItem, type PluginAccordionProps, type PluginAlign, type PluginAriaRootAttributes, type PluginAvatarGroupItem, type PluginAvatarGroupProps, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginBarChartProps, type PluginBreadcrumbItem, type PluginBreadcrumbsProps, type PluginButtonProps, type PluginButtonVariant, type PluginCalendarBaseProps, type PluginCalendarProps, type PluginCalendarRangeProps, type PluginCalendarSingleProps, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCardProps, type PluginChartBaseProps, type PluginChartColor, type PluginChartSeries, type PluginCheckboxProps, type PluginComboboxProps, type PluginCommandPaletteItem, type PluginCommandPaletteProps, type PluginConfirmDialogProps, type PluginContextMenuProps, type PluginCopyButtonProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableSort, type PluginDateFieldBaseProps, type PluginDatePickerProps, type PluginDateRange, type PluginDateRangePickerProps, type PluginDateRangePreset, type PluginDescriptionItem, type PluginDescriptionListItemProps, type PluginDescriptionListProps, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDiffStatProps, type PluginDisclosureProps, type PluginDismissButtonProps, type PluginDividerProps, type PluginDocumentPackage, type PluginDomProps, type PluginDonutChartProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginEmojiPickerProps, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFileDropzoneProps, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFilterChipProps, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginHighlightedTextProps, type PluginHostBridge, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginInputProps, type PluginIsoDate, type PluginKbdChordProps, type PluginKbdProps, type PluginLineChartProps, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginMeterProps, type PluginMeterThresholds, type PluginMultiSelectProps, type PluginNavListItem, type PluginNavListProps, type PluginNavListSection, type PluginNumberInputProps, type PluginPaneHeaderProps, type PluginPaneStateProps, type PluginPickerBaseProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginProgressBarProps, type PluginRadioGroupProps, type PluginRadioOption, type PluginResizableSplitProps, type PluginRootAttributes, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSectionLabelProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSheetProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSliderProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginStatCardProps, type PluginStepState, type PluginStepperProps, type PluginStepperStep, type PluginSwitchProps, type PluginTabItem, type PluginTabsProps, type PluginTagInputProps, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginTimeAgoProps, type PluginTimelineActor, type PluginTimelineItem, type PluginTimelineProps, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTruncatedTooltipProps, type PluginVirtualListProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseHostChannelResult, type UseListNavigationOptions, type UseListNavigationResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };
+export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAccordionItem, type PluginAccordionProps, type PluginAlign, type PluginAriaRootAttributes, type PluginAvatarGroupItem, type PluginAvatarGroupProps, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginBarChartProps, type PluginBreadcrumbItem, type PluginBreadcrumbsProps, type PluginButtonProps, type PluginButtonVariant, type PluginCalendarBaseProps, type PluginCalendarProps, type PluginCalendarRangeProps, type PluginCalendarSingleProps, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCardProps, type PluginChartBaseProps, type PluginChartColor, type PluginChartSeries, type PluginCheckboxProps, type PluginComboboxProps, type PluginCommandPaletteItem, type PluginCommandPaletteProps, type PluginConfirmDialogProps, type PluginContextMenuProps, type PluginCopyButtonProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableSort, type PluginDateFieldBaseProps, type PluginDatePickerProps, type PluginDateRange, type PluginDateRangePickerProps, type PluginDateRangePreset, type PluginDescriptionItem, type PluginDescriptionListItemProps, type PluginDescriptionListProps, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDiffStatProps, type PluginDisclosureProps, type PluginDismissButtonProps, type PluginDividerProps, type PluginDocumentPackage, type PluginDomProps, type PluginDonutChartProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginEmojiPickerProps, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFileDropzoneProps, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFilterChipProps, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginHighlightedTextProps, type PluginHostBridge, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginInputProps, type PluginIsoDate, type PluginKbdChordProps, type PluginKbdProps, type PluginLineChartProps, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginMeterProps, type PluginMeterThresholds, type PluginMultiSelectProps, type PluginNavListItem, type PluginNavListProps, type PluginNavListSection, type PluginNumberInputProps, type PluginPaneHeaderProps, type PluginPaneStateProps, type PluginPickerBaseProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginProgressBarProps, type PluginRadioGroupProps, type PluginRadioOption, type PluginResizableSplitProps, type PluginRootAttributes, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSectionLabelProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSheetProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSliderProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginStatCardProps, type PluginStepState, type PluginStepperProps, type PluginStepperStep, type PluginSwitchProps, type PluginTabItem, type PluginTabsProps, type PluginTagInputProps, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginTimeAgoProps, type PluginTimelineActor, type PluginTimelineItem, type PluginTimelineProps, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTruncatedTooltipProps, type PluginVirtualListBaseProps, type PluginVirtualListComponent, type PluginVirtualListCountProps, type PluginVirtualListItemsProps, type PluginVirtualListProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseHostChannelResult, type UseListNavigationOptions, type UseListNavigationResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };

@@ -932,15 +932,7 @@ export interface PluginConfirmDialogProps {
  * element carries your `id` and `data-*` (a `data-testid` included). Without a
  * `role` it is a plain `list` and each row is a `listitem`.
  */
-export interface PluginVirtualListProps<T = unknown> extends PluginDomProps<HTMLDivElement> {
-  /** The rows. Omit and pass `count` when rows are fetched by index. */
-  items?: readonly T[];
-  /** The row count when there is no `items` array. Ignored when `items` is given. */
-  count?: number;
-  /** Renders one row. `item` is `undefined` for a `count`-only list. */
-  renderItem(index: number, item: T | undefined): ReactNode;
-  /** A stable key per row. Defaults to the index, which re-mounts rows when the list reorders. */
-  itemKey?(index: number, item: T | undefined): string | number;
+export interface PluginVirtualListBaseProps extends PluginDomProps<HTMLDivElement> {
   /** Expected row height in px, before rows are measured. Defaults to 28. */
   estimatedItemSize?: number;
   /** Rows rendered beyond each edge of the viewport. Defaults to 8. */
@@ -959,6 +951,59 @@ export interface PluginVirtualListProps<T = unknown> extends PluginDomProps<HTML
   "aria-label": string;
   /** Classes for the scrolling element. */
   className?: string;
+}
+
+/**
+ * A `VirtualList` over an array: each row is handed its item, typed `T`. JSX
+ * and `createElement(VirtualList<T>, …)` pick this form when `items` is given.
+ */
+export interface PluginVirtualListItemsProps<T = unknown> extends PluginVirtualListBaseProps {
+  /** The rows. */
+  items: readonly T[];
+  /** Ignored when `items` is given. */
+  count?: number;
+  /** Renders one row. */
+  renderItem(index: number, item: T): ReactNode;
+  /** A stable key per row. Defaults to the index, which re-mounts rows when the list reorders. */
+  itemKey?(index: number, item: T): string | number;
+}
+
+/** A `VirtualList` of `count` rows fetched by index: rows are handed no item. */
+export interface PluginVirtualListCountProps extends PluginVirtualListBaseProps {
+  items?: undefined;
+  /** The row count. */
+  count: number;
+  /** Renders one row; `item` is always `undefined`, so read your data by `index`. */
+  renderItem(index: number, item: undefined): ReactNode;
+  /** A stable key per row. Defaults to the index, which re-mounts rows when the list reorders. */
+  itemKey?(index: number, item: undefined): string | number;
+}
+
+/**
+ * Props of `VirtualList` in their general form, either `items` or `count`, for
+ * a wrapper that forwards them. Written out directly, `VirtualList` narrows to
+ * `PluginVirtualListItemsProps` or `PluginVirtualListCountProps`.
+ */
+export interface PluginVirtualListProps<T = unknown> extends PluginVirtualListBaseProps {
+  /** The rows. Omit and pass `count` when rows are fetched by index. */
+  items?: readonly T[];
+  /** The row count when there is no `items` array. Ignored when `items` is given. */
+  count?: number;
+  /** Renders one row. `item` is `undefined` for a `count`-only list. */
+  renderItem(index: number, item: T | undefined): ReactNode;
+  /** A stable key per row. Defaults to the index, which re-mounts rows when the list reorders. */
+  itemKey?(index: number, item: T | undefined): string | number;
+}
+
+/**
+ * `VirtualList`'s call signatures. With `items`, rows get `T`; with `count`,
+ * `undefined`; the last, general form keeps a bare `createElement(VirtualList,
+ * …)` and forwarded `PluginVirtualListProps` compiling as they always have.
+ */
+export interface PluginVirtualListComponent {
+  <T>(props: PluginVirtualListItemsProps<T>): ReactNode;
+  (props: PluginVirtualListCountProps): ReactNode;
+  (props: PluginVirtualListProps): ReactNode;
 }
 
 /** One column of a `DataTable`. */
@@ -1015,6 +1060,14 @@ export interface PluginDataTableProps<T = unknown> extends PluginRootAttributes 
   /** A sortable header was activated: ascending first, then it flips. */
   onSortChange?: (sort: PluginDataTableSort) => void;
   onRowClick?(row: T, index: number): void;
+  /**
+   * The row's context menu, in `DropdownMenu` entries: opened by a right-click
+   * on the row, or by Shift+F10 / the Menu key on the keyboard cursor's row.
+   * The row is outlined while its menu is open and focus returns to the table
+   * when it closes. Return `null` or `[]` for a row with no menu. Setting it
+   * makes the table a keyboard grid, as `onRowClick` does.
+   */
+  rowMenu?(row: T, index: number): readonly PluginDropdownMenuEntry[] | null;
   /** The key of the one selected row, drawn with the list highlight. */
   selectedRowKey?: string | number | null;
   /** Shown in place of the body while `rows` is empty: usually an `EmptyState`. */
@@ -1513,6 +1566,13 @@ export interface PluginStatCardProps extends PluginDomProps<HTMLDivElement> {
    * up is good depends on the figure.
    */
   delta?: ReactNode;
+  /**
+   * Words a number `delta` with its unit, keeping the card's sign and arrow:
+   * it is handed the magnitude (never negative) and returns the text after
+   * the sign, so `(n) => n.toFixed(1) + "%"` draws "+12.5%" or "−3.0%".
+   * Defaults to the grouped number.
+   */
+  formatDelta?(magnitude: number): string;
   tone?: PluginSeverity;
   /** One quiet line under the figure: its scope or source. */
   hint?: ReactNode;
@@ -2027,7 +2087,11 @@ export interface PluginTimelineProps<
   "aria-label": string;
   /** Custom content under an entry's title and description: a comment body in `Markdown`, a diff summary. */
   renderContent?(item: T, index: number): ReactNode;
-  /** Puts a "Today", "Yesterday" or date header before each day's entries. Entries without a timestamp stay under the header above them. */
+  /**
+   * Puts a "Today", "Yesterday" or date header before each day's entries.
+   * Entries without a timestamp stay under the header above them. It does not
+   * sort: give `items` in date order, newest first, or a day's header repeats.
+   */
   groupByDay?: boolean;
   /** `compact` (the default) is "5m ago"; `verbose` is "5 minutes ago". */
   timeFormat?: "compact" | "verbose";

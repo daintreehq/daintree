@@ -20,7 +20,7 @@ import {
   toIsoDate,
   todayIso,
   weekday,
-} from "@/components/PluginKit/kitDateMath";
+} from "@/pluginUi/dateMath";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 beforeAll(async () => {
@@ -100,7 +100,7 @@ describe("date math", () => {
     vi.stubGlobal("Intl", intl);
     vi.resetModules();
     try {
-      const math = await import("@/components/PluginKit/kitDateMath");
+      const math = await import("@/pluginUi/dateMath");
       const shown = math.formatFieldDate("2026-09-30");
       expect(shown).toContain("2026");
       expect(shown).not.toContain("2569");
