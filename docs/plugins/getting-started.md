@@ -103,7 +103,13 @@ The generated `package.json` lists `daintree-plugin` as a devDependency alongsid
 
 In Daintree, open the command palette and run **My First Plugin: Say Hello**. A toast appears.
 
-To iterate, edit your source, then re-run `npm run package` and `daintree-plugin install` (which replaces the installed copy). For a faster loop, `daintree-plugin dev` hot-reloads the plugin on every save — see [Development loop](./dev-loop.md#daintree-plugin-dev).
+To iterate, edit your source, then re-run `npm run package` and `daintree-plugin install` (which replaces the installed copy). For a faster loop, `daintree-plugin dev` hot-reloads the plugin on every save and prints its performance measurements against their budgets as it runs — see [Development loop](./dev-loop.md#daintree-plugin-dev).
+
+## Add a view
+
+The `view` and `full` templates add `src/panel.tsx`, a React component Daintree mounts in a panel. Build it from `@daintreehq/plugin-ui`, Daintree's own components served to your view by the host — `Button`, `Input`, `Select`, `DataTable` and `VirtualList` for lists, `Dialog` and `ConfirmDialog`, `EmptyState` and `PaneState`, `Icon` — and get data with the hooks in `@daintreehq/plugin-sdk/react`. Style what the kit doesn't draw with Tailwind classes on Daintree's tokens. The scaffolded `tsconfig.json` already declares both the kit and `window.electron.plugin`, so the view typechecks. [Views](./views.md) is the reference, and its [Performance](./views.md#performance) section is worth reading before your first list.
+
+Run `npx daintree-plugin lint` before you package: it flags the patterns that make a view slow or look foreign, and names the fix.
 
 ## Package for distribution
 
@@ -120,5 +126,5 @@ See [Distribution](./distribution.md) for how users install it.
 - Add more contribution points — see [Contribution points](./contribution-points.md)
 - Serve tools to the agents in Daintree's terminals with an agent MCP endpoint, or ship a skill — see [Agent extensions](./agent-extensions.md)
 - Explore the host API — see [Host API](./host-api.md)
-- Compose it into something real — pull-then-push views, live refresh, file and SQLite data, handing work to an agent — see [Patterns](./patterns.md)
+- Compose it into something real — subscribe-then-pull views, pushing deltas, large lists, live refresh, file and SQLite data, handing work to an agent — see [Patterns](./patterns.md)
 - Understand what runs when — see [Architecture](./architecture.md)
