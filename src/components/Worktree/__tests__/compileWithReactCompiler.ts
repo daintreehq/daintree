@@ -1,7 +1,11 @@
-import { readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import path from "path";
 import type { ComponentType } from "react";
 import { transformSync } from "@babel/core";
 import { reactCompilerPreset } from "@vitejs/plugin-react";
+
+const OUT_DIR = path.resolve(__dirname, "../../../../.compiled-tests");
+const RELATIVE_SPECIFIER = /((?:from|import)\s*\(?\s*)(["'])(\.{1,2}\/[^"']+)\2/g;
 
 const written: string[] = [];
 
@@ -20,8 +24,8 @@ export function isComponent<P>(value: unknown): value is ComponentType<P> {
  * so a component whose memoization only goes wrong once compiled passes every
  * ordinary test.
  *
- * The output is written beside the original so its relative and aliased
- * imports resolve unchanged; `removeCompiledModules` deletes it.
+ * The output goes outside `src`, which the contract tests walk while this
+ * runs, with relative imports made absolute; `removeCompiledModules` deletes it.
  */
 export async function importCompiled(absoluteSource: string): Promise<Record<string, unknown>> {
   const { preset } = reactCompilerPreset({ compilationMode: "infer", target: "19" });
@@ -38,11 +42,18 @@ export async function importCompiled(absoluteSource: string): Promise<Record<str
   if (!result?.code?.includes("react/compiler-runtime")) {
     throw new Error(`${absoluteSource} was not compiled; a test on it would prove nothing`);
   }
-  const target = absoluteSource.replace(
-    /\.(tsx?)$/,
-    `.compiled-${process.pid}-${written.length}.$1`
+  const sourceDir = path.dirname(absoluteSource);
+  const code = result.code.replace(
+    RELATIVE_SPECIFIER,
+    (_, lead: string, quote: string, spec: string) =>
+      `${lead}${quote}${path.resolve(sourceDir, spec)}${quote}`
   );
-  writeFileSync(target, result.code);
+  const target = path.join(
+    OUT_DIR,
+    path.basename(absoluteSource).replace(/\.(tsx?)$/, `.${process.pid}-${written.length}.$1`)
+  );
+  mkdirSync(OUT_DIR, { recursive: true });
+  writeFileSync(target, code);
   written.push(target);
   const mod: unknown = await import(/* @vite-ignore */ target);
   if (!isModule(mod)) throw new Error(`${target} did not load as a module`);
