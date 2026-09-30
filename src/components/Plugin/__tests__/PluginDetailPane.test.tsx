@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { PluginDetailPane } from "../PluginDetailPane";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -38,7 +38,15 @@ const pluginMcpListMock = vi.hoisted(() => vi.fn(() => Promise.resolve([])));
 const getDiagnosticsSnapshotMock = vi.hoisted(() =>
   vi.fn(() => Promise.resolve({ plugins: [] as unknown[] }))
 );
+// The Performance tab is earned by main having a snapshot for the plugin.
+const getPerfSnapshotsMock = vi.hoisted(() => vi.fn(() => Promise.resolve([] as unknown[])));
+const perfUnsubscribeMock = vi.hoisted(() => vi.fn());
+const onPerfSnapshotsChangedMock = vi.hoisted(() => vi.fn(() => perfUnsubscribeMock));
 beforeEach(() => {
+  getPerfSnapshotsMock.mockClear();
+  getPerfSnapshotsMock.mockResolvedValue([]);
+  perfUnsubscribeMock.mockClear();
+  onPerfSnapshotsChangedMock.mockClear();
   pluginMcpListMock.mockClear();
   getDiagnosticsSnapshotMock.mockClear();
   getDiagnosticsSnapshotMock.mockResolvedValue({ plugins: [] });
@@ -58,6 +66,8 @@ beforeEach(() => {
       revealSecretSetting: vi.fn(() => Promise.resolve(null)),
       pathExists: vi.fn(() => Promise.resolve(true)),
       getDiagnosticsSnapshot: getDiagnosticsSnapshotMock,
+      getPerfSnapshots: getPerfSnapshotsMock,
+      onPerfSnapshotsChanged: onPerfSnapshotsChangedMock,
     },
   } as unknown as Window["electron"];
 });
@@ -611,5 +621,125 @@ describe("PluginDetailPane settings deep link", () => {
     );
     fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
     expect(screen.getByText("Available when the plugin is enabled")).toBeTruthy();
+  });
+});
+
+describe("PluginDetailPane performance and styles tabs", () => {
+  function perfSnapshot(pluginId: string) {
+    return {
+      pluginId,
+      isolation: "worker",
+      activation: { lastMs: 120, count: 1, at: Date.now() },
+      viewLoads: [],
+      viewCommits: null,
+      invokes: {
+        count: 0,
+        p50Ms: 0,
+        p95Ms: 0,
+        maxMs: 0,
+        lastMs: 0,
+        errors: 0,
+        timeouts: 0,
+        oversized: 0,
+      },
+      pushes: { messages: 0, bytes: 0, perSecond: 0, bytesPerSecond: 0, oversized: 0 },
+      longFrames: { count: 0, totalBlockingMs: 0, lastAt: null },
+      workerMemory: null,
+      overBudget: [],
+      since: Date.now(),
+    };
+  }
+
+  function withPanel(overrides: Partial<LoadedPluginInfo> = {}, hasPty = false): LoadedPluginInfo {
+    const base = makePlugin(overrides);
+    return {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        contributes: {
+          ...base.manifest.contributes,
+          panels: [
+            {
+              id: "main",
+              name: "Main",
+              iconId: "box",
+              color: "#000",
+              hasPty,
+              canRestart: false,
+              canConvert: false,
+              showInPalette: true,
+            },
+          ],
+          views: [{ id: "main", componentPath: "dist/main.js", location: "panel" }],
+        },
+      },
+    };
+  }
+
+  function renderDetail(plugin: LoadedPluginInfo) {
+    return render(
+      <TooltipProvider>
+        <PluginDetailPane
+          plugin={plugin}
+          checkingUpdate={false}
+          upToDate={false}
+          onUninstall={vi.fn()}
+          onCheckForUpdate={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  it("offers no Performance tab until main has a snapshot for this plugin", async () => {
+    getPerfSnapshotsMock.mockResolvedValue([perfSnapshot("someone.else")]);
+    renderDetail(makePlugin());
+    await act(async () => {});
+    expect(screen.queryByRole("tab", { name: "Performance" })).toBeNull();
+  });
+
+  it("earns a Performance tab from the instance's snapshot and renders it", async () => {
+    getPerfSnapshotsMock.mockResolvedValue([perfSnapshot("acme.demo")]);
+    renderDetail(makePlugin());
+    fireEvent.click(await screen.findByRole("tab", { name: "Performance" }));
+    expect(screen.getByText("Activation")).toBeTruthy();
+    expect(screen.getByText("120 ms")).toBeTruthy();
+  });
+
+  it("subscribes while the pane is open and unsubscribes when it closes", async () => {
+    const { unmount } = renderDetail(makePlugin());
+    await act(async () => {});
+    expect(onPerfSnapshotsChangedMock).toHaveBeenCalledTimes(1);
+    unmount();
+    expect(perfUnsubscribeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Styles for an enabled plugin with a rendered panel, not a terminal one", async () => {
+    const { unmount } = renderDetail(withPanel());
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("tab", { name: "Styles" }));
+    expect(
+      await screen.findByText("Open one of this plugin\u2019s panels to check its styles.")
+    ).toBeTruthy();
+    unmount();
+
+    renderDetail(withPanel({}, true));
+    await act(async () => {});
+    expect(screen.queryByRole("tab", { name: "Styles" })).toBeNull();
+  });
+
+  it("offers no Styles tab for a panel with no matching view", async () => {
+    const base = withPanel();
+    renderDetail({
+      ...base,
+      manifest: { ...base.manifest, contributes: { ...base.manifest.contributes, views: [] } },
+    });
+    await act(async () => {});
+    expect(screen.queryByRole("tab", { name: "Styles" })).toBeNull();
+  });
+
+  it("offers no Styles tab while the plugin is disabled", async () => {
+    renderDetail(withPanel({ disabled: true }));
+    await act(async () => {});
+    expect(screen.queryByRole("tab", { name: "Styles" })).toBeNull();
   });
 });

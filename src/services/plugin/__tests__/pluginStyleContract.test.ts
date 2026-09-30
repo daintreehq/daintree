@@ -25,11 +25,20 @@ const createPluginStyleRuntime = vi.fn(async () => ({
 
 vi.mock("@/services/plugin/tailwind/pluginStyleRuntime", () => ({ createPluginStyleRuntime }));
 
+const createPluginCandidateValidator = vi.fn(
+  async () => (candidates: string[]) =>
+    candidates.map((candidate) => ({ candidate, generated: !candidate.startsWith("bg-red") }))
+);
+vi.mock("@/services/plugin/tailwind/pluginTailwindAdapter", () => ({
+  createPluginCandidateValidator,
+}));
+
 const {
   PLUGIN_STYLE_ROOT_PROPS,
   preparePluginStyles,
   registerPluginStyleRoot,
   getPluginStyleReport,
+  getPluginStyleReportForRoots,
   resetPluginStyleContractForTests,
 } = await import("@/services/plugin/pluginStyleContract");
 
@@ -171,5 +180,35 @@ describe("pluginStyleContract — diagnostics", () => {
       generated: ["p-4"],
       notGenerated: ["bg-red-500"],
     });
+  });
+});
+
+describe("pluginStyleContract — per-plugin diagnostics", () => {
+  it("returns null when there is nothing mounted to check", async () => {
+    await expect(getPluginStyleReportForRoots([])).resolves.toBeNull();
+    expect(createPluginCandidateValidator).not.toHaveBeenCalled();
+  });
+
+  it("classifies only the classes on the given roots", async () => {
+    const mine = document.createElement("div");
+    mine.className = "p-4";
+    mine.innerHTML = `<span class="bg-red-500 p-4"></span>`;
+    const theirs = document.createElement("div");
+    theirs.innerHTML = `<span class="bg-red-700"></span>`;
+
+    await expect(getPluginStyleReportForRoots([mine])).resolves.toEqual({
+      generated: ["p-4"],
+      notGenerated: ["bg-red-500"],
+    });
+  });
+
+  it("builds the validator once and retries after a failed build", async () => {
+    const root = document.createElement("div");
+    root.className = "p-4";
+    createPluginCandidateValidator.mockRejectedValueOnce(new Error("boom"));
+    await expect(getPluginStyleReportForRoots([root])).rejects.toThrow("boom");
+    await getPluginStyleReportForRoots([root]);
+    await getPluginStyleReportForRoots([root]);
+    expect(createPluginCandidateValidator).toHaveBeenCalledTimes(2);
   });
 });

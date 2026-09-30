@@ -21,8 +21,10 @@ import type {
   PluginStyleReport,
   PluginStyleRuntime,
 } from "@/services/plugin/tailwind/pluginStyleRuntime";
+import type { PluginCandidateValidator } from "@/services/plugin/tailwind/pluginTailwindAdapter";
 
 const loadRuntimeModule = () => import("@/services/plugin/tailwind/pluginStyleRuntime");
+const loadAdapterModule = () => import("@/services/plugin/tailwind/pluginTailwindAdapter");
 
 /** Spreadable marker for the element a plugin view renders into. */
 export const PLUGIN_STYLE_ROOT_PROPS: Readonly<Record<string, string>> = Object.freeze({
@@ -148,10 +150,56 @@ export function getPluginStyleReport(): Promise<PluginStyleReport | null> {
   return readyRuntime ? readyRuntime.getReport() : Promise.resolve(null);
 }
 
+/**
+ * Compiling the design system costs tens of milliseconds, so the validator is
+ * built once per document and reused by every per-plugin check.
+ */
+let validatorPromise: Promise<PluginCandidateValidator> | null = null;
+
+function candidateValidator(): Promise<PluginCandidateValidator> {
+  validatorPromise ??= loadAdapterModule()
+    .then((module) => module.createPluginCandidateValidator())
+    .catch((error: unknown) => {
+      // Not memoised on failure: a diagnostics read is user-initiated and
+      // retryable, unlike the mount path above.
+      validatorPromise = null;
+      throw error;
+    });
+  return validatorPromise;
+}
+
+/**
+ * Classify the classes currently on the given plugin roots — the per-plugin
+ * form of {@link getPluginStyleReport}. The document-wide report cannot be
+ * split by plugin because the runtime pools every plugin's classes, so the
+ * caller picks the roots and this reads their live DOM. `null` when there are
+ * no roots, which means "nothing mounted to check", not "every class was fine".
+ */
+export async function getPluginStyleReportForRoots(
+  roots: readonly Element[]
+): Promise<PluginStyleReport | null> {
+  if (roots.length === 0) return null;
+  const classes = new Set<string>();
+  for (const root of roots) {
+    for (const token of root.classList) classes.add(token);
+    for (const element of root.querySelectorAll("[class]")) {
+      for (const token of element.classList) classes.add(token);
+    }
+  }
+  const validate = await candidateValidator();
+  const generated: string[] = [];
+  const notGenerated: string[] = [];
+  for (const verdict of validate([...classes])) {
+    (verdict.generated ? generated : notGenerated).push(verdict.candidate);
+  }
+  return { generated, notGenerated };
+}
+
 /** Test seam: drop the document's runtime and every memoised preparation. */
 export function resetPluginStyleContractForTests(): void {
   readyRuntime?.dispose();
   readyRuntime = null;
   runtimePromise = null;
+  validatorPromise = null;
   preparedSources.clear();
 }
