@@ -51,7 +51,7 @@ describe("formatDevMetrics", () => {
       "Performance — acme.demo (worker)
         activation        —
         view load         —
-        view first paint  —
+        view first frame  —
         view commits p95  —  none observed (production builds do not report commits)
         invokes p50/p95   —
         pushes/s          —
@@ -106,7 +106,7 @@ describe("formatDevMetrics", () => {
       "Performance — acme.demo (worker)
         activation        612ms                                      over budget: 612ms > 500ms
         view load         170ms (acme.demo.panel)                    ✓ (budget 300ms)
-        view first paint  250ms                                      ✓ (budget 500ms)
+        view first frame  250ms                                      ✓ (budget 500ms)
         view commits p95  7.3ms (40)                                 ✓ (budget 16ms)
         invokes p50/p95   3.0ms / 300ms (12, 2 failed, 1 timed out)  over budget: 300ms > 250ms
         pushes/s          4.3/s, 2.0 KB/s (peak 20.0/s, 4.0 KB/s)    ✓

@@ -65,6 +65,7 @@ import {
 } from "@/services/plugin/pluginViewMetrics";
 import { markRendererPerformance } from "@/utils/performance";
 import { PERF_MARKS } from "@shared/perf/marks";
+import { PluginKitOwnerContext } from "@/components/PluginKit/kitScope";
 
 /**
  * The resolved subset of `PanelKindConfig` a plugin view actually needs. Both
@@ -613,13 +614,14 @@ export function makePluginViewContent(
    * Completes an attempt's load sample at the first frame that can show it.
    * Rendered beside the view inside the same Suspense boundary, so its layout
    * effect runs in the commit that reveals the resolved view, before the
-   * browser paints it. One animation frame later is the frame that paints that
-   * commit, and the frame's own timestamp is when it began.
+   * browser paints it. The next animation frame is the first that can show
+   * that commit, and its timestamp is when that frame began, before its paint:
+   * a first-frame figure, not a measured paint time.
    *
    * A layout effect and one frame, not a passive effect and two: a passive
    * effect runs after the view's own mount effects, and a view that loads its
-   * data there pushed the second frame out behind that render, reporting first
-   * paint 140-170 ms after the view was on screen. A view that throws while
+   * data there pushed the second frame out behind that render, reporting the
+   * first frame 140-170 ms after the view was on screen. A view that throws while
    * rendering unwinds this with it, so a failed load records no sample.
    */
   function PluginViewPaintReporter({ view }: { view: object }) {
@@ -1446,20 +1448,24 @@ export function makePluginViewContent(
                 {...styleRootProps}
               >
                 <Profiler id={kindId} onRender={onViewCommit}>
-                  <LazyView
-                    panelId={panelId}
-                    pluginId={pluginId}
-                    disposeSignal={controller.signal}
-                    panelRemovedSignal={panelRemovedSignal}
-                    initialArgs={mountArgs}
-                    stateVersion={mountStateVersion}
-                    persistState={persistState}
-                    requestReload={requestReload}
-                    setHasUnsavedChanges={setHasUnsavedChanges}
-                    worktreeId={worktreeId}
-                    styleRootAttributes={styleRootProps}
-                    {...(settingsContext ? { settingsContext } : {})}
-                  />
+                  {/* Kit overlays portal out of the root above; this is how
+                      they still name the plugin that owns them. */}
+                  <PluginKitOwnerContext.Provider value={pluginId}>
+                    <LazyView
+                      panelId={panelId}
+                      pluginId={pluginId}
+                      disposeSignal={controller.signal}
+                      panelRemovedSignal={panelRemovedSignal}
+                      initialArgs={mountArgs}
+                      stateVersion={mountStateVersion}
+                      persistState={persistState}
+                      requestReload={requestReload}
+                      setHasUnsavedChanges={setHasUnsavedChanges}
+                      worktreeId={worktreeId}
+                      styleRootAttributes={styleRootProps}
+                      {...(settingsContext ? { settingsContext } : {})}
+                    />
+                  </PluginKitOwnerContext.Provider>
                 </Profiler>
                 <PluginViewPaintReporter view={LazyView} />
                 <PluginViewMountReporter

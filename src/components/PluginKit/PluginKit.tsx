@@ -1,4 +1,4 @@
-import { isValidElement, type ChangeEvent, type ReactNode } from "react";
+import { isValidElement, type ChangeEvent, type ReactNode, type SyntheticEvent } from "react";
 import type {
   PluginBadgeProps,
   PluginButtonProps,
@@ -99,7 +99,9 @@ import {
   PluginStyleScope,
   positive,
   str,
+  useKitOwnerAttributes,
 } from "./kitProps";
+import { PluginKitLayerContext, useKitOverlayZClass, type PluginKitLayer } from "./kitScope";
 import { pluginKitPatterns } from "./PluginKitPatterns";
 import { pluginKitLists } from "./PluginKitLists";
 import { pluginKitOverlays } from "./PluginKitOverlays";
@@ -166,6 +168,7 @@ function KitIconButton({
   className,
   ...rest
 }: PluginIconButtonProps) {
+  const overlayZ = useKitOverlayZClass();
   const label = str(ariaLabel) ?? "";
   const button = (
     <Button
@@ -187,7 +190,7 @@ function KitIconButton({
   return (
     <Tooltip>
       <TooltipTrigger asChild>{button}</TooltipTrigger>
-      <TooltipContent side={oneOf(tooltipSide, SIDES) ?? "bottom"}>
+      <TooltipContent side={oneOf(tooltipSide, SIDES) ?? "bottom"} className={overlayZ}>
         <PluginStyleScope>{node(tip)}</PluginStyleScope>
       </TooltipContent>
     </Tooltip>
@@ -202,12 +205,13 @@ function KitTooltip({
   delayDuration,
   disabled,
 }: PluginTooltipProps) {
+  const overlayZ = useKitOverlayZClass();
   if (!isValidElement(children)) return null;
   if (disabled === true || !hasContent(content)) return children;
   return (
     <Tooltip delayDuration={positive(delayDuration, 10_000)}>
       <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent side={oneOf(side, SIDES)} align={oneOf(align, ALIGNS)}>
+      <TooltipContent side={oneOf(side, SIDES)} align={oneOf(align, ALIGNS)} className={overlayZ}>
         <PluginStyleScope>{node(content)}</PluginStyleScope>
       </TooltipContent>
     </Tooltip>
@@ -222,10 +226,12 @@ function KitTruncatedTooltip({
   focusable,
   isTruncated,
 }: PluginTruncatedTooltipProps) {
+  const overlayZ = useKitOverlayZClass();
   if (!isValidElement(children)) return null;
   return (
     <TruncatedTooltip
       content={<PluginStyleScope>{node(content)}</PluginStyleScope>}
+      contentClassName={overlayZ}
       side={oneOf(side, SIDES)}
       align={oneOf(align, ALIGNS)}
       focusable={focusable !== false}
@@ -532,6 +538,8 @@ function KitSelect(props: PluginSelectProps) {
   // (`""`, `null`, `undefined`) goes back to the placeholder rather than
   // leaving Radix holding the last pick uncontrolled.
   const controlled = Object.hasOwn(props, "value");
+  const overlayZ = useKitOverlayZClass();
+  const owner = useKitOwnerAttributes();
   const entries = normalizeSelectOptions(options);
   // Radix's trigger does not read the field context the other controls do, so
   // a Select inside a kit FormField is wired here.
@@ -559,7 +567,7 @@ function KitSelect(props: PluginSelectProps) {
       >
         <SelectValue placeholder={str(placeholder)} />
       </SelectTrigger>
-      <SelectContent>
+      <SelectContent {...owner} className={overlayZ}>
         {entries.map((entry, index) =>
           entry.kind === "option" ? (
             renderSelectItem(entry.option)
@@ -1128,8 +1136,23 @@ function renderMenuEntry(entry: PluginDropdownMenuEntry, index: number): ReactNo
   }
 }
 
-function stopEvent(event: { stopPropagation: () => void }) {
-  event.stopPropagation();
+/**
+ * Stops a React event reaching the view's handlers without stopping the native
+ * event. React's `stopPropagation()` also stops the native event where React
+ * listens, which is below `document`, so Radix's document `pointerdown`
+ * listener would never see a press inside the menu and never clear the flag
+ * that press set: the next click outside would read as inside and be ignored.
+ * Shadowing the native method for the call keeps the native event flowing.
+ */
+function stopReactPropagation(event: SyntheticEvent) {
+  const native = event.nativeEvent;
+  const keep = () => {};
+  Object.defineProperty(native, "stopPropagation", { value: keep, configurable: true });
+  try {
+    event.stopPropagation();
+  } finally {
+    Reflect.deleteProperty(native, "stopPropagation");
+  }
 }
 
 function KitDropdownMenu({
@@ -1143,11 +1166,14 @@ function KitDropdownMenu({
   onCloseAutoFocus,
   stopPropagation,
 }: PluginDropdownMenuProps) {
+  const overlayZ = useKitOverlayZClass();
+  const owner = useKitOwnerAttributes();
   if (!isValidElement(trigger)) return null;
   const entries: readonly PluginDropdownMenuEntry[] = Array.isArray(items) ? items : [];
   const closeAutoFocus = fn(onCloseAutoFocus);
   // Only the view's ancestors are cut off: the menu's own handlers run on the
-  // content element itself, so Radix's keyboard and focus policy are untouched.
+  // content element itself, and the native events still reach the document,
+  // so Radix's keyboard, focus and outside-press policy are untouched.
   const isolate = stopPropagation === true;
   return (
     <DropdownMenu
@@ -1156,13 +1182,15 @@ function KitDropdownMenu({
     >
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
       <DropdownMenuContent
+        {...owner}
+        className={overlayZ}
         side={oneOf(side, SIDES)}
         align={oneOf(align, ALIGNS)}
         aria-label={str(ariaLabel)}
         onCloseAutoFocus={closeAutoFocus ? (event) => closeAutoFocus(event) : undefined}
-        onClick={isolate ? stopEvent : undefined}
-        onPointerDown={isolate ? stopEvent : undefined}
-        onKeyDown={isolate ? stopEvent : undefined}
+        onClick={isolate ? stopReactPropagation : undefined}
+        onPointerDown={isolate ? stopReactPropagation : undefined}
+        onKeyDown={isolate ? stopReactPropagation : undefined}
       >
         {entries.map(renderMenuEntry)}
       </DropdownMenuContent>
@@ -1202,6 +1230,10 @@ function zIndexOf(layer: unknown): "nested" | undefined {
   return layer === "nested" ? "nested" : undefined;
 }
 
+function layerOf(layer: unknown): PluginKitLayer {
+  return layer === "nested" ? "nested" : "modal";
+}
+
 function noop() {}
 
 function KitDialog({
@@ -1226,37 +1258,41 @@ function KitDialog({
   const footerHint =
     content(hint) ?? (custom === undefined ? disabledReasonOf(primaryAction) : undefined);
   return (
-    <AppDialog
-      isOpen={open === true}
-      onClose={fn(onClose) ?? noop}
-      size={oneOf(size, ["sm", "md", "lg"] as const) ?? "md"}
-      dismissible={dismissible !== false}
-      zIndex={zIndexOf(layer)}
-      data-testid={nonEmpty(testId)}
-    >
-      <AppDialog.Header>
-        <AppDialog.Title icon={iconNode(icon)}>{node(title)}</AppDialog.Title>
-        <AppDialog.CloseButton />
-      </AppDialog.Header>
-      <AppDialog.Body>
-        <PluginStyleScope block className="space-y-3">
-          {hasContent(description) ? (
-            <AppDialog.Description>{node(description)}</AppDialog.Description>
-          ) : null}
-          {node(children)}
-        </PluginStyleScope>
-      </AppDialog.Body>
-      {custom !== undefined ? (
-        <AppDialog.Footer hint={footerHint}>
-          {/* One container: a hint spreads the footer, and loose controls would scatter across it. */}
-          <PluginStyleScope block className="flex shrink-0 items-center gap-3">
-            {custom}
+    // Context reaches through the dialog's portal, so kit overlays opened
+    // inside it can stack above a nested dialog.
+    <PluginKitLayerContext.Provider value={layerOf(layer)}>
+      <AppDialog
+        isOpen={open === true}
+        onClose={fn(onClose) ?? noop}
+        size={oneOf(size, ["sm", "md", "lg"] as const) ?? "md"}
+        dismissible={dismissible !== false}
+        zIndex={zIndexOf(layer)}
+        data-testid={nonEmpty(testId)}
+      >
+        <AppDialog.Header>
+          <AppDialog.Title icon={iconNode(icon)}>{node(title)}</AppDialog.Title>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+        <AppDialog.Body>
+          <PluginStyleScope block className="space-y-3">
+            {hasContent(description) ? (
+              <AppDialog.Description>{node(description)}</AppDialog.Description>
+            ) : null}
+            {node(children)}
           </PluginStyleScope>
-        </AppDialog.Footer>
-      ) : primary || secondary ? (
-        <AppDialog.Footer primaryAction={primary} secondaryAction={secondary} hint={footerHint} />
-      ) : null}
-    </AppDialog>
+        </AppDialog.Body>
+        {custom !== undefined ? (
+          <AppDialog.Footer hint={footerHint}>
+            {/* One container: a hint spreads the footer, and loose controls would scatter across it. */}
+            <PluginStyleScope block className="flex shrink-0 items-center gap-3">
+              {custom}
+            </PluginStyleScope>
+          </AppDialog.Footer>
+        ) : primary || secondary ? (
+          <AppDialog.Footer primaryAction={primary} secondaryAction={secondary} hint={footerHint} />
+        ) : null}
+      </AppDialog>
+    </PluginKitLayerContext.Provider>
   );
 }
 
@@ -1296,16 +1332,21 @@ function KitConfirmDialog({
     zIndex: zIndexOf(layer),
   };
   const tone = oneOf(variant, ["default", "destructive", "info"] as const) ?? "default";
-  if (tone === "destructive") {
-    return (
-      <ConfirmDialog
-        {...common}
-        variant="destructive"
-        typedNameTarget={nonEmpty(typedNameTarget)}
-      />
-    );
-  }
-  return <ConfirmDialog {...common} variant={tone} />;
+  // Around the whole dialog: the title, description and hint can hold kit
+  // overlays too, not only the children.
+  return (
+    <PluginKitLayerContext.Provider value={layerOf(layer)}>
+      {tone === "destructive" ? (
+        <ConfirmDialog
+          {...common}
+          variant="destructive"
+          typedNameTarget={nonEmpty(typedNameTarget)}
+        />
+      ) : (
+        <ConfirmDialog {...common} variant={tone} />
+      )}
+    </PluginKitLayerContext.Provider>
+  );
 }
 
 /**
