@@ -29,7 +29,7 @@ Creates `./my-plugin/` with:
 - `plugin.json` — starter manifest
 - `package.json` — npm dev deps (`@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite`, `daintree-plugin`, Vite, TypeScript), each pinned to a caret range of the version the CLI was released with
 - `vite.config.ts` — pre-configured for plugin builds
-- `tsconfig.json`
+- `tsconfig.json` — for a template with a view, `compilerOptions.types` lists `@daintreehq/plugin-sdk/view-globals` and `@daintreehq/plugin-sdk/plugin-ui`, so `window.electron.plugin` and the [UI kit](./ui-kit.md) typecheck
 - `src/` — starter code based on template choice
 - `.gitignore` — excludes `dist/`, `.dntr` files, `node_modules/`
 
@@ -105,7 +105,7 @@ Full detail, including the trust gate and the contribution restrictions, is in [
 Starts a hot-reload dev loop against a running Daintree instance:
 
 ```bash
-npx daintree-plugin dev [--skip-build]
+npx daintree-plugin dev [--skip-build] [--no-metrics]
 ```
 
 What it does, in order:
@@ -116,9 +116,73 @@ What it does, in order:
 4. Asks the running Daintree to load and activate the plugin (the `plugin.dev.start` IPC).
 5. Starts `vite build --watch`. Daintree watches the plugin **root** — `plugin.json`, `dist/` and the `.dev-marker` count as the artifact; `src/` is ignored, because a source write says nothing about whether a loadable build exists yet. Once a rebuild settles (a ~200 ms trailing debounce, then a short quiet period the bytes must survive unchanged, so a half-written `dist/` is never imported), the whole plugin is reconciled against what is on disk: the manifest is re-read, contributions are re-registered, views are republished under a fresh generation, and the backend worker is replaced. A save therefore reloads manifest, views and backend together as one artifact generation — not just the worker. A `plugin.json` you are midway through editing is reported rather than acted on, and leaves the running version up until the next save. Dev plugins carry a **DEV** badge on their entry in Preferences so you can tell at a glance which installed plugins are pinned to a local dev folder.
 
+6. Polls the running Daintree every 2 seconds for the plugin's performance measurements (the `plugin.dev.metrics` CLI method) and prints them beside their budgets whenever what the table would show changes. `--no-metrics` turns it off. A Daintree too old to report metrics says so once and polling stops; a failed poll while Daintree restarts or a rebuild swaps in just waits for the next one.
+
+```
+Performance — acme.builds (worker)
+  activation        212ms                                     ✓ (budget 500ms)
+  view load         184ms (acme.builds.main)                  ✓ (budget 300ms)
+  view first frame  241ms                                     ✓ (budget 500ms)
+  view commits p95  —                                         none observed (production builds do not report commits)
+  invokes p50/p95   18ms / 96ms (42, 1 failed)                ✓ (budget 250ms)
+  pushes/s          3.1/s, 12.4 KB/s (peak 9.0/s, 40.0 KB/s)  ✓
+  long frames       2 (148ms blocking)                        plugin activity observed during these frames
+  worker RSS        88.4 MB                                   ✓ (budget 256.0 MB)
+```
+
+The rows and what each is compared with are in [Performance](#performance) below. A row reads `over budget: 612ms > 500ms` when the host's snapshot lists that budget as exceeded; the table states where a value sits and never what to do about it.
+
 Press Ctrl-C (or send SIGTERM) to stop: the watcher is killed, Daintree is asked to unload the plugin (`plugin.dev.stop`), and the `.dev-marker` plus the symlink Daintree-`dev` created are removed. A second Ctrl-C while teardown is in flight exits immediately.
 
 One host method is a no-op for `dev`-loaded plugins: `registerForgeProvider`. Forge providers require synchronous host methods (`parseRemote`, URL builders) that can't cross the worker's async MessagePort boundary, so a `registerForgeProvider` call logs a warning and is skipped. Everything else — including `host.process.spawn` and `host.fs.watch`, whose handles and subscriptions are proxied over the port and survive a reload — works under `dev`. Note this is **not** a dev-only limitation: every user-installed plugin runs in a worker (see [Architecture → Activation](./architecture.md#activation)), so packaging and installing the plugin doesn't restore forge support either. Only Daintree's built-in plugins run in-process and can register forge providers — a known architectural gap, not something a third-party plugin can work around today.
+
+### `daintree-plugin lint [dir]`
+
+Checks the plugin's source for performance traps and for drift from the host's design contract, then compiles the view's classes against that contract the way the running host does and lists the ones that generate no CSS. `validate` stays manifest-only; `lint` is the command that reads your code.
+
+```bash
+npx daintree-plugin lint [dir] [--json] [--strict]
+```
+
+`dir` defaults to the current directory. It reads the plugin's own `.ts`, `.tsx`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.mts`, `.cts` and `.css` files, skipping `node_modules`, build output, tests, previews, fixtures, declaration files, tooling config and any file over 2,097,152 characters (read as a bundle); the only build output it reads is the built view, for `bundled-react`. Each file is classified as view, worker, shared or style — by what the manifest names, then by what it imports (`react`, `react-dom`, `@daintreehq/plugin-ui` make a view; an exported `activate` a worker), then by its directory — and rules that only make sense in a view or a worker run only there. Views written with JSX, `createElement` or a `h()` alias are all read. Output groups findings by file with the rule id, the message and a one-line fix; `--json` prints the whole result (`findings`, `errorCount`, `warningCount`, `notes`, `ok`). It exits 1 on any error, and with `--strict` on any warning too.
+
+The rules are heuristics over source, not proofs, and every finding names a fix. Performance rules:
+
+| Rule | Severity | Flags |
+| --- | --- | --- |
+| `interval-polling-in-view` | warn | `setInterval` in view code: poll in the worker and push. A tick of 30 s or more is exempt unless its callback fetches; a clock tick (storing `Date.now()`, bumping a counter) is pointed at `useNow` instead |
+| `undebounced-worktree-subscription` | warn | A host `fs.watch` without `debounceMs`, which delivers every write in a burst. Worktree, active-worktree and agent-state subscriptions coalesce by default, so it no longer flags those |
+| `subscription-without-dispose` | warn | A `plugin.on` / `onPanel` subscription in a view whose disposer is dropped, so it outlives the view |
+| `large-inline-payload` | warn | A whole collection posted once per item inside a loop over it — cost that grows with its square |
+| `whole-state-push` | warn | A collection that only grows, re-sent whole on every push; use `createSyncedCollection` + `useSyncedCollection` |
+| `render-on-every-event` | warn | State set on every event of a high-frequency subscription, or a collection copied in state to append one item |
+| `bundled-react` | error | The built view bundles its own React, so hooks break against the host's |
+
+Consistency rules:
+
+| Rule | Severity | Flags |
+| --- | --- | --- |
+| `stock-palette-colour` | error | A stock Tailwind colour (`bg-blue-500`), which compiles to nothing in a plugin; use a semantic token |
+| `dark-variant` | warn | `dark:`, which follows the OS colour scheme, not the Daintree theme |
+| `legacy-daintree-utility` | warn | A legacy `daintree-*` colour alias |
+| `raw-shadow` | warn | A stock or hard-coded shadow instead of a `--theme-shadow-*` token |
+| `arbitrary-text-size` | warn | An arbitrary font size off the type scale |
+| `text-colour-slash-alpha` | warn | A text colour with slash alpha; use a solid token one step down |
+| `raw-radius` | warn | A radius off the theme's scale |
+| `unpaired-outline-suppression` | warn | `outline-none`, or an `outline-hidden` / `outline-0` with no visible focus treatment beside it |
+| `hand-rolled-spinner` | warn | A hand-applied `animate-spin`; use the kit's `Spinner` |
+| `hand-rolled-badge` | warn | A hand-tinted status pill (`bg-status-*/10`); use `Badge` |
+| `apply-directive` | warn | `@apply` in a stylesheet — it needs a Tailwind build step plugin styles never get |
+| `raw-button` | warn | A raw `<button>` in a view; use `Button` |
+| `raw-form-control` | warn | A raw form control; use the matching kit component |
+| `native-title-tooltip` | warn | A native `title=` tooltip, which ignores the theme and the keyboard |
+| `inline-svg-icon` | warn | An inline 24×24 SVG icon; use `Icon` |
+| `lucide-react-import` | warn | `lucide-react` bundled into a view; the kit's `Icon` is served at no bundle cost |
+| `native-dialog-in-view` | warn | `alert`, `confirm` or `prompt` in a view; use `ConfirmDialog` or `Dialog` |
+| `self-container-query` | warn | A container-query variant on the container itself |
+| `class-compiles-to-nothing` | warn | The offline style report: classes Tailwind generates no CSS for against the design contract — usually a typo or a utility from another Tailwind version. One finding per file; stock colours are left to `stock-palette-colour` and classes your own stylesheets define are not reported |
+
+`LINT_RULES` in `packages/daintree-plugin/src/lib/lint/index.ts` is the authoritative list of the rules above it; `class-compiles-to-nothing` is the separate style report in the same file (`STYLE_REPORT_RULE_ID`). The kit components the fixes name are in the [UI kit](./ui-kit.md) reference.
 
 ### `daintree-plugin validate`
 
@@ -170,10 +234,10 @@ Equivalent to Preferences → Plugins → Uninstall. User-scope settings are **k
 ### `daintree-plugin doctor <projectRoot>`
 
 ```bash
-npx daintree-plugin doctor . [--offline]
+npx daintree-plugin doctor . [--offline] [--no-lint]
 ```
 
-`validate` plus the checks that only make sense for a project's committed plugins: walks every directory under `<projectRoot>/.daintree/plugins/`, validates each manifest under the project rules, and confirms that `main` and every view `componentPath` exist in the working tree, parse as ESM, are in the git index (`git ls-files --error-unmatch`), and are not matched by any `.gitignore` rule. These are working-tree and index checks, not a check of committed contents: a staged-but-uncommitted build passes, and a tracked file whose committed copy is stale is not caught, so a clean run catches the common ways a plugin stays local (an ignored or untracked `dist/`) without proving that a fresh clone loads it. It also asks the running Daintree what it has decided about the project (trust state, and each plugin's load state) and prints that as information — host status never affects the result or the exit code. `--offline` skips that query for CI.
+`validate` plus the checks that only make sense for a project's committed plugins: walks every directory under `<projectRoot>/.daintree/plugins/`, validates each manifest under the project rules, and confirms that `main` and every view `componentPath` exist in the working tree, parse as ESM, are in the git index (`git ls-files --error-unmatch`), and are not matched by any `.gitignore` rule. These are working-tree and index checks, not a check of committed contents: a staged-but-uncommitted build passes, and a tracked file whose committed copy is stale is not caught, so a clean run catches the common ways a plugin stays local (an ignored or untracked `dist/`) without proving that a fresh clone loads it. It also runs [`lint`](#daintree-plugin-lint-dir) over each plugin and folds its findings into the warnings, as `lint <severity> <file>:<line> [<rule>] <message> — <fix>`. They are advisory there — a heuristic over source cannot prove a plugin won't load, which is the question doctor's exit status answers — so run `lint` itself to gate on them; `--no-lint` skips it. Finally it asks the running Daintree what it has decided about the project (trust state, and each plugin's load state) and prints that as information — host status never affects the result or the exit code. `--offline` skips that query for CI.
 
 ### `daintree-plugin schema`
 
@@ -182,6 +246,50 @@ npx daintree-plugin schema [--project] [--out plugin.schema.json]
 ```
 
 Prints the JSON Schema for `plugin.json`, generated from the same Zod schema the host loads with, so an editor can complete and check the manifest against the contract rather than the prose. `--project` emits the project-plugin variant, `--out` writes to a file instead of stdout. It is structural only: the cross-field rules the host enforces at load (a view's id naming a declared panel, the contribution types refused under project scope, the reserved `daintree.*` namespace) are Zod refinements that the generated schema omits, so a manifest that passes the editor can still be refused by `validate`.
+
+## Performance
+
+Plugin views share the app's main thread and plugin workers share its IPC, so one slow plugin makes all of Daintree slow. The host measures each plugin's cost against a set of budgets and shows the numbers to you (`daintree-plugin dev`) and to users (Settings → Plugins). They are **observations, not verdicts**: a plugin that was active during a slow frame did not necessarily cause it, and Daintree never slows, blocks or stops a plugin for going over a budget. What _is_ enforced is the transport — invoke deadlines and payload caps — documented in [Host API → Deadlines and size limits](./host-api.md#deadlines-and-size-limits).
+
+### Budgets
+
+From `PLUGIN_PERF_BUDGETS` in `shared/config/pluginBudgets.ts`:
+
+| Budget | Value | Measured as |
+| --- | --- | --- |
+| `activationMs` | 500 ms | `activate()` from call to settled, including worker boot for a worker plugin. The last activation is compared |
+| `viewLoadMs` | 300 ms | Open → view module imported and styles prepared, measured directly (`loadMs`); a builtin's view has no import, so it is open → activated and the kit ready |
+| `viewFirstPaintMs` | 500 ms | Open → the start of the animation frame after the view's first commit: the first frame that can show it. A view whose first commit is its own loading state reports that frame |
+| `viewCommitP95Ms` | 16 ms | p95 of React `Profiler` commit durations. Production React never calls `Profiler`, so this is measured only in development and profiling builds and reads "none observed" otherwise |
+| `invokeP95Ms` | 250 ms | p95 of `invoke` round trips. Invokes that overlapped a host prompt the plugin had open (quick pick, input box, confirm, send-to-agent picker) waited on the user, so they are counted separately as prompt waits and left out of the latency figures |
+| `pushesPerSecond` | 60 /s | Sustained host → renderer pushes: the trailing ten one-second buckets divided by their span. One push reaching two renderers counts two |
+| `pushBytesPerSecond` | 1 MiB/s | The same window, in estimated payload bytes |
+| `workerRssBytes` | 256 MiB | Worker process resident memory, sampled every 5 s while someone is watching and on demand (at most every 2 s) when snapshots are read. Worker plugins only |
+
+Beside the budgeted figures the snapshot keeps the busiest single second of pushes (shown as the peak, never judged), invoke errors, timeouts and oversize refusals, oversize pushes, and **long frames**: long animation frames (Chromium reports those of 50 ms or more) during which the plugin was observed doing something. A frame is attributed to a plugin once, under the first of these that matches: a script served from its `plugin://` origin ran; one of its views committed (development builds only); a pointer, key, input, wheel or click event was dispatched inside one of its views or their kit overlays; or a host push was delivered to its listeners in that renderer. Each means "active during the stall", which is why the table's note reads "plugin activity observed during these frames".
+
+Measurements start when main first records the plugin and cover this session only; unloading the plugin, a reload included, discards them. `PluginPerfSnapshot` in `shared/types/pluginMetrics.ts` is the full shape, and it is what `window.electron.plugin.getPerfSnapshots()` and `onPerfSnapshotsChanged(callback)` serve to the app's own UI.
+
+### In Settings → Plugins
+
+A plugin's detail page gains two tabs, for installed, built-in and project plugins alike:
+
+- **Performance** appears once main has measured something. It shows each figure against its budget, with the explainer "Measured since …, in this session only. These are observations, not a verdict: a plugin that was active during a slow frame didn't necessarily cause it. Budgets are guides, and Daintree never slows or stops a plugin for going over one."
+- **Styles** appears for a running plugin with a rendered panel view. It reads the open views in that window — including popups a panel opens with its style-root attributes — and lists the classes Daintree's plugin styles generate no CSS for, split into stock Tailwind colours (with the semantic token to use instead) and classes with no matching utility (usually a typo, a utility from another Tailwind version, or a class your own CSS styles). **Check again** re-reads. It is the live counterpart of `lint`'s `class-compiles-to-nothing`.
+
+### In DevTools
+
+Every view load puts its phases on the renderer's Performance timeline as User Timing measures named `daintree:plugin:<pluginId>:<phase>`, so they sit beside your own frames in a recording:
+
+| Phase         | Covers                                                               |
+| ------------- | -------------------------------------------------------------------- |
+| `activate`    | The `activateForView` round trip                                     |
+| `import`      | The view module's `import()` (not for a builtin)                     |
+| `styles`      | Preparing the plugin's Tailwind styles (not for a builtin)           |
+| `view-load`   | Open → imported and styled: the figure `viewLoadMs` is compared with |
+| `first-paint` | Open → the first frame that can show the view                        |
+
+Only the latest entry per plugin and phase is kept, however often views open. Under Daintree's perf capture (`DAINTREE_PERF_CAPTURE`, used by the E2E benches) the renderer also emits the marks `plugin_view.load_start`, `plugin_view.activated`, `plugin_view.imported` and `plugin_view.first_paint`, each carrying `pluginId` and `kindId`, and main emits `plugin-activated` with `{ pluginId, durationMs }`.
 
 ## Debugging
 
