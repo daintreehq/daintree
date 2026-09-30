@@ -33,11 +33,12 @@ program.addCommand(newCommand());
 
 program
   .command("validate")
+  .argument("[dir]", "plugin directory (default: current directory)")
   .description("Validate plugin.json against Daintree's manifest schema")
   .option("--env", "resolve ${settings:…} tokens against .daintree-plugin-env")
-  .action(async (opts: { env?: boolean }) => {
+  .action(async (dir: string | undefined, opts: { env?: boolean }) => {
     try {
-      const result = await runValidate({ env: opts.env });
+      const result = await runValidate({ dir, env: opts.env });
       if (result.ok) {
         console.log("✓ plugin.json is valid");
       }

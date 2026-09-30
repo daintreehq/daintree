@@ -75,10 +75,13 @@ function typecheck(dir: string, override: ts.CompilerOptions = {}): string[] {
   const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, dir);
   const options: ts.CompilerOptions = {
     ...parsed.options,
-    // `dist/` only exists after the SDK is built, so the declarations' own
-    // import of `/react` is pointed at source; everything else resolves the
-    // way it would for an author.
-    paths: { "@daintreehq/plugin-sdk/react": [path.join(sdkDir, "src/react.ts")] },
+    // `dist/` only exists after the SDK is built, so its runtime entries are
+    // pointed at source; the types-only entries (`view-globals`, `plugin-ui`)
+    // resolve through the package exports the way they would for an author.
+    paths: {
+      "@daintreehq/plugin-sdk": [path.join(sdkDir, "src/index.ts")],
+      "@daintreehq/plugin-sdk/react": [path.join(sdkDir, "src/react.ts")],
+    },
     ...override,
   };
   const host = ts.createCompilerHost(options);
