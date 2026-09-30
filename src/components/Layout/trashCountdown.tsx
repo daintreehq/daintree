@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { TRASH_TTL_MS } from "@shared/config/trash";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { cn } from "@/lib/utils";
+import { getTrashTtlMs } from "@/store/slices/panelRegistry/trash";
 
 /**
  * The shared deadline vocabulary for the recently-closed list.
@@ -11,6 +11,10 @@ import { cn } from "@/lib/utils";
  * about it. Both the single-pane row and the tab-group row spell it the same
  * way, and they spell it here so they cannot drift apart.
  */
+
+// Read once: the only override is an E2E launch value the preload fixes
+// before any module runs, so it cannot change for the life of the renderer.
+const TRASH_TTL_MS = getTrashTtlMs();
 
 /** The window in whole seconds, for copy that has to name it. */
 export const TRASH_TTL_SECONDS = Math.round(TRASH_TTL_MS / 1000);

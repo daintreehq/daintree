@@ -1,5 +1,5 @@
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
-import type { TrashExpiryHelpers } from "./trash";
+import { getTrashTtlMs, type TrashExpiryHelpers } from "./trash";
 import { getNarrowPanel } from "./selectors";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
@@ -17,7 +17,6 @@ import {
   type PanelInstance,
   type PanelKind,
 } from "@shared/types/panel";
-import { TRASH_TTL_MS } from "@shared/config/trash";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { cancelReconnectErrorDebounce } from "./browser";
@@ -86,7 +85,7 @@ export const createTrashActions = (
       return;
     }
 
-    const expiresAt = Date.now() + TRASH_TTL_MS;
+    const expiresAt = Date.now() + getTrashTtlMs();
 
     if (isDevPreviewPanel(terminal)) {
       stopDevPreviewByPanelId(id);
@@ -160,7 +159,7 @@ export const createTrashActions = (
       return;
     }
 
-    const expiresAt = Date.now() + TRASH_TTL_MS;
+    const expiresAt = Date.now() + getTrashTtlMs();
     const groupRestoreId = `group-${crypto.randomUUID()}`;
     const panelIds = [...group.panelIds];
     const activeTabId = group.activeTabId ?? panelIds[0] ?? "";

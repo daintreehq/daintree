@@ -1,5 +1,5 @@
-import { test, expect } from "@playwright/test";
-import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
+import { test, expect, type Locator } from "@playwright/test";
+import { launchApp, closeApp, waitForProcessExit, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { waitForTerminalText, runTerminalCommand } from "../../helpers/terminal";
@@ -11,13 +11,44 @@ import {
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 import { dismissBlockingPalette } from "../../helpers/overlays";
-import { TRASH_TTL_MS } from "../../../shared/config/trash";
+import { getPtyPid, isPidAlive } from "../../helpers/stress";
+
+// E2E-only trash TTL overrides (renderer and pty-host timers alike; honoured
+// only under DAINTREE_E2E_MODE in an unpackaged build). The restore / Empty
+// trash launch holds entries far longer than any of its tests, so only Empty
+// trash can be what kills a PTY there; the expiry launch makes the TTL short
+// enough to observe without sleeping through the real 20 s.
+const TRASH_TTL_HOLD_MS = 120_000;
+const TRASH_TTL_EXPIRY_MS = 5_000;
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 
 let ctx: AppContext;
-let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
+
+async function launchWithTrashTtl(ttlMs: number, name: string): Promise<void> {
+  const fixture = createFixtureRepo({ name });
+  fixtureCleanup = fixture.cleanup;
+  ctx = await launchApp({ env: { DAINTREE_E2E_TRASH_TTL_MS: String(ttlMs) } });
+  ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture.dir, "Trash Restore Test");
+
+  const worktreeCards = ctx.window.locator("[data-worktree-branch]");
+  await expect(worktreeCards.first()).toBeVisible({ timeout: T_LONG });
+}
+
+async function closeLaunch(): Promise<void> {
+  if (ctx?.app) await closeApp(ctx.app);
+  fixtureCleanup?.();
+  fixtureCleanup = undefined;
+}
+
+/** The trash pill names the TTL the renderer is actually running with. */
+async function expectAdvertisedTtl(window: AppContext["window"], ttlMs: number): Promise<void> {
+  await expect(window.locator(SEL.trash.container)).toHaveAttribute(
+    "aria-label",
+    new RegExp(`removed for good ${ttlMs / 1000} seconds after closing`)
+  );
+}
 
 function uniqueMarker(): string {
   return `TM_${Date.now().toString(36).slice(-6)}_${Math.random().toString(36).slice(2, 6)}`;
@@ -29,6 +60,12 @@ async function openTerminal(window: AppContext["window"]): Promise<void> {
   await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
 }
 
+async function ptyPidOf(window: AppContext["window"], panel: Locator): Promise<number> {
+  const pid = await getPtyPid(window, panel);
+  expect(isPidAlive(pid), `PTY ${pid} should be alive before it is trashed`).toBe(true);
+  return pid;
+}
+
 async function closeFirstPanel(window: AppContext["window"]): Promise<void> {
   const before = await getGridPanelCount(window);
   const panel = getFirstGridPanel(window);
@@ -37,20 +74,58 @@ async function closeFirstPanel(window: AppContext["window"]): Promise<void> {
   await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(before - 1);
 }
 
+/**
+ * Close every grid panel, then empty the trash through the popover's
+ * "Empty trash" button and its confirm. The confirm must still list every
+ * closed panel (so the TTL has not already taken them), and afterwards each
+ * PTY process must really be gone.
+ */
+async function closeAllAndEmptyTrash(
+  window: AppContext["window"],
+  ptyPids: number[]
+): Promise<void> {
+  let count = await getGridPanelCount(window);
+  while (count > 0) {
+    await closeFirstPanel(window);
+    count = await getGridPanelCount(window);
+  }
+
+  const trashBtn = window.locator(SEL.trash.container);
+  await expect(trashBtn).toBeVisible({ timeout: T_MEDIUM });
+  // The popover keeps its open state across a restore, so a plain click on
+  // the reappearing pill would toggle it shut.
+  if ((await trashBtn.getAttribute("aria-expanded")) !== "true") {
+    await trashBtn.click();
+  }
+
+  const popover = window.locator('[role="dialog"][aria-label="Recently closed terminals"]');
+  await expect(popover).toBeVisible({ timeout: T_SHORT });
+  await popover.locator('[data-testid="empty-trash-button"]').click();
+
+  const confirm = window
+    .locator('[role="dialog"], [role="alertdialog"]')
+    .filter({ hasText: "Empty trash?" });
+  await expect(confirm).toBeVisible({ timeout: T_SHORT });
+  const noun = ptyPids.length === 1 ? "1 panel" : `${ptyPids.length} panels`;
+  await expect(confirm).toContainText(`${noun} will be permanently removed`);
+  for (const pid of ptyPids) {
+    expect(isPidAlive(pid), `PTY ${pid} should still be alive until Empty trash`).toBe(true);
+  }
+  await confirm.locator(SEL.confirmDialog.confirm).click();
+
+  await expect(confirm).not.toBeVisible({ timeout: T_SHORT });
+  await expect(trashBtn).not.toBeVisible({ timeout: T_MEDIUM });
+  for (const pid of ptyPids) {
+    await waitForProcessExit(pid, T_LONG);
+  }
+}
+
 test.describe.serial("Core: Terminal Trash & Restore", () => {
   test.beforeAll(async () => {
-    ({ dir: fixtureDir, cleanup: fixtureCleanup } = createFixtureRepo({ name: "trash-restore" }));
-    ctx = await launchApp();
-    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Trash Restore Test");
-
-    const worktreeCards = ctx.window.locator("[data-worktree-branch]");
-    await expect(worktreeCards.first()).toBeVisible({ timeout: T_LONG });
+    await launchWithTrashTtl(TRASH_TTL_HOLD_MS, "trash-restore");
   });
 
-  test.afterAll(async () => {
-    if (ctx?.app) await closeApp(ctx.app);
-    fixtureCleanup?.();
-  });
+  test.afterAll(closeLaunch);
 
   // ── Trash and Restore via Keyboard Shortcut ─────────────
 
@@ -64,11 +139,13 @@ test.describe.serial("Core: Terminal Trash & Restore", () => {
       const panel = getFirstGridPanel(window);
       await runTerminalCommand(window, panel, `echo "${marker}"`);
       await waitForTerminalText(panel, marker, T_LONG);
+      const pid = await ptyPidOf(window, panel);
 
       await closeFirstPanel(window);
 
       const trashBtn = window.locator(SEL.trash.container);
       await expect(trashBtn).toBeVisible({ timeout: T_MEDIUM });
+      await expectAdvertisedTtl(window, TRASH_TTL_HOLD_MS);
 
       await window.keyboard.press(`${mod}+Shift+T`);
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(1);
@@ -78,15 +155,10 @@ test.describe.serial("Core: Terminal Trash & Restore", () => {
 
       // Trash container should disappear after restore (entry consumed)
       await expect(trashBtn).not.toBeVisible({ timeout: T_MEDIUM });
-    });
 
-    test("cleanup: close restored terminal", async () => {
-      const { window } = ctx;
-      const count = await getGridPanelCount(window);
-      if (count > 0) {
-        await closeFirstPanel(window);
-      }
-      await window.waitForTimeout(TRASH_TTL_MS + 3_000);
+      await test.step("close the restored terminal and empty the trash", async () => {
+        await closeAllAndEmptyTrash(window, [pid]);
+      });
     });
   });
 
@@ -102,6 +174,7 @@ test.describe.serial("Core: Terminal Trash & Restore", () => {
       const panel = getFirstGridPanel(window);
       await runTerminalCommand(window, panel, `echo "${marker}"`);
       await waitForTerminalText(panel, marker, T_LONG);
+      const pid = await ptyPidOf(window, panel);
 
       await closeFirstPanel(window);
 
@@ -119,15 +192,10 @@ test.describe.serial("Core: Terminal Trash & Restore", () => {
 
       const restored = getFirstGridPanel(window);
       await waitForTerminalText(restored, marker, T_LONG);
-    });
 
-    test("cleanup: close restored terminal", async () => {
-      const { window } = ctx;
-      const count = await getGridPanelCount(window);
-      if (count > 0) {
-        await closeFirstPanel(window);
-      }
-      await window.waitForTimeout(TRASH_TTL_MS + 3_000);
+      await test.step("close the restored terminal and empty the trash", async () => {
+        await closeAllAndEmptyTrash(window, [pid]);
+      });
     });
   });
 
@@ -145,6 +213,7 @@ test.describe.serial("Core: Terminal Trash & Restore", () => {
       const panelA = getFirstGridPanel(window);
       await runTerminalCommand(window, panelA, `echo "${markerA}"`);
       await waitForTerminalText(panelA, markerA, T_LONG);
+      const pidA = await ptyPidOf(window, panelA);
 
       // Open terminal B
       await openTerminal(window);
@@ -154,6 +223,7 @@ test.describe.serial("Core: Terminal Trash & Restore", () => {
       const panelB = panels.last();
       await runTerminalCommand(window, panelB, `echo "${markerB}"`);
       await waitForTerminalText(panelB, markerB, T_LONG);
+      const pidB = await ptyPidOf(window, panelB);
 
       // Close A (first panel), then B
       await panels.first().locator(SEL.panel.close).first().click();
@@ -168,20 +238,22 @@ test.describe.serial("Core: Terminal Trash & Restore", () => {
 
       const restored = getFirstGridPanel(window);
       await waitForTerminalText(restored, markerB, T_LONG);
-    });
 
-    test("cleanup: close all and wait for trash expiry", async () => {
-      const { window } = ctx;
-      let count = await getGridPanelCount(window);
-      while (count > 0) {
-        await closeFirstPanel(window);
-        count = await getGridPanelCount(window);
-      }
-      await window.waitForTimeout(TRASH_TTL_MS + 3_000);
+      await test.step("close B again and empty the trash holding A and B", async () => {
+        await closeAllAndEmptyTrash(window, [pidA, pidB]);
+      });
     });
   });
+});
 
-  // ── TTL Expiry Permanently Removes Terminal ─────────────
+// ── TTL Expiry Permanently Removes Terminal ─────────────
+
+test.describe.serial("Core: Terminal Trash TTL Expiry", () => {
+  test.beforeAll(async () => {
+    await launchWithTrashTtl(TRASH_TTL_EXPIRY_MS, "trash-ttl");
+  });
+
+  test.afterAll(closeLaunch);
 
   test.describe.serial("TTL Expiry Permanently Removes Terminal", () => {
     test("trashed terminal is permanently removed after TTL", async () => {
@@ -193,16 +265,22 @@ test.describe.serial("Core: Terminal Trash & Restore", () => {
       const panel = getFirstGridPanel(window);
       await runTerminalCommand(window, panel, `echo "${marker}"`);
       await waitForTerminalText(panel, marker, T_LONG);
+      const pid = await ptyPidOf(window, panel);
 
+      const closedAt = Date.now();
       await closeFirstPanel(window);
 
       const trashBtn = window.locator(SEL.trash.container);
       await expect(trashBtn).toBeVisible({ timeout: T_MEDIUM });
+      await expectAdvertisedTtl(window, TRASH_TTL_EXPIRY_MS);
+      // Trash holds the PTY: it is still running while the entry waits.
+      expect(isPidAlive(pid), `PTY ${pid} should survive being trashed`).toBe(true);
 
-      // Wait for TTL to expire
-      await window.waitForTimeout(TRASH_TTL_MS + 2_000);
-
-      await expect(trashBtn).not.toBeVisible({ timeout: T_MEDIUM });
+      // Nothing but the TTL removes it: the trash entry and the PTY both go.
+      await expect(trashBtn).not.toBeVisible({ timeout: TRASH_TTL_EXPIRY_MS + T_LONG });
+      await waitForProcessExit(pid, T_LONG);
+      // Not early: the entry lived out its TTL rather than being dropped.
+      expect(Date.now() - closedAt).toBeGreaterThanOrEqual(TRASH_TTL_EXPIRY_MS - 1_000);
       expect(await getGridPanelCount(window)).toBe(0);
 
       // Reopen-last should be a no-op

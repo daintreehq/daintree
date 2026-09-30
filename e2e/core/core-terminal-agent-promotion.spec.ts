@@ -1,5 +1,5 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { chmodSync, mkdirSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { execSync } from "child_process";
 import path from "path";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
@@ -31,7 +31,17 @@ const AGENT_STATE_VALUES = new Set([
 ]);
 
 const T_IDENTITY = 60_000;
-const T_AGENT_STICKY_REGRESSION = 45_000;
+// Shortens ProcessDetector's 30 s shell-command expiry for this launch only
+// (honoured solely under DAINTREE_E2E_MODE in an unpackaged build).
+const SHELL_COMMAND_EXPIRY_OVERRIDE_MS = 3_000;
+// Evidence is injected before the agent is even detected, so by the time the
+// guard runs the marker is usually already logged; the bound only has to be
+// comfortably under the 30 s product expiry so a dead override fails here.
+const T_SHELL_EXPIRY_OBSERVED = 20_000;
+// Covers several ProcessTreeCache polls after expiry (1.5 s base, backing off
+// toward 5 s on an unchanged tree), so an off-streak demotion that needs two
+// passes would land inside the window.
+const T_POST_EXPIRY_DWELL = 10_000;
 const FAKE_CLAUDE_STOP = "__DAINTREE_FAKE_CLAUDE_STOP__";
 const FAKE_NPM_STOP = "__DAINTREE_FAKE_NPM_STOP__";
 const fakeBuildProcess = [
@@ -41,6 +51,46 @@ const fakeBuildProcess = [
   `process.stdin.on('data', (chunk) => { if (String(chunk).includes('${FAKE_NPM_STOP}')) { console.log('NPM_EXIT'); process.exit(0); } });`,
   "setTimeout(() => {}, 10000);",
 ].join(" ");
+
+function readMainLog(): string {
+  const logPath = path.join(ctx.userDataDir, "logs", "daintree.log");
+  return existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
+}
+
+/**
+ * The pty-host logs one `[E2E] shell-evidence-expired` line per injected
+ * command when the overridden expiry elapses. Waiting on it proves the timer
+ * actually ran out before the spec asserts the agent survived it.
+ */
+async function waitForShellEvidenceExpiry(terminalId: string): Promise<void> {
+  const marker = `[E2E] shell-evidence-expired term=${terminalId} agent=claude action=retain`;
+  await expect
+    .poll(() => readMainLog().includes(marker), {
+      message: `pty-host never reported shell-command expiry for ${terminalId}`,
+      timeout: T_SHELL_EXPIRY_OBSERVED,
+      intervals: [250, 500],
+    })
+    .toBe(true);
+}
+
+/**
+ * Sample the pane's identity through the dwell so a transient demotion (drop
+ * then re-promotion) fails too, not just one that sticks.
+ */
+async function expectAgentHeldThroughDwell(panel: Locator, terminalId: string): Promise<void> {
+  const deadline = Date.now() + T_POST_EXPIRY_DWELL;
+  while (Date.now() < deadline) {
+    const detected = await panel.getAttribute("data-detected-agent-id");
+    const chrome = await panel.getAttribute("data-chrome-agent-id");
+    expect(
+      { detected, chrome },
+      `${terminalId} demoted after shell-command evidence expired`
+    ).toEqual({ detected: "claude", chrome: "claude" });
+    // timer: SHELL_COMMAND_EXPIRY_MS (E2E override) — sampling interval of the
+    // post-expiry dwell.
+    await panel.page().waitForTimeout(250);
+  }
+}
 
 function panelHeaderIcon(panel: Locator): Locator {
   return panel.locator("[data-pane-chrome] [data-terminal-icon-id]").first();
@@ -337,6 +387,7 @@ test.describe.serial("Core: terminal runtime agent promotion", () => {
         PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
         DAINTREE_CLI_PATH_PREPEND: fakeBinDir,
         DAINTREE_IDENTITY_DEBUG_PASS: "1",
+        DAINTREE_E2E_SHELL_COMMAND_EXPIRY_MS: String(SHELL_COMMAND_EXPIRY_OVERRIDE_MS),
       },
     });
     ctx.window = await openAndOnboardProject(
@@ -386,9 +437,11 @@ test.describe.serial("Core: terminal runtime agent promotion", () => {
         expect(await getTerminalText(panel)).not.toContain(".e2e bin");
       }
 
-      // Regression guard: shell-command evidence has a 30s expiry. A live
-      // agent must not demote to plain terminal when that timer elapses.
-      await window.waitForTimeout(T_AGENT_STICKY_REGRESSION);
+      // Regression guard: shell-command evidence expires (30 s in product,
+      // shortened for this launch). A live agent must not demote to plain
+      // terminal when that timer elapses.
+      await waitForShellEvidenceExpiry(toolbarPanelId);
+      await expectAgentHeldThroughDwell(panel, toolbarPanelId);
       await expect(panel).toHaveAttribute("data-detected-agent-id", "claude");
       await expect(panel).toHaveAttribute("data-chrome-agent-id", "claude");
       await expectRuntimeKind(panel, "agent");
@@ -467,7 +520,8 @@ test.describe.serial("Core: terminal runtime agent promotion", () => {
       await expectPanelHasAgentState(panel);
       await expectWorktreeTracksAgent(window, plainPanelId, "claude");
 
-      await window.waitForTimeout(T_AGENT_STICKY_REGRESSION);
+      await waitForShellEvidenceExpiry(plainPanelId);
+      await expectAgentHeldThroughDwell(panel, plainPanelId);
       await expect(panel).toHaveAttribute("data-detected-agent-id", "claude");
       await expect(panel).toHaveAttribute("data-chrome-agent-id", "claude");
       await expectRuntimeKind(panel, "agent");

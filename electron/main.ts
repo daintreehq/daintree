@@ -732,6 +732,11 @@ if (!gotTheLock) {
         const host = getWorkspaceClientRef()?.getHostForWindow(windowId);
         return host?._hasLiveChildForTesting() ?? false;
       };
+      // The pid is the handle a spec needs to SIGKILL the pty-host for real;
+      // null when the host is not forked (or between a crash and its respawn).
+      (globalThis as Record<string, unknown>).__daintreeGetPtyHostPid = (
+        windowId: number
+      ): number | null => getPtyClient()?.getHostPidForWindow(windowId) ?? null;
       (globalThis as Record<string, unknown>).__daintreeWorktreeHasPort = (
         webContentsId: number
       ): boolean => {

@@ -32,6 +32,7 @@ import type { ActionContext, ActionDispatchResult } from "../shared/types/action
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
+import { parseE2ETimerOverrideMs } from "../shared/config/e2eTimerOverrides.js";
 import {
   BrokerError,
   RequestResponseBroker,
@@ -3738,6 +3739,16 @@ if (isE2EMode) {
 // polyfilled `process.env` even under sandbox: true) is the propagation point.
 if (isE2ESkipFirstRunDialogs) {
   contextBridge.exposeInMainWorld(e2eGlobalKey("SKIP_FIRST_RUN_DIALOGS"), true);
+}
+
+// E2E-only trash TTL override. The pty-host reads the same env var for its own
+// kill timer; the renderer's copy drives the trash row expiry and countdown.
+// The env check is inline so a production build folds the branch away.
+if (!isPackagedBuild && process.env.DAINTREE_E2E_MODE === "1") {
+  const trashTtlOverrideMs = parseE2ETimerOverrideMs(process.env.DAINTREE_E2E_TRASH_TTL_MS);
+  if (trashTtlOverrideMs !== null) {
+    contextBridge.exposeInMainWorld(e2eGlobalKey("TRASH_TTL_MS"), trashTtlOverrideMs);
+  }
 }
 
 // Surface the persisted color scheme id (seeded via additionalArguments) so the
