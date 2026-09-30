@@ -124,8 +124,8 @@ class VoiceRecordingService {
     }
 
     this.unsubscribers.push(
-      voiceInput.onTranscriptionDelta((delta) => {
-        logDebug(`${LOG_PREFIX} Received transcription delta`, { length: delta.length });
+      voiceInput.onTranscriptionDelta(({ text: delta, itemId }) => {
+        logDebug(`${LOG_PREFIX} Received transcription delta`, { itemId, length: delta.length });
         const voiceState = useVoiceRecordingStore.getState();
         const target = voiceState.activeTarget;
         if (target) {
@@ -140,9 +140,13 @@ class VoiceRecordingService {
             // Snapshot where dictated text will begin once the final commit runs,
             // including any leading separator inserted between existing draft and
             // the first dictated token. Stable for the lifetime of the utterance.
-            useVoiceRecordingStore
-              .getState()
-              .setDraftLengthAtSegmentStart(target.panelId, insertStart);
+            // Identified items skip it: the provider releases their completions
+            // in commit order, so each one appends to the current draft.
+            if (!itemId) {
+              useVoiceRecordingStore
+                .getState()
+                .setDraftLengthAtSegmentStart(target.panelId, insertStart);
+            }
             // Track paragraph start for the first utterance in a new paragraph.
             useVoiceRecordingStore.getState().setActiveParagraphStart(target.panelId, insertStart);
           }
@@ -150,19 +154,19 @@ class VoiceRecordingService {
           // decoration renders them outside the doc model so the editor's
           // history records a single transaction per utterance (#9172).
         }
-        useVoiceRecordingStore.getState().appendDelta(delta);
+        useVoiceRecordingStore.getState().appendDelta(delta, itemId);
       })
     );
 
     this.unsubscribers.push(
-      voiceInput.onTranscriptionComplete(({ text }) => {
-        logDebug(`${LOG_PREFIX} Received transcription complete`, { length: text.length });
+      voiceInput.onTranscriptionComplete(({ text, itemId }) => {
+        logDebug(`${LOG_PREFIX} Received transcription complete`, { itemId, length: text.length });
         const voiceState = useVoiceRecordingStore.getState();
         const panelId = voiceState.activeTarget?.panelId;
         const projectId = voiceState.activeTarget?.projectId;
         if (panelId) {
           const buffer = voiceState.panelBuffers[panelId];
-          const segmentStart = buffer?.draftLengthAtSegmentStart ?? -1;
+          const segmentStart = itemId ? -1 : (buffer?.draftLengthAtSegmentStart ?? -1);
           const finalText = text.trim();
           if (finalText) {
             const inputStore = useTerminalInputStore.getState();
@@ -179,7 +183,7 @@ class VoiceRecordingService {
             inputStore.bumpExternalDraftRevision();
           }
         }
-        useVoiceRecordingStore.getState().completeSegment(text);
+        useVoiceRecordingStore.getState().completeSegment(text, itemId);
       })
     );
 

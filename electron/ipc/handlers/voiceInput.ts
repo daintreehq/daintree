@@ -445,7 +445,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
       if (voiceEvent.type === "delta") {
         logDebug("[VoiceInput] → renderer delta", { length: voiceEvent.text.length });
-        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, voiceEvent.text);
+        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, {
+          text: voiceEvent.text,
+          ...(voiceEvent.itemId ? { itemId: voiceEvent.itemId } : {}),
+        });
       } else if (voiceEvent.type === "complete") {
         const rawText = voiceEvent.text.trim();
         const liveSettings = getVoiceSettings();
@@ -475,10 +478,23 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           paragraphingStrategy: settings.paragraphingStrategy,
           partCount: parts.length,
         });
+        // Every part of one item carries its id so the renderer retires that
+        // item's preview. An identified item that yields no text still sends one
+        // empty completion — otherwise its interim deltas would linger as ghost
+        // text and be flushed into the draft on stop.
+        const itemIdField = voiceEvent.itemId ? { itemId: voiceEvent.itemId } : {};
+        if (parts.length === 0 && voiceEvent.itemId) {
+          getAppWebContents(win).send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
+            text: "",
+            willCorrect: false,
+            ...itemIdField,
+          });
+        }
         for (let i = 0; i < parts.length; i++) {
           getAppWebContents(win).send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
             text: parts[i],
             willCorrect: false,
+            ...itemIdField,
           });
           if (i < parts.length - 1) {
             getAppWebContents(win).send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {

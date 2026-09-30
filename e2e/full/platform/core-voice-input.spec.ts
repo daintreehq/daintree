@@ -142,7 +142,7 @@ async function installEventCapture(window: Page): Promise<void> {
     w.__voiceCapture__ = captured;
     const v = w.electron.voiceInput;
     v.onStatus((status: string) => captured.statuses.push(status));
-    v.onTranscriptionDelta((delta: string) => captured.deltas.push(delta));
+    v.onTranscriptionDelta((payload: { text: string }) => captured.deltas.push(payload.text));
     v.onTranscriptionComplete((payload: { text: string; willCorrect: boolean }) =>
       captured.completes.push(payload)
     );

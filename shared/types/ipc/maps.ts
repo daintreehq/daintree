@@ -1884,8 +1884,8 @@ export interface IpcEventMap {
   };
 
   // Voice input events
-  "voice-input:transcription-delta": string;
-  "voice-input:transcription-complete": { text: string; willCorrect: boolean };
+  "voice-input:transcription-delta": { text: string; itemId?: string };
+  "voice-input:transcription-complete": { text: string; willCorrect: boolean; itemId?: string };
   "voice-input:paragraph-boundary": { rawText: string | null };
   "voice-input:file-token-resolved": {
     description: string;
