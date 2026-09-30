@@ -1272,7 +1272,7 @@ describe("VoiceRecordingService — pause/resume (#9191)", () => {
 
   async function getVoiceMockState() {
     const mod = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: { activeTarget: { panelId: string } | null; status: string };
+      __state: { activeTarget: { panelId: string } | null; status: string; micSignal: string };
     };
     return mod.__state;
   }
@@ -1337,7 +1337,7 @@ describe("VoiceRecordingService — pause/resume (#9191)", () => {
     const voiceState = await getVoiceMockState();
     voiceState.activeTarget = { panelId: "panel-1" };
     voiceState.status = "paused";
-    (voiceState as { micSignal?: string }).micSignal = "live";
+    voiceState.micSignal = "live";
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
@@ -1360,12 +1360,12 @@ describe("VoiceRecordingService — pause/resume (#9191)", () => {
     const voiceState = await getVoiceMockState();
     voiceState.activeTarget = { panelId: "panel-1" };
     voiceState.status = "paused";
-    (voiceState as { micSignal?: string }).micSignal = "pending";
+    voiceState.micSignal = "pending";
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
     const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
-    (useVoiceRecordingStore.getState().announce as ReturnType<typeof vi.fn>).mockClear();
+    vi.mocked(useVoiceRecordingStore.getState().announce).mockClear();
 
     voiceRecordingService.resume();
 

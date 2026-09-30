@@ -72,7 +72,7 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
 
     it("holds the static arming ring from the hotkey press until the mic is live", () => {
       expect(source).toMatch(
-        /const\s+showArming\s*=\s*isActive\s*&&\s*\(isArming\s*\|\|\s*isMicStarting\)/
+        /const\s+showArming\s*=\s*isActive\s*&&\s*\(isArming\s*\|\|\s*isMicStarting\s*\|\|\s*\(isFinishing\s*&&\s*!isMicLive\)\)/
       );
     });
   });
@@ -104,7 +104,7 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
       // isPaused as another isActive sub-state that should still render the
       // (frozen) orbit chrome.
       expect(source).toMatch(
-        /const\s+showOrbit\s*=\s*isActive\s*&&\s*\(\(isSessionOpen\s*&&\s*isMicLive\)\s*\|\|\s*isFinishing\s*\|\|\s*isPaused\)/
+        /const\s+showOrbit\s*=\s*isActive\s*&&\s*\(\(\(isSessionOpen\s*\|\|\s*isFinishing\)\s*&&\s*isMicLive\)\s*\|\|\s*isPaused\)/
       );
     });
 

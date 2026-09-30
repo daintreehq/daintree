@@ -312,7 +312,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // delivers real audio, but the listening chrome waits for it (#13105).
     const isVoiceMicStarting =
       (isVoiceRecording || isVoiceConnecting || isVoiceReconnecting) && voiceMicSignal !== "live";
-    const isVoiceListeningChrome = isVoiceActiveForPanel && !isVoiceMicStarting;
+    const isVoiceListeningChrome = isVoiceActiveForPanel && voiceMicSignal === "live";
     const isVoiceSubmitting = useTerminalInputStore((s) => s.voiceSubmittingPanels.has(terminalId));
 
     const commandContext = { terminalId, cwd, projectId };

@@ -73,11 +73,11 @@ export function VoiceRecordingToolbarButton({
   // race where status briefly stays "recording"/"finishing" while
   // activeTarget has already been cleared, which would otherwise leave the
   // RAF loop spinning on null refs.
-  const showOrbit = isActive && ((isSessionOpen && isMicLive) || isFinishing || isPaused);
+  const showOrbit = isActive && (((isSessionOpen || isFinishing) && isMicLive) || isPaused);
   // Arming paints immediately — the visual confirmation IS the point of the
   // state. The static accent ring holds from the hotkey press until the mic
   // is live, so the indicator never blanks out before the orbit takes over.
-  const showArming = isActive && (isArming || isMicStarting);
+  const showArming = isActive && (isArming || isMicStarting || (isFinishing && !isMicLive));
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<HTMLSpanElement>(null);

@@ -114,6 +114,11 @@ describe("VoiceRecordingToolbarButton — tooltip names what a click does", () =
       micSignal: "live" as const,
       title: "Recording: Daintree / main · Connecting…",
     },
+    {
+      status: "finishing" as const,
+      micSignal: "pending" as const,
+      title: "Finishing transcription…",
+    },
   ])(
     "separates mic state from backend state ($status, mic $micSignal) — #13105",
     ({ status, micSignal, title }) => {

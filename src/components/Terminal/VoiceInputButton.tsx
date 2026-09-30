@@ -86,7 +86,8 @@ export function VoiceInputButton({
   // Keep orbit visible through finishing and paused for continuity
   const showOrbit = isSessionOpen || isFinishing || isPaused;
   const isActive = isSessionOpen || isFinishing || isPaused;
-  const isOrbitStill = isPaused || isMicStarting;
+  // A stop before the mic ever went live drains without claiming it listened.
+  const isOrbitStill = isPaused || isMicStarting || (isFinishing && micSignal !== "live");
 
   // Animation refs
   const wrapperRef = useRef<HTMLDivElement>(null);
