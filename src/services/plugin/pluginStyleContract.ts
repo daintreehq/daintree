@@ -191,19 +191,100 @@ export async function getPluginStyleReportForRoots(
 ): Promise<PluginStyleReport | null> {
   if (roots.length === 0) return null;
   const classes = new Set<string>();
+  const addClasses = (element: Element) => {
+    const lucideIcon = element instanceof SVGElement && element.classList.contains("lucide");
+    for (const token of element.classList) {
+      // Lucide stamps `lucide` and `lucide-<icon>` on the icons it draws; the
+      // same prefix on any other element is the author's and gets checked.
+      if (lucideIcon && (token === "lucide" || token.startsWith("lucide-"))) continue;
+      classes.add(token);
+    }
+  };
   for (const root of roots) {
-    for (const token of root.classList) classes.add(token);
-    for (const element of root.querySelectorAll("[class]")) {
-      for (const token of element.classList) classes.add(token);
+    addClasses(root);
+    for (const element of root.querySelectorAll("[class]")) addClasses(element);
+  }
+  const doc = roots[0]!.ownerDocument;
+  const styled = documentClassSelectors(doc);
+  const generated: string[] = [];
+  const candidates: string[] = [];
+  for (const token of classes) {
+    if (isMarkerClass(token)) continue;
+    // Kit components render host component classes (`search-field`,
+    // `palette-row`, …) that the host's own stylesheet styles, not the
+    // plugin's Tailwind; they are styled, so they are not the author's problem.
+    if (styled.has(token)) generated.push(token);
+    else candidates.push(token);
+  }
+  const notGenerated: string[] = [];
+  if (candidates.length > 0) {
+    const validate = await candidateValidator();
+    for (const verdict of validate(candidates)) {
+      (verdict.generated ? generated : notGenerated).push(verdict.candidate);
     }
   }
-  const validate = await candidateValidator();
-  const generated: string[] = [];
-  const notGenerated: string[] = [];
-  for (const verdict of validate([...classes])) {
-    (verdict.generated ? generated : notGenerated).push(verdict.candidate);
-  }
   return { generated, notGenerated };
+}
+
+/** Tailwind's `group` / `peer` (optionally named) only anchor variants on other elements. */
+function isMarkerClass(token: string): boolean {
+  return /^(?:group|peer)(?:\/[\w-]+)?$/.test(token);
+}
+
+/**
+ * Class names per stylesheet, keyed by sheet object and re-read when its
+ * top-level rule count changes, which covers `replaceSync()` and rule inserts
+ * and deletes. A sheet whose `<style>` text is replaced is a new object anyway.
+ */
+const sheetClassCache = new WeakMap<
+  CSSStyleSheet,
+  { ruleCount: number; names: ReadonlySet<string> }
+>();
+
+function documentClassSelectors(doc: Document): ReadonlySet<string> {
+  const sheets = [...doc.styleSheets, ...(doc.adoptedStyleSheets ?? [])];
+  if (sheets.length === 1) return classesInSheet(sheets[0]!);
+  const all = new Set<string>();
+  for (const sheet of sheets) {
+    for (const name of classesInSheet(sheet)) all.add(name);
+  }
+  return all;
+}
+
+function classesInSheet(sheet: CSSStyleSheet): ReadonlySet<string> {
+  let rules: CSSRuleList;
+  try {
+    rules = sheet.cssRules;
+  } catch {
+    // A cross-origin sheet hides its rules; it cannot be the host's own CSS.
+    return new Set();
+  }
+  const cached = sheetClassCache.get(sheet);
+  if (cached && cached.ruleCount === rules.length) return cached.names;
+  const names = new Set<string>();
+  collectRuleClasses(rules, names);
+  sheetClassCache.set(sheet, { ruleCount: rules.length, names });
+  return names;
+}
+
+const CLASS_SELECTOR = /\.((?:\\[0-9a-fA-F]{1,6}\s?|\\[^\n0-9a-fA-F]|[\w-])+)/g;
+const CSS_ESCAPE = /\\(?:([0-9a-fA-F]{1,6})\s?|([^\n]))/g;
+
+function collectRuleClasses(rules: CSSRuleList, names: Set<string>): void {
+  for (const rule of rules) {
+    const selectorText = (rule as Partial<CSSStyleRule>).selectorText;
+    if (typeof selectorText === "string") {
+      for (const match of selectorText.matchAll(CLASS_SELECTOR)) {
+        names.add(
+          match[1]!.replace(CSS_ESCAPE, (_, hex: string | undefined, char: string | undefined) =>
+            hex ? String.fromCodePoint(parseInt(hex, 16)) : char!
+          )
+        );
+      }
+    }
+    const nested = (rule as Partial<CSSGroupingRule>).cssRules;
+    if (nested) collectRuleClasses(nested, names);
+  }
 }
 
 /** Test seam: drop the document's runtime and every memoised preparation. */

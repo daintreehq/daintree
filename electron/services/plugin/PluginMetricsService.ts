@@ -8,7 +8,10 @@ import type {
   PluginRendererMetricsReport,
   PluginViewLoadSample,
 } from "../../../shared/types/pluginMetrics.js";
-import { getAppMetricsSnapshot } from "../../utils/appMetricsSnapshot.js";
+import {
+  getAppMetricsSnapshot,
+  refreshAppMetricsSnapshot,
+} from "../../utils/appMetricsSnapshot.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { PLUGIN_INVOKE_TIMEOUT } from "./pluginInvokeDeadline.js";
 import { PLUGIN_PAYLOAD_TOO_LARGE } from "./pluginPayloadLimits.js";
@@ -82,7 +85,8 @@ type TimerHandle = ReturnType<typeof setTimeout>;
 export interface PluginMetricsServiceOptions {
   host?: PluginMetricsHost;
   now?: () => number;
-  sampleProcessMemory?: () => readonly ProcessMemorySample[];
+  /** Process memory no older than `maxAgeMs`; 0 asks for a fresh sweep. */
+  sampleProcessMemory?: (maxAgeMs: number) => readonly ProcessMemorySample[];
   setTimeout?: (fn: () => void, ms: number) => TimerHandle;
   clearTimeout?: (handle: TimerHandle) => void;
 }
@@ -288,9 +292,11 @@ export function measurementsOf(
 
 const BUDGET_KEYS = Object.keys(PLUGIN_PERF_BUDGETS) as PluginPerfBudgetKey[];
 
-function defaultSampleProcessMemory(): ProcessMemorySample[] {
+function defaultSampleProcessMemory(maxAgeMs: number): ProcessMemorySample[] {
   // `workingSetSize` is in kilobytes; it is the resident set on every platform.
-  return getAppMetricsSnapshot().map((metric) => ({
+  // A zero-age cached sweep still predates a worker spawned in the same millisecond.
+  const metrics = maxAgeMs <= 0 ? refreshAppMetricsSnapshot() : getAppMetricsSnapshot(maxAgeMs);
+  return metrics.map((metric) => ({
     pid: metric.pid,
     rssBytes: (metric.memory?.workingSetSize ?? 0) * 1024,
   }));
@@ -300,7 +306,7 @@ export class PluginMetricsService {
   private readonly entries = new Map<string, Entry>();
   private host: PluginMetricsHost | null;
   private readonly now: () => number;
-  private readonly sampleProcessMemory: () => readonly ProcessMemorySample[];
+  private readonly sampleProcessMemory: (maxAgeMs: number) => readonly ProcessMemorySample[];
   private readonly setTimer: (fn: () => void, ms: number) => TimerHandle;
   private readonly clearTimer: (handle: TimerHandle) => void;
 
@@ -311,6 +317,9 @@ export class PluginMetricsService {
 
   private promptSeq = 0;
   private lastMemorySampleAt = Number.NEGATIVE_INFINITY;
+  private lastFreshSweepAt = Number.NEGATIVE_INFINITY;
+  /** Worker pids the last sample looked for. */
+  private sampledPids: ReadonlySet<number> = new Set();
 
   private samplingHolds = 0;
   private samplingLeaseUntil = 0;
@@ -637,11 +646,32 @@ export class PluginMetricsService {
    */
   private sampleOnDemand(): void {
     if (this.disposed) return;
-    if (this.now() - this.lastMemorySampleAt < ON_DEMAND_SAMPLE_MIN_INTERVAL_MS) return;
-    this.sampleWorkerMemory();
+    if (
+      this.now() - this.lastMemorySampleAt < ON_DEMAND_SAMPLE_MIN_INTERVAL_MS &&
+      !this.hasUnsampledWorker()
+    ) {
+      return;
+    }
+    this.sampleWorkerMemory(ON_DEMAND_SAMPLE_MIN_INTERVAL_MS);
   }
 
-  private sampleWorkerMemory(): void {
+  /**
+   * A worker started since the last sample, which a throttled read would
+   * report as null. Only new pids count, so a pid the sweep never finds cannot
+   * defeat the throttle.
+   */
+  private hasUnsampledWorker(): boolean {
+    try {
+      for (const [, pid] of this.host?.workerPids() ?? []) {
+        if (!this.sampledPids.has(pid)) return true;
+      }
+    } catch {
+      // Treated as nothing new; sampleWorkerMemory reports the failure path.
+    }
+    return false;
+  }
+
+  private sampleWorkerMemory(maxAgeMs: number = MEMORY_SAMPLE_INTERVAL_MS): void {
     const host = this.host;
     if (!host) return;
     this.lastMemorySampleAt = this.now();
@@ -651,12 +681,21 @@ export class PluginMetricsService {
     } catch {
       return;
     }
+    this.sampledPids = new Set(pidToPlugin.keys());
     const seen = new Set<string>();
     // Skip the process-table sweep entirely when no worker is running.
     if (pidToPlugin.size > 0) {
       let samples: readonly ProcessMemorySample[];
       try {
-        samples = this.sampleProcessMemory();
+        samples = this.sampleProcessMemory(maxAgeMs);
+        // The shared process sweep is cached, so a worker that started after
+        // it is missing from it; re-sweep for it, at most once per interval.
+        const found = new Set(samples.map((sample) => sample.pid));
+        const missing = [...pidToPlugin.keys()].some((pid) => !found.has(pid));
+        if (missing && this.now() - this.lastFreshSweepAt >= ON_DEMAND_SAMPLE_MIN_INTERVAL_MS) {
+          this.lastFreshSweepAt = this.now();
+          samples = this.sampleProcessMemory(0);
+        }
       } catch {
         return;
       }

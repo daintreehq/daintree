@@ -866,8 +866,11 @@ export class PluginDevWorkerHostProxy {
         }
         if (panelId !== undefined && panelId !== null) {
           if (typeof panelId !== "string" || panelId.length === 0) {
-            throw new Error(
-              `Plugin "${this.pluginId}" postToPanel: panelId must be a non-empty string, null, or undefined: ${String(panelId)}`
+            // Rejects like the channel check (#10617).
+            return Promise.reject(
+              new Error(
+                `Plugin "${this.pluginId}" postToPanel: panelId must be a non-empty string, null, or undefined: ${String(panelId)}`
+              )
             );
           }
         }

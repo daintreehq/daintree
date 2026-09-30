@@ -33,6 +33,27 @@ function viewLoadMsOf(sample: PluginViewLoadSample): number {
   return sample.loadMs;
 }
 
+function loadBreakdown(sample: PluginViewLoadSample): string {
+  return `Activate ${measured(sample.activateMs)} · import ${measured(
+    sample.importMs
+  )} · styles ${measured(sample.stylesMs)}${sample.retry ? " · after a retry" : ""}`;
+}
+
+/**
+ * The slowest of the recorded loads, when it is not the latest one. A warm
+ * re-open reads near zero for import and styles, so without this the cold cost
+ * disappears from the tab as soon as the view is opened again. The earliest
+ * wins a tie: it is the cold one.
+ */
+function slowestEarlierLoad(loads: readonly PluginViewLoadSample[]): PluginViewLoadSample | null {
+  if (loads.length < 2) return null;
+  let slowestIndex = 0;
+  for (let i = 1; i < loads.length; i++) {
+    if (viewLoadMsOf(loads[i]!) > viewLoadMsOf(loads[slowestIndex]!)) slowestIndex = i;
+  }
+  return slowestIndex === loads.length - 1 ? null : loads[slowestIndex]!;
+}
+
 interface MetricRowProps {
   label: string;
   value: ReactNode;
@@ -100,6 +121,7 @@ export function PluginPerformanceSection({
 }) {
   const budgets = PLUGIN_PERF_BUDGETS;
   const latestLoad = snapshot.viewLoads[snapshot.viewLoads.length - 1];
+  const slowestLoad = slowestEarlierLoad(snapshot.viewLoads);
   const { invokes, pushes, longFrames, activation, viewCommits } = snapshot;
 
   const invokeExtras = [
@@ -138,15 +160,7 @@ export function PluginPerformanceSection({
         <MetricRow
           label="Last view load"
           value={latestLoad ? measured(viewLoadMsOf(latestLoad)) : "No view opened yet"}
-          detail={
-            latestLoad
-              ? `Activate ${measured(latestLoad.activateMs)} · import ${measured(
-                  latestLoad.importMs
-                )} · styles ${measured(latestLoad.stylesMs)}${
-                  latestLoad.retry ? " · after a retry" : ""
-                }`
-              : undefined
-          }
+          detail={latestLoad ? loadBreakdown(latestLoad) : undefined}
           budget={`Budget ${measured(budgets.viewLoadMs)}`}
           aboveBudget={over(snapshot, "viewLoadMs")}
         />
@@ -158,6 +172,16 @@ export function PluginPerformanceSection({
             detail="From opening the view to the start of the first frame that can show it"
             budget={`Budget ${measured(budgets.viewFirstPaintMs)}`}
             aboveBudget={over(snapshot, "viewFirstPaintMs")}
+          />
+        )}
+
+        {slowestLoad && (
+          <MetricRow
+            label="Slowest view load"
+            value={measured(viewLoadMsOf(slowestLoad))}
+            detail={`Slowest of the last ${pluralize(snapshot.viewLoads.length, "load")} · ${loadBreakdown(
+              slowestLoad
+            )} · first frame ${measured(slowestLoad.firstPaintMs)}`}
           />
         )}
 
