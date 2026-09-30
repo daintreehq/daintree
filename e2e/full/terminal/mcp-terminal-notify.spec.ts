@@ -5,16 +5,26 @@ import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { addAndSwitchToProject } from "../../helpers/workflows";
 import { getTerminalTextById } from "../../helpers/terminal";
+import { dispatchAction } from "../../helpers/actions";
+import { sameFilesystemEntry } from "../../helpers/resource-lifecycle";
 import {
   fakeAgentEnv,
   installFakeAgent,
   listFakeAgentLaunches,
   ptyWrite,
+  readFakeAgentLaunchLog,
   readFakeAgentStdin,
   sendFakeAgentCommand,
+  sendFakeAgentHandback,
   type FakeAgentLaunch,
 } from "../../helpers/fakeAgent";
 import { T_LONG, T_MEDIUM } from "../../helpers/timeouts";
+import {
+  MIN_NOTIFY_INTERVAL_MS,
+  NOTIFY_COALESCE_MS,
+  NOTIFY_SETTLE_GRACE_MS,
+  NOTIFY_TARGET_SETTLE_MS,
+} from "../../../shared/types/terminalNotify";
 
 /**
  * Terminal notices end to end, received by the real Daintree Assistant in the
@@ -36,6 +46,11 @@ const PROTOCOL_VERSION = "2025-06-18";
  * settle grace — with the same CI scaling as every other timeout.
  */
 const T_NOTICE = T_LONG * 4;
+/** Every gate a notice passes before it is typed, so one that is coming has come. */
+const NOTICE_DWELL_MS =
+  NOTIFY_TARGET_SETTLE_MS + NOTIFY_COALESCE_MS + NOTIFY_SETTLE_GRACE_MS + MIN_NOTIFY_INTERVAL_MS;
+/** A trashed pane's PTY is killed when its trash entry expires; shortened for the launch. */
+const TRASH_TTL_MS = 3_000;
 
 interface Endpoint {
   port: number;
@@ -67,7 +82,8 @@ function parseBody(contentType: string, raw: string): any {
 async function post(
   endpoint: Endpoint,
   body: unknown,
-  headers: Record<string, string> = {}
+  headers: Record<string, string> = {},
+  timeoutMs = T_LONG * 2
 ): Promise<{ sessionId: string | null; body: any }> {
   const res = await fetch(`http://127.0.0.1:${endpoint.port}/mcp`, {
     method: "POST",
@@ -78,7 +94,7 @@ async function post(
       ...headers,
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(T_LONG * 2),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   return {
     sessionId: res.headers.get("mcp-session-id"),
@@ -110,31 +126,34 @@ async function openSession(endpoint: Endpoint, clientName: string): Promise<Sess
 
 let nextRequestId = 100;
 
-async function rpc(session: Session, method: string, params: unknown): Promise<any> {
+async function rpc(
+  session: Session,
+  method: string,
+  params: unknown,
+  timeoutMs?: number
+): Promise<any> {
   const res = await post(
     session.endpoint,
     { jsonrpc: "2.0", id: nextRequestId++, method, params },
-    { "mcp-session-id": session.sessionId, "mcp-protocol-version": PROTOCOL_VERSION }
+    { "mcp-session-id": session.sessionId, "mcp-protocol-version": PROTOCOL_VERSION },
+    timeoutMs
   );
   return res.body;
 }
 
 /** A tool call's result, failing the test with the whole reply on a tool error. */
-async function callOk(session: Session, name: string, args: Record<string, unknown>) {
-  const body = await rpc(session, "tools/call", { name, arguments: args });
+async function callOk(
+  session: Session,
+  name: string,
+  args: Record<string, unknown>,
+  timeoutMs?: number
+) {
+  const body = await rpc(session, "tools/call", { name, arguments: args }, timeoutMs);
   expect(body?.result?.isError, `${name} failed: ${JSON.stringify(body)}`).not.toBe(true);
-  return body.result.structuredContent;
-}
-
-async function dispatch(page: Page, actionId: string, args: unknown): Promise<any> {
-  return page.evaluate(
-    async ([id, payload]) => {
-      const run = (window as any).__daintreeDispatchAction;
-      if (typeof run !== "function") throw new Error("Action dispatch hook not available");
-      return run(id, payload, { source: "test" });
-    },
-    [actionId, args] as const
-  );
+  if (body.result.structuredContent !== undefined) return body.result.structuredContent;
+  // A tool without an output schema answers in its text block alone.
+  const text = body.result.content?.[0]?.text;
+  return typeof text === "string" ? JSON.parse(text) : undefined;
 }
 
 async function agentState(page: Page, panelId: string): Promise<string | null> {
@@ -212,16 +231,44 @@ async function startAssistantLane(click: () => Promise<void>): Promise<FakeAgent
   return launch;
 }
 
+/** The state Daintree reports for each terminal, as the orchestrator reads it. */
+async function agentStates(session: Session, terminalIds: string[]): Promise<string[]> {
+  const status = await callOk(session, "terminal.getStatus", { terminalIds });
+  return terminalIds.map(
+    (id) =>
+      (status?.terminals ?? []).find((entry: any) => entry.terminalId === id)?.agentState ?? "none"
+  );
+}
+
+/** The OS pid of the fake CLI a pane started. */
+function pidOf(paneId: string): number {
+  const record = readFakeAgentLaunchLog(binDir).find((launch) => launch.paneId === paneId);
+  if (!record) throw new Error(`no launch record for ${paneId}`);
+  return record.pid;
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 test.describe.serial("MCP: terminal notices reach the pane that asked", () => {
   test.beforeAll(async () => {
     test.setTimeout(300_000);
     const a = createFixtureRepo({ name: "notify-assistant" });
-    const b = createFixtureRepo({ name: "notify-elsewhere" });
+    // Its second worktree is where the orchestrator places one of its workers.
+    const b = createFixtureRepo({ name: "notify-elsewhere", withFeatureBranch: true });
     cleanups = [a.cleanup, b.cleanup];
     repoB = b.dir;
     binDir = installFakeAgent(a.dir, { perPane: true });
 
-    ctx = await launchApp({ env: fakeAgentEnv(binDir) });
+    ctx = await launchApp({
+      env: { ...fakeAgentEnv(binDir), DAINTREE_E2E_TRASH_TTL_MS: String(TRASH_TTL_MS) },
+    });
     page = await openAndOnboardProject(ctx.app, ctx.window, a.dir, "notify-assistant");
     ctx.window = page;
 
@@ -257,7 +304,7 @@ test.describe.serial("MCP: terminal notices reach the pane that asked", () => {
 
     // The Daintree Assistant, opened in the sidebar and started the way a user
     // starts it, then a second lane beside it.
-    await dispatch(page, "help.togglePanel", undefined);
+    await dispatchAction(page, "help.togglePanel", undefined, { source: "test" });
     const first = await startAssistantLane(() =>
       page.locator('[data-testid="help-start-assistant"]').click()
     );
@@ -408,5 +455,245 @@ test.describe.serial("MCP: terminal notices reach the pane that asked", () => {
     });
     expect(refused?.result?.isError).toBe(true);
     expect(JSON.stringify(refused)).toContain("NOTIFY_NOT_ELIGIBLE");
+  });
+
+  test("an orchestrator pane launches its own workers, gets each handback, and closes only what it launched", async () => {
+    test.setTimeout(480_000);
+    // Project B is on screen. Its tier gives an agent pane launched there its own bearer.
+    const view = ctx.window;
+    await view.evaluate(async () => {
+      const current = await (window as any).electron.project.getCurrent();
+      const settings = (await (window as any).electron.project.getSettings(current.id)) ?? {
+        runCommands: [],
+      };
+      await (window as any).electron.project.saveSettings(current.id, {
+        ...settings,
+        daintreeMcpTier: "core",
+      });
+    });
+    await expect
+      .poll(() =>
+        view.evaluate(async () => {
+          const current = await (window as any).electron.project.getCurrent();
+          return (await (window as any).electron.project.getSettings(current.id))?.daintreeMcpTier;
+        })
+      )
+      .toBe("core");
+
+    const launchAsUser = (name: string) =>
+      nextLaunch(async () => {
+        const launched = await dispatchAction(
+          view,
+          "agent.launch",
+          { agentId: "claude", name },
+          { source: "test" }
+        );
+        expect(launched?.ok, JSON.stringify(launched)).toBe(true);
+      });
+    const orchestratorLaunch = await launchAsUser("Orchestrator");
+    const orchestratorId = orchestratorLaunch.paneId;
+    expect(orchestratorLaunch.mcpToken, "a core-tier pane gets its own bearer").toBeTruthy();
+    await trust(view, orchestratorId);
+    await sendFakeAgentCommand(binDir, "idle", T_MEDIUM, orchestratorId);
+    // A pane the user started beside it, which the orchestrator never launched.
+    // Settled at its prompt, so a notice sent to it by mistake would be logged.
+    const bystanderId = (await launchAsUser("Bystander")).paneId;
+    await trust(view, bystanderId);
+    await sendFakeAgentCommand(binDir, "idle", T_MEDIUM, bystanderId);
+
+    const orchestrator = await openSession(
+      { port, authorization: `Bearer ${orchestratorLaunch.mcpToken}` },
+      "orchestrator-pane"
+    );
+    const { worktrees } = await callOk(orchestrator, "worktree.list", {});
+    const mainTree = worktrees.find((tree: any) => tree.isMain);
+    const featureTree = worktrees.find((tree: any) => tree.branch === "feature/test-branch");
+    expect(mainTree && featureTree, JSON.stringify(worktrees)).toBeTruthy();
+
+    // One worker per worktree, launched by the orchestrator over its own bearer.
+    const workers: Array<{ id: string; label: string; path: string; summary: string }> = [];
+    for (const [label, tree] of [
+      ["alpha", mainTree],
+      ["beta", featureTree],
+    ] as const) {
+      const launched = await callOk(orchestrator, "agent.launchMany", {
+        agentIds: ["claude"],
+        prompt: `Survey the ${label} worktree`,
+        name: label,
+        worktreeId: tree.id,
+        notify: true,
+      });
+      expect(launched.results, JSON.stringify(launched)).toHaveLength(1);
+      expect(launched.results[0]).toMatchObject({ target: "claude", ok: true });
+      const id = launched.results[0].result.terminalId as string;
+      expect(id).toBeTruthy();
+      workers.push({ id, label, path: tree.path, summary: `${label} survey: 3 files need tests` });
+    }
+    const workerIds = workers.map((worker) => worker.id);
+    expect(new Set([...workerIds, orchestratorId, bystanderId]).size).toBe(4);
+
+    for (const worker of workers) {
+      // The CLI really started in its worktree with the launch prompt.
+      await expect
+        .poll(() => readFakeAgentLaunchLog(binDir).find((launch) => launch.paneId === worker.id), {
+          timeout: T_LONG * 2,
+        })
+        .toBeTruthy();
+      const record = readFakeAgentLaunchLog(binDir).find((launch) => launch.paneId === worker.id)!;
+      expect(sameFilesystemEntry(record.cwd, worker.path), `${record.cwd} vs ${worker.path}`).toBe(
+        true
+      );
+      expect(record.argv.join(" ")).toContain(`Survey the ${worker.label} worktree`);
+      // Past the trust dialog; the acknowledgement proves the keystroke landed.
+      expect(await ptyWrite(view, worker.id, "\r")).toBe(true);
+      await sendFakeAgentCommand(binDir, "work", T_LONG, worker.id);
+    }
+    await expect
+      .poll(() => agentStates(orchestrator, workerIds), {
+        timeout: T_NOTICE,
+        intervals: [250, 500, 1000],
+      })
+      .toEqual(["working", "working"]);
+
+    // Each worker stops in turn: one line for it, typed into the orchestrator.
+    const noticeLine = (id: string) =>
+      `Daintree: terminal ${id} stopped working, now waiting at its prompt.`;
+    const expected: string[] = [];
+    for (const worker of workers) {
+      await sendFakeAgentCommand(binDir, "idle", T_MEDIUM, worker.id);
+      expected.push(noticeLine(worker.id));
+      await expect
+        .poll(() => noticesFor(binDir, orchestratorId), {
+          timeout: T_NOTICE,
+          intervals: [500, 1000],
+        })
+        .toEqual(expected);
+    }
+
+    // Busy before the next turn lands, so neither reads as settled before it
+    // prints its marker however slowly the runner gets to it.
+    for (const worker of workers) await sendFakeAgentCommand(binDir, "work", T_MEDIUM, worker.id);
+
+    // The next turn, held open until every worker has answered. Its own
+    // notices hold with it, and go once the call itself has the answers.
+    const notifyState = () =>
+      view.evaluate(
+        (id) => (window as any).electron.mcpServer.getPaneNotifyState(id),
+        orchestratorId
+      );
+    const sending = callOk(
+      orchestrator,
+      "terminal.sendCommandMany",
+      {
+        sends: workers.map((worker) => ({
+          terminalId: worker.id,
+          command: `Report on the ${worker.label} worktree`,
+        })),
+        handback: true,
+        waitForReply: true,
+        notify: true,
+        waitSeconds: 180,
+      },
+      200_000
+    );
+    sending.catch(() => {});
+    await expect
+      .poll(async () => (await notifyState())?.pendingCount ?? 0, { timeout: T_LONG })
+      .toBe(2);
+    const handbacks = await Promise.all(
+      workers.map(async (worker) => {
+        await expect
+          .poll(() => readFakeAgentStdin(binDir, worker.id), { timeout: T_NOTICE })
+          .toMatch(
+            new RegExp(`Report on the ${worker.label} worktree[\\s\\S]*DAINTREE-DONE-[a-z0-9]{6}:`)
+          );
+        return sendFakeAgentHandback(binDir, worker.summary, {
+          paneId: worker.id,
+          timeoutMs: T_LONG,
+        });
+      })
+    );
+    const sent = await sending;
+    expect(sent.results, JSON.stringify(sent)).toHaveLength(2);
+    workers.forEach((worker, index) => {
+      const code = handbacks[index].code;
+      expect(code, "the worker was asked for a handback").toMatch(/^[a-z0-9]{6}$/);
+      const item = sent.results[index];
+      expect(item, JSON.stringify(item)).toMatchObject({
+        target: worker.id,
+        ok: true,
+        result: { sent: true, terminalId: worker.id },
+        reply: { terminalId: worker.id, outcome: "handback", handback: worker.summary },
+      });
+      expect(item.reply.reply?.text ?? "").toContain(
+        `DAINTREE-DONE-${code}: ${worker.summary} END-${code}`
+      );
+    });
+
+    // Answered, so the held notices are gone rather than still waiting.
+    await expect
+      .poll(
+        async () => {
+          const state = await notifyState();
+          return [state?.pendingCount ?? 0, state?.readyCount ?? 0];
+        },
+        { timeout: T_LONG }
+      )
+      .toEqual([0, 0]);
+
+    const idle = await callOk(
+      orchestrator,
+      "terminal.waitUntilIdleBatch",
+      { terminalIds: workerIds, mode: "all", timeoutMs: T_NOTICE },
+      T_NOTICE + T_LONG
+    );
+    expect(idle, JSON.stringify(idle)).toMatchObject({ mode: "all", timedOut: false });
+    expect([...idle.settledTerminalIds].sort()).toEqual([...workerIds].sort());
+
+    // The fake writes no Claude transcript, so there is no last message to read,
+    // and the call says so rather than failing.
+    const lastMessage = await callOk(orchestrator, "terminal.readLastMessageOwned", {
+      terminalId: workers[0].id,
+    });
+    expect(lastMessage, JSON.stringify(lastMessage)).toMatchObject({ status: "unavailable" });
+    const unreadable = await rpc(orchestrator, "tools/call", {
+      name: "terminal.readLastMessageOwned",
+      arguments: { terminalId: bystanderId },
+    });
+    expect(unreadable?.result?.isError, JSON.stringify(unreadable)).toBe(true);
+    expect(JSON.stringify(unreadable)).toContain("RESOURCE_NOT_OWNED");
+
+    // A notice the answered wait failed to drop would be typed after these gates.
+    // timer: NOTICE_DWELL_MS (notice settle + coalesce + asking-pane grace + min interval)
+    await view.waitForTimeout(NOTICE_DWELL_MS);
+    expect(noticesFor(binDir, orchestratorId)).toEqual(expected);
+    for (const paneId of [...workerIds, bystanderId, otherLaneId, workerId]) {
+      expect(noticesFor(binDir, paneId), `notice typed into ${paneId}`).toEqual([]);
+    }
+    expect(noticesFor(binDir, assistantId)).toHaveLength(3);
+
+    // Cleanup reaches the orchestrator's own workers and nothing else.
+    const closed = await callOk(orchestrator, "terminal.closeMany", {
+      terminalIds: [workers[0].id, bystanderId],
+    });
+    expect(closed.results, JSON.stringify(closed)).toHaveLength(2);
+    expect(closed.results[0]).toMatchObject({ target: workers[0].id, ok: true });
+    expect(closed.results[1]).toMatchObject({ target: bystanderId, ok: false });
+    expect(JSON.stringify(closed.results[1])).toContain("RESOURCE_NOT_OWNED");
+    await callOk(orchestrator, "terminal.closeOwned", { terminalId: workers[1].id });
+    const refused = await rpc(orchestrator, "tools/call", {
+      name: "terminal.closeOwned",
+      arguments: { terminalId: bystanderId },
+    });
+    expect(refused?.result?.isError, JSON.stringify(refused)).toBe(true);
+    expect(JSON.stringify(refused)).toContain("RESOURCE_NOT_OWNED");
+
+    const workerPids = workerIds.map(pidOf);
+    await expect
+      .poll(() => workerPids.map(isAlive), { timeout: T_LONG * 3, intervals: [250, 500, 1000] })
+      .toEqual([false, false]);
+    expect(isAlive(pidOf(bystanderId)), "the bystander's CLI was killed").toBe(true);
+    expect(isAlive(pidOf(orchestratorId)), "the orchestrator's CLI was killed").toBe(true);
+    expect(noticesFor(binDir, orchestratorId)).toEqual(expected);
   });
 });
