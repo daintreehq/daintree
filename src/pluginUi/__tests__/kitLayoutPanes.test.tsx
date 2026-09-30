@@ -45,7 +45,8 @@ const sizes = new Map<string, { width: number; height: number }>();
 const ownRect = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "getBoundingClientRect");
 
 function sizeOf(element: HTMLElement) {
-  for (const [attribute, size] of sizes) {
+  const byLength = [...sizes].sort((a, b) => b[0].length - a[0].length);
+  for (const [attribute, size] of byLength) {
     // A bare name is an attribute to carry; a bracketed key is a selector.
     const hit = attribute.startsWith("[")
       ? element.matches(attribute)
@@ -390,6 +391,59 @@ describe("SplitGroup", () => {
     );
     relayout();
     expect(screen.getByRole("separator").getAttribute("aria-valuenow")).toBe("150");
+  });
+
+  it("steps a squeezed pane from its drawn size, never backwards", () => {
+    // Two saved 240px panes and a 120px floor in 500px: both draw at 184.
+    sizes.set("data-split-group", { width: 500, height: 400 });
+    sizes.set('[data-split-group-pane="a"]', { width: 184, height: 400 });
+    sizes.set('[data-split-group-pane="b"]', { width: 184, height: 400 });
+    mount(
+      <kit.SplitGroup
+        panes={[
+          { id: "main", content: "M", fill: true, minSize: 120 },
+          { id: "a", content: "A", defaultSize: 240 },
+          { id: "b", content: "B", defaultSize: 240 },
+        ]}
+      />
+    );
+    relayout();
+    const handle = screen.getAllByRole("separator")[0]!;
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    expect(Number(handle.getAttribute("aria-valuenow"))).toBeGreaterThanOrEqual(184);
+  });
+
+  it("measures only its own panes, not a nested group's of the same id", () => {
+    sizes.set('[data-split-group-pane="side"] [data-split-group-pane="side"]', {
+      width: 90,
+      height: 400,
+    });
+    sizes.set('[data-split-group-pane="side"]', { width: 260, height: 400 });
+    mount(
+      <kit.SplitGroup
+        data-testid="outer"
+        panes={[
+          { id: "main", content: "M" },
+          {
+            id: "side",
+            defaultSize: 300,
+            content: (
+              <kit.SplitGroup
+                panes={[
+                  { id: "top", content: "T" },
+                  { id: "side", content: "inner", defaultSize: 120 },
+                ]}
+              />
+            ),
+          },
+        ]}
+      />
+    );
+    relayout();
+    const outerHandle = screen
+      .getAllByRole("separator")
+      .find((handle) => handle.parentElement === screen.getByTestId("outer"));
+    expect(outerHandle?.getAttribute("aria-valuenow")).toBe("260");
   });
 
   it("restores sizes remembered under persistKey", () => {
@@ -975,6 +1029,18 @@ describe("TaskList focus, alignment and announcements", () => {
     expect(spoken()).toEqual([""]);
     view.update(at("failed"));
     expect(spoken()).toEqual(["Sync failed"]);
+  });
+
+  it("keeps focus in the section when the last focused task goes away", () => {
+    function Harness() {
+      const [tasks, setTasks] = useState([{ id: "a", title: "Sync", status: "running" as const }]);
+      return <kit.TaskList aria-label="Jobs" onCancel={() => setTasks([])} tasks={tasks} />;
+    }
+    mount(<Harness />);
+    const cancel = screen.getByRole("button", { name: "Cancel Sync" });
+    cancel.focus();
+    fireEvent.click(cancel);
+    expect(document.activeElement).toBe(document.querySelector("[data-task-list]"));
   });
 
   it("announces a task settling, and nothing on the first render or while it runs", () => {
