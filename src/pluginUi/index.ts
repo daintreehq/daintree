@@ -29,7 +29,6 @@ import type {
   PluginDiffStatProps,
   PluginDescriptionListItemProps,
   PluginDescriptionListProps,
-  PluginDialogProps,
   PluginDisclosureProps,
   PluginDismissButtonProps,
   PluginDividerProps,
