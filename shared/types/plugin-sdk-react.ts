@@ -2969,7 +2969,7 @@ export interface PluginUnreadDotProps extends PluginRootAttributes {
 
 /**
  * Props of `CountIndicator`: a count in the app's count pill, capped at
- * `max` ("99+"). With `children` it sits on their corner as a solid bubble;
+ * `max` ("99+"). With `children` it overlaps their corner as a solid bubble;
  * alone it is the inline count `NavList` and `Tabs` draw.
  */
 export interface PluginCountIndicatorProps extends PluginRootAttributes {

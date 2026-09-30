@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { createElement, Fragment, type ReactNode } from "react";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "@shared/types/plugin";
 
@@ -185,6 +185,13 @@ describe("Link", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
+  it("is underlined at rest, not only on hover or focus", () => {
+    render(createElement(kit.Link, { href: "https://example.com" }, "Docs"));
+    const tokens = screen.getByRole("link", { name: "Docs" }).className.split(" ");
+    // A bare `underline`: the link reads as one without its colour.
+    expect(tokens).toContain("underline");
+  });
+
   it("names the external arrow and carries the focus ring", () => {
     render(createElement(kit.Link, { href: "https://example.com", externalIcon: true }, "Site"));
     const link = screen.getByRole("link", { name: /^Site.*opens in browser/ });
@@ -220,6 +227,15 @@ describe("CodeBlock", () => {
     );
     expect(screen.getByRole("group", { name: "Example" })).toBeTruthy();
     expect(container.querySelectorAll("[data-line]")).toHaveLength(3);
+  });
+
+  it("keeps the copy button out of the scrolling code", () => {
+    const { container } = render(
+      withTooltips(createElement(kit.CodeBlock, { code: "x".repeat(400) }))
+    );
+    const button = screen.getByRole("button", { name: "Copy code" });
+    expect(container.querySelector("pre")?.contains(button)).toBe(false);
+    expect(button.closest("[class*='absolute']")).toBeNull();
   });
 
   it("copies the code without the gutter numbers", async () => {
@@ -492,6 +508,45 @@ describe("ColoredLabel", () => {
     expect(label.textContent).toBe("bug");
   });
 
+  it("lets a long name wrap inside a shrinkable chip", () => {
+    render(
+      createElement(
+        kit.ColoredLabel,
+        { color: "#5319e7", "data-testid": "l" },
+        "area: ingest pipeline / retry policy"
+      )
+    );
+    const label = screen.getByTestId("l");
+    expect(label.className).not.toContain("whitespace-nowrap");
+    expect(label.className).not.toMatch(/(^|\s)shrink-0(\s|$)/);
+    expect(label.firstElementChild?.className).toContain("line-clamp-2");
+  });
+
+  it("edges a dot swatch only when it would vanish into the pane", () => {
+    document.documentElement.dataset.colorMode = "light";
+    onTestFinished(() => {
+      delete document.documentElement.dataset.colorMode;
+    });
+    render(
+      createElement(
+        kit.ColoredLabel,
+        { color: "#ffffff", variant: "dot", "data-testid": "w" },
+        "white"
+      )
+    );
+    render(
+      createElement(
+        kit.ColoredLabel,
+        { color: "#d73a4a", variant: "dot", "data-testid": "r" },
+        "red"
+      )
+    );
+    const swatch = (id: string) => screen.getByTestId(id).querySelector("[aria-hidden]");
+    // jsdom has no theme tokens, so the light polarity's fallback surface (white) applies.
+    expect(swatch("w")?.hasAttribute("data-edged")).toBe(true);
+    expect(swatch("r")?.hasAttribute("data-edged")).toBe(false);
+  });
+
   it("draws the forge label chip as the dot variant", () => {
     render(
       createElement(kit.ColoredLabel, { color: "0e8a16", variant: "dot", "data-testid": "l" }, "ok")
@@ -590,7 +645,11 @@ describe("CountIndicator", () => {
     const bubble = button.parentElement?.querySelector("[data-kit-count-indicator]");
     expect(bubble?.textContent).toBe("5+");
     expect(bubble?.className).toContain("bg-text-secondary");
-    expect(bubble?.className).toContain("-translate-x-1/2");
+    // It overlaps its anchor's corner rather than centring on it, so it never
+    // rises past the chrome the anchor sits in (pane headers clip paint).
+    expect(bubble?.className).not.toMatch(/translate/);
+    expect(bubble?.className).toMatch(/(^|\s)-bottom-/);
+    expect(bubble?.className).toMatch(/(^|\s)-left-/);
     const description = document.getElementById(button.getAttribute("aria-describedby") ?? "");
     expect(description?.textContent).toBe("7 unread");
   });

@@ -46,7 +46,7 @@ import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { useDaintreeTheme } from "@/pluginUi/theme";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import { labelColors, parseLabelHex } from "./kitLabelColor";
+import { labelColors, parseLabelHex, swatchNeedsEdge } from "./kitLabelColor";
 import {
   node,
   nonEmpty,
@@ -188,10 +188,12 @@ function KitHeading({
   );
 }
 
-// The link ink the app uses for inline links, underlined on hover and focus,
-// with the component-owned accent ring. `rounded-xs` so the ring hugs the run.
+// The app's inline link (WorktreeDetails): the link ink, underlined at rest so
+// it reads as a link without its hue (WCAG F73: the ink alone sits under 3:1
+// against body text on several themes), the underline thickening on hover, and
+// the component-owned accent ring. `rounded-xs` so the ring hugs the run.
 const LINK_CLASS =
-  "rounded-xs text-text-link underline-offset-2 hover:underline focus-visible:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary";
+  "rounded-xs text-text-link underline decoration-1 underline-offset-2 hover:decoration-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary";
 
 function KitLink({
   href,
@@ -253,8 +255,9 @@ function KitLink({
 
 // Rendered Markdown's inline code chip, in utilities: a recessed well with a
 // hairline, the mono face a step smaller than the text around it. The size is
-// relative to that text, which no step of the ramp can say, so it is inline.
-const INLINE_CODE_STYLE = { fontSize: "0.85em" } as const;
+// relative to that text, which no step of the ramp can say, so it is inline,
+// floored at the ramp's smallest step so a chip in 10px text stays legible.
+const INLINE_CODE_STYLE = { fontSize: "max(0.85em, var(--text-4xs))" } as const;
 
 function KitInlineCode({ children, className, ...rest }: PluginInlineCodeProps) {
   return (
@@ -262,7 +265,8 @@ function KitInlineCode({ children, className, ...rest }: PluginInlineCodeProps) 
       {...pickRootProps(rest)}
       style={INLINE_CODE_STYLE}
       className={cn(
-        "rounded-xs border border-border-subtle bg-surface-inset px-1 py-px font-mono font-normal text-text-primary [overflow-wrap:anywhere]",
+        // `box-decoration-clone`: a chip that wraps keeps its edges on both lines.
+        "rounded-xs border border-border-subtle bg-surface-inset box-decoration-clone px-1 py-px font-mono font-normal text-text-primary [overflow-wrap:anywhere]",
         str(className)
       )}
     >
@@ -355,14 +359,14 @@ function KitCodeBlock({
       aria-label={label ?? (lang ? `${lang} code` : "Code")}
       data-kit-code-block=""
       className={cn(
-        "kit-code-block relative min-w-0 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset",
+        "kit-code-block flex min-w-0 items-start rounded-[var(--radius-lg)] border border-border-default bg-surface-inset",
         str(className)
       )}
     >
       {/* A scroller with no focusable content is a tab stop of its own in
           Chromium, so a clipped block stays reachable from the keyboard. */}
       <pre
-        className="m-0 overflow-auto py-2 font-mono text-xs leading-5 text-text-primary"
+        className="m-0 min-w-0 flex-1 overflow-auto py-2 font-mono text-xs leading-5 text-text-primary"
         style={height === undefined ? undefined : { maxHeight: height }}
       >
         <code className={cn("block", wraps ? "w-full" : "w-max min-w-full")}>
@@ -381,10 +385,13 @@ function KitCodeBlock({
                 )}
               >
                 {lineNumbers === true ? (
+                  // The diff viewer's gutter: right-aligned numbers behind a
+                  // hairline, in secondary ink because a marked line is found
+                  // by its number.
                   <span
                     aria-hidden="true"
-                    className="shrink-0 select-none pr-3 pl-2.5 text-right text-text-muted tabular-nums"
-                    style={{ width: `calc(${gutterWidth} + 1.375rem)` }}
+                    className="mr-3 shrink-0 select-none border-r border-border-subtle pr-2 pl-2 text-right text-text-secondary tabular-nums"
+                    style={{ width: `calc(${gutterWidth} + 1rem)` }}
                   >
                     {number}
                   </span>
@@ -405,12 +412,12 @@ function KitCodeBlock({
           })}
         </code>
       </pre>
+      {/* Its own column beside the scroller, never over it: a long first line,
+          or any line scrolled sideways, would otherwise run under the button. */}
       {copyable === false ? null : (
-        <CopyButton
-          text={text}
-          aria-label="Copy code"
-          className="absolute top-1 right-1 bg-surface-inset"
-        />
+        <div className="shrink-0 p-1">
+          <CopyButton text={text} aria-label="Copy code" />
+        </div>
       )}
     </div>
   );
@@ -481,7 +488,9 @@ function KitPathLabel({ path, mono, focusable, className, ...rest }: PluginPathL
           <PathTail
             data-kit-path-directory=""
             // The directory gives way first; the name only once it is all gone.
-            className="min-w-0 shrink text-text-secondary"
+            // At least room for "…/", so a directory squeezed by a long name
+            // still says there is one rather than showing a bare separator.
+            className="min-w-[2ch] shrink text-text-secondary"
           >
             {directory}
           </PathTail>
@@ -621,7 +630,13 @@ function KitStateGlyph({ state, label, size, className, ...rest }: PluginStateGl
   const name = nonEmpty(label);
   const glyph = (
     <Glyph
-      className={cn("shrink-0", tone, name ? undefined : str(className))}
+      // Forced colours repaint only the glyphs that ask for it (the agent
+      // circles do); this keeps a Lucide ring from staying grey there.
+      className={cn(
+        "shrink-0 forced-colors:text-[CanvasText]",
+        tone,
+        name ? undefined : str(className)
+      )}
       style={{ width: px, height: px }}
       aria-hidden="true"
     />
@@ -639,6 +654,14 @@ function KitStateGlyph({ state, label, size, className, ...rest }: PluginStateGl
     </span>
   );
 }
+
+// Both variants take the forge LabelChip's containment: the chip may shrink in
+// a narrow row and the name wraps to two lines at most, so one long provider
+// label never pushes the panel sideways.
+const LABEL_SHELL_CLASS = "max-w-full shrink whitespace-normal";
+const labelName = (children: ReactNode) => (
+  <span className="min-w-0 line-clamp-2 [overflow-wrap:anywhere]">{node(children)}</span>
+);
 
 /** `kitLabelColor`'s parsed colour as the dot's fill variable. */
 function labelDotStyle(rgb: readonly number[]): CSSProperties & Record<"--kit-label-dot", string> {
@@ -668,18 +691,25 @@ function KitColoredLabel({
         shape={oneOf(shape, ["default", "pill"] as const) ?? "pill"}
         data-kit-colored-label="dot"
         style={own}
-        className={str(className)}
+        className={cn(LABEL_SHELL_CLASS, str(className))}
       >
         {hex ? (
           <span
             aria-hidden="true"
+            data-edged={
+              swatchNeedsEdge(color, theme.tokens["surface-panel"], theme.colorMode)
+                ? ""
+                : undefined
+            }
             // Through a variable, so the forced-colors fill can still win: an
             // inline background would beat the class and be painted as Canvas.
-            className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--kit-label-dot)] forced-colors:bg-[CanvasText]"
+            // A swatch too close to the pane (white on light, black on dark)
+            // takes a hairline so it still reads as a dot.
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--kit-label-dot)] data-[edged]:ring-1 data-[edged]:ring-border-strong data-[edged]:ring-inset forced-colors:bg-[CanvasText]"
             style={labelDotStyle(hex)}
           />
         ) : null}
-        {node(children)}
+        {labelName(children)}
       </Badge>
     );
   }
@@ -710,9 +740,9 @@ function KitColoredLabel({
             }
           : own
       }
-      className={str(className)}
+      className={cn(LABEL_SHELL_CLASS, str(className))}
     >
-      {node(children)}
+      {labelName(children)}
     </Badge>
   );
 }
@@ -729,12 +759,15 @@ const PIP_PLACEMENT: Record<PluginIndicatorPlacement, string> = {
   "bottom-left": "-bottom-0.5 -left-0.5",
 };
 
-// A count bubble centres on the corner instead, so a wide "99+" grows outwards.
+// A count bubble takes the pip's corner, overlapping its anchor rather than
+// centring on the corner: centred, a 14px bubble on a 24px toolbar button rises
+// past a 32px header, and pane chrome clips paint at its edge. A wide "99+"
+// grows inward over the icon, never out past the anchor's side.
 const BUBBLE_PLACEMENT: Record<PluginIndicatorPlacement, string> = {
-  "top-right": "top-0 right-0 translate-x-1/2 -translate-y-1/2",
-  "top-left": "top-0 left-0 -translate-x-1/2 -translate-y-1/2",
-  "bottom-right": "bottom-0 right-0 translate-x-1/2 translate-y-1/2",
-  "bottom-left": "bottom-0 left-0 -translate-x-1/2 translate-y-1/2",
+  "top-right": "-top-0.5 -right-1",
+  "top-left": "-top-0.5 -left-1",
+  "bottom-right": "-bottom-0.5 -right-1",
+  "bottom-left": "-bottom-0.5 -left-1",
 };
 
 const CUTOUT_CLASS =
@@ -887,9 +920,9 @@ function KitCountIndicator({
       aria-hidden="true"
       data-kit-count-indicator=""
       className={cn(
-        // The count pill's recipe, made solid and a fixed 16px tall.
+        // The count pill's recipe, made solid and a fixed 14px tall.
         COUNT_BADGE_CLASS,
-        "pointer-events-none absolute h-4 min-w-4 bg-text-secondary px-1 py-0 text-text-inverse",
+        "pointer-events-none absolute h-3.5 min-w-3.5 bg-text-secondary px-1 py-0 text-text-inverse",
         CUTOUT_CLASS,
         BUBBLE_PLACEMENT[oneOf(placement, PLACEMENTS) ?? "top-right"]
       )}
