@@ -197,7 +197,21 @@ const largeInlinePayload: LintRule = {
   },
 };
 
-/** `x.push(`, `x.unshift(`, `x = [...x, …]`, `x = x.concat(` — `x` grows. `x` may be a member path. */
+/**
+ * `[…].slice(-n)` or `….concat(…).slice(a, b)` at `close`: the copy is capped
+ * as it is made. `.slice()` and `.slice(0)` copy it whole, so they cap nothing.
+ */
+function slicedAfter(masked: string, close: number): boolean {
+  if (close < 0) return false;
+  const cap = /\s*\.\s*slice\s*\(\s*(?:-|[^,()]+,\s*[^\s)])/y;
+  cap.lastIndex = close + 1;
+  return cap.test(masked);
+}
+
+/**
+ * `x.push(`, `x.unshift(`, `x = [...x, …]`, `x = x.concat(` — `x` grows. `x` may be a member path.
+ * `x = [...x, item].slice(-100)` rebuilds `x` capped, so it does not grow.
+ */
 function appendedCollections(masked: string): Set<string> {
   const grown = new Set<string>();
   const path = "[A-Za-z_$][\\w$]*(?:\\s*\\.\\s*[A-Za-z_$][\\w$]*)*";
@@ -207,12 +221,15 @@ function appendedCollections(masked: string): Set<string> {
   }
   for (const m of masked.matchAll(
     new RegExp(
-      `(${path})\\s*=\\s*(?:\\[\\s*\\.\\.\\.\\s*(${path})|(${path})\\s*\\.\\s*concat\\s*\\()`,
+      `(${path})\\s*=\\s*(?:(\\[)\\s*\\.\\.\\.\\s*(${path})|(${path})\\s*\\.\\s*concat\\s*(\\())`,
       "g"
     )
   )) {
     const target = normal(m[1]!);
-    if (normal(m[2] ?? m[3] ?? "") === target) grown.add(target);
+    if (normal(m[3] ?? m[4] ?? "") !== target) continue;
+    const open = m[2] !== undefined ? m.index + m[0].indexOf("[") : m.index + m[0].length - 1;
+    if (slicedAfter(masked, matchClose(masked, open))) continue;
+    grown.add(target);
   }
   return grown;
 }
@@ -223,6 +240,42 @@ function isBounded(masked: string, name: string): boolean {
   return new RegExp(
     `(?<![\\w$.])${p}\\s*(?:\\.\\s*(?:shift|splice)\\s*\\(|\\.\\s*length\\s*=(?!=)|=\\s*${p}\\s*\\.\\s*slice\\s*\\()`
   ).test(masked);
+}
+
+/**
+ * `x = []` or `x = new Array()` after `from` in the same block — a flush that
+ * posts the buffer and starts a fresh one, which bounds it like `x.splice(0)`. A declaration
+ * (`let x = []`) is where it starts, not a reset.
+ */
+function resetAfter(masked: string, name: string, from: number): boolean {
+  // Only in the block holding the post: a reset in some other callback does
+  // not run when this one posts.
+  const end = enclosingBlockEnd(masked, from);
+  const p = name.split(".").map(escape).join("\\s*\\.\\s*");
+  const reset = new RegExp(
+    `(?<![\\w$.])(?<!\\b(?:let|const|var)\\s+)${p}\\s*=(?!=)\\s*(?:\\[\\s*\\]|new\\s+Array\\s*\\(\\s*(?:0\\s*)?\\))`,
+    "g"
+  );
+  reset.lastIndex = from;
+  const match = reset.exec(masked);
+  return match !== null && match.index < end;
+}
+
+/** The `}` closing the innermost block around `at`, or the end of the text at top level. */
+function enclosingBlockEnd(masked: string, at: number): number {
+  let depth = 0;
+  for (let i = at - 1; i >= 0; i--) {
+    const c = masked[i]!;
+    if (c === "}") depth++;
+    else if (c === "{") {
+      if (depth === 0) {
+        const close = matchClose(masked, i);
+        return close < 0 ? masked.length : close;
+      }
+      depth--;
+    }
+  }
+  return masked.length;
 }
 
 /** Names a payload sends whole: `x`, `{ x }`, `{ k: x }`, `[...x]`, `x.slice()`. */
@@ -254,6 +307,7 @@ const wholeStatePush: LintRule = {
       const payloadText = file.masked.slice(payload[0], payload[1]);
       // A collection, or the object that owns it (`state` for `state.calls.push`).
       const sent = unbounded.find((name) => {
+        if (resetAfter(file.masked, name, payload[1])) return false;
         const segments = name.split(".");
         return segments.some((_, i) =>
           payloadReferences(payloadText, segments.slice(0, i + 1).join("."))
@@ -279,6 +333,20 @@ const APPEND_PER_EVENT =
   /\bset[A-Z][\w$]*\s*\(\s*(?:\(?\s*[\w$]+\s*\)?\s*=>\s*)?(?:\[\s*\.\.\.|[\w$]+\s*\.\s*concat\s*\()/;
 const SETS_STATE = /^\s*set[A-Z][\w$]*\s*$|\bset[A-Z][\w$]*\s*\(/;
 
+/**
+ * An append in `[start, end)` whose copy grows with the collection.
+ * `setLines((prev) => [...prev, line].slice(-500))` copies a capped buffer.
+ */
+function growingAppend(masked: string, start: number, end: number): boolean {
+  const re = new RegExp(APPEND_PER_EVENT.source, "g");
+  for (const m of masked.slice(start, end).matchAll(re)) {
+    const spread = m[0].indexOf("[");
+    const open = start + m.index + (spread >= 0 ? spread : m[0].length - 1);
+    if (!slicedAfter(masked, matchClose(masked, open))) return true;
+  }
+  return false;
+}
+
 const renderOnEveryEvent: LintRule = {
   id: "render-on-every-event",
   severity: "warn",
@@ -298,7 +366,7 @@ const renderOnEveryEvent: LintRule = {
       const channel = args
         .map(([s, e]) => /^\s*(["'`])([^"'`]*)\1\s*$/.exec(file.code.slice(s, e))?.[2])
         .find((value) => value !== undefined);
-      const append = APPEND_PER_EVENT.test(callbackText);
+      const append = growingAppend(file.masked, callback[0], callback[1]);
       const highFrequency = channel !== undefined && HIGH_FREQUENCY.test(channel);
       if (append || (highFrequency && SETS_STATE.test(callbackText))) {
         hits.push({

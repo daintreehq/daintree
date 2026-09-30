@@ -216,18 +216,20 @@ export async function lintPlugin(opts: LintOptions = {}): Promise<LintResult> {
   const files: LintFile[] = [];
   for (const candidate of await discover(dir, manifest)) {
     const absolute = path.join(dir, candidate.rel);
-    let raw: string;
+    let bytes: Buffer;
     try {
-      raw = await fs.readFile(absolute, "utf8");
+      bytes = await fs.readFile(absolute);
     } catch {
       continue;
     }
-    if (candidate.role === "source" && raw.length > MAX_SOURCE_BYTES) {
+    // Bytes on disk, not UTF-16 code units: non-ASCII source is larger than its length.
+    if (candidate.role === "source" && bytes.byteLength > MAX_SOURCE_BYTES) {
       notes.push(
         `Skipped ${candidate.rel}: larger than 2 MB, so read as a bundle rather than source.`
       );
       continue;
     }
+    const raw = bytes.toString("utf8");
     const extension = path.extname(candidate.rel);
     const prepared =
       candidate.role === "build"
