@@ -540,6 +540,23 @@ const rawPortal: LintRule = {
   },
 };
 
+// The editor and diff libraries a view bundles to edit code or show a change,
+// which the kit's CodeEditor and DiffView now serve themed from the host.
+const EDITOR_LIBRARY_IMPORT =
+  /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\(\s*|\bimport\s+)["'](?:@codemirror\/[\w-]+|codemirror|@uiw\/(?:react-)?codemirror[\w-]*|react-diff-view|diff2html|react-diff-viewer(?:-continued)?)(?:\/[^"']*)?["']/;
+
+const editorLibraryImport: LintRule = {
+  id: "editor-library-import",
+  severity: "warn",
+  appliesTo: "view",
+  message: "a code editor or diff library is bundled into the view",
+  hint: "prefer `CodeEditor` or `DiffView` from @daintreehq/plugin-ui: Daintree's own editor and diff viewer, themed with the app and loaded by the host",
+  check(file) {
+    const match = EDITOR_LIBRARY_IMPORT.exec(file.code);
+    return match ? [{ offset: match.index }] : [];
+  },
+};
+
 export const CONSISTENCY_RULES: LintRule[] = [
   stockColour,
   darkVariant,
@@ -564,4 +581,5 @@ export const CONSISTENCY_RULES: LintRule[] = [
   globalKeyListener,
   rawPortal,
   viewportBreakpoint,
+  editorLibraryImport,
 ];

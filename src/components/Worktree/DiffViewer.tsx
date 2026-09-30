@@ -161,6 +161,26 @@ export interface DiffViewerProps {
    * whose lines can't be handed back to an agent working in a worktree.
    */
   annotations?: DiffViewerAnnotations;
+  /**
+   * A grammar for highlighting in place of the one each file's path implies,
+   * for a diff whose paths carry no extension (the plugin kit's DiffView).
+   */
+  language?: string;
+  /**
+   * Extra controls at the end of each hunk header, after its range and copy
+   * button, given the hunk, its position among the file's rendered hunks and
+   * the file it belongs to.
+   */
+  renderHunkActions?: (hunk: HunkData, index: number, file: DiffViewerHunkFile) => ReactNode;
+  /** Draws the file header's Open button. Defaults to true. */
+  openInEditor?: boolean;
+}
+
+/** The file a hunk handed to `renderHunkActions` belongs to, as the patch names it. */
+export interface DiffViewerHunkFile {
+  oldPath: string;
+  newPath: string;
+  type: string;
 }
 
 export interface DiffViewerAnnotations {
@@ -454,6 +474,9 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
     onToggleCollapse,
     onTokensRendered,
     annotations,
+    language,
+    renderHunkActions,
+    openInEditor = true,
   },
   ref
 ) {
@@ -661,6 +684,9 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           onToggleCollapse={onToggleCollapse}
           onTokensRendered={onTokensRendered}
           annotations={annotations}
+          language={language}
+          renderHunkActions={renderHunkActions}
+          openInEditor={openInEditor}
         />
       ))}
     </div>
@@ -678,6 +704,7 @@ interface HunkHeaderProps {
   gapStart: number;
   hiddenCount: number;
   onExpand: ((start: number, end: number) => void) | null;
+  actions?: ReactNode;
 }
 
 function HunkCopyButton({ hunk }: { hunk: HunkData }) {
@@ -698,7 +725,7 @@ function HunkCopyButton({ hunk }: { hunk: HunkData }) {
   );
 }
 
-function HunkHeader({ hunk, gapStart, hiddenCount, onExpand }: HunkHeaderProps) {
+function HunkHeader({ hunk, gapStart, hiddenCount, onExpand, actions }: HunkHeaderProps) {
   return (
     <div className="diff-hunk-header-inner">
       {hiddenCount > 0 && onExpand && (
@@ -752,6 +779,9 @@ function HunkHeader({ hunk, gapStart, hiddenCount, onExpand }: HunkHeaderProps) 
       )}
       <span className="diff-hunk-header-text">{hunk.content}</span>
       <HunkCopyButton hunk={hunk} />
+      {actions != null && actions !== false && (
+        <span className="diff-hunk-header-actions">{actions}</span>
+      )}
     </div>
   );
 }
@@ -775,6 +805,9 @@ interface FileDiffProps {
   /** Fired after this file's token pass commits */
   onTokensRendered?: () => void;
   annotations?: DiffViewerAnnotations;
+  language?: string;
+  renderHunkActions?: (hunk: HunkData, index: number, file: DiffViewerHunkFile) => ReactNode;
+  openInEditor: boolean;
 }
 
 const EMPTY_NOTES: readonly DiffNote[] = [];
@@ -795,12 +828,15 @@ function FileDiff({
   onToggleCollapse,
   onTokensRendered,
   annotations,
+  language: languageOverride,
+  renderHunkActions,
+  openInEditor,
 }: FileDiffProps) {
   const relPath = getFilePath(file);
   const language = useMemo(() => {
-    const derived = getLanguageForFile(relPath);
+    const derived = languageOverride || getLanguageForFile(relPath);
     return isLanguageFailed(derived) ? "plaintext" : derived;
-  }, [relPath]);
+  }, [relPath, languageOverride]);
   const diffType: DiffType = file.type as DiffType;
 
   const fileBytes = useMemo(() => estimateFileDiffBytes(file), [file]);
@@ -1378,6 +1414,11 @@ function FileDiff({
             gapStart={gapStart}
             hiddenCount={hiddenCount}
             onExpand={oldSource ? handleExpandContext : null}
+            actions={renderHunkActions?.(hunk, i, {
+              oldPath: file.oldPath,
+              newPath: file.newPath,
+              type: file.type,
+            })}
           />
         </Decoration>
       );
@@ -1535,7 +1576,7 @@ function FileDiff({
             {rawText && (
               <CopyButton text={rawText} aria-label="Copy file diff" tooltipSide="bottom" />
             )}
-            {absolutePath && (
+            {absolutePath && openInEditor && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button variant="ghost" size="xs" onClick={handleOpenInEditor}>

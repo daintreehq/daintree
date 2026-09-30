@@ -259,6 +259,15 @@ declare module "@daintreehq/plugin-ui" {
     PluginStatusBarProps,
     PluginStatusBarSlot,
   } from "@daintreehq/plugin-sdk/react";
+  import type {
+    PluginCodeEditorHandle,
+    PluginCodeEditorProps,
+    PluginDiffHunk,
+    PluginDiffHunkAction,
+    PluginDiffViewProps,
+    PluginMarkdownEditorMode,
+    PluginMarkdownEditorProps,
+  } from "@daintreehq/plugin-sdk/react";
 
   export type MarkdownProps = PluginMarkdownProps;
   export type ButtonProps = PluginButtonProps;
@@ -472,6 +481,13 @@ declare module "@daintreehq/plugin-ui" {
   export type OverflowToolbarItem = PluginOverflowToolbarItem;
   export type OverflowToolbarAction = PluginOverflowToolbarAction;
   export type OverflowToolbarSeparator = PluginOverflowToolbarSeparator;
+  export type CodeEditorHandle = PluginCodeEditorHandle;
+  export type CodeEditorProps = PluginCodeEditorProps;
+  export type DiffHunk = PluginDiffHunk;
+  export type DiffHunkAction = PluginDiffHunkAction;
+  export type DiffViewProps = PluginDiffViewProps;
+  export type MarkdownEditorMode = PluginMarkdownEditorMode;
+  export type MarkdownEditorProps = PluginMarkdownEditorProps;
   export type ContainerSize = PluginContainerSize;
   export type ContainerTarget = PluginContainerTarget;
 
@@ -767,6 +783,31 @@ declare module "@daintreehq/plugin-ui" {
   export const ScrollArea: ComponentType<ScrollAreaProps>;
   /** A toolbar whose controls fold into a "More actions" menu when the strip is too narrow. */
   export const OverflowToolbar: ComponentType<OverflowToolbarProps>;
+
+  /**
+   * Daintree's code editor: the file viewer's CodeMirror, theme, gutters and
+   * find bar, controlled through `value` and `onChange`. It loads on first
+   * use, holding its place with a skeleton; `ref` takes `focus` and `openSearch`.
+   */
+  export const CodeEditor: ComponentType<CodeEditorProps>;
+  /**
+   * Daintree's diff surface for two texts or a unified patch: unified or
+   * split, highlighted, with foldable unchanged lines and your own hunk
+   * actions (Stage, Revert, Comment) in each hunk header.
+   */
+  export const DiffView: ComponentType<DiffViewProps>;
+  /**
+   * `text` with a `DiffView` hunk undone (its new lines swapped back for its
+   * old ones), for a Revert hunk action. Null when those lines no longer
+   * match the hunk.
+   */
+  export function revertHunk(text: string, hunk: DiffHunk): string | null;
+  /**
+   * A Markdown field for comments, descriptions and notes: a growing text
+   * area, a formatting toolbar, Write and Preview (or both side by side), and
+   * Cmd+Enter to submit.
+   */
+  export const MarkdownEditor: ComponentType<MarkdownEditorProps>;
 
   /**
    * The scope for `useDraggable` and `useDroppable`: pointer and keyboard

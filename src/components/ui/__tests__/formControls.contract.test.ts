@@ -51,6 +51,9 @@ const RAW_TEXTAREAS: Record<string, string> = {
   "src/components/ui/textarea.tsx": "the primitive",
   // A full-pane scratch editor with its own chrome, not a field on a form.
   "src/components/Terminal/TerminalScratchpad.tsx": "pane editor",
+  // The kit MarkdownEditor: a borderless text area inside the field frame it
+  // shares with the Write/Preview strip, which draws the Textarea's paint.
+  "src/components/PluginKit/PluginKitEditors.tsx": "framed Markdown editor",
 };
 
 describe("form control family", () => {

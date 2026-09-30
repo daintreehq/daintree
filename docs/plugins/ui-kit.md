@@ -432,6 +432,51 @@ import { Badge, Kanban, SortableList } from "@daintreehq/plugin-ui";
 />;
 ```
 
+### Editors
+
+Editing surfaces that are Daintree's own: `CodeEditor` is the file viewer's CodeMirror editor, `DiffView` the diff panel, and `MarkdownEditor` the comment field. Don't bundle CodeMirror, a diff renderer or a Markdown toolbar of your own (lint: `editor-library-import`); these carry the app's fonts, gutters, selection and diff colours, find bar and hunk headers in every theme, and cost your view nothing until one renders. `CodeEditor` and `DiffView` each load their own chunk on first use and hold their place with a skeleton until then.
+
+```tsx
+import { Button, CodeEditor, DiffView, MarkdownEditor, revertHunk } from "@daintreehq/plugin-ui";
+
+<CodeEditor
+  aria-label="studio.yaml"
+  language="yaml"
+  value={draft}
+  onChange={setDraft}
+  onSave={save}
+  className="h-80"
+/>;
+
+<DiffView
+  oldText={saved}
+  newText={draft}
+  path="studio.yaml"
+  view="split"
+  hunkActions={[{ id: "revert", label: "Revert", icon: "rotate-ccw" }]}
+  onHunkAction={(id, hunk) => {
+    const next = revertHunk(draft, hunk);
+    if (next !== null) setDraft(next);
+  }}
+/>;
+
+<MarkdownEditor
+  aria-label="Release notes"
+  value={notes}
+  onChange={setNotes}
+  onSubmit={publish}
+  layout="auto"
+  footer={<Button onClick={() => publish(notes)}>Publish</Button>}
+/>;
+```
+
+| Export | Props | Notes |
+| --- | --- | --- |
+| `CodeEditor` | `value?`, `defaultValue?`, `onChange?(value)`, `language?`, `readOnly?`, `lineNumbers?` (true), `wrap?`, `placeholder?`, `minHeight?`, `maxHeight?` (px), `onSave?(value)`, `autoFocus?`, `bordered?` (true), `"aria-label"?`, `className?`, `ref?` | The file viewer's editor made editable: its theme, gutters and fold markers, bracket matching, undo history and the app's find and replace bar (Cmd+F inside the editor, or the app's Find in focused panel while it has focus; Cmd+L goes to a line where the app leaves it free). `language` takes a name, alias or extension from the languages the file viewer highlights (`json`, `yaml`, `ts`, `tsx`, `python`, `markdown`, `sql`, `go`, `rust`, `css`, `html`, …); unknown, the text is plain. `onChange` gets the whole text on every edit, never mid-way through an IME composition, and a new `value` replaces the text without calling it. `onSave` claims Cmd+S (Ctrl+S) inside the editor; without it the key is left to the app. `readOnly` keeps the text selectable and searchable. Tab moves focus out, as in every host editor. Without `maxHeight` the editor grows with its text, or fills the height `className` gives it; past `maxHeight` it scrolls. `bordered={false}` drops the field border for an editor that fills a pane edge to edge. `ref` holds `focus()` and `openSearch()`. |
+| `DiffView` | `oldText?` + `newText?`, or `patch?`; `path?`, `language?`, `view?: "unified" \| "split"` (`unified`), `wrap?`, `context?` (3), `hunkActions?`, `onHunkAction?(id, hunk)`, `renderHunkActions?(hunk)`, `maxHeight?` (px), `"aria-label"?`, `className?` | The diff panel's surface: highlighted, with its line-number gutters and +/- markers, hunk headers, moved-line and whitespace marks and per-hunk copy. Two texts are diffed for you (the same line diff git uses), `context` unchanged lines around each change, and the rest fold behind Expand buttons in the hunk headers. `patch` takes `git diff` output (several files draw one after another), `diff -u` output (paths without `a/` and `b/`, with or without timestamps, one or several files) or a lone hunk. `path` names the file in the header and picks the highlighting; `language` overrides it. `split` puts the two sides side by side with one shared horizontal scroll. `hunkActions` (`{ id, label, icon?, tooltip?, disabled? }[]`, or a function of the hunk returning one) are buttons at the end of each hunk header, and `onHunkAction` receives the pressed one's `id` and the hunk: `index`, `filePath`, `header`, `oldStart`, `oldCount`, `newStart`, `newCount`, `oldText`, `newText` and `patch` (the hunk alone with its file headers, new and deleted files included, for `git apply`). `renderHunkActions` adds your own nodes after them. Identical texts draw the diff panel's "No changes detected". |
+| `revertHunk(text, hunk)` | returns `string \| null` | `text` with a `DiffView` hunk undone: its new lines swapped back for its old ones. Pass the `newText` the diff was drawn from (or a later copy the hunk still matches); null when those lines no longer read as the hunk's new side, so a stale hunk is never spliced into the wrong place. A pure deletion drawn with `context={0}` has no lines to check and goes back where it says, so keep its hunk only as long as the text it came from. Whether the file ends in a newline is not part of a hunk: the text keeps its own. |
+| `MarkdownEditor` | `value?`, `defaultValue?`, `onChange?(value)`, `placeholder?`, `mode?: "write" \| "preview"`, `defaultMode?`, `onModeChange?(mode)`, `layout?: "tabs" \| "split" \| "auto"` (`tabs`), `onSubmit?(value)`, `onCancel?()`, `minRows?` (3), `maxRows?` (16), `toolbar?` (true), `footer?`, `disabled?`, `readOnly?`, `autoFocus?`, `invalid?`, `basePath?`, `rootPath?`, `"aria-label"?`, `className?` | A field for comments, descriptions and notes, built like the app's own note composer: a text area that grows with its text from `minRows` to `maxRows`, a Write and Preview tab strip, and a toolbar for bold, italic, code (a fenced block over several lines), links and bulleted and numbered lists. Each toolbar edit is one step of the text area's own undo, and that history survives a look at Preview. Bold, italic, inline code and the lists come off again when pressed a second time. The keys are GitHub's (Cmd+I, Cmd+E, Cmd+Shift+8, …); one the app is bound to (Cmd+B toggles the sidebar, Cmd+K starts a chord) stays the app's and is not offered in the tooltip. Preview renders through `Markdown`, with `basePath` and `rootPath` as there, no shorter than the source was. `layout="split"` shows the source and preview side by side, and `auto` does so once the editor is 720px wide. Cmd+Enter calls `onSubmit` and Escape `onCancel`; `footer` is a row under the field for its buttons. |
+
 ### Icons
 
 `Icon` draws one of Daintree's own icons by name: `name`, `size?` (16 px; inside a kit `Button` the button sizes it), `className?`, `"aria-label"?` (omitted, the icon is decorative and `aria-hidden`). An unknown name renders nothing, with a warning in development, rather than throwing. The set only grows. The names are Lucide-style kebab-case, plus two Daintree concepts, `worktree` (a git worktree) and `daintree` (the app's mark):
@@ -530,4 +575,4 @@ A builtin that still needs a covered export gets an exception scoped to one file
 
 ## Checking a view against the kit
 
-`daintree-plugin lint` points at hand-rolled versions of kit controls — `raw-button`, `raw-form-control`, `native-title-tooltip`, `inline-svg-icon`, `lucide-react-import`, `dnd-library-import`, `hand-rolled-spinner`, `hand-rolled-badge`, `native-dialog-in-view`, `raw-portal`, `view-web-storage`, `global-key-listener` — and at classes that compile to nothing against the design contract. The Styles tab in Settings → Plugins runs the same class check against a running view. See [Development loop → Lint](./dev-loop.md#daintree-plugin-lint-dir).
+`daintree-plugin lint` points at hand-rolled versions of kit controls — `raw-button`, `raw-form-control`, `native-title-tooltip`, `inline-svg-icon`, `lucide-react-import`, `dnd-library-import`, `editor-library-import`, `hand-rolled-spinner`, `hand-rolled-badge`, `native-dialog-in-view`, `raw-portal`, `view-web-storage`, `global-key-listener` — and at classes that compile to nothing against the design contract. The Styles tab in Settings → Plugins runs the same class check against a running view. See [Development loop → Lint](./dev-loop.md#daintree-plugin-lint-dir).

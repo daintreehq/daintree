@@ -123,6 +123,11 @@ import type {
   PluginUnreadDotProps,
   PluginVisuallyHiddenProps,
 } from "@shared/types/plugin-sdk-react";
+import type {
+  PluginCodeEditorProps,
+  PluginDiffViewProps,
+  PluginMarkdownEditorProps,
+} from "@shared/types/plugin-sdk-react";
 import { fromKit } from "./kit";
 
 export { preloadPluginUi, whenPluginUiReady } from "./kit";
@@ -800,4 +805,30 @@ export type {
   PluginIndicatorPlacement as IndicatorPlacement,
   PluginUnreadDotProps as UnreadDotProps,
   PluginCountIndicatorProps as CountIndicatorProps,
+} from "@shared/types/plugin-sdk-react";
+
+// Editors: the host's CodeMirror editor and diff viewer, and a Markdown field.
+// Each loads its own chunk on first render, after the kit's.
+export const CodeEditor: ComponentType<PluginCodeEditorProps> = fromKit(
+  "CodeEditor",
+  (kit) => kit.CodeEditor
+);
+export const DiffView: ComponentType<PluginDiffViewProps> = fromKit(
+  "DiffView",
+  (kit) => kit.DiffView
+);
+export const MarkdownEditor: ComponentType<PluginMarkdownEditorProps> = fromKit(
+  "MarkdownEditor",
+  (kit) => kit.MarkdownEditor
+);
+export { revertHunk } from "./diffHunk";
+
+export type {
+  PluginCodeEditorHandle as CodeEditorHandle,
+  PluginCodeEditorProps as CodeEditorProps,
+  PluginDiffHunk as DiffHunk,
+  PluginDiffHunkAction as DiffHunkAction,
+  PluginDiffViewProps as DiffViewProps,
+  PluginMarkdownEditorMode as MarkdownEditorMode,
+  PluginMarkdownEditorProps as MarkdownEditorProps,
 } from "@shared/types/plugin-sdk-react";
