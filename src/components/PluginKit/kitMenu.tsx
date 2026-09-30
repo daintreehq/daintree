@@ -51,7 +51,12 @@ export interface KitMenuParts {
    * renders every other row; a `submenu` entry then renders nothing.
    */
   Sub?: ComponentType<{ children?: ReactNode }>;
-  SubTrigger?: ComponentType<{ children?: ReactNode; disabled?: boolean; textValue?: string }>;
+  SubTrigger?: ComponentType<{
+    children?: ReactNode;
+    disabled?: boolean;
+    textValue?: string;
+    className?: string;
+  }>;
   SubContent?: ComponentType<{ children?: ReactNode; className?: string }>;
 }
 
@@ -142,6 +147,9 @@ function KitSubmenuContent({
   );
 }
 
+/** A submenu row with a description: the host chevron aligned to the label's line. */
+const TWO_LINE_TRIGGER_CLASS = "items-start [&>svg:last-child]:mt-px";
+
 // A plugin's items can nest (or, by mistake, contain themselves); past this
 // depth a submenu renders nothing rather than recursing without end.
 const MAX_SUBMENU_DEPTH = 6;
@@ -208,7 +216,12 @@ function renderMenuEntry(
       const description = nonEmpty(typed.description);
       return (
         <parts.Sub key={key}>
-          <parts.SubTrigger disabled={typed.disabled === true} textValue={label}>
+          <parts.SubTrigger
+            disabled={typed.disabled === true}
+            textValue={label}
+            // Beside two lines the chevron sits on the label's line, not between them.
+            className={description === undefined ? undefined : TWO_LINE_TRIGGER_CLASS}
+          >
             {Glyph ? <MenuRowIcon Glyph={Glyph} top={description !== undefined} /> : null}
             <MenuRowText label={label} description={description} />
           </parts.SubTrigger>
@@ -237,7 +250,14 @@ function renderMenuEntry(
           ) : (
             <MenuRowText label={label} description={description} />
           )}
-          <parts.Shortcut shortcut={str(typed.shortcut)} />
+          {description === undefined ? (
+            <parts.Shortcut shortcut={str(typed.shortcut)} />
+          ) : (
+            // The key column reads against the label's line, as the icon does.
+            <span className="ml-auto flex shrink-0 self-start">
+              <parts.Shortcut shortcut={str(typed.shortcut)} />
+            </span>
+          )}
         </parts.Item>
       );
     }

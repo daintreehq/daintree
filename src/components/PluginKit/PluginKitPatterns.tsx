@@ -38,7 +38,9 @@ import {
   LIST_DETAIL_ROW_CLASS,
   PALETTE_ROW_CLASS,
   PALETTE_ROW_FOCUS_CLASS,
+  ROW_MENU_TARGET_CLASS,
 } from "@/components/ui/paletteRowStyles";
+import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { PaneLoadingState } from "@/components/ui/PaneLoadingState";
 import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
@@ -692,6 +694,9 @@ function KitListRow({
   meta,
   selected,
   active,
+  checked,
+  selecting,
+  onToggle,
   onSelect,
   disabled,
   className,
@@ -700,9 +705,54 @@ function KitListRow({
   const dom = pickDomProps(rest);
   const inert = disabled === true;
   const select = fn(onSelect);
+  const toggle = fn(onToggle);
+  const cursor = active === true;
+  // A row in a multi-select list takes the app's membership mark: the shared
+  // checkbox glyph in the icon's slot, as the worktree overview grid draws it.
+  // It shows on a checked row, on every row while anything is selected, and
+  // on the row under the pointer or the keyboard cursor, where the icon gives
+  // way to it; otherwise the icon stands.
+  const membership = typeof checked === "boolean";
+  const markAlways = checked === true || selecting === true;
+  const glyph = sizedIcon(icon, "h-4 w-4 text-text-secondary");
+  const leading = membership ? (
+    <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
+      {glyph && !markAlways ? (
+        <span
+          className={cn("flex", "group-hover/kit-row:hidden", cursor && "in-focus-visible:hidden")}
+        >
+          {glyph}
+        </span>
+      ) : null}
+      <span
+        aria-hidden="true"
+        data-kit-row-checkbox=""
+        onClick={
+          toggle
+            ? (event) => {
+                event.stopPropagation();
+                toggle();
+              }
+            : undefined
+        }
+        className={cn(
+          "absolute inset-0 items-center justify-center",
+          // A 24px pointer target around the 14px glyph (WCAG 2.5.8).
+          toggle && "cursor-pointer before:absolute before:-inset-1 before:content-['']",
+          markAlways || !glyph
+            ? "flex"
+            : cn("hidden group-hover/kit-row:flex", cursor && "in-focus-visible:flex")
+        )}
+      >
+        <CheckboxGlyph checked={checked === true} />
+      </span>
+    </span>
+  ) : (
+    glyph
+  );
   const body = (
     <>
-      {sizedIcon(icon, "h-4 w-4 text-text-secondary")}
+      {leading}
       <span className="flex min-w-0 flex-1 flex-col">
         {/* Code in a title steps down to the mono size the host sets code at
             (text-xs): at the row's 14px, the mono face reads a size larger. */}
@@ -735,13 +785,17 @@ function KitListRow({
         className={cn(
           PALETTE_ROW_CLASS,
           LIST_ROW_BOX,
+          "group/kit-row",
+          // The row a context menu is open on keeps a ring while the menu is up,
+          // as in the host's own lists (Radix sets `data-state` on the trigger).
+          ROW_MENU_TARGET_CLASS,
           // An option is chosen, not read: Shift-click extends the selection
           // rather than dragging a text selection across the rows.
           "select-none",
           // In a multi-select list the fill is the selection, so the cursor
           // takes the focus outline the app's own multi-select grids draw,
           // shown only while the list has keyboard focus.
-          active === true && LIST_ROW_CURSOR_CLASS,
+          cursor && LIST_ROW_CURSOR_CLASS,
           unavailable && "opacity-50",
           str(className)
         )}

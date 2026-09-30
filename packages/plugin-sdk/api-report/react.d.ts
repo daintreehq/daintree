@@ -1103,6 +1103,17 @@ interface PluginListRowProps extends Omit<PluginDomProps<HTMLElement>, "title"> 
      * keyboard focus. Pass `index === activeIndex`.
      */
     active?: boolean;
+    /**
+     * The row is in a multi-select list and this says whether it is chosen:
+     * the host's checkbox glyph takes the icon's place on a checked row, on the
+     * row under the pointer and on the keyboard cursor, as in the app's own
+     * multi-select lists. Pass `selection.isSelected(id)`.
+     */
+    checked?: boolean;
+    /** Anything in the list is selected: every row shows its checkbox. Pass `selection.count > 0`. */
+    selecting?: boolean;
+    /** A click on the checkbox itself: toggle just this row (`selection.toggle(id)`). */
+    onToggle?: () => void;
     onSelect?: () => void;
     /**
      * Dimmed and not clickable. In a `useListNavigation` listbox, report the same

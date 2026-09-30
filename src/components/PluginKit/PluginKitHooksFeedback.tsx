@@ -249,7 +249,7 @@ function KitConfirmPopover({
           {question}
         </p>
         {detail ? (
-          <p id={descriptionId} className="mt-1 text-xs text-text-secondary">
+          <p id={descriptionId} className="mt-1 text-xs text-balance text-text-secondary">
             {detail}
           </p>
         ) : null}
