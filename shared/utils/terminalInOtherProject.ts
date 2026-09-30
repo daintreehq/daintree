@@ -1,12 +1,23 @@
 import type { ActionDispatchResult } from "../types/actions.js";
 
+const NO_PANEL_SUFFIX = " — pass an `id` from the terminal listing.";
+const NO_PANEL_PATTERN = /^[\w.]+: no panel with id ".*"$/s;
+
 /**
  * "No panel with id" for a terminal-taking action: the id is not in the view
  * that received the call. The one message every miss reads as, whether the id
  * never existed or — for a caller not entitled to know — lives elsewhere.
  */
 export function formatNoPanelMessage(actionId: string, terminalId: string): string {
-  return `${actionId}: no panel with id "${terminalId}" — pass an \`id\` from the terminal listing.`;
+  return `${actionId}: no panel with id "${terminalId}"${NO_PANEL_SUFFIX}`;
+}
+
+function isNoPanelMessage(message: unknown): boolean {
+  return (
+    typeof message === "string" &&
+    message.endsWith(NO_PANEL_SUFFIX) &&
+    NO_PANEL_PATTERN.test(message.slice(0, -NO_PANEL_SUFFIX.length))
+  );
 }
 
 export interface TerminalInOtherProjectDetails {
@@ -68,14 +79,29 @@ export class TerminalInOtherProjectError extends Error {
  * reason `RESOURCE_NOT_OWNED` is uniform (#12980): telling them apart would let
  * a scoped caller probe ids for the shape of workspaces it was never granted.
  * Applied in main, where binding is known; the renderer cannot see it.
+ *
+ * Both kinds of miss leave with no `details`. An ordinary miss carries the
+ * renderer's thrown `Error`, whose `stack` survives the structured clone to a
+ * plugin worker, so a replacement minted here would be told apart by its stack
+ * alone — dropping it from both is the only shape that is identical.
  */
 export function maskTerminalInOtherProject(result: ActionDispatchResult): ActionDispatchResult {
   // Renderer replies cross IPC unvalidated, so a malformed one passes through.
-  if (!result || result.ok || result.error?.code !== "TERMINAL_IN_OTHER_PROJECT") return result;
+  if (!result || result.ok || !result.error) return result;
+  const { code, message } = result.error;
+  if (code === "EXECUTION_ERROR" && isNoPanelMessage(message)) {
+    return { ok: false, error: { code, message } };
+  }
+  if (code !== "TERMINAL_IN_OTHER_PROJECT") return result;
   const details = result.error.details as Partial<TerminalInOtherProjectErrorDetails> | undefined;
-  const message = formatNoPanelMessage(
-    typeof details?.actionId === "string" ? details.actionId : "terminal.close",
-    typeof details?.terminalId === "string" ? details.terminalId : ""
-  );
-  return { ok: false, error: { code: "EXECUTION_ERROR", message, details: new Error(message) } };
+  return {
+    ok: false,
+    error: {
+      code: "EXECUTION_ERROR",
+      message: formatNoPanelMessage(
+        typeof details?.actionId === "string" ? details.actionId : "terminal.close",
+        typeof details?.terminalId === "string" ? details.terminalId : ""
+      ),
+    },
+  };
 }

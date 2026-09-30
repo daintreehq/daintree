@@ -38,18 +38,41 @@ describe("maskTerminalInOtherProject", () => {
 
     expect(masked).toEqual({
       ok: false,
-      error: {
-        code: "EXECUTION_ERROR",
-        message: formatNoPanelMessage("terminal.close", "t1"),
-        details: expect.any(Error),
-      },
+      error: { code: "EXECUTION_ERROR", message: formatNoPanelMessage("terminal.close", "t1") },
     });
     expect(JSON.stringify(masked)).not.toContain("proj-b");
+  });
+
+  it("gives an ordinary miss the same shape, so neither carries a telltale stack", () => {
+    const message = formatNoPanelMessage("terminal.close", "t1");
+    const ordinary = maskTerminalInOtherProject({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message, details: new Error(message) },
+    });
+    const err = new TerminalInOtherProjectError("terminal.close", details);
+    const elsewhere = maskTerminalInOtherProject({
+      ok: false,
+      error: { code: "TERMINAL_IN_OTHER_PROJECT", message: err.message, details: err.toDetails() },
+    });
+
+    expect(structuredClone(ordinary)).toStrictEqual(structuredClone(elsewhere));
+    expect(ordinary.ok || "details" in ordinary.error).toBe(false);
   });
 
   it.each<[string, ActionDispatchResult]>([
     ["a success", { ok: true, result: { closedIds: ["t1"] } }],
     ["another error", { ok: false, error: { code: "EXECUTION_ERROR", message: "boom" } }],
+    [
+      "a look-alike message",
+      {
+        ok: false,
+        error: {
+          code: "EXECUTION_ERROR",
+          message: 'x: no panel with id "t1" — pass an `id` from the terminal listing. Also: boom',
+          details: new Error("boom"),
+        },
+      },
+    ],
   ])("leaves %s untouched", (_label, result) => {
     expect(maskTerminalInOtherProject(result)).toBe(result);
   });
