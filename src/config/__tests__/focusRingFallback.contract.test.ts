@@ -581,8 +581,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   },
   {
     file: "src/components/PluginKit/PluginKitEditors.tsx",
-    fragment:
-      "block w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary outline-hidden",
+    fragment: "block rounded-none border-0 bg-transparent focus-visible:outline-hidden",
     reason:
       "Parent shows focus: the kit MarkdownEditor's frame wraps its Write/Preview strip and this text area as one field and paints the ring once via has-[textarea:focus-visible], as TagInput does",
   },

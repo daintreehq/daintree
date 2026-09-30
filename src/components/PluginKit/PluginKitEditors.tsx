@@ -18,6 +18,7 @@ import type {
   PluginMarkdownEditorProps,
 } from "@shared/types/plugin-sdk-react";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import { UnderlineTabs } from "@/components/ui/UnderlineTabs";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { cn } from "@/lib/utils";
@@ -447,7 +448,10 @@ function KitMarkdownEditor({
   const label = nonEmpty(ariaLabel);
 
   const textarea = (
-    <textarea
+    // The host's Textarea, for its field wiring (a kit FormField's label,
+    // description and error reach it), drawn without its own box: the frame
+    // around the strip and the text is the field.
+    <Textarea
       ref={textareaRef}
       aria-label={label}
       data-kit-markdown-source=""
@@ -457,13 +461,14 @@ function KitMarkdownEditor({
       disabled={inert}
       readOnly={locked}
       autoFocus={autoFocus === true}
-      aria-invalid={invalid === true || undefined}
+      invalid={invalid === true}
+      resize="none"
       spellCheck
       onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setText(event.target.value)}
       onKeyDown={onKeyDown}
       // The frame draws the field's ring; the text area is its content.
       // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the frame rings it through has-[textarea:focus-visible]
-      className="block w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary outline-hidden placeholder:text-text-placeholder disabled:cursor-not-allowed"
+      className="block rounded-none border-0 bg-transparent focus-visible:outline-hidden disabled:opacity-100"
     />
   );
   const source = split ? (
@@ -481,6 +486,11 @@ function KitMarkdownEditor({
     </div>
   );
 
+  // Exactly the source's height, so switching sides moves nothing below the
+  // field; a longer preview scrolls inside it. Opened straight into Preview,
+  // before the source has been measured, it takes the source's first height.
+  const previewHeight = sourceHeight ?? rowsMin * 20 + 16;
+  const showPreview = split || activeMode === "preview";
   const preview = (
     <div
       id={split ? undefined : panelId("preview")}
@@ -488,15 +498,14 @@ function KitMarkdownEditor({
       aria-labelledby={split ? undefined : tabId("preview")}
       aria-label={split ? "Preview" : undefined}
       tabIndex={split ? undefined : 0}
+      // Mounted behind Write too, so the Preview tab's aria-controls always
+      // resolves; its content renders only while it shows.
+      hidden={!showPreview}
       data-kit-markdown-preview=""
       className="min-w-0 overflow-auto px-3 py-2 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-      style={
-        sourceHeight === null
-          ? undefined
-          : { minHeight: sourceHeight, maxHeight: split ? sourceHeight : undefined }
-      }
+      style={{ height: previewHeight }}
     >
-      {text.trim() === "" ? (
+      {!showPreview ? null : text.trim() === "" ? (
         <p className="text-sm text-text-secondary">Nothing to preview</p>
       ) : (
         <Markdown
@@ -577,7 +586,7 @@ function KitMarkdownEditor({
         ) : (
           <>
             {source}
-            {activeMode === "preview" ? preview : null}
+            {preview}
           </>
         )}
       </div>

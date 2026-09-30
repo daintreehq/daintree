@@ -404,12 +404,14 @@
 }
 
 /* A host's own hunk controls (the plugin kit's Stage, Revert, Comment). Always
-   drawn, unlike the copy button: they are what the hunk is for, not a spare. */
+   drawn, unlike the copy button: they are what the hunk is for, not a spare.
+   Pulled into the row's height as the copy button is (its -my-1), so a header
+   carrying actions keeps the host's rhythm while each target stays 24px. */
 .diff-viewer .diff-hunk-header-actions {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin-block: -2px;
+  margin-block: -4px;
 }
 
 /* Keyboard hunk nav target: keep the hunk header clear of the sticky dialog
