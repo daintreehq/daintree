@@ -2493,23 +2493,49 @@ describe("sessionServer tier-mismatch notifier", () => {
     });
   });
 
-  it("points the assistant's core session at `full` for the unscoped worktree.delete", async () => {
-    // The owned delete is core; only the unscoped one needs `full`, and the
-    // banner must name the tier that actually covers what was called.
+  it("points the assistant's core session at `full` for worktree resource teardown", async () => {
+    // Both deletes are core for the assistant (#13135); resource teardown
+    // still needs `full`, and the banner must name the tier that actually
+    // covers what was called.
     const notify = vi.fn();
     const deps = fakeDeps({ notifyTierMismatch: notify });
     deps.sessionStore.sessionOriginMap.set("session-A2", "help");
     const server = createSessionServer("session-A2", deps);
     await server.connect(makeMockTransport());
 
-    await callTool(server, { name: "worktree.delete", arguments: {} });
+    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
 
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({
-        toolId: "worktree.delete",
+        toolId: "worktree.resource.teardown",
         tier: "core",
         targetTier: "full",
       })
+    );
+  });
+
+  it("admits the unscoped worktree.delete for the assistant's core session (#13135)", async () => {
+    // A worktree an earlier help session made — or this assistant's own from
+    // before a restart — has no ownership record here, so the delete has to
+    // reach it unscoped. It is refused by nothing but the confirm gate.
+    const notify = vi.fn();
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const deps = fakeDeps({ notifyTierMismatch: notify, dispatchAction });
+    deps.sessionStore.sessionOriginMap.set("session-A4", "help");
+    const server = createSessionServer("session-A4", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: { worktreeId: "wt-from-an-earlier-session" },
+    })) as { isError?: boolean };
+
+    expect(notify).not.toHaveBeenCalled();
+    expect(result.isError).not.toBe(true);
+    expect(dispatchAction).toHaveBeenCalledWith(
+      "worktree.delete",
+      expect.objectContaining({ worktreeId: "wt-from-an-earlier-session" }),
+      false
     );
   });
 
@@ -3425,12 +3451,12 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     // pre-authorization silently do nothing here, exactly as it did for a
     // tier-permitted tool.
     const sessionStore = assistantSessionStore("core");
-    sessionStore.grantCache.issueGrant("s", "worktree.delete");
+    sessionStore.grantCache.issueGrant("s", "worktree.resource.teardown");
     const grant = sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
       actorType: "help-session",
-      allowedTools: ["worktree.delete"],
+      allowedTools: ["worktree.resource.teardown"],
       maxUses: 2,
     });
     const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
@@ -3438,9 +3464,13 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     const server = createSessionServer("s", deps);
     await server.connect(makeMockTransport());
 
-    await callTool(server, { name: "worktree.delete", arguments: {} });
+    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
 
-    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), true);
+    expect(dispatchAction).toHaveBeenCalledWith(
+      "worktree.resource.teardown",
+      expect.any(Object),
+      true
+    );
     expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(1);
     sessionStore.grantCache.dispose();
   });
@@ -3485,7 +3515,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
       sessionId: "s",
       actorId: "help-1",
       actorType: "help-session",
-      allowedTools: ["worktree.delete"],
+      allowedTools: ["worktree.resource.teardown"],
       maxUses: 2,
     });
     const consumeSpy = vi
@@ -3497,14 +3527,14 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, {
-      name: "worktree.delete",
+      name: "worktree.resource.teardown",
       arguments: {},
     })) as { isError?: boolean; content?: Array<{ text?: string }> };
 
     // Proves the refusal came from the consume-failure guard rather than the
     // ordinary tier denial, which would produce the same error for a
     // different reason.
-    expect(consumeSpy).toHaveBeenCalledWith(grant.id, "worktree.delete");
+    expect(consumeSpy).toHaveBeenCalledWith(grant.id, "worktree.resource.teardown");
     expect(result.isError).toBe(true);
     expect(result.content?.[0]?.text ?? "").toContain(TIER_NOT_PERMITTED_CODE);
     expect(dispatchAction).not.toHaveBeenCalled();
@@ -3518,12 +3548,12 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     // this call would be refused as tier-denied even though a live grant
     // admitted it.
     const sessionStore = assistantSessionStore("core");
-    sessionStore.grantCache.issueGrant("s", "worktree.delete");
+    sessionStore.grantCache.issueGrant("s", "worktree.resource.teardown");
     const grant = sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
       actorType: "help-session",
-      allowedTools: ["worktree.delete"],
+      allowedTools: ["worktree.resource.teardown"],
       maxUses: 2,
     });
     const consumeSpy = vi
@@ -3535,13 +3565,17 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, {
-      name: "worktree.delete",
+      name: "worktree.resource.teardown",
       arguments: {},
     })) as { isError?: boolean };
 
-    expect(consumeSpy).toHaveBeenCalledWith(grant.id, "worktree.delete");
+    expect(consumeSpy).toHaveBeenCalledWith(grant.id, "worktree.resource.teardown");
     expect(result.isError).not.toBe(true);
-    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), false);
+    expect(dispatchAction).toHaveBeenCalledWith(
+      "worktree.resource.teardown",
+      expect.any(Object),
+      false
+    );
     sessionStore.grantCache.dispose();
   });
 
@@ -3684,7 +3718,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     });
     const resetIdle = sessionStore.resetIdleTimer as ReturnType<typeof vi.fn>;
     resetIdle.mockClear();
-    sessionStore.grantCache.issueGrant("s", "worktree.delete");
+    sessionStore.grantCache.issueGrant("s", "worktree.resource.teardown");
     const refreshSpy = vi.spyOn(sessionStore.grantCache, "refresh");
     const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
     const notify = vi.fn();
@@ -3693,12 +3727,16 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, {
-      name: "worktree.delete",
+      name: "worktree.resource.teardown",
       arguments: {},
     })) as { isError?: boolean };
 
     expect(result.isError).not.toBe(true);
-    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), false);
+    expect(dispatchAction).toHaveBeenCalledWith(
+      "worktree.resource.teardown",
+      expect.any(Object),
+      false
+    );
     expect(notify).not.toHaveBeenCalled();
     expect(refreshSpy).toHaveBeenCalledTimes(1);
     expect(resetIdle).toHaveBeenCalledWith("s");
@@ -3716,7 +3754,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
       sessionId: "s",
       actorId: "help-1",
       actorType: "help-session",
-      allowedTools: ["worktree.delete"],
+      allowedTools: ["worktree.resource.teardown"],
       maxUses: 2,
     });
     const refreshSpy = vi.spyOn(sessionStore.grantCache, "refreshNativeGrant");
@@ -3726,14 +3764,18 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, {
-      name: "worktree.delete",
+      name: "worktree.resource.teardown",
       arguments: {},
     })) as { isError?: boolean };
 
     expect(result.isError).not.toBe(true);
     // dispatchConfirmed=true → the native grant bypasses the confirm modal,
     // unlike a per-tool grant which dispatches with `false`.
-    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), true);
+    expect(dispatchAction).toHaveBeenCalledWith(
+      "worktree.resource.teardown",
+      expect.any(Object),
+      true
+    );
     expect(refreshSpy).toHaveBeenCalledWith(grant.id);
     // One use consumed at authorization.
     expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(1);
@@ -3778,7 +3820,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
       sessionId: "s",
       actorId: "help-1",
       actorType: "help-session",
-      allowedTools: ["worktree.delete"],
+      allowedTools: ["worktree.resource.teardown"],
       maxUses: 1,
     });
     const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
@@ -3787,13 +3829,13 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     await server.connect(makeMockTransport());
 
     const first = (await callTool(server, {
-      name: "worktree.delete",
+      name: "worktree.resource.teardown",
       arguments: {},
     })) as { isError?: boolean };
     expect(first.isError).not.toBe(true);
 
     const second = (await callTool(server, {
-      name: "worktree.delete",
+      name: "worktree.resource.teardown",
       arguments: {},
     })) as { isError?: boolean; content?: Array<{ text?: string }> };
     expect(second.isError).toBe(true);
@@ -3825,7 +3867,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
 
   it("failed dispatch through a grant does not refresh the TTL", async () => {
     const sessionStore = assistantSessionStore("core");
-    sessionStore.grantCache.issueGrant("s", "worktree.delete");
+    sessionStore.grantCache.issueGrant("s", "worktree.resource.teardown");
     const refreshSpy = vi.spyOn(sessionStore.grantCache, "refresh");
     const dispatchAction = vi.fn().mockResolvedValue({
       result: { ok: false, error: { code: "BOOM", message: "boom" } },
@@ -3834,7 +3876,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     const server = createSessionServer("s", deps);
     await server.connect(makeMockTransport());
 
-    await callTool(server, { name: "worktree.delete", arguments: {} });
+    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
 
     expect(dispatchAction).toHaveBeenCalled();
     expect(refreshSpy).not.toHaveBeenCalled();
@@ -3854,15 +3896,15 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     await server.connect(makeMockTransport());
 
     // 1st denial.
-    await callTool(server, { name: "worktree.delete", arguments: {} });
+    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
     expect(notify).toHaveBeenCalledTimes(1);
 
     // 2nd denial: still fires (threshold = 2 means 1st AND 2nd fire).
-    await callTool(server, { name: "worktree.delete", arguments: {} });
+    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
     expect(notify).toHaveBeenCalledTimes(2);
 
     // 3rd denial: suppressed but audited.
-    await callTool(server, { name: "worktree.delete", arguments: {} });
+    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
     expect(notify).toHaveBeenCalledTimes(2);
 
     // Every denial wrote an audit record.
@@ -3886,14 +3928,18 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     await server.connect(makeMockTransport());
 
     // Push the counter past the silence threshold.
-    await callTool(server, { name: "worktree.delete", arguments: {} });
-    await callTool(server, { name: "worktree.delete", arguments: {} });
-    await callTool(server, { name: "worktree.delete", arguments: {} });
-    expect(sessionStore.grantCache.shouldSuppressBanner("s", "worktree.delete")).toBe(true);
+    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
+    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
+    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
+    expect(sessionStore.grantCache.shouldSuppressBanner("s", "worktree.resource.teardown")).toBe(
+      true
+    );
 
     // Approval mints a grant + resets counter.
-    sessionStore.grantCache.issueGrant("s", "worktree.delete");
-    expect(sessionStore.grantCache.shouldSuppressBanner("s", "worktree.delete")).toBe(false);
+    sessionStore.grantCache.issueGrant("s", "worktree.resource.teardown");
+    expect(sessionStore.grantCache.shouldSuppressBanner("s", "worktree.resource.teardown")).toBe(
+      false
+    );
 
     sessionStore.grantCache.dispose();
   });
@@ -4966,9 +5012,9 @@ describe("sessionServer introspection tier filtering", () => {
   // #12117. The bug this reproduces: an assistant below the tier an action
   // needs could not see it at any discovery surface, so it told the user
   // Daintree has no such feature. It now learns the name exists and needs
-  // `full` — without the name becoming callable anywhere. The exemplar is
-  // `worktree.delete`, the action the bug was filed about, which sits above a
-  // core session again now that only its owned form is core.
+  // `full` — without the name becoming callable anywhere. The bug was filed
+  // about `worktree.delete`, which is core for the assistant since #13135; the
+  // exemplar is resource teardown, which still sits above a core session.
   describe("first-party existence catalog (#12117)", () => {
     function firstPartyDeps(
       result: unknown,
@@ -4982,12 +5028,15 @@ describe("sessionServer introspection tier filtering", () => {
     it("reports a higher-tier action to a renderer-owned session", async () => {
       const deps = firstPartyDeps({
         totalMatches: 2,
-        results: [entry("terminal.list"), entry("worktree.delete", { category: "worktree" })],
+        results: [
+          entry("terminal.list"),
+          entry("worktree.resource.teardown", { category: "worktree" }),
+        ],
       });
       const server = createSessionServer("s1", deps);
       const res = await callTool(server, {
         name: "actions.search",
-        arguments: { query: "delete worktree" },
+        arguments: { query: "tear down worktree resource" },
       });
 
       const body = payload<{
@@ -4997,7 +5046,7 @@ describe("sessionServer introspection tier filtering", () => {
       expect(body.results.map((r) => r.id)).toEqual(["terminal.list"]);
       expect(body.unavailable).toEqual([
         expect.objectContaining({
-          id: "worktree.delete",
+          id: "worktree.resource.teardown",
           minimumTier: "full",
           callable: false,
         }),
@@ -5010,7 +5059,10 @@ describe("sessionServer introspection tier filtering", () => {
     // paged path would leave search working and listing silently bare.
     it("reports them through the paged actions.list path too", async () => {
       const deps = firstPartyDeps({
-        actions: [entry("terminal.list"), entry("worktree.delete", { category: "worktree" })],
+        actions: [
+          entry("terminal.list"),
+          entry("worktree.resource.teardown", { category: "worktree" }),
+        ],
       });
       // `actions.list` is itself full-only, so a core session reaches the paged
       // path only once the user has allowed it that one tool.
@@ -5026,7 +5078,7 @@ describe("sessionServer introspection tier filtering", () => {
       }>(res);
       expect(body.actions.map((a) => a.id)).toEqual(["terminal.list"]);
       expect(body.total).toBe(1);
-      expect(body.unavailable.map((s) => s.id)).toEqual(["worktree.delete"]);
+      expect(body.unavailable.map((s) => s.id)).toEqual(["worktree.resource.teardown"]);
       expect(body.unavailableTotal).toBe(1);
     });
 
@@ -5034,7 +5086,7 @@ describe("sessionServer introspection tier filtering", () => {
     // moment a grant admits the id, it must leave the catalog and appear in
     // `actions`. Anything else advertises the same tool in two states at once.
     it("moves a granted id out of the catalog and into the callable list", async () => {
-      const deps = firstPartyDeps({ actions: [entry("worktree.delete")] });
+      const deps = firstPartyDeps({ actions: [entry("worktree.resource.teardown")] });
       deps.sessionStore.grantCache.issueGrant("s1", "actions.list");
       const server = createSessionServer("s1", deps);
 
@@ -5044,14 +5096,14 @@ describe("sessionServer introspection tier filtering", () => {
       expect(before.actions).toEqual([]);
       expect(before.unavailableTotal).toBe(1);
 
-      deps.sessionStore.grantCache.issueGrant("s1", "worktree.delete");
+      deps.sessionStore.grantCache.issueGrant("s1", "worktree.resource.teardown");
 
       const after = payload<{
         actions: ActionManifestEntry[];
         unavailable: unknown[];
         unavailableTotal: number;
       }>(await callTool(server, { name: "actions.list" }));
-      expect(after.actions.map((a) => a.id)).toEqual(["worktree.delete"]);
+      expect(after.actions.map((a) => a.id)).toEqual(["worktree.resource.teardown"]);
       expect(after.unavailable).toEqual([]);
       expect(after.unavailableTotal).toBe(0);
     });
@@ -5061,22 +5113,22 @@ describe("sessionServer introspection tier filtering", () => {
     // catalog must not appear on either side of it.
     it("leaves the name out of tools/list and refuses the call", async () => {
       const deps = firstPartyDeps(
-        { actions: [entry("worktree.delete")] },
+        { actions: [entry("worktree.resource.teardown")] },
         {
           requestManifest: vi
             .fn()
             .mockResolvedValue([
               makeManifestEntry("terminal.list"),
-              makeManifestEntry("worktree.delete"),
+              makeManifestEntry("worktree.resource.teardown"),
             ]),
         }
       );
       const server = createSessionServer("s1", deps);
 
       const listed = await listTools(server);
-      expect(listed.tools.map((t) => t.name)).not.toContain("worktree.delete");
+      expect(listed.tools.map((t) => t.name)).not.toContain("worktree.resource.teardown");
 
-      const denied = await callTool(server, { name: "worktree.delete", arguments: {} });
+      const denied = await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
       expect(denied.isError).toBe(true);
       expect(toolErrorPayload(denied).code).toBe(TIER_NOT_PERMITTED_CODE);
     });
@@ -5102,14 +5154,14 @@ describe("sessionServer introspection tier filtering", () => {
     it("names the tier on a getSchema read instead of an unknown-id denial", async () => {
       const deps = firstPartyDeps({
         ok: true,
-        entry: entry("worktree.delete", { category: "worktree" }),
+        entry: entry("worktree.resource.teardown", { category: "worktree" }),
         policy: null,
         error: null,
       });
       const server = createSessionServer("s1", deps);
       const res = await callTool(server, {
         name: "actions.getSchema",
-        arguments: { actionId: "worktree.delete" },
+        arguments: { actionId: "worktree.resource.teardown" },
       });
 
       const body = payload<{
@@ -11327,6 +11379,32 @@ describe("assistant skip preference (#12874)", () => {
     );
     help.sessionStore.grantCache.dispose();
   });
+
+  // The issue's own case (#13135): a core help session deleting a worktree an
+  // earlier session made. Skip runs it; ask raises the ordinary modal. Neither
+  // is refused, and nothing about it depends on the session having created it.
+  it.each([
+    { skipped: true, confirmed: true, authorization: "skip-preference" },
+    { skipped: false, confirmed: false, authorization: undefined },
+  ])(
+    "dispatches a core help session's unscoped delete (skipped: $skipped)",
+    async ({ skipped, confirmed, authorization }) => {
+      const help = skipServer({ origin: "help", skipped, tier: "core" });
+      await help.server.connect(makeMockTransport());
+
+      const result = await callTool(help.server, {
+        name: "worktree.delete",
+        arguments: { worktreeId: "wt-from-an-earlier-session" },
+      });
+
+      expect(result.isError).not.toBe(true);
+      const call = help.dispatchAction.mock.calls.at(-1)!;
+      expect(call[0]).toBe("worktree.delete");
+      expect(call[2]).toBe(confirmed);
+      expect(call[3]).toBe(authorization);
+      help.sessionStore.grantCache.dispose();
+    }
+  );
 
   it("keeps the dialog while the preference resolves to ask", async () => {
     const help = skipServer({ origin: "help", skipped: false });

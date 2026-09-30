@@ -811,7 +811,7 @@ describe("McpServerService", () => {
     // for us and picking the survivors at random. Choosing which tools to drop
     // beats having Cursor choose. Everything here has a shell equivalent the
     // caller already has. The git writes have since left the in-app tool sets
-    // too; `worktree.delete` stays on `full` for the in-app assistant.
+    // too; `worktree.delete` stays on core for the in-app assistant.
     it("external tier: shell-equivalent mutations are neither listed nor callable (#11585)", async () => {
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
         ok: true,
@@ -925,13 +925,14 @@ describe("McpServerService", () => {
       );
       expect(allowed.isError).not.toBe(true);
 
-      // Destructive denied at dispatch time
+      // Destructive denied at dispatch time. The unscoped delete is core for
+      // the assistant only (#13135), so a pane is pointed at its owned form.
       const denied = getTextResult(
         await client.callTool({ name: "worktree.delete", arguments: { id: "x" } })
       );
       expect(denied.isError).toBe(true);
       expect(denied.content[0].text).toContain("TIER_NOT_PERMITTED");
-      expect(denied.content[0].text).toContain("core");
+      expect(denied.content[0].text).toContain("worktree.deleteOwned");
 
       const records = getAuditRecords(service);
       const denyRecord = records.find((r) => r.toolId === "worktree.delete");
@@ -990,8 +991,8 @@ describe("McpServerService", () => {
         title: "Fetch",
         description: "Update remote-tracking refs from the remote",
       }),
-      // The owned delete is core and the unscoped one full (#12116), which a
-      // pane bearer only ever sees as the owned form. `danger` mirrors the real
+      // Both deletes are core for the assistant (#13135), and a pane bearer
+      // only ever sees the owned form. `danger` mirrors the real
       // registry so the fixture doesn't quietly describe these as safe; the
       // registry values themselves are guarded by `EXPECTED_CONFIRM_DANGER`.
       createManifestEntry({

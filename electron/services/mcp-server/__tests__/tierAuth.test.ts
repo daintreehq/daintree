@@ -695,13 +695,10 @@ describe("external tool surface budget (#11585)", () => {
   // — the apiKey back-compat guarantee and #11544's CI-status routes — so a
   // future reader sees the reversal was intentional.
   //
-  // Every one of them stays reachable for the in-app assistant at `full`, which
-  // is not subject to any third-party client's cap. The paired internal-tier
+  // Every one of them stays reachable for the in-app assistant by `full` at the
+  // latest, which is not subject to any third-party client's cap. The paired internal-tier
   // assertion is what makes this a boundary rather than a deletion.
   const CUT_FROM_EXTERNAL_KEPT_INTERNALLY = [
-    // D2 destructive, and not needed to drive work forward — an external caller
-    // has its own shell. In-app the unscoped delete is a `full` tool.
-    "worktree.delete",
     // #11544's two CI-status routes.
     "forge.getCIStatus",
     "worktree.reviewReadiness",
@@ -1046,15 +1043,18 @@ describe("help-session tier policy (#10640)", () => {
     }
   });
 
-  // Confirm-classified worktree cleanup (#12116). Cleaning up a worktree the
-  // session created is part of the core loop; the unscoped delete and resource
-  // teardown reach worktrees the session never made, so they wait for `full`.
-  // Discovery is asserted beside dispatch because the two gates are what an
-  // agent actually experiences, and `shouldExposeTool` has its own reasons to
-  // withhold a `danger: "confirm"` tool (see `isWithheldFromBoundSession` for
-  // the bound-external case). Neither of them fires here.
-  it("admits the owned worktree delete at core and the unscoped cleanup only at full", () => {
+  // Confirm-classified worktree cleanup (#12116, #13135). The assistant deletes
+  // any eligible worktree at core — an earlier help session's included — and
+  // `danger: "confirm"` is what asks, not the tool set. Every other origin at
+  // core gets only the owned form, and resource teardown still waits for
+  // `full`. Discovery is asserted beside dispatch because the two gates are
+  // what an agent actually experiences, and `shouldExposeTool` has its own
+  // reasons to withhold a `danger: "confirm"` tool (see
+  // `isWithheldFromBoundSession` for the bound-external case). Neither of them
+  // fires here.
+  it("admits the unscoped worktree delete at core for the assistant only", () => {
     const assistant = { ...UNBOUND_SESSION_SURFACE, rendererOwnedOrigin: true };
+    const pane = { ...UNBOUND_SESSION_SURFACE, rendererOwnedOrigin: false };
     for (const toolId of [
       "worktree.delete",
       "worktree.deleteOwned",
@@ -1067,25 +1067,32 @@ describe("help-session tier policy (#10640)", () => {
     expect(isTierPermitted("core", "worktree.deleteOwned", true)).toBe(true);
     expect(isTierPermitted("core", "worktree.deleteOwned", false)).toBe(true);
     expect(shouldExposeTool(owned, "core", assistant)).toBe(true);
+    expect(shouldExposeTool(owned, "core", pane)).toBe(true);
 
-    for (const toolId of ["worktree.delete", "worktree.resource.teardown"]) {
-      const entry = makeEntry({ id: toolId, danger: "confirm" });
-      expect(isTierPermitted("core", toolId, true)).toBe(false);
-      expect(shouldExposeTool(entry, "core", assistant)).toBe(false);
-      expect(isTierPermitted("full", toolId, true)).toBe(true);
-      expect(shouldExposeTool(entry, "full", assistant)).toBe(true);
+    const unscoped = makeEntry({ id: "worktree.delete", danger: "confirm" });
+    expect(isTierPermitted("core", "worktree.delete", true)).toBe(true);
+    expect(shouldExposeTool(unscoped, "core", assistant)).toBe(true);
+    for (const tier of ["core", "full"] as const) {
+      expect(isTierPermitted(tier, "worktree.delete", false)).toBe(false);
+      expect(shouldExposeTool(unscoped, tier, pane)).toBe(false);
     }
+
+    const teardown = makeEntry({ id: "worktree.resource.teardown", danger: "confirm" });
+    expect(isTierPermitted("core", "worktree.resource.teardown", true)).toBe(false);
+    expect(shouldExposeTool(teardown, "core", assistant)).toBe(false);
+    expect(isTierPermitted("full", "worktree.resource.teardown", true)).toBe(true);
+    expect(shouldExposeTool(teardown, "full", assistant)).toBe(true);
   });
 
   it("withholds the unscoped worktree delete from the external tier (#11585)", () => {
-    // The two surfaces move independently: the unscoped delete being a `full`
+    // The two surfaces move independently: the unscoped delete being a core
     // tool for the assistant did not re-admit it externally. An api-key caller
     // still gets only the ownership-scoped `worktree.deleteOwned`, which is the
     // whole point of the #11585 cut — it has its own shell, so it does not need
     // ours.
     expect(isTierPermitted("external", "worktree.delete")).toBe(false);
     expect(isTierPermitted("external", "worktree.deleteOwned")).toBe(true);
-    expect(isTierPermitted("full", "worktree.delete", true)).toBe(true);
+    expect(isTierPermitted("core", "worktree.delete", true)).toBe(true);
   });
 });
 
@@ -2243,16 +2250,15 @@ describe("filterIntrospectionResultForSession", () => {
 
     // The stub above proves nothing about the derivation: BAND_OVERRIDES pins
     // it, so a builder that passed a hard-coded `danger` into `deriveBand`
-    // would still report it correctly. `worktree.delete` — the action #12117
-    // was filed about, out of core's reach again since the core/full split —
-    // has no override and is `danger: "confirm"` in a non-open-world category,
-    // so its band can only be right if the entry's OWN danger reaches the
-    // derivation.
+    // would still report it correctly. `worktree.resource.teardown` is out of
+    // core's reach, has no override and is `danger: "confirm"` in a
+    // non-open-world category, so its band can only be right if the entry's
+    // OWN danger reaches the derivation.
     it("derives the band from the entry's own danger, not a fixed value", () => {
       const destructive = buildUnavailableStub(
         makeEntry({
-          id: "worktree.delete",
-          title: "Delete Worktree",
+          id: "worktree.resource.teardown",
+          title: "Tear Down Worktree Resource",
           category: "worktree",
           danger: "confirm",
         }),
@@ -2261,7 +2267,7 @@ describe("filterIntrospectionResultForSession", () => {
       expect(destructive).toMatchObject({ band: "destructive-local", minimumTier: "full" });
 
       const safe = buildUnavailableStub(
-        makeEntry({ id: "worktree.delete", category: "worktree", danger: "safe" }),
+        makeEntry({ id: "worktree.resource.teardown", category: "worktree", danger: "safe" }),
         firstParty()
       );
       expect(safe).toMatchObject({ band: "reversible" });
