@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { createElement, type ComponentType, type ReactNode } from "react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("@/services/ActionService", () => ({
@@ -13,6 +13,8 @@ import {
   addDays,
   addMonths,
   fitMonthsToMax,
+  formatEditableRange,
+  formatFieldRange,
   monthWeeks,
   parseDateText,
   parseRangeText,
@@ -22,6 +24,8 @@ import {
   weekday,
 } from "@/pluginUi/dateMath";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { inputVariants } from "@/components/ui/input";
+import { selectTriggerVariants } from "@/components/ui/select";
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
@@ -150,6 +154,34 @@ describe("date math", () => {
       end: "2026-09-01",
     });
     expect(parseRangeText("2026-09-01 – nope", today)).toBeNull();
+  });
+
+  it("says each part two range ends share once, and edits the range in full", () => {
+    const month = (iso: string) =>
+      new Intl.DateTimeFormat(undefined, { month: "short", timeZone: "UTC" }).format(
+        new Date(`${iso}T00:00:00Z`)
+      );
+    const count = (text: string, part: string) => text.split(part).length - 1;
+    const sameMonth = { start: "2026-09-24", end: "2026-09-30" };
+    const sameYear = { start: "2026-09-24", end: "2026-10-03" };
+    const twoYears = { start: "2026-12-28", end: "2027-01-03" };
+
+    expect(count(formatFieldRange(sameMonth), "2026")).toBe(1);
+    expect(count(formatFieldRange(sameMonth), month("2026-09-24"))).toBe(1);
+    expect(count(formatFieldRange(sameYear), "2026")).toBe(1);
+    expect(count(formatFieldRange(sameYear), month("2026-10-03"))).toBe(1);
+    expect(count(formatFieldRange(twoYears), "2026")).toBe(1);
+    expect(count(formatFieldRange(twoYears), "2027")).toBe(1);
+    // Shorter than both ends written out, whenever a part is shared.
+    expect(formatFieldRange(sameMonth).length).toBeLessThan(formatEditableRange(sameMonth).length);
+    expect(formatFieldRange({ start: "2026-09-30", end: "2026-09-30" })).toBe(
+      formatEditableRange({ start: "2026-09-30", end: "2026-09-30" }).split(" – ")[0]
+    );
+
+    // The form a user edits is the one the parser reads back.
+    for (const range of [sameMonth, sameYear, twoYears]) {
+      expect(parseRangeText(formatEditableRange(range), "2020-01-01")).toEqual(range);
+    }
   });
 });
 
@@ -399,6 +431,140 @@ describe("DatePicker", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("sizes its box as the kit Input and Select do at both densities", () => {
+    const classes = (value: string) => value.split(/\s+/).filter(Boolean);
+    const vertical = (value: string) => classes(value).filter((name) => /^(py|h)-/.test(name));
+    const typeSize = (value: string) =>
+      classes(value).filter((name) => /^text-(xs|sm|base)$/.test(name));
+
+    renderLoose(kit.DatePicker, {
+      value: "2026-09-30",
+      "aria-label": "Due",
+      "data-testid": "field",
+    });
+    let box = screen.getByTestId("field");
+    let input = screen.getByRole("textbox", { name: "Due" });
+    const inputDefault = inputVariants({ density: "default" });
+    // A percentage height on the text resolves short against the box's auto
+    // height, so the text sizes the box through the Input's own padding.
+    expect(classes(input.className).some((name) => /^h-/.test(name))).toBe(false);
+    expect(vertical(input.className)).toEqual(vertical(inputDefault));
+    expect(typeSize(box.className)).toEqual(typeSize(inputDefault));
+    expect(vertical(box.className)).toEqual([]);
+
+    cleanup();
+    renderLoose(kit.DateRangePicker, {
+      value: { start: "2026-09-01", end: "2026-09-30" },
+      density: "compact",
+      "aria-label": "Period",
+      "data-testid": "field",
+    });
+    box = screen.getByTestId("field");
+    input = screen.getByRole("textbox", { name: "Period" });
+    const compactTrigger = selectTriggerVariants({ density: "compact" });
+    expect(classes(input.className).some((name) => /^h-/.test(name))).toBe(false);
+    // The compact control step every compact field shares.
+    expect(vertical(box.className)).toEqual(
+      vertical(compactTrigger).filter((n) => n.startsWith("h-"))
+    );
+    expect(typeSize(box.className)).toEqual(typeSize(compactTrigger));
+  });
+
+  it("keeps its calendar modal: focus stays inside and Escape hands it back", async () => {
+    const { container } = renderLoose(kit.DatePicker, {
+      defaultValue: "2026-09-30",
+      "aria-label": "Due date",
+    });
+    const input = screen.getByRole("textbox", { name: "Due date" });
+    const trigger = screen.getByRole("button", { name: "Choose date" });
+    trigger.focus();
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
+    const dialog = await screen.findByRole("dialog", { name: "Choose date" });
+    const cell = day("2026-09-30");
+    await waitFor(() => expect(document.activeElement).toBe(cell));
+    // The day is the panel's last tab stop; Tab wraps to its first, not out.
+    await act(async () => {
+      fireEvent.keyDown(cell, { key: "Tab" });
+    });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Previous month" }));
+    await act(async () => {
+      fireEvent.keyDown(document.activeElement!, { key: "Tab", shiftKey: true });
+    });
+    expect(document.activeElement).toBe(cell);
+    // The page behind is out of reach: hidden from assistive tech, and focus
+    // sent there comes straight back without closing the calendar.
+    expect(container.getAttribute("aria-hidden")).toBe("true");
+    await act(async () => {
+      input.focus();
+    });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(screen.getByRole("dialog", { name: "Choose date" })).toBe(dialog);
+    await act(async () => {
+      fireEvent.keyDown(cell, { key: "Escape" });
+    });
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(container.hasAttribute("aria-hidden")).toBe(false);
+  });
+
+  it("closes only its calendar on Escape inside a Sheet", async () => {
+    // The sheet's scroll shadows measure their body.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const onOpenChange = vi.fn();
+    render(
+      withTooltips(
+        createElement(kit.Sheet, {
+          open: true,
+          onOpenChange,
+          title: "Contract",
+          children: createElement(kit.DatePicker, {
+            defaultValue: "2026-09-30",
+            "aria-label": "Start",
+          }),
+        })
+      )
+    );
+    const trigger = await screen.findByRole("button", { name: "Choose date" });
+    // Let the sheet take its initial focus first, as it does before a user can click.
+    const sheet = screen.getByRole("dialog", { name: "Contract" });
+    await waitFor(() => expect(sheet.contains(document.activeElement)).toBe(true));
+    trigger.focus();
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
+    const picker = await screen.findByRole("dialog", { name: "Choose date" });
+    const cell = day("2026-09-30");
+    await waitFor(() => expect(document.activeElement).toBe(cell));
+    await act(async () => {
+      fireEvent.keyDown(cell, { key: "Tab" });
+    });
+    expect(picker.contains(document.activeElement)).toBe(true);
+    // Focus sent back into the sheet stays in the calendar layered over it.
+    await act(async () => {
+      screen.getByRole("textbox", { name: "Start", hidden: true }).focus();
+    });
+    expect(picker.contains(document.activeElement)).toBe(true);
+    await act(async () => {
+      fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    });
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(screen.queryByRole("dialog", { name: "Choose date" })).toBeNull();
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
   it("degrades bad props instead of throwing", () => {
     expect(() =>
       renderLoose(kit.DatePicker, {
@@ -479,6 +645,28 @@ describe("DateRangePicker", () => {
       fireEvent.click(screen.getByRole("button", { name: "Allowed" }));
     });
     expect(onValueChange).toHaveBeenLastCalledWith({ start: "2026-09-07", end: "2026-09-13" });
+  });
+
+  it("shows a range collapsed and ellipsised at rest, and in full while edited", () => {
+    const onValueChange = vi.fn();
+    renderLoose(kit.DateRangePicker, {
+      defaultValue: { start: "2026-09-24", end: "2026-09-30" },
+      onValueChange,
+      "aria-label": "Period",
+    });
+    const input = screen.getByRole("textbox", { name: "Period" }) as HTMLInputElement;
+    const range = { start: "2026-09-24", end: "2026-09-30" };
+    expect(input.value).toBe(formatFieldRange(range));
+    // Too long for the field, it ends in an ellipsis rather than mid-date.
+    expect(input.className.split(" ")).toContain("truncate");
+    fireEvent.focus(input);
+    expect(input.value).toBe(formatEditableRange(range));
+    // Editing an end of the full text parses back.
+    fireEvent.change(input, { target: { value: input.value.replace("30", "29") } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onValueChange).toHaveBeenLastCalledWith({ start: "2026-09-24", end: "2026-09-29" });
+    fireEvent.blur(input);
+    expect(input.value).toBe(formatFieldRange({ start: "2026-09-24", end: "2026-09-29" }));
   });
 
   it("shows the month a range ends in when the next one is wholly past max", async () => {

@@ -24,6 +24,7 @@ import {
   FIRST_ISO,
   firstOfMonth,
   formatDayNumber,
+  formatEditableRange,
   formatFieldDate,
   formatFieldRange,
   formatFullDate,
@@ -427,13 +428,25 @@ function KitCalendar(props: PluginCalendarProps) {
 const FIELD =
   "flex w-full items-center gap-0.5 bg-surface-input border border-border-input rounded-[var(--radius-md)] text-text-primary transition-colors duration-150 ease-out has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-accent-primary has-[input:focus-visible]:outline-offset-2";
 
+// The box's height comes from the text, as the Input's does: the input inside
+// carries the Input's vertical padding and the box its type size, so default
+// is the Input's 34px, and compact the 28px step of a compact Select trigger.
+// No percentage height on the input: against the box's auto height Chromium
+// resolves one to less than the text needs, and the field came out short.
 const FIELD_DENSITY = {
   default: "pl-3 pr-1 text-sm",
   compact: "h-7 pl-2 pr-0.5 text-xs",
 } as const;
 
+const FIELD_INPUT_DENSITY = {
+  default: "py-1.5",
+  compact: "py-1",
+} as const;
+
+// `truncate`: a value wider than the field ends in an ellipsis while it is not
+// being edited, instead of being cut off mid-date.
 const FIELD_INPUT =
-  "h-full min-w-0 flex-1 bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden disabled:cursor-not-allowed";
+  "min-w-0 flex-1 truncate bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden disabled:cursor-not-allowed";
 
 interface DateFieldProps {
   mode: Mode;
@@ -456,9 +469,11 @@ function sameValue(a: FieldValue, b: FieldValue): boolean {
   return sameRange(a, b);
 }
 
-function formatValue(value: FieldValue): string {
+// A range reads collapsed at rest and in full while edited (see `formatEditableRange`).
+function formatValue(value: FieldValue, editing: boolean): string {
   if (value === null) return "";
-  return typeof value === "string" ? formatFieldDate(value) : formatFieldRange(value);
+  if (typeof value === "string") return formatFieldDate(value);
+  return editing ? formatEditableRange(value) : formatFieldRange(value);
 }
 
 function isoValue(value: FieldValue): string {
@@ -503,6 +518,7 @@ function DateField({ mode, props }: DateFieldProps) {
   const value = controlled ? readValue(mode, props.value) : ownValue;
   const [text, setText] = useState<string | null>(null);
   const [typedInvalid, setTypedInvalid] = useState(false);
+  const [editing, setEditing] = useState(false);
   const controlledOpen = typeof open === "boolean" ? open : undefined;
   const [ownOpen, setOwnOpen] = useState(false);
   const isOpen = controlledOpen ?? ownOpen;
@@ -625,7 +641,10 @@ function DateField({ mode, props }: DateFieldProps) {
   );
 
   return (
-    <Popover open={isOpen} onOpenChange={(next) => setOpen(next)}>
+    // Modal, as the date picker dialog pattern asks: Tab stays in the calendar,
+    // the page behind is inert, and Escape or a click away closes it and hands
+    // focus back (to the calendar button, or the text when Alt+Down opened it).
+    <Popover modal open={isOpen} onOpenChange={(next) => setOpen(next)}>
       <PopoverAnchor asChild>
         <div
           {...rootAttributes}
@@ -646,19 +665,23 @@ function DateField({ mode, props }: DateFieldProps) {
             aria-labelledby={str(ariaLabelledBy)}
             aria-describedby={str(ariaDescribedBy)}
             {...controlProps}
-            value={text ?? formatValue(value)}
+            value={text ?? formatValue(value, editing)}
             onChange={(event) => {
               setText(event.target.value);
               setTypedInvalid(false);
             }}
-            onBlur={commitText}
+            onFocus={() => setEditing(true)}
+            onBlur={() => {
+              setEditing(false);
+              commitText();
+            }}
             onKeyDown={handleKeyDown}
             placeholder={str(placeholder) ?? (mode === "range" ? "Choose dates" : "Choose a date")}
             disabled={inert}
             required={mustHaveValue}
             autoComplete="off"
             spellCheck={false}
-            className={cn(FIELD_INPUT, compact ? "py-1" : "py-1.5")}
+            className={cn(FIELD_INPUT, FIELD_INPUT_DENSITY[compact ? "compact" : "default"])}
           />
           {canClear ? (
             <Button
