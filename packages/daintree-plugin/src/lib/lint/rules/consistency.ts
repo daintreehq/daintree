@@ -236,6 +236,10 @@ const KIT_FOR_INPUT: Record<string, string> = {
   checkbox: "Checkbox",
   radio: "RadioGroup",
   range: "Slider",
+  date: "DatePicker",
+  time: "TimePicker",
+  "datetime-local": "DateTimePicker",
+  color: "ColorPicker",
   button: "Button",
   submit: "Button",
   reset: "Button",
@@ -263,7 +267,7 @@ const rawFormControl = elementRule(
     if (literal === null && hasProp(file, element, "type")) return null;
     const type = (literal ?? "text").toLowerCase();
     const kit = KIT_FOR_INPUT[type] ?? (KIT_INPUT_TYPES.has(type) ? "Input" : null);
-    // date, time, color, hidden and the rest have no kit control: the native
+    // hidden, month, week and the rest have no kit control: the native
     // element, styled with theme tokens, is the right call. A file input is
     // often the hidden half of a plugin's own "Import…" button, so it is left
     // alone rather than pointed at `FileDropzone`.

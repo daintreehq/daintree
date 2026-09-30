@@ -419,8 +419,19 @@ function FieldError(props: FieldErrorProps) {
   );
 }
 
+/**
+ * Hides the enclosing field from the controls inside, for a composite control
+ * (a date and a time as one value) that joins the field itself and whose parts
+ * are each named on their own. Without it every part would claim the field's
+ * one control id.
+ */
+function FieldBoundary({ children }: { children: React.ReactNode }) {
+  return <FieldContext.Provider value={null}>{children}</FieldContext.Provider>;
+}
+
 export {
   Field,
+  FieldBoundary,
   FieldLabel,
   FieldDescription,
   FieldError,

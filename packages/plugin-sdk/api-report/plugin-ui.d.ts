@@ -912,4 +912,81 @@ declare module "@daintreehq/plugin-ui" {
   export function useToast(): UseToastResult;
   /** A small confirm anchored to `trigger`, for actions that are cheap to undo. The trigger shows while the kit loads. */
   export const ConfirmPopover: ComponentType<ConfirmPopoverProps>;
+  // Colour, time and range pickers, toggle groups, split buttons and forms.
+  import type {
+    PluginColorPickerProps,
+    PluginColorSwatch,
+    PluginColorSwatchProps,
+    PluginDateTimePickerProps,
+    PluginFieldValidator,
+    PluginFormError,
+    PluginFormFieldBinding,
+    PluginFormHandle,
+    PluginFormProps,
+    PluginFormStatus,
+    PluginFormStatusProps,
+    PluginIsoDateTime,
+    PluginIsoTime,
+    PluginRangeSliderMark,
+    PluginRangeSliderProps,
+    PluginSchemaFormProps,
+    PluginSplitButtonProps,
+    PluginTimePickerProps,
+    PluginToggleGroupItem,
+    PluginToggleGroupProps,
+    UseFormOptions as PluginUseFormOptions,
+    UseFormResult as PluginUseFormResult,
+  } from "@daintreehq/plugin-sdk/react";
+
+  export type ColorSwatchEntry = PluginColorSwatch;
+  export type ColorSwatchProps = PluginColorSwatchProps;
+  export type ColorPickerProps = PluginColorPickerProps;
+  export type IsoTime = PluginIsoTime;
+  export type TimePickerProps = PluginTimePickerProps;
+  export type IsoDateTime = PluginIsoDateTime;
+  export type DateTimePickerProps = PluginDateTimePickerProps;
+  export type RangeSliderMark = PluginRangeSliderMark;
+  export type RangeSliderProps = PluginRangeSliderProps;
+  export type ToggleGroupItem = PluginToggleGroupItem;
+  export type ToggleGroupProps = PluginToggleGroupProps;
+  export type SplitButtonProps = PluginSplitButtonProps;
+  export type FormError = PluginFormError;
+  export type FieldValidator<V, T> = PluginFieldValidator<V, T>;
+  export type UseFormOptions<T extends Record<string, unknown>> = PluginUseFormOptions<T>;
+  export type FormFieldBinding<V> = PluginFormFieldBinding<V>;
+  export type FormStatusValue = PluginFormStatus;
+  export type UseFormResult<T extends Record<string, unknown>> = PluginUseFormResult<T>;
+  export type FormHandle = PluginFormHandle;
+  export type FormProps = PluginFormProps;
+  export type FormStatusProps = PluginFormStatusProps;
+  export type SchemaFormProps = PluginSchemaFormProps;
+
+  /** A chip of one colour, for display or, with an `onClick`, as a trigger. */
+  export const ColorSwatch: ComponentType<ColorSwatchProps>;
+  /** A colour field opening a palette (the theme's category colours by default), an area, a hue strip and a hex field. */
+  export const ColorPicker: ComponentType<ColorPickerProps>;
+  /** A time typed into hour and minute segments or chosen from a list; `"HH:mm"` values. */
+  export const TimePicker: ComponentType<TimePickerProps>;
+  /** A `DatePicker` and a `TimePicker` as one `"YYYY-MM-DDTHH:mm"` value, with the zone named. */
+  export const DateTimePicker: ComponentType<DateTimePickerProps>;
+  /** A low and a high value on one track, drawn like `Slider`, each thumb with its own keys. */
+  export const RangeSlider: ComponentType<RangeSliderProps>;
+  /** A row of toolbar-style toggle buttons, any number on (`multiple`) or at most one (`single`). */
+  export const ToggleGroup: ComponentType<ToggleGroupProps>;
+  /** A primary action and a chevron opening a `DropdownMenu` of the alternatives. */
+  export const SplitButton: ComponentType<SplitButtonProps>;
+  /**
+   * Form state: values against a clean baseline, per-field and whole-form
+   * checks (sync or async), submit with a pending state, reset, and the
+   * status words `SettingsActions` shows. Spread `form.field(name)` onto a kit control.
+   */
+  export function useForm<T extends Record<string, unknown>>(
+    options: UseFormOptions<T>
+  ): UseFormResult<T>;
+  /** A native `<form>` driven by `useForm`: Enter submits, a failed check focuses the first invalid control. The fields show while the kit loads. */
+  export const Form: ComponentType<FormProps>;
+  /** A form's status for `SettingsActions`' `status`: unsaved, saving, saved, or the error with its glyph. */
+  export const FormStatus: ComponentType<FormStatusProps>;
+  /** A settings group generated from a JSON Schema by the plugin settings generator. */
+  export const SchemaForm: ComponentType<SchemaFormProps>;
 }

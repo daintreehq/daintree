@@ -63,6 +63,16 @@ function renderPluginRoot(): Element {
         createElement(kit.IconButton, { icon: "x", "aria-label": "Close" }),
         createElement(kit.Icon, { name: "search", className: "text-text-secondary" }),
         createElement(kit.SearchField, { value: "", "aria-label": "Search" }),
+        createElement(kit.ToggleGroup, {
+          "aria-label": "Days",
+          items: [
+            { value: "mon", label: "M", "aria-label": "Monday" },
+            { value: "b", icon: "tag", "aria-label": "Bold" },
+          ],
+          defaultValue: ["mon"],
+        }),
+        createElement(kit.ColorSwatch, { color: "#2f81f7" }),
+        createElement(kit.RangeSlider, { "aria-label": "Range", defaultValue: [20, 60] }),
         createElement("div", { className: "border-b border-divider plugin-typo-class" }),
         // Lucide's prefix on the author's own element is still checked.
         createElement("span", { className: "lucide-typo" })

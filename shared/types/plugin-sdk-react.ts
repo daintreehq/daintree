@@ -3845,3 +3845,435 @@ export interface PluginContainerSize {
 
 /** What `useContainerSize` and `useBreakpoint` observe: a ref, or the element itself. */
 export type PluginContainerTarget = RefObject<Element | null> | Element | null | undefined;
+
+// Pickers and forms: colours, times, two-thumb ranges, toggle groups, split
+// buttons, form state and forms generated from a JSON Schema.
+
+/** A preset in a `ColorPicker`'s palette: a colour, or a colour with a spoken name. */
+export type PluginColorSwatch = string | { value: string; label: string };
+
+/**
+ * Props of `ColorSwatch`: a small chip of one colour, drawn with an edge so a
+ * pale colour keeps its shape on any surface. With an `onClick` (a `Popover`
+ * or `DropdownMenu` trigger hands it one) it is a button; without, a picture.
+ */
+export interface PluginColorSwatchProps extends PluginDomProps<HTMLElement> {
+  /** `#rgb` or `#rrggbb`, with or without the `#`. Anything else draws an empty chip. */
+  color: string | null | undefined;
+  /** `xs` 12px, `sm` 16px (the default), `md` 20px, `lg` 24px. */
+  size?: "xs" | "sm" | "md" | "lg";
+  /** `circle` (the default) or `square`. */
+  shape?: "circle" | "square";
+  /** Draws the chip as chosen: a ring round it, for a palette of your own. */
+  selected?: boolean;
+  /** The colour's spoken name. Defaults to its hex. */
+  "aria-label"?: string;
+  disabled?: boolean;
+  className?: string;
+}
+
+/**
+ * Props of `ColorPicker`: a field showing the colour and its hex that opens a
+ * palette, a saturation area, a hue strip, a hex field that also takes
+ * `rgb()` and `hsl()`, and the eyedropper where the platform has one. Built
+ * for label and tag colours; pair it with `ColoredLabel` for the preview.
+ */
+export interface PluginColorPickerProps extends PluginAriaRootAttributes {
+  /** `#rrggbb`, controlled. `null` is no colour. Passing the prop at all makes it controlled. */
+  value?: string | null;
+  defaultValue?: string | null;
+  /**
+   * Every change, as lowercase `#rrggbb`: a swatch, a committed hex, and each
+   * move across the area or the hue strip.
+   */
+  onValueChange?: (value: string) => void;
+  /**
+   * The palette. Defaults to the theme's category colours (blue, purple, cyan,
+   * green, amber, orange, teal, indigo, rose, pink, violet, slate), resolved in
+   * the active theme.
+   */
+  swatches?: readonly PluginColorSwatch[];
+  /** Focus left the control (and whatever it opened), or its panel closed: `useForm`'s `field()` hands this in. */
+  onBlur?: () => void;
+  /** Offers the area, hue strip, hex field and eyedropper beside the palette. Default true. */
+  allowCustom?: boolean;
+  /** `field` (the default) is a Select-sized field with the hex; `swatch` is the chip alone. */
+  variant?: "field" | "swatch";
+  /** Shown on a `field` with no colour. Defaults to "Choose a colour". */
+  placeholder?: string;
+  disabled?: boolean;
+  invalid?: boolean;
+  /** Submits the hex in a native form under this name. */
+  name?: string;
+  open?: boolean;
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  side?: PluginSide;
+  align?: PluginAlign;
+  density?: "default" | "compact";
+  id?: string;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  /** Classes for the trigger. */
+  className?: string;
+}
+
+/** A wall-clock time, `"HH:mm"` in 24-hour form ("09:30", "17:05"). It carries no day and no zone. */
+export type PluginIsoTime = string;
+
+/**
+ * Props of `TimePicker`: a time typed into hour and minute segments (and AM/PM
+ * where the locale uses a 12-hour clock), or chosen from a list. Each segment
+ * is a spin button: Up/Down step it, digits type into it, Left/Right move
+ * between segments, Backspace clears it. The value commits once every segment
+ * is filled; a time outside `min`/`max` marks the field invalid and leaves the
+ * value alone. Joins a `FormField` on its own.
+ */
+export interface PluginTimePickerProps extends PluginAriaRootAttributes {
+  /** The time, controlled. `null` is empty. Passing the prop at all makes it controlled. */
+  value?: PluginIsoTime | null;
+  defaultValue?: PluginIsoTime | null;
+  /** The new time, or `null` when the field was cleared. */
+  onValueChange?: (value: PluginIsoTime | null) => void;
+  /** Focus left the control (and whatever it opened), or its list closed: `useForm`'s `field()` hands this in. */
+  onBlur?: () => void;
+  /** The earliest time, inclusive. */
+  min?: PluginIsoTime;
+  /** The latest time, inclusive. */
+  max?: PluginIsoTime;
+  /**
+   * Minutes per Up/Down press on the minute segment, 1–60 (default 1). The
+   * list steps by the smallest multiple of it that is at least 15 minutes.
+   */
+  step?: number;
+  /** 12 or 24. Defaults to the user's locale. */
+  hourCycle?: 12 | 24;
+  /** Draws a clear button while there is a value. Default true. */
+  clearable?: boolean;
+  disabled?: boolean;
+  /** Also pass `required` to the enclosing `FormField`. Stops the field clearing. */
+  required?: boolean;
+  invalid?: boolean;
+  /** Submits the `"HH:mm"` value in a native form under this name. */
+  name?: string;
+  /** The list popover, controlled. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  density?: "default" | "compact";
+  id?: string;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  /** Classes for the field. */
+  className?: string;
+}
+
+/**
+ * A local date and wall-clock time, `"YYYY-MM-DDTHH:mm"` ("2026-09-30T14:05"),
+ * as `<input type="datetime-local">` holds it. Read it as a time in the zone
+ * the picker shows, never through `new Date()` alone.
+ */
+export type PluginIsoDateTime = string;
+
+/**
+ * Props of `DateTimePicker`: a `DatePicker` and a `TimePicker` side by side as
+ * one value, with the time zone named after them. Picking a day with no time
+ * yet fills the earliest allowed time of that day; typing a time with no day
+ * yet fills today. Clearing the day clears the value.
+ */
+export interface PluginDateTimePickerProps extends PluginAriaRootAttributes {
+  /** The date and time, controlled. `null` is empty. Passing the prop at all makes it controlled. */
+  value?: PluginIsoDateTime | null;
+  defaultValue?: PluginIsoDateTime | null;
+  onValueChange?: (value: PluginIsoDateTime | null) => void;
+  /** Focus left both parts (and their popovers): `useForm`'s `field()` hands this in. */
+  onBlur?: () => void;
+  /** The earliest date and time, inclusive. */
+  min?: PluginIsoDateTime;
+  /** The latest date and time, inclusive. */
+  max?: PluginIsoDateTime;
+  /** Days that cannot be chosen. */
+  isDateDisabled?: (date: PluginIsoDate) => boolean;
+  weekStartsOn?: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+  /** As `TimePicker`. */
+  step?: number;
+  hourCycle?: 12 | 24;
+  /**
+   * The IANA zone the time is in ("Europe/Berlin"), named after the field.
+   * Display only: the value is the wall time as typed. Defaults to the user's zone.
+   */
+  timeZone?: string;
+  /** Names the zone after the field. Default true. */
+  showTimeZone?: boolean;
+  clearable?: boolean;
+  disabled?: boolean;
+  required?: boolean;
+  invalid?: boolean;
+  /** Submits the `"YYYY-MM-DDTHH:mm"` value in a native form under this name. */
+  name?: string;
+  density?: "default" | "compact";
+  id?: string;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  className?: string;
+}
+
+/** A tick under a `RangeSlider`'s track: a value, or a value with a label under it. */
+export type PluginRangeSliderMark = number | { value: number; label: string };
+
+/**
+ * Props of `RangeSlider`: a low and a high value on one track, drawn exactly
+ * like `Slider`. Each thumb is its own slider with its own keys (arrows step,
+ * Page Up/Down step ten times, Home/End go as far as the other thumb allows);
+ * a press on the track moves the nearer thumb. The thumbs never cross and
+ * stay `minDistance` apart.
+ */
+export interface PluginRangeSliderProps extends PluginAriaRootAttributes {
+  /** `[low, high]`, controlled. An array makes the slider controlled. */
+  value?: readonly [number, number];
+  defaultValue?: readonly [number, number];
+  /** Every move of either thumb. */
+  onValueChange?: (value: [number, number]) => void;
+  /** Once a drag or a key press ends: the moment to save. */
+  onValueCommit?: (value: [number, number]) => void;
+  /** Focus left both thumbs: `useForm`'s `field()` hands this in. */
+  onBlur?: () => void;
+  /** Marks the slider invalid, as an enclosing `FormField`'s error does. */
+  invalid?: boolean;
+  /** Defaults to 0. */
+  min?: number;
+  /** Defaults to 100. */
+  max?: number;
+  /** Defaults to 1. */
+  step?: number;
+  /** The smallest gap between the thumbs, rounded up to whole steps. Defaults to 0. */
+  minDistance?: number;
+  /** A value in words, spoken as `aria-valuetext` and shown by `showValue` and the tooltip. */
+  formatValue?: (value: number) => string;
+  /** Shows "low – high" beside the track. */
+  showValue?: boolean;
+  /** Ticks under the track, labelled where given a label. */
+  marks?: readonly PluginRangeSliderMark[];
+  /**
+   * The value over a thumb: `auto` (the default) while it is dragged or has
+   * keyboard focus, `never` for none.
+   */
+  tooltip?: "auto" | "never";
+  /** The thumbs' spoken names. Defaults to "Minimum" and "Maximum". */
+  thumbLabels?: readonly [string, string];
+  /** Submits both values in a native form under this name, low first. */
+  name?: string;
+  disabled?: boolean;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  className?: string;
+}
+
+/** One button of a `ToggleGroup`: a label, an icon, or both. */
+export interface PluginToggleGroupItem {
+  /** Non-empty and unique within the group. */
+  value: string;
+  label?: string;
+  icon?: PluginIconSource;
+  /** Required when there is no `label`; the spoken name when the label is an abbreviation. */
+  "aria-label"?: string;
+  /** Hover detail. An icon-only item shows its `aria-label` by default. */
+  tooltip?: ReactNode;
+  disabled?: boolean;
+}
+
+/**
+ * Props of `ToggleGroup`: a row of toggle buttons drawn like the pane toolbar's
+ * own toggles. `multiple` (the default) turns any number on, as weekday
+ * choices or text styles; `single` turns at most one on and lets it be turned
+ * off again (for exactly one, always, use `SegmentedControl`). One tab stop:
+ * arrow keys, Home and End move between the buttons, Space or Enter toggles.
+ */
+export interface PluginToggleGroupProps extends PluginAriaRootAttributes {
+  items: readonly PluginToggleGroupItem[];
+  type?: "multiple" | "single";
+  /** The values that are on, controlled. Passing the prop at all makes it controlled. */
+  value?: readonly string[];
+  defaultValue?: readonly string[];
+  /** The values now on, in the items' order. */
+  onValueChange?: (value: string[]) => void;
+  /** Focus left the group: `useForm`'s `field()` hands this in. */
+  onBlur?: () => void;
+  /** Marks the group invalid. */
+  invalid?: boolean;
+  /** Required: the group's name. */
+  "aria-label": string;
+  disabled?: boolean;
+  /** `compact` (24px) for a 32px strip; `default` is the toolbar's 26px. */
+  density?: "default" | "compact";
+  className?: string;
+}
+
+/**
+ * Props of `SplitButton`: a primary action and, on a separate chevron with its
+ * own tab stop, a `DropdownMenu` of the alternatives ("Save" and "Save as
+ * template"). The two halves share one shape in any `Button` variant and size.
+ */
+export interface PluginSplitButtonProps extends PluginRootAttributes {
+  /** The primary action's label. */
+  children: ReactNode;
+  onClick?: () => void;
+  /** The menu's entries, any `DropdownMenu` entry type (submenus and descriptions included). */
+  items: readonly PluginDropdownMenuEntry[];
+  variant?: Exclude<PluginButtonVariant, "link" | "pill">;
+  size?: "default" | "sm" | "xs" | "lg";
+  /** A leading icon on the primary action. */
+  icon?: PluginIconSource;
+  /** Busy: the primary action shows a spinner and both halves stop taking presses. */
+  loading?: boolean;
+  disabled?: boolean;
+  /** Disables only the menu half. */
+  menuDisabled?: boolean;
+  /** `submit` makes the primary action submit its form. */
+  type?: "button" | "submit";
+  /** The chevron's spoken name and tooltip. Defaults to "More options". */
+  menuLabel?: string;
+  side?: PluginSide;
+  /** Defaults to `end`, so the menu lines up under the chevron. */
+  align?: PluginAlign;
+  className?: string;
+}
+
+/** A field's error: a message, or nothing when it is fine. */
+export type PluginFormError = string | null | undefined;
+
+/** Checks one field. Return the message to show, or nothing. May be async. */
+export type PluginFieldValidator<V, T> = (
+  value: V,
+  values: T
+) => PluginFormError | Promise<PluginFormError>;
+
+export interface UseFormOptions<T extends Record<string, unknown>> {
+  /** The values the form starts from, and what "dirty" compares against. */
+  initialValues: T;
+  /** Per-field checks, run as the field is left and on submit. */
+  validators?: { [K in keyof T]?: PluginFieldValidator<T[K], T> };
+  /** A whole-form check run on submit, for rules across fields. May be async. */
+  validate?: (
+    values: T
+  ) =>
+    Partial<Record<keyof T, PluginFormError>> | Promise<Partial<Record<keyof T, PluginFormError>>>;
+  /**
+   * Called with the values once every check passes. A throw (or rejection)
+   * keeps the form dirty and shows its message as the form's error status.
+   * On success the values become the new clean state.
+   */
+  onSubmit: (values: T) => void | Promise<void>;
+  /**
+   * When a field is checked: `blur` (the default) once it is left, then on
+   * every change after that; `change` on every change; `submit` only on submit.
+   */
+  validateOn?: "blur" | "change" | "submit";
+}
+
+/** Spread onto a kit control: its value, change and blur, and whether it is invalid. */
+// A type alias rather than an interface, so it spreads into props that also
+// take `data-*` attributes (an interface has no implicit index signature).
+export type PluginFormFieldBinding<V> = {
+  name: string;
+  value: V;
+  onValueChange: (value: V) => void;
+  onBlur: () => void;
+  invalid: boolean;
+};
+
+/**
+ * Where a form stands: `clean` (nothing changed), `dirty`, `invalid` (a
+ * shown check failed), `submitting`, `saved` (the last submit went through and
+ * nothing changed since) or `error` (the last submit threw).
+ */
+export type PluginFormStatus = "clean" | "dirty" | "invalid" | "submitting" | "saved" | "error";
+
+export interface UseFormResult<T extends Record<string, unknown>> {
+  values: T;
+  /** Errors to show: a field's once it has been checked, every field's after a submit. */
+  errors: Partial<Record<keyof T, string>>;
+  /** Fields whose value differs from the clean state. */
+  dirtyFields: (keyof T)[];
+  isDirty: boolean;
+  isSubmitting: boolean;
+  /** An async check is running. */
+  isValidating: boolean;
+  status: PluginFormStatus;
+  /** The status in words for `SettingsActions`' `status`, or `FormStatus`: "Unsaved changes", "Saved". */
+  statusMessage: string | undefined;
+  /** The last submit's failure, when it threw. */
+  submitError: string | undefined;
+  setValue: <K extends keyof T>(name: K, value: T[K]) => void;
+  setValues: (values: Partial<T>) => void;
+  /** Sets or clears one field's error by hand (a server-side check, say). */
+  setError: (name: keyof T, error: PluginFormError) => void;
+  /** Back to the clean state, or to `values`, which become the new clean state. */
+  reset: (values?: T) => void;
+  /** Runs every check, then `onSubmit`. Resolves `true` when it went through. */
+  submit: () => Promise<boolean>;
+  /** The value, change, blur and invalid props of one field. */
+  field: <K extends keyof T & string>(name: K) => PluginFormFieldBinding<T[K]>;
+}
+
+/** The part of a `useForm` result that `Form` and `FormStatus` read: pass the whole result. */
+export interface PluginFormHandle {
+  submit: () => Promise<boolean>;
+  reset: () => void;
+  status: PluginFormStatus;
+  statusMessage: string | undefined;
+}
+
+/**
+ * Props of `Form`: a native `<form>` driven by `useForm`. Enter in a text
+ * field or a time segment, or a `type="submit"` button, submits through
+ * `form.submit()` (a second submit while one is running is refused), a `type="reset"`
+ * button resets, and a submit that fails a check moves focus to the first
+ * invalid control.
+ */
+export interface PluginFormProps extends PluginRootAttributes {
+  form: PluginFormHandle;
+  children?: ReactNode;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  className?: string;
+}
+
+/**
+ * Props of `FormStatus`: a form's status as the `status` of `SettingsActions`
+ * shows it — "Unsaved changes", "Saving…", "Saved" with a check, and a failed
+ * check or submit in the error ink with its glyph. `SettingsActions` announces
+ * it politely; anywhere else, put it in a `LiveRegion`.
+ */
+export interface PluginFormStatusProps extends PluginRootAttributes {
+  form: PluginFormHandle;
+}
+
+/**
+ * Props of `SchemaForm`: a settings group generated from a JSON Schema by the
+ * same generator as plugin settings, so it reads and behaves like the form in
+ * the plugin's settings home. The schema is an object with `properties`; each
+ * is a row. `string` is a text field (`format: "password"` or `writeOnly`
+ * masks it), `number`/`integer` a number field held to `minimum`/`maximum`,
+ * `boolean` a switch, `enum` of strings a segmented control or select, and
+ * `object`/`array` a JSON text area. `title`, `description`, `default` and the
+ * root's `required` are read; anything else is ignored, with a warning in
+ * development (the annotations `$schema`, `$id`, `$comment` and `examples`
+ * quietly). Text commits as the field is left or on Enter, choices at once.
+ */
+export interface PluginSchemaFormProps extends PluginRootAttributes {
+  schema: Record<string, unknown>;
+  /** The values, controlled. Passing the prop at all makes it controlled. */
+  value?: Record<string, unknown>;
+  defaultValue?: Record<string, unknown>;
+  /** The whole object after one field committed. A field left empty is removed. */
+  onValueChange?: (value: Record<string, unknown>) => void;
+  /** Errors to show by property name, beside the form's own checks (`useForm().errors`). */
+  errors?: Record<string, PluginFormError>;
+  /** A sub-label above the group, as `SettingsGroup`'s. */
+  label?: string;
+  disabled?: boolean;
+}
