@@ -314,6 +314,7 @@ export default function Notes({ pluginId, disposeSignal }) {
 | Lists and tables | `VirtualList`, `DataTable`, `LogView`, `ListRow` with `useListNavigation`, `ScrollShadow`, `FileTree`, `Timeline` (an activity feed or audit log), `HighlightedText` (search matches in a row) |
 | Figures | `StatCard` (a labelled figure with an optional change), `Sparkline`, `Meter` (usage against a limit, with warning and danger thresholds), `DiffStat` ("+12 -3") |
 | Dates | `Calendar` (an inline month grid, one day or a range), `DatePicker` and `DateRangePicker` (typed or picked ISO `"YYYY-MM-DD"` days, range presets), `TimeAgo` (an age that keeps itself current) |
+| Charts | `BarChart` (grouped or stacked, upright or across), `LineChart` (numeric or time x, optional area), `DonutChart` (parts of a whole) — all with a tooltip anchored to the point under the pointer or the arrow keys |
 | Pane chrome | `PaneHeader`, `Toolbar`, `ToolbarButton`, `Tabs` |
 | Navigation | `NavList` (an app's left rail), `Breadcrumbs`, `Stepper` (a wizard's progress), `CommandPalette` (a quick switcher or "jump to…") |
 | Layout | `Card` (header, body and footer; clickable with `onClick`), `Divider`, `SectionLabel`, `ResizableSplit` (two panes with a draggable divider), `Accordion`, `Disclosure`, `DescriptionList` (a record's label and value rows) |
@@ -324,7 +325,7 @@ export default function Notes({ pluginId, disposeSignal }) {
 
 One status vocabulary runs through `Badge` `tone`, `Callout` `severity` and `SeverityIcon`: `error` (the same colour as `danger`, which `Badge` also accepts), `warning`, `success`, `info` and `neutral`.
 
-Not in the kit yet, so draw them with tokens: charts beyond a sparkline, and a tooltip anchored to a point rather than an element.
+Not in the kit, so draw them with tokens: other chart forms (a scatter, a heatmap, a graph of nodes), and a point tooltip on a canvas of your own; the kit charts carry theirs. Read the series colours from the `category-*` tokens with a fallback, in the kit charts' order (`blue`, `amber`, `indigo`, `orange`, `violet`, `teal`), so your chart and theirs agree.
 
 **Never `window.confirm`, `alert` or `prompt` in a view.** A native dialog ignores the theme, blocks the whole window and takes focus from every other panel. `ConfirmDialog` is the view-side confirm; `host.showConfirm` is the worker's.
 

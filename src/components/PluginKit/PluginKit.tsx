@@ -108,6 +108,7 @@ import { pluginKitNavigation } from "./PluginKitNavigation";
 import { pluginKitLayout } from "./PluginKitLayout";
 import { pluginKitInputs } from "./PluginKitInputs";
 import { normalizeSelectOptions } from "./kitOptions";
+import { pluginKitCharts } from "./PluginKitCharts";
 import { primeRadix } from "@/components/ui/radix-loader";
 
 export { normalizeSelectOptions, pickDomProps };
@@ -1248,6 +1249,7 @@ export const pluginKit = {
   ...pluginKitNavigation,
   ...pluginKitLayout,
   ...pluginKitInputs,
+  ...pluginKitCharts,
 };
 
 export type PluginKit = typeof pluginKit;

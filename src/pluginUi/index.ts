@@ -15,6 +15,7 @@ import type {
   PluginSheetProps,
   PluginStepperProps,
   PluginBadgeProps,
+  PluginBarChartProps,
   PluginButtonProps,
   PluginCalendarProps,
   PluginCalloutProps,
@@ -33,6 +34,7 @@ import type {
   PluginDisclosureProps,
   PluginDismissButtonProps,
   PluginDividerProps,
+  PluginDonutChartProps,
   PluginDropdownMenuProps,
   PluginEmojiPickerProps,
   PluginEmptyStateProps,
@@ -47,6 +49,7 @@ import type {
   PluginInputProps,
   PluginKbdChordProps,
   PluginKbdProps,
+  PluginLineChartProps,
   PluginListRowProps,
   PluginLogViewProps,
   PluginMeterProps,
@@ -412,6 +415,21 @@ export const EmojiPicker: ComponentType<PluginEmojiPickerProps> = fromKit(
   ({ trigger }) => (isValidElement(trigger) ? trigger : null)
 );
 
+// Charts.
+
+export const BarChart: ComponentType<PluginBarChartProps> = fromKit(
+  "BarChart",
+  (kit) => kit.BarChart
+);
+export const LineChart: ComponentType<PluginLineChartProps> = fromKit(
+  "LineChart",
+  (kit) => kit.LineChart
+);
+export const DonutChart: ComponentType<PluginDonutChartProps> = fromKit(
+  "DonutChart",
+  (kit) => kit.DonutChart
+);
+
 export type {
   PluginMarkdownProps as MarkdownProps,
   PluginButtonProps as ButtonProps,
@@ -545,4 +563,10 @@ export type {
   PluginTagInputProps as TagInputProps,
   PluginFileDropzoneProps as FileDropzoneProps,
   PluginEmojiPickerProps as EmojiPickerProps,
+  PluginChartColor as ChartColor,
+  PluginChartSeries as ChartSeries,
+  PluginChartBaseProps as ChartBaseProps,
+  PluginBarChartProps as BarChartProps,
+  PluginLineChartProps as LineChartProps,
+  PluginDonutChartProps as DonutChartProps,
 } from "@shared/types/plugin-sdk-react";

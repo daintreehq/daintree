@@ -492,6 +492,54 @@ export const emoji = createElement(ui.EmojiPicker, { trigger: createElement(ui.B
 // @ts-expect-error an EmojiPicker needs a trigger
 export const noTrigger = createElement(ui.EmojiPicker, { onSelect: () => {} });
 
+// Charts.
+const chartRows = [{ day: "Mon", passed: 12, failed: 1 }, { day: "Tue", passed: 9, failed: 3 }];
+const chartSeries: ui.ChartSeries[] = [{ key: "passed", label: "Passed" }, { key: "failed", label: "Failed", color: "orange" }];
+export const bars = createElement(ui.BarChart, {
+  data: chartRows,
+  x: "day",
+  series: chartSeries,
+  "aria-label": "Builds per day",
+  mode: "stacked",
+  orientation: "horizontal",
+  height: 160,
+  formatValue: (value: number) => String(value) + " builds",
+  formatX: (value: unknown) => String(value),
+  xLabel: "Day",
+  loading: false,
+  empty: "Nothing yet",
+  "data-testid": "bars",
+});
+// @ts-expect-error a chart needs an aria-label
+export const unnamedBars = createElement(ui.BarChart, { data: chartRows, x: "day", series: chartSeries });
+// @ts-expect-error bar modes are a closed set
+export const badMode = createElement(ui.BarChart, { data: chartRows, x: "day", series: chartSeries, "aria-label": "B", mode: "overlap" });
+// @ts-expect-error chart colours are a closed set
+export const badColor = createElement(ui.BarChart, { data: chartRows, x: "day", series: [{ key: "a", label: "A", color: "red" }], "aria-label": "B" });
+export const lines = createElement(ui.LineChart, {
+  data: [{ at: new Date(), p50: 120, p95: 340 }],
+  x: "at",
+  series: [{ key: "p50", label: "p50" }, { key: "p95", label: "p95", color: "neutral" }],
+  "aria-label": "Latency",
+  xType: "time",
+  area: true,
+  curve: "monotone",
+  formatX: (value: number) => new Date(value).toISOString(),
+});
+// @ts-expect-error curves are a closed set
+export const badCurve = createElement(ui.LineChart, { data: [], x: "at", series: [], "aria-label": "L", curve: "step" });
+export const donut = createElement(ui.DonutChart, {
+  data: [{ lang: "TypeScript", files: 420 }],
+  x: "lang",
+  value: "files",
+  "aria-label": "Files by language",
+  centerLabel: "files",
+  centerValue: "420",
+  otherLabel: "Everything else",
+});
+// @ts-expect-error a donut needs its value key
+export const noValueKey = createElement(ui.DonutChart, { data: [], x: "lang", "aria-label": "Files" });
+
 // Root attributes: \`id\` and \`data-*\` everywhere, \`aria-*\` where the root is the control.
 export const selectId = createElement(ui.Select, { options: [], "aria-label": "Pick", "data-testid": "pick" });
 export const segmentedId = createElement(ui.SegmentedControl, { options: [], value: "", onValueChange: () => {}, "aria-label": "Mode", "data-testid": "mode", "aria-describedby": "hint" });

@@ -1545,6 +1545,110 @@ export interface PluginSparklineProps extends PluginRootAttributes {
 }
 
 /**
+ * A chart colour. Series take the categorical slots in this fixed order
+ * (`blue`, `amber`, `indigo`, `orange`, `violet`, `teal`), read from the
+ * theme's `category-*` tokens, so neighbours stay apart under colour-vision
+ * deficiency and in the colour-vision themes. Pin one on a series so it keeps
+ * its colour when a filter removes the series before it. `neutral` is a quiet
+ * grey for a comparison series such as "previous period".
+ */
+export type PluginChartColor =
+  "blue" | "amber" | "indigo" | "orange" | "violet" | "teal" | "neutral";
+
+/** One series of a `BarChart` or `LineChart`: the row key its values live under. */
+export interface PluginChartSeries {
+  /** The key in each `data` row that holds this series' number. */
+  key: string;
+  /** Its name in the legend, tooltip and data table. */
+  label: string;
+  /** Pins the colour. Omitted, the series takes the next slot in the fixed order. */
+  color?: PluginChartColor;
+}
+
+/** What every kit chart takes. */
+export interface PluginChartBaseProps extends PluginRootAttributes {
+  /**
+   * The rows: one plain object per x position (or per part, for a
+   * `DonutChart`). A value that is not a finite number is a gap, never a zero.
+   */
+  data: readonly Record<string, unknown>[];
+  /** Required: what the chart shows ("Builds per day, last 30 days"). */
+  "aria-label": string;
+  /** The plot's height in px, legend excluded. Defaults to 200. The width fills the container. */
+  height?: number;
+  /**
+   * Formats a value for the axis, tooltip, legend and data table. Omitted,
+   * axes read compact (`1.2K`) and the tooltip reads in full (`1,234`).
+   */
+  formatValue?: (value: number) => string;
+  /** Draws the kit's skeleton at the chart's height in place of the chart. */
+  loading?: boolean;
+  /** Shown when there is nothing to draw. Omitted, a quiet "No data" at the chart's height. */
+  empty?: ReactNode;
+  className?: string;
+}
+
+/**
+ * Props of `BarChart`: a value per category, for one or more series, grouped
+ * side by side or stacked, drawn upward or across.
+ */
+export interface PluginBarChartProps extends PluginChartBaseProps {
+  /** The key in each row that holds the category ("day", "branch"). */
+  x: string;
+  /** Up to six series; any past the sixth are not drawn. */
+  series: readonly PluginChartSeries[];
+  /** `grouped` (the default) sets a category's bars side by side; `stacked` piles them. */
+  mode?: "grouped" | "stacked";
+  /** `vertical` (the default) draws columns; `horizontal` draws bars, for long category names. */
+  orientation?: "vertical" | "horizontal";
+  /** Formats a category for its axis label, the tooltip and the table. Defaults to `String(value)`. */
+  formatX?: (value: unknown) => string;
+  /** The category column's header in the accessible data table. Defaults to "Category". */
+  xLabel?: string;
+}
+
+/**
+ * Props of `LineChart`: one or more series over a numeric or time x axis,
+ * with an optional area wash.
+ */
+export interface PluginLineChartProps extends PluginChartBaseProps {
+  /** The key in each row that holds x: a number, a `Date`, epoch ms, or an ISO date string. */
+  x: string;
+  /** Up to six series; any past the sixth are not drawn. */
+  series: readonly PluginChartSeries[];
+  /**
+   * `time` reads x as a date and ticks on calendar steps; `number` as a plain
+   * number. Omitted, `time` when the first x is a `Date` or a string.
+   */
+  xType?: "number" | "time";
+  /** Fills under each line with a faint wash of its colour, down to zero. */
+  area?: boolean;
+  /** `linear` (the default) joins points straight; `monotone` smooths without overshooting a value. */
+  curve?: "linear" | "monotone";
+  /** Formats x (a number; epoch ms for `time`) for the axis, tooltip and table. */
+  formatX?: (value: number) => string;
+  /** The x column's header in the accessible data table. Defaults to "Time" or "X". */
+  xLabel?: string;
+}
+
+/**
+ * Props of `DonutChart`: parts of a whole, with the total (or your own
+ * figure) in the centre and a legend that lists every part's value and share.
+ */
+export interface PluginDonutChartProps extends PluginChartBaseProps {
+  /** The key in each row that holds the part's name. */
+  x: string;
+  /** The key in each row that holds the part's size. Zero, negative and non-finite parts are left out. */
+  value: string;
+  /** The figure in the centre. Defaults to the formatted total. */
+  centerValue?: ReactNode;
+  /** A quiet line under the centre figure ("Total files"). */
+  centerLabel?: ReactNode;
+  /** The name of the part that gathers everything past the fifth. Defaults to "Other". */
+  otherLabel?: string;
+}
+
+/**
  * Props of `FormFieldGroup`: one label over a set of controls that answer it
  * together, such as a row of checkboxes. The label matches a `FormField`'s;
  * each control inside is its own horizontal `FormField`.

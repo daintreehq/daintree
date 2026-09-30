@@ -258,6 +258,7 @@ What the no-build path costs, and what it doesn't: the worker cannot import npm 
 | Lines added and removed | `DiffStat` |
 | A date, a date range, a calendar | `DatePicker`, `DateRangePicker` (with `presets`), `Calendar`; values are ISO `"YYYY-MM-DD"` strings, never `Date` objects |
 | An age that stays current ("5m ago") | `TimeAgo` |
+| A chart | `BarChart` for categories, `LineChart` for change over time, `DonutChart` for parts of a whole (up to six series or parts; fold the rest into "Other") |
 | Pane chrome | `PaneHeader`, `Toolbar` with `ToolbarButton`, `Tabs` |
 | App navigation | `NavList` for the left rail, `Breadcrumbs`, `Stepper` for a wizard, `CommandPalette` for a quick switcher |
 | Page structure | `Card` for a grouped block (`onClick` makes the whole card a button), `SectionLabel` over a group, `Divider`, `Accordion` or `Disclosure` for sections that fold |
@@ -271,7 +272,7 @@ What the no-build path costs, and what it doesn't: the worker cannot import npm 
 | Relative times in text, sizes, durations | `formatTimeAgo`, `formatBytes`, `formatDuration`, `formatCount` |
 | Colours for a canvas or WebGL | `useDaintreeTheme()` / `onDidChangeDaintreeTheme` |
 
-A settings view builds from `SettingsSection`, `SettingsGroup` and `SettingsRow`. The full list with props is [views.md → Host UI components](./views.md#host-ui-components), and `plugin-ui.d.ts` in `@daintreehq/plugin-sdk` is the authoritative one. Nothing is locked down: for anything the kit has no component for — a chart beyond a sparkline, say — use the token vocabulary below.
+A settings view builds from `SettingsSection`, `SettingsGroup` and `SettingsRow`. The full list with props is [views.md → Host UI components](./views.md#host-ui-components), and `plugin-ui.d.ts` in `@daintreehq/plugin-sdk` is the authoritative one. Nothing is locked down: for anything the kit has no component for — a scatter or a graph of nodes, say — use the token vocabulary below.
 
 Things the lab watched agents get wrong, each of which the kit or the host already covers:
 
