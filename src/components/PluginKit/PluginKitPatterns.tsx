@@ -2,6 +2,7 @@ import { useId, useRef, useState, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import type {
   PluginFormFieldControlProps,
+  PluginFormFieldGroupProps,
   PluginFormFieldProps,
   PluginListRowProps,
   PluginPaneHeaderProps,
@@ -30,6 +31,7 @@ import {
   FieldDescription,
   FieldError,
   FieldLabel,
+  InlineError,
   useFieldControl,
 } from "@/components/ui/field";
 import {
@@ -250,6 +252,13 @@ function FieldControlSlot({
   );
 }
 
+// A horizontal field nudges its control down to sit on a 16px checkbox's
+// centre line. The switch is 24px, so it steps up instead, centring on the
+// label's first 20px line. Three attributes deep, so it outranks the field's
+// own two-deep nudge whatever order the stylesheet emits them in.
+const SWITCH_ROW_ALIGN =
+  "[&>[data-field-control][data-slot=switch][data-size=md]]:-mt-0.5 [&>[data-field-control][data-slot=switch][data-size=sm]]:mt-0";
+
 function KitFormField({
   label,
   description,
@@ -282,7 +291,7 @@ function KitFormField({
       orientation={layout}
       controlId={nonEmpty(htmlFor)}
       disabled={disabled === true}
-      className={str(className)}
+      className={cn(layout === "horizontal" && SWITCH_ROW_ALIGN, str(className))}
     >
       {/* A horizontal field's grid needs the control first; a vertical one reads top down. */}
       {layout === "horizontal" ? control : null}
@@ -291,6 +300,68 @@ function KitFormField({
       {layout === "vertical" ? control : null}
       {problem}
     </Field>
+  );
+}
+
+// A fieldset, so a disabled group disables every control in it, named by its
+// label rather than its whole legend: "Required" beside it is not part of the
+// name, as a FieldLabel's accessory is not. The label wears the vertical
+// FieldLabel's size and tone, so a group reads as one more field in the form.
+function KitFormFieldGroup({
+  label,
+  description,
+  error,
+  required,
+  disabled,
+  layout,
+  children,
+  className,
+}: PluginFormFieldGroupProps) {
+  const baseId = useId();
+  const labelId = `${baseId}label`;
+  const descriptionId = hasContent(description) ? `${baseId}description` : undefined;
+  const errorId = hasContent(error) ? `${baseId}error` : undefined;
+  const inert = disabled === true;
+  // "Required" stays out of the group's name but is still announced with it.
+  const requiredId = required === true ? `${baseId}required` : undefined;
+  const describedBy = [errorId, requiredId, descriptionId].filter(Boolean).join(" ") || undefined;
+  return (
+    <fieldset
+      disabled={inert}
+      aria-labelledby={labelId}
+      aria-describedby={describedBy}
+      className={cn("m-0 min-w-0 border-0 p-0", str(className))}
+    >
+      <legend className="mb-2 p-0">
+        <span className="flex min-w-0 items-center gap-2">
+          <span id={labelId} className={cn("text-sm text-text-secondary", inert && "opacity-50")}>
+            {node(label)}
+          </span>
+          {requiredId ? (
+            <span id={requiredId} className="text-xs text-text-secondary">
+              Required
+            </span>
+          ) : null}
+        </span>
+      </legend>
+      {descriptionId ? (
+        <p id={descriptionId} className="-mt-1 mb-2 text-xs text-text-secondary select-text">
+          {node(description)}
+        </p>
+      ) : null}
+      <div
+        className={
+          layout === "inline" ? "flex flex-wrap items-start gap-x-4 gap-y-2" : "grid gap-2"
+        }
+      >
+        {node(children)}
+      </div>
+      {errorId ? (
+        <InlineError id={errorId} className="mt-2">
+          {node(error)}
+        </InlineError>
+      ) : null}
+    </fieldset>
   );
 }
 
@@ -529,7 +600,11 @@ function KitListRow({
     <>
       {sizedIcon(icon, "h-4 w-4 text-text-secondary")}
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate">{node(title)}</span>
+        {/* Code in a title steps down to the mono size the host sets code at
+            (text-xs): at the row's 14px, the mono face reads a size larger. */}
+        <span className="truncate [&_code]:text-xs [&_kbd]:text-xs [&_samp]:text-xs">
+          {node(title)}
+        </span>
         {hasContent(subtitle) ? (
           <span className="truncate text-xs text-text-secondary">{node(subtitle)}</span>
         ) : null}
@@ -630,6 +705,7 @@ export const pluginKitPatterns = {
   ToolbarButton: KitToolbarButton,
   PaneState: KitPaneState,
   FormField: KitFormField,
+  FormFieldGroup: KitFormFieldGroup,
   Switch: KitSwitch,
   Tabs: KitTabs,
   ProgressBar: KitProgressBar,

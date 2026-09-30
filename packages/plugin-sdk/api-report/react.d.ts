@@ -71,6 +71,13 @@ interface PluginMarkdownProps {
     className?: string;
     /** Reading size. Omitted, the document renders at Daintree's default Markdown size. */
     fontSize?: PluginMarkdownFontSize;
+    /**
+     * `center` (the default) centres the document's reading measure in its
+     * container, as Daintree's own document views do. `start` keeps the measure
+     * but sets it against the leading edge, in line with the controls above it:
+     * for a preview inside a form or an editor. Added in 1.3.
+     */
+    align?: "center" | "start";
 }
 /**
  * DOM props every non-portalled kit control forwards to its root element:
@@ -698,8 +705,18 @@ interface PluginDataTableColumn<T = unknown> {
     /** Unique within the table; also the row field read when there is no `render`. */
     id: string;
     header: ReactNode;
-    /** Fixed width: px as a number, or any CSS length. Columns without one share the rest. */
+    /**
+     * Fixed width: px as a number, or any CSS length. Columns without one share
+     * the rest, up to 480px each; space beyond that is left at the table's
+     * trailing edge rather than stretching one column across it (since 1.3).
+     */
     width?: number | string;
+    /**
+     * Takes all the width the other columns leave, with no cap: for the one
+     * column that should run to the edge (a message, a path). Give the other
+     * columns widths, or they share the space with it. Added in 1.3.
+     */
+    grow?: boolean;
     align?: "start" | "center" | "end";
     /** Draws the header as a sort button that reports through `onSortChange`. */
     sortable?: boolean;
@@ -1122,6 +1139,127 @@ interface PluginPopoverSearchFieldProps extends PluginDomProps<HTMLInputElement>
     clearLabel?: string;
     autoFocus?: boolean;
     disabled?: boolean;
+}
+/** One entry of a flat `FileTree` listing: the shape `host.fs.walk` returns. */
+interface PluginFileTreeEntry {
+    /** Relative, `/`-separated. Missing parent folders are filled in. */
+    path: string;
+    /** `dir` as `host.fs.walk` spells it, or `directory`. */
+    type: "file" | "dir" | "directory";
+}
+/** One node of a nested `FileTree`. A node with `children` is a folder. */
+interface PluginFileTreeNode {
+    name: string;
+    /** Defaults to `directory` when `children` is given, else `file`. */
+    type?: "file" | "dir" | "directory";
+    children?: readonly PluginFileTreeNode[];
+}
+/** A row of a `FileTree`, as its callbacks report it. */
+interface PluginFileTreeItem {
+    /** Relative, `/`-separated: the path you gave, or the node names joined. */
+    path: string;
+    name: string;
+    type: "file" | "directory";
+    /** 0 for entries at the root. */
+    depth: number;
+}
+/**
+ * Props of `FileTree`: Daintree's file tree, virtualised, with the chevron
+ * gutter, file-type icons and keyboard model of the host's own file browser.
+ * Give it `entries` (a flat list) or `nodes` (nested). One tab stop:
+ * Up/Down/Home/End move the selection, Right opens a folder or steps into it,
+ * Left closes it or steps out to the parent, Enter activates, and typing
+ * jumps to a matching name.
+ */
+interface PluginFileTreeProps {
+    entries?: readonly PluginFileTreeEntry[];
+    nodes?: readonly PluginFileTreeNode[];
+    /** Required: names the tree for assistive tech. */
+    "aria-label": string;
+    /** The selected path, controlled. Passing it at all makes selection controlled. */
+    selectedPath?: string | null;
+    defaultSelectedPath?: string | null;
+    /** A row was selected by click, arrow key or typeahead. */
+    onSelect?: (path: string, item: PluginFileTreeItem) => void;
+    /** The open folders, controlled. Passing it at all makes expansion controlled. */
+    expandedPaths?: readonly string[];
+    defaultExpandedPaths?: readonly string[];
+    onExpandedPathsChange?: (paths: string[]) => void;
+    /** Enter or a double-click on a row: open the file, show the folder. */
+    onActivate?: (path: string, item: PluginFileTreeItem) => void;
+    /**
+     * `natural` (the default): folders first, then names in numeric-aware,
+     * case-insensitive order, so `churn-2` precedes `churn-10`. `none` keeps
+     * the order you gave.
+     */
+    sort?: "natural" | "none";
+    /** Shown when there are no entries: usually an `EmptyState`. */
+    empty?: ReactNode;
+    className?: string;
+}
+/**
+ * Props of `StatCard`: one figure with its sentence-case label, for a
+ * dashboard row. The figure stays neutral; a `tone` adds its severity glyph
+ * beside the label. `success` is for a recorded result ("All checks passed"),
+ * never for "healthy" standing status.
+ */
+interface PluginStatCardProps extends PluginDomProps<HTMLDivElement> {
+    label: ReactNode;
+    /** The figure. Format it yourself (`formatCount`, `formatBytes`, `formatDuration`). */
+    value: ReactNode;
+    /**
+     * The change beside the figure. A number is signed and drawn with an up or
+     * down arrow; anything else is shown as given. Neutral either way: whether
+     * up is good depends on the figure.
+     */
+    delta?: ReactNode;
+    tone?: PluginSeverity;
+    /** One quiet line under the figure: its scope or source. */
+    hint?: ReactNode;
+    /** Below the hint: a `Sparkline`, say. */
+    children?: ReactNode;
+    className?: string;
+}
+/**
+ * Props of `Sparkline`: a small trend line with no axes, drawn in a theme
+ * colour. It fills its container's width. Fewer than two finite values draw
+ * an empty box of the same size; a non-finite value is a gap.
+ */
+interface PluginSparklineProps {
+    values: readonly number[];
+    /** Required: the trend in words ("Events per second, last 60 s"). Empty hides it from assistive tech. */
+    "aria-label": string;
+    /** In px. Defaults to 24. */
+    height?: number;
+    /**
+     * `neutral` (the default) draws in the secondary text colour, and so does
+     * `success`: a trend is standing status, and green is kept for results that
+     * just landed. Never accent.
+     */
+    tone?: PluginSeverity;
+    /** Fixed ends of the scale. Omitted, the values' own range is used. */
+    min?: number;
+    max?: number;
+    className?: string;
+}
+/**
+ * Props of `FormFieldGroup`: one label over a set of controls that answer it
+ * together, such as a row of checkboxes. The label matches a `FormField`'s;
+ * each control inside is its own horizontal `FormField`.
+ */
+interface PluginFormFieldGroupProps {
+    label: ReactNode;
+    description?: ReactNode;
+    /** Shown under the controls. */
+    error?: ReactNode;
+    /** Says "Required" beside the label. */
+    required?: boolean;
+    /** Disables every control inside and dims the label. */
+    disabled?: boolean;
+    /** `stack` (the default) puts one control per line; `inline` wraps them in a row. */
+    layout?: "stack" | "inline";
+    children?: ReactNode;
+    className?: string;
 }
 /**
  * Keys of {@link PluginThemeTokens}: Daintree's semantic theme tokens, the
@@ -1837,4 +1975,4 @@ interface PluginHostBridge {
     onPanel(pluginId: string, channel: string, panelId: string, callback: (payload: unknown) => void): () => void;
 }
 
-export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAlign, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginButtonProps, type PluginButtonVariant, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCheckboxProps, type PluginConfirmDialogProps, type PluginCopyButtonProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableSort, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDismissButtonProps, type PluginDocumentPackage, type PluginDomProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFormFieldControlProps, type PluginFormFieldProps, type PluginHostBridge, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginInputProps, type PluginKbdChordProps, type PluginKbdProps, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginPaneHeaderProps, type PluginPaneStateProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginProgressBarProps, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginSwitchProps, type PluginTabItem, type PluginTabsProps, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTruncatedTooltipProps, type PluginVirtualListProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseHostChannelResult, type UseListNavigationOptions, type UseListNavigationResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };
+export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAlign, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginButtonProps, type PluginButtonVariant, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCheckboxProps, type PluginConfirmDialogProps, type PluginCopyButtonProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableSort, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDismissButtonProps, type PluginDocumentPackage, type PluginDomProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginHostBridge, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginInputProps, type PluginKbdChordProps, type PluginKbdProps, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginPaneHeaderProps, type PluginPaneStateProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginProgressBarProps, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginStatCardProps, type PluginSwitchProps, type PluginTabItem, type PluginTabsProps, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTruncatedTooltipProps, type PluginVirtualListProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseHostChannelResult, type UseListNavigationOptions, type UseListNavigationResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };

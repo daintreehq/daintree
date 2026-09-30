@@ -105,6 +105,8 @@ import { PluginKitLayerContext, useKitOverlayZClass, type PluginKitLayer } from 
 import { pluginKitPatterns } from "./PluginKitPatterns";
 import { pluginKitLists } from "./PluginKitLists";
 import { pluginKitOverlays } from "./PluginKitOverlays";
+import { pluginKitData } from "./PluginKitData";
+import { pluginKitFileTree } from "./PluginKitFileTree";
 import { primeRadix } from "@/components/ui/radix-loader";
 
 export { pickDomProps };
@@ -878,6 +880,9 @@ function KitCalloutStrip({
   );
 }
 
+// `flex-1` fills a flex column; `h-full` fills a block parent with a height.
+const CANVAS_FILL_CLASS = "h-full min-h-0 flex-1";
+
 function KitEmptyState({
   title,
   variant,
@@ -892,7 +897,10 @@ function KitEmptyState({
   const heading = str(title) ?? "";
   const glyph = renderIconSource(icon) ?? undefined;
   const actionNode = content(action);
-  const classes = str(className);
+  // A canvas state is a whole pane's content, so it fills whatever the view
+  // gives it and centres there, as the host's own pane states sit in a
+  // centring frame; left to its own height it clings to the top of the pane.
+  const classes = size === "canvas" ? cn(CANVAS_FILL_CLASS, str(className)) : str(className);
   if (kind === "user-cleared") {
     return (
       <EmptyState
@@ -1385,6 +1393,8 @@ export const pluginKit = {
   ...pluginKitPatterns,
   ...pluginKitLists,
   ...pluginKitOverlays,
+  ...pluginKitData,
+  ...pluginKitFileTree,
 };
 
 export type PluginKit = typeof pluginKit;
