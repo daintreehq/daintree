@@ -391,6 +391,21 @@ const selfContainerQuery: LintRule = {
   },
 };
 
+const VIEWPORT_VARIANT = /^(?:max-)?(?:sm|md|lg|xl|2xl)$|^(?:min|max)-\[/;
+
+const viewportBreakpoint = classRule(
+  {
+    id: "viewport-breakpoint",
+    severity: "warn",
+    message: "viewport breakpoint in a panel",
+    hint: "a panel is one pane of the window: use a container query (@container on a wrapper, @md: on its children), AutoGrid, or useBreakpoint from @daintreehq/plugin-ui",
+  },
+  (token, { variants }) =>
+    variants.some((variant) => VIEWPORT_VARIANT.test(variant))
+      ? `"${token}" answers to the window's width, not the pane's`
+      : null
+);
+
 const NATIVE_DIALOG =
   /(?:\b(?:window|globalThis|self)\s*\.\s*|(?<![\w$.]))(confirm|alert|prompt)\s*\(/g;
 
@@ -436,6 +451,95 @@ const nativeDialogInView: LintRule = {
   },
 };
 
+/**
+ * `localStorage.getItem(…)`, `window.sessionStorage[…]`: the browser's storage,
+ * bare or on the global object — never another object's property of that name.
+ */
+const WEB_STORAGE =
+  /(?:\b(?:window|globalThis|self)\s*\.\s*|(?<![\w$.]))(localStorage|sessionStorage)\b(?!\s*:)/g;
+
+/** Where `import … from` clauses sit, so a name one imports is not read as a use. */
+function importRanges(masked: string): Array<[number, number]> {
+  return [...masked.matchAll(/\bimport\b[^;]*?\bfrom\b/g)].map((m) => [
+    m.index,
+    m.index + m[0].length,
+  ]);
+}
+
+const viewWebStorage: LintRule = {
+  id: "view-web-storage",
+  severity: "warn",
+  appliesTo: "view",
+  message: "browser storage in a view",
+  hint: "use usePersistentViewState from @daintreehq/plugin-ui for a tab, split size or filter (it rides the panel's own saved state), or host.storage in the worker for anything that outlives the panel — localStorage is one bucket shared by every plugin and the app",
+  check(file) {
+    const hits: RuleHit[] = [];
+    const imports = importRanges(file.masked);
+    for (const m of file.masked.matchAll(WEB_STORAGE)) {
+      const name = m[1]!;
+      if (imports.some(([start, end]) => m.index >= start && m.index < end)) continue;
+      const qualified = !m[0].startsWith(name);
+      // A local binding of that name shadows only the bare reference.
+      if (!qualified && bindsName(file.masked, name)) continue;
+      hits.push({ offset: m.index, message: `${name} in a view; use usePersistentViewState` });
+    }
+    return hits;
+  },
+};
+
+/** `document.addEventListener("keydown", …)` and the window's — a hand-rolled shortcut listener. */
+const GLOBAL_KEY_LISTENER =
+  /(?<![\w$.])(?:window|document|globalThis)\s*\.\s*addEventListener\s*\(\s*["'`](keydown|keyup)["'`]/g;
+
+const globalKeyListener: LintRule = {
+  id: "global-key-listener",
+  severity: "warn",
+  appliesTo: "view",
+  message: "shortcut listener on the whole document",
+  hint: "use useHotkeys from @daintreehq/plugin-ui: it listens only while focus is in your view, leaves text fields alone and never takes a key Daintree is bound to",
+  check(file) {
+    const hits: RuleHit[] = [];
+    // The event name is a string literal, which masking blanks, so read the
+    // original code at the masked match's offsets.
+    for (const m of file.code.matchAll(GLOBAL_KEY_LISTENER)) {
+      if (!/addEventListener/.test(file.masked.slice(m.index, m.index + m[0].length))) continue;
+      hits.push({ offset: m.index, message: `a global ${m[1]} listener; use useHotkeys` });
+    }
+    return hits;
+  },
+};
+
+const rawPortal: LintRule = {
+  id: "raw-portal",
+  severity: "warn",
+  appliesTo: "view",
+  message: "createPortal in a view",
+  hint: "prefer `Portal` from @daintreehq/plugin-ui — it marks the container as your style root, which a bare createPortal leaves unstyled",
+  check(file) {
+    // Only a file that imports react-dom can be calling its createPortal, which
+    // keeps an unrelated method of the same name quiet; an aliased import
+    // (`createPortal as portal`) is followed to its local name.
+    if (
+      !/from\s*["']react-dom(?:\/client)?["']|require\(\s*["']react-dom["']\s*\)/.test(file.code)
+    ) {
+      return [];
+    }
+    const names = ["createPortal"];
+    for (const m of file.code.matchAll(/\bcreatePortal\s+as\s+([A-Za-z_$][\w$]*)/g)) {
+      names.push(m[1]!);
+    }
+    const hits: RuleHit[] = [];
+    const call = new RegExp(`(?<![\\w$])(?:${names.join("|")})\\s*\\(`, "g");
+    for (const m of file.masked.matchAll(call)) {
+      // `createPortal(…) { … }` is a method being declared, not called.
+      const close = matchClose(file.masked, m.index + m[0].length - 1);
+      if (close > 0 && /^\s*\{/.test(file.masked.slice(close + 1, close + 40))) continue;
+      hits.push({ offset: m.index, message: "createPortal renders outside the view's style root" });
+    }
+    return hits;
+  },
+};
+
 export const CONSISTENCY_RULES: LintRule[] = [
   stockColour,
   darkVariant,
@@ -456,4 +560,8 @@ export const CONSISTENCY_RULES: LintRule[] = [
   dndLibraryImport,
   selfContainerQuery,
   nativeDialogInView,
+  viewWebStorage,
+  globalKeyListener,
+  rawPortal,
+  viewportBreakpoint,
 ];

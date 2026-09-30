@@ -72,7 +72,9 @@
   left: 0;
   z-index: 2;
   background: var(--color-surface-sidebar);
-  color: var(--color-state-idle);
+  /* Secondary ink, not the idle-activity hue it borrowed: line numbers are
+     coordinates people read, and idle sits under 4.5:1 on several themes. */
+  color: var(--color-text-secondary);
   padding: 0 8px;
   /* width acts as a hint under table-layout:auto; min-width keeps it from
      shrinking under content-heavy code columns. */

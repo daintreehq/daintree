@@ -179,8 +179,12 @@ Consistency rules:
 | `inline-svg-icon` | warn | An inline 24×24 SVG icon; use `Icon` |
 | `lucide-react-import` | warn | `lucide-react` bundled into a view; the kit's `Icon` is served at no bundle cost |
 | `dnd-library-import` | warn | A drag-and-drop library (`@dnd-kit/*`, `react-beautiful-dnd`, `sortablejs`, …) bundled into a view; the kit's `SortableList`, `Kanban` and `DragDropProvider` cover reordering and boards |
+| `raw-portal` | warn | `createPortal` in a view; the kit's `Portal` marks its container as the plugin's style root |
 | `native-dialog-in-view` | warn | `alert`, `confirm` or `prompt` in a view; use `ConfirmDialog` or `Dialog` |
+| `view-web-storage` | warn | `localStorage` or `sessionStorage` in a view; use `usePersistentViewState` for view state, or `host.storage` in the worker |
+| `global-key-listener` | warn | A `keydown`/`keyup` listener on the whole document or window in a view; use `useHotkeys` |
 | `self-container-query` | warn | A container-query variant on the container itself |
+| `viewport-breakpoint` | warn | A viewport breakpoint (`md:`, `max-sm:`) in a panel, which answers to the window rather than the pane; use a container query, `AutoGrid` or `useBreakpoint` |
 | `class-compiles-to-nothing` | warn | The offline style report: classes Tailwind generates no CSS for against the design contract — usually a typo or a utility from another Tailwind version. One finding per file; stock colours are left to `stock-palette-colour` and classes your own stylesheets define are not reported |
 
 `LINT_RULES` in `packages/daintree-plugin/src/lib/lint/index.ts` is the authoritative list of the rules above it; `class-compiles-to-nothing` is the separate style report in the same file (`STYLE_REPORT_RULE_ID`). The kit components the fixes name are in the [UI kit](./ui-kit.md) reference.

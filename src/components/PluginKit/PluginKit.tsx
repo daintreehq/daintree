@@ -45,6 +45,9 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -106,10 +109,13 @@ import { pluginKitFileTree } from "./PluginKitFileTree";
 import { pluginKitDates } from "./PluginKitDates";
 import { pluginKitNavigation } from "./PluginKitNavigation";
 import { pluginKitLayout } from "./PluginKitLayout";
+import { pluginKitLayoutCore } from "./PluginKitLayoutCore";
 import { pluginKitInputs } from "./PluginKitInputs";
 import { normalizeSelectOptions } from "./kitOptions";
 import { pluginKitCharts } from "./PluginKitCharts";
 import { pluginKitDnd } from "./PluginKitDnd";
+import { pluginKitHooksFeedback } from "./PluginKitHooksFeedback";
+import { pluginKitTypography, pluginKitTypographyFunctions } from "./PluginKitTypography";
 import { primeRadix } from "@/components/ui/radix-loader";
 
 export { normalizeSelectOptions, pickDomProps };
@@ -1065,6 +1071,9 @@ function KitSearchField({
 }
 
 const DROPDOWN_MENU_PARTS: KitMenuParts = {
+  Sub: DropdownMenuSub,
+  SubTrigger: DropdownMenuSubTrigger,
+  SubContent: DropdownMenuSubContent,
   Item: DropdownMenuItem,
   CheckboxItem: DropdownMenuCheckboxItem,
   RadioGroup: DropdownMenuRadioGroup,
@@ -1249,9 +1258,13 @@ export const pluginKit = {
   ...pluginKitDates,
   ...pluginKitNavigation,
   ...pluginKitLayout,
+  ...pluginKitLayoutCore,
   ...pluginKitInputs,
   ...pluginKitCharts,
   ...pluginKitDnd,
+  ...pluginKitHooksFeedback,
+  ...pluginKitTypography,
+  ...pluginKitTypographyFunctions,
 };
 
 export type PluginKit = typeof pluginKit;

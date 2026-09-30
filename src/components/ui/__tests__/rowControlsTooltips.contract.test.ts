@@ -29,6 +29,8 @@ const GLYPH_TOGGLES: Record<string, string> = {
   "src/panels/file-browser/FileTreeView.tsx": "tree disclosure chevron",
   "src/components/PluginKit/PluginKitFileTree.tsx":
     "the kit FileTree's disclosure chevron, as the host tree's",
+  "src/components/PluginKit/PluginKitPatterns.tsx":
+    "the kit ListRow's selection checkbox in the icon slot, as the worktree overview grid's",
 };
 
 /** Elements that already own the keyboard, so text inside must not add a tab stop. */

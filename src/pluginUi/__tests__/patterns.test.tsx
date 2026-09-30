@@ -110,12 +110,12 @@ describe("@daintreehq/plugin-ui lists", () => {
     const second = screen.getAllByRole("option")[1]!;
     expect(listbox.getAttribute("aria-activedescendant")).toBe(second.id);
     fireEvent.keyDown(listbox, { key: "Enter" });
-    expect(onSelect).toHaveBeenLastCalledWith(1);
+    expect(onSelect).toHaveBeenLastCalledWith(1, expect.objectContaining({ key: "Enter" }));
 
     fireEvent.keyDown(listbox, { key: "ArrowUp" });
     fireEvent.keyDown(listbox, { key: "ArrowUp" });
     fireEvent.keyDown(listbox, { key: " " });
-    expect(onSelect).toHaveBeenLastCalledWith(0);
+    expect(onSelect).toHaveBeenLastCalledWith(0, expect.objectContaining({ key: " " }));
   });
 
   it("skips disabled rows and never selects one from the keyboard or a click", () => {
@@ -160,14 +160,14 @@ describe("@daintreehq/plugin-ui lists", () => {
     fireEvent.keyDown(list, { key: "Home" });
     expect(result?.activeIndex).toBe(2);
     fireEvent.keyDown(list, { key: " " });
-    expect(onSelect).toHaveBeenLastCalledWith(2);
+    expect(onSelect).toHaveBeenLastCalledWith(2, expect.objectContaining({ key: " " }));
     fireEvent.keyDown(list, { key: "End" });
     expect(result?.activeIndex).toBe(3);
     // Typeahead passes over the disabled "Alpha" and "Beta".
     fireEvent.keyDown(list, { key: "a" });
     expect(result?.activeIndex).toBe(3);
     fireEvent.keyDown(list, { key: "Enter" });
-    expect(onSelect).toHaveBeenLastCalledWith(3);
+    expect(onSelect).toHaveBeenLastCalledWith(3, expect.objectContaining({ key: "Enter" }));
   });
 
   it("never selects in a list whose rows are all disabled", () => {
