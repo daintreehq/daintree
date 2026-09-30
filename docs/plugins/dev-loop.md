@@ -189,7 +189,7 @@ Consistency rules:
 Runs the manifest through Daintree's Zod schema and reports any errors. It validates under the origin your manifest declares, so a `"scope": "project"` manifest is checked against the project rules.
 
 ```bash
-npx daintree-plugin validate [--env]
+npx daintree-plugin validate [dir] [--env]
 ```
 
 `--env` additionally resolves `${settings:…}` tokens against a `.daintree-plugin-env` file, so you can confirm an MCP server's `command` / `args` / `env` substitute the way you expect before spawning it for real.
