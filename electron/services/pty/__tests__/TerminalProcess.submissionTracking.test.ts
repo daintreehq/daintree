@@ -348,16 +348,21 @@ describe("TerminalProcess handback requests (#12488)", () => {
     terminal.dispose();
   });
 
-  it("keeps the last handback while a later submission has not reached the pty", () => {
+  it("keeps the last handback until a later submission's Enter reaches the pty", async () => {
+    vi.useFakeTimers();
     const terminal = createTerminal();
     const handback = { message: "done", observedAt: 1, truncated: false };
     terminal.getInfo().lastHandback = handback;
-    const release = acquireInputLock(terminal);
 
-    terminal.submit("queued", "tok-1");
-
+    terminal.submit("follow up", "tok-1");
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("writing");
     expect(terminal.getInfo().lastHandback).toBe(handback);
-    release();
+
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("pty_written");
+    expect(terminal.getInfo().lastHandback).toBeUndefined();
+    vi.useRealTimers();
     terminal.dispose();
   });
 
