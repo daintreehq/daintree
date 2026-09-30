@@ -715,6 +715,8 @@ function DateField({ mode, props }: DateFieldProps) {
         {...owner}
         align="start"
         aria-label={`Choose ${noun}`}
+        // Radix traps focus and hides the page but leaves the role unqualified.
+        aria-modal="true"
         className={cn("w-auto max-w-[calc(100vw-2rem)] p-3", overlayZ)}
         onPointerDownCapture={() => {
           pressedInside.current = true;

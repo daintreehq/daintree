@@ -482,6 +482,7 @@ describe("DatePicker", () => {
       fireEvent.click(trigger);
     });
     const dialog = await screen.findByRole("dialog", { name: "Choose date" });
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
     const cell = day("2026-09-30");
     await waitFor(() => expect(document.activeElement).toBe(cell));
     // The day is the panel's last tab stop; Tab wraps to its first, not out.
@@ -546,6 +547,8 @@ describe("DatePicker", () => {
       fireEvent.click(trigger);
     });
     const picker = await screen.findByRole("dialog", { name: "Choose date" });
+    // Declared modal like the sheet under it, and still the only layer Escape closes.
+    expect(picker.getAttribute("aria-modal")).toBe("true");
     const cell = day("2026-09-30");
     await waitFor(() => expect(document.activeElement).toBe(cell));
     await act(async () => {
