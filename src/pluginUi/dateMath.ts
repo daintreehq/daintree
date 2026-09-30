@@ -317,7 +317,25 @@ export function weekdayNames(weekStart: number): readonly { short: string; long:
 
 export const RANGE_SEPARATOR = " – ";
 
+/**
+ * A range as the field shows it at rest, each shared part said once: "Sep 24 –
+ * 30, 2026", "Sep 24 – Oct 3, 2026", "Dec 28, 2026 – Jan 3, 2027", in the
+ * locale's own order. One day reads as that day.
+ */
 export function formatFieldRange(range: DateRange): string {
+  const field = formatter("field", { year: "numeric", month: "short", day: "numeric" });
+  // Every current engine has it; one without shows the full form instead.
+  if (typeof field.formatRange !== "function") return formatEditableRange(range);
+  return field.formatRange(utcOf(range.start), utcOf(range.end));
+}
+
+/**
+ * Both ends in full, "Sep 24, 2026 – Sep 30, 2026": what the field holds while
+ * it is being edited. A collapsed end ("30, 2026") names no month of its own,
+ * and some locales join the ends with a mark the parser does not split on, so
+ * the text a user edits is always this one, which `parseRangeText` reads back.
+ */
+export function formatEditableRange(range: DateRange): string {
   return `${formatFieldDate(range.start)}${RANGE_SEPARATOR}${formatFieldDate(range.end)}`;
 }
 
