@@ -266,7 +266,9 @@ function KitInlineCode({ children, className, ...rest }: PluginInlineCodeProps) 
       style={INLINE_CODE_STYLE}
       className={cn(
         // `box-decoration-clone`: a chip that wraps keeps its edges on both lines.
-        "rounded-xs border border-border-subtle bg-surface-inset box-decoration-clone px-1 py-px font-mono font-normal text-text-primary [overflow-wrap:anywhere]",
+        // MarkdownDocument.css's chip exactly: a 60% sidebar wash, a hairline at
+        // half the default border, 6px by 2px of padding.
+        "rounded-xs border border-border-default/50 bg-surface-sidebar/60 box-decoration-clone px-1.5 py-0.5 font-mono font-normal text-text-primary [overflow-wrap:anywhere]",
         str(className)
       )}
     >
