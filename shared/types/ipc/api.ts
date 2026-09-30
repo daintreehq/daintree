@@ -2353,6 +2353,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onPerfSnapshotsChanged(
       callback: (snapshots: import("../pluginMetrics.js").PluginPerfSnapshot[]) => void
     ): () => void;
+    /**
+     * Plugins that had a host push delivered to their listeners in this
+     * renderer with a dispatch overlapping `[start, end]`, both on this page's
+     * `performance.now()` clock. A local read of the last deliveries the
+     * preload recorded, for long-frame attribution; no IPC.
+     */
+    pluginsWithPushDeliveriesDuring(start: number, end: number): string[];
     /** Subscribe to plugin panel kind registry changes. Returns a cleanup. */
     onPanelKindsChanged(
       callback: (payload: {

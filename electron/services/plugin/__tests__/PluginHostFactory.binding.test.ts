@@ -632,6 +632,35 @@ describe("createHost dispatch, catalog and prompts", () => {
     }
   });
 
+  it("meters each dialog prompt from open to settle, so invokes can leave out user waits", async () => {
+    const h = makeHarness();
+    const events: string[] = [];
+    let answer: (value: unknown) => void = () => {};
+    h.requestPrompt.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          events.push("requested");
+          answer = resolve;
+        })
+    );
+    const trackPromptWait = vi.fn((pluginId: string) => {
+      events.push(`open:${pluginId}`);
+      return () => events.push("closed");
+    });
+    const { host } = createHost({ ...h.deps, trackPromptWait }, PLUGIN_ID, BOUND);
+
+    const pending = host.showConfirm({ title: "sure?" });
+    await flush();
+    expect(events).toEqual([`open:${PLUGIN_ID}`, "requested"]);
+    answer(true);
+    await expect(pending).resolves.toBe(true);
+    expect(events).toEqual([`open:${PLUGIN_ID}`, "requested", "closed"]);
+
+    await host.showQuickPick([{ id: "a", label: "A" }]);
+    await host.showInputBox({ title: "name" });
+    expect(trackPromptWait).toHaveBeenCalledTimes(3);
+  });
+
   it("leaves the signal undefined when a plugin passes no call options (#12279)", async () => {
     const h = makeHarness();
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);

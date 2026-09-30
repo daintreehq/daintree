@@ -97,7 +97,11 @@ import {
   type AgentStateChangePayload,
 } from "../../../shared/utils/pluginAgentSnapshot.js";
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
-import type { PluginSendToAgentRequest } from "../../../shared/types/pluginUiPrompt.js";
+import {
+  promptOpensDialog,
+  type PluginSendToAgentRequest,
+  type PluginUiPromptResultValue,
+} from "../../../shared/types/pluginUiPrompt.js";
 import {
   AGENT_CONTEXT_MAX_TEXT_LENGTH,
   AGENT_CONTEXT_MAX_TITLE_LENGTH,
@@ -518,6 +522,12 @@ export interface PluginHostFactoryDeps {
    * is best-effort; a missing sink must never change what the plugin sees.
    */
   recordPushRejected?: (pluginId: string) => void;
+  /**
+   * Meter a host prompt the user has to answer: called as it opens, and the
+   * returned function as it settles. Optional for the same reason as
+   * `recordPushRejected`.
+   */
+  trackPromptWait?: (pluginId: string) => () => void;
 }
 
 /**
@@ -680,7 +690,10 @@ export function createHost(
     sendToScope(channel, ...args);
   };
   const dispatcher = withPushFlushBarrier(deps.dispatcher);
-  const promptDispatcher = withPushFlushBarrier(deps.promptDispatcher);
+  const promptDispatcher = withPromptWaitTracking(
+    withPushFlushBarrier(deps.promptDispatcher),
+    deps.trackPromptWait
+  );
   const panelReloadDispatcher = withPushFlushBarrier(deps.panelReloadDispatcher);
 
   /**
@@ -2555,6 +2568,40 @@ function hasProjectTargetingGrant(pluginId: string): boolean {
     capability: "project:dispatch",
     scopeKey: "global",
   });
+}
+
+/**
+ * Meter every prompt that puts a dialog in front of the user, so an invoke
+ * whose handler awaited one is not reported as a slow handler. Only
+ * `requestPrompt` is wrapped; it is the one method the host calls.
+ */
+function withPromptWaitTracking(
+  dispatcher: PluginUIPromptDispatcher,
+  track: ((pluginId: string) => () => void) | undefined
+): Pick<PluginUIPromptDispatcher, "requestPrompt"> {
+  // Partial test deps leave the dispatcher unset.
+  if (!track || dispatcher === null || typeof dispatcher !== "object") return dispatcher;
+  return {
+    requestPrompt: (pluginId, params, projectId, signal) => {
+      if (!promptOpensDialog(params)) {
+        return dispatcher.requestPrompt(pluginId, params, projectId, signal);
+      }
+      let end: () => void = () => {};
+      try {
+        end = track(pluginId);
+      } catch {
+        // Metering must never change what the plugin sees.
+      }
+      let pending: Promise<PluginUiPromptResultValue>;
+      try {
+        pending = dispatcher.requestPrompt(pluginId, params, projectId, signal);
+      } catch (err) {
+        end();
+        throw err;
+      }
+      return pending.finally(end);
+    },
+  };
 }
 
 /**

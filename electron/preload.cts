@@ -1084,6 +1084,49 @@ interface PluginPushChannelEntry {
 }
 const _pluginPushChannels = new Map<string, PluginPushChannelEntry>();
 
+// Recent push deliveries, for the renderer's long-frame attribution: plugin
+// code runs through the host's React, so a frame spent reacting to a push
+// never names the plugin, and the page cannot wrap the contextBridge objects
+// the push arrives through. One slot per delivery interval; deliveries to the
+// same plugin within a few milliseconds of each other extend the newest slot,
+// so a flood costs two clock reads per push and no allocation.
+const PUSH_DELIVERY_RING = 128;
+const PUSH_DELIVERY_COALESCE_MS = 4;
+const _pushDeliveryStarts = new Float64Array(PUSH_DELIVERY_RING);
+const _pushDeliveryEnds = new Float64Array(PUSH_DELIVERY_RING);
+const _pushDeliveryPlugins: (string | undefined)[] = new Array(PUSH_DELIVERY_RING);
+let _pushDeliveryCursor = 0;
+let _pushDeliveryCount = 0;
+
+function _recordPushDelivery(pluginId: string, start: number, end: number): void {
+  if (_pushDeliveryCount > 0) {
+    const newest = (_pushDeliveryCursor - 1 + PUSH_DELIVERY_RING) % PUSH_DELIVERY_RING;
+    if (
+      _pushDeliveryPlugins[newest] === pluginId &&
+      start - _pushDeliveryEnds[newest]! <= PUSH_DELIVERY_COALESCE_MS
+    ) {
+      if (end > _pushDeliveryEnds[newest]!) _pushDeliveryEnds[newest] = end;
+      return;
+    }
+  }
+  _pushDeliveryStarts[_pushDeliveryCursor] = start;
+  _pushDeliveryEnds[_pushDeliveryCursor] = end;
+  _pushDeliveryPlugins[_pushDeliveryCursor] = pluginId;
+  _pushDeliveryCursor = (_pushDeliveryCursor + 1) % PUSH_DELIVERY_RING;
+  if (_pushDeliveryCount < PUSH_DELIVERY_RING) _pushDeliveryCount++;
+}
+
+function _pluginsWithPushDeliveriesDuring(start: unknown, end: unknown): string[] {
+  if (typeof start !== "number" || typeof end !== "number") return [];
+  const found: string[] = [];
+  for (let i = 0; i < _pushDeliveryCount; i++) {
+    const pluginId = _pushDeliveryPlugins[i];
+    if (pluginId === undefined || found.includes(pluginId)) continue;
+    if (_pushDeliveryEnds[i]! >= start && _pushDeliveryStarts[i]! <= end) found.push(pluginId);
+  }
+  return found;
+}
+
 // Main batches every push on this transport into one message per renderer per
 // macrotask (an ordered `[fullChannel, envelope]` array). Each entry is replayed
 // through the per-channel dispatcher below, in order, so panel filtering and
@@ -1149,6 +1192,7 @@ function _pluginPushOn(
       }
       const set = subscribers.get(targetPanelId);
       if (!set || set.size === 0) return;
+      const deliveredAt = performance.now();
       // Snapshot before dispatch: a subscriber may unsubscribe (or its panel may
       // unmount) inside its own callback, mutating the Set mid-iteration.
       for (const cb of [...set]) {
@@ -1158,6 +1202,7 @@ function _pluginPushOn(
           console.error("[Preload] plugin push subscriber threw for", fullChannel, err);
         }
       }
+      _recordPushDelivery(pluginId, deliveredAt, performance.now());
     };
     ipcRenderer.on(fullChannel, handler);
     entry = { handler, subscribers };
@@ -3361,6 +3406,11 @@ function buildElectronApi(): ElectronAPI {
       // tracked plugin's snapshot; read `getPerfSnapshots()` for the first one.
       onPerfSnapshotsChanged: (callback: (snapshots: PluginPerfSnapshot[]) => void) =>
         _onPerfSnapshotsChanged(callback),
+
+      // Local read, no IPC: which plugins had a push delivered to their
+      // listeners here between two `performance.now()` instants.
+      pluginsWithPushDeliveriesDuring: (start: number, end: number): string[] =>
+        _pluginsWithPushDeliveriesDuring(start, end),
 
       // Plugin-scoped bridge to the native filesystem path of a dropped File.
       // `webUtils.getPathForFile` must run in the preload (Electron 32 removed

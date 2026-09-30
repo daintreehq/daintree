@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRendererMetricsReport } from "@shared/types/pluginMetrics";
 import type { PluginRendererMetricsEnvelope } from "@shared/types/ipc/pluginMetrics";
-import { REPORT_DRAIN_DELAY_MS, startPluginMetricsReporter } from "../pluginMetricsReporter";
+import {
+  REPORT_DRAIN_DELAY_MS,
+  VIEW_LOAD_DRAIN_DELAY_MS,
+  startPluginMetricsReporter,
+} from "../pluginMetricsReporter";
 import { createPluginViewMetrics, generationOfViewUrl } from "../pluginViewMetrics";
 
 /** A registry double that follows the real drain protocol's re-arming rules. */
@@ -275,6 +279,42 @@ describe("startPluginMetricsReporter with the real registry", () => {
       expect(metrics.pluginIdForScriptUrl("plugin://pi-new/__dtv-2/chunk.js")).toBe("acme.demo");
     } finally {
       stopReal();
+    }
+  });
+
+  it("sends a view load after a short debounce rather than the commit delay", () => {
+    vi.useFakeTimers();
+    const { metrics, sent, stopReal } = startReal();
+    try {
+      metrics.registerViewOrigin("acme.demo", NEW_VIEW);
+      metrics.recordCommit("acme.demo", 7, 12, NEW);
+      metrics.recordViewLoad(
+        "acme.demo",
+        {
+          kindId: "acme.demo.main",
+          activateMs: 80,
+          importMs: 40,
+          stylesMs: 90,
+          loadMs: 95,
+          firstPaintMs: 120,
+          retry: false,
+          at: 1,
+        },
+        NEW
+      );
+      vi.advanceTimersByTime(VIEW_LOAD_DRAIN_DELAY_MS - 1);
+      expect(sent).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(sent).toHaveBeenCalledTimes(1);
+      const [envelope] = sent.mock.calls[0]![0];
+      expect(envelope!.report.viewLoads.map((load) => load.loadMs)).toEqual([95]);
+      // The commit went with it, and the commit timer it had armed is gone.
+      expect(envelope!.report.commitCount).toBe(1);
+      vi.advanceTimersByTime(REPORT_DRAIN_DELAY_MS);
+      expect(sent).toHaveBeenCalledTimes(1);
+    } finally {
+      stopReal();
+      vi.useRealTimers();
     }
   });
 });

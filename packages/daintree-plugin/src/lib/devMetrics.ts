@@ -56,9 +56,20 @@ function formatUnit(value: number, unit: Unit): string {
   }
 }
 
-/** Mirrors the host: activation runs first, then import and style preparation overlap. */
+/**
+ * The host's own measurement of open → imported and styled. A Daintree from
+ * before `loadMs` existed sends only the phases, which are rebuilt the way it
+ * rebuilt them itself.
+ */
 function viewLoadMsOf(sample: PluginViewLoadSample): number {
+  const loadMs: unknown = (sample as Partial<PluginViewLoadSample>).loadMs;
+  if (typeof loadMs === "number" && Number.isFinite(loadMs)) return loadMs;
   return sample.activateMs + Math.max(sample.importMs, sample.stylesMs);
+}
+
+/** A field an older Daintree may not send, read as a number or not at all. */
+function optionalNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 /** "✓", or "over budget: 612ms > 500ms", judged by the host's own `overBudget`. */
@@ -130,16 +141,22 @@ export function formatDevMetrics(snapshot: PluginPerfSnapshot): string {
 
   const invokes = snapshot.invokes;
   if (invokes.count > 0) {
+    const promptWaits = optionalNumber(invokes.promptWaits) ?? 0;
     const failures: string[] = [];
     if (invokes.errors > 0) failures.push(`${invokes.errors} failed`);
     if (invokes.timeouts > 0) failures.push(`${invokes.timeouts} timed out`);
     if (invokes.oversized > 0) failures.push(`${invokes.oversized} oversized`);
+    // Calls that overlapped a prompt waited on the user; the host leaves them
+    // out of the timings, and says so here.
+    if (promptWaits > 0) failures.push(`${promptWaits} waited on a prompt, untimed`);
+    const timed = invokes.count > promptWaits;
     rows.push({
       label: "invokes p50/p95",
       value:
-        `${formatMs(invokes.p50Ms)} / ${formatMs(invokes.p95Ms)} (${invokes.count}` +
+        (timed ? `${formatMs(invokes.p50Ms)} / ${formatMs(invokes.p95Ms)}` : NONE) +
+        ` (${invokes.count}` +
         (failures.length > 0 ? `, ${failures.join(", ")})` : ")"),
-      note: mark(snapshot, "invokeP95Ms", invokes.p95Ms),
+      note: timed ? mark(snapshot, "invokeP95Ms", invokes.p95Ms) : "",
     });
   } else {
     rows.push({ label: "invokes p50/p95", value: NONE, note: "" });
@@ -151,9 +168,16 @@ export function formatDevMetrics(snapshot: PluginPerfSnapshot): string {
       mark(snapshot, "pushesPerSecond", pushes.perSecond),
       mark(snapshot, "pushBytesPerSecond", pushes.bytesPerSecond),
     ];
+    const peak = optionalNumber(pushes.peakPerSecond);
+    const peakBytes = optionalNumber(pushes.peakBytesPerSecond);
     rows.push({
       label: "pushes/s",
-      value: `${formatRate(pushes.perSecond)}, ${formatBytes(pushes.bytesPerSecond)}/s`,
+      // Sustained (10 s) first, as budgeted; the busiest second beside it.
+      value:
+        `${formatRate(pushes.perSecond)}, ${formatBytes(pushes.bytesPerSecond)}/s` +
+        (peak !== null && peakBytes !== null
+          ? ` (peak ${formatRate(peak)}, ${formatBytes(peakBytes)}/s)`
+          : ""),
       note: notes.every((n) => n.startsWith("✓"))
         ? "✓"
         : notes.filter((n) => !n.startsWith("✓")).join("; "),

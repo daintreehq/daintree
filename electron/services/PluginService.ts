@@ -266,7 +266,11 @@ import { broadcastToRenderer, broadcastToProjectRenderers } from "../ipc/utils.j
 import { PLUGIN_INVOKE_MAX_RESULT_BYTES } from "../../shared/config/pluginBudgets.js";
 import { assertPayloadWithinLimit, estimatePayloadBytes } from "./plugin/pluginPayloadLimits.js";
 import { getPluginPushBatcher, routePluginPush } from "./plugin/pluginPushBatcher.js";
-import { PluginMetricsService, classifyInvokeFailure } from "./plugin/PluginMetricsService.js";
+import {
+  PluginMetricsService,
+  classifyInvokeFailure,
+  type InvokePromptMark,
+} from "./plugin/PluginMetricsService.js";
 import { markPerformance } from "../utils/performance.js";
 import { deepFreeze } from "../utils/deepFreeze.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -3716,6 +3720,7 @@ export class PluginService {
       safeAppendAudit,
       safeArgsHash,
       recordPushRejected: (pluginId) => this.metrics.recordPushOversized(pluginId),
+      trackPromptWait: (pluginId) => this.metrics.beginPromptWait(pluginId),
     };
   }
 
@@ -3864,8 +3869,21 @@ export class PluginService {
    * Deliberately narrower than `dispose()`: quit wants the OS children gone,
    * not a full registry teardown with its contribution broadcasts and a second
    * best-effort MCP shutdown that `shutdown.ts` already runs on its own.
+   *
+   * Plugin workers are stopped here too. They die with the app either way, and
+   * a supervisor that was not told first reads that exit as a crash: it logged
+   * "Worker crashed (code 0)" for every worker on every quit and tried to
+   * respawn it. Disposing the supervisor marks the exit as expected and sends
+   * the worker its cooperative shutdown.
    */
   async shutdownManagedProcesses(): Promise<void> {
+    for (const { workerHost } of this.pluginWorkers.values()) {
+      try {
+        workerHost.dispose();
+      } catch {
+        // One worker failing to stop must not keep the others running.
+      }
+    }
     await this.processManager?.shutdownAll();
   }
 
@@ -4487,7 +4505,11 @@ export class PluginService {
     // Metered here rather than from the audit log, which can be disabled and is
     // capped. Timed from after activation: a cold start is recorded as the
     // activation it is, not as a slow first invoke.
-    const timing = { handlerStart: Number.NaN };
+    // `promptMark` is taken with `handlerStart`, after activation: a prompt
+    // the plugin raised while activating did not overlap the handler.
+    const timing: { handlerStart: number; promptMark?: InvokePromptMark } = {
+      handlerStart: Number.NaN,
+    };
     // A call that outlives an unload+reload of the id describes the old
     // generation; it must not land in the replacement's fresh entry.
     const generation = this.plugins.get(pluginId);
@@ -4496,7 +4518,12 @@ export class PluginService {
     try {
       const result = await this.dispatchHandlerUnmetered(pluginId, channel, ctx, args, timing);
       if (sameGeneration()) {
-        this.metrics.recordInvoke(pluginId, performance.now() - timing.handlerStart, "ok");
+        this.metrics.recordInvoke(
+          pluginId,
+          performance.now() - timing.handlerStart,
+          "ok",
+          timing.promptMark
+        );
       }
       return result;
     } catch (err) {
@@ -4504,7 +4531,8 @@ export class PluginService {
         this.metrics.recordInvoke(
           pluginId,
           performance.now() - timing.handlerStart,
-          classifyInvokeFailure(err)
+          classifyInvokeFailure(err),
+          timing.promptMark
         );
       }
       throw err;
@@ -4516,7 +4544,7 @@ export class PluginService {
     channel: string,
     ctx: PluginIpcContext,
     args: unknown[],
-    timing: { handlerStart: number }
+    timing: { handlerStart: number; promptMark?: InvokePromptMark }
   ): Promise<unknown> {
     // Ownership guard (#10462): the renderer is a single shared WebContents in
     // which every plugin runs in the same realm, so a caller can pass an
@@ -4539,6 +4567,9 @@ export class PluginService {
     // activation are available on the very first call. No-op once activated.
     await this.activatePlugin(pluginId);
     timing.handlerStart = performance.now();
+    // A handler awaiting the user's answer to a prompt is not slow; the mark
+    // lets the metrics keep such a call out of the latency stats.
+    timing.promptMark = this.metrics.markInvokeStart(pluginId);
 
     const key = `${pluginId}:${channel}`;
     const descriptor = this.pluginActions.get(channel);

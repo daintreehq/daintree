@@ -7,6 +7,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -48,7 +49,7 @@ import { PluginViewRuntimeStatus } from "@/components/Plugin/PluginViewRuntimeSt
 import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
 import { presentWorkerStatus, useWorkerStall } from "@/components/Plugin/pluginWorkerPresentation";
 import {
-  PLUGIN_STYLE_ROOT_PROPS,
+  pluginStyleRootPropsFor,
   preparePluginStyles,
   registerPluginStyleRoot,
 } from "@/services/plugin/pluginStyleContract";
@@ -231,6 +232,8 @@ interface ViewLoadTiming {
   activateMs: number;
   importMs: number;
   stylesMs: number;
+  /** Open → module imported and styles ready; the `view-load` phase. */
+  loadMs: number;
   recorded: boolean;
 }
 
@@ -324,6 +327,9 @@ export function makePluginViewContent(
   // one a replaced load's view makes after its successor mounted is dropped
   // instead of being counted against the new load.
   const viewGeneration = generationOfViewUrl(componentPath);
+  // Tagged with the owner so a portal the view spreads these onto can be
+  // traced back to this plugin (Styles check, long-frame input attribution).
+  const styleRootProps = pluginStyleRootPropsFor(pluginId);
 
   // Defined once per content factory, not inline in render: the boundary swaps
   // its fallback subtree whenever this component *type* changes identity, which
@@ -386,6 +392,7 @@ export function makePluginViewContent(
       activateMs: 0,
       importMs: 0,
       stylesMs: 0,
+      loadMs: 0,
       recorded: false,
     };
     markPluginView(PERF_MARKS.PLUGIN_VIEW_LOAD_START, { pluginId, kindId, retry });
@@ -462,7 +469,7 @@ export function makePluginViewContent(
       // Compiler folds a capitalised alias of a lowercase binding back into the
       // binding, and `<component />` then renders an intrinsic element.
       const BuiltinPanelView = (props: PanelViewProps) => createElement(component, props);
-      endPhase("view-load", timing.openedAt);
+      timing.loadMs = endPhase("view-load", timing.openedAt);
       markPluginView(PERF_MARKS.PLUGIN_VIEW_IMPORTED, { pluginId, kindId });
       return { default: BuiltinPanelView };
     });
@@ -542,7 +549,7 @@ export function makePluginViewContent(
             timing.stylesMs = await (viewPath === initialPath
               ? stylesReady
               : trackStyles(viewPath));
-            endPhase("view-load", timing.openedAt);
+            timing.loadMs = endPhase("view-load", timing.openedAt);
             markPluginView(PERF_MARKS.PLUGIN_VIEW_IMPORTED, { pluginId, kindId });
             return module;
           } catch (err) {
@@ -603,46 +610,54 @@ export function makePluginViewContent(
   };
 
   /**
-   * Completes an attempt's load sample once its first commit has painted.
-   * Rendered beside the view inside the same Suspense boundary, so its effect
-   * runs only once the view has resolved and committed; the double rAF then
-   * waits out the frame that commit lands in. A view that throws while
+   * Completes an attempt's load sample at the first frame that can show it.
+   * Rendered beside the view inside the same Suspense boundary, so its layout
+   * effect runs in the commit that reveals the resolved view, before the
+   * browser paints it. One animation frame later is the frame that paints that
+   * commit, and the frame's own timestamp is when it began.
+   *
+   * A layout effect and one frame, not a passive effect and two: a passive
+   * effect runs after the view's own mount effects, and a view that loads its
+   * data there pushed the second frame out behind that render, reporting first
+   * paint 140-170 ms after the view was on screen. A view that throws while
    * rendering unwinds this with it, so a failed load records no sample.
    */
   function PluginViewPaintReporter({ view }: { view: object }) {
-    useEffect(() => {
+    useLayoutEffect(() => {
       const timing = loadTimings.get(view);
       if (!timing || timing.recorded || typeof requestAnimationFrame !== "function") return;
-      let second = 0;
-      const first = requestAnimationFrame(() => {
-        second = requestAnimationFrame(() => {
-          if (timing.recorded) return;
-          timing.recorded = true;
-          const firstPaintMs = endPhase("first-paint", timing.openedAt);
-          markPluginView(PERF_MARKS.PLUGIN_VIEW_FIRST_PAINT, {
-            pluginId,
-            kindId,
-            retry: timing.retry,
-            firstPaintMs: roundMs(firstPaintMs),
-          });
-          pluginViewMetrics.recordViewLoad(
-            pluginId,
-            {
-              kindId,
-              activateMs: roundMs(timing.activateMs),
-              importMs: roundMs(timing.importMs),
-              stylesMs: roundMs(timing.stylesMs),
-              firstPaintMs: roundMs(firstPaintMs),
-              retry: timing.retry,
-              at: Date.now(),
-            },
-            viewGeneration
-          );
+      const committedAt = performance.now();
+      const frame = requestAnimationFrame((frameStart) => {
+        if (timing.recorded) return;
+        timing.recorded = true;
+        // The frame cannot have begun before the commit it paints; the max
+        // guards a clock that reports otherwise.
+        const paintedAt = Math.max(committedAt, frameStart);
+        const firstPaintMs = paintedAt - timing.openedAt;
+        measurePluginViewPhase(pluginId, "first-paint", timing.openedAt, paintedAt, { kindId });
+        markPluginView(PERF_MARKS.PLUGIN_VIEW_FIRST_PAINT, {
+          pluginId,
+          kindId,
+          retry: timing.retry,
+          firstPaintMs: roundMs(firstPaintMs),
         });
+        pluginViewMetrics.recordViewLoad(
+          pluginId,
+          {
+            kindId,
+            activateMs: roundMs(timing.activateMs),
+            importMs: roundMs(timing.importMs),
+            stylesMs: roundMs(timing.stylesMs),
+            loadMs: roundMs(timing.loadMs),
+            firstPaintMs: roundMs(firstPaintMs),
+            retry: timing.retry,
+            at: Date.now(),
+          },
+          viewGeneration
+        );
       });
       return () => {
-        cancelAnimationFrame(first);
-        cancelAnimationFrame(second);
+        cancelAnimationFrame(frame);
       };
     }, [view]);
     return null;
@@ -1428,7 +1443,7 @@ export function makePluginViewContent(
                   }
                 }}
                 ref={styleRootRef}
-                {...PLUGIN_STYLE_ROOT_PROPS}
+                {...styleRootProps}
               >
                 <Profiler id={kindId} onRender={onViewCommit}>
                   <LazyView
@@ -1442,7 +1457,7 @@ export function makePluginViewContent(
                     requestReload={requestReload}
                     setHasUnsavedChanges={setHasUnsavedChanges}
                     worktreeId={worktreeId}
-                    styleRootAttributes={PLUGIN_STYLE_ROOT_PROPS}
+                    styleRootAttributes={styleRootProps}
                     {...(settingsContext ? { settingsContext } : {})}
                   />
                 </Profiler>

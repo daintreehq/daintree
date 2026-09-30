@@ -15,6 +15,7 @@ vi.mock("@/components/Plugin/PluginViewRuntimeStatus", () => ({
 }));
 vi.mock("@/services/plugin/pluginStyleContract", () => ({
   PLUGIN_STYLE_ROOT_PROPS: {},
+  pluginStyleRootPropsFor: () => ({}),
   preparePluginStyles: () => Promise.resolve(),
   registerPluginStyleRoot: () => () => {},
 }));
@@ -140,7 +141,7 @@ describe("PluginViewContent load metrics", () => {
     );
     const [sample] = pluginViewMetrics.getLocalSnapshot("acme")!.viewLoads;
     expect(sample).toMatchObject({ kindId: "acme.dashboard", retry: false });
-    for (const key of ["activateMs", "importMs", "stylesMs", "firstPaintMs"] as const) {
+    for (const key of ["activateMs", "importMs", "stylesMs", "loadMs", "firstPaintMs"] as const) {
       expect(sample![key]).toBeGreaterThanOrEqual(0);
     }
     expect(sample!.firstPaintMs).toBeGreaterThanOrEqual(sample!.importMs);

@@ -10,7 +10,7 @@ import { projectIdFromPluginInstanceKey } from "../../../shared/types/plugin.js"
 import type { IpcContext } from "../types.js";
 import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 
-/** Report messages accepted per renderer per second; the renderer drains every ~2 s. */
+/** Report messages accepted per renderer per second; the renderer drains every 250 ms at most. */
 export const MAX_REPORTS_PER_SECOND = 5;
 
 type ProjectResolver = (webContentsId: number) => string | null;

@@ -38,6 +38,23 @@ export const CHANGE_COALESCE_MS = 1_000;
 export const MEMORY_SAMPLE_INTERVAL_MS = 5_000;
 /** How long one CLI poll keeps worker memory sampling alive. */
 export const SAMPLING_LEASE_MS = 15_000;
+/**
+ * A snapshot read samples worker memory itself when the last sample is older
+ * than this, so a one-shot `getPerfSnapshots()` sees memory without anyone
+ * holding a subscription or lease.
+ */
+export const ON_DEMAND_SAMPLE_MIN_INTERVAL_MS = 2_000;
+
+/**
+ * Where a plugin's prompts stood when an invoke started; see
+ * {@link PluginMetricsService.markInvokeStart}.
+ */
+export interface InvokePromptMark {
+  /** A prompt was already open. */
+  open: boolean;
+  /** The service-wide prompt sequence number at the start. */
+  seq: number;
+}
 
 export type InvokeOutcome = "ok" | "error" | "timeout" | "oversized";
 
@@ -133,14 +150,27 @@ class RateWindow {
     this.firstAt ??= now;
   }
 
-  rates(now: number): { perSecond: number; bytesPerSecond: number } {
-    if (this.firstAt === null) return { perSecond: 0, bytesPerSecond: 0 };
+  rates(now: number): {
+    perSecond: number;
+    bytesPerSecond: number;
+    peakPerSecond: number;
+    peakBytesPerSecond: number;
+  } {
+    if (this.firstAt === null) {
+      return { perSecond: 0, bytesPerSecond: 0, peakPerSecond: 0, peakBytesPerSecond: 0 };
+    }
     this.advance(now);
     let messages = 0;
     let bytes = 0;
+    let peakMessages = 0;
+    let peakBytes = 0;
     for (let i = 0; i < PUSH_BUCKETS; i++) {
-      messages += this.messages[i]!;
-      bytes += this.bytes[i]!;
+      const bucketMessages = this.messages[i]!;
+      const bucketBytes = this.bytes[i]!;
+      messages += bucketMessages;
+      bytes += bucketBytes;
+      if (bucketMessages > peakMessages) peakMessages = bucketMessages;
+      if (bucketBytes > peakBytes) peakBytes = bucketBytes;
     }
     // A plugin that started pushing three seconds ago is divided by three, not
     // by the full window, so a fresh burst is not understated.
@@ -149,7 +179,13 @@ class RateWindow {
       Math.max(PUSH_BUCKET_MS, now - this.firstAt)
     );
     const seconds = spanMs / 1_000;
-    return { perSecond: messages / seconds, bytesPerSecond: bytes / seconds };
+    // A bucket is one second wide, so its total already is a per-second rate.
+    return {
+      perSecond: messages / seconds,
+      bytesPerSecond: bytes / seconds,
+      peakPerSecond: peakMessages,
+      peakBytesPerSecond: peakBytes,
+    };
   }
 
   private advance(now: number): void {
@@ -176,6 +212,11 @@ interface Entry {
   invokeErrors: number;
   invokeTimeouts: number;
   invokeOversized: number;
+  invokePromptWaits: number;
+  /** Host prompts this plugin has open right now. */
+  promptsOpen: number;
+  /** Service-wide prompt sequence number of this plugin's latest prompt; 0 for none. */
+  lastPromptSeq: number;
   pushMessages: number;
   pushBytes: number;
   pushOversized: number;
@@ -196,6 +237,9 @@ function createEntry(since: number): Entry {
     invokeErrors: 0,
     invokeTimeouts: 0,
     invokeOversized: 0,
+    invokePromptWaits: 0,
+    promptsOpen: 0,
+    lastPromptSeq: 0,
     pushMessages: 0,
     pushBytes: 0,
     pushOversized: 0,
@@ -210,12 +254,12 @@ function createEntry(since: number): Entry {
 }
 
 /**
- * Open → view imported and styles prepared, rebuilt from the sample's phases.
- * Activation runs first; the import and the style preparation then overlap, so
- * the longer of the two is what the view waited on.
+ * Open → view imported and styles prepared, as the renderer measured it. The
+ * phases cannot be recombined into it: style preparation starts before
+ * activation, so `activate + max(import, styles)` counts that overlap twice.
  */
 export function viewLoadMsOf(sample: PluginViewLoadSample): number {
-  return sample.activateMs + Math.max(sample.importMs, sample.stylesMs);
+  return sample.loadMs;
 }
 
 /** The measurement each budget is compared against, or undefined when none exists yet. */
@@ -230,7 +274,10 @@ export function measurementsOf(
     out.viewFirstPaintMs = latestLoad.firstPaintMs;
   }
   if (snapshot.viewCommits) out.viewCommitP95Ms = snapshot.viewCommits.p95Ms;
-  if (snapshot.invokes.count > 0) out.invokeP95Ms = snapshot.invokes.p95Ms;
+  // Prompt waits carry no latency; with nothing else there is nothing to compare.
+  if (snapshot.invokes.count > snapshot.invokes.promptWaits) {
+    out.invokeP95Ms = snapshot.invokes.p95Ms;
+  }
   if (snapshot.pushes.messages > 0) {
     out.pushesPerSecond = snapshot.pushes.perSecond;
     out.pushBytesPerSecond = snapshot.pushes.bytesPerSecond;
@@ -262,6 +309,9 @@ export class PluginMetricsService {
   private changeTimer: TimerHandle | null = null;
   private lastEmitAt = Number.NEGATIVE_INFINITY;
 
+  private promptSeq = 0;
+  private lastMemorySampleAt = Number.NEGATIVE_INFINITY;
+
   private samplingHolds = 0;
   private samplingLeaseUntil = 0;
   private samplingTimer: TimerHandle | null = null;
@@ -291,13 +341,55 @@ export class PluginMetricsService {
   }
 
   /**
-   * One invoke round trip. `errors` counts every failure; timeouts and oversize
-   * payloads are also counted on their own, as subsets of it.
+   * A host prompt (quick pick, input box, confirm, send to agent with no
+   * target) opened for this plugin; the returned function is its close. An
+   * invoke that overlaps one waited on the user, so it leaves the latency stats
+   * (see {@link recordInvoke}).
    */
-  recordInvoke(pluginId: string, durationMs: number, outcome: InvokeOutcome): void {
+  beginPromptWait(pluginId: string): () => void {
+    const entry = this.entryFor(pluginId);
+    if (!entry) return () => {};
+    entry.promptsOpen++;
+    entry.lastPromptSeq = ++this.promptSeq;
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      // The entry captured here, not a lookup: after an evict and reload the
+      // id names a fresh entry this prompt never opened against.
+      entry.promptsOpen = Math.max(0, entry.promptsOpen - 1);
+    };
+  }
+
+  /** Taken when an invoke starts and handed back to {@link recordInvoke}. */
+  markInvokeStart(pluginId: string): InvokePromptMark {
+    const entry = this.entries.get(pluginId);
+    return { open: (entry?.promptsOpen ?? 0) > 0, seq: this.promptSeq };
+  }
+
+  /**
+   * One invoke round trip. `errors` counts every failure; timeouts and oversize
+   * payloads are also counted on their own, as subsets of it. With `mark`, an
+   * invoke during which the plugin had a host prompt open (open at the start,
+   * opened during it, or still open at the end) is counted as a prompt wait and
+   * kept out of the latency window, since its duration is the user's.
+   */
+  recordInvoke(
+    pluginId: string,
+    durationMs: number,
+    outcome: InvokeOutcome,
+    mark?: InvokePromptMark
+  ): void {
     const entry = this.entryFor(pluginId);
     if (!entry) return;
-    entry.invokes.record(durationMs);
+    const waitedOnPrompt =
+      mark !== undefined && (mark.open || entry.promptsOpen > 0 || entry.lastPromptSeq > mark.seq);
+    if (waitedOnPrompt) {
+      entry.invokes.count++;
+      entry.invokePromptWaits++;
+    } else {
+      entry.invokes.record(durationMs);
+    }
     if (outcome !== "ok") entry.invokeErrors++;
     if (outcome === "timeout") entry.invokeTimeouts++;
     else if (outcome === "oversized") entry.invokeOversized++;
@@ -363,6 +455,7 @@ export class PluginMetricsService {
   }
 
   getSnapshot(pluginId: string): PluginPerfSnapshot | null {
+    this.sampleOnDemand();
     const entry = this.entries.get(pluginId);
     if (entry) return this.snapshotOf(pluginId, entry);
     // A loaded plugin with nothing recorded yet reads as empty rather than absent.
@@ -371,6 +464,7 @@ export class PluginMetricsService {
   }
 
   getAll(): PluginPerfSnapshot[] {
+    this.sampleOnDemand();
     const out: PluginPerfSnapshot[] = [];
     for (const [pluginId, entry] of this.entries) out.push(this.snapshotOf(pluginId, entry));
     return out;
@@ -449,15 +543,20 @@ export class PluginMetricsService {
       viewCommits: entry.commits.stats(),
       invokes: {
         ...(invokeStats ?? { count: 0, p50Ms: 0, p95Ms: 0, maxMs: 0, lastMs: 0 }),
+        // Every invoke, including prompt waits the latency window left out.
+        count: entry.invokes.count,
         errors: entry.invokeErrors,
         timeouts: entry.invokeTimeouts,
         oversized: entry.invokeOversized,
+        promptWaits: entry.invokePromptWaits,
       },
       pushes: {
         messages: entry.pushMessages,
         bytes: entry.pushBytes,
         perSecond: rates.perSecond,
         bytesPerSecond: rates.bytesPerSecond,
+        peakPerSecond: rates.peakPerSecond,
+        peakBytesPerSecond: rates.peakBytesPerSecond,
         oversized: entry.pushOversized,
       },
       longFrames: {
@@ -531,9 +630,21 @@ export class PluginMetricsService {
     unrefTimer(this.samplingTimer);
   }
 
+  /**
+   * A read with nothing keeping the sampler alive takes its own sample, at
+   * most once per {@link ON_DEMAND_SAMPLE_MIN_INTERVAL_MS}: a caller that
+   * reads once must not see null memory just because no one subscribed.
+   */
+  private sampleOnDemand(): void {
+    if (this.disposed) return;
+    if (this.now() - this.lastMemorySampleAt < ON_DEMAND_SAMPLE_MIN_INTERVAL_MS) return;
+    this.sampleWorkerMemory();
+  }
+
   private sampleWorkerMemory(): void {
     const host = this.host;
     if (!host) return;
+    this.lastMemorySampleAt = this.now();
     const pidToPlugin = new Map<number, string>();
     try {
       for (const [pluginId, pid] of host.workerPids()) pidToPlugin.set(pid, pluginId);

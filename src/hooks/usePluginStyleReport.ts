@@ -2,28 +2,32 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "@shared/types/plugin";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import { getPanelStoreSnapshot } from "@/store/storeAccessors";
-import { getPluginStyleReportForRoots } from "@/services/plugin/pluginStyleContract";
+import {
+  getPluginStyleReportForRoots,
+  PLUGIN_STYLE_OWNER_ATTRIBUTE,
+} from "@/services/plugin/pluginStyleContract";
 import type { PluginStyleReport } from "@/services/plugin/tailwind/pluginStyleRuntime";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 /**
  * The plugin style roots in this document that belong to `pluginId` (the
- * runtime instance id). A root is attributed through the panel that hosts it:
- * `ContentPanel` stamps `data-panel-id`, the panel record names its kind, and
- * the kind's `extensionId` is the owning instance. A portal a view mounted
- * outside its panel has no panel to attribute it to, so it is not counted.
+ * runtime instance id). A root inside a panel is attributed through that
+ * panel: `ContentPanel` stamps `data-panel-id`, the panel record names its
+ * kind, and the kind's `extensionId` is the owning instance. A root outside
+ * any panel (a portal) is attributed by the owner the host tagged the view's
+ * `styleRootAttributes` with; a portal that did not spread them is not counted.
  */
 export function findPluginStyleRoots(pluginId: string, doc: Document = document): Element[] {
   const panels = getPanelStoreSnapshot()?.panelsById;
-  if (!panels) return [];
   const roots: Element[] = [];
   for (const root of doc.querySelectorAll(`[${PLUGIN_STYLE_ROOT_ATTRIBUTE}]`)) {
     const panelId = root.closest("[data-panel-id]")?.getAttribute("data-panel-id");
-    if (!panelId) continue;
-    const kind = panels[panelId]?.kind;
-    if (!kind) continue;
-    if (getPanelKindConfig(kind)?.extensionId !== pluginId) continue;
-    roots.push(root);
+    if (panelId) {
+      const kind = panels?.[panelId]?.kind;
+      if (kind && getPanelKindConfig(kind)?.extensionId === pluginId) roots.push(root);
+      continue;
+    }
+    if (root.getAttribute(PLUGIN_STYLE_OWNER_ATTRIBUTE) === pluginId) roots.push(root);
   }
   return roots;
 }

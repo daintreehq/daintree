@@ -15,6 +15,7 @@ function sample(overrides: Partial<PluginViewLoadSample> = {}): PluginViewLoadSa
     activateMs: 1,
     importMs: 2,
     stylesMs: 3,
+    loadMs: 4,
     firstPaintMs: 10,
     retry: false,
     at: 1,
@@ -156,7 +157,9 @@ describe("pluginViewMetrics", () => {
     expect(metrics.pluginsCommittingDuring(0, 2)).toEqual([]);
   });
 
-  it("tracks long frames only while a view is mounted", () => {
+  it("tracks long frames while a view is mounted, and for a moment after the last closes", () => {
+    let now = 5_000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const metrics = createPluginViewMetrics();
     expect(metrics.isTracking()).toBe(false);
     const releaseA = metrics.retainView("acme");
@@ -166,7 +169,12 @@ describe("pluginViewMetrics", () => {
     releaseA();
     expect(metrics.isTracking()).toBe(true);
     releaseB();
+    // A frame the closing click stalled is delivered after the frame ends.
+    now += 999;
+    expect(metrics.isTracking()).toBe(true);
+    now += 1;
     expect(metrics.isTracking()).toBe(false);
+    vi.restoreAllMocks();
   });
 
   it("keeps the window's worst commit even when costs keep climbing", () => {
@@ -263,14 +271,19 @@ describe("pluginViewMetrics", () => {
   });
 
   it("ignores a view release left over from before reset()", () => {
+    let now = 5_000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const metrics = createPluginViewMetrics();
     const stale = metrics.retainView("acme");
     metrics.reset();
     const release = metrics.retainView("acme");
     stale();
+    now += 2_000;
     expect(metrics.isTracking()).toBe(true);
     release();
+    now += 2_000;
     expect(metrics.isTracking()).toBe(false);
+    vi.restoreAllMocks();
   });
 
   it("evicts closed plugins once their data has drained, keeping open ones", () => {
@@ -315,5 +328,34 @@ describe("pluginViewMetrics", () => {
     const [report] = metrics.drainReports();
     expect(report!.pluginId).toBe("fresh");
     expect(report!.viewLoads).toEqual([sample()]);
+  });
+
+  it("coalesces a burst of input for one plugin and finds it by interval", () => {
+    const metrics = createPluginViewMetrics();
+    for (let at = 1_000; at <= 1_200; at += 2) metrics.recordInput("acme", at);
+    metrics.recordInput("beta", 1_500);
+    expect(metrics.pluginsWithInputDuring(1_150, 1_160)).toEqual(["acme"]);
+    expect(metrics.pluginsWithInputDuring(1_201, 1_499)).toEqual([]);
+    expect(metrics.pluginsWithInputDuring(0, 2_000)).toEqual(["acme", "beta"]);
+  });
+
+  it("forgets input from a load its successor retired", () => {
+    const metrics = createPluginViewMetrics();
+    metrics.registerViewOrigin("acme", "plugin://pi-a/__dtv-1/view.js");
+    metrics.recordInput("acme", 10);
+    metrics.registerViewOrigin("acme", "plugin://pi-b/__dtv-2/view.js");
+    expect(metrics.pluginsWithInputDuring(0, 100)).toEqual([]);
+  });
+
+  it("announces every recorded view load", () => {
+    const metrics = createPluginViewMetrics();
+    const listener = vi.fn();
+    const off = metrics.onViewLoadRecorded(listener);
+    metrics.recordViewLoad("acme", sample());
+    metrics.recordViewLoad("acme", sample());
+    expect(listener).toHaveBeenCalledTimes(2);
+    off();
+    metrics.recordViewLoad("acme", sample());
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 });

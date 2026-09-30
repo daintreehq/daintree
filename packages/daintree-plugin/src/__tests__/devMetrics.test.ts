@@ -25,8 +25,17 @@ function snapshot(overrides: Partial<PluginPerfSnapshot> = {}): PluginPerfSnapsh
       errors: 0,
       timeouts: 0,
       oversized: 0,
+      promptWaits: 0,
     },
-    pushes: { messages: 0, bytes: 0, perSecond: 0, bytesPerSecond: 0, oversized: 0 },
+    pushes: {
+      messages: 0,
+      bytes: 0,
+      perSecond: 0,
+      bytesPerSecond: 0,
+      peakPerSecond: 0,
+      peakBytesPerSecond: 0,
+      oversized: 0,
+    },
     longFrames: { count: 0, totalBlockingMs: 0, lastAt: null },
     workerMemory: null,
     overBudget: [],
@@ -61,6 +70,7 @@ describe("formatDevMetrics", () => {
             activateMs: 100,
             importMs: 90,
             stylesMs: 40,
+            loadMs: 170,
             firstPaintMs: 250,
             retry: false,
             at: 1,
@@ -76,8 +86,17 @@ describe("formatDevMetrics", () => {
           errors: 2,
           timeouts: 1,
           oversized: 0,
+          promptWaits: 0,
         },
-        pushes: { messages: 50, bytes: 5_000, perSecond: 4.25, bytesPerSecond: 2048, oversized: 0 },
+        pushes: {
+          messages: 50,
+          bytes: 5_000,
+          perSecond: 4.25,
+          bytesPerSecond: 2048,
+          peakPerSecond: 20,
+          peakBytesPerSecond: 4096,
+          oversized: 0,
+        },
         longFrames: { count: 2, totalBlockingMs: 130, lastAt: 5 },
         workerMemory: { rssBytes: 84 * 1024 * 1024, at: 1 },
         overBudget: ["activationMs", "invokeP95Ms"],
@@ -86,11 +105,11 @@ describe("formatDevMetrics", () => {
     expect(text).toMatchInlineSnapshot(`
       "Performance — acme.demo (worker)
         activation        612ms                                      over budget: 612ms > 500ms
-        view load         190ms (acme.demo.panel)                    ✓ (budget 300ms)
+        view load         170ms (acme.demo.panel)                    ✓ (budget 300ms)
         view first paint  250ms                                      ✓ (budget 500ms)
         view commits p95  7.3ms (40)                                 ✓ (budget 16ms)
         invokes p50/p95   3.0ms / 300ms (12, 2 failed, 1 timed out)  over budget: 300ms > 250ms
-        pushes/s          4.3/s, 2.0 KB/s                            ✓
+        pushes/s          4.3/s, 2.0 KB/s (peak 20.0/s, 4.0 KB/s)    ✓
         long frames       2 (130ms blocking)                         plugin activity observed during these frames
         worker RSS        84.0 MB                                    ✓ (budget 256.0 MB)"
     `);
@@ -104,12 +123,53 @@ describe("formatDevMetrics", () => {
           bytes: 1,
           perSecond: 90,
           bytesPerSecond: 2 * 1024 * 1024,
+          peakPerSecond: 90,
+          peakBytesPerSecond: 2 * 1024 * 1024,
           oversized: 0,
         },
         overBudget: ["pushesPerSecond", "pushBytesPerSecond"],
       })
     );
     expect(text).toContain("over budget: 90.0/s > 60.0/s; over budget: 2.0 MB/s > 1.0 MB/s");
+  });
+
+  it("prefers the host's measured view load over rebuilding it from phases", () => {
+    const load = {
+      kindId: "acme.demo.panel",
+      activateMs: 100,
+      importMs: 90,
+      stylesMs: 140,
+      loadMs: 150,
+      firstPaintMs: 250,
+      retry: false,
+      at: 1,
+    };
+    expect(formatDevMetrics(snapshot({ viewLoads: [load] }))).toContain("view load         150ms");
+    // A Daintree from before `loadMs` sends only the phases.
+    const { loadMs: _omitted, ...older } = load;
+    expect(formatDevMetrics(snapshot({ viewLoads: [older as typeof load] }))).toContain(
+      "view load         240ms"
+    );
+  });
+
+  it("says how many invokes waited on a prompt and does not judge untimed latency", () => {
+    const text = formatDevMetrics(
+      snapshot({
+        invokes: {
+          count: 2,
+          p50Ms: 0,
+          p95Ms: 0,
+          maxMs: 0,
+          lastMs: 0,
+          errors: 0,
+          timeouts: 0,
+          oversized: 0,
+          promptWaits: 2,
+        },
+      })
+    );
+    expect(text).toContain("invokes p50/p95   — (2, 2 waited on a prompt, untimed)");
+    expect(text).not.toContain("budget 250ms");
   });
 
   it("omits the worker row for an in-process plugin", () => {
