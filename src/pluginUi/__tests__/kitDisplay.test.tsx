@@ -9,7 +9,14 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 import * as kit from "@daintreehq/plugin-ui";
-import { meterTone, timelineDayLabel, timelineRows } from "@/components/PluginKit/PluginKitDisplay";
+import {
+  AVATAR_CUTOUT_PX,
+  AVATAR_GROUP_FIT,
+  GROUP_OVERLAP,
+  meterTone,
+  timelineDayLabel,
+  timelineRows,
+} from "@/components/PluginKit/PluginKitDisplay";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 beforeAll(async () => {
@@ -194,6 +201,52 @@ describe("AvatarGroup", () => {
     expect(document.body.textContent).not.toContain("+");
     // Without an aria-label it is not a named group.
     expect(screen.queryByRole("group")).toBeNull();
+  });
+
+  it("overlaps each avatar only as far as its initials stay whole", () => {
+    const FONT_PX: Record<string, number> = { "text-3xs": 10, "text-2xs": 11 };
+    for (const size of ["xs", "sm", "md", "lg"] as const) {
+      const fit = AVATAR_GROUP_FIT[size];
+      // The class the group draws with is the overlap the fit was sized for.
+      expect(Number(GROUP_OVERLAP[size].replace("-space-x-", "")) * 4).toBe(fit.overlap);
+      // What the next disc and its cut-out leave of this one must reach past
+      // the centred initials, a cap being at most ~0.7em wide.
+      const visible = fit.px - fit.overlap - AVATAR_CUTOUT_PX;
+      expect(visible).toBeGreaterThanOrEqual(
+        fit.px / 2 + (fit.initials * fit.fontPx * 0.7) / 2 + 0.5
+      );
+      render(
+        withTooltips(
+          createElement(kit.AvatarGroup, {
+            avatars: [{ name: "Grace Hopper" }, { name: "Ada Lovelace" }],
+            size,
+            "aria-label": "People",
+          })
+        )
+      );
+      const group = screen.getByRole("group", { name: "People" });
+      expect(group.className.split(" ")).toContain(GROUP_OVERLAP[size]);
+      const initials = group.querySelector("[data-avatar-fallback] span")!;
+      // And the fit's initials and type size are the ones the avatar draws.
+      expect(initials.textContent).toHaveLength(fit.initials);
+      const font = initials.className.split(" ").find((name) => name in FONT_PX);
+      expect(FONT_PX[font ?? ""]).toBe(fit.fontPx);
+      cleanup();
+    }
+  });
+
+  it("gives every disc its own edge inside the canvas cut-out", () => {
+    render(
+      withTooltips(
+        createElement(kit.AvatarGroup, { avatars: people, max: 2, "aria-label": "People" })
+      )
+    );
+    const group = screen.getByRole("group", { name: "People" });
+    for (const disc of group.children) {
+      const classes = disc.className.split(" ");
+      expect(classes).toContain("ring-surface-canvas");
+      expect(classes).toContain("border-border-strong");
+    }
   });
 
   it("skips nameless entries and falls back on a bad max", () => {
