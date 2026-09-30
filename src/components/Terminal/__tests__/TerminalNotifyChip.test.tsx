@@ -206,6 +206,19 @@ describe("TerminalNotifyChip", () => {
     expect(footerClasses.has("rounded-full")).toBe(false);
   });
 
+  it("marks the footer item open whatever its tone", async () => {
+    for (const delivery of [
+      { status: "idle" } as const,
+      { status: "blocked", reason: "approval" } as const,
+    ]) {
+      getPaneNotifyState.mockResolvedValue(paneState({ delivery }));
+      const { unmount } = render(<TerminalNotifyChip terminalId="t1" variant="footer" />);
+      const chip = await screen.findByTestId("terminal-notify-chip");
+      expect(chip.className.split(/\s+/).some((c) => c.startsWith("aria-expanded:bg-"))).toBe(true);
+      unmount();
+    }
+  });
+
   it("stays hidden instead of breaking the header when the bridge is missing", async () => {
     Reflect.deleteProperty(window, "electron");
     expect(() => render(<TerminalNotifyChip terminalId="t1" />)).not.toThrow();

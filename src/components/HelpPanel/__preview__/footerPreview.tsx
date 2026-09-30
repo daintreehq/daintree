@@ -23,6 +23,7 @@ import "@/index.css";
  *   ?theme=daintree|bondi|…   built-in theme id
  *   ?fixture=rest             which footer state to render
  *   ?width=380                panel width in CSS px (default 380, the app's default)
+ *   ?height=160               panel height in CSS px (taller leaves room for an open popover)
  */
 
 interface Fixture {
@@ -155,6 +156,7 @@ const themeId = params.get("theme") ?? "daintree";
 const fixtureParam = params.get("fixture") ?? "";
 const fixtureName: FixtureName = isFixtureName(fixtureParam) ? fixtureParam : "rest";
 const width = Number(params.get("width")) || 380;
+const height = Number(params.get("height")) || 160;
 const fixture: Fixture = FIXTURES[fixtureName];
 
 const watched = fixture.watching > 0 || (fixture.ready ?? 0) > 0;
@@ -201,7 +203,7 @@ function App() {
     <div
       data-preview-panel
       className="flex flex-col bg-surface-panel border border-border-default"
-      style={{ width: `${width}px`, height: "160px" }}
+      style={{ width: `${width}px`, height: `${height}px` }}
     >
       {/* Stand-in for the transcript: the footer's real top neighbour. */}
       <div className="flex-1 min-h-0 px-3 py-3 space-y-2" aria-hidden="true">

@@ -164,7 +164,7 @@ export function TerminalNotifyChip({
               type="button"
               className={cn(
                 footer
-                  ? cn(FOOTER_ITEM_CLASS, "shrink-0 gap-1")
+                  ? cn(FOOTER_ITEM_CLASS, "shrink-0 gap-1 aria-expanded:bg-overlay-soft")
                   : cn(
                       HEADER_CHIP_CLASS,
                       HEADER_CHIP_SURFACE,
@@ -174,7 +174,7 @@ export function TerminalNotifyChip({
                 tone === "warning"
                   ? "text-status-warning"
                   : footer
-                    ? "hover:text-text-primary aria-expanded:bg-overlay-soft"
+                    ? "hover:text-text-primary"
                     : "text-text-secondary hover:text-text-primary"
               )}
               aria-label={`${heading}; Daintree may type a notice into this pane`}

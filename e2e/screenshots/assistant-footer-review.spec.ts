@@ -143,10 +143,11 @@ async function open(
   page: Page,
   fixture: string,
   theme: string,
-  width: number
+  width: number,
+  height?: number
 ): Promise<{ panel: Locator; footer: Locator }> {
   await page.setViewportSize({ width: 800, height: 400 });
-  const url = `${baseURL}/assistant-footer-preview.html?theme=${theme}&fixture=${fixture}&width=${width}`;
+  const url = `${baseURL}/assistant-footer-preview.html?theme=${theme}&fixture=${fixture}&width=${width}${height ? `&height=${height}` : ""}`;
   const panel = page.locator("[data-preview-panel]").first();
   const footer = page.locator("[data-preview-footer]").first();
   try {
@@ -203,6 +204,19 @@ test("assistant footer — states, widths and themes", async ({ page }) => {
     await page.keyboard.press("Tab");
     await page.waitForTimeout(250);
     written.push(await snap(panel, `busy-${narrowTheme}-380-focus.png`));
+  }
+
+  // The watch item's popover, opened by a real click, against the page so the
+  // portaled content is in frame.
+  {
+    // Tall enough that the popover opens above the footer, as it does in the app.
+    const { panel } = await open(page, "watch-blocked", narrowTheme, DEFAULT_WIDTH, 360);
+    await page.getByTestId("terminal-notify-chip").click();
+    const popover = page.getByRole("dialog");
+    await expect(popover).toBeVisible();
+    await expect(popover.getByRole("button", { name: "Stop notices" })).toBeVisible();
+    await page.waitForTimeout(250);
+    written.push(await snap(panel, `watch-blocked-${narrowTheme}-380-open.png`));
   }
 
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
