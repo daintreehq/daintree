@@ -21,6 +21,7 @@ import {
 import { MCP_SURFACE_TOOL_ID } from "../surfaceManifest.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import type { SessionStore } from "../sessionStore.js";
+import type { McpSessionOrigin } from "../../../../shared/types/ipc/mcpServer.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
 import { GrantCache } from "../grantCache.js";
 import { ResourceOwnershipLedger } from "../resourceOwnership.js";
@@ -11733,7 +11734,7 @@ describe("session-scoped ownership note for api-key callers (#12987)", () => {
     sessionId: string,
     options: {
       principal?: string;
-      origin?: string;
+      origin?: McpSessionOrigin;
       store?: RealSessionStore;
       overrides?: Partial<SessionServerDeps>;
     } = {}
@@ -11837,7 +11838,7 @@ describe("session-scoped ownership note for api-key callers (#12987)", () => {
       expect(refusal(result).message).not.toContain(NOTE);
     });
 
-    it.each(["help", "assistant-pane"])(
+    it.each(["help", "assistant-pane"] as const)(
       "is given to a %s session no bearer bound, whose records are session-scoped too",
       async (origin) => {
         const { server } = session("s-unbound", { origin });
@@ -12031,7 +12032,7 @@ describe("session-scoped ownership note for api-key callers (#12987)", () => {
     it.each([
       ["a pane bearer", { principal: "principal-pane" }],
       ["a help session", { principal: "help\u0000h-1", origin: "help" }],
-    ])("is not given to %s", async (_label, options) => {
+    ] as const)("is not given to %s", async (_label, options) => {
       const { server } = session("s-bound", options);
 
       const launched = await callTool(server, {
