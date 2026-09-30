@@ -531,6 +531,50 @@ describe("IdentityWatcher", () => {
       watcher.dispose();
     });
 
+    it("ignores a stale PowerShell cursor prompt when newer process output is visible", async () => {
+      const inject = vi.fn();
+      const fakeDetector = {
+        injectShellCommandEvidence: inject,
+        clearShellCommandEvidence: vi.fn(),
+      } as unknown as ProcessDetector;
+      const { delegate } = createFakeDelegate({
+        processDetector: fakeDetector,
+        visibleLines: ['PS C:\\repo> node -e "..."', "NPM_READY"],
+        cursorLine: "PS C:\\repo> ",
+        ptyDescendantCount: 0,
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit('node -e "..."');
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(inject).toHaveBeenCalledTimes(1);
+      expect(inject.mock.calls[0]?.[0]).toMatchObject({ processIconId: "node" });
+      watcher.dispose();
+    });
+
+    it("stops an uncommitted process badge when the current PowerShell prompt returns", async () => {
+      const inject = vi.fn();
+      const fakeDetector = {
+        injectShellCommandEvidence: inject,
+        clearShellCommandEvidence: vi.fn(),
+      } as unknown as ProcessDetector;
+      const { delegate } = createFakeDelegate({
+        processDetector: fakeDetector,
+        visibleLines: ['PS C:\\repo> node -e "..."', "NPM_READY", "PS C:\\repo> "],
+        cursorLine: "NPM_READY",
+        ptyDescendantCount: 0,
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit('node -e "..."');
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(inject).not.toHaveBeenCalled();
+      expect(watcher.isFallbackCommitted).toBe(false);
+      watcher.dispose();
+    });
+
     it("ignores a cached PowerShell prompt after the running command has printed output", async () => {
       const inject = vi.fn();
       const fakeDetector = {

@@ -843,7 +843,15 @@ export class IdentityWatcher {
         return;
       }
 
-      if (promptVisible && !this.identity.agentType && ptyDescendantCount === 0) {
+      // The cursor can lag behind newer output on Windows. A cached shell
+      // prompt must not cancel a live process when the descendant scan misses it.
+      const lastVisibleLine = findLastNonBlankLine(
+        this.delegate.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES)
+      );
+      const currentPromptVisible = isUnambiguousShellPromptLine(
+        lastVisibleLine ?? this.delegate.getCursorLine() ?? undefined
+      );
+      if (currentPromptVisible && !this.identity.agentType && ptyDescendantCount === 0) {
         console.log(
           `[IdentityDebug] shell-fallback-stop term=${this.delegate.terminalId.slice(-8)} ` +
             `reason=prompt-before-commit icon=${this.identity.processIconId ?? "<none>"}`
