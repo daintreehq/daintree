@@ -6,6 +6,7 @@
 import { isValidElement, type ComponentType, type ReactNode } from "react";
 import type {
   PluginAvatarGroupProps,
+  PluginAccordionProps,
   PluginAvatarProps,
   PluginBreadcrumbsProps,
   PluginCommandPaletteProps,
@@ -17,6 +18,7 @@ import type {
   PluginButtonProps,
   PluginCalendarProps,
   PluginCalloutProps,
+  PluginCardProps,
   PluginCheckboxProps,
   PluginConfirmDialogProps,
   PluginCopyButtonProps,
@@ -25,7 +27,12 @@ import type {
   PluginDateRangePickerProps,
   PluginDialogProps,
   PluginDiffStatProps,
+  PluginDescriptionListItemProps,
+  PluginDescriptionListProps,
+  PluginDialogProps,
+  PluginDisclosureProps,
   PluginDismissButtonProps,
+  PluginDividerProps,
   PluginDropdownMenuProps,
   PluginEmptyStateProps,
   PluginFileTreeProps,
@@ -46,8 +53,10 @@ import type {
   PluginPopoverProps,
   PluginPopoverSearchFieldProps,
   PluginProgressBarProps,
+  PluginResizableSplitProps,
   PluginScrollShadowProps,
   PluginSearchFieldProps,
+  PluginSectionLabelProps,
   PluginSegmentedControlProps,
   PluginSelectProps,
   PluginSettingsActionsProps,
@@ -333,6 +342,34 @@ export const Breadcrumbs: ComponentType<PluginBreadcrumbsProps> = fromKit(
 );
 export const NavList: ComponentType<PluginNavListProps> = fromKit("NavList", (kit) => kit.NavList);
 export const Stepper: ComponentType<PluginStepperProps> = fromKit("Stepper", (kit) => kit.Stepper);
+// Cards, dividers, section labels, splits, accordions and description lists.
+
+export const Card: ComponentType<PluginCardProps> = fromKit("Card", (kit) => kit.Card);
+export const Divider: ComponentType<PluginDividerProps> = fromKit("Divider", (kit) => kit.Divider);
+export const SectionLabel: ComponentType<PluginSectionLabelProps> = fromKit(
+  "SectionLabel",
+  (kit) => kit.SectionLabel
+);
+export const ResizableSplit: ComponentType<PluginResizableSplitProps> = fromKit(
+  "ResizableSplit",
+  (kit) => kit.ResizableSplit
+);
+export const Accordion: ComponentType<PluginAccordionProps> = fromKit(
+  "Accordion",
+  (kit) => kit.Accordion
+);
+export const Disclosure: ComponentType<PluginDisclosureProps> = fromKit(
+  "Disclosure",
+  (kit) => kit.Disclosure
+);
+export const DescriptionList: ComponentType<PluginDescriptionListProps> = fromKit(
+  "DescriptionList",
+  (kit) => kit.DescriptionList
+);
+export const DescriptionListItem: ComponentType<PluginDescriptionListItemProps> = fromKit(
+  "DescriptionListItem",
+  (kit) => kit.DescriptionListItem
+);
 
 export type {
   PluginMarkdownProps as MarkdownProps,
@@ -447,4 +484,14 @@ export type {
   PluginStepperProps as StepperProps,
   PluginStepperStep as StepperStep,
   PluginStepState as StepState,
+  PluginCardProps as CardProps,
+  PluginDividerProps as DividerProps,
+  PluginSectionLabelProps as SectionLabelProps,
+  PluginResizableSplitProps as ResizableSplitProps,
+  PluginAccordionProps as AccordionProps,
+  PluginAccordionItem as AccordionItem,
+  PluginDisclosureProps as DisclosureProps,
+  PluginDescriptionListProps as DescriptionListProps,
+  PluginDescriptionListItemProps as DescriptionListItemProps,
+  PluginDescriptionItem as DescriptionItem,
 } from "@shared/types/plugin-sdk-react";

@@ -13,6 +13,7 @@ import type {
   DOMAttributes,
   HTMLAttributes,
   KeyboardEvent,
+  MouseEvent,
   ReactElement,
   ReactNode,
   Ref,
@@ -2090,6 +2091,193 @@ export interface PluginTimeAgoProps extends PluginRootAttributes {
    * where a tooltip trigger would fight the control's own pointer and focus.
    */
   tooltip?: boolean;
+  className?: string;
+}
+
+interface PluginCardBaseProps extends Omit<PluginDomProps<HTMLElement>, "title" | "onClick"> {
+  /** The card's heading, sentence case. */
+  title?: ReactNode;
+  /** One or two quiet lines under the title. */
+  description?: ReactNode;
+  children?: ReactNode;
+  /**
+   * A row under the body, set off by a hairline: the card's actions, or a
+   * quiet line such as "Updated 5m ago" on a clickable card.
+   */
+  footer?: ReactNode;
+  /**
+   * `default` is the panel surface. `inset` recedes: a nested group or a
+   * read-only detail block inside another surface.
+   */
+  variant?: "default" | "inset";
+  /** The body's padding: 16 px (`md`, the default), 12 px (`sm`), or none, for a list or table edge to edge. */
+  padding?: "none" | "sm" | "md";
+  className?: string;
+}
+
+/**
+ * Props of `Card`: the app's card surface, a hairline frame with an optional
+ * header (`title`, `description`, `actions`), a body and a `footer`. Never
+ * accent. With `onClick` the whole card is one button, a destination or a
+ * choice; controls cannot sit inside a button, so a clickable card takes no
+ * `actions`. DOM props land on the root.
+ */
+export type PluginCardProps =
+  | (PluginCardBaseProps & {
+      onClick?: undefined;
+      /** Trailing controls in the header row. */
+      actions?: ReactNode;
+      disabled?: undefined;
+    })
+  | (PluginCardBaseProps & {
+      /** Makes the whole card a button that calls this. */
+      onClick: (event: MouseEvent<HTMLButtonElement>) => void;
+      actions?: undefined;
+      disabled?: boolean;
+    });
+
+/**
+ * Props of `Divider`: a hairline between groups. A `label` sits in the middle
+ * of a horizontal line ("or", "Older").
+ */
+export interface PluginDividerProps extends PluginRootAttributes {
+  /** `horizontal` (the default) spans the width; `vertical` stretches to the row's height. */
+  orientation?: "horizontal" | "vertical";
+  /** Short text centred on a horizontal line. Ignored on a vertical one. */
+  label?: ReactNode;
+  className?: string;
+}
+
+/**
+ * Props of `SectionLabel`: the small quiet heading above a group of content.
+ * It is drawn uppercase, so write the text in sentence case, and keep it to a
+ * word or two of your own vocabulary: never a branch, a path or anything the
+ * user typed, which uppercasing would misstate.
+ */
+export interface PluginSectionLabelProps extends PluginRootAttributes {
+  children?: ReactNode;
+  /**
+   * `section` (the default) names a section of a pane, page or card.
+   * `list` is a step smaller, for a band of rows inside a list.
+   */
+  variant?: "section" | "list";
+  /** The element. Defaults to `h3` for `section` and `div` for `list`. */
+  as?: "h2" | "h3" | "h4" | "div";
+  className?: string;
+}
+
+/**
+ * Props of `ResizableSplit`: two panes with a draggable divider between them.
+ * One pane (`sizedPane`) holds a size in px and the other takes the rest. The
+ * divider is keyboard resizable (arrows, Shift+arrows, Home, End) and
+ * double-click resets it. Sizes commit when a drag ends, so `onSizeChange`
+ * runs once per gesture, not on every frame. It fills its container.
+ */
+export interface PluginResizableSplitProps extends PluginRootAttributes {
+  first: ReactNode;
+  second: ReactNode;
+  /** `horizontal` (the default) puts the panes side by side; `vertical` stacks them. */
+  orientation?: "horizontal" | "vertical";
+  /** The pane that holds the size. Defaults to `first`. */
+  sizedPane?: "first" | "second";
+  /** Required: names the divider ("Resize file list"). */
+  "aria-label": string;
+  /** The sized pane's size in px, controlled. */
+  size?: number;
+  /** The starting size in px when uncontrolled, and what a reset returns to. Defaults to 280. */
+  defaultSize?: number;
+  /** Called with the new size when a drag ends, on a key press and on a reset. */
+  onSizeChange?: (size: number) => void;
+  /** In px. Defaults to 160. */
+  minSize?: number;
+  /** In px. Defaults to 640. The sized pane never takes more than its container either way. */
+  maxSize?: number;
+  /**
+   * Lets the sized pane collapse: dragging it below half its `minSize`
+   * collapses it, and Enter or Space on the divider toggles it. The divider
+   * stays at the edge, so dragging it out or an arrow key brings the pane back.
+   * A collapsed pane stays mounted, keeping its state.
+   */
+  collapsible?: boolean;
+  collapsed?: boolean;
+  defaultCollapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
+  className?: string;
+}
+
+/** One section of an `Accordion`. */
+export interface PluginAccordionItem {
+  value: string;
+  title: ReactNode;
+  /** Mounted only while the section is open. */
+  content: ReactNode;
+  /** Beside the title: a count or a `Badge`. Text, never a control. */
+  trailing?: ReactNode;
+  disabled?: boolean;
+}
+
+/**
+ * Props of `Accordion`: stacked sections, each a heading button that shows or
+ * hides its content. Up/Down/Home/End move between the headings. `value` is
+ * the open sections in both modes; `single` keeps at most one open.
+ */
+export interface PluginAccordionProps extends PluginRootAttributes {
+  items: readonly PluginAccordionItem[];
+  /** `single` (the default) opens one section at a time; `multiple` any number. */
+  type?: "single" | "multiple";
+  /** The open sections' values, controlled. */
+  value?: readonly string[];
+  defaultValue?: readonly string[];
+  onValueChange?: (value: string[]) => void;
+  /** The heading level of each section's title. Defaults to 3. */
+  headingLevel?: 2 | 3 | 4 | 5 | 6;
+  className?: string;
+}
+
+/** Props of `Disclosure`: one heading button that shows or hides the content under it. */
+export interface PluginDisclosureProps extends PluginRootAttributes {
+  title: ReactNode;
+  /** Mounted only while open. */
+  children?: ReactNode;
+  open?: boolean;
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** Beside the title: a count or a `Badge`. Text, never a control. */
+  trailing?: ReactNode;
+  disabled?: boolean;
+  /** The heading level of the title. Defaults to 3. */
+  headingLevel?: 2 | 3 | 4 | 5 | 6;
+  className?: string;
+}
+
+/** One row of a `DescriptionList`: a label and its value. */
+export interface PluginDescriptionItem {
+  label: ReactNode;
+  /** Empty draws a quiet dash, read as "None". */
+  value?: ReactNode;
+  /** One quiet line under the value. */
+  hint?: ReactNode;
+  /** Draws a copy button after the value that copies this text. */
+  copyText?: string;
+}
+
+/**
+ * Props of `DescriptionList`: the label and value rows of a record's detail
+ * page. Give the rows as `items`, or as `DescriptionListItem` children.
+ */
+export interface PluginDescriptionListProps extends PluginRootAttributes {
+  items?: readonly PluginDescriptionItem[];
+  children?: ReactNode;
+  /** `inline` (the default) puts labels in a column beside the values; `stacked` puts each label above its value. */
+  layout?: "inline" | "stacked";
+  /** Draws a copy button after every value that is text or a number. An item's `copyText` wins. */
+  copyable?: boolean;
+  className?: string;
+}
+
+/** Props of `DescriptionListItem`: one row, as a child of `DescriptionList`. */
+export interface PluginDescriptionListItemProps
+  extends PluginRootAttributes, PluginDescriptionItem {
   className?: string;
 }
 
