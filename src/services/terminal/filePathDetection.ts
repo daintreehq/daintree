@@ -16,6 +16,121 @@ export const FILE_PATH_REGEX =
 
 const WINDOWS_ABS = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
 
+// A path token that contains spaces. FILE_PATH_REGEX treats a space as a token
+// boundary, so `/Users/me/Library/Application Support/x.md` offers only its
+// `Support/x.md` tail — which resolves against the cwd and links nothing real.
+export interface SpacedFilePathCandidate {
+  /** Span to underline, in the scanned text's coordinates. */
+  startIndex: number;
+  endIndex: number;
+  /** The path as the filesystem spells it: quotes dropped, `\ ` decoded. */
+  path: string;
+  /**
+   * The syntax alone can't settle it: an unquoted space is as likely to
+   * separate two tokens as to sit inside a directory name. Such candidates
+   * are only links once `probeDir` is confirmed to exist.
+   */
+  probeDir?: string;
+}
+
+// Quoted and shell-escaped forms carry their own boundaries, so they need no
+// filesystem confirmation. Only space-containing spellings are taken here —
+// a space-free quoted path stays the business of FILE_PATH_REGEX.
+const QUOTED_PATH_REGEX = /(?:^|[\s(=:])(["'`])([^"'`\s][^"'`]*?)\1/g;
+const QUOTED_PATH_SHAPE = /^(?:[a-zA-Z]:[\\/])?[\w./\\ -]*[\\/][\w./\\ -]*\.\w+(?::\d+(?::\d+)?)?$/;
+const ESCAPED_PATH_REGEX = /(?:^|[\s(])((?:[\w./-]|\\ )+\.\w+(?::\d+(?::\d+)?)?)/g;
+
+// Unquoted: anchored on an absolute root and grown word by word, each word
+// joined by exactly one space. Bounded because the scan runs on every hover.
+const SPACED_ANCHOR_REGEX = /(?:^|[\s(])((?:\/|[a-zA-Z]:[\\/])[\w./\\-]*)/g;
+const SPACED_WORD_REGEX = /[\w./\\-]+(?::\d+(?::\d+)?)?/y;
+const SPACED_TAIL_REGEX = /^[\w./\\-]*[\\/][\w./\\-]*\.\w+(?::\d+(?::\d+)?)?/;
+const ABSOLUTE_WORD = /^(?:\/|[a-zA-Z]:[\\/])/;
+const MAX_SPACED_WORDS = 8;
+
+function stripLocationSuffix(path: string): string {
+  return path.replace(/(?::\d+(?::\d+)?)$/, "");
+}
+
+/**
+ * Find path tokens that contain spaces: quoted (`"/a b/c.md"`), shell-escaped
+ * (`/a\ b/c.md`), and unquoted absolute paths whose space sits in a directory
+ * component (`/a b/c.md`). Unquoted candidates carry `probeDir` — the parent
+ * directory that must exist — and every plausible length is returned, longest
+ * first per start, so the caller can keep the longest one that checks out.
+ */
+export function findSpacedFilePathCandidates(text: string): SpacedFilePathCandidate[] {
+  const candidates: SpacedFilePathCandidate[] = [];
+  const explicit: Array<[number, number]> = [];
+
+  for (const match of text.matchAll(QUOTED_PATH_REGEX)) {
+    const inner = match[2]!;
+    if (!inner.includes(" ") || inner.endsWith(" ") || !QUOTED_PATH_SHAPE.test(inner)) continue;
+    if (isPathExcluded(inner)) continue;
+    const startIndex = match.index + match[0].length - inner.length - 1;
+    const endIndex = startIndex + inner.length;
+    candidates.push({ startIndex, endIndex, path: inner });
+    explicit.push([startIndex - 1, endIndex + 1]);
+  }
+
+  for (const match of text.matchAll(ESCAPED_PATH_REGEX)) {
+    const raw = match[1]!;
+    if (!raw.includes("\\ ") || !raw.includes("/")) continue;
+    const startIndex = match.index + match[0].length - raw.length;
+    const endIndex = startIndex + raw.length;
+    if (overlaps(explicit, startIndex, endIndex)) continue;
+    candidates.push({ startIndex, endIndex, path: raw.replace(/\\ /g, " ") });
+    explicit.push([startIndex, endIndex]);
+  }
+
+  for (const match of text.matchAll(SPACED_ANCHOR_REGEX)) {
+    const first = match[1]!;
+    const startIndex = match.index + match[0].length - first.length;
+    if (overlaps(explicit, startIndex, startIndex + first.length)) continue;
+
+    const wordEnds: number[] = [];
+    let pos = startIndex + first.length;
+    while (wordEnds.length < MAX_SPACED_WORDS - 1 && text[pos] === " ") {
+      SPACED_WORD_REGEX.lastIndex = pos + 1;
+      const word = SPACED_WORD_REGEX.exec(text);
+      // A word that starts its own absolute path is the next token, not a
+      // continuation of this one.
+      if (!word || ABSOLUTE_WORD.test(word[0])) break;
+      pos += 1 + word[0].length;
+      wordEnds.push(pos);
+    }
+
+    for (let i = wordEnds.length - 1; i >= 0; i--) {
+      const lastWordStart = (i === 0 ? startIndex + first.length : wordEnds[i - 1]!) + 1;
+      // The last word has to carry a separator, which puts every space in the
+      // candidate inside a directory component — the one thing a single stat
+      // of the parent directory can then confirm.
+      const tail = SPACED_TAIL_REGEX.exec(text.slice(lastWordStart, wordEnds[i]));
+      if (!tail) continue;
+      const endIndex = lastWordStart + tail[0].length;
+      if (overlaps(explicit, startIndex, endIndex)) continue;
+      const path = text.slice(startIndex, endIndex);
+      candidates.push({
+        startIndex,
+        endIndex,
+        path,
+        probeDir: parentDirectory(stripLocationSuffix(path)),
+      });
+    }
+  }
+
+  return candidates;
+}
+
+function parentDirectory(path: string): string {
+  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return path.slice(0, cut);
+}
+
+function overlaps(spans: ReadonlyArray<[number, number]>, start: number, end: number): boolean {
+  return spans.some(([s, e]) => start < e && end > s);
+}
+
 // Matches a `file://` URL token inside arbitrary text — agent CLIs print
 // generated images this way (`file:///Users/me/.codex/generated_images/x.png`).
 // The body class is deliberately permissive about `|`, `\` and brackets: real
@@ -203,6 +318,16 @@ export function resolveSelectedFilePath(selection: string, cwd: string): Resolve
   }
 
   if (isPathExcluded(trimmed)) return null;
+
+  // The user selected exactly this span, so an unquoted spaced path needs no
+  // probe here — the selection itself is the evidence of where it ends.
+  const spaced = findSpacedFilePathCandidates(trimmed).find((candidate) => {
+    const quoted = candidate.startIndex === 1 && candidate.endIndex === trimmed.length - 1;
+    const whole = candidate.startIndex === 0 && candidate.endIndex === trimmed.length;
+    return whole || (quoted && trimmed[0] === trimmed[trimmed.length - 1]);
+  });
+  if (spaced) return resolveFilePathCandidate(spaced.path, cwd);
+
   const matches = [...trimmed.matchAll(FILE_PATH_REGEX)];
   if (matches.length !== 1) return null;
   const [match] = matches;
