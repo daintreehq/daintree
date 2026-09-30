@@ -87,6 +87,14 @@ describe("classifyWaitingReason", () => {
       ["box-framed usage limit", "│ You've hit your usage limit. Try again at 4pm."],
       ["box-cornered usage limit", "╰ You have reached your usage limit"],
       ["pointer-prefixed usage limit", "❯ You've hit your usage limit."],
+      [
+        "weekly limit banner",
+        "  ⎿  You've hit your weekly limit · resets Oct 2 at 9pm (Europe/Lisbon)",
+      ],
+      ["weekly limit with curly apostrophe", "You’ve hit your weekly limit · resets Oct 2"],
+      ["model limit banner", "You've hit your Opus limit · resets 3am"],
+      ["unqualified limit with reset", "You've hit your limit · resets 2pm (America/New_York)"],
+      ["legacy window-first banner", "5-hour limit reached ∙ resets 3pm"],
       ["quota", "Quota exceeded for this billing period"],
       ["overloaded", "API error: Overloaded. Please retry shortly."],
       ["auth", "Authentication failed. Run /login to reauthenticate."],
@@ -174,6 +182,8 @@ describe("classifyWaitingReason", () => {
       ["a hypothetical", "If you exceeded the rate limit, I can add backoff."],
       ["a negated second person", "I don't think you hit your usage limit."],
       ["an unrelated object", "You reached the section on rate limits."],
+      ["an unqualified limit without a reset", "You've hit your limit of 5 retries."],
+      ["a mid-line weekly limit", "The banner says you've hit your weekly limit."],
     ])("keeps %s as prompt (precision guard)", (_name, line) => {
       expect(classifyWaitingReason([line], false)).toBe("prompt");
     });
@@ -284,6 +294,14 @@ describe("hasRateLimitMessage (#12797)", () => {
     "Error: 429 Too Many Requests",
     "quota exceeded for this model",
     "│ 429: Too Many Requests",
+    "  ⎿  You've hit your weekly limit · resets Oct 2 at 9pm (Europe/Lisbon)",
+    "  ⎿  You’ve hit your weekly limit · resets Oct 2 at 9pm (Europe/Lisbon)",
+    "You've hit your weekly limit · resets Oct 2",
+    "You've hit your session limit · resets 6pm",
+    "You've hit your Sonnet limit · resets Oct 3 at 1am",
+    "You've hit your limit · resets 2pm (America/New_York)",
+    "Session limit reached ∙ resets 6pm",
+    "  ⎿  You’ve been rate limited",
   ])("sees a rate-limit banner: %s", (line) => {
     expect(hasRateLimitMessage(["some output", line, "> "])).toBe(true);
   });
@@ -297,6 +315,15 @@ describe("hasRateLimitMessage (#12797)", () => {
     "Credit balance is too low",
     "Retry with backoff when the API returns 429 Too Many Requests",
     "The handler maps quota exceeded errors to a friendly message",
+    "You've hit your limit of 5 retries",
+    "Have you hit your weekly limit?",
+    "⚠ Heads up, you have less than 10% of your weekly limit left.",
+    "I checked whether the session limit reached its cap",
+    "  ⎿  I checked whether the session limit reached its cap",
+    "PASS Session limit reached ∙ resets 6pm",
+    "  ⎿  You've hit your limit of 5 retries · resets Oct 2",
+    "The banner says you've hit your weekly limit · resets Oct 2",
+    "If you've hit your weekly limit · resets Oct 2",
   ])("does not treat other failures or prose as a rate limit: %s", (line) => {
     expect(hasRateLimitMessage([line])).toBe(false);
   });
