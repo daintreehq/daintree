@@ -17,6 +17,7 @@ import { HighlightedText, substringMatchIndices } from "@/components/ui/Highligh
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
 import { formatAbsoluteDate } from "@/utils/timeAgo";
@@ -63,7 +64,8 @@ function finiteNumber(value: unknown): number | undefined {
 
 // A removable chip is an applied filter, so it stays pressed and its click
 // takes it off: the one tab stop and the one action, rather than a second
-// button nested beside the label.
+// button nested beside the label. A long label ellipsises in the host chip's
+// slot and reads in full in the chip's one tooltip, above the remove hint.
 function KitFilterChip({
   children,
   selected,
@@ -85,9 +87,12 @@ function KitFilterChip({
   const clickHandler = typeof onClick === "function" ? onClick : undefined;
   const keyHandler = typeof onKeyDown === "function" ? onKeyDown : undefined;
   const pressed = remove ? true : controlled ? selected : internal;
+  const { ref: labelRef, isTruncated } = useTruncationDetection();
+  const label = node(children);
   const chip = (
     <FilterChip
       {...dom}
+      labelRef={labelRef}
       selected={pressed}
       count={remove ? undefined : finiteNumber(count)}
       disabled={disabled === true}
@@ -111,16 +116,21 @@ function KitFilterChip({
         }
       }}
     >
-      {node(children)}
+      {label}
       {remove ? <X className="-mr-0.5 h-3 w-3 shrink-0" aria-hidden="true" /> : null}
     </FilterChip>
   );
-  if (!remove) return chip;
+  const hint = remove ? (nonEmpty(removeLabel) ?? "Remove filter") : null;
+  // Mounted whether or not the label clips, so a resize never remounts the
+  // chip under focus; closed while there is nothing to say.
   return (
-    <Tooltip>
+    <Tooltip open={isTruncated || hint ? undefined : false} autoDismiss={!isTruncated}>
       <TooltipTrigger asChild>{chip}</TooltipTrigger>
       <TooltipContent side="bottom" className={overlayZ}>
-        {nonEmpty(removeLabel) ?? "Remove filter"}
+        {isTruncated ? <div className="break-words">{label}</div> : null}
+        {hint ? (
+          <div className={isTruncated ? "text-text-secondary" : undefined}>{hint}</div>
+        ) : null}
       </TooltipContent>
     </Tooltip>
   );
