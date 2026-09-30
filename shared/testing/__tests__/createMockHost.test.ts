@@ -1752,3 +1752,75 @@ describe("createMockHost fs.readFiles", () => {
     await expect(call(["/a"], { encoding: "latin1" })).rejects.toThrow(/encoding/);
   });
 });
+
+describe("createMockHost listener signal", () => {
+  it("reports every channel listened to until a test says otherwise", () => {
+    const host = createMockHost();
+    const seen: boolean[] = [];
+    const dispose = host.onDidChangeListeners!("tick", (has) => seen.push(has));
+    expect(host.hasListeners!("tick")).toBe(true);
+    host.simulateListenersChange("tick", false);
+    host.simulateListenersChange("tick", false);
+    expect(host.hasListeners!("tick")).toBe(false);
+    expect(host.hasListeners!("other")).toBe(true);
+    host.simulateListenersChange("tick", true);
+    dispose();
+    host.simulateListenersChange("tick", false);
+    expect(seen).toEqual([false, true]);
+  });
+
+  it("validates the channel like the host", () => {
+    const host = createMockHost();
+    expect(() => host.hasListeners!("a:b")).toThrow(/channel/);
+    expect(() => host.onDidChangeListeners!("", () => {})).toThrow(/channel/);
+  });
+});
+
+describe("createMockHost fs.walk", () => {
+  async function seeded() {
+    const host = createMockHost();
+    await host.fs.mkdir("/root/empty");
+    await host.fs.mkdir("/root/src/deep");
+    await host.fs.writeFile("/root/src/deep/x.ts", "xx");
+    await host.fs.writeFile("/root/src/y.js", "y");
+    await host.fs.writeFile("/root/z.ts", "zzz");
+    await host.fs.writeFile("/elsewhere/q.ts", "q");
+    return host;
+  }
+
+  it("lists the tree under the root in the host's order", async () => {
+    const host = await seeded();
+    const result = await host.fs.walk!("/root");
+    expect(result).toEqual({
+      entries: [
+        { path: "empty", type: "dir" },
+        { path: "src", type: "dir" },
+        { path: "src/deep", type: "dir" },
+        { path: "src/deep/x.ts", type: "file" },
+        { path: "src/y.js", type: "file" },
+        { path: "z.ts", type: "file" },
+      ],
+      truncated: false,
+    });
+  });
+
+  it("applies include, exclude, maxDepth, limit and includeSize", async () => {
+    const host = await seeded();
+    const paths = async (options: Parameters<NonNullable<typeof host.fs.walk>>[1]) =>
+      (await host.fs.walk!("/root", options)).entries.map((e) => e.path);
+    expect(await paths({ include: ["**/*.ts"] })).toEqual(["src/deep/x.ts", "z.ts"]);
+    expect(await paths({ exclude: ["src"] })).toEqual(["empty", "z.ts"]);
+    expect(await paths({ maxDepth: 1 })).toEqual(["empty", "src", "z.ts"]);
+    const limited = await host.fs.walk!("/root", { limit: 2 });
+    expect(limited.truncated).toBe(true);
+    expect(limited.entries.map((e) => e.path)).toEqual(["empty", "src"]);
+    const sized = await host.fs.walk!("/root", { include: ["z.ts"], includeSize: true });
+    expect(sized.entries).toEqual([{ path: "z.ts", type: "file", size: 3 }]);
+  });
+
+  it("rejects bad options and a missing root", async () => {
+    const host = await seeded();
+    await expect(host.fs.walk!("/root", { limit: 0 })).rejects.toThrow(/VALIDATION/);
+    await expect(host.fs.walk!("/nope")).rejects.toThrow(/ENOENT/);
+  });
+});

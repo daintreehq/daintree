@@ -670,3 +670,94 @@ describe("createSyncedCollection host contract", () => {
     c.dispose();
   });
 });
+
+describe("createSyncedCollection listener awareness", () => {
+  function listeningHost() {
+    const h = fakeHost();
+    let listening = true;
+    const hasListeners = vi.fn((_channel: string) => listening);
+    return {
+      ...h,
+      host: { ...h.host, hasListeners },
+      hasListeners,
+      setListening: (value: boolean) => {
+        listening = value;
+      },
+    };
+  }
+
+  it("asks the host about its channel as soon as it is created", async () => {
+    const h = listeningHost();
+    await createSyncedCollection<Row>(h.host, "rows", { key });
+    expect(h.hasListeners).toHaveBeenCalledWith("rows");
+  });
+
+  it("sends no delta while nobody listens, and the next pull carries the changes", async () => {
+    const h = listeningHost();
+    const c = await createSyncedCollection<Row>(h.host, "rows", { key });
+    h.snapshot("rows");
+    c.upsert({ id: "a", v: 1 });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(h.posts).toHaveLength(1);
+
+    h.setListening(false);
+    c.upsert({ id: "b", v: 1 });
+    c.remove("a");
+    await vi.advanceTimersByTimeAsync(20);
+    expect(h.posts).toHaveLength(1);
+    expect(c.revision).toBe(2);
+
+    h.setListening(true);
+    const s = h.snapshot<Row>("rows");
+    expect(s.revision).toBe(2);
+    expect(s.entries.map(([k]) => k)).toEqual(["b"]);
+    c.upsert({ id: "c", v: 1 });
+    await vi.advanceTimersByTimeAsync(20);
+    expect((h.posts[1]!.payload as SyncedCollectionDelta<Row>).revision).toBe(3);
+  });
+
+  it("leaves a revision gap a still-mounted view resyncs on", async () => {
+    const h = listeningHost();
+    const c = await createSyncedCollection<Row>(h.host, "rows", { key });
+    h.snapshot("rows");
+    h.setListening(false);
+    c.upsert({ id: "a", v: 1 });
+    await vi.advanceTimersByTimeAsync(20);
+    h.setListening(true);
+    c.upsert({ id: "b", v: 1 });
+    await vi.advanceTimersByTimeAsync(20);
+    const d = h.posts[0]!.payload as SyncedCollectionDelta<Row>;
+    expect(d.revision).toBe(2);
+    expect(d.upserts.map(([k]) => k)).toEqual(["b"]);
+  });
+
+  it("keeps sending on a host whose hasListeners throws", async () => {
+    const h = fakeHost();
+    const host = {
+      ...h.host,
+      hasListeners: () => {
+        throw new Error("broken");
+      },
+    };
+    const c = await createSyncedCollection<Row>(host, "rows", { key });
+    h.snapshot("rows");
+    c.upsert({ id: "a", v: 1 });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(h.posts).toHaveLength(1);
+  });
+
+  it("pauses against the mock host's simulated listeners", async () => {
+    const { createMockHost } = await import("../testing.js");
+    const host = createMockHost({ pluginId: "acme.demo" });
+    const c = await createSyncedCollection<Row>(host, "rows", { key });
+    await host.registeredHandlers.find((r) => r.channel === "rows-snapshot")!.handler({} as never);
+    host.simulateListenersChange("rows", false);
+    c.upsert({ id: "a", v: 1 });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(host.postToPanelCalls.filter((p) => p.channel === "rows")).toHaveLength(1);
+    host.simulateListenersChange("rows", true);
+    c.upsert({ id: "b", v: 1 });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(host.postToPanelCalls.filter((p) => p.channel === "rows")).toHaveLength(2);
+  });
+});

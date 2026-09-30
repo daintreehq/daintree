@@ -1071,6 +1071,8 @@ export const CHANNELS = {
   PLUGIN_REPORT_PANEL_INVENTORY: "plugin:report-panel-inventory",
   /** Renderer → main, fire-and-forget: batched plugin view cost observations. */
   PLUGIN_REPORT_VIEW_METRICS: "plugin:report-view-metrics",
+  /** Renderer → main, fire-and-forget: the plugin push channels this renderer has subscribers for. */
+  PLUGIN_REPORT_PUSH_LISTENERS: "plugin:report-push-listeners",
   /** Every tracked plugin's `PluginPerfSnapshot`. */
   PLUGIN_PERF_SNAPSHOTS_GET: "plugin:perf-snapshots-get",
   /** Renderer → main, fire-and-forget: start receiving `PLUGIN_PERF_SNAPSHOTS_CHANGED`. */

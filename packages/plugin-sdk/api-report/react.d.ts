@@ -1776,7 +1776,7 @@ interface StreamBufferResult<T> {
 declare function useStreamBuffer<T>(options?: StreamBufferOptions): StreamBufferResult<T>;
 
 interface SyncedCollectionViewOptions {
-    /** False unsubscribes and stops pulling; the last items stay. Default true. */
+    /** False unsubscribes and stops pulling; the last items stay until it is re-enabled, which starts over from a fresh snapshot. Default true. */
     enabled?: boolean;
     /** The view's `disposeSignal`. Once it aborts nothing more is pulled or applied. */
     signal?: AbortSignal;

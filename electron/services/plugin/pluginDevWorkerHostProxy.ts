@@ -44,6 +44,8 @@ import type {
   PluginFsApi,
   PluginFsReadFilesEntry,
   PluginFsReadFilesOptions,
+  PluginFsWalkOptions,
+  PluginFsWalkResult,
   PluginRenderPdfResult,
   PluginFsStat,
   PluginGitStatus,
@@ -135,6 +137,14 @@ interface RegisteredMcpTool {
  */
 const COMMAND_IMPORT_TIMEOUT_MS = 5000;
 
+/** Push channels one worker may watch for listeners; past it `hasListeners` answers `true`. */
+const MAX_WATCHED_PUSH_CHANNELS = 256;
+
+interface ListenerState {
+  value: boolean;
+  callbacks: Set<(hasListeners: boolean) => void>;
+}
+
 export class PluginDevWorkerHostProxy {
   readonly host: PluginHostApi;
   private readonly post: Post;
@@ -174,6 +184,12 @@ export class PluginDevWorkerHostProxy {
    * module's state is the worker exiting, not this map.
    */
   private readonly commandModules = new Map<string, Promise<ActionHandler>>();
+  /**
+   * Per push channel: whether main last said a renderer listens, and the
+   * `onDidChangeListeners` callbacks for it. Opened on first use and kept for
+   * the worker's life, so `hasListeners` stays a synchronous local read.
+   */
+  private readonly listenerStates = new Map<string, ListenerState>();
 
   constructor(pluginId: string, post: Post, identity: PluginIdentity) {
     this.pluginId = pluginId;
@@ -211,6 +227,7 @@ export class PluginDevWorkerHostProxy {
     // here keeps it alive.
     this.runningInvokes.clear();
     this.commandModules.clear();
+    this.listenerStates.clear();
     for (const database of this.databases) void database.close();
     this.databases.clear();
   }
@@ -857,6 +874,26 @@ export class PluginDevWorkerHostProxy {
         }
         return Promise.resolve();
       },
+      hasListeners: (channel) => {
+        const name = this.pushListenerChannel("hasListeners", channel);
+        if (this.disposed) return false;
+        return this.listenerState(name)?.value ?? true;
+      },
+      onDidChangeListeners: (channel, callback) => {
+        const name = this.pushListenerChannel("onDidChangeListeners", channel);
+        if (typeof callback !== "function") {
+          throw new Error(
+            `Plugin "${this.pluginId}" onDidChangeListeners: callback must be a function`
+          );
+        }
+        const state = this.disposed ? null : this.listenerState(name);
+        if (!state) return () => {};
+        const registered = (hasListeners: boolean): void => callback(hasListeners);
+        state.callbacks.add(registered);
+        return () => {
+          state.callbacks.delete(registered);
+        };
+      },
       getActiveWorktree: () =>
         this.call<PluginWorktreeSnapshot | null>("getActiveWorktree", undefined),
       getWorktrees: () => this.call<PluginWorktreeSnapshot[]>("getWorktrees", undefined),
@@ -1266,6 +1303,20 @@ export class PluginDevWorkerHostProxy {
             { path: dirPath, ...(options?.detail === true && { detail: true }) },
             options?.signal
           ),
+        walk: (root: string, options?: PluginFsWalkOptions) => {
+          // Forwarded as given (minus the signal, which cancels the call) so
+          // the host rejects a malformed option rather than it reading as absent.
+          let forwarded: unknown = options;
+          if (options !== null && typeof options === "object") {
+            const { signal: _signal, ...rest } = options;
+            forwarded = rest;
+          }
+          return this.call<PluginFsWalkResult>(
+            "fs.walk",
+            { root, ...(forwarded !== undefined && { options: forwarded }) },
+            options?.signal
+          );
+        },
         stat: (targetPath, options) =>
           this.call<PluginFsStat>("fs.stat", { path: targetPath }, options?.signal),
         watch: async (paths, callback, options) => {
@@ -1395,6 +1446,49 @@ export class PluginDevWorkerHostProxy {
       },
     };
     return host;
+  }
+
+  private pushListenerChannel(method: string, channel: unknown): string {
+    if (typeof channel !== "string" || channel.length === 0 || channel.includes(":")) {
+      throw new Error(
+        `Plugin "${this.pluginId}" ${method}: channel must be a non-empty string without colons: ${String(channel)}`
+      );
+    }
+    return channel;
+  }
+
+  /**
+   * The listener state for `channel`, subscribing to main's reports the first
+   * time. Until main's first report lands the answer is `true`, the same
+   * "assume someone is listening" main gives for a renderer it has not heard
+   * from; a report that differs fires the channel's callbacks.
+   */
+  private listenerState(channel: string): ListenerState | null {
+    const existing = this.listenerStates.get(channel);
+    if (existing) return existing;
+    if (this.listenerStates.size >= MAX_WATCHED_PUSH_CHANNELS) return null;
+    const state: ListenerState = { value: true, callbacks: new Set() };
+    this.listenerStates.set(channel, state);
+    this.subscribe(
+      "push-listeners",
+      (payload) => {
+        const next = payload === true;
+        if (next === state.value) return;
+        state.value = next;
+        for (const callback of [...state.callbacks]) {
+          try {
+            callback(next);
+          } catch (err) {
+            console.error(
+              `[plugin-dev:${this.pluginId}] onDidChangeListeners callback threw:`,
+              err
+            );
+          }
+        }
+      },
+      channel
+    );
+    return state;
   }
 
   private subscribe(
