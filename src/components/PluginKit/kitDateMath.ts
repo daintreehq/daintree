@@ -127,6 +127,26 @@ export function clampIso(iso: string, min: string | null, max: string | null): s
   return iso;
 }
 
+/**
+ * The first of `count` months shown from `first`, moved back so the last one
+ * is not wholly past `max`: a range ending today shows last month beside this
+ * one, not this one beside a month of disabled days. Never before `min`'s month.
+ */
+export function fitMonthsToMax(
+  first: string,
+  count: number,
+  min: string | null,
+  max: string | null
+): string {
+  if (max === null || count < 2) return first;
+  const overshoot = monthDistance(monthOf(max), shiftMonth(first, count - 1));
+  if (overshoot <= 0) return first;
+  const shifted = shiftMonth(first, -overshoot);
+  const floor = min === null ? null : monthOf(min);
+  if (floor === null || shifted >= floor) return shifted;
+  return floor < first ? floor : first;
+}
+
 /** The user's wall-clock day at `now`. */
 export function todayIso(now: number): string {
   const date = new Date(now);
