@@ -255,6 +255,19 @@ declare module "@daintreehq/plugin-ui" {
     PluginStatusBarProps,
     PluginStatusBarSlot,
   } from "@daintreehq/plugin-sdk/react";
+  import type {
+    PluginComposerAttachment,
+    PluginComposerProps,
+    PluginInlineEditProps,
+    PluginKeyValueEditorProps,
+    PluginKeyValuePair,
+    PluginListEditorProps,
+    PluginMentionSuggestion,
+    PluginMentionTextareaProps,
+    PluginMentionTrigger,
+    PluginSecretInputProps,
+    PluginShortcutRecorderProps,
+  } from "@daintreehq/plugin-sdk/react";
 
   export type MarkdownProps = PluginMarkdownProps;
   export type ButtonProps = PluginButtonProps;
@@ -470,6 +483,17 @@ declare module "@daintreehq/plugin-ui" {
   export type OverflowToolbarSeparator = PluginOverflowToolbarSeparator;
   export type ContainerSize = PluginContainerSize;
   export type ContainerTarget = PluginContainerTarget;
+  export type MentionSuggestion = PluginMentionSuggestion;
+  export type MentionTrigger = PluginMentionTrigger;
+  export type MentionTextareaProps = PluginMentionTextareaProps;
+  export type ComposerAttachment = PluginComposerAttachment;
+  export type ComposerProps = PluginComposerProps;
+  export type InlineEditProps = PluginInlineEditProps;
+  export type KeyValuePair = PluginKeyValuePair;
+  export type KeyValueEditorProps = PluginKeyValueEditorProps;
+  export type ListEditorProps = PluginListEditorProps;
+  export type SecretInputProps = PluginSecretInputProps;
+  export type ShortcutRecorderProps = PluginShortcutRecorderProps;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -908,4 +932,27 @@ declare module "@daintreehq/plugin-ui" {
   export function useToast(): UseToastResult;
   /** A small confirm anchored to `trigger`, for actions that are cheap to undo. The trigger shows while the kit loads. */
   export const ConfirmPopover: ComponentType<ConfirmPopoverProps>;
+
+  /**
+   * A textarea that grows with its text and opens the host's autocomplete
+   * menu on a trigger character (`@`, `/`, `#`), with suggestions from
+   * `getSuggestions`, sync or async. The caret stays in the text.
+   */
+  export const MentionTextarea: ComponentType<MentionTextareaProps>;
+  /**
+   * The agent composer: mentions and commands, attachment chips, an attach
+   * button, your footer controls, and Send (Stop while `busy`). Cmd/Ctrl+Enter
+   * sends by default.
+   */
+  export const Composer: ComponentType<ComposerProps>;
+  /** Text you rename in place: click or F2, Enter commits, Escape cancels. */
+  export const InlineEdit: ComponentType<InlineEditProps>;
+  /** Rows of key and value fields, with duplicate checks, secret values and `KEY=value` paste. */
+  export const KeyValueEditor: ComponentType<KeyValueEditorProps>;
+  /** An editable list of single values, with duplicate checks and multi-line paste. */
+  export const ListEditor: ComponentType<ListEditorProps>;
+  /** A masked token field with reveal, and a saved state with Replace and Clear. */
+  export const SecretInput: ComponentType<SecretInputProps>;
+  /** Records a keyboard shortcut in the app's combo notation and flags ones Daintree uses. */
+  export const ShortcutRecorder: ComponentType<ShortcutRecorderProps>;
 }

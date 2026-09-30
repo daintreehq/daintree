@@ -63,6 +63,10 @@ export interface AutocompleteItem {
   descriptionKind?: "text" | "path";
   /** Semantic category; drives the neutral badge. Undefined for file/context items. */
   category?: CompletionKind;
+  /** Badge text in place of the category's, for rows from outside the composer (plugin menus). */
+  badge?: string;
+  /** Shown but never selected or inserted, like a stale row, without the "Updating" state. */
+  disabled?: boolean;
   /** Enter behavior; defaults to `insert` when absent. */
   enterAction?: AutocompleteEnterAction;
   /** Send-time behavior; defaults to `literal` when absent. */
@@ -199,7 +203,9 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
 
     const hasStaleRows = staleKeys !== undefined && staleKeys.size > 0;
     const selectedItem = items[selectedIndex];
-    const isSelectedStale = selectedItem ? (staleKeys?.has(selectedItem.key) ?? false) : false;
+    const isSelectedStale = selectedItem
+      ? (staleKeys?.has(selectedItem.key) ?? false) || selectedItem.disabled === true
+      : false;
     const keyHints = getKeyHints(selectedItem, isSelectedStale);
     const hasRows = items.length > 0;
     // Spoken for every state, shown only when there are no rows to show instead:
@@ -284,8 +290,9 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
             aria-busy={isLoading || hasStaleRows || undefined}
           >
             {items.map((item, idx) => {
-              const badge = item.category ? CATEGORY_LABEL[item.category] : undefined;
-              const isRowStale = staleKeys?.has(item.key) ?? false;
+              const badge =
+                item.badge ?? (item.category ? CATEGORY_LABEL[item.category] : undefined);
+              const isRowStale = (staleKeys?.has(item.key) ?? false) || item.disabled === true;
               // Enter won't act on a stale row, so it doesn't wear the selection.
               const isSelected = idx === selectedIndex && !isRowStale;
               const isPath = item.descriptionKind === "path";

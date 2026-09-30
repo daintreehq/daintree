@@ -123,6 +123,15 @@ import type {
   PluginUnreadDotProps,
   PluginVisuallyHiddenProps,
 } from "@shared/types/plugin-sdk-react";
+import type {
+  PluginComposerProps,
+  PluginInlineEditProps,
+  PluginKeyValueEditorProps,
+  PluginListEditorProps,
+  PluginMentionTextareaProps,
+  PluginSecretInputProps,
+  PluginShortcutRecorderProps,
+} from "@shared/types/plugin-sdk-react";
 import { fromKit } from "./kit";
 
 export { preloadPluginUi, whenPluginUiReady } from "./kit";
@@ -583,6 +592,38 @@ export const OverflowToolbar: ComponentType<PluginOverflowToolbarProps> = fromKi
   (kit) => kit.OverflowToolbar
 );
 
+// Mention autocomplete, the agent composer, inline rename, key/value and list
+// editors, secrets and shortcut recording.
+
+export const MentionTextarea: ComponentType<PluginMentionTextareaProps> = fromKit(
+  "MentionTextarea",
+  (kit) => kit.MentionTextarea
+);
+export const Composer: ComponentType<PluginComposerProps> = fromKit(
+  "Composer",
+  (kit) => kit.Composer
+);
+export const InlineEdit: ComponentType<PluginInlineEditProps> = fromKit(
+  "InlineEdit",
+  (kit) => kit.InlineEdit
+);
+export const KeyValueEditor: ComponentType<PluginKeyValueEditorProps> = fromKit(
+  "KeyValueEditor",
+  (kit) => kit.KeyValueEditor
+);
+export const ListEditor: ComponentType<PluginListEditorProps> = fromKit(
+  "ListEditor",
+  (kit) => kit.ListEditor
+);
+export const SecretInput: ComponentType<PluginSecretInputProps> = fromKit(
+  "SecretInput",
+  (kit) => kit.SecretInput
+);
+export const ShortcutRecorder: ComponentType<PluginShortcutRecorderProps> = fromKit(
+  "ShortcutRecorder",
+  (kit) => kit.ShortcutRecorder
+);
+
 export type {
   PluginMarkdownProps as MarkdownProps,
   PluginButtonProps as ButtonProps,
@@ -800,4 +841,18 @@ export type {
   PluginIndicatorPlacement as IndicatorPlacement,
   PluginUnreadDotProps as UnreadDotProps,
   PluginCountIndicatorProps as CountIndicatorProps,
+} from "@shared/types/plugin-sdk-react";
+
+export type {
+  PluginMentionSuggestion as MentionSuggestion,
+  PluginMentionTrigger as MentionTrigger,
+  PluginMentionTextareaProps as MentionTextareaProps,
+  PluginComposerAttachment as ComposerAttachment,
+  PluginComposerProps as ComposerProps,
+  PluginInlineEditProps as InlineEditProps,
+  PluginKeyValuePair as KeyValuePair,
+  PluginKeyValueEditorProps as KeyValueEditorProps,
+  PluginListEditorProps as ListEditorProps,
+  PluginSecretInputProps as SecretInputProps,
+  PluginShortcutRecorderProps as ShortcutRecorderProps,
 } from "@shared/types/plugin-sdk-react";
