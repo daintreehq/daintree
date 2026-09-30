@@ -88,10 +88,11 @@ describe("help prompt outputs", () => {
       const grounding = section(body, "## How to Answer");
       const line = grounding.split("\n").find((l) => l.includes("Session not found")) ?? "";
       expect(line).toMatch(/`daintree`.*404/);
-      expect(line).toMatch(/restart/i);
-      expect(line).toMatch(/\btransient\b/i);
-      expect(line).toMatch(/retry this turn/i);
-      expect(line).toMatch(/don't[^\n]*new session/i);
+      expect(line).toMatch(/\bpause\b/i);
+      expect(line).toMatch(/retry at most twice this turn/i);
+      expect(line).toMatch(/persists[^\n]*unavailable for now/i);
+      expect(line).toMatch(/no new session/i);
+      expect(line).not.toMatch(/indefinitely|until it works/i);
     });
 
     // The same session answered a permission dialog with a guessed `1` while
