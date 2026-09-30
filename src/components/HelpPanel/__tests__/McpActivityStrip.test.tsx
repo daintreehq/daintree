@@ -633,6 +633,8 @@ describe("McpActivityStrip live activity", () => {
         const trigger = screen.getByRole("button", { name: /recent tool calls/i });
         const shown = (trigger.textContent ?? "").trim();
         expect(trigger.getAttribute("aria-label")).toContain(shown);
+        // A call waiting on the user keeps its words at every width.
+        if (activity.danger) expect(shown).toContain("Awaiting confirmation");
         unmount();
       }
     }

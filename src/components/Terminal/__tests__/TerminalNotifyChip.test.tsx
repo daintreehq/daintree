@@ -135,21 +135,76 @@ describe("TerminalNotifyChip", () => {
     await waitFor(() => expect(stopPaneNotices).toHaveBeenCalledWith("t1"));
   });
 
-  it("says so, and keeps the control, when stopping fails", async () => {
+  it("says so when stopping fails, and the retry works", async () => {
     getPaneNotifyState.mockResolvedValue(paneState());
     stopPaneNotices.mockRejectedValueOnce(new Error("boom"));
     render(<TerminalNotifyChip terminalId="t1" />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Stop notices" }));
-
     expect((await screen.findByRole("alert")).textContent).toMatch(/still on/);
-    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    await waitFor(() => expect((retry as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(retry);
+    await waitFor(() => expect(stopPaneNotices).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
+  it("never carries a failed stop over to another pane", async () => {
+    getPaneNotifyState.mockResolvedValue(paneState());
+    stopPaneNotices.mockRejectedValueOnce(new Error("boom"));
+    const { rerender } = render(<TerminalNotifyChip terminalId="t1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Stop notices" }));
+    await screen.findByRole("alert");
+
+    getPaneNotifyState.mockResolvedValue(paneState({ terminalId: "t2" }));
+    rerender(<TerminalNotifyChip terminalId="t2" />);
+    await screen.findByTestId("terminal-notify-chip");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Stop notices" })).toBeTruthy();
+  });
+
+  it("ignores a stop that settles after the chip moved to another pane", async () => {
+    getPaneNotifyState.mockResolvedValue(paneState());
+    let reject: (err: Error) => void = () => {};
+    stopPaneNotices.mockReturnValueOnce(
+      new Promise<void>((_resolve, rej) => {
+        reject = rej;
+      })
+    );
+    const { rerender } = render(<TerminalNotifyChip terminalId="t1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Stop notices" }));
+
+    getPaneNotifyState.mockResolvedValue(paneState({ terminalId: "t2" }));
+    rerender(<TerminalNotifyChip terminalId="t2" />);
+    await screen.findByTestId("terminal-notify-chip");
+    const stopT2 = screen.getByRole("button", { name: "Stop notices" }) as HTMLButtonElement;
+    expect(stopT2.disabled).toBe(false);
+
+    await act(async () => reject(new Error("late")));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("starts the next batch of notices without the last batch's failure", async () => {
+    getPaneNotifyState.mockResolvedValue(paneState());
+    stopPaneNotices.mockRejectedValueOnce(new Error("boom"));
+    render(<TerminalNotifyChip terminalId="t1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Stop notices" }));
+    await screen.findByRole("alert");
+
+    act(() => push?.(paneState({ pendingCount: 0, readyCount: 0, revision: 2 })));
+    expect(screen.queryByTestId("terminal-notify-chip")).toBeNull();
+    act(() => push?.(paneState({ pendingCount: 1, revision: 3 })));
+    await screen.findByTestId("terminal-notify-chip");
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("keeps everything it shows inside its accessible name, in both hosts", async () => {
     const states = [
       paneState({ pendingCount: 1 }),
       paneState({ pendingCount: 12 }),
+      paneState({ pendingCount: 1204 }),
+      paneState({ pendingCount: 0, readyCount: 1204 }),
       paneState({ pendingCount: 0, readyCount: 1 }),
       paneState({ pendingCount: 0, readyCount: 3 }),
     ];
@@ -178,6 +233,7 @@ describe("TerminalNotifyChip", () => {
     unmount();
     render(<TerminalNotifyChip terminalId="t1" variant="footer" compact />);
     const compact = (await screen.findByTestId("terminal-notify-chip")).textContent ?? "";
+    expect(compact).toContain("2");
     expect(roomy).toMatch(/\bterminals?\b/);
     expect(compact).not.toMatch(/terminal/);
     expect(roomy).toContain(compact);

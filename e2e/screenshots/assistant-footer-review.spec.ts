@@ -206,14 +206,29 @@ test("assistant footer — states, widths and themes", async ({ page }) => {
     written.push(await snap(panel, `busy-${narrowTheme}-380-focus.png`));
   }
 
-  // The watch item's popover, opened by a real click, against the page so the
-  // portaled content is in frame.
+  // The watch item's popover, opened by a real click.
   {
     // Tall enough that the popover opens above the footer, as it does in the app.
     const { panel } = await open(page, "watch-blocked", narrowTheme, DEFAULT_WIDTH, 360);
-    await page.getByTestId("terminal-notify-chip").click();
+    const chip = page.getByTestId("terminal-notify-chip");
+    // Radix stamps aria-expanded once it has loaded; a click before that can land
+    // on the pre-load tree the tooltip provider is about to replace.
+    await expect(chip).toHaveAttribute("aria-expanded", "false");
+    await chip.click();
     const popover = page.getByRole("dialog");
     await expect(popover).toBeVisible();
+    const inner = await popover.boundingBox();
+    const outer = await panel.boundingBox();
+    if (
+      !inner ||
+      !outer ||
+      inner.y < outer.y ||
+      inner.x < outer.x ||
+      inner.y + inner.height > outer.y + outer.height ||
+      inner.x + inner.width > outer.x + outer.width
+    ) {
+      throw new Error("watch popover is not inside the captured panel — refusing to write");
+    }
     await expect(popover.getByRole("button", { name: "Stop notices" })).toBeVisible();
     await page.waitForTimeout(250);
     written.push(await snap(panel, `watch-blocked-${narrowTheme}-380-open.png`));

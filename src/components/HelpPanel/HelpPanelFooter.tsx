@@ -58,16 +58,20 @@ export const MAX_FOOTER_DENSITY = 5;
  *
  * Telling those outside changes from the row's own compaction is done by
  * measurement, not by flagging commits: once a generation settles, the width
- * of every item in the row is recorded, and a later DOM change only restarts
- * if one of them moved or the row overflows. Every item, not just the spacer:
+ * of every item in the row is recorded, along with whether the row still
+ * overflows, and a later DOM change only restarts if that snapshot changed.
+ * Overflow is part of the snapshot, not a trigger on its own: a row that still
+ * overflows at the last step would otherwise restart on its own compaction's
+ * text changes, forever. Every item, not just the spacer:
  * space a child gives up is often absorbed by a truncated sibling growing
  * back, with the spacer still at its minimum. The row's own steps are already
  * part of the recorded layout, so they can never re-trigger a restart.
  */
 function measureItems(row: HTMLElement): string {
-  return Array.from(row.children, (child) =>
+  const widths = Array.from(row.children, (child) =>
     child instanceof HTMLElement ? child.offsetWidth : 0
   ).join(",");
+  return `${widths}|${row.scrollWidth > row.clientWidth ? "overflow" : "fits"}`;
 }
 
 export function useFooterDensity(contentKey: string) {
@@ -93,9 +97,7 @@ export function useFooterDensity(contentKey: string) {
     if (!row) return;
     const restart = () => setEpoch((e) => e + 1);
     const mutations = new MutationObserver(() => {
-      if (measureItems(row) !== settledLayout.current || row.scrollWidth > row.clientWidth) {
-        restart();
-      }
+      if (measureItems(row) !== settledLayout.current) restart();
     });
     mutations.observe(row, { childList: true, subtree: true, characterData: true });
     let lastWidth = row.clientWidth;

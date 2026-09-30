@@ -127,27 +127,39 @@ export function TerminalNotifyChip({
   compact?: boolean;
 }) {
   const state = usePaneNotifyState(terminalId);
-  const [stopping, setStopping] = useState(false);
-  const [stopFailed, setStopFailed] = useState(false);
+  // Scoped to the pane it was started for, so a stop still in flight, or one
+  // that failed, never shows on a different pane this chip is reused for.
+  const [stopOp, setStopOp] = useState<{
+    terminalId: string;
+    phase: "stopping" | "failed";
+  } | null>(null);
   const headingId = useId();
+  const visible = state !== null && (state.pendingCount > 0 || state.readyCount > 0);
+  const stopping = stopOp?.terminalId === terminalId && stopOp.phase === "stopping";
+  const stopFailed = stopOp?.terminalId === terminalId && stopOp.phase === "failed";
+
+  // A failure belongs to the notices it failed to stop. Once they are gone,
+  // the next batch starts clean.
+  if (!visible && stopOp?.phase === "failed") setStopOp(null);
 
   const stop = useCallback(() => {
-    setStopping(true);
-    setStopFailed(false);
-    window.electron.mcpServer
-      .stopPaneNotices(terminalId)
-      .catch((err: unknown) => {
-        setStopFailed(true);
+    const settle = (next: typeof stopOp) =>
+      setStopOp((current) => (current?.terminalId === terminalId ? next : current));
+    setStopOp({ terminalId, phase: "stopping" });
+    window.electron.mcpServer.stopPaneNotices(terminalId).then(
+      () => settle(null),
+      (err: unknown) => {
+        settle({ terminalId, phase: "failed" });
         logWarn("Failed to stop pane notices", { error: formatErrorMessage(err, "") });
-      })
-      .finally(() => setStopping(false));
+      }
+    );
   }, [terminalId]);
 
-  if (state === null || (state.pendingCount === 0 && state.readyCount === 0)) return null;
+  if (state === null || !visible) return null;
 
   const { text, tone } = describeDelivery(state.delivery);
   const pending = state.pendingCount;
-  const count = pending > 0 ? pending : state.readyCount;
+  const count = (pending > 0 ? pending : state.readyCount).toLocaleString();
   const counted =
     pending > 0 ? pluralize(pending, "terminal") : pluralize(state.readyCount, "notice");
   const heading = pending > 0 ? `Waiting on ${counted}` : `${counted} waiting to be delivered`;

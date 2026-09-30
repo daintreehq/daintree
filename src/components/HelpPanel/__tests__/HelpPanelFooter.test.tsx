@@ -85,11 +85,20 @@ describe("useFooterDensity", () => {
     }
   });
 
-  function Row({ contentKey, wrapped = false }: { contentKey: string; wrapped?: boolean }) {
+  function Row({
+    contentKey,
+    wrapped = false,
+    textSteps = false,
+  }: {
+    contentKey: string;
+    wrapped?: boolean;
+    /** Each step also changes text, as the real footer's compaction does. */
+    textSteps?: boolean;
+  }) {
     const { rowRef, density } = useFooterDensity(contentKey);
     const row = (
       <div ref={rowRef} data-density={density} data-testid="row">
-        <span data-testid="content" />
+        <span data-testid="content">{textSteps ? `step ${density}` : null}</span>
         <span data-testid="slack" />
       </div>
     );
@@ -149,6 +158,25 @@ describe("useFooterDensity", () => {
     needed = ROW_PX + 4 * STEP_PX;
     rerender(<Row contentKey="a" wrapped />);
     expect(density()).toBe(4);
+  });
+
+  it("does not loop when the last step still overflows and each step changes text", async () => {
+    needed = ROW_PX + 100 * STEP_PX;
+    const onRender = vi.fn();
+    render(
+      <Profiler id="row" onRender={onRender}>
+        <Row contentKey="a" textSteps />
+      </Profiler>
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+    });
+    const settled = onRender.mock.calls.length;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+    });
+    expect(density()).toBe(MAX_FOOTER_DENSITY);
+    expect(onRender.mock.calls.length).toBe(settled);
   });
 
   it("does not loop on its own compaction", async () => {
