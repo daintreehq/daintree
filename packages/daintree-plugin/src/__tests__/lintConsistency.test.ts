@@ -46,6 +46,10 @@ const CLASS_CASES: Record<string, [string, string]> = {
     `<span className="bg-status-error/10 text-status-error" />`,
     `<span className="bg-status-error text-text-inverse" />`,
   ],
+  "viewport-breakpoint": [
+    `<div className={cn("grid grid-cols-1", on && "md:grid-cols-3 max-sm:hidden")} />`,
+    `<div className="@container"><div className="grid-cols-1 @md:grid-cols-3 hover:bg-overlay-soft" /></div>`,
+  ],
 };
 
 describe("class-string rules", () => {
@@ -274,6 +278,24 @@ describe("self-container-query", () => {
       "src/styles.ts": `export const cardStyles = { root: "@container p-2", grid: "grid-cols-2 @md:grid-cols-4" };\n`,
     });
     expect(clean).toEqual([]);
+  });
+});
+
+describe("viewport-breakpoint", () => {
+  it("flags each viewport variant, stacked or arbitrary, and nothing container-scoped", async () => {
+    const flagged = await lintFor(
+      "viewport-breakpoint",
+      view(
+        `<div className="md:grid-cols-3 max-sm:hidden hover:lg:p-4 min-[600px]:flex max-[900px]:block @md:grid-cols-2 supports-[display:grid]:grid data-[open]:flex" />`
+      )
+    );
+    expect(flagged.map((finding) => /"([^"]+)"/.exec(finding.message)?.[1])).toEqual([
+      "md:grid-cols-3",
+      "max-sm:hidden",
+      "hover:lg:p-4",
+      "min-[600px]:flex",
+      "max-[900px]:block",
+    ]);
   });
 });
 

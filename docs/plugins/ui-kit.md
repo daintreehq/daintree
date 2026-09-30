@@ -222,6 +222,55 @@ A view is part of Daintree's own window, so `FileDropzone` (or your own `<input 
 | `Disclosure` | `title`, `children?`, `open?`, `defaultOpen?`, `onOpenChange?(open)`, `trailing?`, `disabled?`, `headingLevel?`, `className?` | One heading button that shows or hides what is under it, such as an "Advanced" group. Content is mounted only while open. Its chevron sits on the content's edge and its content starts under the title, as an `Accordion`'s do, so the two line up when they stack in one column. |
 | `DescriptionList` | `items?: { label, value?, hint?, copyText? }[]`, `children?`, `layout?: "inline" \| "stacked"`, `copyable?`, `className?` | The label and value rows of a record's detail page, as a `dl`. `inline` (the default) puts the labels in a column beside the values; `stacked` puts each label over its value, for a narrow pane. An empty value draws a quiet dash, read as "None". `copyable` adds a copy button after every text or number value; an item's `copyText` adds one that copies that text. Inline, the value column is as wide as the longest value (up to the room there is) and the copy buttons sit in one column straight after it, so they stay beside short values and line up with each other. Build the rows as `DescriptionListItem` children (the same fields as an item) when they need their own `data-*`. |
 
+### Page structure
+
+The layout a panel is built from, on the spacing scale Daintree's own panes use: `gap` and `padding` take `none`, `xs` (4 px), `sm` (8), `md` (12, a pane's inset), `lg` (16) and `xl` (24). Build a panel from these rather than from `div`s with hand-picked gaps, and its spacing and chrome heights match the rest of the app.
+
+| Export | Props | Notes |
+| --- | --- | --- |
+| `Stack` | `children?`, `gap?` (`md`), `align?: "start" \| "center" \| "end" \| "stretch" \| "baseline"` (`stretch`), `justify?: "start" \| "center" \| "end" \| "between" \| "around" \| "evenly"`, `as?`, `className?`; DOM props | Children in a column. `as` is one of `div` (the default), `section`, `article`, `aside`, `header`, `footer`, `nav`, `main`, `form`, `fieldset`, `ul`, `ol`, `li`, `span`; a `ul` or `ol` drops its markers. |
+| `Inline` | as `Stack`, plus `wrap?`; `gap?` (`sm`), `align?` (`center`) | Children in a row, vertically centred. It does not wrap unless `wrap` is set. |
+| `Cluster` | as `Stack`; `gap?` (`sm`), `align?` (`center`) | A row that wraps, the same gap between rows as between items: chips, tags, badges. |
+| `Grid` | `columns?: number \| string`, `gap?` (`md`), `align?`, `as?`, `className?`; DOM props | Explicit columns: a count (1 to 12, equal widths) or a `grid-template-columns` value (`"200px 1fr"`). |
+| `AutoGrid` | `minColumnWidth?` (180), `maxColumns?`, `stretch?`, `gap?` (`md`), `align?`, `as?`, `className?`; DOM props | As many equal columns as fit, none narrower than `minColumnWidth` (up to 4096; anything else falls back to 180) unless the grid itself is narrower, when its one column takes the whole width, reflowing with the grid's own width, never the window's, so a `StatCard` row goes from four across to one as the pane narrows. `maxColumns` caps the count on a wide pane. A short row keeps full-row column widths; `stretch` spreads it across instead. |
+| `PaneLayout` | `header?`, `toolbar?`, `children?`, `footer?`, `statusBar?`, `scroll?: "shadow" \| "plain" \| "none"`, `padding?`, `bodyClassName?`, `bodyRef?`, `bodyLabel?`, `className?` | A panel's shell. It fills the view's root; the header (a `PaneHeader`), toolbar (a `Toolbar` or `OverflowToolbar` with `variant="bar"`), footer and status bar keep their own heights, and the body between them is the only thing that scrolls. `shadow` (the default) fades the edge with more; `none` does not scroll, for a body holding its own scroller (a `VirtualList`, a `ResizableSplit`). `padding` insets the body's content; `bodyRef` is its scroller; `bodyLabel` names it as a region. |
+| `StatusBar` | `left?`, `center?`, `right?`, `density?: "compact" \| "comfortable"`, `placement?: "bottom" \| "top"`, `className?` | The thin strip along a pane's edge: what the view shows on the left, a control or two on the right. A slot takes a node or an array of facts, drawn with a quiet dot between them. Text on the left truncates first when the strip runs short; the right never does. `compact` (the default) is the host's 24 px bottom status strip in 11 px text; `comfortable` is the 28 px metadata strip a file pane shows over its content, which fits an `xs` `Button`. `placement="top"` puts the hairline under it. It is not a live region: announce a result yourself. |
+| `ScrollArea` | `children?`, `orientation?: "vertical" \| "horizontal" \| "both"`, `className?` (the frame), `scrollClassName?` (the scroller), `compact?`, `ref?` (the scroller); DOM props | A scroller on either axis or both, fading each edge that has more. Content along a scrolling axis keeps its own size, so a row of cards overflows sideways instead of squeezing. DOM props land on the scroller. With an `aria-label` or `aria-labelledby` and no `role` of your own it is a named `region`; Chromium already puts a scroller with nothing focusable inside it in the Tab order, and `tabIndex={0}` makes that explicit. For a vertical list, `ScrollShadow` is the same thing. |
+| `OverflowToolbar` | `items: ({ id, label, icon?, onSelect?, showLabel?, pressed?, disabled?, tooltip?, shortcut?, destructive?, priority? } \| { type: "separator" })[]`, `"aria-label"`, `variant?: "inline" \| "bar"`, `leading?`, `trailing?`, `overflowLabel?` ("More actions"), `className?` | A `Toolbar` whose controls fold into a "More actions" menu when the strip is too narrow for them, measured as it resizes. Each control is a `ToolbarButton` in the strip (icon-only unless `showLabel`; `label` names it) and a menu row once folded: `pressed` makes it a toggle and a check row, `shortcut` fills the menu's key column. The last controls fold first; a higher `priority` stays longer. `leading` and `trailing` never fold. Still one tab stop, Left and Right reaching the menu button, and a focused control that folds hands focus to it. |
+
+`useContainerSize(target)` and `useBreakpoint(target, breakpoints?)` make layout answer to the panel's width, never the window's. `target` is a ref or the element itself. A ref is re-read each time the calling component renders, so an element it mounts later is picked up; for an element a child mounts on its own schedule, keep the element in state from a callback ref (`ref={setElement}`) and pass that. `useContainerSize` returns `{ width, height }` in CSS px, re-read at most once a frame while it changes and `0` until measured. `useBreakpoint` returns the widest named step the width reaches — `{ sm: 360, md: 640, lg: 960 }` by default, or your own record — and `null` while the element is narrower than every step, not yet measured, or hidden (a zero width counts as unmeasured). Both stop observing on unmount.
+
+```tsx
+import { useRef } from "react";
+import {
+  AutoGrid,
+  PaneHeader,
+  PaneLayout,
+  StatCard,
+  StatusBar,
+  useBreakpoint,
+} from "@daintreehq/plugin-ui";
+
+export default function Dashboard() {
+  const root = useRef<HTMLDivElement>(null);
+  const wide = useBreakpoint(root, { wide: 640 }) === "wide";
+  return (
+    <div ref={root} className="flex min-h-0 flex-1 flex-col">
+      <PaneLayout
+        header={<PaneHeader title="main · 3 open PRs" />}
+        padding="md"
+        statusBar={<StatusBar left={["12 checks", "2 failing"]} right="Updated 1m ago" />}
+      >
+        <AutoGrid minColumnWidth={wide ? 180 : 140}>
+          <StatCard label="Open PRs" value={3} />
+          <StatCard label="Failing checks" value={2} />
+        </AutoGrid>
+      </PaneLayout>
+    </div>
+  );
+}
+```
+
 ### Settings grammar
 
 A settings view is a stack of `SettingsSection`s, each holding `SettingsGroup`s of `SettingsRow`s — the same section → group → row grammar Daintree's own settings pages use.
