@@ -17,6 +17,7 @@ import type {
   ReactElement,
   ReactNode,
   Ref,
+  RefObject,
 } from "react";
 
 /**
@@ -2766,6 +2767,283 @@ export interface PluginEmojiPickerProps {
   "aria-label"?: string;
 }
 
+// Typography, inline elements and small status primitives.
+
+/**
+ * Steps of Daintree's type ramp: Tailwind's stock `xs` (12px), `sm` (14px),
+ * `base` (16px) and `lg` (18px), plus the app's own label steps `2xs` (11px)
+ * and `3xs` (10px). `inherit` takes the size of the surrounding text.
+ */
+export type PluginTextSize = "3xs" | "2xs" | "xs" | "sm" | "base" | "lg" | "inherit";
+
+/**
+ * Daintree's text colour roles. `primary` is body text, `secondary` supporting
+ * text and icons, `muted` the quietest (it has no contrast floor on some dark
+ * themes, so never put anything the user must read in it). The status tones
+ * carry an outcome; `accent` is at most one load-bearing signal per region.
+ * `inherit` takes the surrounding colour.
+ */
+export type PluginTextTone =
+  "primary" | "secondary" | "muted" | "danger" | "success" | "warning" | "accent" | "inherit";
+
+/**
+ * Props of `Text`: a run of text on the app's type ramp and in one of its
+ * colour roles, so a view never spells font sizes or colour classes by hand.
+ */
+export interface PluginTextProps extends PluginDomProps {
+  children?: ReactNode;
+  /** A step of the type ramp. Defaults to `sm`, the app's reading size. */
+  size?: PluginTextSize;
+  /** A colour role. Defaults to `primary`. */
+  tone?: PluginTextTone;
+  /** The app's monospace face, for paths, hashes and identifiers. */
+  mono?: boolean;
+  /** Omitted, the weight is inherited, so a `strong` keeps its own emphasis. */
+  weight?: "normal" | "medium" | "semibold";
+  /**
+   * One line, cut with an ellipsis. The element becomes a block so it has a
+   * width to cut at; put it in a `TruncatedTooltip` to show the whole text.
+   */
+  truncate?: boolean;
+  /** The element. Defaults to `span`; `p` for a paragraph. */
+  as?: "span" | "p" | "div" | "strong" | "em" | "small";
+  className?: string;
+}
+
+/**
+ * Props of `Heading`: a heading at one of the app's four heading sizes. The
+ * level picks both the size and the element (`h1`–`h4`) unless `as` says
+ * otherwise, so a view can keep a correct outline while drawing a smaller
+ * size.
+ */
+export interface PluginHeadingProps extends PluginDomProps<HTMLHeadingElement> {
+  children?: ReactNode;
+  /** 1: 18px, 2: 16px, 3: 14px, 4: 12px, all semibold. Defaults to 2. */
+  level?: 1 | 2 | 3 | 4;
+  /** The element, when the outline needs a different level than the size. */
+  as?: "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "div";
+  /** Defaults to `primary`. */
+  tone?: "primary" | "secondary";
+  truncate?: boolean;
+  className?: string;
+}
+
+/**
+ * Props of `Link`: an inline link that routes a click exactly as `Markdown`
+ * does. `http(s)` and `mailto` links open in the browser; a relative or
+ * absolute path opens in Daintree's file viewer while it stays inside
+ * `rootPath`. Nothing navigates the view itself.
+ */
+export interface PluginLinkProps extends PluginDomProps<HTMLAnchorElement> {
+  href: string;
+  children?: ReactNode;
+  /**
+   * Absolute path a relative `href` resolves against: a directory, or a
+   * Markdown file whose directory is used, as `Markdown`'s `basePath`.
+   */
+  basePath?: string;
+  /**
+   * Absolute directory a file link must stay inside. Defaults to the
+   * directory `basePath` resolves to. With neither, a path opens nothing.
+   */
+  rootPath?: string;
+  /** Draws a small arrow after an `http(s)` link's text, and names it as opening in the browser. */
+  externalIcon?: boolean;
+  className?: string;
+}
+
+/** Props of `InlineCode`: a code span in running text. */
+export interface PluginInlineCodeProps extends PluginRootAttributes {
+  children?: ReactNode;
+  className?: string;
+}
+
+/**
+ * Props of `CodeBlock`: a read-only, highlighted snippet with a copy button,
+ * in the same token colours as the app's diffs and Markdown fences.
+ */
+export interface PluginCodeBlockProps extends PluginRootAttributes {
+  /** The text shown and copied. A trailing newline is dropped. */
+  code: string;
+  /**
+   * A grammar name or fence alias (`ts`, `tsx`, `json`, `bash`, `python`,
+   * `yaml`, `go`, `rust`, …). Unknown or omitted, the code shows as plain text.
+   */
+  language?: string;
+  /** Draws line numbers in a gutter. They are never copied. */
+  lineNumbers?: boolean;
+  /** Line numbers to mark, as the gutter counts them (from `startLine`). A tint and an edge, never colour alone. */
+  highlightLines?: readonly number[];
+  /** The number the first line counts from. Defaults to 1. */
+  startLine?: number;
+  /** A height in px past which the block scrolls. */
+  maxHeight?: number;
+  /** Wraps long lines instead of scrolling sideways. */
+  wrap?: boolean;
+  /** Shows the copy button. Defaults to true. */
+  copyable?: boolean;
+  /** Names the block for assistive tech ("Install command"). */
+  "aria-label"?: string;
+  className?: string;
+}
+
+/**
+ * Props of `PathLabel`: a file path on one line that gives way in the middle.
+ * The directory ellipsises from its start while the file name stays whole, so
+ * `…/Settings/AgentSettings.tsx` rather than `src/components/Sett…`. While it is
+ * cut, the full path shows in a tooltip.
+ */
+export interface PluginPathLabelProps extends PluginRootAttributes {
+  path: string;
+  /** Draws the path in the monospace face. */
+  mono?: boolean;
+  /** Pass `false` inside a row that already owns the keyboard. Defaults to true. */
+  focusable?: boolean;
+  className?: string;
+}
+
+/** Props of `VisuallyHidden`: content read by assistive tech and not drawn. */
+export interface PluginVisuallyHiddenProps extends PluginRootAttributes {
+  children?: ReactNode;
+  /** Defaults to `span`. */
+  as?: "span" | "div";
+}
+
+/**
+ * Props of `LiveRegion`: an element whose changes assistive tech reads out.
+ * Keep it mounted and change its children; a region that mounts with its
+ * message already inside is often not read. For one-off messages use
+ * `useAnnounce` instead.
+ */
+export interface PluginLiveRegionProps extends PluginRootAttributes {
+  children?: ReactNode;
+  /** `polite` (the default) waits for a pause; `assertive` interrupts, for errors only. */
+  politeness?: "polite" | "assertive";
+  /** Reads the whole region on each change rather than just what changed. Defaults to true. */
+  atomic?: boolean;
+  /** Keeps the region off screen. Defaults to false. */
+  visuallyHidden?: boolean;
+  className?: string;
+}
+
+/** Options of the function `useAnnounce` returns. */
+export interface PluginAnnounceOptions {
+  /** `polite` (the default) waits for a pause; `assertive` interrupts, for errors only. */
+  politeness?: "polite" | "assertive";
+}
+
+/**
+ * Props of `Portal`: renders its children into a container outside the view,
+ * the document body by default, marked as your plugin's style root so your
+ * classes still apply there. Position what you put in it yourself.
+ */
+export interface PluginPortalProps {
+  children?: ReactNode;
+  /** An element to render into instead of the document body. */
+  container?: Element | null;
+}
+
+/** The states `StatusDot` and `StateGlyph` draw. */
+export type PluginStatusState = "running" | "idle" | "waiting" | "error" | "success" | "neutral";
+
+/**
+ * Props of `StatusDot`: the app's 6px activity dot. `running` and `waiting`
+ * take the agent working and waiting hues, `error` and `success` the status
+ * colours, `neutral` the secondary ink, and `idle` is a hollow ring, so idle
+ * never rests on colour alone.
+ */
+export interface PluginStatusDotProps extends PluginRootAttributes {
+  state: PluginStatusState;
+  /** Names the state for assistive tech. Without it the dot is decorative. */
+  label?: string;
+  /** A slow pulse while something is live. Still under reduced motion. */
+  pulse?: boolean;
+  /** `sm` 6px (the default), `md` 8px. */
+  size?: "sm" | "md";
+  className?: string;
+}
+
+/**
+ * Props of `StateGlyph`: the app's state glyph at icon size. `running` is the
+ * agent working spinner, `waiting` the amber ring, `idle` a plain ring,
+ * `success` and `error` the severity glyphs, `neutral` a ring with a bar.
+ */
+export interface PluginStateGlyphProps extends PluginRootAttributes {
+  state: PluginStatusState;
+  /** Names the state for assistive tech. Without it the glyph is decorative. */
+  label?: string;
+  /** In px. Defaults to 16. */
+  size?: number;
+  className?: string;
+}
+
+/**
+ * Props of `ColoredLabel`: a tag in a colour the user chose, such as a
+ * GitHub or GitLab label. Drawn like a `Badge`, as a tint of the colour with
+ * the text shifted until it reads at 4.5:1 on that tint over the pane, a raised
+ * panel and a hovered row in the active theme, light or dark, and an edge so a pale colour keeps its
+ * shape.
+ */
+export interface PluginColoredLabelProps extends PluginDomProps<HTMLSpanElement> {
+  /** `#rgb` or `#rrggbb`, with or without the `#`. Anything else draws a neutral badge. */
+  color: string;
+  children?: ReactNode;
+  /** As `Badge`: `xs`, `sm` (the default), `md`. */
+  size?: "xs" | "sm" | "md";
+  /** As `Badge`. `pill` is fully rounded. */
+  shape?: "default" | "pill";
+  /**
+   * `tint` (the default) colours the whole label. `dot` is the chip Daintree's
+   * own forge labels use: a neutral outline badge with the colour on a dot
+   * before the name, for a dense row where many colours would be loud.
+   */
+  variant?: "tint" | "dot";
+  className?: string;
+}
+
+/** Where `UnreadDot` and `CountIndicator` sit on the element they wrap. */
+export type PluginIndicatorPlacement = "top-right" | "top-left" | "bottom-right" | "bottom-left";
+
+/**
+ * Props of `UnreadDot`: the app's 6px neutral unread pip. With `children` it
+ * sits on their corner, cut out from them; alone it is an inline dot.
+ */
+export interface PluginUnreadDotProps extends PluginRootAttributes {
+  children?: ReactNode;
+  /** Shows the dot. Defaults to true; `false` keeps `children` alone. */
+  visible?: boolean;
+  /**
+   * What the dot means ("Unread replies"). On a single element child it is
+   * attached to that element as its description; otherwise it is read beside it.
+   */
+  label?: string;
+  /** Defaults to `top-right`. */
+  placement?: PluginIndicatorPlacement;
+  className?: string;
+}
+
+/**
+ * Props of `CountIndicator`: a count in the app's count pill, capped at
+ * `max` ("99+"). With `children` it overlaps their corner as a solid bubble;
+ * alone it is the inline count `NavList` and `Tabs` draw.
+ */
+export interface PluginCountIndicatorProps extends PluginRootAttributes {
+  count: number;
+  children?: ReactNode;
+  /** Past this the pill reads "99+". Defaults to 99. */
+  max?: number;
+  /** Shows a zero. Defaults to false: zero draws nothing. */
+  showZero?: boolean;
+  /**
+   * What the count means, spoken in place of the numeral ("3 unread"). On a
+   * single element child it is attached to that element as its description.
+   */
+  label?: string;
+  /** Defaults to `top-right`. */
+  placement?: PluginIndicatorPlacement;
+  className?: string;
+}
+
 /**
  * Keys of {@link PluginThemeTokens}: Daintree's semantic theme tokens, the
  * same names as the `--theme-*` CSS variables without the prefix. The surface,
@@ -3112,3 +3390,248 @@ export interface PluginConfirmPopoverProps {
   side?: PluginSide;
   align?: PluginAlign;
 }
+
+// Layout core: stacks, grids, the pane shell, status strips, two-axis scrollers,
+// the folding toolbar and container-size hooks.
+
+/**
+ * The kit's spacing steps, on the scale Daintree's own panes use: `xs` 4px,
+ * `sm` 8px, `md` 12px (a pane's inset), `lg` 16px, `xl` 24px.
+ */
+export type PluginLayoutGap = "none" | "xs" | "sm" | "md" | "lg" | "xl";
+
+/** Cross-axis alignment of a layout's children. */
+export type PluginLayoutAlign = "start" | "center" | "end" | "stretch" | "baseline";
+
+/** Main-axis distribution of a layout's children. */
+export type PluginLayoutJustify = "start" | "center" | "end" | "between" | "around" | "evenly";
+
+/** The elements a layout component can render as. */
+export type PluginLayoutElement =
+  | "div"
+  | "section"
+  | "article"
+  | "aside"
+  | "header"
+  | "footer"
+  | "nav"
+  | "main"
+  | "form"
+  | "fieldset"
+  | "ul"
+  | "ol"
+  | "li"
+  | "span";
+
+/** What `Stack`, `Inline`, `Cluster`, `Grid` and `AutoGrid` share. DOM props land on the root. */
+export interface PluginLayoutBaseProps extends Omit<PluginDomProps<HTMLElement>, "ref"> {
+  children?: ReactNode;
+  /** Space between children. */
+  gap?: PluginLayoutGap;
+  /** The element to render. Defaults to `div`. */
+  as?: PluginLayoutElement;
+  className?: string;
+  ref?: Ref<HTMLElement>;
+}
+
+/** Props of `Stack`: children in a column. `gap` defaults to `md`, `align` to `stretch`. */
+export interface PluginStackProps extends PluginLayoutBaseProps {
+  align?: PluginLayoutAlign;
+  justify?: PluginLayoutJustify;
+}
+
+/**
+ * Props of `Inline`: children in a row. `gap` defaults to `sm`, `align` to
+ * `center`. The row does not wrap unless `wrap` is set.
+ */
+export interface PluginInlineProps extends PluginLayoutBaseProps {
+  align?: PluginLayoutAlign;
+  justify?: PluginLayoutJustify;
+  wrap?: boolean;
+}
+
+/**
+ * Props of `Cluster`: a row that wraps, for chips, tags and badges. `gap`
+ * defaults to `sm` and applies between rows too.
+ */
+export interface PluginClusterProps extends PluginLayoutBaseProps {
+  align?: PluginLayoutAlign;
+  justify?: PluginLayoutJustify;
+}
+
+/**
+ * Props of `Grid`: explicit columns. A number is that many equal columns (1
+ * to 12); a string is a `grid-template-columns` value (`"200px 1fr"`).
+ * `gap` defaults to `md`.
+ */
+export interface PluginGridProps extends PluginLayoutBaseProps {
+  columns?: number | string;
+  /** Cross-axis alignment of the cells. Defaults to `stretch`. */
+  align?: PluginLayoutAlign;
+}
+
+/**
+ * Props of `AutoGrid`: as many equal columns as fit, each at least
+ * `minColumnWidth` px, reflowing with the grid's own width rather than the
+ * window's. `gap` defaults to `md`.
+ */
+export interface PluginAutoGridProps extends PluginLayoutBaseProps {
+  /**
+   * The narrowest a column may get, in px (up to 4096). Defaults to 180. A
+   * grid narrower than this draws one column at its own width.
+   */
+  minColumnWidth?: number;
+  /** Never more columns than this, however wide the grid gets. */
+  maxColumns?: number;
+  /**
+   * `true` stretches a short row's cells to fill the width (CSS `auto-fit`);
+   * the default keeps every column the same width as a full row's (`auto-fill`).
+   */
+  stretch?: boolean;
+  /** Cross-axis alignment of the cells. Defaults to `stretch`. */
+  align?: PluginLayoutAlign;
+}
+
+/**
+ * Props of `PaneLayout`: the shell of a plugin panel. The header, toolbar,
+ * footer and status bar keep their own heights and the body between them is
+ * the only thing that scrolls. It fills the view's root.
+ */
+export interface PluginPaneLayoutProps extends PluginRootAttributes {
+  /** Usually a `PaneHeader`. */
+  header?: ReactNode;
+  /** Usually a `Toolbar` or `OverflowToolbar` with `variant="bar"`. */
+  toolbar?: ReactNode;
+  /** The body. */
+  children?: ReactNode;
+  /** A strip above the status bar, such as a row of form actions. */
+  footer?: ReactNode;
+  /** Usually a `StatusBar`. */
+  statusBar?: ReactNode;
+  /**
+   * How the body scrolls: `shadow` (the default) fades the edge that has more,
+   * `plain` scrolls without fades, `none` does not scroll, for a body that
+   * holds its own scroller (a `VirtualList`, a `ResizableSplit`).
+   */
+  scroll?: "shadow" | "plain" | "none";
+  /** Inset of the body's content, on the gap scale. Defaults to `none`. */
+  padding?: PluginLayoutGap;
+  /** Classes for the body's content (inside the scroller). */
+  bodyClassName?: string;
+  /** The body's scrolling element (the body itself with `scroll="none"`). */
+  bodyRef?: Ref<HTMLDivElement>;
+  /** Names the body as a region for screen readers. */
+  bodyLabel?: string;
+  className?: string;
+}
+
+/**
+ * A `StatusBar` slot: one node, or an array of facts drawn with a quiet dot
+ * between them.
+ */
+export type PluginStatusBarSlot = ReactNode | readonly ReactNode[];
+
+/**
+ * Props of `StatusBar`: the thin strip along a pane's edge saying what the
+ * view shows, with at most a control or two. Not a live region: announce
+ * results yourself.
+ */
+export interface PluginStatusBarProps extends PluginAriaRootAttributes {
+  /** Leading facts; they truncate first when the strip runs short. */
+  left?: PluginStatusBarSlot;
+  /** Centred between the two sides. */
+  center?: PluginStatusBarSlot;
+  /** Trailing facts and controls; they never truncate. */
+  right?: PluginStatusBarSlot;
+  /**
+   * `compact` (the default) is a pane's bottom status strip in 11px text;
+   * `comfortable` is the taller 12px metadata strip a file pane shows over its
+   * content, which fits an `xs` `Button`.
+   */
+  density?: "compact" | "comfortable";
+  /** Which edge the hairline is on: `bottom` (the default) draws it above the strip. */
+  placement?: "bottom" | "top";
+  className?: string;
+}
+
+/**
+ * Props of `ScrollArea`: a scroller on either axis or both, fading each edge
+ * that has more to scroll. DOM props land on the scrolling element; with an
+ * `aria-label` or `aria-labelledby` and no `role`, it is a named `region`.
+ */
+export interface PluginScrollAreaProps extends Omit<PluginDomProps<HTMLDivElement>, "ref"> {
+  children?: ReactNode;
+  /** The axes that scroll. Defaults to `vertical`. */
+  orientation?: "vertical" | "horizontal" | "both";
+  /** Classes for the outer frame (size it here). */
+  className?: string;
+  /** Classes for the scrolling element (padding goes here). */
+  scrollClassName?: string;
+  /** A shorter fade, for dense content. */
+  compact?: boolean;
+  /** The scrolling element. */
+  ref?: Ref<HTMLDivElement>;
+}
+
+/** A control of an `OverflowToolbar`: a toolbar button in the strip, a menu row once folded. */
+export interface PluginOverflowToolbarAction {
+  type?: "action";
+  /** Non-empty and unique within the toolbar. */
+  id: string;
+  /** The button's name and its menu row's text. */
+  label: string;
+  icon?: PluginIconSource;
+  onSelect?: () => void;
+  /** Draws the label beside the icon in the strip. Icon-only by default. */
+  showLabel?: boolean;
+  /** A toggle's state: a pressed button in the strip, a check row in the menu. */
+  pressed?: boolean;
+  disabled?: boolean;
+  /** Tooltip in the strip when it says more than the name. `false` for none. */
+  tooltip?: ReactNode | false;
+  /** A canonical combo for the menu's key column, e.g. `"Cmd+R"`. */
+  shortcut?: string;
+  /** A destructive menu row. */
+  destructive?: boolean;
+  /**
+   * Higher stays in the strip longer. Among equals, the later control folds
+   * first. Defaults to 0.
+   */
+  priority?: number;
+}
+
+/** A hairline between groups of an `OverflowToolbar`, in the strip and in the menu. */
+export interface PluginOverflowToolbarSeparator {
+  type: "separator";
+}
+
+export type PluginOverflowToolbarItem =
+  PluginOverflowToolbarAction | PluginOverflowToolbarSeparator;
+
+/**
+ * Props of `OverflowToolbar`: a `Toolbar` whose controls fold into a "More
+ * actions" menu when the strip is too narrow for them. One tab stop, Left and
+ * Right between the controls and the menu button.
+ */
+export interface PluginOverflowToolbarProps extends PluginAriaRootAttributes {
+  items: readonly PluginOverflowToolbarItem[];
+  /** Required: two toolbars on screen must be told apart. */
+  "aria-label": string;
+  variant?: "inline" | "bar";
+  /** Content before the controls that never folds (a title, a search field). */
+  leading?: ReactNode;
+  /** Content at the far end that never folds. */
+  trailing?: ReactNode;
+  /** The menu button's name. Defaults to "More actions". */
+  overflowLabel?: string;
+  className?: string;
+}
+
+/** A container's size in CSS px, as `useContainerSize` reports it. 0 before it is measured. */
+export interface PluginContainerSize {
+  width: number;
+  height: number;
+}
+
+/** What `useContainerSize` and `useBreakpoint` observe: a ref, or the element itself. */
+export type PluginContainerTarget = RefObject<Element | null> | Element | null | undefined;
