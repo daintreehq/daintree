@@ -413,6 +413,30 @@ describe("SplitGroup", () => {
     expect(Number(handle.getAttribute("aria-valuenow"))).toBeGreaterThanOrEqual(184);
   });
 
+  it("saves squeezed siblings at their drawn size when a step commits", () => {
+    sizes.set("data-split-group", { width: 500, height: 400 });
+    sizes.set('[data-split-group-pane="a"]', { width: 184, height: 400 });
+    sizes.set('[data-split-group-pane="b"]', { width: 184, height: 400 });
+    const onLayoutChange = vi.fn();
+    mount(
+      <kit.SplitGroup
+        onLayoutChange={onLayoutChange}
+        panes={[
+          { id: "main", content: "M", fill: true, minSize: 120 },
+          { id: "a", content: "A", defaultSize: 240 },
+          { id: "b", content: "B", defaultSize: 240 },
+        ]}
+      />
+    );
+    relayout();
+    // "a" sits after the fill, so ArrowRight shrinks it by one step.
+    fireEvent.keyDown(screen.getAllByRole("separator")[0]!, { key: "ArrowRight" });
+    expect(onLayoutChange).toHaveBeenLastCalledWith({
+      sizes: { a: 174, b: 184 },
+      collapsed: [],
+    });
+  });
+
   it("measures only its own panes, not a nested group's of the same id", () => {
     sizes.set('[data-split-group-pane="side"] [data-split-group-pane="side"]', {
       width: 90,
@@ -1006,7 +1030,8 @@ describe("TaskList focus, alignment and announcements", () => {
     cancel.focus();
     fireEvent.click(cancel);
     expect(screen.queryByRole("button", { name: "Cancel Sync" })).toBeNull();
-    expect((document.activeElement as HTMLElement | null)?.dataset.taskId).toBe("sync");
+    const active = document.activeElement;
+    expect(active instanceof HTMLElement ? active.dataset.taskId : undefined).toBe("sync");
   });
 
   it("re-arms the announcer when a task moves on, so a repeat outcome is spoken", () => {
