@@ -445,6 +445,20 @@ describe("findSpacedFilePathCandidates", () => {
     expect(candidate?.probeDir).toBe("C:\\Program Files\\App");
   });
 
+  it("never proposes a UNC root, which a probe would dial over SMB", () => {
+    for (const text of [
+      "//attacker.host/share a/x.md",
+      "see //attacker.host/share a/x.md",
+      "/\\attacker.host/share a/x.md",
+      '"//attacker.host/share a/x.md"',
+      '"\\\\attacker.host\\share a\\x.md"',
+      "'\\/attacker.host/share a/x.md'",
+      "//attacker.host/share\\ a/x.md",
+    ]) {
+      expect(findSpacedFilePathCandidates(text)).toEqual([]);
+    }
+  });
+
   it("links a quoted path without a probe, underlining inside the quotes", () => {
     const text = `open "${ISSUE_PATH}" now`;
     expect(findSpacedFilePathCandidates(text)).toEqual([

@@ -51,6 +51,10 @@ const ABSOLUTE_WORD = /^(?:\/|[a-zA-Z]:[\\/])/;
 // Sentence punctuation after the name still ends it: `/a/b.ts. See foo/x.ts`.
 const COMPLETE_FILE_WORD = /\.\w+(?::\d+(?::\d+)?)?\.?$/;
 const MAX_SPACED_WORDS = 8;
+// Two leading separators in any mix is a UNC root on Windows. Probing one
+// (or opening it on click) makes the OS dial SMB to that host and hand it
+// the user's NTLM credentials, so hovered terminal text never gets to name one.
+const UNC_PREFIX = /^[\\/]{2}/;
 
 function stripLocationSuffix(path: string): string {
   return path.replace(/(?::\d+(?::\d+)?)$/, "");
@@ -69,7 +73,7 @@ export function findSpacedFilePathCandidates(text: string): SpacedFilePathCandid
   for (const match of text.matchAll(QUOTED_PATH_REGEX)) {
     const inner = match[2]!;
     if (!inner.includes(" ") || inner.endsWith(" ") || !QUOTED_PATH_SHAPE.test(inner)) continue;
-    if (isPathExcluded(inner)) continue;
+    if (isPathExcluded(inner) || UNC_PREFIX.test(inner)) continue;
     const startIndex = match.index + match[0].length - inner.length - 1;
     const endIndex = startIndex + inner.length;
     candidates.push({ startIndex, endIndex, path: inner });
@@ -78,7 +82,7 @@ export function findSpacedFilePathCandidates(text: string): SpacedFilePathCandid
 
   for (const match of text.matchAll(ESCAPED_PATH_REGEX)) {
     const raw = match[1]!;
-    if (!raw.includes("\\ ") || !raw.includes("/")) continue;
+    if (!raw.includes("\\ ") || !raw.includes("/") || UNC_PREFIX.test(raw)) continue;
     const startIndex = match.index + match[0].length - raw.length;
     const endIndex = startIndex + raw.length;
     if (overlaps(explicit, startIndex, endIndex)) continue;
@@ -88,6 +92,7 @@ export function findSpacedFilePathCandidates(text: string): SpacedFilePathCandid
 
   for (const match of text.matchAll(SPACED_ANCHOR_REGEX)) {
     const first = match[1]!;
+    if (UNC_PREFIX.test(first)) continue;
     const startIndex = match.index + match[0].length - first.length;
     if (overlaps(explicit, startIndex, startIndex + first.length)) continue;
 

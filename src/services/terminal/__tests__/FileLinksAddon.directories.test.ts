@@ -432,6 +432,17 @@ describe("FileLinksAddon paths containing spaces", () => {
     expect(systemClient.checkDirectory).toHaveBeenCalledWith(dir);
   });
 
+  it("never probes or links a spaced UNC path", async () => {
+    existingDirs("//attacker.host/share a");
+
+    const links = await provide(
+      new FileLinksAddon(flat(["see //attacker.host/share a/x.md"]), () => "/repo")
+    );
+
+    expect(systemClient.checkDirectory).not.toHaveBeenCalled();
+    expect(texts(links).some((text) => text.includes("share a"))).toBe(false);
+  });
+
   it("falls back to the space-free links when the probe refutes the path", async () => {
     const home = nextHome();
     existingDirs();
