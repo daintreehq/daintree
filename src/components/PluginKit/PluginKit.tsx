@@ -109,10 +109,12 @@ import { pluginKitFileTree } from "./PluginKitFileTree";
 import { pluginKitDates } from "./PluginKitDates";
 import { pluginKitNavigation } from "./PluginKitNavigation";
 import { pluginKitLayout } from "./PluginKitLayout";
+import { pluginKitLayoutCore } from "./PluginKitLayoutCore";
 import { pluginKitInputs } from "./PluginKitInputs";
 import { normalizeSelectOptions } from "./kitOptions";
 import { pluginKitCharts } from "./PluginKitCharts";
 import { pluginKitHooksFeedback } from "./PluginKitHooksFeedback";
+import { pluginKitTypography, pluginKitTypographyFunctions } from "./PluginKitTypography";
 import { primeRadix } from "@/components/ui/radix-loader";
 
 export { normalizeSelectOptions, pickDomProps };
@@ -1255,9 +1257,12 @@ export const pluginKit = {
   ...pluginKitDates,
   ...pluginKitNavigation,
   ...pluginKitLayout,
+  ...pluginKitLayoutCore,
   ...pluginKitInputs,
   ...pluginKitCharts,
   ...pluginKitHooksFeedback,
+  ...pluginKitTypography,
+  ...pluginKitTypographyFunctions,
 };
 
 export type PluginKit = typeof pluginKit;

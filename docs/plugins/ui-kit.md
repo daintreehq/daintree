@@ -77,7 +77,7 @@ The host's view load path closes that gap for panel views: it starts loading the
 Tooltip bodies, menus, select lists, popovers and dialogs open in host overlays that portal to the document body, outside the view's style root. Two consequences:
 
 - **The overlay's own chrome takes no `className`.** Those props do not exist on `DropdownMenu`, `ContextMenu`, `Dialog`, `ConfirmDialog`, `Sheet`, `CommandPalette`, `Popover`, `EmojiPicker`, `Tooltip`, or the lists and calendars that `Select`, `Combobox`, `MultiSelect`, `DatePicker` and `DateRangePicker` open: the chrome is the host's. On those fields, `className` styles the trigger only.
-- **What you put inside an overlay is still yours.** Content you pass into a tooltip, popover or dialog body is re-marked as a plugin style root and tagged with your plugin, so your view's Tailwind classes apply there too and diagnostics (the Styles check, long-frame attribution) know whose it is. A portal you open yourself with `createPortal` must mark its container with the `PLUGIN_STYLE_ROOT_ATTRIBUTE` attribute from `@daintreehq/plugin-sdk`, or your classes will not reach it ([Views](./views.md)).
+- **What you put inside an overlay is still yours.** Content you pass into a tooltip, popover or dialog body is re-marked as a plugin style root and tagged with your plugin, so your view's Tailwind classes apply there too and diagnostics (the Styles check, long-frame attribution) know whose it is. For something of your own that has to float, render it in a `Portal`: it marks its container as your style root and tags it with your plugin for you. A bare `createPortal` does neither, so your classes do not reach what it renders (`daintree-plugin lint` reports it as `raw-portal`); if you must use one, spread `styleRootAttributes` from `PanelViewProps` onto its container ([Views](./views.md)).
 
 Overlays stack at the popover tier. A dialog opened from inside another modal surface — Settings, another dialog — passes `layer="nested"`, and kit overlays opened inside that dialog lift themselves above it.
 
@@ -195,6 +195,45 @@ A view is part of Daintree's own window, so `FileDropzone` (or your own `<input 
 | `AvatarGroup` | `avatars: { name, src?, shape? }[]`, `max?` (4), `size?: "xs" \| "sm" \| "md" \| "lg"`, `"aria-label"?`, `className?` | Overlapping `Avatar`s for the people on something, each with its name as a tooltip, cut out from each other with the pane's canvas colour and drawn with a hairline edge so the discs stay apart on a dark pane. They overlap only as far as every disc's initials stay whole at each size. Past `max` the rest fold into a "+N" that takes focus and lists them in its tooltip (ten names, then a count). `aria-label` ("Reviewers") makes it a named group. |
 | `HighlightedText` | `text`, `query?`, `ranges?: [start, end][]`, `className?` | Text with its search matches on a neutral band, the host's search highlight: never accent and never bold, so a row does not reflow as the user types. `query` marks the first case-insensitive occurrence, which is what a substring filter tested; `ranges` are inclusive offsets you computed (fuse.js `indices` as they come), merged where they touch. |
 
+### Type, inline elements and status marks
+
+The app's type ramp, colour roles and small marks as components, so a view never spells a font size or a status colour by hand.
+
+```tsx
+import { CodeBlock, CountIndicator, Heading, IconButton, InlineCode, Link, PathLabel, StatusDot, Text } from "@daintreehq/plugin-ui";
+
+<Heading level={2}>Flaky login test</Heading>
+<Text as="p" tone="secondary">
+  Fails on <InlineCode>main</InlineCode> about one run in ten. See{" "}
+  <Link href="https://example.com/runs/812" externalIcon>run 812</Link> and{" "}
+  <Link href="tests/login.spec.ts" rootPath={projectRoot}>the spec</Link>.
+</Text>
+<CodeBlock code={snippet} language="ts" lineNumbers highlightLines={[3]} maxHeight={240} />
+<PathLabel path="src/components/Settings/AgentSettings.tsx" />
+<StatusDot state="running" label="Running" pulse />
+<CountIndicator count={unread} label={`${unread} unread`}>
+  <IconButton icon="inbox" aria-label="Inbox" />
+</CountIndicator>
+```
+
+| Export | Props | Notes |
+| --- | --- | --- |
+| `Text` | `children?`, `size?: "3xs" \| "2xs" \| "xs" \| "sm" \| "base" \| "lg" \| "inherit"`, `tone?: "primary" \| "secondary" \| "muted" \| "danger" \| "success" \| "warning" \| "accent" \| "inherit"`, `mono?`, `weight?: "normal" \| "medium" \| "semibold"` (inherited when omitted), `truncate?`, `as?: "span" \| "p" \| "div" \| "strong" \| "em" \| "small"`, `className?`; DOM props | The ramp the app draws with: `sm` (14px, the default) for reading text, `xs` (12px) for dense rows and secondary lines, `2xs` and `3xs` (11 and 10px) for labels and metadata, `base` and `lg` for emphasis. `primary` (the default) for body text, `secondary` for supporting text and icons, `muted` only for what nobody has to read (it has no contrast floor on some dark themes). The status tones state an outcome; `accent` is at most one signal per region. `inherit` takes the surrounding size or colour, for a run inside other text. `truncate` makes it a block cut with an ellipsis; wrap it in `TruncatedTooltip` to show the rest. |
+| `Heading` | `children?`, `level?: 1 \| 2 \| 3 \| 4` (2), `as?: "h1" … "h6" \| "div"`, `tone?: "primary" \| "secondary"`, `truncate?`, `className?`; DOM props | The app's heading sizes, all semibold: 1 is 18px (a pane or dialog title), 2 is 16px (a page section), 3 is 14px (a group), 4 is 12px (a sub-group). `level` also picks the element; `as` keeps the size and changes the element, so the document outline stays right (`as="div"` is still a heading at that level to assistive tech). For the small uppercase label over a group, use `SectionLabel`. |
+| `Link` | `href`, `children?`, `basePath?`, `rootPath?`, `externalIcon?`, `className?`; DOM props | An inline link in the app's link colour, underlined at rest so it reads as a link without its colour, the underline thickening on hover. A click is routed exactly as a `Markdown` link's: `http(s)` and `mailto` open in the browser, and a relative or absolute path opens in Daintree's file viewer while it resolves inside `rootPath` (`basePath` and `rootPath` mean what they mean on `Markdown`; with neither, a path opens nothing). Nothing ever navigates the view. An `onClick` that calls `preventDefault()` takes the click over. `externalIcon` draws a small arrow after a web link and tells assistive tech it opens in the browser. For an action, use `Button variant="link"`. |
+| `InlineCode` | `children?`, `className?` | A code span in running text: the mono face a step smaller than its surroundings, on a recessed chip. |
+| `CodeBlock` | `code`, `language?`, `lineNumbers?`, `highlightLines?: number[]`, `startLine?` (1), `maxHeight?` (px), `wrap?`, `copyable?` (true), `"aria-label"?`, `className?` | A read-only snippet highlighted with the grammars and token colours of Daintree's diffs and Markdown fences, with a Copy button. `language` takes a grammar or fence alias (`ts`, `tsx`, `json`, `bash`, `python`, `yaml`, `go`, `rust`, …); an unknown one shows plain text. The highlighter loads on the first block, so a block paints plain for a moment and then takes colour with nothing moving. Line numbers are never read or copied. `highlightLines` (numbered as the gutter counts, from `startLine`) marks lines with a tint and an edge and exposes them as marked text. Past `maxHeight` the block scrolls, and a scrolled block is reachable from the keyboard; `wrap` wraps long lines instead of scrolling sideways. |
+| `PathLabel` | `path`, `mono?`, `focusable?` (true), `className?` | A file path on one line that gives way in the middle: the directory ellipsises from its start while the file name stays whole (`…/Settings/AgentSettings.tsx`), and only once the directory is gone does the name itself cut. While anything is cut, the full path shows in a tooltip, broken only between folders. `focusable={false}` inside a row that already owns the keyboard. |
+| `VisuallyHidden` | `children?`, `as?: "span" \| "div"` | Read by assistive tech, not drawn: a label for a glyph-only cell, the rest of a sentence a visual layout abbreviates. |
+| `LiveRegion` | `children?`, `politeness?: "polite" \| "assertive"`, `atomic?` (true), `visuallyHidden?`, `className?` | A mounted region whose changes are read out (`status`, or `alert` when assertive). Keep it mounted and change its children: a region that appears with its message already in it is often not read. `assertive` interrupts, so keep it for failures. |
+| `useAnnounce()` | returns `(message, { politeness? }?) => void` | Speaks a one-off message ("Saved", "3 results") through the host's announcer, the one the kit's own `CopyButton` uses. It reaches VoiceOver even from under a modal dialog, where a live region of your own is not read. The function is stable across renders; empty messages are ignored. |
+| `StatusDot` | `state: "running" \| "idle" \| "waiting" \| "error" \| "success" \| "neutral"`, `label?`, `pulse?`, `size?: "sm" \| "md"`, `className?` | The app's 6px activity dot (`md` is 8px). `running` and `waiting` wear the agent working and waiting hues, `error` and `success` the status colours, `neutral` the secondary ink, and `idle` is a hollow ring, so the state never rests on colour alone. `pulse` is the activity pulse, still under reduced motion. With `label` it is a named image; without, decorative, so say the state in text beside it. |
+| `StateGlyph` | `state` (as `StatusDot`), `label?`, `size?` (16), `className?` | The same states as the app's glyphs, for a row that wants an icon-sized mark: `running` the agent working spinner, `waiting` the amber ring, `idle` a plain ring, `success` and `error` the severity glyphs, `neutral` a ring with a bar. The spinner stops under reduced motion. |
+| `ColoredLabel` | `color` (`#rgb` or `#rrggbb`), `children?`, `size?: "xs" \| "sm" \| "md"`, `shape?: "default" \| "pill"`, `variant?: "tint" \| "dot"`, `className?`; DOM props | A label in a colour the user chose, like a GitHub or GitLab label, drawn as a `Badge`: a tint of the colour with a hairline edge, and the colour itself as the text, moved lighter or darker (keeping its hue) until it reads at 4.5:1 on that tint over the pane, a raised panel and a hovered row in the active theme. So `#ffffff` and `#000000` both stay legible in a light and a dark theme, and the label follows a theme switch. `variant="dot"` is the chip Daintree's own forge labels use, a neutral pill with the colour on a dot before the name, for a dense row where a run of tinted labels would be loud. A long name wraps to two lines and the chip shrinks with its row, as Daintree's forge labels do. A colour that is not hex draws a neutral badge. For your own fixed tones, use `Badge`. |
+| `UnreadDot` | `children?`, `visible?` (true), `label?`, `placement?: "top-right" \| "top-left" \| "bottom-right" \| "bottom-left"`, `className?` | The app's neutral unread pip. Around `children` it sits on their corner, cut out from them; alone it is an inline dot. `label` ("Unread replies") becomes the description of a single element child such as an `IconButton`, so it is read when the button takes focus. Never accent: several can show at once. |
+| `CountIndicator` | `count`, `children?`, `max?` (99), `showZero?`, `label?`, `placement?`, `className?` | A count capped at `max` ("99+"). Alone it is the count pill `NavList` and `Tabs` draw; around `children` it is a solid bubble overlapping their corner, inside their box, so it is never clipped by the header or toolbar it sits in. On a 24px toolbar button a three-character count covers most of the icon, and Daintree marks its own toolbar buttons with a dot rather than a number, so prefer `UnreadDot` there and keep numbers for larger anchors or inline. Zero draws nothing unless `showZero`. `label` ("12 unread") is spoken in place of the numeral, and describes a single element child as `UnreadDot`'s does. |
+| `Portal` | `children?`, `container?: Element \| null` | Renders its children outside the view, into the document body or `container`, inside a box-less wrapper marked as your plugin's style root, so your classes apply there and diagnostics know whose it is. Position and layer what you put in it yourself. See [Overlays, portals and layers](#overlays-portals-and-layers). |
+
 ### Overlays
 
 | Export | Props | Notes |
@@ -242,6 +281,55 @@ A view is part of Daintree's own window, so `FileDropzone` (or your own `<input 
 | `Accordion` | `items: { value, title, content, trailing?, disabled? }[]`, `type?: "single" \| "multiple"`, `value?: string[]`, `defaultValue?`, `onValueChange?(value)`, `headingLevel?: 2..6`, `className?` | Stacked sections split by hairlines, each a heading button with a chevron. `single` (the default) keeps at most one open, and clicking the open one closes it; handed several values, it opens only the first that names a section. `value` is the open sections in both modes. Up, Down, Home and End move between headers. A closed section's content is not mounted. `trailing` is a count or a `Badge`, never a control. |
 | `Disclosure` | `title`, `children?`, `open?`, `defaultOpen?`, `onOpenChange?(open)`, `trailing?`, `disabled?`, `headingLevel?`, `className?` | One heading button that shows or hides what is under it, such as an "Advanced" group. Content is mounted only while open. Its chevron sits on the content's edge and its content starts under the title, as an `Accordion`'s do, so the two line up when they stack in one column. |
 | `DescriptionList` | `items?: { label, value?, hint?, copyText? }[]`, `children?`, `layout?: "inline" \| "stacked"`, `copyable?`, `className?` | The label and value rows of a record's detail page, as a `dl`. `inline` (the default) puts the labels in a column beside the values; `stacked` puts each label over its value, for a narrow pane. An empty value draws a quiet dash, read as "None". `copyable` adds a copy button after every text or number value; an item's `copyText` adds one that copies that text. Inline, the value column is as wide as the longest value (up to the room there is) and the copy buttons sit in one column straight after it, so they stay beside short values and line up with each other. Build the rows as `DescriptionListItem` children (the same fields as an item) when they need their own `data-*`. |
+
+### Page structure
+
+The layout a panel is built from, on the spacing scale Daintree's own panes use: `gap` and `padding` take `none`, `xs` (4 px), `sm` (8), `md` (12, a pane's inset), `lg` (16) and `xl` (24). Build a panel from these rather than from `div`s with hand-picked gaps, and its spacing and chrome heights match the rest of the app.
+
+| Export | Props | Notes |
+| --- | --- | --- |
+| `Stack` | `children?`, `gap?` (`md`), `align?: "start" \| "center" \| "end" \| "stretch" \| "baseline"` (`stretch`), `justify?: "start" \| "center" \| "end" \| "between" \| "around" \| "evenly"`, `as?`, `className?`; DOM props | Children in a column. `as` is one of `div` (the default), `section`, `article`, `aside`, `header`, `footer`, `nav`, `main`, `form`, `fieldset`, `ul`, `ol`, `li`, `span`; a `ul` or `ol` drops its markers. |
+| `Inline` | as `Stack`, plus `wrap?`; `gap?` (`sm`), `align?` (`center`) | Children in a row, vertically centred. It does not wrap unless `wrap` is set. |
+| `Cluster` | as `Stack`; `gap?` (`sm`), `align?` (`center`) | A row that wraps, the same gap between rows as between items: chips, tags, badges. |
+| `Grid` | `columns?: number \| string`, `gap?` (`md`), `align?`, `as?`, `className?`; DOM props | Explicit columns: a count (1 to 12, equal widths) or a `grid-template-columns` value (`"200px 1fr"`). |
+| `AutoGrid` | `minColumnWidth?` (180), `maxColumns?`, `stretch?`, `gap?` (`md`), `align?`, `as?`, `className?`; DOM props | As many equal columns as fit, none narrower than `minColumnWidth` (up to 4096; anything else falls back to 180) unless the grid itself is narrower, when its one column takes the whole width, reflowing with the grid's own width, never the window's, so a `StatCard` row goes from four across to one as the pane narrows. `maxColumns` caps the count on a wide pane. A short row keeps full-row column widths; `stretch` spreads it across instead. |
+| `PaneLayout` | `header?`, `toolbar?`, `children?`, `footer?`, `statusBar?`, `scroll?: "shadow" \| "plain" \| "none"`, `padding?`, `bodyClassName?`, `bodyRef?`, `bodyLabel?`, `className?` | A panel's shell. It fills the view's root; the header (a `PaneHeader`), toolbar (a `Toolbar` or `OverflowToolbar` with `variant="bar"`), footer and status bar keep their own heights, and the body between them is the only thing that scrolls. `shadow` (the default) fades the edge with more; `none` does not scroll, for a body holding its own scroller (a `VirtualList`, a `ResizableSplit`). `padding` insets the body's content; `bodyRef` is its scroller; `bodyLabel` names it as a region. |
+| `StatusBar` | `left?`, `center?`, `right?`, `density?: "compact" \| "comfortable"`, `placement?: "bottom" \| "top"`, `className?` | The thin strip along a pane's edge: what the view shows on the left, a control or two on the right. A slot takes a node or an array of facts, drawn with a quiet dot between them. Text on the left truncates first when the strip runs short; the right never does. `compact` (the default) is the host's 24 px bottom status strip in 11 px text; `comfortable` is the 28 px metadata strip a file pane shows over its content, which fits an `xs` `Button`. `placement="top"` puts the hairline under it. It is not a live region: announce a result yourself. |
+| `ScrollArea` | `children?`, `orientation?: "vertical" \| "horizontal" \| "both"`, `className?` (the frame), `scrollClassName?` (the scroller), `compact?`, `ref?` (the scroller); DOM props | A scroller on either axis or both, fading each edge that has more. Content along a scrolling axis keeps its own size, so a row of cards overflows sideways instead of squeezing. DOM props land on the scroller. With an `aria-label` or `aria-labelledby` and no `role` of your own it is a named `region`; Chromium already puts a scroller with nothing focusable inside it in the Tab order, and `tabIndex={0}` makes that explicit. For a vertical list, `ScrollShadow` is the same thing. |
+| `OverflowToolbar` | `items: ({ id, label, icon?, onSelect?, showLabel?, pressed?, disabled?, tooltip?, shortcut?, destructive?, priority? } \| { type: "separator" })[]`, `"aria-label"`, `variant?: "inline" \| "bar"`, `leading?`, `trailing?`, `overflowLabel?` ("More actions"), `className?` | A `Toolbar` whose controls fold into a "More actions" menu when the strip is too narrow for them, measured as it resizes. Each control is a `ToolbarButton` in the strip (icon-only unless `showLabel`; `label` names it) and a menu row once folded: `pressed` makes it a toggle and a check row, `shortcut` fills the menu's key column. The last controls fold first; a higher `priority` stays longer. `leading` and `trailing` never fold. Still one tab stop, Left and Right reaching the menu button, and a focused control that folds hands focus to it. |
+
+`useContainerSize(target)` and `useBreakpoint(target, breakpoints?)` make layout answer to the panel's width, never the window's. `target` is a ref or the element itself. A ref is re-read each time the calling component renders, so an element it mounts later is picked up; for an element a child mounts on its own schedule, keep the element in state from a callback ref (`ref={setElement}`) and pass that. `useContainerSize` returns `{ width, height }` in CSS px, re-read at most once a frame while it changes and `0` until measured. `useBreakpoint` returns the widest named step the width reaches — `{ sm: 360, md: 640, lg: 960 }` by default, or your own record — and `null` while the element is narrower than every step, not yet measured, or hidden (a zero width counts as unmeasured). Both stop observing on unmount.
+
+```tsx
+import { useRef } from "react";
+import {
+  AutoGrid,
+  PaneHeader,
+  PaneLayout,
+  StatCard,
+  StatusBar,
+  useBreakpoint,
+} from "@daintreehq/plugin-ui";
+
+export default function Dashboard() {
+  const root = useRef<HTMLDivElement>(null);
+  const wide = useBreakpoint(root, { wide: 640 }) === "wide";
+  return (
+    <div ref={root} className="flex min-h-0 flex-1 flex-col">
+      <PaneLayout
+        header={<PaneHeader title="main · 3 open PRs" />}
+        padding="md"
+        statusBar={<StatusBar left={["12 checks", "2 failing"]} right="Updated 1m ago" />}
+      >
+        <AutoGrid minColumnWidth={wide ? 180 : 140}>
+          <StatCard label="Open PRs" value={3} />
+          <StatCard label="Failing checks" value={2} />
+        </AutoGrid>
+      </PaneLayout>
+    </div>
+  );
+}
+```
 
 ### Settings grammar
 
@@ -395,4 +483,4 @@ A builtin that still needs a covered export gets an exception scoped to one file
 
 ## Checking a view against the kit
 
-`daintree-plugin lint` points at hand-rolled versions of kit controls — `raw-button`, `raw-form-control`, `native-title-tooltip`, `inline-svg-icon`, `lucide-react-import`, `hand-rolled-spinner`, `hand-rolled-badge`, `native-dialog-in-view`, `view-web-storage`, `global-key-listener` — and at classes that compile to nothing against the design contract. The Styles tab in Settings → Plugins runs the same class check against a running view. See [Development loop → Lint](./dev-loop.md#daintree-plugin-lint-dir).
+`daintree-plugin lint` points at hand-rolled versions of kit controls — `raw-button`, `raw-form-control`, `native-title-tooltip`, `inline-svg-icon`, `lucide-react-import`, `hand-rolled-spinner`, `hand-rolled-badge`, `native-dialog-in-view`, `raw-portal`, `view-web-storage`, `global-key-listener` — and at classes that compile to nothing against the design contract. The Styles tab in Settings → Plugins runs the same class check against a running view. See [Development loop → Lint](./dev-loop.md#daintree-plugin-lint-dir).

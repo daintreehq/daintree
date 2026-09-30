@@ -6,6 +6,7 @@
 import { isValidElement, type ComponentType, type ReactNode } from "react";
 import type {
   PluginAccordionProps,
+  PluginAutoGridProps,
   PluginAvatarGroupProps,
   PluginAvatarProps,
   PluginBadgeProps,
@@ -16,6 +17,7 @@ import type {
   PluginCalloutProps,
   PluginCardProps,
   PluginCheckboxProps,
+  PluginClusterProps,
   PluginComboboxProps,
   PluginCommandPaletteProps,
   PluginConfirmDialogProps,
@@ -41,9 +43,11 @@ import type {
   PluginFilterChipProps,
   PluginFormFieldGroupProps,
   PluginFormFieldProps,
+  PluginGridProps,
   PluginHighlightedTextProps,
   PluginIconButtonProps,
   PluginIconProps,
+  PluginInlineProps,
   PluginInputProps,
   PluginKbdChordProps,
   PluginKbdProps,
@@ -54,13 +58,16 @@ import type {
   PluginMultiSelectProps,
   PluginNavListProps,
   PluginNumberInputProps,
+  PluginOverflowToolbarProps,
   PluginPaneHeaderProps,
+  PluginPaneLayoutProps,
   PluginPaneStateProps,
   PluginPopoverProps,
   PluginPopoverSearchFieldProps,
   PluginProgressBarProps,
   PluginRadioGroupProps,
   PluginResizableSplitProps,
+  PluginScrollAreaProps,
   PluginScrollShadowProps,
   PluginSearchFieldProps,
   PluginSectionLabelProps,
@@ -80,7 +87,9 @@ import type {
   PluginSparklineProps,
   PluginSpinnerProps,
   PluginSpinningIconProps,
+  PluginStackProps,
   PluginStatCardProps,
+  PluginStatusBarProps,
   PluginStepperProps,
   PluginSwitchProps,
   PluginTabsProps,
@@ -95,6 +104,22 @@ import type {
   PluginTruncatedTooltipProps,
   PluginVirtualListComponent,
 } from "@shared/types/plugin-sdk-react";
+import type {
+  PluginCodeBlockProps,
+  PluginColoredLabelProps,
+  PluginCountIndicatorProps,
+  PluginHeadingProps,
+  PluginInlineCodeProps,
+  PluginLinkProps,
+  PluginLiveRegionProps,
+  PluginPathLabelProps,
+  PluginPortalProps,
+  PluginStateGlyphProps,
+  PluginStatusDotProps,
+  PluginTextProps,
+  PluginUnreadDotProps,
+  PluginVisuallyHiddenProps,
+} from "@shared/types/plugin-sdk-react";
 import { fromKit } from "./kit";
 
 export { preloadPluginUi, whenPluginUiReady } from "./kit";
@@ -102,6 +127,7 @@ export { preloadPluginUi, whenPluginUiReady } from "./kit";
 export { Markdown } from "./Markdown";
 export { getDaintreeTheme, onDidChangeDaintreeTheme, useDaintreeTheme } from "./theme";
 export { useListNavigation } from "./listNavigation";
+export { useBreakpoint, useContainerSize } from "./containerSize";
 export {
   formatBytes,
   formatCount,
@@ -449,6 +475,92 @@ export const ConfirmPopover: ComponentType<PluginConfirmPopoverProps> = fromKit(
   ({ trigger }) => (isValidElement(trigger) ? trigger : null)
 );
 
+// Type ramp, inline elements, accessibility helpers and status primitives.
+
+// What the indicators' loading fallbacks may render of untyped children: the
+// loaded adapters drop anything else, and so must the frame before them.
+const renderableChild = (children: unknown): ReactNode =>
+  typeof children === "string" || typeof children === "number" || isValidElement(children)
+    ? children
+    : null;
+
+export const Text: ComponentType<PluginTextProps> = fromKit("Text", (kit) => kit.Text);
+export const Heading: ComponentType<PluginHeadingProps> = fromKit("Heading", (kit) => kit.Heading);
+export const Link: ComponentType<PluginLinkProps> = fromKit("Link", (kit) => kit.Link);
+export const InlineCode: ComponentType<PluginInlineCodeProps> = fromKit(
+  "InlineCode",
+  (kit) => kit.InlineCode
+);
+export const CodeBlock: ComponentType<PluginCodeBlockProps> = fromKit(
+  "CodeBlock",
+  (kit) => kit.CodeBlock
+);
+export const PathLabel: ComponentType<PluginPathLabelProps> = fromKit(
+  "PathLabel",
+  (kit) => kit.PathLabel
+);
+export const VisuallyHidden: ComponentType<PluginVisuallyHiddenProps> = fromKit(
+  "VisuallyHidden",
+  (kit) => kit.VisuallyHidden
+);
+export const LiveRegion: ComponentType<PluginLiveRegionProps> = fromKit(
+  "LiveRegion",
+  (kit) => kit.LiveRegion
+);
+export const Portal: ComponentType<PluginPortalProps> = fromKit("Portal", (kit) => kit.Portal);
+export const StatusDot: ComponentType<PluginStatusDotProps> = fromKit(
+  "StatusDot",
+  (kit) => kit.StatusDot
+);
+export const StateGlyph: ComponentType<PluginStateGlyphProps> = fromKit(
+  "StateGlyph",
+  (kit) => kit.StateGlyph
+);
+export const ColoredLabel: ComponentType<PluginColoredLabelProps> = fromKit(
+  "ColoredLabel",
+  (kit) => kit.ColoredLabel
+);
+export const UnreadDot: ComponentType<PluginUnreadDotProps> = fromKit(
+  "UnreadDot",
+  (kit) => kit.UnreadDot,
+  // The wrapped element is there from the first frame; only the dot waits.
+  ({ children }) => renderableChild(children)
+);
+export const CountIndicator: ComponentType<PluginCountIndicatorProps> = fromKit(
+  "CountIndicator",
+  (kit) => kit.CountIndicator,
+  ({ children }) => renderableChild(children)
+);
+export { useAnnounce } from "./announce";
+
+// Stacks, grids, the pane shell, status strips, two-axis scrollers and the
+// folding toolbar.
+
+export const Stack: ComponentType<PluginStackProps> = fromKit("Stack", (kit) => kit.Stack);
+export const Inline: ComponentType<PluginInlineProps> = fromKit("Inline", (kit) => kit.Inline);
+export const Cluster: ComponentType<PluginClusterProps> = fromKit("Cluster", (kit) => kit.Cluster);
+export const Grid: ComponentType<PluginGridProps> = fromKit("Grid", (kit) => kit.Grid);
+export const AutoGrid: ComponentType<PluginAutoGridProps> = fromKit(
+  "AutoGrid",
+  (kit) => kit.AutoGrid
+);
+export const PaneLayout: ComponentType<PluginPaneLayoutProps> = fromKit(
+  "PaneLayout",
+  (kit) => kit.PaneLayout
+);
+export const StatusBar: ComponentType<PluginStatusBarProps> = fromKit(
+  "StatusBar",
+  (kit) => kit.StatusBar
+);
+export const ScrollArea: ComponentType<PluginScrollAreaProps> = fromKit(
+  "ScrollArea",
+  (kit) => kit.ScrollArea
+);
+export const OverflowToolbar: ComponentType<PluginOverflowToolbarProps> = fromKit(
+  "OverflowToolbar",
+  (kit) => kit.OverflowToolbar
+);
+
 export type {
   PluginMarkdownProps as MarkdownProps,
   PluginButtonProps as ButtonProps,
@@ -610,4 +722,46 @@ export type {
   PluginToastHandle as ToastHandle,
   UseToastResult,
   PluginConfirmPopoverProps as ConfirmPopoverProps,
+  PluginLayoutGap as LayoutGap,
+  PluginLayoutAlign as LayoutAlign,
+  PluginLayoutJustify as LayoutJustify,
+  PluginLayoutElement as LayoutElement,
+  PluginLayoutBaseProps as LayoutBaseProps,
+  PluginStackProps as StackProps,
+  PluginInlineProps as InlineProps,
+  PluginClusterProps as ClusterProps,
+  PluginGridProps as GridProps,
+  PluginAutoGridProps as AutoGridProps,
+  PluginPaneLayoutProps as PaneLayoutProps,
+  PluginStatusBarProps as StatusBarProps,
+  PluginStatusBarSlot as StatusBarSlot,
+  PluginScrollAreaProps as ScrollAreaProps,
+  PluginOverflowToolbarProps as OverflowToolbarProps,
+  PluginOverflowToolbarItem as OverflowToolbarItem,
+  PluginOverflowToolbarAction as OverflowToolbarAction,
+  PluginOverflowToolbarSeparator as OverflowToolbarSeparator,
+  PluginContainerSize as ContainerSize,
+  PluginContainerTarget as ContainerTarget,
+} from "@shared/types/plugin-sdk-react";
+
+export type {
+  PluginTextSize as TextSize,
+  PluginTextTone as TextTone,
+  PluginTextProps as TextProps,
+  PluginHeadingProps as HeadingProps,
+  PluginLinkProps as LinkProps,
+  PluginInlineCodeProps as InlineCodeProps,
+  PluginCodeBlockProps as CodeBlockProps,
+  PluginPathLabelProps as PathLabelProps,
+  PluginVisuallyHiddenProps as VisuallyHiddenProps,
+  PluginLiveRegionProps as LiveRegionProps,
+  PluginAnnounceOptions as AnnounceOptions,
+  PluginPortalProps as PortalProps,
+  PluginStatusState as StatusState,
+  PluginStatusDotProps as StatusDotProps,
+  PluginStateGlyphProps as StateGlyphProps,
+  PluginColoredLabelProps as ColoredLabelProps,
+  PluginIndicatorPlacement as IndicatorPlacement,
+  PluginUnreadDotProps as UnreadDotProps,
+  PluginCountIndicatorProps as CountIndicatorProps,
 } from "@shared/types/plugin-sdk-react";

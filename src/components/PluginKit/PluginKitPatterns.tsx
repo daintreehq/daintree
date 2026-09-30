@@ -23,7 +23,7 @@ import type {
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { SettingsActions, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
-import { Badge } from "@/components/ui/badge";
+import { CountBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CALLOUT_ICON } from "@/components/ui/Callout";
 import {
@@ -450,11 +450,9 @@ function readTabs(items: unknown): TabEntry[] {
 
 function tabBadge(badge: unknown): ReactNode {
   if (typeof badge === "number" && Number.isFinite(badge)) {
-    return (
-      <Badge size="xs" shape="pill" className="leading-none tabular-nums">
-        {formatCompactCount(badge)}
-      </Badge>
-    );
+    // The app's count pill, the one NavList and the kit's CountIndicator
+    // draw, so a count reads the same in a tab as anywhere else.
+    return <CountBadge>{formatCompactCount(badge)}</CountBadge>;
   }
   return content(badge);
 }

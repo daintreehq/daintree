@@ -46,6 +46,10 @@ const CLASS_CASES: Record<string, [string, string]> = {
     `<span className="bg-status-error/10 text-status-error" />`,
     `<span className="bg-status-error text-text-inverse" />`,
   ],
+  "viewport-breakpoint": [
+    `<div className={cn("grid grid-cols-1", on && "md:grid-cols-3 max-sm:hidden")} />`,
+    `<div className="@container"><div className="grid-cols-1 @md:grid-cols-3 hover:bg-overlay-soft" /></div>`,
+  ],
 };
 
 describe("class-string rules", () => {
@@ -238,6 +242,64 @@ describe("lucide-react-import", () => {
   });
 });
 
+describe("raw-portal", () => {
+  it("flags createPortal in a view and passes the kit's Portal", async () => {
+    const flagged = await lintFor(
+      "raw-portal",
+      view(
+        `<div>{createPortal(<span />, document.body)}</div>`,
+        `import { createPortal } from "react-dom";\n`
+      )
+    );
+    expect(flagged).toHaveLength(1);
+    expect(
+      await lintFor(
+        "raw-portal",
+        view(`<Portal><div /></Portal>`, `import { Portal } from "@daintreehq/plugin-ui";\n`)
+      )
+    ).toEqual([]);
+  });
+
+  it("follows a namespace or an aliased import", async () => {
+    expect(
+      await lintFor(
+        "raw-portal",
+        view(
+          `<div>{ReactDOM.createPortal(<span />, document.body)}</div>`,
+          `import * as ReactDOM from "react-dom";\n`
+        )
+      )
+    ).toHaveLength(1);
+    expect(
+      await lintFor(
+        "raw-portal",
+        view(
+          `<div>{portal(<span />, document.body)}</div>`,
+          `import { createPortal as portal } from "react-dom";\n`
+        )
+      )
+    ).toHaveLength(1);
+  });
+
+  it("ignores an unrelated createPortal where react-dom is not imported", async () => {
+    expect(await lintFor("raw-portal", view(`<div>{layers.createPortal("toast")}</div>`))).toEqual(
+      []
+    );
+  });
+
+  it("ignores the name inside a string or comment", async () => {
+    expect(
+      await lintFor(
+        "raw-portal",
+        view(
+          `<p>{"createPortal(x)"}</p>`,
+          `import { flushSync } from "react-dom";\n// createPortal(x)\n`
+        )
+      )
+    ).toEqual([]);
+  });
+});
+
 describe("self-container-query", () => {
   it("flags a container-query variant on the element that declares the container", async () => {
     const flagged = await lintFor(
@@ -274,6 +336,24 @@ describe("self-container-query", () => {
       "src/styles.ts": `export const cardStyles = { root: "@container p-2", grid: "grid-cols-2 @md:grid-cols-4" };\n`,
     });
     expect(clean).toEqual([]);
+  });
+});
+
+describe("viewport-breakpoint", () => {
+  it("flags each viewport variant, stacked or arbitrary, and nothing container-scoped", async () => {
+    const flagged = await lintFor(
+      "viewport-breakpoint",
+      view(
+        `<div className="md:grid-cols-3 max-sm:hidden hover:lg:p-4 min-[600px]:flex max-[900px]:block @md:grid-cols-2 supports-[display:grid]:grid data-[open]:flex" />`
+      )
+    );
+    expect(flagged.map((finding) => /"([^"]+)"/.exec(finding.message)?.[1])).toEqual([
+      "md:grid-cols-3",
+      "max-sm:hidden",
+      "hover:lg:p-4",
+      "min-[600px]:flex",
+      "max-[900px]:block",
+    ]);
   });
 });
 

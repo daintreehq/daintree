@@ -1218,7 +1218,7 @@ export default tseslint.config(
     const kitCovered = [
       ["@/components/ui/AppDialog", ["AppDialog"]],
       ["@/components/ui/Avatar", ["Avatar"]],
-      ["@/components/ui/badge", ["Badge"]],
+      ["@/components/ui/badge", ["Badge", "CountBadge", "COUNT_BADGE_CLASS"]],
       ["@/components/ui/button", ["Button"]],
       ["@/components/ui/Callout", ["Callout"]],
       ["@/components/ui/checkbox", ["Checkbox"]],
@@ -1244,6 +1244,8 @@ export default tseslint.config(
       ["@/components/ui/input", ["Input"]],
       ["@/components/ui/Kbd", ["Kbd", "KbdChord", "KBD_CLASS", "KBD_COMPACT_CLASS"]],
       ["@/components/ui/PaneState", ["PaneState"]],
+      ["@/components/ui/PathSegments", ["PathSegments"]],
+      ["@/components/ui/PathTail", ["PathTail"]],
       ["@/components/ui/popover", ["Popover", "PopoverTrigger", "PopoverContent"]],
       ["@/components/ui/PopoverSearchField", ["PopoverSearchField"]],
       ["@/components/ui/ProgressBar", ["ProgressBar"]],

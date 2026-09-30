@@ -6,7 +6,7 @@ A plugin view is a React component the renderer mounts inside a panel, or in the
 
 Views render **inline** in Daintree's React tree, not in an iframe. Same document, same CSS cascade, same `:root` custom properties, same React instance. That is what makes the styling below possible, and it is also why a view has the same reach as Daintree's own UI, including the full `window.electron` bridge. The [trust model](./trust-model.md) covers what that means; this page covers what to do with it.
 
-The host mounts your default export under an error boundary and a `Suspense` boundary, inside a container that is `flex flex-col flex-1 min-h-0 w-full`. Make your root element fill it: `height: 100%` with `display: flex; flex-direction: column; min-height: 0` is the shape that scrolls correctly, because `min-height: 0` is what lets a flex child shrink below its content and hand the overflow to an inner scroller. A root that is only `height: 100%` will push the panel's own scrollbar around instead of owning it.
+The host mounts your default export under an error boundary and a `Suspense` boundary, inside a container that is `flex flex-col flex-1 min-h-0 w-full`. Make your root element fill it: `height: 100%` with `display: flex; flex-direction: column; min-height: 0` is the shape that scrolls correctly, because `min-height: 0` is what lets a flex child shrink below its content and hand the overflow to an inner scroller. A root that is only `height: 100%` will push the panel's own scrollbar around instead of owning it. The kit's [`PaneLayout`](./ui-kit.md#page-structure) is that shape already, with the header, toolbar and status strip at the host panes' own heights and the body as the one scroller.
 
 You receive [`PanelViewProps`](./contribution-points.md#views--shipped): `panelId`, `pluginId`, `worktreeId`, `disposeSignal`, `panelRemovedSignal`, `initialArgs`, `stateVersion`, `persistState`, `requestReload`, `setHasUnsavedChanges`, `styleRootAttributes`, and on a settings view `settingsContext`. Two of these are misread in every first plugin. `pluginId` is your host-side id, which for a project plugin is the instance key, not your manifest name; pass it through to the bridge as given. `disposeSignal` aborts on every unmount, including the temporary ones (a sibling pane maximised, a dock tab left), so it is for cancelling fetches, never for deciding something is finished. `stateVersion` says which shape `initialArgs` holds, and is only meaningful once you declare `stateVersion` on the panel contribution — see [panel state versioning](./contribution-points.md#panels--shipped).
 
@@ -38,7 +38,7 @@ The host mounts it in your settings home, below the generated fields, inside a s
 
 **What it doesn't get.** There is no panel record behind it, so `initialArgs`, `persistState`, `stateVersion`, `worktreeId`, `requestReload` and `setHasUnsavedChanges` are absent. `pluginId`, `panelId`, `disposeSignal`, `panelRemovedSignal` and `styleRootAttributes` behave as they do in a panel.
 
-**Containment.** The surface is contained like a project surface (`contain: layout paint`, overflow clipped, its own stacking context), so a `position: fixed` descendant stays inside it; portal anything that has to float, spreading `styleRootAttributes` onto the portal container.
+**Containment.** The surface is contained like a project surface (`contain: layout paint`, overflow clipped, its own stacking context), so a `position: fixed` descendant stays inside it; portal anything that has to float with the kit's `Portal`, which marks its container as your style root.
 
 **Lifecycle.** Mounting the section activates a loaded plugin that hasn't activated yet, as opening a panel does; it never starts a stopped one. While the plugin is disabled or stopped, the section shows as a single row saying it's available once the plugin runs. When the plugin stops, is muted or reloads, the section is unmounted and its `disposeSignal` and `panelRemovedSignal` abort. After a reload an open settings page shows "Reloading…" until the new module is being served, then mounts it — it never runs the retired one. A render error shows the same diagnostics pane with Try again that a panel gets.
 
@@ -91,7 +91,7 @@ Semantic colours resolve to live theme variables, so a panel built on them follo
 
 **Not part of the vocabulary:** stock palette colours (`bg-red-500`, `text-blue-600`); `dark:` — Daintree themes are runtime tokens, not a class, so a semantic token is already theme-aware and `dark:` is never the answer; `prose` (`@tailwindcss/typography` is not in the plugin contract; for rendered Markdown use [`Markdown`](#host-ui-components), which brings the host's document styles with it); `@apply`, which needs a build step this path does not have.
 
-Prefer **container queries** (`@container`, `@sm:`, `@md:`) over viewport breakpoints (`sm:`, `md:`). A breakpoint describes the whole window; your panel is one pane in a grid and can be narrow while the window is wide. The container has to be an **ancestor**: `@md:` answers to the nearest enclosing `@container`, never to the element carrying it, so `@container @md:grid-cols-4` on one element never applies (lint: `self-container-query`). Put `@container` on the wrapper and the variants on its children.
+Prefer **container queries** (`@container`, `@sm:`, `@md:`) over viewport breakpoints (`sm:`, `md:`). A breakpoint describes the whole window; your panel is one pane in a grid and can be narrow while the window is wide. The container has to be an **ancestor**: `@md:` answers to the nearest enclosing `@container`, never to the element carrying it, so `@container @md:grid-cols-4` on one element never applies (lint: `self-container-query`). Put `@container` on the wrapper and the variants on its children. When the structure itself has to change with the pane — a list beside its detail when wide, stacked when narrow — read the width with the kit's `useContainerSize` or `useBreakpoint`, which answer to the element you hand them, and lay the grid out with `AutoGrid`, which reflows with its own width.
 
 ### The vocabulary
 
@@ -150,8 +150,9 @@ Everything else Tailwind ships that does not name a colour works too — this li
 ### Copy-ready shapes
 
 ```jsx
-// Panel root. `flex flex-col flex-1 min-h-0` is what makes an inner scroller own
-// the overflow instead of pushing the panel's own scrollbar around.
+// Panel root, when the kit's PaneLayout doesn't fit. `flex flex-col flex-1 min-h-0`
+// is what makes an inner scroller own the overflow instead of pushing the
+// panel's own scrollbar around.
 <div className="flex flex-col flex-1 min-h-0 bg-surface-panel text-text-primary">
 
 // A bespoke row the kit's ListRow doesn't fit
@@ -161,20 +162,21 @@ Everything else Tailwind ships that does not name a colour works too — this li
 <div className="px-3 pt-3 pb-1 text-2xs font-medium uppercase text-text-muted">
 ```
 
-Buttons, badges, inputs and spinners are not on this list on purpose: they are `Button`, `Badge`, `Input` and `Spinner` in the kit, and a hand-rolled copy is what the `raw-button`, `hand-rolled-badge`, `raw-form-control` and `hand-rolled-spinner` lint rules report.
+Buttons, badges, inputs and spinners are not on this list on purpose: they are `Button`, `Badge`, `Input` and `Spinner` in the kit (and text sizes and colours are `Text` and `Heading`, status dots `StatusDot`), and a hand-rolled copy is what the `raw-button`, `hand-rolled-badge`, `raw-form-control` and `hand-rolled-spinner` lint rules report.
 
 **Conditional classes must be complete strings.** `isActive ? "bg-surface-active" : ""` works. `` `bg-surface-${tone}` `` does not — the compiler sees the class in your source or in the DOM, and a name assembled from fragments exists in neither until it is too late to matter. The same rule applies to a lookup table, which is fine, and to string concatenation, which is not.
 
-**Portals need a marked container.** Anything you render with `createPortal` leaves your style root, so its classes generate CSS that never matches. Kit overlays — `Dialog`, `ConfirmDialog`, `Popover`, `DropdownMenu`, `Tooltip` — portal for you and re-mark the content you pass them, so your classes still apply inside a dialog body. For a portal of your own, spread `styleRootAttributes` from `PanelViewProps` onto the container:
+**Portals need a marked container.** Anything you render with `createPortal` leaves your style root, so its classes generate CSS that never matches. Kit overlays — `Dialog`, `ConfirmDialog`, `Popover`, `DropdownMenu`, `Tooltip` — portal for you and re-mark the content you pass them, so your classes still apply inside a dialog body. For a portal of your own, use the kit's `Portal`, which marks its container for you:
 
 ```jsx
-createPortal(
-  <div {...styleRootAttributes} className="p-4 bg-surface-dialog">
-    …
-  </div>,
-  document.body
-);
+import { Portal } from "@daintreehq/plugin-ui";
+
+<Portal>
+  <div className="fixed right-4 bottom-4 p-4 bg-surface-dialog">…</div>
+</Portal>;
 ```
+
+A raw `plugin://` view that renders without the kit spreads `styleRootAttributes` from `PanelViewProps` onto its own `createPortal` container instead.
 
 **A `<style>` element still works**, for the things utilities do not cover — a keyframe, a complex selector, a third-party widget's stylesheet. Scope your selectors under a class on your root so you don't restyle the host. Do not ship compiled Tailwind CSS: `@daintreehq/plugin-vite` fails the build if you wire Tailwind into it, because two independently-compiled copies of the same utilities lose Tailwind's own ordering rules.
 
