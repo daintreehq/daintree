@@ -1,5 +1,70 @@
 # Changelog
 
+## [0.40.0] - 2026-09-30
+
+A third consistency pass brings rows, lists, keyboard handling, resize handles, icons, headers, popovers, drag and drop, wording and number formats down to one pattern each, and a 50-PR performance sweep stops terminals, the sidebar, dock and toolbar re-rendering on unrelated activity while cutting git and IPC work in the workspace host. Notifications now lead back to their source, and PR lists show merge conflicts.
+
+### Features
+
+**Notifications**
+
+- Clicking a notification center row, or pressing Enter, goes to its panel or worktree; rows with nowhere to go say why, and the first row action moves to `Mod+Enter` (#13056)
+- Notifications are grouped under their worktree or panel, and transient notifications are no longer dropped (#13057)
+- The high memory use notice offers "Ask agent about memory", which launches the default agent with a read-only diagnosis prompt (#13036)
+
+**Forge**
+
+- The PR list and linked-PR badges show a merge-conflict icon on GitHub and GitLab instead of looking like CI never ran (#13070)
+
+**Daintree Assistant and MCP**
+
+- A "Never ask" option for Daintree confirmations lets assistant sessions skip prompts without turning on the global Skip permission prompts setting (#12989)
+- The assistant can set model and reasoning effort for a single agent launch (#13045)
+- An agent refused a terminal it doesn't own is told how the user hands the terminal over (#12980)
+
+**Design system**
+
+- File lists, palettes, pickers and popovers share one row shape, selection, hover and menu-target style, with 24px row controls, shared tooltips and one unavailable style (#13031, #13049, #13058)
+- Pickers and lists follow one arrow, Home and End rule, file lists are a single Tab stop, and every resize handle takes Shift-step, Home/End and Enter-to-reset with a 12px hit area (#13024, #13031, #13086)
+- Each action has one icon, and errors, warnings, info and success share one glyph set that stays readable in forced colours (#13016, #13064)
+- Pane, assistant, Review and overlay headers share one compact frame; popover headers, dock chips and status popovers share one strip and list; floating surfaces share one elevation (#13029, #13034, #13073, #13087)
+- Drag and drop uses one drop-target frame, ghost and grip, and portal tabs can be picked up from the keyboard (#13085)
+- Choice cards look and press alike, and the bundled GitHub, SvelteKit and Markdown plugins draw with the host UI kit (#13060, #13090)
+- Copy to clipboard confirms the same way everywhere (#13023)
+- Restart session applies without a countdown, and saved-fleet delete, toolbar reset, portal-link remove and split-ratio reset apply immediately with Undo instead of a confirm (#13033)
+- Correct plurals, ellipses and sentence case throughout, and one format each for times, sizes, diff stats, progress and paths (#13041, #13072)
+
+### Bug Fixes
+
+**Terminals and agents**
+
+- Right-clicking a tab or session row targets that tab or row, not the active panel (#13022)
+- Custom launch flags survive restart, resume, restore and missing-CLI recovery, and Codex `-c` pairs are no longer mangled (#13046)
+- Closed terminals no longer leave per-terminal state held in the renderer (#12988, #13026)
+- Dictation starts immediately instead of freezing for about 650 ms, stays in the chosen language, and gains an "Auto-detect (multiple languages)" option (#12979, #12981)
+
+**MCP and plugins**
+
+- Claude Code's Daintree MCP connection no longer drops after five idle minutes (#12994)
+- The assistant keeps ownership of the worktrees and terminals it created across MCP reconnects (#12993)
+- Plugin panels loaded early in startup no longer fail with 404s, and startup no longer waits up to 8 s on the plugin blocklist download (#12996, #13044)
+
+**Interface**
+
+- Kill confirmations appear above open dock status popovers, and Escape closes them (#13081)
+- A cancelled project switch shows one plain toast with Try again (#13035)
+- The project switcher says "waiting" instead of "need input", and the deleted-worktree cleanup notice reads in the past tense (#13047, #13055)
+- Dialog selects and rename fields use the shared controls, and a typed scratchpad rename is no longer lost on blur (#13079)
+
+### Performance
+
+- The terminal grid, sidebar worktree cards, dock, launcher, toolbar, fleet chips and app root no longer re-render on unrelated panel, agent-state and worktree-status updates (#12999, #13004, #13005, #13040, #13074, #13077, #13084, #13089)
+- Theme changes no longer refit every terminal, no-op fits are skipped, and project switches batch their redraws (#13003, #13019, #13020)
+- Restore preloads only restored panes, restores the focused pane first with capped scrollback, and defers the assistant panel (#13021, #13051)
+- The workspace host spawns fewer git processes, reuses sibling fetches, caches paged diffs, and stops re-sending unchanged worktrees and PRs over IPC (#13000, #13007, #13009, #13018, #13065, #13092, #13094)
+- CLI and editor probes run once and off the main thread, store writes skip identical backups, terminal metrics go only to the owning project view, and PTY exits and echo route in constant time (#13017, #13032, #13038, #13043, #13088)
+- Markdown, the file browser, Review Hub, branch picker and MCP audit log stop re-parsing and re-sorting on every tick (#12991, #13013, #13052, #13054, #13099)
+
 ## [0.39.0] - 2026-09-29
 
 A second design pass takes buttons, fields, menus, tabs, dialogs, focus rings and motion down to one family each, and first opens of palettes, dialogs and settings now land in the opening frame. Project plugins can run as full applications with their own database and agent tools, and the assistant can hand work to other agents and get their replies back over a slimmer two-tier MCP surface.
