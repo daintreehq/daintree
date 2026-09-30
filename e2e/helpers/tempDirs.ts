@@ -44,8 +44,14 @@ export function recordTempDir(dir: string, env: NodeJS.ProcessEnv = process.env)
 }
 
 export function readTempManifest(manifest: string): string[] {
-  if (!existsSync(manifest)) return [];
-  const lines = readFileSync(manifest, "utf8")
+  let raw: string;
+  try {
+    raw = readFileSync(manifest, "utf8");
+  } catch {
+    // Another run's teardown can unlink its manifest at any moment.
+    return [];
+  }
+  const lines = raw
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);

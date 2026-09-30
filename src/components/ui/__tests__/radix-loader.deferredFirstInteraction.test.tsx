@@ -148,6 +148,8 @@ describe("deferred Radix tooltip on first interaction", () => {
     await waitFor(() => {
       expect(getByRole("button", { name: "Settings" }).getAttribute("data-state")).toBe("closed");
     });
+    // The upgrade remounts the trigger, so focus taken before the chunk loaded
+    // does not survive it (see the todo below). Refocus to test the tooltip.
     const upgraded = getByRole("button", { name: "Settings" });
     upgraded.blur();
     upgraded.focus();
@@ -156,6 +158,8 @@ describe("deferred Radix tooltip on first interaction", () => {
       expect(openTooltip()?.textContent).toContain("Hint for Settings");
     });
   });
+
+  it.todo("keeps focus on a trigger that was focused before the chunk loaded");
 
   it("after the chunk loads, the first hover on a fresh trigger opens its tooltip", async () => {
     const { fireEvent, render, waitFor } = rtl;

@@ -278,47 +278,40 @@ async function typeDirectlyIntoTerminal(
   const xterm = panel.locator(SEL.terminal.xtermRows);
   const helperTextarea = panel.locator(SEL.terminal.xtermHelperTextarea).first();
 
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await dismissBlockingPalette(page);
-    await expect(xterm).toBeVisible({ timeout: T_MEDIUM });
+  await dismissBlockingPalette(page);
+  await expect(xterm).toBeVisible({ timeout: T_MEDIUM });
+  await xterm.click({ force: true });
+  const targetFocused = await expect
+    .poll(() => getFocusedPanelId(page), { timeout: 2_000, intervals: [100, 250] })
+    .toBe(terminalId)
+    .then(() => true)
+    .catch(() => false);
+
+  if (!targetFocused) {
+    const focusResult = await dispatchAction(
+      page,
+      "panel.focus",
+      { panelId: terminalId },
+      { source: "test" }
+    );
+    expect(focusResult.ok, focusResult.error?.message).toBe(true);
     await xterm.click({ force: true });
-    const targetFocused = await expect
-      .poll(() => getFocusedPanelId(page), { timeout: 2_000, intervals: [100, 250] })
-      .toBe(terminalId)
-      .then(() => true)
-      .catch(() => false);
-
-    if (!targetFocused) {
-      const focusResult = await dispatchAction(
-        page,
-        "panel.focus",
-        { panelId: terminalId },
-        { source: "test" }
-      );
-      expect(focusResult.ok, focusResult.error?.message).toBe(true);
-      await xterm.click({ force: true });
-    }
-
-    await expect
-      .poll(() => getFocusedPanelId(page), { timeout: T_MEDIUM, intervals: [100, 250] })
-      .toBe(terminalId);
-
-    await expect(helperTextarea).toBeAttached({ timeout: T_MEDIUM });
-    await helperTextarea.evaluate((el) => {
-      if (el instanceof HTMLElement) el.focus();
-    });
-    await expect(helperTextarea).toBeFocused({ timeout: T_MEDIUM });
-
-    await page.keyboard.type(command, { delay: process.platform === "darwin" ? 8 : 0 });
-    await page.keyboard.press("Enter");
-
-    if (attempt === 1) return;
-
-    const responded = await waitForTerminalText(panel, `text=${command}`, 5_000)
-      .then(() => true)
-      .catch(() => false);
-    if (responded) return;
   }
+
+  await expect
+    .poll(() => getFocusedPanelId(page), { timeout: T_MEDIUM, intervals: [100, 250] })
+    .toBe(terminalId);
+
+  await expect(helperTextarea).toBeAttached({ timeout: T_MEDIUM });
+  await helperTextarea.evaluate((el) => {
+    if (el instanceof HTMLElement) el.focus();
+  });
+  await expect(helperTextarea).toBeFocused({ timeout: T_MEDIUM });
+
+  // Submitted exactly once: a retype would hide a lost first delivery and
+  // could double the command, so callers assert the single response.
+  await page.keyboard.type(command, { delay: process.platform === "darwin" ? 8 : 0 });
+  await page.keyboard.press("Enter");
 }
 
 function quotePosixShellArg(value: string): string {
@@ -843,6 +836,8 @@ test.describe("Core: Fleet terminal broadcast", () => {
           await waitForTerminalText(panel, `FLEET_RESPONSE`, T_LONG);
           await waitForTerminalText(panel, `text=${command}`, T_LONG);
           await waitForTerminalText(panel, `FLEET_DONE ${command}`, T_LONG);
+          const text = await getTerminalText(panel);
+          expect(text.split(`FLEET_DONE ${command}`).length - 1).toBe(1);
         }
       });
 

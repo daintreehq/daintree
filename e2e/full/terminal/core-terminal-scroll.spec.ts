@@ -640,7 +640,8 @@ test.describe("Core: Terminal scroll & buffer", () => {
     });
 
     await test.step("terminal remains interactive after flood", async () => {
-      await runTerminalCommand(window, panel, "echo INTERACTIVE_CHECK");
+      // Assembled at runtime, so the echoed command line can't satisfy the wait.
+      await runTerminalCommand(window, panel, "node -e \"console.log('INTERACTIVE_' + 'CHECK')\"");
       await waitForTerminalText(panel, "INTERACTIVE_CHECK", T_LONG);
     });
   });

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { BUILT_IN_APP_SCHEMES } from "../../../shared/theme/index.js";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
@@ -29,6 +29,41 @@ async function expandProjectPulse(window: AppContext["window"]) {
 // into, the spread-commit Pulse repo, and the light-theme repo. Theme swaps
 // reload the page and the Pulse settings toggle is global, so the theme group
 // runs last and each group switches to its own project in its own hook.
+// The pulse card's polite live region says "Refreshing pulse data" while a
+// silent refresh runs and "Pulse data updated" when it lands. Recording every
+// change proves a click started and finished a real refresh; a no-op handler
+// never produces the transition.
+async function recordPulseAnnouncements(window: Page): Promise<void> {
+  await window.evaluate(() => {
+    const w = globalThis.window as unknown as {
+      __pulseAnnouncements?: string[];
+      __pulseAnnouncementObserver?: MutationObserver;
+    };
+    w.__pulseAnnouncementObserver?.disconnect();
+    const region = document.querySelector('.pulse-card [role="status"]');
+    if (!region) throw new Error("pulse status region not found");
+    const seen: string[] = [];
+    w.__pulseAnnouncements = seen;
+    const observer = new MutationObserver(() => seen.push(region.textContent ?? ""));
+    observer.observe(region, { childList: true, characterData: true, subtree: true });
+    w.__pulseAnnouncementObserver = observer;
+  });
+}
+
+async function expectPulseRefreshCompleted(window: Page): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        window.evaluate(
+          () =>
+            (globalThis.window as unknown as { __pulseAnnouncements?: string[] })
+              .__pulseAnnouncements ?? []
+        ),
+      { timeout: T_LONG }
+    )
+    .toEqual(expect.arrayContaining(["Refreshing pulse data", "Pulse data updated"]));
+}
+
 test.describe("Panels: Project Pulse and light theme", () => {
   let ctx: AppContext;
   const cleanups: Array<() => void> = [];
@@ -121,8 +156,9 @@ test.describe("Panels: Project Pulse and light theme", () => {
       const { window } = ctx;
       const refreshBtn = window.locator(SEL.pulse.refreshButton);
       await expect(refreshBtn).toBeEnabled({ timeout: T_SHORT });
+      await recordPulseAnnouncements(window);
       await refreshBtn.click();
-      await expect(refreshBtn).toBeEnabled({ timeout: T_LONG });
+      await expectPulseRefreshCompleted(window);
       await expect(window.locator(SEL.pulse.heatmap)).toBeVisible({ timeout: T_MEDIUM });
     });
 
@@ -131,9 +167,9 @@ test.describe("Panels: Project Pulse and light theme", () => {
       const lastUpdated = window.locator(SEL.pulse.lastUpdated);
       await expect(lastUpdated).toBeVisible({ timeout: T_MEDIUM });
       await expect(lastUpdated).toContainText(/Updated /, { timeout: T_SHORT });
+      await recordPulseAnnouncements(window);
       await lastUpdated.click();
-      // Heatmap should remain visible after the click-driven refresh completes.
-      await expect(lastUpdated).toBeEnabled({ timeout: T_LONG });
+      await expectPulseRefreshCompleted(window);
       await expect(window.locator(SEL.pulse.heatmap)).toBeVisible({ timeout: T_MEDIUM });
     });
 

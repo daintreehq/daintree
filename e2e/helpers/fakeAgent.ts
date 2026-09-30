@@ -457,27 +457,34 @@ function fakeAgentProgram(
       if (input.includes("\u001b[I")) write("\u001b[6n\u001b[c\u001b]11;?\u0007");
     }
     if (isCodex) {
-      if (input === "\u0003") {
-        const now = Date.now();
-        if (now - ctrlCArmedAt < 2000) {
-          shutdown();
-          return;
+      // A PTY can coalesce keys into one chunk ("\u0003\u0003", or an Escape
+      // alongside other input), so walk the bytes rather than matching whole
+      // chunks. An ESC that starts a CSI/SS3 sequence is not an Escape key.
+      let handled = false;
+      for (let i = 0; i < input.length; i++) {
+        const ch = input[i];
+        if (ch === "\u0003") {
+          handled = true;
+          const now = Date.now();
+          if (now - ctrlCArmedAt < 2000) {
+            shutdown();
+            return;
+          }
+          ctrlCArmedAt = now;
+          write("\r\n  Press Ctrl-C again to quit\r\n");
+        } else if (ch === "\u001b" && input[i + 1] !== "[" && input[i + 1] !== "O") {
+          handled = true;
+          const now = Date.now();
+          const double = now - lastEscAt < 500;
+          lastEscAt = now;
+          if (double && workingTimer) {
+            stopStream();
+            stopWorking();
+            logEvent("interrupt");
+          }
         }
-        ctrlCArmedAt = now;
-        write("\r\n  Press Ctrl-C again to quit\r\n");
-        return;
       }
-      if (input === "\u001b" || input === "\u001b\u001b") {
-        const now = Date.now();
-        const double = input.length === 2 || now - lastEscAt < 500;
-        lastEscAt = now;
-        if (double && workingTimer) {
-          stopStream();
-          stopWorking();
-          logEvent("interrupt");
-        }
-        return;
-      }
+      if (handled) return;
     }
     if (input.includes(config.tokens.stop)) {
       shutdown();

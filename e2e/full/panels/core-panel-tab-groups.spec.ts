@@ -205,13 +205,18 @@ test.describe("Core: Panel Tab Groups & Layout", () => {
         const panel = getFirstGridPanel(window);
 
         // The duplicated tab should be the active one — verify PTY works
-        await runTerminalCommand(window, panel, "node -e \"console.log('TAB_DUPLICATE_ALIVE')\"");
+        // Markers are assembled at runtime so the echoed command line can't match.
+        await runTerminalCommand(
+          window,
+          panel,
+          "node -e \"console.log('TAB_DUPLICATE_' + 'ALIVE')\""
+        );
         await waitForTerminalText(panel, "TAB_DUPLICATE_ALIVE", T_LONG);
 
         // A duplicate is a new process rooted in the worktree it is filed under (#11854)
-        await runTerminalCommand(window, panel, 'node -p "process.cwd()"');
+        await runTerminalCommand(window, panel, "node -p \"'CWD=' + process.cwd() + '=CWD'\"");
         const dirBasename = path.basename(fixtureDir);
-        await waitForTerminalTextIgnoringLineBreaks(panel, dirBasename, T_LONG);
+        await waitForTerminalTextIgnoringLineBreaks(panel, `${dirBasename}=CWD`, T_LONG);
       });
 
       test("clicking tab switches active terminal", async () => {

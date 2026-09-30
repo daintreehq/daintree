@@ -16,13 +16,6 @@ export async function openProject(
   await openFolder.click();
 }
 
-/**
- * @deprecated No-op. The telemetry consent dialog this dismissed no longer
- * exists — the question is a step inside the agent setup wizard — so there is
- * nothing to dismiss. Kept only until the remaining spec callers are removed.
- */
-export async function dismissTelemetryConsent(_window: Page): Promise<void> {}
-
 export async function openAndOnboardProject(
   app: ElectronApplication,
   window: Page,
