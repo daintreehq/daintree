@@ -703,6 +703,115 @@ describe("DeepgramTranscriptionProvider", () => {
     await Promise.all([first, second]);
   });
 
+  // ── Graceful stop while connecting (#13108) ──────────────────────────────
+
+  it("stopGracefully while connecting flushes buffered audio, then CloseStream, then drains", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const statuses: string[] = [];
+    const completes: string[] = [];
+    provider.onEvent((e) => {
+      if (e.type === "status") statuses.push(e.status);
+      if (e.type === "complete") completes.push(e.text);
+    });
+
+    const startPromise = provider.start(BASE_SETTINGS);
+    await Promise.resolve();
+    const socket = latestInstance();
+    provider.sendAudioChunk(new Uint8Array([1, 2, 3]).buffer);
+
+    const stopPromise = provider.stopGracefully();
+    expect(statuses.at(-1)).toBe("finishing");
+    expect(socket.closeCalls).toBe(0);
+
+    // Audio after the stop (mic already released) must not be kept.
+    provider.sendAudioChunk(new Uint8Array([9]).buffer);
+
+    socket.simulateOpen();
+    await expect(startPromise).resolves.toEqual({ ok: true });
+    expect(socket.binaryFrames()).toEqual([Buffer.from([1, 2, 3])]);
+    expect(socket.textFrames().map((f) => f.type)).toEqual(["CloseStream"]);
+    expect(statuses).not.toContain("recording");
+
+    socket.simulateMessage(resultsMessage("yes do that", { is_final: true }));
+    socket.simulateClose(1000);
+    await stopPromise;
+
+    expect(completes).toEqual(["yes do that"]);
+    expect(statuses.at(-1)).toBe("idle");
+  });
+
+  it("stopGracefully while connecting gives up after the connect wait if the socket never opens", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const statuses: string[] = [];
+    provider.onEvent((e) => {
+      if (e.type === "status") statuses.push(e.status);
+    });
+
+    const startPromise = provider.start(BASE_SETTINGS);
+    await Promise.resolve();
+    const socket = latestInstance();
+    provider.sendAudioChunk(new Uint8Array([1, 2, 3]).buffer);
+
+    const stopPromise = provider.stopGracefully();
+    vi.advanceTimersByTime(3_000);
+    await stopPromise;
+
+    expect(statuses.at(-1)).toBe("idle");
+    expect(socket.closeCalls).toBe(1);
+    await expect(startPromise).resolves.toMatchObject({ ok: false });
+    expect(socket.binaryFrames()).toHaveLength(0);
+  });
+
+  it("stopGracefully while connecting with no buffered audio stops immediately", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const statuses: string[] = [];
+    provider.onEvent((e) => {
+      if (e.type === "status") statuses.push(e.status);
+    });
+
+    void provider.start(BASE_SETTINGS);
+    await Promise.resolve();
+    const socket = latestInstance();
+
+    await provider.stopGracefully();
+    expect(statuses).toEqual(["connecting", "idle"]);
+    expect(socket.closeCalls).toBe(1);
+  });
+
+  it("stop() while waiting on a connecting stop discards the buffered audio", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    void provider.start(BASE_SETTINGS);
+    await Promise.resolve();
+    const socket = latestInstance();
+    provider.sendAudioChunk(new Uint8Array([1, 2, 3]).buffer);
+
+    const stopPromise = provider.stopGracefully();
+    provider.stop();
+    await stopPromise;
+
+    // A late open on the cancelled socket sends nothing.
+    socket.simulateOpen();
+    expect(socket.binaryFrames()).toHaveLength(0);
+    expect(socket.textFrames()).toHaveLength(0);
+  });
+
+  it("a fatal connect error while waiting on a connecting stop settles the stop", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const statuses: string[] = [];
+    provider.onEvent((e) => {
+      if (e.type === "status") statuses.push(e.status);
+    });
+    void provider.start(BASE_SETTINGS);
+    await Promise.resolve();
+    const socket = latestInstance();
+    provider.sendAudioChunk(new Uint8Array([1, 2, 3]).buffer);
+
+    const stopPromise = provider.stopGracefully();
+    socket.simulateError(new Error("ECONNREFUSED"));
+    await stopPromise;
+    expect(statuses.at(-1)).toBe("idle");
+  });
+
   // ── Error handling ─────────────────────────────────────────────────────
 
   it("surfaces a server-side Error event as a fatal error", async () => {

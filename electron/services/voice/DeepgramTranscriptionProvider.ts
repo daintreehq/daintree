@@ -26,6 +26,9 @@ const CONNECT_TIMEOUT_MS = 10_000;
 // remaining transcripts and closes. If it never closes (network hiccup), force
 // the stop through after this long rather than hanging.
 const DRAIN_TIMEOUT_MS = 3_000;
+// How long a graceful stop that lands before the socket opens waits for it, so
+// the buffered audio can still be transcribed. Past this it's discarded.
+const STOP_CONNECT_TIMEOUT_MS = 3_000;
 // Deepgram drops an idle connection after ~10s of no audio with a NET-0001
 // error. A periodic KeepAlive text frame resets that timer; well under 10s
 // gives margin even if a tick is delayed.
@@ -117,6 +120,9 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private drainTimeout: ReturnType<typeof setTimeout> | null = null;
   private drainPromise: Promise<void> | null = null;
   private isDraining = false;
+  // A graceful stop arrived before the socket opened; the drain is waiting on
+  // `open` to flush the buffered audio and send CloseStream (#13108).
+  private stopPendingReady = false;
 
   private audioChunkCount = 0;
   private staleChunkWarned = false;
@@ -251,6 +257,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       });
       this.emit({ type: "status", status: "error" });
       this.settlePendingStart(mySessionId, { ok: false, error: "Connection timed out" });
+      this.settleDrain("connection-timeout");
     }, CONNECT_TIMEOUT_MS);
 
     // A non-101 HTTP response to the WebSocket upgrade surfaces here (not via
@@ -316,6 +323,13 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         }
       }
       this.isReady = true;
+      if (this.isDraining) {
+        // Stopped while connecting: the mic is already released, so skip
+        // KeepAlive and "recording" — close the stream and drain.
+        this.settlePendingStart(mySessionId, { ok: true });
+        if (this.stopPendingReady) this.closeStreamAfterLateReady();
+        return;
+      }
       this.startKeepAlive(connection, mySessionId);
       this.emit({ type: "status", status: "recording" });
       this.settlePendingStart(mySessionId, { ok: true });
@@ -577,6 +591,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.clearKeepAlive();
     this.isExpectedClose = false;
     this.isDraining = false;
+    this.stopPendingReady = false;
     if (this.drainResolve) {
       this.drainResolve();
       this.drainResolve = null;
@@ -605,6 +620,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private settleDrain(reason: string): void {
     this.clearDrainTimeout();
     this.isDraining = false;
+    this.stopPendingReady = false;
     this.drainPromise = null;
     if (this.drainResolve) {
       logInfo(`${P} Drain completed`, { reason });
@@ -628,6 +644,13 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     }
 
     this.isExpectedClose = true;
+
+    // Audio captured while connecting sits in the pre-connect buffer until the
+    // socket opens. If the connection attempt is still live, wait for it rather
+    // than discarding what the user already said.
+    if (!this.isReady && this.connection && this.preConnectBufferBytes > 0) {
+      return this.stopAfterConnect();
+    }
 
     if (!this.connection || !this.isReady) {
       this.cleanupPreviousSession();
@@ -669,6 +692,63 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       this.cleanupPreviousSession();
       this.emit({ type: "status", status: "idle" });
     }
+  }
+
+  /**
+   * Graceful stop before the socket opens. The drain promise first waits
+   * (bounded by STOP_CONNECT_TIMEOUT_MS) for `open`, which flushes the buffer
+   * and calls `closeStreamAfterLateReady()`; from there it's the normal
+   * CloseStream drain. Connect failures settle the drain via the close/fatal
+   * paths. Audio arriving meanwhile is dropped by `sendAudioChunk`.
+   */
+  private async stopAfterConnect(): Promise<void> {
+    logInfo(`${P} Stop before socket open — waiting to flush buffered audio`, {
+      bufferedChunks: this.preConnectBuffer.length,
+      bufferedBytes: this.preConnectBufferBytes,
+    });
+    this.isDraining = true;
+    this.stopPendingReady = true;
+    this.emit({ type: "status", status: "finishing" });
+
+    const sessionIdBeforeDrain = this.sessionId;
+    this.drainPromise = new Promise<void>((resolve) => {
+      this.drainResolve = resolve;
+      this.drainTimeout = setTimeout(() => {
+        logWarn(
+          `${P} Socket not open ${STOP_CONNECT_TIMEOUT_MS}ms after stop — discarding buffered audio`,
+          { bufferedBytes: this.preConnectBufferBytes }
+        );
+        this.settleDrain("connect-timeout");
+      }, STOP_CONNECT_TIMEOUT_MS);
+    });
+    await this.drainPromise;
+
+    if (this.sessionId === sessionIdBeforeDrain) {
+      this.cleanupPreviousSession();
+      this.emit({ type: "status", status: "idle" });
+    }
+  }
+
+  /**
+   * Second half of `stopAfterConnect()`, run from `open` once the buffered
+   * audio has been flushed: send CloseStream and re-arm the drain backstop for
+   * the server's final Results and close.
+   */
+  private closeStreamAfterLateReady(): void {
+    this.stopPendingReady = false;
+    this.clearDrainTimeout();
+    try {
+      this.connection?.send(JSON.stringify({ type: "CloseStream" }));
+      logInfo(`${P} → CloseStream (after late open)`);
+    } catch {
+      logWarn(`${P} Failed to send CloseStream after late open`);
+      this.settleDrain("close-stream-failed");
+      return;
+    }
+    this.drainTimeout = setTimeout(() => {
+      logWarn(`${P} Drain timed out after ${DRAIN_TIMEOUT_MS}ms, force closing`);
+      this.settleDrain("timeout");
+    }, DRAIN_TIMEOUT_MS);
   }
 
   stop(): void {
